@@ -303,6 +303,7 @@ class RAGService:
 
         # LightRAG configuration
         lightrag_kwargs: dict[str, Any] = {
+            "workspace": config.workspace,
             "default_llm_timeout": config.llm_request_timeout,
             "chunk_token_size": config.chunk_size,
             "chunk_overlap_token_size": config.chunk_overlap,
@@ -413,7 +414,7 @@ class RAGService:
 
                 pg_index = PGHashIndex(
                     pool,
-                    workspace=config.postgres_workspace,
+                    workspace=config.workspace,
                     sources_dir=config.sources_dir,
                 )
                 await pg_index.initialize()
@@ -428,7 +429,7 @@ class RAGService:
         from dlightrag.ingestion.hash_index import HashIndex
 
         logger.info("Hash index: HashIndex (JSON file)")
-        return HashIndex(config.working_dir_path, config.sources_dir)
+        return HashIndex(config.working_dir_path, config.sources_dir, workspace=config.workspace)
 
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""

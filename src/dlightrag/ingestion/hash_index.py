@@ -164,8 +164,13 @@ class HashIndex:
     For PostgreSQL, use PGHashIndex instead.
     """
 
-    def __init__(self, working_dir: Path, sources_dir: Path) -> None:
-        self._working_dir = working_dir
+    def __init__(self, working_dir: Path, sources_dir: Path, workspace: str = "default") -> None:
+        self._workspace = workspace
+        if workspace:
+            self._working_dir = working_dir / workspace
+        else:
+            self._working_dir = working_dir
+        self._working_dir.mkdir(parents=True, exist_ok=True)
         self._sources_dir = sources_dir
         self._cache: dict[str, dict[str, Any]] | None = None
 

@@ -235,6 +235,47 @@ class TestHashIndex:
         assert reason is not None
 
 
+class TestHashIndexWorkspace:
+    """Test JSON HashIndex workspace isolation."""
+
+    async def test_workspace_creates_subdirectory(self, tmp_path: Path) -> None:
+        """HashIndex with workspace stores files in workspace subdirectory."""
+        sources_dir = tmp_path / "sources"
+        sources_dir.mkdir()
+
+        index = HashIndex(tmp_path, sources_dir, workspace="project-a")
+        await index.register("sha256:abc", "doc-1", "/path/a.pdf")
+
+        # Hash file should be in workspace subdirectory
+        hash_file = tmp_path / "project-a" / "file_content_hashes.json"
+        assert hash_file.exists()
+
+    async def test_different_workspaces_isolated(self, tmp_path: Path) -> None:
+        """Different workspaces have separate hash indexes."""
+        sources_dir = tmp_path / "sources"
+        sources_dir.mkdir()
+
+        index_a = HashIndex(tmp_path, sources_dir, workspace="ws-a")
+        index_b = HashIndex(tmp_path, sources_dir, workspace="ws-b")
+
+        await index_a.register("sha256:same", "doc-a", "/path/a.pdf")
+
+        # ws-b should NOT see ws-a's hash
+        exists, _ = index_b.check_exists("sha256:same")
+        assert not exists
+
+    async def test_default_workspace_uses_subdirectory(self, tmp_path: Path) -> None:
+        """Default workspace also uses a subdirectory for consistency."""
+        sources_dir = tmp_path / "sources"
+        sources_dir.mkdir()
+
+        index = HashIndex(tmp_path, sources_dir, workspace="default")
+        await index.register("sha256:abc", "doc-1", "/path/a.pdf")
+
+        hash_file = tmp_path / "default" / "file_content_hashes.json"
+        assert hash_file.exists()
+
+
 def _create_pdf_with_metadata(path: Path, text: str, date_str: str) -> None:
     """Create a minimal PDF with given text and CreationDate metadata."""
     content = f"BT /F1 12 Tf 100 700 Td ({text}) Tj ET".encode("latin-1")
