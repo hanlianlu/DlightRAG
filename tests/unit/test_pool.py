@@ -9,13 +9,17 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from corprag.pool import (
+from dlightrag.pool import (
     RAGServiceUnavailableError,
     close_shared_rag_service,
+    close_workspace_services,
     get_rag_error_info,
     get_shared_rag_service,
+    get_workspace_service,
     is_rag_service_initialized,
+    list_available_workspaces,
     reset_shared_rag_service,
+    reset_workspace_pool,
 )
 
 
@@ -36,7 +40,7 @@ class TestGetSharedRagService:
     """Test singleton with async lock and exponential backoff."""
 
     async def test_fast_path_returns_cached(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         mock_service = AsyncMock()
         pool._shared_rag_service = mock_service
@@ -45,7 +49,7 @@ class TestGetSharedRagService:
         result = await get_shared_rag_service()
         assert result is mock_service
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_initializes_on_first_call(self, mock_create) -> None:
         mock_service = AsyncMock()
         mock_create.return_value = mock_service
@@ -56,7 +60,7 @@ class TestGetSharedRagService:
         mock_create.assert_awaited_once()
         assert is_rag_service_initialized()
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_concurrent_calls_only_init_once(self, mock_create) -> None:
         mock_service = AsyncMock()
 
@@ -75,7 +79,7 @@ class TestGetSharedRagService:
         assert mock_create.await_count == 1
         assert all(r is mock_service for r in results)
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_init_failure_sets_error_state(self, mock_create) -> None:
         mock_create.side_effect = RuntimeError("DB connection failed")
 
@@ -86,7 +90,7 @@ class TestGetSharedRagService:
         error_info = get_rag_error_info()
         assert "RuntimeError" in error_info["last_error"]
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_exponential_backoff_after_failure(self, mock_create) -> None:
         mock_create.side_effect = RuntimeError("fail")
 
@@ -101,9 +105,9 @@ class TestGetSharedRagService:
         # create should only have been called once
         assert mock_create.await_count == 1
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_backoff_doubles(self, mock_create) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         mock_create.side_effect = RuntimeError("fail")
 
@@ -124,9 +128,9 @@ class TestGetSharedRagService:
         # Should cap at 300
         assert second_retry <= 300.0
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_retry_after_backoff_expires(self, mock_create) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         # First call fails
         mock_create.side_effect = RuntimeError("initial fail")
@@ -144,9 +148,9 @@ class TestGetSharedRagService:
         result = await get_shared_rag_service()
         assert result is mock_service
 
-    @patch("corprag.pool.RAGService.create", new_callable=AsyncMock)
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_success_resets_error_state(self, mock_create) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         # First call fails
         mock_create.side_effect = RuntimeError("fail")
@@ -174,7 +178,7 @@ class TestCloseSharedRagService:
     """Test cleanup."""
 
     async def test_closes_and_resets(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         mock_service = AsyncMock()
         pool._shared_rag_service = mock_service
@@ -187,7 +191,7 @@ class TestCloseSharedRagService:
         assert not pool._rag_ready
 
     async def test_close_handles_exception(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         mock_service = AsyncMock()
         mock_service.close.side_effect = RuntimeError("cleanup error")
@@ -210,21 +214,21 @@ class TestPoolStateHelpers:
     """Test state query functions."""
 
     def test_is_initialized_true(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         pool._shared_rag_service = AsyncMock()
         pool._rag_ready = True
         assert is_rag_service_initialized()
 
     def test_is_initialized_false_when_not_ready(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         pool._shared_rag_service = AsyncMock()
         pool._rag_ready = False
         assert not is_rag_service_initialized()
 
     def test_get_error_info(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         pool._rag_last_error = "RuntimeError: fail"
         pool._rag_last_error_ts = 1234567890.0
@@ -236,7 +240,7 @@ class TestPoolStateHelpers:
         assert info["retry_after"] == 60.0
 
     def test_reset_shared_rag_service(self) -> None:
-        import corprag.pool as pool
+        import dlightrag.pool as pool
 
         pool._shared_rag_service = AsyncMock()
         pool._rag_ready = True
@@ -248,3 +252,98 @@ class TestPoolStateHelpers:
         assert not pool._rag_ready
         assert pool._rag_last_error is None
         assert pool._rag_retry_after == 30.0
+
+
+# ---------------------------------------------------------------------------
+# TestWorkspacePool
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_ws_pool():
+    """Reset workspace pool state before and after each test."""
+    reset_workspace_pool()
+    yield
+    reset_workspace_pool()
+
+
+class TestWorkspacePool:
+    """Test workspace-keyed RAGService pool."""
+
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
+    async def test_creates_service_for_workspace(self, mock_create) -> None:
+        mock_service = AsyncMock()
+        mock_create.return_value = mock_service
+
+        result = await get_workspace_service("project-a")
+
+        assert result is mock_service
+        call_kwargs = mock_create.call_args[1]
+        assert call_kwargs["config"].postgres_workspace == "project-a"
+
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
+    async def test_caches_service_per_workspace(self, mock_create) -> None:
+        mock_service = AsyncMock()
+        mock_create.return_value = mock_service
+
+        svc1 = await get_workspace_service("ws-1")
+        svc2 = await get_workspace_service("ws-1")
+
+        assert svc1 is svc2
+        assert mock_create.await_count == 1
+
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
+    async def test_different_workspaces_get_different_services(self, mock_create) -> None:
+        mock_create.side_effect = [AsyncMock(), AsyncMock()]
+
+        svc1 = await get_workspace_service("ws-a")
+        svc2 = await get_workspace_service("ws-b")
+
+        assert svc1 is not svc2
+        assert mock_create.await_count == 2
+
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
+    async def test_concurrent_creates_only_init_once(self, mock_create) -> None:
+        mock_service = AsyncMock()
+
+        async def slow_create(**kwargs):
+            await asyncio.sleep(0.05)
+            return mock_service
+
+        mock_create.side_effect = slow_create
+
+        results = await asyncio.gather(
+            get_workspace_service("ws-x"),
+            get_workspace_service("ws-x"),
+            get_workspace_service("ws-x"),
+        )
+
+        assert mock_create.await_count == 1
+        assert all(r is mock_service for r in results)
+
+    @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
+    async def test_close_workspace_services(self, mock_create) -> None:
+        import dlightrag.pool as pool
+
+        svc_a = AsyncMock()
+        svc_b = AsyncMock()
+        pool._workspace_services = {"a": svc_a, "b": svc_b}
+
+        await close_workspace_services()
+
+        svc_a.close.assert_awaited_once()
+        svc_b.close.assert_awaited_once()
+        assert pool._workspace_services == {}
+
+    async def test_list_workspaces_non_pg_returns_default(self) -> None:
+        from dlightrag.config import DlightragConfig, set_config
+
+        cfg = DlightragConfig(  # type: ignore[call-arg]
+            kv_storage="JsonKVStorage",
+            postgres_workspace="myws",
+            openai_api_key="test",
+        )
+        set_config(cfg)
+
+        result = await list_available_workspaces()
+        assert result == ["myws"]
