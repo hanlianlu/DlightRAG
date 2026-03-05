@@ -18,8 +18,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.pool import get_workspace_service, list_available_workspaces
-from dlightrag.retrieval.federation import federated_answer, federated_retrieve
+from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +32,14 @@ def _get_config() -> DlightragConfig:
     return get_config()
 
 
-def _resolve_workspace(workspace: str | None = None) -> str:
-    """Resolve workspace to default if not specified."""
-    return workspace or _get_config().workspace
+_manager: RAGServiceManager | None = None
+
+
+def _get_manager() -> RAGServiceManager:
+    global _manager
+    if _manager is None:
+        _manager = RAGServiceManager()
+    return _manager
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -206,11 +210,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle MCP tool calls."""
     try:
         if name == "retrieve":
-            ws = arguments.get("workspaces") or [_get_config().workspace]
-            result = await federated_retrieve(
-                query=arguments["query"],
-                workspaces=ws,
-                get_service=get_workspace_service,
+            manager = _get_manager()
+            result = await manager.aretrieve(
+                arguments["query"],
+                workspaces=arguments.get("workspaces"),
                 mode=arguments.get("mode", "mix"),
                 top_k=arguments.get("top_k"),
             )
@@ -230,15 +233,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "answer":
+            manager = _get_manager()
             kwargs: dict[str, Any] = {}
             if arguments.get("conversation_history"):
                 kwargs["conversation_history"] = arguments["conversation_history"]
-
-            ws = arguments.get("workspaces") or [_get_config().workspace]
-            result = await federated_answer(
-                query=arguments["query"],
-                workspaces=ws,
-                get_service=get_workspace_service,
+            result = await manager.aanswer(
+                arguments["query"],
+                workspaces=arguments.get("workspaces"),
                 mode=arguments.get("mode", "mix"),
                 top_k=arguments.get("top_k"),
                 **kwargs,
@@ -259,16 +260,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "list_workspaces":
-            ws_list = await list_available_workspaces()
+            manager = _get_manager()
+            ws_list = await manager.list_workspaces()
             return [TextContent(type="text", text=json.dumps({"workspaces": ws_list}, indent=2))]
 
         if name == "ingest":
-            ws = _resolve_workspace(arguments.get("workspace"))
-            service = await get_workspace_service(ws)
-
+            manager = _get_manager()
+            ws = arguments.get("workspace") or _get_config().workspace
             source_type = arguments["source_type"]
             kwargs: dict[str, Any] = {}
-
             if source_type == "local":
                 kwargs["path"] = arguments.get("path", ".")
             elif source_type == "azure_blob":
@@ -277,17 +277,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     kwargs["blob_path"] = arguments["blob_path"]
                 if arguments.get("prefix") is not None:
                     kwargs["prefix"] = arguments["prefix"]
-
             if arguments.get("replace") is not None:
                 kwargs["replace"] = arguments["replace"]
-
-            result = await service.aingest(source_type=source_type, **kwargs)
+            result = await manager.aingest(ws, source_type=source_type, **kwargs)
             return [TextContent(type="text", text=json.dumps(result, default=str))]
 
         if name == "list_files":
-            ws = _resolve_workspace(arguments.get("workspace"))
-            service = await get_workspace_service(ws)
-            files = await service.alist_ingested_files()
+            manager = _get_manager()
+            ws = arguments.get("workspace") or _get_config().workspace
+            files = await manager.list_ingested_files(ws)
             return [
                 TextContent(
                     type="text",
@@ -298,11 +296,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "delete_files":
-            ws = _resolve_workspace(arguments.get("workspace"))
-            service = await get_workspace_service(ws)
-            results = await service.adelete_files(
-                filenames=arguments.get("filenames"),
-                file_paths=arguments.get("file_paths"),
+            manager = _get_manager()
+            ws = arguments.get("workspace") or _get_config().workspace
+            results = await manager.delete_files(
+                ws, filenames=arguments.get("filenames"), file_paths=arguments.get("file_paths")
             )
             return [
                 TextContent(
