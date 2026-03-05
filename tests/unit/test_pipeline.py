@@ -108,45 +108,6 @@ class TestIngestionPipelineHelpers:
         assert d.is_dir()
         assert "custom_type" in str(d)
 
-    async def test_acopy_to_sources_local_new_file(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        pipeline = _make_pipeline(test_config)
-        src = tmp_path / "new_doc.pdf"
-        src.write_text("pdf bytes")
-        dest = await pipeline._acopy_to_sources_local(src)
-        assert dest.exists()
-        assert dest.name == "new_doc.pdf"
-        assert dest.read_text() == "pdf bytes"
-
-    async def test_acopy_to_sources_local_conflict_resolution(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        from datetime import date
-
-        pipeline = _make_pipeline(test_config)
-        # Pre-create file in sources/local/
-        existing = test_config.sources_dir / "local" / "report.pdf"
-        existing.write_text("existing")
-
-        # New file with same name but different content
-        src = tmp_path / "report.pdf"
-        src.write_text("new version")
-        dest = await pipeline._acopy_to_sources_local(src)
-        date_str = date.today().strftime("%Y_%m_%d")
-        assert dest.name == f"report_{date_str}.pdf"
-        assert dest.read_text() == "new version"
-
-    async def test_acopy_to_sources_local_already_in_place(
-        self, test_config: DlightragConfig
-    ) -> None:
-        pipeline = _make_pipeline(test_config)
-        # File already in sources/local
-        existing = test_config.sources_dir / "local" / "report.pdf"
-        existing.write_text("content")
-        dest = await pipeline._acopy_to_sources_local(existing)
-        assert dest == existing
-
 
 # ---------------------------------------------------------------------------
 # TestIngestSingleFileWithPolicy
@@ -307,6 +268,49 @@ class TestAingestFromLocal:
 
         assert result.processed == 0
         assert result.total_files == 0
+
+    @pytest.mark.asyncio
+    async def test_single_file_records_original_path(self, test_config):
+        """Ingested file metadata records the original path, not a sources/ copy."""
+        pipeline = _make_pipeline(test_config)
+        test_file = test_config.working_dir_path / "outside" / "report.pdf"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("test content")
+
+        result = await pipeline.aingest_from_local(test_file)
+
+        assert result.status == "success"
+        assert result.processed == 1
+        assert "sources" not in (result.source_path or "")
+        assert str(test_file.resolve()) in (result.source_path or "")
+
+    @pytest.mark.asyncio
+    async def test_no_copy_to_sources_dir(self, test_config):
+        """Files are NOT copied to sources/ anymore."""
+        pipeline = _make_pipeline(test_config)
+        test_file = test_config.working_dir_path / "outside" / "report.pdf"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("test content")
+
+        await pipeline.aingest_from_local(test_file)
+
+        sources_local = test_config.working_dir_path / "sources" / "local"
+        if sources_local.exists():
+            assert not list(sources_local.iterdir()), "No files should be in sources/local/"
+
+    @pytest.mark.asyncio
+    async def test_temp_cleaned_up_after_ingestion(self, test_config):
+        """Temp dir is cleaned up after ingestion completes."""
+        pipeline = _make_pipeline(test_config)
+        test_file = test_config.working_dir_path / "outside" / "report.pdf"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("test content")
+
+        await pipeline.aingest_from_local(test_file)
+
+        tmp_dir = test_config.temp_dir
+        if tmp_dir.exists():
+            assert not list(tmp_dir.iterdir()), "Temp dirs should be cleaned up"
 
 
 # ---------------------------------------------------------------------------

@@ -186,41 +186,6 @@ class IngestionPipeline:
             )
             return file_path
 
-    async def _acopy_to_sources_local(self, src_path: Path) -> Path:
-        """Copy file to sources/local/, auto-converting Excel to PDF if configured."""
-        source_dir = self._get_source_dir("local")
-        dest_path = source_dir / src_path.name
-
-        # Handle filename conflicts
-        if dest_path.exists() and not dest_path.samefile(src_path):
-            # Same content? Reuse existing file instead of creating a duplicate
-            src_hash = await asyncio.to_thread(compute_file_hash, src_path)
-            dest_hash = await asyncio.to_thread(compute_file_hash, dest_path)
-            if src_hash == dest_hash:
-                logger.debug(f"Identical file already in sources: {dest_path.name}")
-            else:
-                # Genuinely different file with same name — version with date suffix
-                from datetime import date
-
-                base = src_path.stem
-                suffix = src_path.suffix
-                date_str = date.today().strftime("%Y_%m_%d")
-                dest_path = source_dir / f"{base}_{date_str}{suffix}"
-                # Same date but already exists with different content? Add counter
-                if dest_path.exists():
-                    counter = 2
-                    while dest_path.exists():
-                        dest_path = source_dir / f"{base}_{date_str}_{counter}{suffix}"
-                        counter += 1
-
-        # Copy if not already in sources/local
-        if not dest_path.exists():
-            await asyncio.to_thread(shutil.copy2, src_path, dest_path)
-            logger.debug(f"Copied {src_path} to {dest_path}")
-
-        # Auto-convert Excel to PDF using centralized async method
-        return await self._maybe_convert_excel_to_pdf(dest_path, source_dir)
-
     async def _download_blob_to_storage_async(
         self,
         source: AsyncDataSource,
@@ -416,27 +381,30 @@ class IngestionPipeline:
             if replace:
                 await self.adelete_files(filenames=[path.name], delete_source=True)
 
-            # Copy to sources/local/
-            source_path = await self._acopy_to_sources_local(path)
+            source_uri = str(path.resolve())
+            tmpdir = self._create_temp_dir()
+            try:
+                working_path = await self._prepare_for_parsing(path, tmpdir)
 
-            logger.info(
-                "Ingesting local file: %s -> %s",
-                path.resolve(),
-                source_path,
-            )
+                logger.info(
+                    "Ingesting local file: %s",
+                    path.resolve(),
+                )
 
-            result = await self._ingest_single_file_with_policy(
-                source_path, artifacts_dir, content_hash=content_hash
-            )
-            result.source_type = "local"
-            result.total_files = 1
-            return result
+                result = await self._ingest_single_file_with_policy(
+                    working_path, artifacts_dir, content_hash=content_hash, source_uri=source_uri
+                )
+                result.source_type = "local"
+                result.total_files = 1
+                return result
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
         # Directory
         if path.is_dir():
             # Collect files to process with dedup check
             pattern = "**/*" if recursive else "*"
-            files_to_process: list[tuple[Path, str]] = []
+            files_to_process: list[tuple[Path, str, str]] = []
             skipped_count = 0
             skipped_files: list[str] = []
 
@@ -460,8 +428,7 @@ class IngestionPipeline:
                 if replace:
                     await self.adelete_files(filenames=[file_path.name], delete_source=True)
 
-                copied_path = await self._acopy_to_sources_local(file_path)
-                files_to_process.append((copied_path, content_hash or ""))
+                files_to_process.append((file_path, content_hash or "", str(file_path.resolve())))
 
             total_files = len(files_to_process) + skipped_count
 
@@ -492,12 +459,17 @@ class IngestionPipeline:
             )
 
             # Process files concurrently with semaphore control
-            tasks = [
-                self._ingest_single_file_with_policy(
-                    fp, artifacts_dir, content_hash=ch if ch else None
-                )
-                for fp, ch in files_to_process
-            ]
+            async def _ingest_local_single(fp: Path, ch: str, uri: str) -> IngestionResult:
+                tmpdir = self._create_temp_dir()
+                try:
+                    working = await self._prepare_for_parsing(fp, tmpdir)
+                    return await self._ingest_single_file_with_policy(
+                        working, artifacts_dir, content_hash=ch if ch else None, source_uri=uri
+                    )
+                finally:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+
+            tasks = [_ingest_local_single(fp, ch, uri) for fp, ch, uri in files_to_process]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             # Count successes
