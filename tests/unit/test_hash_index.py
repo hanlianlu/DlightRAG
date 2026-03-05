@@ -548,3 +548,72 @@ class TestMongoHashIndex:
         entries = await mongo_index.list_all()
         assert len(entries) == 1
         assert entries[0]["doc_id"] == "doc-001"
+
+
+class TestHashIndexFactory:
+    """Test that _create_hash_index selects the right backend."""
+
+    async def test_pg_backend_selection(self, tmp_path):
+        """PG config should attempt PGHashIndex (falls back to JSON without PG)."""
+        from unittest.mock import MagicMock
+
+        from dlightrag.service import RAGService
+
+        config = MagicMock()
+        config.kv_storage = "PGKVStorage"
+        config.workspace = "test"
+        config.sources_dir = None
+        config.working_dir_path = tmp_path
+
+        service = RAGService.__new__(RAGService)
+        # PGHashIndex will fail (no PG), should fall back to JSON
+        result = await service._create_hash_index(config)
+        assert type(result).__name__ == "HashIndex"
+
+    async def test_json_backend_selection(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from dlightrag.service import RAGService
+
+        config = MagicMock()
+        config.kv_storage = "JsonKVStorage"
+        config.workspace = "test"
+        config.sources_dir = None
+        config.working_dir_path = tmp_path
+
+        service = RAGService.__new__(RAGService)
+        result = await service._create_hash_index(config)
+        assert type(result).__name__ == "HashIndex"
+
+    async def test_redis_fallback_to_json(self, tmp_path):
+        """Redis config without redis package should fall back to JSON."""
+        from unittest.mock import MagicMock
+
+        from dlightrag.service import RAGService
+
+        config = MagicMock()
+        config.kv_storage = "RedisKVStorage"
+        config.workspace = "test"
+        config.sources_dir = None
+        config.working_dir_path = tmp_path
+
+        service = RAGService.__new__(RAGService)
+        result = await service._create_hash_index(config)
+        # Will be HashIndex if redis not installed, RedisHashIndex if installed
+        assert type(result).__name__ in ("HashIndex", "RedisHashIndex")
+
+    async def test_mongo_fallback_to_json(self, tmp_path):
+        """Mongo config without motor package should fall back to JSON."""
+        from unittest.mock import MagicMock
+
+        from dlightrag.service import RAGService
+
+        config = MagicMock()
+        config.kv_storage = "MongoKVStorage"
+        config.workspace = "test"
+        config.sources_dir = None
+        config.working_dir_path = tmp_path
+
+        service = RAGService.__new__(RAGService)
+        result = await service._create_hash_index(config)
+        assert type(result).__name__ in ("HashIndex", "MongoHashIndex")
