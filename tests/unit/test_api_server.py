@@ -3,15 +3,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import _get_config, app
 from dlightrag.config import DlightragConfig
-from dlightrag.pool import RAGServiceUnavailableError
-from dlightrag.retrieval.engine import RetrievalResult
+from dlightrag.core.retrieval.engine import RetrievalResult
+from dlightrag.core.servicemanager import RAGServiceUnavailableError
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -43,14 +43,28 @@ def mock_service():
 
 
 @pytest.fixture
-def _patch_service(mock_service):
-    """Patch get_workspace_service to return the mock service."""
+def mock_manager(mock_service):
+    """Create a mock RAGServiceManager that delegates to mock_service."""
+    manager = AsyncMock()
+    manager.aingest = mock_service.aingest
+    manager.aretrieve = mock_service.aretrieve
+    manager.aanswer = mock_service.aanswer
+    manager.list_ingested_files = mock_service.alist_ingested_files
+    manager.delete_files = mock_service.adelete_files
+    manager.list_workspaces = AsyncMock(return_value=["default"])
+    manager.is_ready = lambda: True
+    manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
+    manager.close = AsyncMock()
+    return manager
 
-    async def _fake_ws_service(ws: str, **kwargs):
-        return mock_service
 
-    with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-        yield
+@pytest.fixture
+def _patch_manager(mock_manager):
+    """Set mock manager on app.state."""
+    app.state.manager = mock_manager
+    yield
+    if hasattr(app.state, "manager"):
+        del app.state.manager
 
 
 @pytest.fixture
@@ -70,12 +84,13 @@ class TestAuthMiddleware:
     """Test _verify_auth bearer token validation."""
 
     async def test_no_token_configured_passes(
-        self, client: AsyncClient, mock_config: DlightragConfig
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
+        app.state.manager = mock_manager
         resp = await client.get("/health")
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_valid_token_passes(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -86,7 +101,7 @@ class TestAuthMiddleware:
         )
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_missing_auth_header_401(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -94,7 +109,7 @@ class TestAuthMiddleware:
         resp = await client.get("/files")
         assert resp.status_code == 401
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_wrong_scheme_401(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -105,7 +120,7 @@ class TestAuthMiddleware:
         )
         assert resp.status_code == 401
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_invalid_token_403(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -141,21 +156,21 @@ class TestAuthMiddleware:
 class TestIngestEndpoint:
     """Test /ingest validation and routing."""
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_local_requires_path(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         resp = await client.post("/ingest", json={"source_type": "local"})
         assert resp.status_code == 400
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_azure_blob_requires_container(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         resp = await client.post("/ingest", json={"source_type": "azure_blob"})
         assert resp.status_code == 400
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_snowflake_requires_query(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -163,39 +178,31 @@ class TestIngestEndpoint:
         assert resp.status_code == 400
 
     async def test_local_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post(
-                "/ingest",
-                json={"source_type": "local", "path": "/data/file.pdf"},
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={"source_type": "local", "path": "/data/file.pdf"},
+        )
         assert resp.status_code == 200
-        mock_service.aingest.assert_awaited_once()
+        mock_manager.aingest.assert_awaited_once()
 
     async def test_azure_blob_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post(
-                "/ingest",
-                json={
-                    "source_type": "azure_blob",
-                    "container_name": "my-container",
-                    "blob_path": "docs/file.pdf",
-                },
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "azure_blob",
+                "container_name": "my-container",
+                "blob_path": "docs/file.pdf",
+            },
+        )
         assert resp.status_code == 200
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_azure_blob_path_and_prefix_mutually_exclusive(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -211,35 +218,26 @@ class TestIngestEndpoint:
         assert resp.status_code == 400
 
     async def test_ingest_with_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        captured_ws = []
-
-        async def _fake_ws_service(ws: str, **kwargs):
-            captured_ws.append(ws)
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post(
-                "/ingest",
-                json={"source_type": "local", "path": "/data/file.pdf", "workspace": "project-x"},
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={"source_type": "local", "path": "/data/file.pdf", "workspace": "project-x"},
+        )
         assert resp.status_code == 200
-        assert captured_ws == ["project-x"]
+        call_kwargs = mock_manager.aingest.call_args
+        assert call_kwargs[0][0] == "project-x"  # first positional arg is workspace
 
     async def test_ingest_service_unavailable_503(
-        self, client: AsyncClient, mock_config: DlightragConfig
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fail(ws: str, **kwargs):
-            raise RAGServiceUnavailableError("RAG not ready")
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fail):
-            resp = await client.post(
-                "/ingest",
-                json={"source_type": "local", "path": "/data/file.pdf"},
-            )
-
+        mock_manager.aingest = AsyncMock(side_effect=RAGServiceUnavailableError("RAG not ready"))
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={"source_type": "local", "path": "/data/file.pdf"},
+        )
         assert resp.status_code == 503
 
 
@@ -252,14 +250,10 @@ class TestRetrieveEndpoint:
     """Test /retrieve endpoint."""
 
     async def test_retrieve_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post("/retrieve", json={"query": "What is RAG?"})
-
+        app.state.manager = mock_manager
+        resp = await client.post("/retrieve", json={"query": "What is RAG?"})
         assert resp.status_code == 200
         body = resp.json()
         assert "answer" in body
@@ -267,19 +261,15 @@ class TestRetrieveEndpoint:
         assert "raw" in body
 
     async def test_retrieve_with_custom_mode(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post(
-                "/retrieve",
-                json={"query": "hello", "mode": "local"},
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/retrieve",
+            json={"query": "hello", "mode": "local"},
+        )
         assert resp.status_code == 200
-        call_kwargs = mock_service.aretrieve.call_args
+        call_kwargs = mock_manager.aretrieve.call_args
         assert call_kwargs.kwargs["mode"] == "local"
 
 
@@ -292,8 +282,9 @@ class TestHealthEndpoint:
     """Test /health endpoint."""
 
     async def test_health_returns_status(
-        self, client: AsyncClient, mock_config: DlightragConfig
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
+        app.state.manager = mock_manager
         resp = await client.get("/health")
         assert resp.status_code == 200
         body = resp.json()
@@ -311,54 +302,40 @@ class TestDeleteEndpoint:
     """Test DELETE /files endpoint."""
 
     async def test_delete_by_filenames(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.request(
-                "DELETE",
-                "/files",
-                json={"filenames": ["report.pdf"]},
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.request(
+            "DELETE",
+            "/files",
+            json={"filenames": ["report.pdf"]},
+        )
         assert resp.status_code == 200
-        mock_service.adelete_files.assert_awaited_once()
+        mock_manager.delete_files.assert_awaited_once()
 
     async def test_delete_by_file_paths(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.request(
-                "DELETE",
-                "/files",
-                json={"file_paths": ["/storage/report.pdf"]},
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.request(
+            "DELETE",
+            "/files",
+            json={"file_paths": ["/storage/report.pdf"]},
+        )
         assert resp.status_code == 200
 
     async def test_delete_with_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        captured_ws = []
-
-        async def _fake_ws_service(ws: str, **kwargs):
-            captured_ws.append(ws)
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.request(
-                "DELETE",
-                "/files",
-                json={"filenames": ["report.pdf"], "workspace": "project-y"},
-            )
-
+        app.state.manager = mock_manager
+        resp = await client.request(
+            "DELETE",
+            "/files",
+            json={"filenames": ["report.pdf"], "workspace": "project-y"},
+        )
         assert resp.status_code == 200
-        assert captured_ws == ["project-y"]
+        call_kwargs = mock_manager.delete_files.call_args
+        assert call_kwargs[0][0] == "project-y"  # first positional arg is workspace
 
 
 # ---------------------------------------------------------------------------
@@ -370,14 +347,10 @@ class TestAnswerEndpoint:
     """Test /answer endpoint."""
 
     async def test_answer_success(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post("/answer", json={"query": "What is RAG?"})
-
+        app.state.manager = mock_manager
+        resp = await client.post("/answer", json={"query": "What is RAG?"})
         assert resp.status_code == 200
         body = resp.json()
         assert "answer" in body
@@ -386,34 +359,27 @@ class TestAnswerEndpoint:
         assert body["answer"] == "The answer is 42"
 
     async def test_answer_with_conversation_history(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
+        app.state.manager = mock_manager
         history = [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there"},
         ]
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.post(
-                "/answer",
-                json={"query": "Follow up", "conversation_history": history},
-            )
-
+        resp = await client.post(
+            "/answer",
+            json={"query": "Follow up", "conversation_history": history},
+        )
         assert resp.status_code == 200
-        call_kwargs = mock_service.aanswer.call_args.kwargs
+        call_kwargs = mock_manager.aanswer.call_args.kwargs
         assert call_kwargs["conversation_history"] == history
 
     async def test_answer_service_unavailable_503(
-        self, client: AsyncClient, mock_config: DlightragConfig
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        async def _fail(ws: str, **kwargs):
-            raise RAGServiceUnavailableError("RAG not ready")
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fail):
-            resp = await client.post("/answer", json={"query": "hello"})
-
+        mock_manager.aanswer = AsyncMock(side_effect=RAGServiceUnavailableError("RAG not ready"))
+        app.state.manager = mock_manager
+        resp = await client.post("/answer", json={"query": "hello"})
         assert resp.status_code == 503
 
 
@@ -425,7 +391,7 @@ class TestAnswerEndpoint:
 class TestFilesEndpoint:
     """Test GET /files endpoint."""
 
-    @pytest.mark.usefixtures("_patch_service")
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_list_files_success(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
@@ -436,32 +402,21 @@ class TestFilesEndpoint:
         assert "count" in body
 
     async def test_list_files_count_matches(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_service.alist_ingested_files = AsyncMock(return_value=["a.pdf", "b.pdf", "c.pdf"])
-
-        async def _fake_ws_service(ws: str, **kwargs):
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.get("/files")
-
+        mock_manager.list_ingested_files = AsyncMock(return_value=["a.pdf", "b.pdf", "c.pdf"])
+        app.state.manager = mock_manager
+        resp = await client.get("/files")
         assert resp.status_code == 200
         body = resp.json()
         assert body["count"] == 3
         assert len(body["files"]) == 3
 
     async def test_list_files_with_workspace(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_service
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        captured_ws = []
-
-        async def _fake_ws_service(ws: str, **kwargs):
-            captured_ws.append(ws)
-            return mock_service
-
-        with patch("dlightrag.api.server.get_workspace_service", new=_fake_ws_service):
-            resp = await client.get("/files?workspace=project-z")
-
+        app.state.manager = mock_manager
+        resp = await client.get("/files?workspace=project-z")
         assert resp.status_code == 200
-        assert captured_ws == ["project-z"]
+        call_kwargs = mock_manager.list_ingested_files.call_args
+        assert call_kwargs[0][0] == "project-z"  # first positional arg is workspace
