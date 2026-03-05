@@ -70,6 +70,7 @@ class TestContentAwarePdfHash:
     def test_pdf_pypdfium2_unavailable_falls_back(self, tmp_path: Path, monkeypatch: Any) -> None:
         """When pypdfium2 import fails, falls back to byte hash."""
         import builtins
+
         real_import = builtins.__import__
 
         def mock_import(name, *args, **kwargs):
@@ -121,6 +122,7 @@ class TestContentAwareOfficeHash:
         assert result.startswith("sha256:")
 
         from dlightrag.ingestion.hash_index import _hash_file_bytes
+
         assert result == _hash_file_bytes(txt)
 
 
@@ -288,7 +290,9 @@ def _create_pdf_with_metadata(path: Path, text: str, date_str: str) -> None:
         b"/Contents 4 0 R/Resources<</Font<</F1<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>>>>>>>endobj\n"
         b"4 0 obj<</Length " + str(len(content)).encode() + b">>\n"
         b"stream\n" + content + b"\nendstream\nendobj\n"
-        b"5 0 obj<</CreationDate(D:" + date_str.replace("-", "").encode() + b"000000+00'00')>>endobj\n"
+        b"5 0 obj<</CreationDate(D:"
+        + date_str.replace("-", "").encode()
+        + b"000000+00'00')>>endobj\n"
         b"xref\n0 6\n"
         b"0000000000 65535 f \n"
         b"0000000009 00000 n \n"

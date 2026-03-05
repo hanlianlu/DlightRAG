@@ -291,7 +291,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [
                 TextContent(
                     type="text",
-                    text=json.dumps({"files": files, "count": len(files), "workspace": ws}, default=str),
+                    text=json.dumps(
+                        {"files": files, "count": len(files), "workspace": ws}, default=str
+                    ),
                 )
             ]
 
@@ -302,7 +304,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 filenames=arguments.get("filenames"),
                 file_paths=arguments.get("file_paths"),
             )
-            return [TextContent(type="text", text=json.dumps({"results": results, "workspace": ws}, default=str))]
+            return [
+                TextContent(
+                    type="text", text=json.dumps({"results": results, "workspace": ws}, default=str)
+                )
+            ]
 
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

@@ -276,8 +276,13 @@ async def list_available_workspaces(
             return [config.workspace]
 
     # Filesystem backends: scan working_dir for workspace subdirectories
-    _FS_BACKENDS = {"JsonKVStorage", "JsonDocStatusStorage", "NanoVectorDBStorage",
-                    "NetworkXStorage", "FaissVectorDBStorage"}
+    _FS_BACKENDS = {
+        "JsonKVStorage",
+        "JsonDocStatusStorage",
+        "NanoVectorDBStorage",
+        "NetworkXStorage",
+        "FaissVectorDBStorage",
+    }
     if config.kv_storage in _FS_BACKENDS or config.vector_storage in _FS_BACKENDS:
         return _discover_filesystem_workspaces(config)
 
@@ -299,10 +304,12 @@ def _discover_filesystem_workspaces(config: DlightragConfig) -> list[str]:
         if not entry.is_dir() or entry.name.startswith("."):
             continue
         # Check for LightRAG data files as evidence of workspace usage
-        if (any(entry.glob("kv_store_*.json"))
-                or any(entry.glob("vdb_*.json"))
-                or any(entry.glob("graph_*.graphml"))
-                or any(entry.glob("file_content_hashes.json"))):
+        if (
+            any(entry.glob("kv_store_*.json"))
+            or any(entry.glob("vdb_*.json"))
+            or any(entry.glob("graph_*.graphml"))
+            or any(entry.glob("file_content_hashes.json"))
+        ):
             workspaces.append(entry.name)
 
     return sorted(workspaces) if workspaces else [config.workspace]

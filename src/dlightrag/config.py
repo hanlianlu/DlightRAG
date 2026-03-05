@@ -371,8 +371,12 @@ class DlightragConfig(BaseSettings):
     def model_post_init(self, __context) -> None:
         """Bridge DLIGHTRAG_* to backend-specific env vars for LightRAG."""
         # Bridge PostgreSQL env vars for LightRAG (only when PG backends are used)
-        _storage_fields = (self.vector_storage, self.graph_storage,
-                           self.kv_storage, self.doc_status_storage)
+        _storage_fields = (
+            self.vector_storage,
+            self.graph_storage,
+            self.kv_storage,
+            self.doc_status_storage,
+        )
         _uses_pg = any(s.startswith("PG") for s in _storage_fields)
 
         if _uses_pg:
@@ -393,9 +397,7 @@ class DlightragConfig(BaseSettings):
 
             # Inject hnsw.ef_search via POSTGRES_SERVER_SETTINGS
             if "POSTGRES_SERVER_SETTINGS" not in os.environ:
-                os.environ["POSTGRES_SERVER_SETTINGS"] = (
-                    f"hnsw.ef_search={self.pg_hnsw_ef_search}"
-                )
+                os.environ["POSTGRES_SERVER_SETTINGS"] = f"hnsw.ef_search={self.pg_hnsw_ef_search}"
 
         # Bridge workspace env vars for non-PG backends that override constructor
         _WORKSPACE_ENV_MAP = {

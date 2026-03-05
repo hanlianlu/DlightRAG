@@ -111,7 +111,9 @@ def _hash_office_content(file_path: Path) -> str | None:
                     has_content = True
 
             if not has_content:
-                logger.debug("No content entries found in %s, falling back to byte hash", file_path.name)
+                logger.debug(
+                    "No content entries found in %s, falling back to byte hash", file_path.name
+                )
                 return None
 
             return f"sha256:{sha256_hash.hexdigest()}"
