@@ -186,24 +186,18 @@ class IngestionPipeline:
             )
             return file_path
 
-    async def _download_blob_to_storage_async(
+    async def _download_blob_to_temp(
         self,
         source: AsyncDataSource,
-        container_name: str,
         blob_path: str,
+        tmpdir: Path,
     ) -> Path:
-        """Download Azure Blob to sources directory, auto-converting Excel to PDF."""
-        source_dir = self._get_source_dir("azure_blobs", container_name)
-        target_path = source_dir / blob_path
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-
+        """Download Azure Blob to temp directory, auto-converting Excel to PDF."""
+        target_path = tmpdir / Path(blob_path).name
         content = await source.aload_document(blob_path)
         await asyncio.to_thread(target_path.write_bytes, content)
-
-        logger.info("Downloaded blob to: %s", target_path)
-
-        # Auto-convert Excel to PDF using centralized method
-        return await self._maybe_convert_excel_to_pdf(target_path, source_dir)
+        logger.info("Downloaded blob to temp: %s", target_path)
+        return await self._prepare_for_parsing(target_path, tmpdir)
 
     def _extract_relative_source_path(self, file_path: str) -> str | None:
         """Extract relative path within sources/ from a full file path.
@@ -524,45 +518,44 @@ class IngestionPipeline:
         # Single blob
         if blob_path:
             basename = Path(blob_path).name
+            source_uri = f"azure://{container_name}/{blob_path}"
+            tmpdir = self._create_temp_dir()
+            try:
+                temp_file = await self._download_blob_to_temp(source, blob_path, tmpdir)
 
-            # Download first (needed to compute hash)
-            source_path = await self._download_blob_to_storage_async(
-                source,
-                container_name,
-                blob_path,
-            )
-
-            # Check for duplicate AFTER download
-            should_skip, content_hash, reason = await self._hash_index.should_skip_file(
-                source_path, replace
-            )
-
-            if should_skip:
-                logger.info(f"Skipped (dedup): {blob_path} - {reason}")
-                return IngestionResult(
-                    status="success",
-                    processed=0,
-                    skipped=1,
-                    total_files=1,
-                    source_type="azure_blobs",
-                    container=container_name,
-                    blob_path=blob_path,
-                    skipped_files=[basename],
+                # Dedup check after download (need local file for hash)
+                should_skip, content_hash, reason = await self._hash_index.should_skip_file(
+                    temp_file, replace
                 )
 
-            if replace:
-                await self.adelete_files(filenames=[basename], delete_source=True)
+                if should_skip:
+                    logger.info(f"Skipped (dedup): {blob_path} - {reason}")
+                    return IngestionResult(
+                        status="success",
+                        processed=0,
+                        skipped=1,
+                        total_files=1,
+                        source_type="azure_blobs",
+                        container=container_name,
+                        blob_path=blob_path,
+                        skipped_files=[basename],
+                    )
 
-            logger.info("Ingesting Azure blob: %s", blob_path)
+                if replace:
+                    await self.adelete_files(filenames=[basename], delete_source=True)
 
-            result = await self._ingest_single_file_with_policy(
-                source_path, artifacts_dir, content_hash=content_hash
-            )
-            result.source_type = "azure_blobs"
-            result.container = container_name
-            result.blob_path = blob_path
-            result.total_files = 1
-            return result
+                logger.info("Ingesting Azure blob: %s", blob_path)
+
+                result = await self._ingest_single_file_with_policy(
+                    temp_file, artifacts_dir, content_hash=content_hash, source_uri=source_uri
+                )
+                result.source_type = "azure_blobs"
+                result.container = container_name
+                result.blob_path = blob_path
+                result.total_files = 1
+                return result
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
 
         # Prefix batch
         if prefix is not None:
@@ -586,24 +579,30 @@ class IngestionPipeline:
                 self.max_concurrent,
             )
 
-            # Phase 1: Download all blobs concurrently
-            async def download_one(blob_id: str) -> Path | None:
+            # Phase 1: Download all blobs to temp dirs concurrently
+            async def download_one(blob_id: str) -> tuple[Path, Path] | None:
+                """Download blob to temp, return (temp_file, tmpdir) or None."""
+                tmpdir = self._create_temp_dir()
                 async with self._semaphore:
                     try:
-                        return await self._download_blob_to_storage_async(
-                            source,
-                            container_name,
-                            blob_id,
+                        temp_file = await self._download_blob_to_temp(
+                            source, blob_id, tmpdir
                         )
+                        return (temp_file, tmpdir)
                     except Exception as exc:
                         logger.error("Failed to download blob %s: %s", blob_id, exc)
+                        shutil.rmtree(tmpdir, ignore_errors=True)
                         return None
 
             download_tasks = [download_one(bid) for bid in blob_ids]
-            downloaded_paths = await asyncio.gather(*download_tasks)
-            valid_paths = [p for p in downloaded_paths if p is not None]
+            downloaded = await asyncio.gather(*download_tasks)
+            # Pair each result with its blob_id for source_uri construction
+            valid_downloads: list[tuple[str, Path, Path]] = []
+            for blob_id, dl in zip(blob_ids, downloaded):
+                if dl is not None:
+                    valid_downloads.append((blob_id, dl[0], dl[1]))
 
-            if not valid_paths:
+            if not valid_downloads:
                 logger.warning(
                     "All downloads failed for prefix %s in container %s",
                     prefix,
@@ -619,11 +618,11 @@ class IngestionPipeline:
                 )
 
             # Phase 2: Check for duplicates and collect files to process
-            files_to_process: list[tuple[Path, str]] = []
+            files_to_process: list[tuple[Path, str, str, Path]] = []  # (file, hash, uri, tmpdir)
             skipped_count = 0
             skipped_files: list[str] = []
 
-            for i, downloaded_path in enumerate(valid_paths):
+            for i, (blob_id, temp_file, tmpdir) in enumerate(valid_downloads):
                 # Check for cancellation periodically
                 if i % self._cancel_check_interval == 0:
                     await self._check_cancelled()
@@ -632,18 +631,20 @@ class IngestionPipeline:
                     should_skip,
                     content_hash,
                     reason,
-                ) = await self._hash_index.should_skip_file(downloaded_path, replace)
+                ) = await self._hash_index.should_skip_file(temp_file, replace)
 
                 if should_skip:
                     skipped_count += 1
-                    skipped_files.append(downloaded_path.name)
-                    logger.info(f"Skipped (dedup): {downloaded_path.name}")
+                    skipped_files.append(temp_file.name)
+                    logger.info(f"Skipped (dedup): {temp_file.name}")
+                    shutil.rmtree(tmpdir, ignore_errors=True)
                     continue
 
                 if replace:
-                    await self.adelete_files(filenames=[downloaded_path.name], delete_source=True)
+                    await self.adelete_files(filenames=[temp_file.name], delete_source=True)
 
-                files_to_process.append((downloaded_path, content_hash or ""))
+                source_uri = f"azure://{container_name}/{blob_id}"
+                files_to_process.append((temp_file, content_hash or "", source_uri, tmpdir))
 
             total_files = len(files_to_process) + skipped_count
 
@@ -675,11 +676,18 @@ class IngestionPipeline:
                 skipped_count,
             )
 
+            async def ingest_one(
+                fp: Path, ch: str, uri: str, tmpdir: Path
+            ) -> IngestionResult:
+                try:
+                    return await self._ingest_single_file_with_policy(
+                        fp, artifacts_dir, content_hash=ch if ch else None, source_uri=uri
+                    )
+                finally:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+
             ingest_tasks = [
-                self._ingest_single_file_with_policy(
-                    fp, artifacts_dir, content_hash=ch if ch else None
-                )
-                for fp, ch in files_to_process
+                ingest_one(fp, ch, uri, td) for fp, ch, uri, td in files_to_process
             ]
             results = await asyncio.gather(*ingest_tasks, return_exceptions=True)
 

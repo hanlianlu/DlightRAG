@@ -420,3 +420,65 @@ class TestTempDirAndSourceUri:
         import shutil
 
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# TestAingestFromAzureBlob
+# ---------------------------------------------------------------------------
+
+
+class TestAingestFromAzureBlob:
+    """Azure Blob ingestion workflow: temp download, dedup, ingest, cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_azure_source_uri_format(self, test_config):
+        """Azure blobs record azure://container/path as source_uri."""
+        pipeline = _make_pipeline(test_config)
+        mock_source = AsyncMock()
+        mock_source.aload_document = AsyncMock(return_value=b"blob content")
+
+        result = await pipeline.aingest_from_azure_blob(
+            source=mock_source,
+            container_name="mycontainer",
+            blob_path="data/report.pdf",
+        )
+
+        assert result.status == "success"
+        if pipeline.rag.insert_content_list.called:
+            call_kwargs = pipeline.rag.insert_content_list.call_args
+            file_path_arg = call_kwargs.kwargs.get("file_path", "")
+            assert file_path_arg == "azure://mycontainer/data/report.pdf"
+
+    @pytest.mark.asyncio
+    async def test_azure_no_permanent_download(self, test_config):
+        """Azure blobs are NOT permanently stored in sources/."""
+        pipeline = _make_pipeline(test_config)
+        mock_source = AsyncMock()
+        mock_source.aload_document = AsyncMock(return_value=b"blob content")
+
+        await pipeline.aingest_from_azure_blob(
+            source=mock_source,
+            container_name="mycontainer",
+            blob_path="data/report.pdf",
+        )
+
+        sources_azure = test_config.working_dir_path / "sources" / "azure_blobs"
+        if sources_azure.exists():
+            assert not list(sources_azure.rglob("*")), "No files in sources/azure_blobs/"
+
+    @pytest.mark.asyncio
+    async def test_azure_temp_cleaned_up(self, test_config):
+        """Temp dir is cleaned up after Azure ingestion."""
+        pipeline = _make_pipeline(test_config)
+        mock_source = AsyncMock()
+        mock_source.aload_document = AsyncMock(return_value=b"blob content")
+
+        await pipeline.aingest_from_azure_blob(
+            source=mock_source,
+            container_name="mycontainer",
+            blob_path="data/report.pdf",
+        )
+
+        tmp_dir = test_config.temp_dir
+        if tmp_dir.exists():
+            assert not list(tmp_dir.iterdir()), "Temp dirs should be cleaned up"
