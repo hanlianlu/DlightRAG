@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dlightrag.config import DlightragConfig
-from dlightrag.ingestion.pipeline import (
+from dlightrag.core.ingestion.pipeline import (
     IngestionCancelledError,
     IngestionPipeline,
 )

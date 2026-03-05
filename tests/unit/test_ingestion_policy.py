@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dlightrag.ingestion.policy import IngestionPolicy, IngestionPolicyConfig
+from dlightrag.core.ingestion.policy import IngestionPolicy, IngestionPolicyConfig
 
 
 class TestIngestionPolicy:

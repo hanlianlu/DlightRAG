@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
-from dlightrag.ingestion.cleanup import collect_deletion_context
+from dlightrag.core.ingestion.cleanup import collect_deletion_context
 
 # ---------------------------------------------------------------------------
 # Helpers

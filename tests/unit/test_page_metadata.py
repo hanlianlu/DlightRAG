@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from dlightrag.ingestion.page_metadata import (
+from dlightrag.core.ingestion.page_metadata import (
     build_page_boundary_map,
     find_page_for_offset,
     inject_page_idx_to_chunks,

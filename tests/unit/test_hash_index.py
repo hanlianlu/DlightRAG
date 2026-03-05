@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.ingestion.hash_index import HashIndex, compute_file_hash
+from dlightrag.core.ingestion.hash_index import HashIndex, compute_file_hash
 
 
 class TestComputeFileHash:
@@ -408,7 +408,7 @@ class TestRedisHashIndex:
 
     @pytest.fixture
     def redis_index(self):
-        from dlightrag.ingestion.hash_index import RedisHashIndex
+        from dlightrag.core.ingestion.hash_index import RedisHashIndex
 
         idx = RedisHashIndex(workspace="test")
         # Mock the Redis client with a dict-based fake
@@ -519,7 +519,7 @@ class TestMongoHashIndex:
 
     @pytest.fixture
     def mongo_index(self):
-        from dlightrag.ingestion.hash_index import MongoHashIndex
+        from dlightrag.core.ingestion.hash_index import MongoHashIndex
 
         idx = MongoHashIndex(workspace="test")
         idx._collection = FakeMongoCollection()
@@ -558,42 +558,42 @@ class TestDeriveSourceType:
     """Tests for derive_source_type() module-level helper."""
 
     def test_azure_uri(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("azure://container/path/file.pdf") == "azure_blobs"
 
     def test_snowflake_uri(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("snowflake://source_label") == "snowflake"
 
     def test_local_absolute_path(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("/Users/me/docs/report.pdf") == "local"
 
     def test_local_relative_path(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("report.pdf") == "local"
 
     def test_legacy_sources_path(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("/abs/path/sources/local/file.pdf") == "local"
         assert derive_source_type("/abs/path/sources/azure_blobs/c/file.pdf") == "azure_blobs"
 
     def test_empty_string(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("") == "unknown"
 
     def test_unknown_uri_scheme(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("s3://bucket/file.pdf") == "unknown"
 
     def test_dot_relative_path(self):
-        from dlightrag.ingestion.hash_index import derive_source_type
+        from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("./data/report.pdf") == "local"
