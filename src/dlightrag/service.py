@@ -149,9 +149,6 @@ class RAGService:
         self.rag_text: EnhancedRAGAnything | None = None
         self.rag_vision: EnhancedRAGAnything | None = None
 
-        # asyncpg pool for PGHashIndex (closed in close())
-        self._hash_pool: Any | None = None
-
     def _unregister_atexit_cleanup(self, rag_obj: Any) -> None:
         """Prevent double-close logging errors by removing raganything atexit hooks."""
         try:
@@ -390,41 +387,51 @@ class RAGService:
         logger.info("All RAG pipelines initialized successfully")
 
     async def _create_hash_index(self, config: DlightragConfig) -> Any:
-        """Create the appropriate hash index backend based on storage config.
+        """Create the appropriate hash index backend based on KV storage config.
 
-        Uses PGHashIndex when KV storage is PG-backed, otherwise falls back
-        to JSON file-based HashIndex.
+        Uses the same backend as the configured KV storage for consistency.
+        Falls back to JSON file-based HashIndex if the backend package is unavailable.
         """
-        if config.kv_storage.startswith("PG"):
-            try:
-                import asyncpg
+        kv = config.kv_storage
 
+        if kv.startswith("PG"):
+            try:
                 from dlightrag.ingestion.hash_index import PGHashIndex
 
-                pool = await asyncpg.create_pool(
-                    host=config.postgres_host,
-                    port=config.postgres_port,
-                    user=config.postgres_user,
-                    password=config.postgres_password,
-                    database=config.postgres_database,
-                    min_size=1,
-                    max_size=3,
-                )
-                self._hash_pool = pool  # track for cleanup in close()
-
-                pg_index = PGHashIndex(
-                    pool,
-                    workspace=config.workspace,
-                    sources_dir=config.sources_dir,
-                )
-                await pg_index.initialize()
-                logger.info("Hash index: PGHashIndex (PostgreSQL)")
-                return pg_index
-
+                idx = PGHashIndex(workspace=config.workspace, sources_dir=config.sources_dir)
+                await idx.initialize()
+                logger.info("Hash index: PGHashIndex (PostgreSQL via shared pool)")
+                return idx
             except ImportError:
                 logger.warning("asyncpg not available, falling back to JSON HashIndex")
             except Exception as e:
                 logger.warning(f"PGHashIndex creation failed, falling back to JSON: {e}")
+
+        elif kv.startswith("Redis"):
+            try:
+                from dlightrag.ingestion.hash_index import RedisHashIndex
+
+                idx = RedisHashIndex(workspace=config.workspace, sources_dir=config.sources_dir)
+                await idx.initialize()
+                logger.info("Hash index: RedisHashIndex (Redis via shared pool)")
+                return idx
+            except ImportError:
+                logger.warning("redis not available, falling back to JSON HashIndex")
+            except Exception as e:
+                logger.warning(f"RedisHashIndex creation failed, falling back to JSON: {e}")
+
+        elif kv.startswith("Mongo"):
+            try:
+                from dlightrag.ingestion.hash_index import MongoHashIndex
+
+                idx = MongoHashIndex(workspace=config.workspace, sources_dir=config.sources_dir)
+                await idx.initialize()
+                logger.info("Hash index: MongoHashIndex (MongoDB via shared client)")
+                return idx
+            except ImportError:
+                logger.warning("motor not available, falling back to JSON HashIndex")
+            except Exception as e:
+                logger.warning(f"MongoHashIndex creation failed, falling back to JSON: {e}")
 
         from dlightrag.ingestion.hash_index import HashIndex
 
@@ -454,14 +461,6 @@ class RAGService:
                     await rag_obj.finalize_storages()
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize retrieval storages", exc_info=True)
-
-        # Close PGHashIndex connection pool
-        if self._hash_pool is not None:
-            try:
-                await self._hash_pool.close()
-            except Exception:  # noqa: BLE001
-                logger.warning("Failed to close hash index pool", exc_info=True)
-            self._hash_pool = None
 
     # === INGESTION API ===
 

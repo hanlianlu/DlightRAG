@@ -2,10 +2,11 @@
 """Hash-based content deduplication for RAG ingestion.
 
 Provides content-addressable storage tracking via SHA256 hashes.
-Supports both PostgreSQL (PGHashIndex) and JSON file (HashIndex) backends.
+Supports PostgreSQL (PGHashIndex), Redis (RedisHashIndex),
+MongoDB (MongoHashIndex), and JSON file (HashIndex) backends.
 
-Use PGHashIndex for multi-worker safety with PostgreSQL storage.
-Use HashIndex as fallback for JSON-based or non-PG storage backends.
+Each distributed backend reuses LightRAG's shared connection manager.
+HashIndex (JSON) is the fallback for local/single-process deployments.
 """
 
 from __future__ import annotations
