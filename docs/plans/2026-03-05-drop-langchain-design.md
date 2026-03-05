@@ -33,9 +33,10 @@ DlightragConfig
 
 ```
 DlightragConfig
-  -> LightRAG native functions (openai_complete, anthropic_complete, ...)
+  -> partial(lightrag _if_cache fn, model=..., api_key=..., base_url=...)
     -> Underlying SDK (already dependencies of lightrag-hku)
-      -> LightRAG(llm_model_func=native_function)  # zero wrapper
+      -> LightRAG(llm_model_func=bound_fn)
+      -> RAGAnything modal processors call bound_fn directly (no hashing_kv)
 ```
 
 ## Verified Facts
@@ -65,28 +66,44 @@ model_name = kwargs["hashing_kv"].global_config["llm_model_name"]
 return await openai_complete_if_cache(model_name, prompt, ...)
 ```
 
-**Consequence:** We pass the native function + `llm_model_name` +
-`llm_model_kwargs` to LightRAG. No `partial()`, no wrapper needed for LLM.
+**However:** The public wrapper functions (`openai_complete` etc.) require
+`hashing_kv` in kwargs — they crash when called directly outside LightRAG's
+pipeline. RAGAnything calls `self.llm_model_func` directly for modal processing
+(image captioning, table analysis) without `hashing_kv`.
 
-### RAGAnything Transparency
+**Solution:** Use `partial(_if_cache_fn, model=..., api_key=..., base_url=...)`
+instead of the public wrapper. The `_if_cache` variants accept `hashing_kv` as
+an optional kwarg (popped internally) and work both:
+- When called directly by RAGAnything modal processors (no hashing_kv)
+- When called through LightRAG pipeline (hashing_kv injected by LightRAG)
 
-RAGAnything passes `lightrag_kwargs` directly to `LightRAG(**lightrag_params)`
-(raganything.py:318-338). Fields like `llm_model_name` and `llm_model_kwargs`
-flow through untouched.
+### RAGAnything Modal Processing Constraint
 
-### Provider Function Mapping (Public Functions)
+RAGAnything uses `self.llm_model_func` for modal processors
+(raganything.py:191-212):
+```python
+modal_caption_func=self.vision_model_func or self.llm_model_func
+```
+These processors call the function directly: `await modal_caption_func(prompt)`.
+No `hashing_kv` is passed. Therefore `llm_model_func` must be a self-contained
+callable with model/api_key/base_url already bound.
+
+RAGAnything also passes `lightrag_kwargs` directly to
+`LightRAG(**lightrag_params)` (raganything.py:318-338).
+
+### Provider Function Mapping (_if_cache Variants)
 
 | DlightRAG provider | LightRAG function | Import path |
 |---|---|---|
-| `openai` | `openai_complete` | `lightrag.llm.openai` |
-| `azure_openai` | `azure_openai_complete` | `lightrag.llm.azure_openai` |
-| `anthropic` | `anthropic_complete` | `lightrag.llm.anthropic` |
-| `google_gemini` | `gemini_model_complete` | `lightrag.llm.gemini` |
-| `ollama` | `ollama_model_complete` | `lightrag.llm.ollama` |
-| `qwen`, `minimax`, `openrouter`, `xinference` | `openai_complete` | `lightrag.llm.openai` (OpenAI-compatible) |
+| `openai` | `openai_complete_if_cache` | `lightrag.llm.openai` |
+| `azure_openai` | `azure_openai_complete_if_cache` | `lightrag.llm.azure_openai` |
+| `anthropic` | `anthropic_complete_if_cache` | `lightrag.llm.anthropic` |
+| `google_gemini` | `gemini_complete_if_cache` | `lightrag.llm.gemini` |
+| `ollama` | `_ollama_model_if_cache` | `lightrag.llm.ollama` |
+| `qwen`, `minimax`, `openrouter`, `xinference` | `openai_complete_if_cache` | `lightrag.llm.openai` (OpenAI-compatible) |
 
-All public functions follow the same pattern: no `model` parameter, reads model
-from `hashing_kv.global_config["llm_model_name"]`.
+All `_if_cache` functions take `model` as first parameter. Use `partial()` to
+bind model + credentials. Works with or without `hashing_kv`.
 
 ### Embedding Functions
 
@@ -131,47 +148,38 @@ differ and were verified via context7 docs and LightRAG source kwargs analysis:
 ### 1. `src/dlightrag/models/llm.py` — LLM Functions
 
 **Delete:** `_build_chat_model`, `_build_llm_model_func`, `get_llm_model_func`,
-`get_ingestion_llm_model_func`
+`get_ingestion_llm_model_func`, `_OPENAI_COMPATIBLE_PROVIDERS`
 
-**Add:** `_get_native_llm_func(provider)` — returns the LightRAG native function
-
-```python
-def _get_native_llm_func(provider: str) -> Callable:
-    if provider in ("openai", "qwen", "minimax", "openrouter", "xinference"):
-        from lightrag.llm.openai import openai_complete
-        return openai_complete
-    if provider == "azure_openai":
-        from lightrag.llm.azure_openai import azure_openai_complete
-        return azure_openai_complete
-    if provider == "anthropic":
-        from lightrag.llm.anthropic import anthropic_complete
-        return anthropic_complete
-    if provider == "google_gemini":
-        from lightrag.llm.gemini import gemini_model_complete
-        return gemini_model_complete
-    if provider == "ollama":
-        from lightrag.llm.ollama import ollama_model_complete
-        return ollama_model_complete
-    raise ValueError(f"Unsupported provider: {provider}")
-```
-
-**Add:** `_get_llm_model_kwargs(config, provider)` — returns kwargs dict for
-the provider
+**Add:** `get_llm_model_func(config)` — returns `partial(_if_cache_fn, ...)`
 
 ```python
-def _get_llm_model_kwargs(config: DlightragConfig, provider: str) -> dict:
-    kwargs = {}
+def get_llm_model_func(config, model_name=None, provider=None):
+    provider = provider or config.llm_provider
+    model = model_name or config.chat_model_name
     api_key = config._get_provider_api_key(provider)
-    if api_key:
-        kwargs["api_key"] = api_key
     base_url = config._get_url(f"{provider}_base_url")
-    if base_url:
-        kwargs["base_url"] = base_url
+
+    if provider in ("openai", "qwen", "minimax", "openrouter", "xinference"):
+        from lightrag.llm.openai import openai_complete_if_cache
+        return partial(openai_complete_if_cache, model=model, api_key=api_key, base_url=base_url)
     if provider == "azure_openai":
-        kwargs["api_version"] = config.azure_api_version
+        from lightrag.llm.azure_openai import azure_openai_complete_if_cache
+        return partial(azure_openai_complete_if_cache, model=model, api_key=api_key,
+                       base_url=base_url, api_version=config.azure_api_version)
+    if provider == "anthropic":
+        from lightrag.llm.anthropic import anthropic_complete_if_cache
+        return partial(anthropic_complete_if_cache, model=model, api_key=api_key)
+    if provider == "google_gemini":
+        from lightrag.llm.gemini import gemini_complete_if_cache
+        return partial(gemini_complete_if_cache, model=model, api_key=api_key)
     if provider == "ollama":
-        kwargs["host"] = config.ollama_base_url.rstrip("/v1")
-    return kwargs
+        from lightrag.llm.ollama import _ollama_model_if_cache
+        host = config.ollama_base_url.removesuffix("/v1")
+        return partial(_ollama_model_if_cache, model=model, host=host)
+    raise ValueError(f"Unsupported provider: {provider}")
+
+def get_ingestion_llm_model_func(config):
+    return get_llm_model_func(config, model_name=config.ingestion_model_name)
 ```
 
 ### 2. `src/dlightrag/models/llm.py` — Embedding
@@ -242,33 +250,26 @@ def _json_kwargs_for_provider(provider):
     return {}  # anthropic: prompt-only
 ```
 
-### 4. `src/dlightrag/service.py` — Wire It Up
+### 4. `src/dlightrag/service.py` — No API Changes
+
+The public API of `get_llm_model_func` / `get_ingestion_llm_model_func` is
+unchanged — they still return `LLMFunc` callables. Only the internals change
+(LangChain wrapper → `partial(_if_cache_fn, ...)`). `service.py` does NOT need
+modifications — the same call pattern works:
 
 ```python
-# Before:
+# service.py:298-302 — UNCHANGED
 llm_func = get_llm_model_func(config)
 ingestion_llm_func = get_ingestion_llm_model_func(config)
-
-lightrag_kwargs = {
-    # no llm_model_name, no llm_model_kwargs
-    ...
-}
-rag = RAGAnything(None, ingestion_llm_func, vision_func, embedding_func, ...)
-
-# After:
-lightrag_kwargs = {
-    "llm_model_func": _get_native_llm_func(config.llm_provider),
-    "llm_model_name": config.chat_model_name,
-    "llm_model_kwargs": _get_llm_model_kwargs(config, config.llm_provider),
-    ...
-}
-rag = RAGAnything(None, None, vision_func, embedding_func, ...)
-# llm_model_func now comes from lightrag_kwargs
+vision_func = get_vision_model_func(config)
+embedding_func = get_embedding_func(config)
+rerank_func = get_rerank_func(config)
 ```
 
-Note: Ingestion and retrieval may use different models. Current config has
-`ingestion_model_name` and `ingestion_temperature`. These can be passed via
-separate RAGAnything instances or handled in lightrag_kwargs.
+RAGAnything receives `ingestion_llm_func` (a `partial`) as its
+`llm_model_func` arg. This works because `partial(_if_cache_fn, model=...)`
+is callable with `(prompt, system_prompt=..., **kwargs)` — the same signature
+RAGAnything expects for modal processing.
 
 ### 5. `src/dlightrag/models/llm.py` — Vision (NO CHANGE)
 
@@ -295,24 +296,22 @@ Remove all `from langchain_*` imports:
 - `from langchain_google_genai import ChatGoogleGenerativeAI`
 - `from langchain_google_genai import GoogleGenerativeAIEmbeddings`
 
-## Open Questions
+## Resolved Questions
 
-1. **Ingestion vs retrieval model split:** Currently DlightRAG supports
-   separate models for ingestion (`ingestion_model_name`) and retrieval
-   (`chat_model_name`). LightRAG has a single `llm_model_func`. Need to verify
-   if RAGAnything supports overriding at the instance level, or if we need two
-   LightRAG instances.
+1. **Ingestion vs retrieval model split:** Handled by calling
+   `get_llm_model_func(config, model_name=config.ingestion_model_name)`. Each
+   call returns a separate `partial` with different model bound. service.py
+   already creates separate RAGAnything instances for ingestion vs retrieval.
 
-2. **Ollama base_url format:** DlightRAG config stores `ollama_base_url` as
-   `http://localhost:11434/v1` (OpenAI-compatible). Native Ollama functions
-   expect `http://localhost:11434` (no `/v1`). Need `.rstrip("/v1")` or store
-   both formats.
+2. **Ollama base_url format:** Use `.removesuffix("/v1")` when passing to
+   native Ollama functions. Config stores `/v1` format for OpenAI-compat usage.
 
 ## Test Strategy
 
 - All 287 existing tests must pass
-- Add unit tests for `_get_native_llm_func` dispatch
-- Add unit tests for `_get_llm_model_kwargs` per provider
+- Add unit tests for `get_llm_model_func` dispatch per provider
+- Add unit tests for `get_embedding_func` per provider
 - Add unit tests for `_json_kwargs_for_provider`
-- Verify embedding `partial` + `EmbeddingFunc` wrapping
 - Verify rerank JSON parsing + fallback behavior
+- Update `test_llm_providers.py` to test `partial` return types instead of
+  LangChain model types
