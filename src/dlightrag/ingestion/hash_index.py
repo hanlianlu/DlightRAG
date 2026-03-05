@@ -670,11 +670,9 @@ class RedisHashIndex:
     async def sync_existing(self) -> int:
         if not self._sources_dir or not self._sources_dir.exists():
             return 0
-        existing = await self._redis.hkeys(self._key())
-        existing_hashes = set(existing)
-        # Build file_path lookup
         all_entries = await self._redis.hgetall(self._key())
-        existing_paths = set()
+        existing_hashes = set(all_entries.keys())
+        existing_paths: set[str] = set()
         for data in all_entries.values():
             info = json.loads(data)
             existing_paths.add(info.get("file_path", ""))

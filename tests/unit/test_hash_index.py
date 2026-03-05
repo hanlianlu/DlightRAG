@@ -360,7 +360,10 @@ def _create_docx(path: Path, body_xml: str, modified_time: str) -> None:
 
 
 class FakeRedis:
-    """Minimal async Redis mock using a dict."""
+    """Minimal async Redis mock using a dict.
+
+    Simulates decode_responses=True (LightRAG default), returning str not bytes.
+    """
 
     def __init__(self):
         self._data: dict[str, dict[str, str]] = {}
