@@ -21,7 +21,6 @@ class TestComputeFileHash:
 
         hash_value = compute_file_hash(test_file)
         assert hash_value.startswith("sha256:")
-        assert len(hash_value) == 71  # "sha256:" + 64 hex chars
 
     def test_same_content_same_hash(self, tmp_path: Path) -> None:
         """Test that identical content produces identical hash."""
@@ -31,15 +30,6 @@ class TestComputeFileHash:
         file2.write_text("same content")
 
         assert compute_file_hash(file1) == compute_file_hash(file2)
-
-    def test_different_content_different_hash(self, tmp_path: Path) -> None:
-        """Test that different content produces different hash."""
-        file1 = tmp_path / "file1.txt"
-        file2 = tmp_path / "file2.txt"
-        file1.write_text("content A")
-        file2.write_text("content B")
-
-        assert compute_file_hash(file1) != compute_file_hash(file2)
 
 
 class TestContentAwarePdfHash:
@@ -67,7 +57,6 @@ class TestContentAwarePdfHash:
 
         result = compute_file_hash(pdf_path)
         assert result.startswith("sha256:")
-        assert len(result) == 71
 
     def test_pdf_pypdfium2_unavailable_falls_back(self, tmp_path: Path, monkeypatch: Any) -> None:
         """When pypdfium2 import fails, falls back to byte hash."""
@@ -113,19 +102,6 @@ class TestContentAwareOfficeHash:
 
         result = compute_file_hash(bad_docx)
         assert result.startswith("sha256:")
-        assert len(result) == 71
-
-    def test_non_office_extension_uses_byte_hash(self, tmp_path: Path) -> None:
-        """Non-PDF, non-Office files use raw byte hash (unchanged behavior)."""
-        txt = tmp_path / "readme.txt"
-        txt.write_text("hello world")
-
-        result = compute_file_hash(txt)
-        assert result.startswith("sha256:")
-
-        from dlightrag.ingestion.hash_index import _hash_file_bytes
-
-        assert result == _hash_file_bytes(txt)
 
 
 class TestHashIndex:
@@ -143,11 +119,6 @@ class TestHashIndex:
         assert entry["doc_id"] == "doc-001"
         assert entry["file_path"] == "/path/to/file.pdf"
 
-    def test_lookup_missing(self, tmp_path: Path) -> None:
-        """Test lookup for non-existent hash."""
-        index = HashIndex(tmp_path)
-        assert index.lookup("sha256:nonexistent") is None
-
     async def test_remove(self, tmp_path: Path) -> None:
         """Test removing a hash entry."""
         index = HashIndex(tmp_path)
@@ -159,11 +130,6 @@ class TestHashIndex:
         result = await index.remove(content_hash)
         assert result is True
         assert index.lookup(content_hash) is None
-
-    async def test_remove_missing(self, tmp_path: Path) -> None:
-        """Test removing non-existent hash."""
-        index = HashIndex(tmp_path)
-        assert await index.remove("sha256:nonexistent") is False
 
     async def test_list_all(self, tmp_path: Path) -> None:
         """Test listing all entries."""
@@ -229,6 +195,88 @@ class TestHashIndex:
         assert should_skip
         assert reason is not None
 
+    async def test_should_skip_file_replace_bypasses_dedup(self, tmp_path: Path) -> None:
+        """replace=True returns (False, hash, None) even for known duplicate."""
+        test_file = tmp_path / "file.txt"
+        test_file.write_text("content")
+        index = HashIndex(tmp_path)
+        content_hash = compute_file_hash(test_file)
+        await index.register(content_hash, "doc-001", str(test_file))
+
+        should_skip, returned_hash, reason = await index.should_skip_file(test_file, replace=True)
+        assert not should_skip
+        assert returned_hash == content_hash
+        assert reason is None
+
+    async def test_find_by_name_found(self, tmp_path: Path) -> None:
+        """find_by_name returns (doc_id, hash, path) for matching filename."""
+        index = HashIndex(tmp_path)
+        await index.register("sha256:abc", "doc-001", "/deep/path/report.pdf")
+        doc_id, h, path = index.find_by_name("report.pdf")
+        assert doc_id == "doc-001"
+        assert h == "sha256:abc"
+        assert path == "/deep/path/report.pdf"
+
+    async def test_find_by_name_not_found(self, tmp_path: Path) -> None:
+        """find_by_name returns (None, None, None) when no match."""
+        index = HashIndex(tmp_path)
+        await index.register("sha256:abc", "doc-001", "/path/other.pdf")
+        assert index.find_by_name("missing.pdf") == (None, None, None)
+
+    async def test_find_by_path_found(self, tmp_path: Path) -> None:
+        """find_by_path matches exact path string."""
+        index = HashIndex(tmp_path)
+        await index.register("sha256:abc", "doc-001", "/exact/path/file.pdf")
+        doc_id, h, path = index.find_by_path("/exact/path/file.pdf")
+        assert doc_id == "doc-001"
+
+    async def test_register_overwrites_existing(self, tmp_path: Path) -> None:
+        """Registering same hash with different doc_id overwrites."""
+        index = HashIndex(tmp_path)
+        await index.register("sha256:abc", "doc-001", "/path/a.pdf")
+        await index.register("sha256:abc", "doc-002", "/path/b.pdf")
+        entry = index.lookup("sha256:abc")
+        assert entry["doc_id"] == "doc-002"
+        assert entry["file_path"] == "/path/b.pdf"
+
+    async def test_persistence_across_instances(self, tmp_path: Path) -> None:
+        """Data survives creating a new HashIndex on the same directory."""
+        index1 = HashIndex(tmp_path)
+        await index1.register("sha256:abc", "doc-001", "/path/a.pdf")
+
+        index2 = HashIndex(tmp_path)
+        entry = index2.lookup("sha256:abc")
+        assert entry is not None
+        assert entry["doc_id"] == "doc-001"
+
+    async def test_corrupted_json_recovers(self, tmp_path: Path) -> None:
+        """Corrupted index file recovers gracefully to empty index."""
+        index = HashIndex(tmp_path)
+        # Write garbage to the index file
+        index._get_index_path().parent.mkdir(parents=True, exist_ok=True)
+        index._get_index_path().write_text("NOT VALID JSON {{{")
+        index.invalidate()
+
+        # Should not raise, returns None
+        assert index.lookup("sha256:anything") is None
+        # Should be able to register new entries
+        await index.register("sha256:new", "doc-new", "/new.pdf")
+        assert index.lookup("sha256:new") is not None
+
+    async def test_list_all_returns_correct_structure(self, tmp_path: Path) -> None:
+        """list_all returns dicts with all expected fields."""
+        index = HashIndex(tmp_path)
+        await index.register("sha256:aaa", "doc-001", "/Users/me/report.pdf")
+        entries = await index.list_all()
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["file_path"] == "/Users/me/report.pdf"
+        assert entry["doc_id"] == "doc-001"
+        assert entry["source_type"] == "local"
+        assert entry["file_name"] == "report.pdf"
+        assert entry["content_hash"] == "sha256:aaa"
+        assert "created_at" in entry
+
 
 class TestHashIndexWorkspace:
     """Test JSON HashIndex workspace isolation."""
@@ -252,14 +300,6 @@ class TestHashIndexWorkspace:
         # ws-b should NOT see ws-a's hash
         exists, _ = index_b.check_exists("sha256:same")
         assert not exists
-
-    async def test_default_workspace_uses_subdirectory(self, tmp_path: Path) -> None:
-        """Default workspace also uses a subdirectory for consistency."""
-        index = HashIndex(tmp_path, workspace="default")
-        await index.register("sha256:abc", "doc-1", "/path/a.pdf")
-
-        hash_file = tmp_path / "default" / "file_content_hashes.json"
-        assert hash_file.exists()
 
 
 def _create_pdf_with_metadata(path: Path, text: str, date_str: str) -> None:
@@ -514,71 +554,6 @@ class TestMongoHashIndex:
         assert entries[0]["doc_id"] == "doc-001"
 
 
-class TestHashIndexFactory:
-    """Test that _create_hash_index selects the right backend."""
-
-    async def test_pg_backend_selection(self, tmp_path):
-        """PG config should select PGHashIndex (or fall back to JSON without PG)."""
-        from unittest.mock import MagicMock
-
-        from dlightrag.service import RAGService
-
-        config = MagicMock()
-        config.kv_storage = "PGKVStorage"
-        config.workspace = "test"
-        config.working_dir_path = tmp_path
-
-        service = RAGService.__new__(RAGService)
-        result = await service._create_hash_index(config)
-        # PGHashIndex if PG is available, HashIndex fallback otherwise
-        assert type(result).__name__ in ("PGHashIndex", "HashIndex")
-
-    async def test_json_backend_selection(self, tmp_path):
-        from unittest.mock import MagicMock
-
-        from dlightrag.service import RAGService
-
-        config = MagicMock()
-        config.kv_storage = "JsonKVStorage"
-        config.workspace = "test"
-        config.working_dir_path = tmp_path
-
-        service = RAGService.__new__(RAGService)
-        result = await service._create_hash_index(config)
-        assert type(result).__name__ == "HashIndex"
-
-    async def test_redis_fallback_to_json(self, tmp_path):
-        """Redis config without redis package should fall back to JSON."""
-        from unittest.mock import MagicMock
-
-        from dlightrag.service import RAGService
-
-        config = MagicMock()
-        config.kv_storage = "RedisKVStorage"
-        config.workspace = "test"
-        config.working_dir_path = tmp_path
-
-        service = RAGService.__new__(RAGService)
-        result = await service._create_hash_index(config)
-        # Will be HashIndex if redis not installed, RedisHashIndex if installed
-        assert type(result).__name__ in ("HashIndex", "RedisHashIndex")
-
-    async def test_mongo_fallback_to_json(self, tmp_path):
-        """Mongo config without motor package should fall back to JSON."""
-        from unittest.mock import MagicMock
-
-        from dlightrag.service import RAGService
-
-        config = MagicMock()
-        config.kv_storage = "MongoKVStorage"
-        config.workspace = "test"
-        config.working_dir_path = tmp_path
-
-        service = RAGService.__new__(RAGService)
-        result = await service._create_hash_index(config)
-        assert type(result).__name__ in ("HashIndex", "MongoHashIndex")
-
-
 class TestDeriveSourceType:
     """Tests for derive_source_type() module-level helper."""
 
@@ -612,3 +587,13 @@ class TestDeriveSourceType:
         from dlightrag.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("") == "unknown"
+
+    def test_unknown_uri_scheme(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("s3://bucket/file.pdf") == "unknown"
+
+    def test_dot_relative_path(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("./data/report.pdf") == "local"

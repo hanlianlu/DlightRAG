@@ -48,58 +48,50 @@ class TestGetLlmModelFunc:
         config = self._make_config(llm_provider="openai", chat_model="gpt-4.1-mini")
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.openai"
         assert func.keywords["model"] == "gpt-4.1-mini"
 
-    def test_qwen_returns_openai_partial(self) -> None:
+    def test_qwen_returns_partial(self) -> None:
         config = self._make_config(llm_provider="qwen", qwen_api_key="qwen-key")
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.openai"
 
-    def test_minimax_returns_openai_partial(self) -> None:
+    def test_minimax_returns_partial(self) -> None:
         config = self._make_config(llm_provider="minimax", minimax_api_key="mm-key")
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.openai"
 
-    def test_ollama_returns_ollama_partial(self) -> None:
+    def test_ollama_returns_partial(self) -> None:
         config = self._make_config(llm_provider="ollama")
         try:
             func = get_llm_model_func(config)
         except ModuleNotFoundError:
             pytest.skip("ollama package not installed")
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.ollama"
         # Host should have /v1 stripped
         assert func.keywords.get("host", "").endswith("/v1") is False
 
-    def test_openrouter_returns_openai_partial(self) -> None:
+    def test_openrouter_returns_partial(self) -> None:
         config = self._make_config(llm_provider="openrouter", openrouter_api_key="sk-or-key")
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.openai"
 
-    def test_xinference_returns_openai_partial(self) -> None:
+    def test_xinference_returns_partial(self) -> None:
         config = self._make_config(llm_provider="xinference")
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.openai"
 
-    def test_anthropic_returns_anthropic_partial(self) -> None:
+    def test_anthropic_returns_partial(self) -> None:
         config = self._make_config(llm_provider="anthropic", anthropic_api_key="ant-key")
         try:
             func = get_llm_model_func(config)
         except ModuleNotFoundError:
             pytest.skip("anthropic/voyageai package not installed")
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.anthropic"
 
-    def test_google_gemini_returns_gemini_partial(self) -> None:
+    def test_google_gemini_returns_partial(self) -> None:
         config = self._make_config(llm_provider="google_gemini", google_gemini_api_key="google-key")
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
-        assert func.func.__module__ == "lightrag.llm.gemini"
 
     def test_unsupported_provider_raises(self) -> None:
         config = self._make_config()

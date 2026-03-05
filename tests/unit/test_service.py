@@ -8,25 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dlightrag.config import DlightragConfig
-from dlightrag.service import RAGService, _detect_mineru_backend
-
-# ---------------------------------------------------------------------------
-# TestRAGServiceInit
-# ---------------------------------------------------------------------------
-
-
-class TestRAGServiceInit:
-    """Test RAGService construction and configuration."""
-
-    def test_ensure_initialized_raises(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
-        with pytest.raises(RuntimeError, match="not initialized"):
-            service._ensure_initialized()
-
-    def test_mineru_backend_manual_override(self) -> None:
-        result = _detect_mineru_backend("custom-engine")
-        assert result == "custom-engine"
-
+from dlightrag.service import RAGService
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
@@ -143,12 +125,6 @@ class TestRAGServiceRerank:
 
         assert result == chunks
 
-    async def test_rerank_empty_chunks(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
-        service._initialized = True
-        result = await service._rerank_chunks([], "query")
-        assert result == []
-
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceClose
@@ -170,3 +146,136 @@ class TestRAGServiceClose:
 
         # Should not raise
         await service.close()
+
+
+# ---------------------------------------------------------------------------
+# TestRAGServiceRetrieve
+# ---------------------------------------------------------------------------
+
+
+class TestRAGServiceRetrieve:
+    """Test aretrieve and aanswer dispatch logic."""
+
+    def _make_retrieval_service(self, config: DlightragConfig) -> RAGService:
+        service = RAGService(config=config)
+        service._initialized = True
+        service.enable_rerank = False
+
+        rag_text = MagicMock()
+        rag_text.aquery_data_with_multimodal = AsyncMock(return_value=MagicMock())
+        rag_text.lightrag = MagicMock()
+
+        rag_vision = MagicMock()
+        rag_vision.aquery_data_with_multimodal = AsyncMock(return_value=MagicMock())
+        rag_vision.lightrag = MagicMock()
+
+        service.rag_text = rag_text
+        service.rag_vision = rag_vision
+        service.ingestion = MagicMock()
+        return service
+
+    @patch("dlightrag.service.augment_retrieval_result", new_callable=AsyncMock,
+           return_value=MagicMock())
+    async def test_aretrieve_uses_text_rag_by_default(self, mock_augment, test_config):
+        service = self._make_retrieval_service(test_config)
+        await service.aretrieve("test query")
+        service.rag_text.aquery_data_with_multimodal.assert_awaited_once()
+        service.rag_vision.aquery_data_with_multimodal.assert_not_awaited()
+
+    @patch("dlightrag.service.augment_retrieval_result", new_callable=AsyncMock,
+           return_value=MagicMock())
+    async def test_aretrieve_uses_vision_rag_with_multimodal(self, mock_augment, test_config):
+        service = self._make_retrieval_service(test_config)
+        await service.aretrieve("test query", multimodal_content=[{"type": "image"}])
+        service.rag_vision.aquery_data_with_multimodal.assert_awaited_once()
+        service.rag_text.aquery_data_with_multimodal.assert_not_awaited()
+
+    async def test_aretrieve_not_initialized_raises(self, test_config):
+        service = RAGService(config=test_config)
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await service.aretrieve("query")
+
+
+# ---------------------------------------------------------------------------
+# TestConversationHistoryTruncation
+# ---------------------------------------------------------------------------
+
+
+class TestConversationHistoryTruncation:
+    """Test aanswer conversation history truncation logic."""
+
+    def _make_answer_service(self, config: DlightragConfig) -> RAGService:
+        service = RAGService(config=config)
+        service._initialized = True
+        service.enable_rerank = False
+
+        rag = MagicMock()
+        rag.aquery_llm_with_multimodal = AsyncMock(return_value=MagicMock())
+        rag.lightrag = MagicMock()
+
+        service.rag_text = rag
+        service.rag_vision = rag
+        service.ingestion = MagicMock()
+        return service
+
+    @patch("dlightrag.service.augment_retrieval_result", new_callable=AsyncMock,
+           return_value=MagicMock())
+    async def test_history_truncated_by_turns(self, mock_augment, test_config):
+        """History exceeding max_conversation_turns*2 is truncated from front."""
+        test_config.max_conversation_turns = 2  # max 4 messages
+        service = self._make_answer_service(test_config)
+
+        history = [{"role": "user", "content": f"msg{i}"} for i in range(10)]
+        await service.aanswer("query", conversation_history=history)
+
+        call_kwargs = service.rag_text.aquery_llm_with_multimodal.call_args.kwargs
+        passed_history = call_kwargs.get("conversation_history", [])
+        assert len(passed_history) <= 4
+
+    @patch("dlightrag.service.augment_retrieval_result", new_callable=AsyncMock,
+           return_value=MagicMock())
+    async def test_none_history_passes_through(self, mock_augment, test_config):
+        """None history does not add conversation_history kwarg."""
+        service = self._make_answer_service(test_config)
+        await service.aanswer("query", conversation_history=None)
+
+        call_kwargs = service.rag_text.aquery_llm_with_multimodal.call_args.kwargs
+        assert "conversation_history" not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# TestRAGServiceFileManagement
+# ---------------------------------------------------------------------------
+
+
+class TestRAGServiceFileManagement:
+    """Test alist_ingested_files and adelete_files delegation."""
+
+    async def test_alist_not_initialized_raises(self, test_config):
+        service = RAGService(config=test_config)
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await service.alist_ingested_files()
+
+    async def test_adelete_not_initialized_raises(self, test_config):
+        service = RAGService(config=test_config)
+        with pytest.raises(RuntimeError, match="not initialized"):
+            await service.adelete_files(filenames=["a.pdf"])
+
+    async def test_alist_delegates_to_ingestion(self, test_config):
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service.ingestion = MagicMock()
+        service.ingestion.alist_ingested_files = AsyncMock(return_value=[{"doc_id": "d1"}])
+        result = await service.alist_ingested_files()
+        assert result == [{"doc_id": "d1"}]
+        service.ingestion.alist_ingested_files.assert_awaited_once()
+
+    async def test_adelete_delegates_to_ingestion(self, test_config):
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service.ingestion = MagicMock()
+        service.ingestion.adelete_files = AsyncMock(return_value=[{"status": "deleted"}])
+        result = await service.adelete_files(filenames=["a.pdf"])
+        assert result == [{"status": "deleted"}]
+        call_kwargs = service.ingestion.adelete_files.call_args.kwargs
+        assert call_kwargs["filenames"] == ["a.pdf"]

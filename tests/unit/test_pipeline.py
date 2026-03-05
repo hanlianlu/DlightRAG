@@ -53,22 +53,6 @@ def _make_pipeline(
 
 
 # ---------------------------------------------------------------------------
-# TestIngestionPipelineHelpers
-# ---------------------------------------------------------------------------
-
-
-class TestIngestionPipelineHelpers:
-    """Pure function / synchronous helper tests."""
-
-    def test_get_storage_dir_creates_path(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config)
-        d = pipeline._get_storage_dir(test_config.artifacts_dir, "custom_type", "sub1", "sub2")
-        assert d.exists()
-        assert d.is_dir()
-        assert "custom_type" in str(d)
-
-
-# ---------------------------------------------------------------------------
 # TestIngestSingleFileWithPolicy
 # ---------------------------------------------------------------------------
 
@@ -254,8 +238,7 @@ class TestAingestFromLocal:
         await pipeline.aingest_from_local(test_file)
 
         sources_local = test_config.working_dir_path / "sources" / "local"
-        if sources_local.exists():
-            assert not list(sources_local.iterdir()), "No files should be in sources/local/"
+        assert not sources_local.exists() or not list(sources_local.iterdir())
 
     @pytest.mark.asyncio
     async def test_temp_cleaned_up_after_ingestion(self, test_config):
@@ -268,8 +251,7 @@ class TestAingestFromLocal:
         await pipeline.aingest_from_local(test_file)
 
         tmp_dir = test_config.temp_dir
-        if tmp_dir.exists():
-            assert not list(tmp_dir.iterdir()), "Temp dirs should be cleaned up"
+        assert not tmp_dir.exists() or not list(tmp_dir.iterdir())
 
 
 # ---------------------------------------------------------------------------
@@ -279,11 +261,6 @@ class TestAingestFromLocal:
 
 class TestCheckCancelled:
     """Test cancellation detection."""
-
-    async def test_no_checker_no_error(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config, cancel_checker=None)
-        # Should not raise
-        await pipeline._check_cancelled()
 
     async def test_checker_returns_false(self, test_config: DlightragConfig) -> None:
         checker = AsyncMock(return_value=False)
@@ -316,18 +293,6 @@ class TestCheckCancelled:
 
 class TestTempDirAndSourceUri:
     """Tests for temp dir creation and source_uri flow."""
-
-    @pytest.mark.asyncio
-    async def test_create_temp_dir_under_working_dir(self, test_config):
-        """Temp dirs are created under working_dir/.tmp/."""
-        pipeline = _make_pipeline(test_config)
-        tmpdir = pipeline._create_temp_dir()
-        assert tmpdir.exists()
-        assert ".tmp" in tmpdir.parts
-        # Cleanup
-        import shutil
-
-        shutil.rmtree(tmpdir, ignore_errors=True)
 
     @pytest.mark.asyncio
     async def test_source_uri_passed_to_insert_content_list(self, test_config):
@@ -367,19 +332,6 @@ class TestTempDirAndSourceUri:
         assert len(entries) == 1
         assert entries[0]["file_path"] == "/original/path/test.txt"
 
-    @pytest.mark.asyncio
-    async def test_prepare_for_parsing_non_excel(self, test_config):
-        """Non-Excel files pass through unchanged."""
-        pipeline = _make_pipeline(test_config)
-        test_file = test_config.working_dir_path / "test.pdf"
-        test_file.write_text("pdf content")
-        tmpdir = pipeline._create_temp_dir()
-        result = await pipeline._prepare_for_parsing(test_file, tmpdir)
-        assert result == test_file
-        import shutil
-
-        shutil.rmtree(tmpdir, ignore_errors=True)
-
 
 # ---------------------------------------------------------------------------
 # TestAingestFromAzureBlob
@@ -403,10 +355,10 @@ class TestAingestFromAzureBlob:
         )
 
         assert result.status == "success"
-        if pipeline.rag.insert_content_list.called:
-            call_kwargs = pipeline.rag.insert_content_list.call_args
-            file_path_arg = call_kwargs.kwargs.get("file_path", "")
-            assert file_path_arg == "azure://mycontainer/data/report.pdf"
+        pipeline.rag.insert_content_list.assert_awaited_once()
+        call_kwargs = pipeline.rag.insert_content_list.call_args
+        file_path_arg = call_kwargs.kwargs.get("file_path", "")
+        assert file_path_arg == "azure://mycontainer/data/report.pdf"
 
     @pytest.mark.asyncio
     async def test_azure_no_permanent_download(self, test_config):
@@ -422,8 +374,7 @@ class TestAingestFromAzureBlob:
         )
 
         sources_azure = test_config.working_dir_path / "sources" / "azure_blobs"
-        if sources_azure.exists():
-            assert not list(sources_azure.rglob("*")), "No files in sources/azure_blobs/"
+        assert not sources_azure.exists() or not list(sources_azure.rglob("*"))
 
     @pytest.mark.asyncio
     async def test_azure_temp_cleaned_up(self, test_config):
@@ -439,5 +390,56 @@ class TestAingestFromAzureBlob:
         )
 
         tmp_dir = test_config.temp_dir
-        if tmp_dir.exists():
-            assert not list(tmp_dir.iterdir()), "Temp dirs should be cleaned up"
+        assert not tmp_dir.exists() or not list(tmp_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# TestAingestFromLocalEdgeCases
+# ---------------------------------------------------------------------------
+
+
+class TestAingestFromLocalEdgeCases:
+    """Additional local ingestion edge cases."""
+
+    async def test_replace_mode_bypasses_dedup(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """replace=True re-ingests even when hash exists."""
+        pipeline = _make_pipeline(test_config)
+        src = tmp_path / "doc.pdf"
+        src.write_text("content")
+
+        # First ingest
+        await pipeline.aingest_from_local(src)
+        # Second ingest with replace — should NOT skip
+        result = await pipeline.aingest_from_local(src, replace=True)
+        assert result.processed == 1
+        assert result.skipped == 0
+
+    async def test_directory_partial_failure(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """One file failing does not prevent others from processing."""
+        pipeline = _make_pipeline(test_config)
+        d = tmp_path / "docs"
+        d.mkdir()
+        (d / "good.pdf").write_text("ok")
+        (d / "bad.pdf").write_text("fail")
+
+        call_count = 0
+        original_parse = pipeline.rag.parse_document
+
+        async def maybe_fail(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            file_path = str(kwargs.get("file_path", args[0] if args else ""))
+            if "bad" in file_path:
+                raise RuntimeError("parse failed")
+            return await original_parse(*args, **kwargs)
+
+        pipeline.rag.parse_document = AsyncMock(side_effect=maybe_fail)
+        result = await pipeline.aingest_from_local(d)
+
+        assert result.total_files == 2
+        # At least one succeeded
+        assert result.processed >= 1

@@ -116,32 +116,20 @@ class TestAuthMiddleware:
         )
         assert resp.status_code == 403
 
-    async def test_ingest_requires_auth(
-        self, client: AsyncClient, mock_config: DlightragConfig
+    @pytest.mark.parametrize(
+        "method,path,body",
+        [
+            ("POST", "/ingest", {"source_type": "local", "path": "/tmp/f.pdf"}),
+            ("POST", "/retrieve", {"query": "hello"}),
+            ("POST", "/answer", {"query": "hello"}),
+            ("DELETE", "/files", {"filenames": ["f.pdf"]}),
+        ],
+    )
+    async def test_endpoint_requires_auth(
+        self, method: str, path: str, body: dict, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         mock_config.api_auth_token = "secret-token"
-        resp = await client.post("/ingest", json={"source_type": "local", "path": "/tmp/f.pdf"})
-        assert resp.status_code == 401
-
-    async def test_retrieve_requires_auth(
-        self, client: AsyncClient, mock_config: DlightragConfig
-    ) -> None:
-        mock_config.api_auth_token = "secret-token"
-        resp = await client.post("/retrieve", json={"query": "hello"})
-        assert resp.status_code == 401
-
-    async def test_answer_requires_auth(
-        self, client: AsyncClient, mock_config: DlightragConfig
-    ) -> None:
-        mock_config.api_auth_token = "secret-token"
-        resp = await client.post("/answer", json={"query": "hello"})
-        assert resp.status_code == 401
-
-    async def test_delete_requires_auth(
-        self, client: AsyncClient, mock_config: DlightragConfig
-    ) -> None:
-        mock_config.api_auth_token = "secret-token"
-        resp = await client.request("DELETE", "/files", json={"filenames": ["f.pdf"]})
+        resp = await client.request(method, path, json=body)
         assert resp.status_code == 401
 
 

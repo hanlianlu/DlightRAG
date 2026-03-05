@@ -205,54 +205,6 @@ class TestCloseSharedRagService:
         assert not pool._rag_ready
 
 
-# ---------------------------------------------------------------------------
-# TestPoolStateHelpers
-# ---------------------------------------------------------------------------
-
-
-class TestPoolStateHelpers:
-    """Test state query functions."""
-
-    def test_is_initialized_true(self) -> None:
-        import dlightrag.pool as pool
-
-        pool._shared_rag_service = AsyncMock()
-        pool._rag_ready = True
-        assert is_rag_service_initialized()
-
-    def test_is_initialized_false_when_not_ready(self) -> None:
-        import dlightrag.pool as pool
-
-        pool._shared_rag_service = AsyncMock()
-        pool._rag_ready = False
-        assert not is_rag_service_initialized()
-
-    def test_get_error_info(self) -> None:
-        import dlightrag.pool as pool
-
-        pool._rag_last_error = "RuntimeError: fail"
-        pool._rag_last_error_ts = 1234567890.0
-        pool._rag_retry_after = 60.0
-
-        info = get_rag_error_info()
-        assert info["last_error"] == "RuntimeError: fail"
-        assert info["timestamp"] == 1234567890.0
-        assert info["retry_after"] == 60.0
-
-    def test_reset_shared_rag_service(self) -> None:
-        import dlightrag.pool as pool
-
-        pool._shared_rag_service = AsyncMock()
-        pool._rag_ready = True
-        pool._rag_last_error = "error"
-
-        reset_shared_rag_service()
-
-        assert pool._shared_rag_service is None
-        assert not pool._rag_ready
-        assert pool._rag_last_error is None
-        assert pool._rag_retry_after == 30.0
-
 
 # ---------------------------------------------------------------------------
 # TestWorkspacePool

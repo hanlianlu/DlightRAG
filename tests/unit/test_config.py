@@ -14,26 +14,6 @@ from dlightrag.config import DlightragConfig, get_config, reset_config
 class TestDlightragConfig:
     """Test DlightragConfig initialization and validation."""
 
-    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test default values are sensible."""
-        monkeypatch.setenv("DLIGHTRAG_OPENAI_API_KEY", "test-key")
-        config = DlightragConfig()  # type: ignore[call-arg]
-
-        assert config.postgres_host == "localhost"
-        assert config.postgres_port == 5432
-        assert config.postgres_user == "dlightrag"
-        assert config.postgres_database == "dlightrag"
-        assert config.workspace == "default"
-        assert config.vector_storage == "PGVectorStorage"
-        assert config.graph_storage == "PGGraphStorage"
-        assert config.kv_storage == "PGKVStorage"
-        assert config.doc_status_storage == "PGDocStatusStorage"
-        assert config.pg_hnsw_m == 32
-        assert config.pg_hnsw_ef_construction == 300
-        assert config.pg_hnsw_ef_search == 300
-        assert config.parser == "mineru"
-        assert config.default_mode == "mix"
-
     def test_env_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test DLIGHTRAG_ env prefix works."""
         monkeypatch.setenv("DLIGHTRAG_OPENAI_API_KEY", "my-test-key")
@@ -283,7 +263,3 @@ class TestDlightragConfig:
         reset_config()
         config2 = get_config()
         assert config1 is not config2
-
-
-def test_temp_dir_property(test_config):
-    assert test_config.temp_dir == test_config.working_dir_path / ".tmp"

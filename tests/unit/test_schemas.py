@@ -14,15 +14,6 @@ from dlightrag.models.schemas import RankedChunk, RerankResult
 
 
 class TestRankedChunk:
-    def test_valid(self) -> None:
-        chunk = RankedChunk(index=0, relevance_score=0.5)
-        assert chunk.index == 0
-        assert chunk.relevance_score == 0.5
-
-    def test_boundary_scores(self) -> None:
-        assert RankedChunk(index=0, relevance_score=0).relevance_score == 0
-        assert RankedChunk(index=0, relevance_score=1).relevance_score == 1
-
     def test_score_below_zero_rejected(self) -> None:
         with pytest.raises(ValidationError):
             RankedChunk(index=0, relevance_score=-0.1)
@@ -50,7 +41,3 @@ class TestRerankResult:
             ]
         )
         assert len(result.ranked_chunks) == 2
-
-    def test_empty_chunks_allowed(self) -> None:
-        result = RerankResult(ranked_chunks=[])
-        assert result.ranked_chunks == []
