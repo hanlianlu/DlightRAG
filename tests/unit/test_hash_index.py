@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from dlightrag.ingestion.hash_index import HashIndex, compute_file_hash
 
 
@@ -355,3 +357,84 @@ def _create_docx(path: Path, body_xml: str, modified_time: str) -> None:
         )
         zf.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships/>')
         zf.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types/>')
+
+
+class FakeRedis:
+    """Minimal async Redis mock using a dict."""
+
+    def __init__(self):
+        self._data: dict[str, dict[str, str]] = {}
+
+    async def hset(self, key: str, field: str, value: str) -> int:
+        self._data.setdefault(key, {})[field] = value
+        return 1
+
+    async def hget(self, key: str, field: str) -> str | None:
+        return self._data.get(key, {}).get(field)
+
+    async def hdel(self, key: str, *fields: str) -> int:
+        bucket = self._data.get(key, {})
+        count = 0
+        for f in fields:
+            if f in bucket:
+                del bucket[f]
+                count += 1
+        return count
+
+    async def hgetall(self, key: str) -> dict[str, str]:
+        return dict(self._data.get(key, {}))
+
+    async def hkeys(self, key: str) -> list[str]:
+        return list(self._data.get(key, {}).keys())
+
+    async def delete(self, *keys: str) -> int:
+        count = 0
+        for k in keys:
+            if k in self._data:
+                del self._data[k]
+                count += 1
+        return count
+
+
+class TestRedisHashIndex:
+    """Tests for RedisHashIndex using a mock Redis client."""
+
+    @pytest.fixture
+    def redis_index(self):
+        from dlightrag.ingestion.hash_index import RedisHashIndex
+
+        idx = RedisHashIndex(workspace="test", sources_dir=None)
+        # Mock the Redis client with a dict-based fake
+        idx._redis = FakeRedis()
+        return idx
+
+    async def test_register_and_check_exists(self, redis_index):
+        await redis_index.register("sha256:aaa", "doc-001", "/path/a.pdf")
+        exists, doc_id = await redis_index._async_check_exists("sha256:aaa")
+        assert exists is True
+        assert doc_id == "doc-001"
+
+    async def test_check_exists_missing(self, redis_index):
+        exists, doc_id = await redis_index._async_check_exists("sha256:missing")
+        assert exists is False
+        assert doc_id is None
+
+    async def test_remove(self, redis_index):
+        await redis_index.register("sha256:aaa", "doc-001", "/path/a.pdf")
+        removed = await redis_index.remove("sha256:aaa")
+        assert removed is True
+        exists, _ = await redis_index._async_check_exists("sha256:aaa")
+        assert exists is False
+
+    async def test_clear(self, redis_index):
+        await redis_index.register("sha256:aaa", "doc-001", "/a.pdf")
+        await redis_index.register("sha256:bbb", "doc-002", "/b.pdf")
+        await redis_index.clear()
+        entries = await redis_index.list_all()
+        assert len(entries) == 0
+
+    async def test_list_all(self, redis_index):
+        await redis_index.register("sha256:aaa", "doc-001", "/a.pdf")
+        entries = await redis_index.list_all()
+        assert len(entries) == 1
+        assert entries[0]["doc_id"] == "doc-001"

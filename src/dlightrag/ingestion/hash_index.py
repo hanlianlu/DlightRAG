@@ -540,9 +540,173 @@ class PGHashIndex:
         """No-op for PG backend (no cache to invalidate)."""
 
 
+class RedisHashIndex:
+    """Redis-backed content hash index for deduplication.
+
+    Multi-worker safe — uses Redis Hash for atomic operations.
+    Requires: redis package (installed with LightRAG RedisKVStorage).
+    """
+
+    KEY_PREFIX = "dlightrag:file_hashes"
+
+    def __init__(self, workspace: str = "default", sources_dir: Path | None = None) -> None:
+        self._workspace = workspace
+        self._sources_dir = sources_dir
+        self._redis: Any = None
+        self._redis_url: str | None = None
+
+    def _key(self) -> str:
+        return f"{self.KEY_PREFIX}:{self._workspace}"
+
+    async def initialize(self) -> None:
+        """Connect to Redis using LightRAG's shared connection pool."""
+        import os
+
+        from redis.asyncio import Redis
+
+        config_uri = "redis://localhost:6379"
+        try:
+            import configparser
+
+            cfg = configparser.ConfigParser()
+            cfg.read("config.ini", "utf-8")
+            config_uri = cfg.get("redis", "uri", fallback=config_uri)
+        except Exception:
+            pass
+        self._redis_url = os.environ.get("REDIS_URI", config_uri)
+
+        from lightrag.kg.redis_impl import RedisConnectionManager
+
+        pool = RedisConnectionManager.get_pool(self._redis_url)
+        self._redis = Redis(connection_pool=pool)
+
+    def check_exists(self, content_hash: str) -> tuple[bool, str | None]:
+        # Sync wrapper — run async version if loop available
+        import asyncio as _aio
+
+        try:
+            loop = _aio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            # In sync deletion context, return not-found (matches PGHashIndex pattern)
+            return (False, None)
+        return _aio.run(self._async_check_exists(content_hash))
+
+    async def _async_check_exists(self, content_hash: str) -> tuple[bool, str | None]:
+        data = await self._redis.hget(self._key(), content_hash)
+        if data:
+            entry = json.loads(data)
+            return (True, entry.get("doc_id"))
+        return (False, None)
+
+    async def register(self, content_hash: str, doc_id: str, file_path: str) -> None:
+        entry = json.dumps(
+            {
+                "doc_id": doc_id,
+                "file_path": file_path,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
+        await self._redis.hset(self._key(), content_hash, entry)
+
+    async def remove(self, content_hash: str) -> bool:
+        removed = await self._redis.hdel(self._key(), content_hash)
+        return removed > 0
+
+    async def clear(self) -> None:
+        """Remove all hash entries for this workspace."""
+        await self._redis.delete(self._key())
+        logger.info("RedisHashIndex cleared for workspace %s", self._workspace)
+
+    async def should_skip_file(
+        self, file_path: Path, replace: bool
+    ) -> tuple[bool, str | None, str | None]:
+        content_hash = await asyncio.to_thread(compute_file_hash, file_path)
+        if replace:
+            return (False, content_hash, None)
+        exists, doc_id = await self._async_check_exists(content_hash)
+        if exists:
+            logger.info(f"Skipping duplicate: {file_path.name} (hash matches doc_id={doc_id})")
+            return (True, content_hash, f"Duplicate of {doc_id}")
+        return (False, content_hash, None)
+
+    @staticmethod
+    def generate_doc_id_from_path(file_path: Path) -> str:
+        return file_path.stem
+
+    def invalidate(self) -> None:
+        pass  # No local cache to invalidate
+
+    def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
+        return (None, None, None)  # Sync context fallback
+
+    def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
+        return (None, None, None)  # Sync context fallback
+
+    async def list_all(self) -> list[dict[str, Any]]:
+        all_entries = await self._redis.hgetall(self._key())
+        results = []
+        for content_hash, data in all_entries.items():
+            info = json.loads(data)
+            fp = info.get("file_path", "")
+            source_type = "unknown"
+            path_parts = Path(fp).parts
+            sources_idx = next((i for i, p in enumerate(path_parts) if p == "sources"), -1)
+            if sources_idx >= 0 and len(path_parts) > sources_idx + 1:
+                source_type = path_parts[sources_idx + 1]
+            results.append(
+                {
+                    "file_path": fp,
+                    "doc_id": info.get("doc_id", ""),
+                    "source_type": source_type,
+                    "file_name": Path(fp).name,
+                    "content_hash": content_hash,
+                    "created_at": info.get("created_at", ""),
+                }
+            )
+        return results
+
+    async def sync_existing(self) -> int:
+        if not self._sources_dir or not self._sources_dir.exists():
+            return 0
+        existing = await self._redis.hkeys(self._key())
+        existing_hashes = set(existing)
+        # Build file_path lookup
+        all_entries = await self._redis.hgetall(self._key())
+        existing_paths = set()
+        for data in all_entries.values():
+            info = json.loads(data)
+            existing_paths.add(info.get("file_path", ""))
+        synced = 0
+        for fp in self._sources_dir.rglob("*"):
+            if fp.is_dir() or fp.name.startswith("."):
+                continue
+            if fp.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+            if str(fp) in existing_paths:
+                continue
+            try:
+                h = await asyncio.to_thread(compute_file_hash, fp)
+            except Exception as exc:
+                logger.warning(f"Failed to hash {fp}: {exc}")
+                continue
+            if h in existing_hashes:
+                continue
+            doc_id = self.generate_doc_id_from_path(fp)
+            await self.register(h, doc_id, str(fp))
+            existing_hashes.add(h)
+            existing_paths.add(str(fp))
+            synced += 1
+        if synced:
+            logger.info(f"Synced {synced} hashes from sources directory")
+        return synced
+
+
 __all__ = [
     "HashIndex",
     "PGHashIndex",
+    "RedisHashIndex",
     "compute_file_hash",
     "SUPPORTED_EXTENSIONS",
 ]
