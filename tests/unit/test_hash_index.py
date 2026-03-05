@@ -202,6 +202,24 @@ class TestHashIndex:
         entry = index.lookup("sha256:aaa")
         assert entry is not None
 
+    async def test_clear(self, tmp_path: Path) -> None:
+        """Test clear removes all entries and deletes the JSON file."""
+        sources_dir = tmp_path / "sources"
+        sources_dir.mkdir()
+
+        index = HashIndex(tmp_path, sources_dir)
+        await index.register("sha256:aaa", "doc-001", "/path/a.pdf")
+        await index.register("sha256:bbb", "doc-002", "/path/b.pdf")
+
+        index_path = index._get_index_path()
+        assert index_path.exists()
+
+        await index.clear()
+
+        assert not index_path.exists()
+        assert index.check_exists("sha256:aaa") == (False, None)
+        assert index.check_exists("sha256:bbb") == (False, None)
+
     async def test_should_skip_file_new(self, tmp_path: Path) -> None:
         """Test should_skip_file for a new file."""
         sources_dir = tmp_path / "sources"

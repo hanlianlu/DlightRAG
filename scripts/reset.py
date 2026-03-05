@@ -151,7 +151,7 @@ async def reset_all(*, do_local: bool = True, dry_run: bool = False) -> dict[str
         stats["storages_dropped"] = await _drop_storages(lightrag, dry_run=dry_run)
 
         # Clean DlightRAG hash_index if present
-        hash_index = getattr(service.ingestion, "hash_index", None)
+        hash_index = getattr(service.ingestion, "_hash_index", None)
         if hash_index is not None and hasattr(hash_index, "clear"):
             if dry_run:
                 print("\n  [DRY RUN] hash_index: would clear")

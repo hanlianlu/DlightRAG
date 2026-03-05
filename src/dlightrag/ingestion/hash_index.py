@@ -213,6 +213,14 @@ class HashIndex:
     def invalidate(self) -> None:
         self._cache = None
 
+    async def clear(self) -> None:
+        """Remove all hash entries (used by reset)."""
+        self._cache = {}
+        index_path = self._get_index_path()
+        if index_path.exists():
+            index_path.unlink()
+        logger.info("HashIndex cleared")
+
     def check_exists(self, content_hash: str) -> tuple[bool, str | None]:
         index = self._load()
         entry = index.get(content_hash)
@@ -367,6 +375,15 @@ class PGHashIndex:
                 CREATE INDEX IF NOT EXISTS idx_file_hashes_workspace
                 ON {self.TABLE}(workspace)
             """)
+
+    async def clear(self) -> None:
+        """Remove all hash entries for this workspace (used by reset)."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                f"DELETE FROM {self.TABLE} WHERE workspace = $1",
+                self._workspace,
+            )
+            logger.info("PGHashIndex cleared for workspace %s: %s", self._workspace, result)
 
     async def check_exists(self, content_hash: str) -> tuple[bool, str | None]:
         async with self._pool.acquire() as conn:
