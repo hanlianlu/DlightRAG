@@ -24,6 +24,10 @@ htmlcov/
 .idea/
 *.swp
 .claude/
+
+# OS
+.DS_Store
+Thumbs.db
 # Docker
 docker-compose.yml
 Dockerfile
@@ -37,4 +41,13 @@ docs/
 
 # Storage
 corprag_storage/
+dlightrag_storage/
+*.db
 *.log
+
+# Test coverage
+.coverage
+coverage.xml
+
+# Python extras
+*.egg
