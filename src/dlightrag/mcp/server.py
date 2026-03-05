@@ -9,6 +9,7 @@ retrieve() + lightweight ingest().
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -17,7 +18,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.pool import get_shared_rag_service, get_workspace_service, list_available_workspaces
+from dlightrag.pool import get_workspace_service, list_available_workspaces
 from dlightrag.retrieval.federation import federated_answer, federated_retrieve
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,11 @@ server = Server(
 
 def _get_config() -> DlightragConfig:
     return get_config()
+
+
+def _resolve_workspace(workspace: str | None = None) -> str:
+    """Resolve workspace to default if not specified."""
+    return workspace or _get_config().workspace
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -102,6 +108,10 @@ async def list_tools() -> list[Tool]:
                         "default": False,
                         "description": "Replace existing documents",
                     },
+                    "workspace": {
+                        "type": "string",
+                        "description": "Target workspace. Omit for default workspace.",
+                    },
                 },
                 "required": ["source_type"],
             },
@@ -157,7 +167,12 @@ async def list_tools() -> list[Tool]:
             description="List all documents ingested in the knowledge base.",
             inputSchema={
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "workspace": {
+                        "type": "string",
+                        "description": "Workspace to list files from. Omit for default workspace.",
+                    },
+                },
             },
         ),
         Tool(
@@ -176,6 +191,10 @@ async def list_tools() -> list[Tool]:
                         "items": {"type": "string"},
                         "description": "List of file paths to delete",
                     },
+                    "workspace": {
+                        "type": "string",
+                        "description": "Workspace to delete from. Omit for default workspace.",
+                    },
                 },
             },
         ),
@@ -186,33 +205,15 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle MCP tool calls."""
     try:
-        service = await get_shared_rag_service()
-
         if name == "retrieve":
-            ws_list = arguments.get("workspaces")
-            if ws_list and len(ws_list) > 1:
-                result = await federated_retrieve(
-                    query=arguments["query"],
-                    workspaces=ws_list,
-                    get_service=get_workspace_service,
-                    mode=arguments.get("mode", "mix"),
-                    top_k=arguments.get("top_k"),
-                )
-            elif ws_list and len(ws_list) == 1:
-                svc = await get_workspace_service(ws_list[0])
-                result = await svc.aretrieve(
-                    query=arguments["query"],
-                    mode=arguments.get("mode", "mix"),
-                    top_k=arguments.get("top_k"),
-                )
-            else:
-                result = await service.aretrieve(
-                    query=arguments["query"],
-                    mode=arguments.get("mode", "mix"),
-                    top_k=arguments.get("top_k"),
-                )
-            import json
-
+            ws = arguments.get("workspaces") or [_get_config().workspace]
+            result = await federated_retrieve(
+                query=arguments["query"],
+                workspaces=ws,
+                get_service=get_workspace_service,
+                mode=arguments.get("mode", "mix"),
+                top_k=arguments.get("top_k"),
+            )
             return [
                 TextContent(
                     type="text",
@@ -233,33 +234,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if arguments.get("conversation_history"):
                 kwargs["conversation_history"] = arguments["conversation_history"]
 
-            ws_list = arguments.get("workspaces")
-            if ws_list and len(ws_list) > 1:
-                result = await federated_answer(
-                    query=arguments["query"],
-                    workspaces=ws_list,
-                    get_service=get_workspace_service,
-                    mode=arguments.get("mode", "mix"),
-                    top_k=arguments.get("top_k"),
-                    **kwargs,
-                )
-            elif ws_list and len(ws_list) == 1:
-                svc = await get_workspace_service(ws_list[0])
-                result = await svc.aanswer(
-                    query=arguments["query"],
-                    mode=arguments.get("mode", "mix"),
-                    top_k=arguments.get("top_k"),
-                    **kwargs,
-                )
-            else:
-                result = await service.aanswer(
-                    query=arguments["query"],
-                    mode=arguments.get("mode", "mix"),
-                    top_k=arguments.get("top_k"),
-                    **kwargs,
-                )
-            import json
-
+            ws = arguments.get("workspaces") or [_get_config().workspace]
+            result = await federated_answer(
+                query=arguments["query"],
+                workspaces=ws,
+                get_service=get_workspace_service,
+                mode=arguments.get("mode", "mix"),
+                top_k=arguments.get("top_k"),
+                **kwargs,
+            )
             return [
                 TextContent(
                     type="text",
@@ -276,12 +259,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "list_workspaces":
-            import json
-
             ws_list = await list_available_workspaces()
             return [TextContent(type="text", text=json.dumps({"workspaces": ws_list}, indent=2))]
 
         if name == "ingest":
+            ws = _resolve_workspace(arguments.get("workspace"))
+            service = await get_workspace_service(ws)
+
             source_type = arguments["source_type"]
             kwargs: dict[str, Any] = {}
 
@@ -298,29 +282,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 kwargs["replace"] = arguments["replace"]
 
             result = await service.aingest(source_type=source_type, **kwargs)
-            import json
-
             return [TextContent(type="text", text=json.dumps(result, default=str))]
 
         if name == "list_files":
+            ws = _resolve_workspace(arguments.get("workspace"))
+            service = await get_workspace_service(ws)
             files = await service.alist_ingested_files()
-            import json
-
             return [
                 TextContent(
                     type="text",
-                    text=json.dumps({"files": files, "count": len(files)}, default=str),
+                    text=json.dumps({"files": files, "count": len(files), "workspace": ws}, default=str),
                 )
             ]
 
         if name == "delete_files":
+            ws = _resolve_workspace(arguments.get("workspace"))
+            service = await get_workspace_service(ws)
             results = await service.adelete_files(
                 filenames=arguments.get("filenames"),
                 file_paths=arguments.get("file_paths"),
             )
-            import json
-
-            return [TextContent(type="text", text=json.dumps({"results": results}, default=str))]
+            return [TextContent(type="text", text=json.dumps({"results": results, "workspace": ws}, default=str))]
 
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 

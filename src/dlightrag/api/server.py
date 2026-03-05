@@ -12,31 +12,32 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.pool import (
     RAGServiceUnavailableError,
-    close_shared_rag_service,
     close_workspace_services,
-    get_shared_rag_service,
     get_workspace_service,
     is_rag_service_initialized,
     list_available_workspaces,
 )
 from dlightrag.retrieval.federation import federated_answer, federated_retrieve
-from dlightrag.service import RAGService
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_workspace(workspace: str | None = None) -> str:
+    """Resolve workspace to default if not specified."""
+    return workspace or get_config().workspace
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
     await close_workspace_services()
-    await close_shared_rag_service()
 
 
 app = FastAPI(
@@ -71,14 +72,6 @@ async def _verify_auth(request: Request, config: DlightragConfig = Depends(_get_
         raise HTTPException(status_code=403, detail="Invalid token")
 
 
-async def _get_rag_service() -> RAGService:
-    """Get the shared RAG service."""
-    try:
-        return await get_shared_rag_service()
-    except RAGServiceUnavailableError as e:
-        raise HTTPException(status_code=503, detail=str(e.detail)) from e
-
-
 # ═══════════════════════════════════════════════════════════════════
 # Request/Response Models
 # ═══════════════════════════════════════════════════════════════════
@@ -94,6 +87,7 @@ class IngestRequest(BaseModel):
     table: str | None = None
     replace: bool | None = None
     sync_hashes: bool = False
+    workspace: str | None = None
 
 
 class RetrieveRequest(BaseModel):
@@ -117,6 +111,7 @@ class DeleteRequest(BaseModel):
     file_paths: list[str] | None = None
     filenames: list[str] | None = None
     delete_source: bool = True
+    workspace: str | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -127,7 +122,8 @@ class DeleteRequest(BaseModel):
 @app.post("/ingest", dependencies=[Depends(_verify_auth)])
 async def ingest(body: IngestRequest) -> dict[str, Any]:
     """Bulk document ingestion."""
-    service = await _get_rag_service()
+    ws = _resolve_workspace(body.workspace)
+    service = await get_workspace_service(ws)
 
     kwargs: dict[str, Any] = {}
     if body.replace is not None:
@@ -168,32 +164,15 @@ async def ingest(body: IngestRequest) -> dict[str, Any]:
 @app.post("/retrieve", dependencies=[Depends(_verify_auth)])
 async def retrieve(body: RetrieveRequest) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
-    if body.workspaces and len(body.workspaces) > 1:
-        result = await federated_retrieve(
-            query=body.query,
-            workspaces=body.workspaces,
-            get_service=get_workspace_service,
-            mode=body.mode,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-        )
-    elif body.workspaces and len(body.workspaces) == 1:
-        service = await get_workspace_service(body.workspaces[0])
-        result = await service.aretrieve(
-            query=body.query,
-            mode=body.mode,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-        )
-    else:
-        service = await _get_rag_service()
-        result = await service.aretrieve(
-            query=body.query,
-            mode=body.mode,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-        )
-
+    ws = body.workspaces or [get_config().workspace]
+    result = await federated_retrieve(
+        query=body.query,
+        workspaces=ws,
+        get_service=get_workspace_service,
+        mode=body.mode,
+        top_k=body.top_k,
+        chunk_top_k=body.chunk_top_k,
+    )
     return {
         "answer": result.answer,
         "contexts": result.contexts,
@@ -208,35 +187,16 @@ async def answer(body: AnswerRequest) -> dict[str, Any]:
     if body.conversation_history:
         kwargs["conversation_history"] = body.conversation_history
 
-    if body.workspaces and len(body.workspaces) > 1:
-        result = await federated_answer(
-            query=body.query,
-            workspaces=body.workspaces,
-            get_service=get_workspace_service,
-            mode=body.mode,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-            **kwargs,
-        )
-    elif body.workspaces and len(body.workspaces) == 1:
-        service = await get_workspace_service(body.workspaces[0])
-        result = await service.aanswer(
-            query=body.query,
-            mode=body.mode,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-            **kwargs,
-        )
-    else:
-        service = await _get_rag_service()
-        result = await service.aanswer(
-            query=body.query,
-            mode=body.mode,
-            top_k=body.top_k,
-            chunk_top_k=body.chunk_top_k,
-            **kwargs,
-        )
-
+    ws = body.workspaces or [get_config().workspace]
+    result = await federated_answer(
+        query=body.query,
+        workspaces=ws,
+        get_service=get_workspace_service,
+        mode=body.mode,
+        top_k=body.top_k,
+        chunk_top_k=body.chunk_top_k,
+        **kwargs,
+    )
     return {
         "answer": result.answer,
         "contexts": result.contexts,
@@ -245,23 +205,25 @@ async def answer(body: AnswerRequest) -> dict[str, Any]:
 
 
 @app.get("/files", dependencies=[Depends(_verify_auth)])
-async def list_files() -> dict[str, Any]:
+async def list_files(workspace: str | None = Query(default=None)) -> dict[str, Any]:
     """List all ingested documents."""
-    service = await _get_rag_service()
+    ws = _resolve_workspace(workspace)
+    service = await get_workspace_service(ws)
     files = await service.alist_ingested_files()
-    return {"files": files, "count": len(files)}
+    return {"files": files, "count": len(files), "workspace": ws}
 
 
 @app.delete("/files", dependencies=[Depends(_verify_auth)])
 async def delete_files(body: DeleteRequest) -> dict[str, Any]:
     """Delete documents from knowledge base."""
-    service = await _get_rag_service()
+    ws = _resolve_workspace(body.workspace)
+    service = await get_workspace_service(ws)
     results = await service.adelete_files(
         file_paths=body.file_paths,
         filenames=body.filenames,
         delete_source=body.delete_source,
     )
-    return {"results": results}
+    return {"results": results, "workspace": ws}
 
 
 @app.get("/health")
