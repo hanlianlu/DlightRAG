@@ -175,6 +175,59 @@ class TestGetEmbeddingFunc:
         assert isinstance(func.func, partial)
 
 
+class TestJsonKwargsForProvider:
+    """Test _json_kwargs_for_provider returns correct JSON mode params."""
+
+    def test_openai(self) -> None:
+        from dlightrag.models.llm import _json_kwargs_for_provider
+
+        assert _json_kwargs_for_provider("openai") == {"response_format": {"type": "json_object"}}
+
+    def test_ollama(self) -> None:
+        from dlightrag.models.llm import _json_kwargs_for_provider
+
+        assert _json_kwargs_for_provider("ollama") == {"format": "json"}
+
+    def test_google_gemini(self) -> None:
+        from dlightrag.models.llm import _json_kwargs_for_provider
+
+        result = _json_kwargs_for_provider("google_gemini")
+        assert result == {"generation_config": {"response_mime_type": "application/json"}}
+
+    def test_anthropic(self) -> None:
+        from dlightrag.models.llm import _json_kwargs_for_provider
+
+        assert _json_kwargs_for_provider("anthropic") == {}
+
+    def test_openai_compatible_providers(self) -> None:
+        from dlightrag.models.llm import _json_kwargs_for_provider
+
+        for provider in ("azure_openai", "qwen", "minimax", "openrouter", "xinference"):
+            result = _json_kwargs_for_provider(provider)
+            assert result == {"response_format": {"type": "json_object"}}, f"Failed for {provider}"
+
+
+class TestExtractJson:
+    """Test _extract_json handles various LLM response formats."""
+
+    def test_raw_json(self) -> None:
+        from dlightrag.models.llm import _extract_json
+
+        assert _extract_json('{"key": "value"}') == '{"key": "value"}'
+
+    def test_markdown_fenced_json(self) -> None:
+        from dlightrag.models.llm import _extract_json
+
+        text = 'Here is the result:\n```json\n{"key": "value"}\n```'
+        assert _extract_json(text) == '{"key": "value"}'
+
+    def test_text_with_embedded_json(self) -> None:
+        from dlightrag.models.llm import _extract_json
+
+        text = 'Some preamble text {"key": "value"}'
+        assert _extract_json(text) == '{"key": "value"}'
+
+
 class TestConvertOpenaiToAnthropicMessages:
     """Test message format conversion."""
 

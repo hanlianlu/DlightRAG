@@ -20,9 +20,7 @@ from functools import partial
 from typing import Any
 
 import numpy as np
-from langchain_core.messages import HumanMessage, SystemMessage
 from lightrag.utils import EmbeddingFunc
-from pydantic import SecretStr
 
 from dlightrag.config import DlightragConfig
 
@@ -67,72 +65,6 @@ def _ensure_bytes(data: bytes | bytearray | str) -> bytes | None:
 # Chat Model Factory
 # ═══════════════════════════════════════════════════════════════════
 
-
-def _build_chat_model(
-    config: DlightragConfig,
-    model: str,
-    temperature: float | None = None,
-    provider: str | None = None,
-    model_kwargs: dict[str, Any] | None = None,
-) -> Any:
-    """Build a LangChain chat model instance from config.
-
-    Args:
-        config: Configuration object.
-        model: Model name / deployment name.
-        temperature: Override temperature. Falls back to config.llm_temperature.
-        provider: Override LLM provider. Falls back to config.llm_provider.
-        model_kwargs: Extra parameters forwarded to the provider API call
-            (e.g. ``{"think": False}`` for Ollama reasoning models).
-
-    Category A (OpenAI-compatible): uses ChatOpenAI with provider-specific base_url.
-    Category B (Dedicated class): uses ChatAnthropic or ChatGoogleGenerativeAI.
-    """
-    temp = temperature if temperature is not None else config.llm_temperature
-    provider = provider or config.llm_provider
-    extra = model_kwargs or {}
-
-    if provider in _OPENAI_COMPATIBLE_PROVIDERS:
-        from langchain_openai import ChatOpenAI
-
-        api_key = config._get_provider_api_key(provider)
-        base_url = config._get_url(f"{provider}_base_url")
-
-        return ChatOpenAI(  # type: ignore[call-arg]
-            model=model,
-            api_key=SecretStr(api_key),
-            base_url=base_url,
-            temperature=temp,
-            timeout=config.llm_request_timeout,
-            max_retries=config.llm_max_retries,
-            extra_body=extra,
-        )
-
-    if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-
-        return ChatAnthropic(  # type: ignore[call-arg]
-            model=model,
-            api_key=SecretStr(config.anthropic_api_key or ""),
-            temperature=temp,
-            timeout=float(config.llm_request_timeout),
-            max_retries=config.llm_max_retries,
-            model_kwargs=extra,
-        )
-
-    if provider == "google_gemini":
-        from langchain_google_genai import ChatGoogleGenerativeAI
-
-        return ChatGoogleGenerativeAI(  # type: ignore[call-arg]
-            model=model,
-            google_api_key=config.google_gemini_api_key,
-            temperature=temp,
-            timeout=config.llm_request_timeout,
-            max_retries=config.llm_max_retries,
-            model_kwargs=extra,
-        )
-
-    raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
 def get_llm_model_func(
@@ -651,17 +583,50 @@ def get_rerank_func(config: DlightragConfig | None = None) -> Callable:
     return _build_llm_rerank_func(cfg)
 
 
+def _json_kwargs_for_provider(provider: str) -> dict[str, Any]:
+    """Return provider-specific kwargs for JSON output mode."""
+    if provider in ("openai", "azure_openai", "qwen", "minimax", "openrouter", "xinference"):
+        return {"response_format": {"type": "json_object"}}
+    if provider == "ollama":
+        return {"format": "json"}
+    if provider == "google_gemini":
+        return {"generation_config": {"response_mime_type": "application/json"}}
+    return {}  # anthropic: prompt-only
+
+
+def _extract_json(text: str) -> str:
+    """Extract JSON from LLM response (handles markdown fences)."""
+    import re
+
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if match:
+        return match.group(1).strip()
+    # Try to find raw JSON object
+    start = text.find("{")
+    if start != -1:
+        return text[start:]
+    return text
+
+
 def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
-    """LLM-based listwise reranker using structured output."""
+    """LLM-based listwise reranker using native LLM function + Pydantic parsing.
+
+    3-layer defense:
+    1. Native JSON mode where available (via provider-specific kwargs)
+    2. Prompt always instructs JSON format (universal fallback)
+    3. Pydantic model_validate_json() as safety net
+    """
     from dlightrag.models.schemas import RerankResult
 
-    llm = _build_chat_model(
+    provider = config.effective_rerank_llm_provider
+    json_kwargs = _json_kwargs_for_provider(provider)
+
+    llm_func = get_llm_model_func(
         config,
-        config.effective_rerank_model,
-        temperature=config.rerank_temperature,
-        provider=config.effective_rerank_llm_provider,
+        model_name=config.effective_rerank_model,
+        provider=provider,
     )
-    structured_llm = llm.with_structured_output(RerankResult)
+
     default_domain_knowledge = config.domain_knowledge_hints
 
     async def rerank_func(
@@ -677,7 +642,8 @@ def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
         doc_lines = "\n".join([f"[{idx}] {doc}" for idx, doc in enumerate(documents)])
 
         system_parts = [
-            "You are a reranker. Given a query and a list of chunks, rank them by relevance."
+            "You are a reranker. Given a query and a list of chunks, rank them by relevance.",
+            '\nRespond with JSON only: {"ranked_chunks": [{"index": 0, "relevance_score": 0.95}, ...]}',
         ]
         if effective_domain_knowledge:
             system_parts.append(f"\n{effective_domain_knowledge}")
@@ -685,16 +651,17 @@ def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
         user_content = f"Query: {query}\n\nChunks:\n{doc_lines}"
 
         try:
-            result: RerankResult = await structured_llm.ainvoke(
-                [
-                    SystemMessage(content="".join(system_parts)),
-                    HumanMessage(content=user_content),
-                ]
-            )  # type: ignore[assignment]
+            result_str = await llm_func(
+                user_content,
+                system_prompt="".join(system_parts),
+                **json_kwargs,
+            )
+
+            parsed = RerankResult.model_validate_json(_extract_json(result_str))
 
             seen: set[int] = set()
             results = []
-            for chunk in result.ranked_chunks:
+            for chunk in parsed.ranked_chunks:
                 if 0 <= chunk.index < len(documents) and chunk.index not in seen:
                     seen.add(chunk.index)
                     results.append({"index": chunk.index, "relevance_score": chunk.relevance_score})
