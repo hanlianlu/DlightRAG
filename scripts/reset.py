@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Reset dlightrag RAG storage — clears PostgreSQL data, AGE graphs, and local files.
+"""Reset dlightrag RAG storage — drops all storage backends and local files.
+
+Works with any storage backend configured in DlightragConfig (PostgreSQL,
+NanoVector, Neo4J, Milvus, Redis, Mongo, JSON files, etc.).
 
 Usage:
     uv run scripts/reset.py                      # reset all (with confirmation)
-    uv run scripts/reset.py --dry-run             # preview what would be deleted
-    uv run scripts/reset.py --keep-files          # reset DB + graphs, keep local files
+    uv run scripts/reset.py --dry-run             # preview what would be dropped
+    uv run scripts/reset.py --keep-files          # drop storages, keep local files
     uv run scripts/reset.py -y                    # skip confirmation prompt
 """
 
@@ -14,15 +17,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import os
 import shutil
 import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Table prefixes to discover and reset
-_TABLE_PREFIXES = ("lightrag_", "dlightrag_")
+# LightRAG storage attribute names (in initialization order)
+_STORAGE_ATTRS = (
+    "full_docs",
+    "text_chunks",
+    "full_entities",
+    "full_relations",
+    "entity_chunks",
+    "relation_chunks",
+    "entities_vdb",
+    "relationships_vdb",
+    "chunks_vdb",
+    "chunk_entity_relation_graph",
+    "llm_response_cache",
+    "doc_status",
+)
 
 
 def _format_size(n: float) -> str:
@@ -33,97 +48,33 @@ def _format_size(n: float) -> str:
     return f"{n:.1f} TB"
 
 
-# ── PostgreSQL tables ────────────────────────────────────────────
+# ── storage drop ─────────────────────────────────────────────────
 
 
-async def _reset_tables(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    database: str,
-    workspace: str,
-    *,
-    dry_run: bool,
-) -> dict[str, int]:
-    """Delete all rows scoped to workspace from LightRAG + dlightrag tables."""
-    import asyncpg  # type: ignore[import-not-found]
+async def _drop_storages(lightrag: object, *, dry_run: bool) -> int:
+    """Call drop() on each LightRAG storage instance.
 
-    stats: dict[str, int] = {}
-    conn = await asyncpg.connect(
-        host=host, port=port, user=user, password=password, database=database
-    )
-    try:
-        # Dynamically discover tables matching our prefixes (any schema)
-        rows = await conn.fetch("SELECT schemaname, tablename FROM pg_tables")
-        all_tables = sorted(
-            (r["schemaname"], r["tablename"])
-            for r in rows
-            if any(r["tablename"].startswith(p) for p in _TABLE_PREFIXES)
-        )
-
-        for schema, table in all_tables:
-            qualified = f"{schema}.{table}"
+    Returns the number of storages successfully dropped.
+    """
+    dropped = 0
+    for attr in _STORAGE_ATTRS:
+        storage = getattr(lightrag, attr, None)
+        if storage is None:
+            continue
+        class_name = type(storage).__name__
+        if dry_run:
+            print(f"  [DRY RUN] {attr} ({class_name})")
+        else:
             try:
-                count = await conn.fetchval(
-                    f"SELECT count(*) FROM {qualified} WHERE workspace = $1", workspace
-                )
-            except Exception:
-                continue  # table has no workspace column or other issue
-
-            stats[qualified] = count or 0
-
-            if dry_run:
-                print(f"  [DRY RUN] {qualified}: {count} rows")
-            else:
-                await conn.execute(f"DELETE FROM {qualified} WHERE workspace = $1", workspace)
-                print(f"  {qualified}: deleted {count} rows")
-
-    finally:
-        await conn.close()
-    return stats
-
-
-# ── AGE graphs ───────────────────────────────────────────────────
-
-
-async def _reset_graphs(
-    host: str,
-    port: int,
-    user: str,
-    password: str,
-    database: str,
-    *,
-    dry_run: bool,
-) -> int:
-    """Drop all Apache AGE graphs."""
-    import asyncpg  # type: ignore[import-not-found]
-
-    conn = await asyncpg.connect(
-        host=host, port=port, user=user, password=password, database=database
-    )
-    total = 0
-    try:
-        await conn.execute("SET search_path = ag_catalog, '$user', public")
-        graphs = await conn.fetch("SELECT name FROM ag_catalog.ag_graph")
-
-        for row in graphs:
-            name = row["name"]
-            try:
-                count = await conn.fetchval(f'SELECT count(*) FROM {name}."_ag_label_vertex"')
-            except Exception:
-                count = 0
-            total += count or 0
-
-            if dry_run:
-                print(f"  [DRY RUN] graph '{name}': {count} vertices")
-            else:
-                await conn.execute(f"SELECT drop_graph('{name}', true)")
-                print(f"  dropped graph '{name}' ({count} vertices)")
-
-    finally:
-        await conn.close()
-    return total
+                result = await storage.drop()
+                status = result.get("status", "unknown")
+                msg = result.get("message", "")
+                print(f"  {attr} ({class_name}): {status} — {msg}")
+                if status == "success":
+                    dropped += 1
+            except Exception as exc:
+                print(f"  {attr} ({class_name}): ERROR — {exc}")
+    return dropped
 
 
 # ── local files ──────────────────────────────────────────────────
@@ -138,7 +89,6 @@ def _reset_local(working_dir: Path, *, dry_run: bool) -> tuple[int, int]:
     total_bytes = 0
     file_count = 0
 
-    # Delete everything except sources/ (which holds copied/downloaded originals)
     for item in sorted(working_dir.iterdir()):
         if item.name == "sources":
             continue
@@ -156,16 +106,13 @@ def _reset_local(working_dir: Path, *, dry_run: bool) -> tuple[int, int]:
             if not dry_run:
                 shutil.rmtree(item, ignore_errors=True)
 
-    if dry_run:
-        print(
-            f"  [DRY RUN] {working_dir}: {file_count} files ({_format_size(total_bytes)}) "
-            f"(sources/ preserved)"
-        )
-    else:
-        print(
-            f"  removed {file_count} files ({_format_size(total_bytes)}) from {working_dir} "
-            f"(sources/ preserved)"
-        )
+    label = "[DRY RUN] " if dry_run else ""
+    action = (
+        f"{working_dir}: {file_count} files ({_format_size(total_bytes)})"
+        if dry_run
+        else (f"removed {file_count} files ({_format_size(total_bytes)}) from {working_dir}")
+    )
+    print(f"  {label}{action} (sources/ preserved)")
 
     return file_count, total_bytes
 
@@ -173,74 +120,56 @@ def _reset_local(working_dir: Path, *, dry_run: bool) -> tuple[int, int]:
 # ── orchestrator ─────────────────────────────────────────────────
 
 
-def _load_env() -> dict[str, str]:
-    """Load settings from environment and .env file (no full config validation)."""
-    from dotenv import dotenv_values, find_dotenv
+async def reset_all(*, do_local: bool = True, dry_run: bool = False) -> dict[str, int]:
+    from dlightrag.config import get_config
+    from dlightrag.service import RAGService
 
-    dotenv_path = find_dotenv(usecwd=True)
-    env = {**dotenv_values(dotenv_path), **dict(os.environ)}
+    config = get_config()
 
-    # Resolve working_dir relative to the .env file location (project root)
-    working_dir = env.get("DLIGHTRAG_WORKING_DIR", "./dlightrag_storage")
-    if dotenv_path and not Path(working_dir).is_absolute():
-        working_dir = str(Path(dotenv_path).parent / working_dir)
+    # Show backend info
+    print("\nStorage backends (from config):")
+    print(f"  KV:         {config.kv_storage}")
+    print(f"  Vector:     {config.vector_storage}")
+    print(f"  Graph:      {config.graph_storage}")
+    print(f"  DocStatus:  {config.doc_status_storage}")
+    print(f"  Workspace:  {config.workspace}")
 
-    return {
-        "host": env.get("DLIGHTRAG_POSTGRES_HOST", "localhost"),
-        "port": env.get("DLIGHTRAG_POSTGRES_PORT", "5432"),
-        "user": env.get("DLIGHTRAG_POSTGRES_USER", "dlightrag"),
-        "password": env.get("DLIGHTRAG_POSTGRES_PASSWORD", "dlightrag"),
-        "database": env.get("DLIGHTRAG_POSTGRES_DATABASE", "dlightrag"),
-        "workspace": env.get(
-            "DLIGHTRAG_WORKSPACE", env.get("DLIGHTRAG_POSTGRES_WORKSPACE", "default")
-        ),
-        "working_dir": working_dir,
-    }
+    stats: dict[str, int] = {"storages_dropped": 0, "local_files": 0}
 
+    # Initialize service to get LightRAG with correct backends
+    print("\nInitializing RAGService...")
+    service = await RAGService.create()
 
-async def reset_all(
-    *,
-    do_tables: bool = True,
-    do_graphs: bool = True,
-    do_local: bool = True,
-    dry_run: bool = False,
-) -> dict[str, int]:
-    env = _load_env()
-    stats: dict[str, int] = {"table_rows": 0, "graph_vertices": 0, "local_files": 0}
+    try:
+        # Get the LightRAG instance
+        lightrag = getattr(service.ingestion.rag, "lightrag", None) if service.ingestion else None
+        if lightrag is None:
+            print("\nERROR: Could not access LightRAG instance from RAGService")
+            return stats
 
-    host = env["host"]
-    port = int(env["port"])
-    user = env["user"]
-    password = env["password"]
-    database = env["database"]
-    workspace = env["workspace"]
+        print(f"\nStorages ({len(_STORAGE_ATTRS)}):")
+        stats["storages_dropped"] = await _drop_storages(lightrag, dry_run=dry_run)
 
-    if do_tables:
-        print("\nPostgreSQL tables:")
-        try:
-            table_stats = await _reset_tables(
-                host, port, user, password, database, workspace, dry_run=dry_run
-            )
-            stats["table_rows"] = sum(table_stats.values())
-        except Exception as exc:
-            print(f"  ERROR: {exc}")
+        # Clean DlightRAG hash_index if present
+        hash_index = getattr(service.ingestion, "hash_index", None)
+        if hash_index is not None and hasattr(hash_index, "clear"):
+            if dry_run:
+                print("\n  [DRY RUN] hash_index: would clear")
+            else:
+                try:
+                    await hash_index.clear()
+                    print("\n  hash_index: cleared")
+                except Exception as exc:
+                    print(f"\n  hash_index: ERROR — {exc}")
 
-    if do_graphs:
-        print("\nAGE graphs:")
-        try:
-            stats["graph_vertices"] = await _reset_graphs(
-                host, port, user, password, database, dry_run=dry_run
-            )
-        except Exception as exc:
-            print(f"  ERROR: {exc}")
-
-    if do_local:
-        print("\nLocal files:")
-        try:
-            files, _ = _reset_local(Path(env["working_dir"]), dry_run=dry_run)
+        if do_local:
+            print("\nLocal files:")
+            working_dir = Path(config.working_dir)
+            files, _ = _reset_local(working_dir, dry_run=dry_run)
             stats["local_files"] = files
-        except Exception as exc:
-            print(f"  ERROR: {exc}")
+
+    finally:
+        await service.close()
 
     return stats
 
@@ -251,17 +180,16 @@ async def reset_all(
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="dlightrag-reset",
-        description="Reset dlightrag RAG storage",
+        description="Reset dlightrag RAG storage (all configured backends)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview without deleting")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
-
     parser.add_argument(
         "--keep-files",
         action="store_true",
-        help="Reset DB + graphs but keep local files (useful for re-ingesting)",
+        help="Drop storages but keep local files",
     )
 
     args = parser.parse_args()
@@ -269,20 +197,13 @@ def main() -> int:
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
 
-    do_tables = True
-    do_graphs = True
     do_local = not args.keep_files
 
-    print("\nReset plan:")
-    print("  PostgreSQL tables: Y")
-    print("  AGE graphs:        Y")
-    print(f"  Local files:       {'Y' if do_local else '- (kept)'}")
-
     if args.dry_run:
-        print("\n  (dry run — nothing will be deleted)")
+        print("\n(dry run — nothing will be deleted)")
 
     if not args.dry_run and not args.yes:
-        print("\nWARNING: This will permanently delete RAG data.")
+        print("\nWARNING: This will permanently delete ALL RAG data in the configured backends.")
         print("Type 'yes' to proceed: ", end="")
         try:
             if input().strip().lower() != "yes":
@@ -292,15 +213,10 @@ def main() -> int:
             print("\nCancelled.")
             return 1
 
-    stats = asyncio.run(
-        reset_all(do_tables=do_tables, do_graphs=do_graphs, do_local=do_local, dry_run=args.dry_run)
-    )
+    stats = asyncio.run(reset_all(do_local=do_local, dry_run=args.dry_run))
 
     print("\nDone.")
-    if do_tables:
-        print(f"  Table rows deleted:  {stats['table_rows']}")
-    if do_graphs:
-        print(f"  Graph vertices:      {stats['graph_vertices']}")
+    print(f"  Storages dropped: {stats['storages_dropped']}")
     if do_local:
         print(f"  Local files removed: {stats['local_files']}")
 
