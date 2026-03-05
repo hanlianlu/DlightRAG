@@ -60,50 +60,9 @@ def _make_pipeline(
 class TestIngestionPipelineHelpers:
     """Pure function / synchronous helper tests."""
 
-    def test_extract_relative_source_path_standard(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config)
-        result = pipeline._extract_relative_source_path(
-            "/abs/path/dlightrag_storage/sources/local/file.pdf"
-        )
-        assert result == "local/file.pdf"
-
-    def test_extract_relative_source_path_no_marker(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config)
-        result = pipeline._extract_relative_source_path("/some/random/path/file.pdf")
-        assert result is None
-
-    def test_extract_relative_source_path_azure_blobs(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config)
-        result = pipeline._extract_relative_source_path(
-            "/abs/dlightrag_storage/sources/azure_blobs/c1/sub/file.pdf"
-        )
-        assert result == "azure_blobs/c1/sub/file.pdf"
-
-    def test_resolve_source_file_absolute_exists(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        pipeline = _make_pipeline(test_config)
-        f = tmp_path / "test_file.txt"
-        f.write_text("data")
-        assert pipeline._resolve_source_file(str(f)) == f
-
-    def test_resolve_source_file_absolute_not_found(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config)
-        assert pipeline._resolve_source_file("/nonexistent/file.pdf") is None
-
-    def test_resolve_source_file_basename_glob_fallback(self, test_config: DlightragConfig) -> None:
-        pipeline = _make_pipeline(test_config)
-        # Create file nested inside sources dir
-        nested = test_config.sources_dir / "local" / "report.pdf"
-        nested.parent.mkdir(parents=True, exist_ok=True)
-        nested.write_text("pdf content")
-        result = pipeline._resolve_source_file("report.pdf")
-        assert result is not None
-        assert result.name == "report.pdf"
-
     def test_get_storage_dir_creates_path(self, test_config: DlightragConfig) -> None:
         pipeline = _make_pipeline(test_config)
-        d = pipeline._get_storage_dir(test_config.sources_dir, "custom_type", "sub1", "sub2")
+        d = pipeline._get_storage_dir(test_config.artifacts_dir, "custom_type", "sub1", "sub2")
         assert d.exists()
         assert d.is_dir()
         assert "custom_type" in str(d)

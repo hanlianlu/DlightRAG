@@ -303,10 +303,6 @@ class DlightragConfig(BaseSettings):
         return Path(self.working_dir).resolve()
 
     @property
-    def sources_dir(self) -> Path:
-        return self.working_dir_path / "sources"
-
-    @property
     def temp_dir(self) -> Path:
         return self.working_dir_path / ".tmp"
 

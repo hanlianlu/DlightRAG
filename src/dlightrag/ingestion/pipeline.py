@@ -135,14 +135,6 @@ class IngestionPipeline:
         storage_dir.mkdir(parents=True, exist_ok=True)
         return storage_dir
 
-    def _get_source_dir(self, source_type: str, *path_parts: str) -> Path:
-        """Get source directory for a specific source type."""
-        return self._get_storage_dir(
-            self.config.sources_dir,
-            source_type,
-            *path_parts,
-        )
-
     def _get_artifacts_dir(self, source_type: str, *path_parts: str) -> Path:
         """Get artifacts directory for a specific source type."""
         return self._get_storage_dir(
@@ -198,39 +190,6 @@ class IngestionPipeline:
         await asyncio.to_thread(target_path.write_bytes, content)
         logger.info("Downloaded blob to temp: %s", target_path)
         return await self._prepare_for_parsing(target_path, tmpdir)
-
-    def _extract_relative_source_path(self, file_path: str) -> str | None:
-        """Extract relative path within sources/ from a full file path.
-
-        E.g., "/abs/path/dlightrag_storage/sources/local/file.pdf" -> "local/file.pdf"
-        """
-        sources_marker = "/sources/"
-        idx = file_path.find(sources_marker)
-        if idx != -1:
-            return file_path[idx + len(sources_marker) :]
-        return None
-
-    def _resolve_source_file(self, file_path: str) -> Path | None:
-        """Resolve a file path to its actual location in the sources directory."""
-        # Try as absolute path first
-        candidate = Path(file_path)
-        if candidate.exists() and candidate.is_file():
-            return candidate
-
-        # Try relative to sources directory
-        rel = self._extract_relative_source_path(file_path)
-        if rel:
-            candidate = self.config.sources_dir / rel
-            if candidate.exists():
-                return candidate
-
-        # Try as basename in any subdirectory of sources
-        basename = Path(file_path).name
-        for match in self.config.sources_dir.rglob(basename):
-            if match.is_file():
-                return match
-
-        return None
 
     # ─────────────────────────────────────────────────────────────────
     # Core ingestion with policy filtering
@@ -924,43 +883,16 @@ class IngestionPipeline:
                     deletion_result["cleanup_results"]["hash_index"] = "removed"
                     logger.info(f"Removed hash index entry: {content_hash[:30]}...")
 
-            # Phase 3b: Delete source files and artifacts
-            if delete_source and ctx.file_paths:
+            # Phase 3b: Delete artifacts (best-effort glob search by filename stem)
+            if delete_source:
                 artifacts_dir = self.config.artifacts_dir
-                source_deleted = False
-
                 for fp in ctx.file_paths:
-                    # Delete source file
-                    resolved = self._resolve_source_file(fp)
-                    if resolved and resolved.exists():
-                        try:
-                            resolved.unlink()
-                            logger.info(f"Deleted source file: {resolved}")
-                            source_deleted = True
-                        except Exception as exc:
-                            logger.warning(f"Failed to delete source file {resolved}: {exc}")
-
-                    # Delete artifacts
-                    rel = self._extract_relative_source_path(fp)
-                    if rel:
-                        rel_path = Path(rel)
-                        artifact_base = artifacts_dir / rel_path.parent
-                        file_stem = rel_path.stem
-
-                        # Delete directory
-                        artifact_dir = artifact_base / file_stem
-                        if artifact_dir.exists() and artifact_dir.is_dir():
-                            shutil.rmtree(artifact_dir)
-                            logger.info(f"Deleted artifacts directory: {artifact_dir}")
-
-                        # Delete artifact files
-                        for artifact_file in artifact_base.glob(f"{file_stem}.*"):
-                            if artifact_file.is_file():
-                                artifact_file.unlink()
-                                logger.info(f"Deleted artifact file: {artifact_file}")
-
-                if source_deleted:
-                    deletion_result["cleanup_results"]["source_files"] = "deleted"
+                    stem = Path(fp).stem
+                    for match in artifacts_dir.rglob(f"{stem}*"):
+                        if match.is_dir():
+                            shutil.rmtree(match, ignore_errors=True)
+                            logger.info(f"Deleted artifacts directory: {match}")
+                deletion_result["cleanup_results"]["artifacts"] = "cleaned"
 
             # Set file_path and doc_id for backward compatibility
             deletion_result["file_path"] = list(ctx.file_paths)[0] if ctx.file_paths else identifier

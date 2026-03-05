@@ -48,7 +48,6 @@ class TestDlightragConfig:
     def test_computed_properties(self, test_config: DlightragConfig) -> None:
         """Test computed properties."""
         assert isinstance(test_config.working_dir_path, Path)
-        assert test_config.sources_dir == test_config.working_dir_path / "sources"
         assert test_config.artifacts_dir == test_config.working_dir_path / "artifacts"
 
     def test_model_names(self, monkeypatch: pytest.MonkeyPatch) -> None:
