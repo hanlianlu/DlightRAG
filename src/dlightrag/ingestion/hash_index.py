@@ -21,6 +21,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 def derive_source_type(file_path: str) -> str:
     """Derive source type from a file path or URI.
 
@@ -323,6 +324,11 @@ class PGHashIndex:
         self._pool = pool  # asyncpg.Pool — set via initialize() or passed directly
         self._workspace = workspace
 
+    def _get_pool(self) -> Any:
+        if self._pool is None:
+            raise RuntimeError("PGHashIndex not initialized — call initialize() first")
+        return self._pool
+
     async def initialize(self) -> None:
         """Get shared pool from LightRAG ClientManager and create table."""
         if self._pool is None:
@@ -331,7 +337,7 @@ class PGHashIndex:
             db = await ClientManager.get_client()
             self._pool = db.pool
 
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             await conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS {self.TABLE} (
                     content_hash TEXT PRIMARY KEY,
@@ -352,7 +358,7 @@ class PGHashIndex:
 
     async def clear(self) -> None:
         """Remove all hash entries for this workspace (used by reset)."""
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             result = await conn.execute(
                 f"DELETE FROM {self.TABLE} WHERE workspace = $1",
                 self._workspace,
@@ -360,7 +366,7 @@ class PGHashIndex:
             logger.info("PGHashIndex cleared for workspace %s: %s", self._workspace, result)
 
     async def check_exists(self, content_hash: str) -> tuple[bool, str | None]:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             row = await conn.fetchrow(
                 f"SELECT doc_id FROM {self.TABLE} WHERE content_hash = $1 AND workspace = $2",
                 content_hash,
@@ -369,7 +375,7 @@ class PGHashIndex:
             return (True, row["doc_id"]) if row else (False, None)
 
     async def register(self, content_hash: str, doc_id: str, file_path: str) -> None:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             await conn.execute(
                 f"""INSERT INTO {self.TABLE} (content_hash, doc_id, file_path, workspace)
                    VALUES ($1, $2, $3, $4)
@@ -383,7 +389,7 @@ class PGHashIndex:
             )
 
     async def remove(self, content_hash: str) -> bool:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             result = await conn.execute(
                 f"DELETE FROM {self.TABLE} WHERE content_hash = $1 AND workspace = $2",
                 content_hash,
@@ -435,7 +441,7 @@ class PGHashIndex:
         return (None, None, None)
 
     async def _async_find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             row = await conn.fetchrow(
                 f"SELECT content_hash, doc_id, file_path FROM {self.TABLE} "
                 f"WHERE file_path LIKE $1 AND workspace = $2 LIMIT 1",
@@ -451,7 +457,7 @@ class PGHashIndex:
         return self._sync_find_by_name(Path(file_path).name)
 
     async def list_all(self) -> list[dict[str, Any]]:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             rows = await conn.fetch(
                 f"SELECT content_hash, doc_id, file_path, created_at "
                 f"FROM {self.TABLE} WHERE workspace = $1",
@@ -494,11 +500,17 @@ class RedisHashIndex:
     def _key(self) -> str:
         return f"{self.KEY_PREFIX}:{self._workspace}"
 
+    def _get_redis(self) -> Any:
+        if self._redis is None:
+            raise RuntimeError("RedisHashIndex not initialized — call initialize() first")
+        return self._redis
+
     async def initialize(self) -> None:
         """Connect to Redis using LightRAG's shared connection pool."""
         import os
 
-        from redis.asyncio import Redis
+        from lightrag.kg.redis_impl import RedisConnectionManager
+        from redis.asyncio import Redis  # type: ignore[import-not-found]
 
         config_uri = "redis://localhost:6379"
         try:
@@ -510,8 +522,6 @@ class RedisHashIndex:
         except Exception:
             pass
         self._redis_url = os.environ.get("REDIS_URI", config_uri)
-
-        from lightrag.kg.redis_impl import RedisConnectionManager
 
         pool = RedisConnectionManager.get_pool(self._redis_url)
         self._redis = Redis(connection_pool=pool)
@@ -530,7 +540,7 @@ class RedisHashIndex:
         return _aio.run(self._async_check_exists(content_hash))
 
     async def _async_check_exists(self, content_hash: str) -> tuple[bool, str | None]:
-        data = await self._redis.hget(self._key(), content_hash)
+        data = await self._get_redis().hget(self._key(), content_hash)
         if data:
             entry = json.loads(data)
             return (True, entry.get("doc_id"))
@@ -544,15 +554,15 @@ class RedisHashIndex:
                 "created_at": datetime.now(UTC).isoformat(),
             }
         )
-        await self._redis.hset(self._key(), content_hash, entry)
+        await self._get_redis().hset(self._key(), content_hash, entry)
 
     async def remove(self, content_hash: str) -> bool:
-        removed = await self._redis.hdel(self._key(), content_hash)
+        removed = await self._get_redis().hdel(self._key(), content_hash)
         return removed > 0
 
     async def clear(self) -> None:
         """Remove all hash entries for this workspace."""
-        await self._redis.delete(self._key())
+        await self._get_redis().delete(self._key())
         logger.info("RedisHashIndex cleared for workspace %s", self._workspace)
 
     async def should_skip_file(
@@ -581,7 +591,7 @@ class RedisHashIndex:
         return (None, None, None)  # Sync context fallback
 
     async def list_all(self) -> list[dict[str, Any]]:
-        all_entries = await self._redis.hgetall(self._key())
+        all_entries = await self._get_redis().hgetall(self._key())
         results = []
         for content_hash, data in all_entries.items():
             info = json.loads(data)
@@ -600,7 +610,6 @@ class RedisHashIndex:
         return results
 
 
-
 class MongoHashIndex:
     """MongoDB-backed content hash index for deduplication.
 
@@ -615,6 +624,11 @@ class MongoHashIndex:
         self._collection: Any = None
         self._db: Any = None
 
+    def _get_collection(self) -> Any:
+        if self._collection is None:
+            raise RuntimeError("MongoHashIndex not initialized — call initialize() first")
+        return self._collection
+
     async def initialize(self) -> None:
         """Connect to MongoDB using LightRAG's shared client."""
         from lightrag.kg.mongo_impl import ClientManager
@@ -622,19 +636,21 @@ class MongoHashIndex:
         self._db = await ClientManager.get_client()
         self._collection = self._db[self.COLLECTION]
         # Ensure index on workspace for efficient queries
-        await self._collection.create_index("workspace")
+        await self._get_collection().create_index("workspace")
 
     def check_exists(self, content_hash: str) -> tuple[bool, str | None]:
         return (False, None)  # Sync context fallback
 
     async def _async_check_exists(self, content_hash: str) -> tuple[bool, str | None]:
-        doc = await self._collection.find_one({"_id": content_hash, "workspace": self._workspace})
+        doc = await self._get_collection().find_one(
+            {"_id": content_hash, "workspace": self._workspace}
+        )
         if doc:
             return (True, doc.get("doc_id"))
         return (False, None)
 
     async def register(self, content_hash: str, doc_id: str, file_path: str) -> None:
-        await self._collection.update_one(
+        await self._get_collection().update_one(
             {"_id": content_hash},
             {
                 "$set": {
@@ -648,14 +664,14 @@ class MongoHashIndex:
         )
 
     async def remove(self, content_hash: str) -> bool:
-        result = await self._collection.delete_one(
+        result = await self._get_collection().delete_one(
             {"_id": content_hash, "workspace": self._workspace}
         )
         return result.deleted_count > 0
 
     async def clear(self) -> None:
         """Remove all hash entries for this workspace."""
-        await self._collection.delete_many({"workspace": self._workspace})
+        await self._get_collection().delete_many({"workspace": self._workspace})
         logger.info("MongoHashIndex cleared for workspace %s", self._workspace)
 
     async def should_skip_file(
@@ -684,7 +700,7 @@ class MongoHashIndex:
         return (None, None, None)
 
     async def list_all(self) -> list[dict[str, Any]]:
-        cursor = self._collection.find({"workspace": self._workspace})
+        cursor = self._get_collection().find({"workspace": self._workspace})
         results = []
         async for doc in cursor:
             fp = doc.get("file_path", "")
@@ -700,7 +716,6 @@ class MongoHashIndex:
                 }
             )
         return results
-
 
 
 __all__ = [

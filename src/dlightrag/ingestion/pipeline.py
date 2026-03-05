@@ -21,7 +21,7 @@ from raganything import RAGAnything
 
 from dlightrag.converters.office import create_converter
 from dlightrag.ingestion.cleanup import collect_deletion_context
-from dlightrag.ingestion.hash_index import HashIndex, compute_file_hash
+from dlightrag.ingestion.hash_index import HashIndex
 from dlightrag.ingestion.policy import IngestionPolicy, PolicyStats
 
 if TYPE_CHECKING:
@@ -265,7 +265,9 @@ class IngestionPipeline:
 
                 # Step 4: Register hash for deduplication (if hash was provided)
                 if content_hash and doc_id:
-                    await self._hash_index.register(content_hash, doc_id, source_uri or str(file_path))
+                    await self._hash_index.register(
+                        content_hash, doc_id, source_uri or str(file_path)
+                    )
 
                 return IngestionResult(
                     status="success",
@@ -544,9 +546,7 @@ class IngestionPipeline:
                 tmpdir = self._create_temp_dir()
                 async with self._semaphore:
                     try:
-                        temp_file = await self._download_blob_to_temp(
-                            source, blob_id, tmpdir
-                        )
+                        temp_file = await self._download_blob_to_temp(source, blob_id, tmpdir)
                         return (temp_file, tmpdir)
                     except Exception as exc:
                         logger.error("Failed to download blob %s: %s", blob_id, exc)
@@ -557,7 +557,7 @@ class IngestionPipeline:
             downloaded = await asyncio.gather(*download_tasks)
             # Pair each result with its blob_id for source_uri construction
             valid_downloads: list[tuple[str, Path, Path]] = []
-            for blob_id, dl in zip(blob_ids, downloaded):
+            for blob_id, dl in zip(blob_ids, downloaded, strict=True):
                 if dl is not None:
                     valid_downloads.append((blob_id, dl[0], dl[1]))
 
@@ -635,9 +635,7 @@ class IngestionPipeline:
                 skipped_count,
             )
 
-            async def ingest_one(
-                fp: Path, ch: str, uri: str, tmpdir: Path
-            ) -> IngestionResult:
+            async def ingest_one(fp: Path, ch: str, uri: str, tmpdir: Path) -> IngestionResult:
                 try:
                     return await self._ingest_single_file_with_policy(
                         fp, artifacts_dir, content_hash=ch if ch else None, source_uri=uri
@@ -645,9 +643,7 @@ class IngestionPipeline:
                 finally:
                     shutil.rmtree(tmpdir, ignore_errors=True)
 
-            ingest_tasks = [
-                ingest_one(fp, ch, uri, td) for fp, ch, uri, td in files_to_process
-            ]
+            ingest_tasks = [ingest_one(fp, ch, uri, td) for fp, ch, uri, td in files_to_process]
             results = await asyncio.gather(*ingest_tasks, return_exceptions=True)
 
             success_count = sum(
