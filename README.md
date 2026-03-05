@@ -9,8 +9,7 @@ Multimodal RAG package built upon [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 - 🌐 **Flexible data sourcing** -- Ingest from local filesystem, Azure Blob Storage, or Snowflake tables
 - 🗂️ **Multimodal ingestion with granular enhancements** -- PDF, Word, Excel, PowerPoint, images, and more via parsing engine
-- 🤖 **Multi-provider LLM** -- OpenAI, Azure OpenAI, Anthropic, Google Gemini, Qwen, MiniMax, Ollama, OpenRouter, xInference
-- 🔭 **Knowledge graph + Vector semantic** -- Retrieval with Apache AGE (graph) and pgvector (vector) in a single PostgreSQL instance
+- 🔭 **Knowledge graph + Vector semantic** -- Ingestion and Retrieval with LightRAG paradigm 
 - ↕️ **Reranking** -- LLM-based listwise OR Reranker from Cohere, Jina, Aliyun, Azure Cohere; Point any backend at a custom endpoint (Xinference, Ollama etc.)
 - ✨ **Retrieval enrichment** -- Enhanced answer and retrieval formation for better citation and reference
 - 🔗 **Cross-workspace federation** -- Query across multiple workspaces in a single request with round-robin result merging and RBAC-ready interface
