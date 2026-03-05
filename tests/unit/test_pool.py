@@ -279,7 +279,7 @@ class TestWorkspacePool:
 
         assert result is mock_service
         call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["config"].postgres_workspace == "project-a"
+        assert call_kwargs["config"].workspace == "project-a"
 
     @patch("dlightrag.pool.RAGService.create", new_callable=AsyncMock)
     async def test_caches_service_per_workspace(self, mock_create) -> None:
@@ -340,10 +340,45 @@ class TestWorkspacePool:
 
         cfg = DlightragConfig(  # type: ignore[call-arg]
             kv_storage="JsonKVStorage",
-            postgres_workspace="myws",
+            workspace="myws",
             openai_api_key="test",
         )
         set_config(cfg)
 
         result = await list_available_workspaces()
         assert result == ["myws"]
+
+    async def test_list_workspaces_filesystem_discovery(self, tmp_path) -> None:
+        """Filesystem backends discover workspaces by scanning working_dir subdirectories."""
+        from dlightrag.config import DlightragConfig, set_config
+
+        working_dir = tmp_path / "dlightrag_storage"
+        working_dir.mkdir()
+
+        # Create workspace directories with LightRAG data files
+        ws_a = working_dir / "project-a"
+        ws_a.mkdir()
+        (ws_a / "kv_store_full_docs.json").write_text("{}")
+
+        ws_b = working_dir / "project-b"
+        ws_b.mkdir()
+        (ws_b / "vdb_entities.json").write_text("{}")
+
+        # Directory without LightRAG data should NOT be discovered
+        ws_empty = working_dir / "empty-dir"
+        ws_empty.mkdir()
+
+        cfg = DlightragConfig(  # type: ignore[call-arg]
+            working_dir=str(working_dir),
+            kv_storage="JsonKVStorage",
+            doc_status_storage="JsonDocStatusStorage",
+            vector_storage="NanoVectorDBStorage",
+            graph_storage="NetworkXStorage",
+            openai_api_key="test",
+        )
+        set_config(cfg)
+
+        result = await list_available_workspaces()
+        assert "project-a" in result
+        assert "project-b" in result
+        assert "empty-dir" not in result

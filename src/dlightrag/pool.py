@@ -226,7 +226,7 @@ async def get_workspace_service(
         from dlightrag.config import get_config
 
         config = base_config or get_config()
-        ws_config = config.model_copy(update={"postgres_workspace": workspace})
+        ws_config = config.model_copy(update={"workspace": workspace})
         svc = await RAGService.create(
             config=ws_config,
             enable_vlm=enable_vlm,
@@ -241,38 +241,71 @@ async def get_workspace_service(
 async def list_available_workspaces(
     base_config: DlightragConfig | None = None,
 ) -> list[str]:
-    """Query PG for all distinct workspaces that have ingested data.
+    """Discover available workspaces based on storage backend.
 
-    Falls back to returning just the default workspace name if PG is not used.
+    - PG backends: query dlightrag_file_hashes table
+    - Filesystem backends (Json/Nano/NetworkX): scan working_dir subdirectories
+    - Other backends: return cached workspace names from pool + default
     """
     from dlightrag.config import get_config
 
     config = base_config or get_config()
 
-    if not config.kv_storage.startswith("PG"):
-        return [config.postgres_workspace]
-
-    try:
-        import asyncpg
-
-        conn = await asyncpg.connect(
-            host=config.postgres_host,
-            port=config.postgres_port,
-            user=config.postgres_user,
-            password=config.postgres_password,
-            database=config.postgres_database,
-        )
+    # PG backends: query hash table
+    if config.kv_storage.startswith("PG"):
         try:
-            rows = await conn.fetch(
-                "SELECT DISTINCT workspace FROM dlightrag_file_hashes ORDER BY workspace"
+            import asyncpg
+
+            conn = await asyncpg.connect(
+                host=config.postgres_host,
+                port=config.postgres_port,
+                user=config.postgres_user,
+                password=config.postgres_password,
+                database=config.postgres_database,
             )
-            workspaces = [row["workspace"] for row in rows]
-            return workspaces if workspaces else [config.postgres_workspace]
-        finally:
-            await conn.close()
-    except Exception as exc:
-        logger.warning("Failed to list workspaces from PG: %s", exc)
-        return [config.postgres_workspace]
+            try:
+                rows = await conn.fetch(
+                    "SELECT DISTINCT workspace FROM dlightrag_file_hashes ORDER BY workspace"
+                )
+                workspaces = [row["workspace"] for row in rows]
+                return workspaces if workspaces else [config.workspace]
+            finally:
+                await conn.close()
+        except Exception as exc:
+            logger.warning("Failed to list workspaces from PG: %s", exc)
+            return [config.workspace]
+
+    # Filesystem backends: scan working_dir for workspace subdirectories
+    _FS_BACKENDS = {"JsonKVStorage", "JsonDocStatusStorage", "NanoVectorDBStorage",
+                    "NetworkXStorage", "FaissVectorDBStorage"}
+    if config.kv_storage in _FS_BACKENDS or config.vector_storage in _FS_BACKENDS:
+        return _discover_filesystem_workspaces(config)
+
+    # Fallback: return cached workspace names + default
+    cached = list(_workspace_services.keys())
+    if config.workspace not in cached:
+        cached.append(config.workspace)
+    return sorted(cached)
+
+
+def _discover_filesystem_workspaces(config: DlightragConfig) -> list[str]:
+    """Scan working_dir for subdirectories containing LightRAG data files."""
+    working_dir = config.working_dir_path
+    if not working_dir.exists():
+        return [config.workspace]
+
+    workspaces = []
+    for entry in working_dir.iterdir():
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        # Check for LightRAG data files as evidence of workspace usage
+        if (any(entry.glob("kv_store_*.json"))
+                or any(entry.glob("vdb_*.json"))
+                or any(entry.glob("graph_*.graphml"))
+                or any(entry.glob("file_content_hashes.json"))):
+            workspaces.append(entry.name)
+
+    return sorted(workspaces) if workspaces else [config.workspace]
 
 
 async def close_workspace_services() -> None:
