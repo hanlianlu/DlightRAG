@@ -398,7 +398,7 @@ class RAGService:
             try:
                 from dlightrag.ingestion.hash_index import PGHashIndex
 
-                idx = PGHashIndex(workspace=config.workspace, sources_dir=config.sources_dir)
+                idx = PGHashIndex(workspace=config.workspace)
                 await idx.initialize()
                 logger.info("Hash index: PGHashIndex (PostgreSQL via shared pool)")
                 return idx
@@ -411,7 +411,7 @@ class RAGService:
             try:
                 from dlightrag.ingestion.hash_index import RedisHashIndex
 
-                idx = RedisHashIndex(workspace=config.workspace, sources_dir=config.sources_dir)
+                idx = RedisHashIndex(workspace=config.workspace)
                 await idx.initialize()
                 logger.info("Hash index: RedisHashIndex (Redis via shared pool)")
                 return idx
@@ -424,7 +424,7 @@ class RAGService:
             try:
                 from dlightrag.ingestion.hash_index import MongoHashIndex
 
-                idx = MongoHashIndex(workspace=config.workspace, sources_dir=config.sources_dir)
+                idx = MongoHashIndex(workspace=config.workspace)
                 await idx.initialize()
                 logger.info("Hash index: MongoHashIndex (MongoDB via shared client)")
                 return idx
@@ -436,7 +436,7 @@ class RAGService:
         from dlightrag.ingestion.hash_index import HashIndex
 
         logger.info("Hash index: HashIndex (JSON file)")
-        return HashIndex(config.working_dir_path, config.sources_dir, workspace=config.workspace)
+        return HashIndex(config.working_dir_path, workspace=config.workspace)
 
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""
@@ -474,8 +474,8 @@ class RAGService:
         Args:
             source_type: "local", "azure_blob", or "snowflake"
             kwargs:
-                local: path, replace, sync_hashes
-                azure_blob: source, container_name, blob_path, prefix, replace, sync_hashes
+                local: path, replace
+                azure_blob: source, container_name, blob_path, prefix, replace
                 snowflake: query, table
         """
         self._ensure_initialized()
@@ -492,8 +492,6 @@ class RAGService:
                 return self.config.ingestion_replace_default
             return bool(replace_arg)
 
-        sync_hashes = bool(kwargs.get("sync_hashes", False))
-
         if source_type == "local":
             path = Path(kwargs["path"])
             replace = get_replace_value()
@@ -503,7 +501,6 @@ class RAGService:
             result = await ingestion.aingest_from_local(
                 path=path,
                 replace=replace,
-                sync_hashes=sync_hashes,
             )
             return result.model_dump(exclude_none=True)
 
@@ -533,7 +530,6 @@ class RAGService:
                     blob_path=blob_path,
                     prefix=prefix,
                     replace=replace,
-                    sync_hashes=sync_hashes,
                 )
                 return result.model_dump(exclude_none=True)
             finally:

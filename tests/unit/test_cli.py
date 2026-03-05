@@ -36,7 +36,7 @@ class TestValidateLocal:
         _validate_ingest_args(args)  # should not raise
 
     def test_valid_local_with_flags(self) -> None:
-        args = _parse_ingest(["./docs", "--replace", "--sync-hashes"])
+        args = _parse_ingest(["./docs", "--replace"])
         _validate_ingest_args(args)
 
     def test_local_requires_path(self) -> None:
@@ -148,11 +148,6 @@ class TestValidateSnowflake:
 
     def test_snowflake_rejects_replace(self) -> None:
         args = _parse_ingest(["--source", "snowflake", "--query", "SELECT 1", "--replace"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_snowflake_rejects_sync_hashes(self) -> None:
-        args = _parse_ingest(["--source", "snowflake", "--query", "SELECT 1", "--sync-hashes"])
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 

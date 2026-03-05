@@ -21,27 +21,6 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Supported file extensions for hash sync
-SUPPORTED_EXTENSIONS = {
-    ".pdf",
-    ".docx",
-    ".doc",
-    ".pptx",
-    ".ppt",
-    ".xlsx",
-    ".xls",
-    ".txt",
-    ".md",
-    ".html",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".bmp",
-    ".tiff",
-}
-
-
 def derive_source_type(file_path: str) -> str:
     """Derive source type from a file path or URI.
 
@@ -190,14 +169,13 @@ class HashIndex:
     For PostgreSQL, use PGHashIndex instead.
     """
 
-    def __init__(self, working_dir: Path, sources_dir: Path, workspace: str = "default") -> None:
+    def __init__(self, working_dir: Path, workspace: str = "default") -> None:
         self._workspace = workspace
         if workspace:
             self._working_dir = working_dir / workspace
         else:
             self._working_dir = working_dir
         self._working_dir.mkdir(parents=True, exist_ok=True)
-        self._sources_dir = sources_dir
         self._cache: dict[str, dict[str, Any]] | None = None
 
     def _get_index_path(self) -> Path:
@@ -292,38 +270,6 @@ class HashIndex:
     def generate_doc_id_from_path(file_path: Path) -> str:
         return file_path.stem
 
-    async def sync_existing(self) -> int:
-        if not self._sources_dir.exists():
-            return 0
-        hash_index = self._load()
-        existing_hashes = set(hash_index.keys())
-        file_path_to_hash = {v.get("file_path"): k for k, v in hash_index.items()}
-        synced_count = 0
-
-        for file_path in self._sources_dir.rglob("*"):
-            if file_path.is_dir() or file_path.name.startswith("."):
-                continue
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
-            if str(file_path) in file_path_to_hash:
-                continue
-            try:
-                content_hash = await asyncio.to_thread(compute_file_hash, file_path)
-            except Exception as exc:
-                logger.warning(f"Failed to compute hash for {file_path}: {exc}")
-                continue
-            if content_hash in existing_hashes:
-                continue
-            doc_id = self.generate_doc_id_from_path(file_path)
-            await self.register(content_hash, doc_id, str(file_path))
-            existing_hashes.add(content_hash)
-            file_path_to_hash[str(file_path)] = content_hash
-            synced_count += 1
-
-        if synced_count > 0:
-            logger.info(f"Synced {synced_count} hashes from sources directory")
-        return synced_count
-
     def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
         index = self._load()
         for h, info in index.items():
@@ -372,12 +318,10 @@ class PGHashIndex:
     def __init__(
         self,
         workspace: str = "default",
-        sources_dir: Path | None = None,
         pool: Any = None,
     ) -> None:
         self._pool = pool  # asyncpg.Pool — set via initialize() or passed directly
         self._workspace = workspace
-        self._sources_dir = sources_dir
 
     async def initialize(self) -> None:
         """Get shared pool from LightRAG ClientManager and create table."""
@@ -529,39 +473,6 @@ class PGHashIndex:
                 )
             return results
 
-    async def sync_existing(self) -> int:
-        if not self._sources_dir or not self._sources_dir.exists():
-            return 0
-
-        # Get existing file paths
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                f"SELECT file_path FROM {self.TABLE} WHERE workspace = $1",
-                self._workspace,
-            )
-        existing_paths = {row["file_path"] for row in rows}
-
-        synced_count = 0
-        for file_path in self._sources_dir.rglob("*"):
-            if file_path.is_dir() or file_path.name.startswith("."):
-                continue
-            if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
-            if str(file_path) in existing_paths:
-                continue
-            try:
-                content_hash = await asyncio.to_thread(compute_file_hash, file_path)
-            except Exception as exc:
-                logger.warning(f"Failed to compute hash for {file_path}: {exc}")
-                continue
-            doc_id = self.generate_doc_id_from_path(file_path)
-            await self.register(content_hash, doc_id, str(file_path))
-            synced_count += 1
-
-        if synced_count > 0:
-            logger.info(f"Synced {synced_count} hashes from sources directory")
-        return synced_count
-
     def invalidate(self) -> None:
         """No-op for PG backend (no cache to invalidate)."""
 
@@ -575,9 +486,8 @@ class RedisHashIndex:
 
     KEY_PREFIX = "dlightrag:file_hashes"
 
-    def __init__(self, workspace: str = "default", sources_dir: Path | None = None) -> None:
+    def __init__(self, workspace: str = "default") -> None:
         self._workspace = workspace
-        self._sources_dir = sources_dir
         self._redis: Any = None
         self._redis_url: str | None = None
 
@@ -689,38 +599,6 @@ class RedisHashIndex:
             )
         return results
 
-    async def sync_existing(self) -> int:
-        if not self._sources_dir or not self._sources_dir.exists():
-            return 0
-        all_entries = await self._redis.hgetall(self._key())
-        existing_hashes = set(all_entries.keys())
-        existing_paths: set[str] = set()
-        for data in all_entries.values():
-            info = json.loads(data)
-            existing_paths.add(info.get("file_path", ""))
-        synced = 0
-        for fp in self._sources_dir.rglob("*"):
-            if fp.is_dir() or fp.name.startswith("."):
-                continue
-            if fp.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
-            if str(fp) in existing_paths:
-                continue
-            try:
-                h = await asyncio.to_thread(compute_file_hash, fp)
-            except Exception as exc:
-                logger.warning(f"Failed to hash {fp}: {exc}")
-                continue
-            if h in existing_hashes:
-                continue
-            doc_id = self.generate_doc_id_from_path(fp)
-            await self.register(h, doc_id, str(fp))
-            existing_hashes.add(h)
-            existing_paths.add(str(fp))
-            synced += 1
-        if synced:
-            logger.info(f"Synced {synced} hashes from sources directory")
-        return synced
 
 
 class MongoHashIndex:
@@ -732,9 +610,8 @@ class MongoHashIndex:
 
     COLLECTION = "dlightrag_file_hashes"
 
-    def __init__(self, workspace: str = "default", sources_dir: Path | None = None) -> None:
+    def __init__(self, workspace: str = "default") -> None:
         self._workspace = workspace
-        self._sources_dir = sources_dir
         self._collection: Any = None
         self._db: Any = None
 
@@ -824,35 +701,6 @@ class MongoHashIndex:
             )
         return results
 
-    async def sync_existing(self) -> int:
-        if not self._sources_dir or not self._sources_dir.exists():
-            return 0
-        existing_docs = await self.list_all()
-        existing_hashes = {d["content_hash"] for d in existing_docs}
-        existing_paths = {d["file_path"] for d in existing_docs}
-        synced = 0
-        for fp in self._sources_dir.rglob("*"):
-            if fp.is_dir() or fp.name.startswith("."):
-                continue
-            if fp.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                continue
-            if str(fp) in existing_paths:
-                continue
-            try:
-                h = await asyncio.to_thread(compute_file_hash, fp)
-            except Exception as exc:
-                logger.warning(f"Failed to hash {fp}: {exc}")
-                continue
-            if h in existing_hashes:
-                continue
-            doc_id = self.generate_doc_id_from_path(fp)
-            await self.register(h, doc_id, str(fp))
-            existing_hashes.add(h)
-            existing_paths.add(str(fp))
-            synced += 1
-        if synced:
-            logger.info(f"Synced {synced} hashes from sources directory")
-        return synced
 
 
 __all__ = [
@@ -862,5 +710,4 @@ __all__ = [
     "MongoHashIndex",
     "compute_file_hash",
     "derive_source_type",
-    "SUPPORTED_EXTENSIONS",
 ]

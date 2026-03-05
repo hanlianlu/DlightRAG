@@ -6,7 +6,7 @@ Usage:
     # Local ingestion (runs directly via RAGService, no API server needed)
     uv run scripts/cli.py ingest ./docs
     uv run scripts/cli.py ingest ./docs --replace
-    uv run scripts/cli.py ingest ./docs --replace --sync-hashes
+    uv run scripts/cli.py ingest ./docs --replace
 
     # Azure Blob ingestion
     uv run scripts/cli.py ingest --source azure_blob --container my-container
@@ -83,7 +83,7 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
         if not args.path:
             _die(
                 "local source requires a path argument.\n"
-                "Usage: dlightrag-cli ingest <path> [--replace] [--sync-hashes]"
+                "Usage: dlightrag-cli ingest <path> [--replace]"
             )
         if args.container_name or args.blob_path or args.prefix:
             _die("--container, --blob-path, --prefix are only for azure_blob source")
@@ -119,8 +119,6 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             _die("--container, --blob-path, --prefix are only for azure_blob source")
         if args.replace:
             _die("--replace is not supported for snowflake source")
-        if args.sync_hashes:
-            _die("--sync-hashes is not supported for snowflake source")
 
 
 # ── subcommands ──────────────────────────────────────────────────
@@ -136,7 +134,6 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     if source == "local":
         kwargs["path"] = args.path
         kwargs["replace"] = args.replace
-        kwargs["sync_hashes"] = args.sync_hashes
         print(f"Ingesting: {args.path} (replace={args.replace})")
 
     elif source == "azure_blob":
@@ -146,7 +143,6 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         if args.prefix is not None:
             kwargs["prefix"] = args.prefix
         kwargs["replace"] = args.replace
-        kwargs["sync_hashes"] = args.sync_hashes
         target = args.blob_path or (f"prefix={args.prefix}" if args.prefix else "entire container")
         print(
             f"Ingesting from Azure Blob: container={args.container_name}, target={target} "
@@ -316,12 +312,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--query", help="SQL query (snowflake source)")
     p_ingest.add_argument("--table", help="Table name metadata (snowflake source, optional)")
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
-    p_ingest.add_argument(
-        "--sync-hashes",
-        action="store_true",
-        dest="sync_hashes",
-        help="Sync content hashes before deduplication",
-    )
 
     # query (retrieve only)
     p_query = sub.add_parser("query", help="Retrieve contexts and sources (no LLM answer)")

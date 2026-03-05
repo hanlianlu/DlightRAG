@@ -133,10 +133,7 @@ class TestHashIndex:
 
     async def test_register_and_lookup(self, tmp_path: Path) -> None:
         """Test registering and looking up hashes."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
 
         content_hash = "sha256:abc123"
         await index.register(content_hash, "doc-001", "/path/to/file.pdf")
@@ -148,18 +145,12 @@ class TestHashIndex:
 
     def test_lookup_missing(self, tmp_path: Path) -> None:
         """Test lookup for non-existent hash."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         assert index.lookup("sha256:nonexistent") is None
 
     async def test_remove(self, tmp_path: Path) -> None:
         """Test removing a hash entry."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         content_hash = "sha256:abc123"
 
         await index.register(content_hash, "doc-001", "/path/to/file.pdf")
@@ -171,18 +162,12 @@ class TestHashIndex:
 
     async def test_remove_missing(self, tmp_path: Path) -> None:
         """Test removing non-existent hash."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         assert await index.remove("sha256:nonexistent") is False
 
     async def test_list_all(self, tmp_path: Path) -> None:
         """Test listing all entries."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         await index.register("sha256:aaa", "doc-001", "/path/a.pdf")
         await index.register("sha256:bbb", "doc-002", "/path/b.pdf")
 
@@ -191,10 +176,7 @@ class TestHashIndex:
 
     async def test_invalidate(self, tmp_path: Path) -> None:
         """Test cache invalidation."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         await index.register("sha256:aaa", "doc-001", "/path/a.pdf")
 
         # Invalidate should clear cache without error
@@ -206,10 +188,7 @@ class TestHashIndex:
 
     async def test_clear(self, tmp_path: Path) -> None:
         """Test clear removes all entries and deletes the JSON file."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         await index.register("sha256:aaa", "doc-001", "/path/a.pdf")
         await index.register("sha256:bbb", "doc-002", "/path/b.pdf")
 
@@ -224,13 +203,10 @@ class TestHashIndex:
 
     async def test_should_skip_file_new(self, tmp_path: Path) -> None:
         """Test should_skip_file for a new file."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
         test_file = tmp_path / "new_file.txt"
         test_file.write_text("new content")
 
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
         should_skip, content_hash, reason = await index.should_skip_file(test_file, replace=False)
 
         assert not should_skip
@@ -239,13 +215,10 @@ class TestHashIndex:
 
     async def test_should_skip_file_duplicate(self, tmp_path: Path) -> None:
         """Test should_skip_file for a duplicate file."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
         test_file = tmp_path / "file.txt"
         test_file.write_text("same content")
 
-        index = HashIndex(tmp_path, sources_dir)
+        index = HashIndex(tmp_path)
 
         # Register the hash first
         content_hash = compute_file_hash(test_file)
@@ -262,10 +235,7 @@ class TestHashIndexWorkspace:
 
     async def test_workspace_creates_subdirectory(self, tmp_path: Path) -> None:
         """HashIndex with workspace stores files in workspace subdirectory."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir, workspace="project-a")
+        index = HashIndex(tmp_path, workspace="project-a")
         await index.register("sha256:abc", "doc-1", "/path/a.pdf")
 
         # Hash file should be in workspace subdirectory
@@ -274,11 +244,8 @@ class TestHashIndexWorkspace:
 
     async def test_different_workspaces_isolated(self, tmp_path: Path) -> None:
         """Different workspaces have separate hash indexes."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index_a = HashIndex(tmp_path, sources_dir, workspace="ws-a")
-        index_b = HashIndex(tmp_path, sources_dir, workspace="ws-b")
+        index_a = HashIndex(tmp_path, workspace="ws-a")
+        index_b = HashIndex(tmp_path, workspace="ws-b")
 
         await index_a.register("sha256:same", "doc-a", "/path/a.pdf")
 
@@ -288,10 +255,7 @@ class TestHashIndexWorkspace:
 
     async def test_default_workspace_uses_subdirectory(self, tmp_path: Path) -> None:
         """Default workspace also uses a subdirectory for consistency."""
-        sources_dir = tmp_path / "sources"
-        sources_dir.mkdir()
-
-        index = HashIndex(tmp_path, sources_dir, workspace="default")
+        index = HashIndex(tmp_path, workspace="default")
         await index.register("sha256:abc", "doc-1", "/path/a.pdf")
 
         hash_file = tmp_path / "default" / "file_content_hashes.json"
@@ -406,7 +370,7 @@ class TestRedisHashIndex:
     def redis_index(self):
         from dlightrag.ingestion.hash_index import RedisHashIndex
 
-        idx = RedisHashIndex(workspace="test", sources_dir=None)
+        idx = RedisHashIndex(workspace="test")
         # Mock the Redis client with a dict-based fake
         idx._redis = FakeRedis()
         return idx
@@ -517,7 +481,7 @@ class TestMongoHashIndex:
     def mongo_index(self):
         from dlightrag.ingestion.hash_index import MongoHashIndex
 
-        idx = MongoHashIndex(workspace="test", sources_dir=None)
+        idx = MongoHashIndex(workspace="test")
         idx._collection = FakeMongoCollection()
         return idx
 
@@ -562,7 +526,6 @@ class TestHashIndexFactory:
         config = MagicMock()
         config.kv_storage = "PGKVStorage"
         config.workspace = "test"
-        config.sources_dir = None
         config.working_dir_path = tmp_path
 
         service = RAGService.__new__(RAGService)
@@ -578,7 +541,6 @@ class TestHashIndexFactory:
         config = MagicMock()
         config.kv_storage = "JsonKVStorage"
         config.workspace = "test"
-        config.sources_dir = None
         config.working_dir_path = tmp_path
 
         service = RAGService.__new__(RAGService)
@@ -594,7 +556,6 @@ class TestHashIndexFactory:
         config = MagicMock()
         config.kv_storage = "RedisKVStorage"
         config.workspace = "test"
-        config.sources_dir = None
         config.working_dir_path = tmp_path
 
         service = RAGService.__new__(RAGService)
@@ -611,7 +572,6 @@ class TestHashIndexFactory:
         config = MagicMock()
         config.kv_storage = "MongoKVStorage"
         config.workspace = "test"
-        config.sources_dir = None
         config.working_dir_path = tmp_path
 
         service = RAGService.__new__(RAGService)

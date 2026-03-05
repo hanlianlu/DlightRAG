@@ -96,7 +96,6 @@ class IngestionPipeline:
         # Hash index for content deduplication (auto-detected by caller)
         self._hash_index = hash_index or HashIndex(
             self.config.working_dir_path,
-            self.config.sources_dir,
         )
 
         # Callback for cancellation checking (replaces Redis task registry)
@@ -363,7 +362,6 @@ class IngestionPipeline:
         path: Path,
         replace: bool = False,
         recursive: bool = True,
-        sync_hashes: bool = False,
     ) -> IngestionResult:
         """Ingest from local filesystem (file or directory).
 
@@ -377,15 +375,9 @@ class IngestionPipeline:
             path: Path to file or directory to ingest
             replace: If True, delete existing docs with same basename before ingesting
             recursive: If True, recursively process directories
-            sync_hashes: If True, sync hashes for existing processed documents
-                        before deduplication check
         """
         if not path.exists():
             raise FileNotFoundError(f"Path not found: {path}")
-
-        # Sync hashes for existing documents if requested
-        if sync_hashes:
-            await self._hash_index.sync_existing()
 
         artifacts_dir = self._get_artifacts_dir("local")
 
@@ -526,7 +518,6 @@ class IngestionPipeline:
         blob_path: str | None = None,
         prefix: str | None = None,
         replace: bool = False,
-        sync_hashes: bool = False,
     ) -> IngestionResult:
         """Ingest from Azure Blob Storage.
 
@@ -539,14 +530,9 @@ class IngestionPipeline:
             blob_path: Specific blob path to ingest (mutually exclusive with prefix)
             prefix: Prefix to filter blobs (mutually exclusive with blob_path)
             replace: If True, delete existing docs with same basename before ingesting
-            sync_hashes: If True, sync hashes for existing processed documents
         """
         if blob_path and prefix:
             raise ValueError("blob_path and prefix are mutually exclusive")
-
-        # Sync hashes for existing documents if requested
-        if sync_hashes:
-            await self._hash_index.sync_existing()
 
         artifacts_dir = self._get_artifacts_dir("azure_blobs", container_name)
 

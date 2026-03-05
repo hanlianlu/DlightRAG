@@ -86,7 +86,6 @@ class IngestRequest(BaseModel):
     query: str | None = None
     table: str | None = None
     replace: bool | None = None
-    sync_hashes: bool = False
     workspace: str | None = None
 
 
@@ -128,7 +127,6 @@ async def ingest(body: IngestRequest) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if body.replace is not None:
         kwargs["replace"] = body.replace
-    kwargs["sync_hashes"] = body.sync_hashes
 
     if body.source_type == "local":
         if not body.path:
