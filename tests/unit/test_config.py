@@ -284,3 +284,7 @@ class TestDlightragConfig:
         reset_config()
         config2 = get_config()
         assert config1 is not config2
+
+
+def test_temp_dir_property(test_config):
+    assert test_config.temp_dir == test_config.working_dir_path / ".tmp"

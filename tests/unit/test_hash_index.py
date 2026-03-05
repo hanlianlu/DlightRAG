@@ -617,3 +617,38 @@ class TestHashIndexFactory:
         service = RAGService.__new__(RAGService)
         result = await service._create_hash_index(config)
         assert type(result).__name__ in ("HashIndex", "MongoHashIndex")
+
+
+class TestDeriveSourceType:
+    """Tests for derive_source_type() module-level helper."""
+
+    def test_azure_uri(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("azure://container/path/file.pdf") == "azure_blobs"
+
+    def test_snowflake_uri(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("snowflake://source_label") == "snowflake"
+
+    def test_local_absolute_path(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("/Users/me/docs/report.pdf") == "local"
+
+    def test_local_relative_path(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("report.pdf") == "local"
+
+    def test_legacy_sources_path(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("/abs/path/sources/local/file.pdf") == "local"
+        assert derive_source_type("/abs/path/sources/azure_blobs/c/file.pdf") == "azure_blobs"
+
+    def test_empty_string(self):
+        from dlightrag.ingestion.hash_index import derive_source_type
+
+        assert derive_source_type("") == "unknown"

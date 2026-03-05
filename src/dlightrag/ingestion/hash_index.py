@@ -42,6 +42,29 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
+def derive_source_type(file_path: str) -> str:
+    """Derive source type from a file path or URI.
+
+    Returns "azure_blobs", "snowflake", "local", or "unknown".
+    Handles both new-style URIs (azure://...) and legacy sources/ paths.
+    """
+    if not file_path:
+        return "unknown"
+    if file_path.startswith("azure://"):
+        return "azure_blobs"
+    if file_path.startswith("snowflake://"):
+        return "snowflake"
+    # Legacy: /abs/path/sources/{source_type}/file.pdf
+    parts = Path(file_path).parts
+    idx = next((i for i, p in enumerate(parts) if p == "sources"), -1)
+    if idx >= 0 and len(parts) > idx + 1:
+        return parts[idx + 1]
+    # Default for local absolute/relative paths
+    if file_path.startswith("/") or file_path.startswith(".") or "://" not in file_path:
+        return "local"
+    return "unknown"
+
+
 # --- Content-aware hash extensions ---
 _PDF_EXTENSIONS = {".pdf"}
 _OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
@@ -322,11 +345,7 @@ class HashIndex:
         results = []
         for content_hash, info in index.items():
             file_path = info.get("file_path", "")
-            source_type = "unknown"
-            path_parts = Path(file_path).parts
-            sources_idx = next((i for i, p in enumerate(path_parts) if p == "sources"), -1)
-            if sources_idx >= 0 and len(path_parts) > sources_idx + 1:
-                source_type = path_parts[sources_idx + 1]
+            source_type = derive_source_type(file_path)
             results.append(
                 {
                     "file_path": file_path,
@@ -497,11 +516,7 @@ class PGHashIndex:
             results = []
             for row in rows:
                 file_path = row["file_path"]
-                source_type = "unknown"
-                path_parts = Path(file_path).parts
-                sources_idx = next((i for i, p in enumerate(path_parts) if p == "sources"), -1)
-                if sources_idx >= 0 and len(path_parts) > sources_idx + 1:
-                    source_type = path_parts[sources_idx + 1]
+                source_type = derive_source_type(file_path)
                 results.append(
                     {
                         "file_path": file_path,
@@ -661,11 +676,7 @@ class RedisHashIndex:
         for content_hash, data in all_entries.items():
             info = json.loads(data)
             fp = info.get("file_path", "")
-            source_type = "unknown"
-            path_parts = Path(fp).parts
-            sources_idx = next((i for i, p in enumerate(path_parts) if p == "sources"), -1)
-            if sources_idx >= 0 and len(path_parts) > sources_idx + 1:
-                source_type = path_parts[sources_idx + 1]
+            source_type = derive_source_type(fp)
             results.append(
                 {
                     "file_path": fp,
@@ -800,11 +811,7 @@ class MongoHashIndex:
         results = []
         async for doc in cursor:
             fp = doc.get("file_path", "")
-            source_type = "unknown"
-            path_parts = Path(fp).parts
-            sources_idx = next((i for i, p in enumerate(path_parts) if p == "sources"), -1)
-            if sources_idx >= 0 and len(path_parts) > sources_idx + 1:
-                source_type = path_parts[sources_idx + 1]
+            source_type = derive_source_type(fp)
             results.append(
                 {
                     "file_path": fp,
@@ -854,5 +861,6 @@ __all__ = [
     "RedisHashIndex",
     "MongoHashIndex",
     "compute_file_hash",
+    "derive_source_type",
     "SUPPORTED_EXTENSIONS",
 ]
