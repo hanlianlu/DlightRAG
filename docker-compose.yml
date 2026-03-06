@@ -20,6 +20,8 @@ services:
       DLIGHTRAG_API_HOST: "0.0.0.0"
       DLIGHTRAG_API_PORT: "8100"
     env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
       - ./src:/app/src:ro
@@ -38,6 +40,8 @@ services:
       DLIGHTRAG_MCP_HOST: "0.0.0.0"
       DLIGHTRAG_MCP_PORT: "8101"
     env_file: .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
       - ./src:/app/src:ro

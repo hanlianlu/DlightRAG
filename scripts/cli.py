@@ -39,6 +39,15 @@ from typing import Any
 import httpx
 
 DEFAULT_API_URL = "http://localhost:8100"
+DEFAULT_QUERY_TIMEOUT = 120
+DEFAULT_INGEST_TIMEOUT = 600
+
+
+def _get_timeout(for_ingest: bool = False) -> int:
+    env_val = os.environ.get("DLIGHTRAG_REQUEST_TIMEOUT")
+    if env_val:
+        return int(env_val)
+    return DEFAULT_INGEST_TIMEOUT if for_ingest else DEFAULT_QUERY_TIMEOUT
 
 
 def _get_api_url() -> str:
@@ -170,6 +179,11 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     try:
         result = await service.aingest(source_type=source, **kwargs)
         _print_json(result)
+    except KeyboardInterrupt:
+        print("\nIngestion cancelled.")
+    except Exception as e:
+        print(f"Ingestion failed: {e}", file=sys.stderr)
+        sys.exit(1)
     finally:
         await service.close()
 
@@ -193,7 +207,7 @@ def cmd_query(args: argparse.Namespace) -> None:
         print(f"Workspaces: {', '.join(args.workspaces)}")
     print(f"API: {url}\n")
 
-    resp = httpx.post(url, json=payload, headers=_headers(), timeout=120)
+    resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
     resp.raise_for_status()
     _print_json(resp.json())
 
@@ -212,7 +226,7 @@ def cmd_answer(args: argparse.Namespace) -> None:
         print(f"Workspaces: {', '.join(args.workspaces)}")
     print(f"API: {url}\n")
 
-    resp = httpx.post(url, json=payload, headers=_headers(), timeout=120)
+    resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
     resp.raise_for_status()
     _print_json(resp.json())
 
@@ -251,7 +265,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
             payload["conversation_history"] = history
 
         try:
-            resp = httpx.post(url, json=payload, headers=_headers(), timeout=120)
+            resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             print(f"[error] HTTP {e.response.status_code}: {e.response.text}\n")
@@ -386,6 +400,9 @@ def main() -> None:
         dispatch[args.command](args)
     except httpx.HTTPStatusError as e:
         print(f"HTTP {e.response.status_code}: {e.response.text}", file=sys.stderr)
+        sys.exit(1)
+    except httpx.TimeoutException:
+        print(f"Request timed out: {_get_api_url()}", file=sys.stderr)
         sys.exit(1)
     except httpx.ConnectError:
         print(f"Connection failed: {_get_api_url()}", file=sys.stderr)

@@ -60,15 +60,13 @@ class TestGetLlmModelFunc:
         func = get_llm_model_func(config)
         assert isinstance(func, partial)
 
-    def test_ollama_returns_partial(self) -> None:
+    def test_ollama_returns_callable(self) -> None:
         config = self._make_config(llm_provider="ollama")
         try:
             func = get_llm_model_func(config)
         except ModuleNotFoundError:
             pytest.skip("ollama package not installed")
-        assert isinstance(func, partial)
-        # Host should have /v1 stripped
-        assert func.keywords.get("host", "").endswith("/v1") is False
+        assert callable(func)
 
     def test_openrouter_returns_partial(self) -> None:
         config = self._make_config(llm_provider="openrouter", openrouter_api_key="sk-or-key")

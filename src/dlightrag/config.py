@@ -309,6 +309,13 @@ class DlightragConfig(BaseSettings):
         description="Bearer token for REST API authentication. If not set, no auth required.",
     )
 
+    # ===== Operational =====
+    log_level: str = Field(default="info")
+    request_timeout: int = Field(
+        default=600,
+        description="Overall request timeout in seconds for ingest/retrieve/answer operations.",
+    )
+
     # ===== Computed Properties =====
 
     @property

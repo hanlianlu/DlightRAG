@@ -116,7 +116,24 @@ def get_llm_model_func(
         from lightrag.llm.ollama import _ollama_model_if_cache
 
         host = (cfg.ollama_base_url or "http://localhost:11434").removesuffix("/v1")
-        return partial(_ollama_model_if_cache, model, host=host)
+
+        # Ollama's native client doesn't accept LightRAG-internal kwargs
+        # (keyword_extraction, token_tracker, etc.) that openai_complete_if_cache
+        # handles. Strip them before forwarding to avoid TypeError.
+        _OLLAMA_STRIP_KWARGS = {
+            "keyword_extraction",
+            "token_tracker",
+            "use_azure",
+            "azure_deployment",
+            "api_version",
+        }
+
+        async def _ollama_wrapper(prompt, **kwargs):
+            for k in _OLLAMA_STRIP_KWARGS:
+                kwargs.pop(k, None)
+            return await _ollama_model_if_cache(model, prompt, host=host, **kwargs)
+
+        return _ollama_wrapper
 
     raise ValueError(f"Unsupported LLM provider: {prov}")
 

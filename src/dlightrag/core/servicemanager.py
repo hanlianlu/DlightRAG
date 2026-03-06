@@ -49,6 +49,8 @@ class RAGServiceManager:
 
         # Health/error tracking
         self._ready: bool = False
+        self._degraded: bool = False
+        self._startup_warnings: list[str] = []
         self._last_error: str | None = None
         self._last_error_ts: float | None = None
         self._retry_after: float = 30.0
@@ -57,15 +59,33 @@ class RAGServiceManager:
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
         """Async factory — creates manager and ensures default workspace is ready."""
         manager = cls(config=config)
-        # Pre-initialize default workspace
-        await manager._get_service(manager._config.workspace)
-        manager._ready = True
+        try:
+            await manager._get_service(manager._config.workspace)
+            manager._ready = True
+        except RAGServiceUnavailableError as e:
+            manager._degraded = True
+            manager._startup_warnings.append(f"Default workspace init failed: {e.detail}")
+            logger.error("RAG service started in degraded mode: %s", e.detail)
         return manager
 
     def _get_lock(self) -> asyncio.Lock:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
+
+    @staticmethod
+    def _actionable_error(exc: Exception) -> str:
+        msg = f"{type(exc).__name__}: {exc}"
+        text = str(exc).lower()
+        if "connection" in text and ("refused" in text or "reset" in text):
+            return f"{msg}. Check DLIGHTRAG_POSTGRES_* or model server settings."
+        if "asyncpg" in type(exc).__module__ if hasattr(type(exc), "__module__") else False:
+            return f"{msg}. Check DLIGHTRAG_POSTGRES_HOST/PORT/USER/PASSWORD."
+        if "timeout" in text or "timed out" in text:
+            return f"{msg}. Service may be overloaded or unreachable."
+        if "authentication" in text or "password" in text or "denied" in text:
+            return f"{msg}. Check API keys or database credentials."
+        return msg
 
     async def _get_service(self, workspace: str) -> RAGService:
         """Get or create a RAGService for a specific workspace. Async-safe."""
@@ -100,7 +120,7 @@ class RAGServiceManager:
                 logger.info("Created RAGService for workspace '%s'", workspace)
                 return svc
             except Exception as e:
-                error_msg = f"{type(e).__name__}: {e}"
+                error_msg = self._actionable_error(e)
                 self._last_error = error_msg
                 self._last_error_ts = time.time()
                 self._retry_after = min(self._retry_after * 2, _MAX_RETRY_INTERVAL)
@@ -121,8 +141,14 @@ class RAGServiceManager:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Ingest documents into a specific workspace."""
-        svc = await self._get_service(workspace)
-        return await svc.aingest(source_type=source_type, **kwargs)
+        try:
+            async with asyncio.timeout(self._config.request_timeout):
+                svc = await self._get_service(workspace)
+                return await svc.aingest(source_type=source_type, **kwargs)
+        except TimeoutError as e:
+            raise RAGServiceUnavailableError(
+                detail=f"Request timed out after {self._config.request_timeout}s"
+            ) from e
 
     async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""
@@ -146,10 +172,16 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple)."""
         ws_list = workspaces or [workspace or self._config.workspace]
-        if len(ws_list) == 1:
-            svc = await self._get_service(ws_list[0])
-            return await svc.aretrieve(query, **kwargs)
-        return await federated_retrieve(query, ws_list, self._get_service, **kwargs)
+        try:
+            async with asyncio.timeout(self._config.request_timeout):
+                if len(ws_list) == 1:
+                    svc = await self._get_service(ws_list[0])
+                    return await svc.aretrieve(query, **kwargs)
+                return await federated_retrieve(query, ws_list, self._get_service, **kwargs)
+        except TimeoutError as e:
+            raise RAGServiceUnavailableError(
+                detail=f"Request timed out after {self._config.request_timeout}s"
+            ) from e
 
     async def aanswer(
         self,
@@ -161,10 +193,16 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         """Answer from one or more workspaces (federated if multiple)."""
         ws_list = workspaces or [workspace or self._config.workspace]
-        if len(ws_list) == 1:
-            svc = await self._get_service(ws_list[0])
-            return await svc.aanswer(query, **kwargs)
-        return await federated_answer(query, ws_list, self._get_service, **kwargs)
+        try:
+            async with asyncio.timeout(self._config.request_timeout):
+                if len(ws_list) == 1:
+                    svc = await self._get_service(ws_list[0])
+                    return await svc.aanswer(query, **kwargs)
+                return await federated_answer(query, ws_list, self._get_service, **kwargs)
+        except TimeoutError as e:
+            raise RAGServiceUnavailableError(
+                detail=f"Request timed out after {self._config.request_timeout}s"
+            ) from e
 
     async def aanswer_stream(
         self,
@@ -181,9 +219,7 @@ class RAGServiceManager:
         """
         ws_list = workspaces or [workspace or self._config.workspace]
         if len(ws_list) > 1:
-            logger.warning(
-                "Streaming only supports single workspace, using '%s'", ws_list[0]
-            )
+            logger.warning("Streaming only supports single workspace, using '%s'", ws_list[0])
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 svc = await self._get_service(ws_list[0])
@@ -270,6 +306,12 @@ class RAGServiceManager:
     def is_ready(self) -> bool:
         """Check if manager is ready (default workspace initialized)."""
         return self._ready
+
+    def is_degraded(self) -> bool:
+        return self._degraded
+
+    def get_warnings(self) -> list[str]:
+        return list(self._startup_warnings)
 
     def get_error_info(self) -> dict[str, str | float | None]:
         """Get error state for health checks."""

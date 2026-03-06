@@ -35,10 +35,10 @@ def _get_config() -> DlightragConfig:
 _manager: RAGServiceManager | None = None
 
 
-def _get_manager() -> RAGServiceManager:
+async def _ensure_manager() -> RAGServiceManager:
     global _manager
     if _manager is None:
-        _manager = RAGServiceManager()
+        _manager = await RAGServiceManager.create()
     return _manager
 
 
@@ -210,7 +210,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     """Handle MCP tool calls."""
     try:
         if name == "retrieve":
-            manager = _get_manager()
+            manager = await _ensure_manager()
             result = await manager.aretrieve(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
@@ -233,7 +233,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "answer":
-            manager = _get_manager()
+            manager = await _ensure_manager()
             kwargs: dict[str, Any] = {}
             if arguments.get("conversation_history"):
                 kwargs["conversation_history"] = arguments["conversation_history"]
@@ -260,12 +260,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "list_workspaces":
-            manager = _get_manager()
+            manager = await _ensure_manager()
             ws_list = await manager.list_workspaces()
             return [TextContent(type="text", text=json.dumps({"workspaces": ws_list}, indent=2))]
 
         if name == "ingest":
-            manager = _get_manager()
+            manager = await _ensure_manager()
             ws = arguments.get("workspace") or _get_config().workspace
             source_type = arguments["source_type"]
             kwargs: dict[str, Any] = {}
@@ -283,7 +283,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps(result, default=str))]
 
         if name == "list_files":
-            manager = _get_manager()
+            manager = await _ensure_manager()
             ws = arguments.get("workspace") or _get_config().workspace
             files = await manager.list_ingested_files(ws)
             return [
@@ -296,7 +296,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             ]
 
         if name == "delete_files":
-            manager = _get_manager()
+            manager = await _ensure_manager()
             ws = arguments.get("workspace") or _get_config().workspace
             results = await manager.delete_files(
                 ws, filenames=arguments.get("filenames"), file_paths=arguments.get("file_paths")
@@ -321,16 +321,22 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
 async def run_stdio() -> None:
     """Run MCP server over stdio transport."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+    await _ensure_manager()
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        if _manager is not None:
+            await _manager.close()
 
 
 async def run_streamable_http(host: str, port: int) -> None:
     """Run MCP server over streamable-http transport."""
+    await _ensure_manager()
     import uvicorn
     from mcp.server.streamable_http import StreamableHTTPServerTransport
     from starlette.applications import Starlette
@@ -350,16 +356,20 @@ async def run_streamable_http(host: str, port: int) -> None:
     )
     uv_server = uvicorn.Server(config)
 
-    async with transport.connect() as (read_stream, write_stream):
-        server_task = asyncio.create_task(
-            server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options(),
+    try:
+        async with transport.connect() as (read_stream, write_stream):
+            server_task = asyncio.create_task(
+                server.run(
+                    read_stream,
+                    write_stream,
+                    server.create_initialization_options(),
+                )
             )
-        )
-        await uv_server.serve()
-        server_task.cancel()
+            await uv_server.serve()
+            server_task.cancel()
+    finally:
+        if _manager is not None:
+            await _manager.close()
 
 
 def main() -> None:
@@ -376,6 +386,8 @@ def main() -> None:
         load_dotenv(args.env_file, override=True)
 
     config = _get_config()
+
+    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
 
     if config.mcp_transport == "streamable-http":
         logger.info(f"Starting MCP server (streamable-http) on {config.mcp_host}:{config.mcp_port}")

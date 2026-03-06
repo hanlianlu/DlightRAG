@@ -53,6 +53,8 @@ def mock_manager(mock_service):
     manager.delete_files = mock_service.adelete_files
     manager.list_workspaces = AsyncMock(return_value=["default"])
     manager.is_ready = lambda: True
+    manager.is_degraded = lambda: False
+    manager.get_warnings = lambda: []
     manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
     manager.close = AsyncMock()
     return manager
@@ -294,6 +296,37 @@ class TestHealthEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# TestHealthEndpointEnhanced
+# ---------------------------------------------------------------------------
+
+
+class TestHealthEndpointEnhanced:
+    """Test enhanced /health endpoint with degraded state."""
+
+    async def test_health_shows_degraded(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.is_degraded = lambda: True
+        mock_manager.get_warnings = lambda: ["Embedding unreachable"]
+        app.state.manager = mock_manager
+        resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert "Embedding unreachable" in body["warnings"]
+
+    async def test_health_healthy_no_warnings(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.is_degraded = lambda: False
+        mock_manager.get_warnings = lambda: []
+        app.state.manager = mock_manager
+        resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "healthy"
+        assert "warnings" not in body
+
+
+# ---------------------------------------------------------------------------
 # TestDeleteEndpoint
 # ---------------------------------------------------------------------------
 
@@ -437,9 +470,7 @@ class TestAnswerStreamMode:
             for t in ["Hello", " world"]:
                 yield t
 
-        mock_manager.aanswer_stream = AsyncMock(
-            return_value=({"chunks": []}, {}, mock_tokens())
-        )
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, {}, mock_tokens()))
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test", "stream": True})
         assert resp.status_code == 200
@@ -449,6 +480,7 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         """Verify context -> token(s) -> done event order."""
+
         async def mock_tokens():
             for t in ["Hi", " there"]:
                 yield t
@@ -475,13 +507,12 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         """Error mid-stream produces error event."""
+
         async def mock_tokens():
             yield "start"
             raise RuntimeError("LLM exploded")
 
-        mock_manager.aanswer_stream = AsyncMock(
-            return_value=({"chunks": []}, {}, mock_tokens())
-        )
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, {}, mock_tokens()))
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test", "stream": True})
         lines = [line for line in resp.text.split("\n") if line.startswith("data: ")]

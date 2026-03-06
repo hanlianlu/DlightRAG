@@ -67,6 +67,8 @@ docker compose up
 
 Everything is included: PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`).
 
+> **Local model servers (Ollama, Xinference, etc.):** If your model server runs on the host machine, use `host.docker.internal` instead of `localhost` in the relevant base URL settings (e.g. `DLIGHTRAG_OPENAI_BASE_URL=http://host.docker.internal:11434/v1`).
+
 ```bash
 # Health check
 curl http://localhost:8100/health
@@ -95,6 +97,11 @@ curl -X POST http://localhost:8100/retrieve \
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the key findings?"}'
+
+# Answer with SSE streaming (tokens arrive in real-time)
+curl -N -X POST http://localhost:8100/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the key findings?", "stream": true}'
 
 # List available workspaces
 curl http://localhost:8100/workspaces
@@ -195,12 +202,13 @@ All configuration is via `DLIGHTRAG_` environment variables, a `.env` file, or c
 
 | Variable | Default | Description |
 |---|---|---|
-| `DLIGHTRAG_LLM_PROVIDER` | `openai` | `openai`, `azure_openai`, `anthropic`, `google_gemini`, `qwen`, `minimax`, `ollama`, `xinference`, `openrouter` |
+| `DLIGHTRAG_LLM_PROVIDER` | `openai` | `openai`, `azure_openai`, `anthropic`, `google_gemini`, `qwen`, `minimax`, `xinference`, `openrouter` |
 | `DLIGHTRAG_EMBEDDING_PROVIDER` | (follows `llm_provider`) | Override embedding provider (e.g., `openai` when using Anthropic) |
 | `DLIGHTRAG_VISION_PROVIDER` | (follows `llm_provider`) | Override vision provider |
 | `DLIGHTRAG_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model |
 
 Each provider has its own API key. Model names are unified across providers.
+For **Ollama**, use `openai` provider with `DLIGHTRAG_OPENAI_BASE_URL=http://host.docker.internal:11434/v1`.
 
 See [.env.example](.env.example) for all provider-specific variables.
 
@@ -270,7 +278,7 @@ DLIGHTRAG_COHERE_API_KEY=your-key
 # Local reranker via Xinference / LiteLLM / any Cohere-compatible endpoint
 DLIGHTRAG_RERANK_BACKEND=cohere
 DLIGHTRAG_RERANK_MODEL=bge-reranker-v2-m3
-DLIGHTRAG_RERANK_BASE_URL=http://localhost:9997/v1/rerank
+DLIGHTRAG_RERANK_BASE_URL=http://host.docker.internal:9997/v1/rerank
 
 # LLM-based listwise reranker (default -- no extra config needed)
 DLIGHTRAG_RERANK_BACKEND=llm
@@ -285,13 +293,34 @@ See [.env.example](.env.example) for all reranking options.
 |---|---|---|
 | `POST` | `/ingest` | Ingest documents from local, Azure Blob, or Snowflake. Optional `workspace` param. |
 | `POST` | `/retrieve` | Retrieve contexts and sources (no LLM answer). Optional `workspaces` list for cross-workspace search. |
-| `POST` | `/answer` | LLM-generated answer with contexts and sources. Optional `workspaces` list for cross-workspace search. |
+| `POST` | `/answer` | LLM-generated answer with contexts and sources. Set `stream: true` for SSE. Optional `workspaces` list. |
 | `GET` | `/files` | List ingested documents. Optional `?workspace=` query param. |
 | `DELETE` | `/files` | Delete documents. Optional `workspace` param. |
 | `GET` | `/workspaces` | List all available workspaces. |
 | `GET` | `/health` | Health check with storage status. |
 
 Set `DLIGHTRAG_API_AUTH_TOKEN` to enable bearer token authentication.
+
+### SSE Streaming (`POST /answer`)
+
+Set `"stream": true` in the request body to receive Server-Sent Events instead of a JSON response. Events are newline-delimited JSON with a `type` field:
+
+| Event type | Payload | Description |
+|---|---|---|
+| `context` | `{type, data, raw}` | Retrieved contexts and sources (sent first) |
+| `token` | `{type, content}` | A single LLM answer token |
+| `done` | `{type}` | Stream completed successfully |
+| `error` | `{type, message}` | Error occurred mid-stream |
+
+```
+data: {"type": "context", "data": {"chunks": [...]}, "raw": {"sources": [...]}}
+
+data: {"type": "token", "content": "The"}
+
+data: {"type": "token", "content": " key"}
+
+data: {"type": "done"}
+```
 
 
 ## Architecture

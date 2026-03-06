@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    _app.state.manager = RAGServiceManager()
+    try:
+        _app.state.manager = await RAGServiceManager.create()
+    except Exception:
+        logger.exception("Failed to initialize RAG service manager")
+        raise
     yield
     await _app.state.manager.close()
 
@@ -253,8 +257,12 @@ async def health(request: Request) -> dict[str, Any]:
     """Health check including RAG service status."""
     config = get_config()
     manager = _get_manager(request)
+
+    is_degraded = manager.is_degraded()
+    warnings = manager.get_warnings()
+
     status: dict[str, Any] = {
-        "status": "healthy",
+        "status": "degraded" if is_degraded else "healthy",
         "rag_initialized": manager.is_ready(),
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
@@ -264,6 +272,8 @@ async def health(request: Request) -> dict[str, Any]:
             "kv": config.kv_storage,
         },
     }
+    if warnings:
+        status["warnings"] = warnings
 
     # Check PostgreSQL connectivity if using PG backends
     if config.kv_storage.startswith("PG"):
@@ -325,7 +335,7 @@ def main() -> None:
         "dlightrag.api.server:app",
         host=config.api_host,
         port=config.api_port,
-        log_level="info",
+        log_level=config.log_level,
     )
 
 

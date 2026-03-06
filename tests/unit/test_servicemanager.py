@@ -207,6 +207,59 @@ class TestDelegation:
         assert result == [{"status": "deleted"}]
 
 
+class TestDegradedMode:
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_create_sets_ready_on_success(self, mock_create, test_cfg) -> None:
+        mock_create.return_value = AsyncMock()
+        manager = await RAGServiceManager.create(config=test_cfg)
+        assert manager.is_ready()
+        assert not manager.is_degraded()
+        assert manager.get_warnings() == []
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_create_sets_degraded_on_failure(self, mock_create, test_cfg) -> None:
+        mock_create.side_effect = RuntimeError("DB down")
+        manager = await RAGServiceManager.create(config=test_cfg)
+        assert not manager.is_ready()
+        assert manager.is_degraded()
+        assert any("DB down" in w for w in manager.get_warnings())
+
+
+class TestActionableErrors:
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_connection_refused_gets_hint(self, mock_create, test_cfg) -> None:
+        mock_create.side_effect = ConnectionRefusedError("Connection refused")
+        manager = RAGServiceManager(config=test_cfg)
+        with pytest.raises(RAGServiceUnavailableError, match="Check.*DLIGHTRAG_POSTGRES"):
+            await manager._get_service("ws-a")
+
+    def test_actionable_error_default(self) -> None:
+        exc = ValueError("something broke")
+        result = RAGServiceManager._actionable_error(exc)
+        assert result == "ValueError: something broke"
+
+    def test_actionable_error_timeout(self) -> None:
+        exc = TimeoutError("request timed out")
+        result = RAGServiceManager._actionable_error(exc)
+        assert "overloaded" in result
+
+
+class TestRequestTimeout:
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_retrieve_timeout(self, mock_create, test_cfg) -> None:
+        mock_svc = AsyncMock()
+
+        async def slow_retrieve(*args, **kwargs):
+            await asyncio.sleep(10)
+
+        mock_svc.aretrieve = slow_retrieve
+        mock_create.return_value = mock_svc
+        test_cfg_short = test_cfg.model_copy(update={"request_timeout": 1})
+        manager = RAGServiceManager(config=test_cfg_short)
+        with pytest.raises(RAGServiceUnavailableError, match="timed out"):
+            await manager.aretrieve("test query", workspace="default")
+
+
 class TestClose:
     """Test cleanup."""
 
