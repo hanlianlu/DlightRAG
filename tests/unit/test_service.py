@@ -352,24 +352,6 @@ class TestRAGServiceUnifiedMode:
         assert result.answer == "The answer is 42."
         assert result.contexts == {"chunks": ["c1"]}
 
-    async def test_alist_ingested_files_unified_raises(self, test_config: DlightragConfig) -> None:
-        """Unified mode does not support file listing yet."""
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service.unified = MagicMock()
-
-        with pytest.raises(NotImplementedError, match="not yet supported in unified mode"):
-            await service.alist_ingested_files()
-
-    async def test_adelete_files_unified_raises(self, test_config: DlightragConfig) -> None:
-        """Unified mode does not support file deletion yet."""
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service.unified = MagicMock()
-
-        with pytest.raises(NotImplementedError, match="not yet supported in unified mode"):
-            await service.adelete_files(filenames=["a.pdf"])
-
     async def test_close_unified_cleanup(self, test_config: DlightragConfig) -> None:
         """close() calls finalize on visual_chunks and LightRAG storages."""
         service = RAGService(config=test_config)

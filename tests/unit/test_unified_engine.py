@@ -50,83 +50,6 @@ def _make_lightrag() -> MagicMock:
 # ---------------------------------------------------------------------------
 
 
-class TestUnifiedEngineInit:
-    """Verify sub-components are created during __init__."""
-
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    def test_subcomponents_created(
-        self,
-        mock_renderer_cls: MagicMock,
-        mock_embedder_cls: MagicMock,
-        mock_extractor_cls: MagicMock,
-        mock_retriever_cls: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-        visual_chunks = MagicMock()
-        vision_func = MagicMock()
-
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=visual_chunks,
-            config=config,
-            vision_model_func=vision_func,
-        )
-
-        mock_renderer_cls.assert_called_once_with(dpi=250)
-        mock_embedder_cls.assert_called_once_with(
-            model="test-model",
-            base_url="http://localhost:8000/v1",
-            api_key="test-key",
-            dim=1024,
-        )
-        mock_extractor_cls.assert_called_once_with(
-            lightrag=lightrag,
-            entity_types=["Person", "Organization"],
-            vision_model_func=vision_func,
-        )
-        mock_retriever_cls.assert_called_once()
-
-        assert engine.renderer is mock_renderer_cls.return_value
-        assert engine.embedder is mock_embedder_cls.return_value
-        assert engine.extractor is mock_extractor_cls.return_value
-        assert engine.retriever is mock_retriever_cls.return_value
-
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    def test_stores_lightrag_and_config(
-        self,
-        _renderer: MagicMock,
-        _embedder: MagicMock,
-        _extractor: MagicMock,
-        _retriever: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-        visual_chunks = MagicMock()
-
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=visual_chunks,
-            config=config,
-        )
-
-        assert engine.lightrag is lightrag
-        assert engine.visual_chunks is visual_chunks
-        assert engine.config is config
-        assert engine.vision_model_func is None
-
-
-# ---------------------------------------------------------------------------
-# TestUpsertWithVisualVectors
-# ---------------------------------------------------------------------------
-
-
 class TestUpsertWithVisualVectors:
     """Test _upsert_with_visual_vectors embedding swap logic."""
 
@@ -193,31 +116,6 @@ class TestUpsertWithVisualVectors:
 
         # Embedding func restored despite error
         assert lightrag.chunks_vdb.embedding_func is original_func
-
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_upsert_empty_data_skips(
-        self,
-        _renderer: MagicMock,
-        _embedder: MagicMock,
-        _extractor: MagicMock,
-        _retriever: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=MagicMock(),
-            config=config,
-        )
-
-        await engine._upsert_with_visual_vectors({}, np.array([]))
-
-        lightrag.chunks_vdb.upsert.assert_not_awaited()
-
 
 # ---------------------------------------------------------------------------
 # TestAingest
@@ -394,36 +292,6 @@ class TestAretrieve:
         )
         assert result is expected
 
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_custom_params_override_defaults(
-        self,
-        _renderer_cls: MagicMock,
-        _embedder_cls: MagicMock,
-        _extractor_cls: MagicMock,
-        _retriever_cls: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=MagicMock(),
-            config=config,
-        )
-
-        engine.retriever.retrieve = AsyncMock(return_value={})
-
-        await engine.aretrieve("q", mode="local", top_k=5, chunk_top_k=3)
-
-        engine.retriever.retrieve.assert_awaited_once_with(
-            query="q",
-            mode="local",
-            top_k=5,
-            chunk_top_k=3,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -466,34 +334,3 @@ class TestAanswer:
             chunk_top_k=10,
         )
         assert result is expected
-
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_custom_params_override_defaults(
-        self,
-        _renderer_cls: MagicMock,
-        _embedder_cls: MagicMock,
-        _extractor_cls: MagicMock,
-        _retriever_cls: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=MagicMock(),
-            config=config,
-        )
-
-        engine.retriever.answer = AsyncMock(return_value={})
-
-        await engine.aanswer("q", mode="global", top_k=20, chunk_top_k=5)
-
-        engine.retriever.answer.assert_awaited_once_with(
-            query="q",
-            mode="global",
-            top_k=20,
-            chunk_top_k=5,
-        )

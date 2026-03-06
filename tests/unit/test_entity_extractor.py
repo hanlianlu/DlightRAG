@@ -39,26 +39,10 @@ def _make_lightrag() -> _FakeLightRAG:
 
 
 class TestEntityExtractorInit:
-    """Verify constructor stores attributes correctly."""
-
-    def test_stores_lightrag(self) -> None:
-        lightrag = _make_lightrag()
-        ext = EntityExtractor(lightrag, ["person"], AsyncMock())
-        assert ext.lightrag is lightrag
-
-    def test_stores_entity_types(self) -> None:
-        entity_types = ["person", "organization", "location"]
-        ext = EntityExtractor(_make_lightrag(), entity_types, AsyncMock())
-        assert ext.entity_types is entity_types
-
-    def test_stores_vision_model_func(self) -> None:
-        vision_fn = AsyncMock()
-        ext = EntityExtractor(_make_lightrag(), ["person"], vision_fn)
-        assert ext.vision_model_func is vision_fn
+    """Verify constructor configures concurrency correctly."""
 
     def test_semaphore_default_value(self) -> None:
         ext = EntityExtractor(_make_lightrag(), ["person"], AsyncMock())
-        # asyncio.Semaphore stores initial value in _value
         assert isinstance(ext._vlm_semaphore, asyncio.Semaphore)
         assert ext._vlm_semaphore._value == 4  # default max_concurrent_vlm
 

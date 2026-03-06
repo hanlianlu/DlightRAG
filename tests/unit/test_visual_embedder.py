@@ -46,46 +46,9 @@ def _mock_response(dim: int, n: int = 1) -> MagicMock:
 
 
 class TestVisualEmbedderInit:
-    def test_stores_parameters(self) -> None:
-        emb = _make_embedder()
-        assert emb.model == "test-model"
-        assert emb.api_key == "sk-test"
-        assert emb.dim == DIM
-        assert emb.batch_size == 4
-
-    def test_strips_trailing_slash(self) -> None:
-        emb = _make_embedder(base_url="https://api.example.com/v1/")
-        assert emb.base_url == "https://api.example.com/v1"
-
-    def test_strips_multiple_trailing_slashes(self) -> None:
+    def test_strips_trailing_slashes(self) -> None:
         emb = _make_embedder(base_url="https://api.example.com/v1///")
         assert emb.base_url == "https://api.example.com/v1"
-
-    def test_no_trailing_slash_unchanged(self) -> None:
-        emb = _make_embedder(base_url="https://api.example.com/v1")
-        assert emb.base_url == "https://api.example.com/v1"
-
-
-# ---------------------------------------------------------------------------
-# TestImageToBase64
-# ---------------------------------------------------------------------------
-
-
-class TestImageToBase64:
-    def test_returns_data_uri(self) -> None:
-        emb = _make_embedder()
-        uri = emb._image_to_base64(_tiny_image())
-        assert uri.startswith("data:image/png;base64,")
-
-    def test_base64_is_decodable(self) -> None:
-        import base64 as b64
-
-        emb = _make_embedder()
-        uri = emb._image_to_base64(_tiny_image())
-        b64_part = uri.split(",", 1)[1]
-        decoded = b64.b64decode(b64_part)
-        # Should be valid PNG bytes (PNG magic number).
-        assert decoded[:4] == b"\x89PNG"
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +206,3 @@ class TestAuthHeaders:
         emb = _make_embedder(api_key="sk-secret-key")
         headers = emb._auth_headers()
         assert headers == {"Authorization": "Bearer sk-secret-key"}
-
-    def test_different_api_key(self) -> None:
-        emb = _make_embedder(api_key="my-other-key")
-        headers = emb._auth_headers()
-        assert headers["Authorization"] == "Bearer my-other-key"

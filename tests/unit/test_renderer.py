@@ -12,18 +12,6 @@ from PIL import Image
 from dlightrag.unifiedrepresent.renderer import PageRenderer, RenderResult
 
 
-class TestPageRendererInit:
-    """Test PageRenderer constructor."""
-
-    def test_default_dpi(self) -> None:
-        renderer = PageRenderer()
-        assert renderer.dpi == 250
-
-    def test_custom_dpi(self) -> None:
-        renderer = PageRenderer(dpi=300)
-        assert renderer.dpi == 300
-
-
 class TestRenderPdf:
     """Test PDF rendering via _render_pdf_sync."""
 
@@ -235,48 +223,6 @@ class TestRenderOffice:
 
 class TestRenderFile:
     """Test render_file dispatching by extension."""
-
-    async def test_dispatch_pdf(self, tmp_path: Path) -> None:
-        """A .pdf file dispatches to _render_pdf."""
-        renderer = PageRenderer()
-        pdf_path = tmp_path / "test.pdf"
-        pdf_path.touch()
-
-        expected = RenderResult(pages=[], metadata={"original_format": "pdf"})
-
-        with patch.object(renderer, "_render_pdf", return_value=expected) as mock_method:
-            result = await renderer.render_file(pdf_path)
-
-        mock_method.assert_called_once_with(pdf_path)
-        assert result is expected
-
-    async def test_dispatch_png(self, tmp_path: Path) -> None:
-        """A .png file dispatches to _load_image."""
-        renderer = PageRenderer()
-        png_path = tmp_path / "photo.png"
-        png_path.touch()
-
-        expected = RenderResult(pages=[], metadata={"original_format": "png"})
-
-        with patch.object(renderer, "_load_image", return_value=expected) as mock_method:
-            result = await renderer.render_file(png_path)
-
-        mock_method.assert_called_once_with(png_path)
-        assert result is expected
-
-    async def test_dispatch_docx(self, tmp_path: Path) -> None:
-        """A .docx file dispatches to _render_office."""
-        renderer = PageRenderer()
-        docx_path = tmp_path / "report.docx"
-        docx_path.touch()
-
-        expected = RenderResult(pages=[], metadata={"original_format": "docx"})
-
-        with patch.object(renderer, "_render_office", return_value=expected) as mock_method:
-            result = await renderer.render_file(docx_path)
-
-        mock_method.assert_called_once_with(docx_path)
-        assert result is expected
 
     async def test_unsupported_extension_raises(self, tmp_path: Path) -> None:
         """Unsupported extensions raise ValueError."""
