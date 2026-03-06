@@ -6,3 +6,8 @@ RAGAnything's caption-based approach. Each document page is rendered
 as a high-DPI image, embedded via multimodal embedding model, and
 stored alongside a LightRAG knowledge graph built from VLM-extracted text.
 """
+
+from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
+from dlightrag.unifiedrepresent.renderer import PageRenderer
+
+__all__ = ["UnifiedRepresentEngine", "PageRenderer"]
