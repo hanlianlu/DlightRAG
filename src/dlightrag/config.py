@@ -221,6 +221,15 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== RAG Processing =====
+    rag_mode: Literal["caption", "unified"] = Field(
+        default="caption",
+        description="RAG mode. 'caption': RAGAnything caption-based pipeline. "
+        "'unified': visual page embedding pipeline (requires multimodal models).",
+    )
+    page_render_dpi: int = Field(
+        default=250,
+        description="Page rendering DPI for unified mode. Higher = better quality but larger images.",
+    )
     working_dir: str = Field(default="./dlightrag_storage")
     parser: Literal["mineru", "docling"] = Field(default="mineru")
     parse_method: Literal["auto", "ocr", "txt"] = Field(default="auto")
