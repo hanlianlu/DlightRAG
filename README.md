@@ -287,6 +287,65 @@ DLIGHTRAG_RERANK_BACKEND=llm
 See [.env.example](.env.example) for all reranking options.
 
 
+## Unified Representational Mode (Mode 2)
+
+DlightRAG supports two RAG modes:
+
+| Mode | Pipeline | Best For |
+|------|----------|----------|
+| `caption` (default) | RAGAnything: document parsing → VLM captioning → text embedding → KG | Text-heavy documents, structured element extraction |
+| `unified` | Visual: page rendering → visual embedding → VLM entity extraction → KG | Visually rich documents (charts, diagrams, complex layouts) |
+
+### Configuration
+
+Set `DLIGHTRAG_RAG_MODE=unified` in your `.env` file:
+
+```bash
+# Mode selection
+DLIGHTRAG_RAG_MODE=unified
+DLIGHTRAG_PAGE_RENDER_DPI=250
+
+# LLM (for keyword extraction, entity extraction)
+DLIGHTRAG_LLM_PROVIDER=qwen
+DLIGHTRAG_CHAT_MODEL=qwen3-vl-32b
+
+# Visual embedding (must be multimodal)
+DLIGHTRAG_EMBEDDING_PROVIDER=openai
+DLIGHTRAG_EMBEDDING_MODEL=qwen3-vl-embedding-8b
+DLIGHTRAG_EMBEDDING_DIM=4096
+DLIGHTRAG_OPENAI_EMBEDDING_BASE_URL=http://localhost:8000/v1
+
+# Vision model (for page description + answer generation)
+DLIGHTRAG_VISION_PROVIDER=qwen
+DLIGHTRAG_VISION_MODEL=qwen3-vl-32b
+
+# Visual reranking (optional)
+DLIGHTRAG_ENABLE_RERANK=true
+DLIGHTRAG_RERANK_MODEL=qwen3-vl-reranker-8b
+DLIGHTRAG_RERANK_BASE_URL=http://localhost:8000/v1
+```
+
+### Model Requirements
+
+- **Embedding model**: Must accept image input (e.g., `qwen3-vl-embedding`)
+- **Vision model**: Must accept image input (e.g., `qwen3-vl`)
+- **Rerank model** (optional): Must accept image input (e.g., `qwen3-vl-reranker`)
+- **Chat model**: Text-only is fine (used for keyword extraction only)
+
+### How It Works
+
+1. **Ingestion**: PDF pages are rendered at 250 DPI → each page is embedded via multimodal embedding model → VLM generates text descriptions → LightRAG builds knowledge graph from text
+2. **Query**: LightRAG retrieves relevant entities/chunks → page images are loaded from visual store → optional visual reranking → VLM generates answer from KG context + page images
+
+### Storage Considerations
+
+Unified mode stores page images in a `visual_chunks` KV store alongside the standard LightRAG stores. For a 100-page PDF at 250 DPI, expect ~300-700 MB of image storage.
+
+### Per-Workspace Mode Lock
+
+Embedding dimensions differ between modes — a workspace created with one mode cannot switch to the other. Create separate workspaces for different modes.
+
+
 ## REST API
 
 | Method | Endpoint | Description |
