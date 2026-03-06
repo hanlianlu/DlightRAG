@@ -115,7 +115,9 @@ class UnifiedRepresentEngine:
             doc_id = compute_mdhash_id(file_path, prefix="doc-")
 
         # Step 3: Write full_docs entry (minimal, for LightRAG compat)
-        await self.lightrag.full_docs.upsert({doc_id: {"content": "", "file_path": str(path)}})
+        await self.lightrag.full_docs.upsert(
+            {doc_id: {"content": "", "file_path": str(path), "page_count": page_count}}
+        )
 
         # Step 4: Parallel embedding + entity extraction
         embed_task = self.embedder.embed_pages(images)
@@ -227,20 +229,38 @@ class UnifiedRepresentEngine:
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
         )
 
-    async def adelete_doc(self, doc_id: str) -> None:
-        """Delete all entries for a document from all stores.
+    async def adelete_doc(self, doc_id: str) -> dict[str, Any]:
+        """Delete unified-specific entries (visual_chunks) for a document.
 
-        Removes: chunks_vdb entries, text_chunks, visual_chunks, full_docs.
-
-        Note: KG entities/relationships are NOT removed (LightRAG does not
-        support selective KG deletion easily).
+        chunks_vdb, text_chunks, full_docs, and KG are cleaned by
+        LightRAG.adelete_by_doc_id() — called by the service layer.
         """
-        # Convention: chunk_id = compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
-        # We don't know page count, so full deletion requires scanning visual_chunks.
-        logger.warning(
-            "adelete_doc is not fully implemented yet for unified mode (doc_id=%s)",
-            doc_id,
-        )
+        # Get page_count from full_docs to reconstruct chunk_ids
+        doc_data = await self.lightrag.full_docs.get_by_id(doc_id)
+        if not doc_data:
+            logger.warning("adelete_doc: doc_id=%s not found in full_docs", doc_id)
+            return {"doc_id": doc_id, "visual_chunks_deleted": 0}
+
+        page_count = doc_data.get("page_count", 0)
+        if not page_count:
+            logger.warning(
+                "adelete_doc: no page_count for doc_id=%s, visual_chunks may not be fully cleaned",
+                doc_id,
+            )
+            return {"doc_id": doc_id, "visual_chunks_deleted": 0}
+
+        # Reconstruct chunk_ids and delete from visual_chunks
+        deleted = 0
+        for i in range(page_count):
+            chunk_id = compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
+            try:
+                await self.visual_chunks.delete([chunk_id])
+                deleted += 1
+            except Exception as exc:
+                logger.warning("Failed to delete visual_chunk %s: %s", chunk_id, exc)
+
+        logger.info("Deleted %d visual_chunks for doc_id=%s", deleted, doc_id)
+        return {"doc_id": doc_id, "visual_chunks_deleted": deleted}
 
     # ------------------------------------------------------------------
     # Internal helpers

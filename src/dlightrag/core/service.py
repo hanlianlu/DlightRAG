@@ -455,6 +455,9 @@ class RAGService:
             vision_model_func=vision_func,
         )
 
+        # Create hash index for deduplication (same backend as caption mode)
+        self._hash_index = await self._create_hash_index(config)
+
         logger.info("Unified representational RAG mode initialized")
 
     async def _create_hash_index(self, config: DlightragConfig) -> HashIndexProtocol:
@@ -558,7 +561,23 @@ class RAGService:
         if self.unified is not None:
             if source_type == "local":
                 path = Path(kwargs["path"])
-                return await self.unified.aingest(file_path=str(path))
+                replace = kwargs.get("replace", self.config.ingestion_replace_default)
+
+                # Content-aware deduplication
+                should_skip, content_hash, reason = await self._hash_index.should_skip_file(
+                    path, replace
+                )
+                if should_skip:
+                    logger.info("Skipped (dedup): %s - %s", path.name, reason)
+                    return {"status": "skipped", "reason": reason, "file_path": str(path)}
+
+                result = await self.unified.aingest(file_path=str(path))
+
+                # Register in hash index
+                if content_hash and result.get("doc_id"):
+                    await self._hash_index.register(content_hash, result["doc_id"], str(path))
+
+                return result
 
             if source_type == "azure_blob":
                 return await self._unified_ingest_azure_blob(**kwargs)
@@ -644,18 +663,20 @@ class RAGService:
                 connection_string=self.config.blob_connection_string,
             )
 
+        replace: bool = kwargs.get("replace", self.config.ingestion_replace_default)
+
         if blob_path is None and prefix is None:
             prefix = ""
 
         try:
             if blob_path:
-                return await self._unified_ingest_single_blob(source, blob_path)
+                return await self._unified_ingest_single_blob(source, blob_path, replace)
 
             # Batch: list + ingest each
             blob_ids = await source.alist_documents(prefix=prefix)
             results: list[dict[str, Any]] = []
             for bid in blob_ids:
-                result = await self._unified_ingest_single_blob(source, bid)
+                result = await self._unified_ingest_single_blob(source, bid, replace)
                 results.append(result)
 
             return {
@@ -670,7 +691,9 @@ class RAGService:
             if hasattr(source, "aclose"):
                 await source.aclose()
 
-    async def _unified_ingest_single_blob(self, source: Any, blob_path: str) -> dict[str, Any]:
+    async def _unified_ingest_single_blob(
+        self, source: Any, blob_path: str, replace: bool = False
+    ) -> dict[str, Any]:
         """Download one blob to temp dir, ingest via unified engine, cleanup."""
         import shutil
         import uuid
@@ -681,8 +704,25 @@ class RAGService:
             target = tmpdir / Path(blob_path).name
             content = await source.aload_document(blob_path)
             await asyncio.to_thread(target.write_bytes, content)
+
+            # Content-aware deduplication
+            should_skip, content_hash, reason = await self._hash_index.should_skip_file(
+                target, replace
+            )
+            if should_skip:
+                logger.info("Skipped (dedup): %s - %s", blob_path, reason)
+                return {"status": "skipped", "reason": reason, "blob_path": blob_path}
+
             logger.info("Downloaded blob to temp: %s", target)
-            return await self.unified.aingest(file_path=str(target))
+            result = await self.unified.aingest(file_path=str(target))
+
+            # Register with original blob path as file_path
+            if content_hash and result.get("doc_id"):
+                await self._hash_index.register(
+                    content_hash, result["doc_id"], f"azure://{blob_path}"
+                )
+
+            return result
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 

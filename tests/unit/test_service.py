@@ -290,10 +290,19 @@ class TestBuildVectorDbKwargs:
 class TestRAGServiceUnifiedMode:
     """Test unified mode (Mode 2) behavior in RAGService."""
 
+    @staticmethod
+    def _mock_hash_index() -> MagicMock:
+        """Return a mock HashIndex that never skips (dedup pass-through)."""
+        hi = MagicMock()
+        hi.should_skip_file = AsyncMock(return_value=(False, "fakehash", None))
+        hi.register = AsyncMock()
+        return hi
+
     async def test_aingest_unified_azure_blob_single(self, test_config: DlightragConfig) -> None:
         """Unified mode downloads a single blob and ingests via unified engine."""
         service = RAGService(config=test_config)
         service._initialized = True
+        service._hash_index = self._mock_hash_index()
         service.unified = MagicMock()
         service.unified.aingest = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 2, "file_path": "/tmp/report.pdf"}
@@ -316,6 +325,7 @@ class TestRAGServiceUnifiedMode:
         """Unified mode batch-ingests blobs by prefix."""
         service = RAGService(config=test_config)
         service._initialized = True
+        service._hash_index = self._mock_hash_index()
         service.unified = MagicMock()
         service.unified.aingest = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 1, "file_path": "/tmp/f.pdf"}
@@ -362,6 +372,7 @@ class TestRAGServiceUnifiedMode:
         """Temp directory is cleaned up even if unified.aingest fails."""
         service = RAGService(config=test_config)
         service._initialized = True
+        service._hash_index = self._mock_hash_index()
         service.unified = MagicMock()
         service.unified.aingest = AsyncMock(side_effect=RuntimeError("render failed"))
 
@@ -387,6 +398,7 @@ class TestRAGServiceUnifiedMode:
         """Unified mode delegates local ingestion to unified engine."""
         service = RAGService(config=test_config)
         service._initialized = True
+        service._hash_index = self._mock_hash_index()
         service.unified = MagicMock()
         service.unified.aingest = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 3, "file_path": "/tmp/f.pdf"}
