@@ -926,7 +926,7 @@ class RAGService:
         """List all ingested files."""
         self._ensure_initialized()
         if self.unified is not None:
-            raise NotImplementedError("File listing is not yet supported in unified mode")
+            return await self._hash_index.list_all()
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
         return await self.ingestion.alist_ingested_files()
@@ -941,7 +941,7 @@ class RAGService:
         """Unified file deletion."""
         self._ensure_initialized()
         if self.unified is not None:
-            raise NotImplementedError("File deletion is not yet supported in unified mode")
+            return await self._unified_delete_files(file_paths=file_paths, filenames=filenames)
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
         return await self.ingestion.adelete_files(
@@ -949,6 +949,81 @@ class RAGService:
             filenames=filenames,
             delete_source=delete_source,
         )
+
+    async def _unified_delete_files(
+        self,
+        *,
+        file_paths: list[str] | None = None,
+        filenames: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Delete files in unified mode: hash lookup -> adelete_by_doc_id -> visual_chunks."""
+        from dlightrag.core.ingestion.cleanup import collect_deletion_context
+
+        if not file_paths and not filenames:
+            return []
+
+        results: list[dict[str, Any]] = []
+        identifiers: list[str] = []
+        if file_paths:
+            identifiers.extend(file_paths)
+        if filenames:
+            identifiers.extend(filenames)
+
+        lightrag = self._lightrag
+
+        for identifier in identifiers:
+            ctx = await collect_deletion_context(
+                identifier=identifier,
+                hash_index=self._hash_index,
+                lightrag=lightrag,
+            )
+
+            deletion_result: dict[str, Any] = {
+                "identifier": identifier,
+                "doc_ids_found": list(ctx.doc_ids),
+                "sources_used": ctx.sources_used,
+                "cleanup_results": {},
+                "status": "deleted",
+            }
+
+            if not ctx.doc_ids:
+                deletion_result["status"] = "not_found"
+                deletion_result["file_path"] = identifier
+                deletion_result["doc_id"] = None
+                results.append(deletion_result)
+                continue
+
+            for doc_id in ctx.doc_ids:
+                # Phase 1: Clean visual_chunks (unified-specific)
+                if self.unified:
+                    try:
+                        vc_result = await self.unified.adelete_doc(doc_id)
+                        deletion_result["cleanup_results"]["visual_chunks"] = vc_result
+                    except Exception as exc:
+                        logger.warning("visual_chunks cleanup failed for %s: %s", doc_id, exc)
+                        deletion_result["cleanup_results"]["visual_chunks"] = f"error: {exc}"
+
+                # Phase 2: LightRAG cleanup (chunks_vdb, text_chunks, full_docs, KG)
+                if lightrag and hasattr(lightrag, "adelete_by_doc_id"):
+                    try:
+                        result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                        deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = (
+                            result.status if hasattr(result, "status") else "completed"
+                        )
+                    except Exception as exc:
+                        logger.warning("LightRAG deletion failed for %s: %s", doc_id, exc)
+                        deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = f"error: {exc}"
+
+            # Phase 3: Remove from hash index
+            for content_hash in ctx.content_hashes:
+                if await self._hash_index.remove(content_hash):
+                    deletion_result["cleanup_results"]["hash_index"] = "removed"
+
+            deletion_result["file_path"] = list(ctx.file_paths)[0] if ctx.file_paths else identifier
+            deletion_result["doc_id"] = list(ctx.doc_ids)[0] if ctx.doc_ids else None
+            results.append(deletion_result)
+
+        return results
 
 
 __all__ = ["RAGService"]
