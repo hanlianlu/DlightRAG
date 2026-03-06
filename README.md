@@ -326,7 +326,7 @@ DLIGHTRAG_RERANK_BASE_URL=http://localhost:9997/v1/rerank
 
 ### Limitations
 
-- **Local files only** — `azure_blob` and `snowflake` sources not supported (yet)
+- **Snowflake uses text-only pipeline** — Snowflake data is inserted via `LightRAG.ainsert()` (no visual embedding, since it's structured text)
 - **No file listing/deletion** — `GET /files` and `DELETE /files` return 400; KG doesn't support selective deletion
 - **No deduplication** — re-ingesting the same file creates duplicate entries
 - **Per-workspace mode lock** — embedding dimensions differ; a workspace cannot switch modes after first ingestion

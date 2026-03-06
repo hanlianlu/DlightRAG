@@ -174,8 +174,6 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         config = config.model_copy(update={"workspace": workspace})
     print(f"Workspace: {workspace}")
     print(f"RAG mode: {config.rag_mode}")
-    if config.rag_mode == "unified" and source != "local":
-        _die("Unified mode only supports local file ingestion (not azure_blob or snowflake)")
     print("Running locally (direct RAGService)\n")
 
     service = await RAGService.create(config=config)
