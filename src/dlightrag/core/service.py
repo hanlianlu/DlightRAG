@@ -298,8 +298,7 @@ class RAGService:
         # --- Caption mode (existing code, unchanged) ---
         if not _HAS_RAGANYTHING:
             raise ImportError(
-                "raganything is required for caption mode. "
-                "Install it with: pip install raganything"
+                "raganything is required for caption mode. Install it with: pip install raganything"
             )
 
         # Detect optimal MinerU backend based on hardware (only for mineru parser)
@@ -555,14 +554,17 @@ class RAGService:
         """
         self._ensure_initialized()
 
-        # Unified mode: only supports local file ingestion
+        # Unified mode
         if self.unified is not None:
-            if source_type != "local":
-                raise ValueError(
-                    f"Unified mode only supports local file ingestion, got: {source_type}"
-                )
-            path = Path(kwargs["path"])
-            return await self.unified.aingest(file_path=str(path))
+            if source_type == "local":
+                path = Path(kwargs["path"])
+                return await self.unified.aingest(file_path=str(path))
+
+            if source_type == "azure_blob":
+                return await self._unified_ingest_azure_blob(**kwargs)
+
+            # source_type == "snowflake"
+            return await self._unified_ingest_snowflake(**kwargs)
 
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
@@ -626,6 +628,107 @@ class RAGService:
             table=kwargs.get("table"),
         )
         return ingestion_result.model_dump(exclude_none=True)
+
+    async def _unified_ingest_azure_blob(self, **kwargs: Any) -> dict[str, Any]:
+        """Unified mode: download blob(s) to temp → visual pipeline."""
+        from dlightrag.sourcing.azure_blob import AzureBlobDataSource
+
+        container_name: str = kwargs["container_name"]
+        blob_path: str | None = kwargs.get("blob_path")
+        prefix: str | None = kwargs.get("prefix")
+        source = kwargs.get("source")
+
+        if source is None:
+            source = AzureBlobDataSource(
+                container_name=container_name,
+                connection_string=self.config.blob_connection_string,
+            )
+
+        if blob_path is None and prefix is None:
+            prefix = ""
+
+        try:
+            if blob_path:
+                return await self._unified_ingest_single_blob(source, blob_path)
+
+            # Batch: list + ingest each
+            blob_ids = await source.alist_documents(prefix=prefix)
+            results: list[dict[str, Any]] = []
+            for bid in blob_ids:
+                result = await self._unified_ingest_single_blob(source, bid)
+                results.append(result)
+
+            return {
+                "status": "success",
+                "source_type": "azure_blob",
+                "container": container_name,
+                "prefix": prefix,
+                "results": results,
+                "processed": len(results),
+            }
+        finally:
+            if hasattr(source, "aclose"):
+                await source.aclose()
+
+    async def _unified_ingest_single_blob(self, source: Any, blob_path: str) -> dict[str, Any]:
+        """Download one blob to temp dir, ingest via unified engine, cleanup."""
+        import shutil
+        import uuid
+
+        tmpdir = self.config.temp_dir / uuid.uuid4().hex[:12]
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        try:
+            target = tmpdir / Path(blob_path).name
+            content = await source.aload_document(blob_path)
+            await asyncio.to_thread(target.write_bytes, content)
+            logger.info("Downloaded blob to temp: %s", target)
+            return await self.unified.aingest(file_path=str(target))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    async def _unified_ingest_snowflake(self, **kwargs: Any) -> dict[str, Any]:
+        """Unified mode: Snowflake text → LightRAG ainsert (no visual pipeline)."""
+        from dlightrag.sourcing.snowflake import SnowflakeDataSource
+
+        config = self.config
+        query: str = kwargs["query"]
+        table: str | None = kwargs.get("table")
+        source_label = table or "query"
+
+        source = await asyncio.to_thread(
+            SnowflakeDataSource,
+            account=config.snowflake_account or "",
+            user=config.snowflake_user or "",
+            password=config.snowflake_password or "",
+            warehouse=config.snowflake_warehouse,
+            database=config.snowflake_database,
+            schema=config.snowflake_schema,
+        )
+
+        try:
+            await asyncio.to_thread(source.execute_query, query, source_label)
+
+            texts: list[str] = []
+            for doc_id in source.list_documents():
+                raw = source.load_document(doc_id)
+                texts.append(raw.decode("utf-8", errors="ignore"))
+
+            if not texts:
+                logger.warning("Snowflake query returned no results")
+                return {"status": "success", "source_type": "snowflake", "processed": 0}
+
+            combined = "\n\n".join(texts)
+            await self._lightrag.ainsert(combined)
+            logger.info("Inserted %d Snowflake rows via LightRAG ainsert", len(texts))
+
+            return {
+                "status": "success",
+                "source_type": "snowflake",
+                "processed": len(texts),
+                "source_label": source_label,
+            }
+        finally:
+            await asyncio.to_thread(source.close)
 
     # === RETRIEVAL API ===
 
@@ -783,9 +886,7 @@ class RAGService:
         """List all ingested files."""
         self._ensure_initialized()
         if self.unified is not None:
-            raise NotImplementedError(
-                "File listing is not yet supported in unified mode"
-            )
+            raise NotImplementedError("File listing is not yet supported in unified mode")
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
         return await self.ingestion.alist_ingested_files()
@@ -800,9 +901,7 @@ class RAGService:
         """Unified file deletion."""
         self._ensure_initialized()
         if self.unified is not None:
-            raise NotImplementedError(
-                "File deletion is not yet supported in unified mode"
-            )
+            raise NotImplementedError("File deletion is not yet supported in unified mode")
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
         return await self.ingestion.adelete_files(
