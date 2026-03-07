@@ -7,9 +7,11 @@ embedding API (e.g., qwen3-vl-embedding).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import logging
+from abc import ABC, abstractmethod
 
 import httpx
 import numpy as np
@@ -18,8 +20,111 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 
+class MultimodalEmbedProvider(ABC):
+    """Strategy for different multimodal embedding API protocols."""
+
+    @property
+    @abstractmethod
+    def endpoint(self) -> str:
+        """API endpoint path (e.g., '/embeddings')."""
+
+    @abstractmethod
+    def build_image_payload(self, model: str, image_b64: str) -> dict: ...
+
+    @abstractmethod
+    def build_text_payload(self, model: str, texts: list[str]) -> dict: ...
+
+    def parse_response(self, response_json: dict) -> list[list[float]]:
+        return [item["embedding"] for item in response_json["data"]]
+
+
+class OpenAICompatProvider(MultimodalEmbedProvider):
+    """Qwen-VL, GME, Xinference, Azure Voyage 3.5 — POST /embeddings with data URI."""
+
+    @property
+    def endpoint(self) -> str:
+        return "/embeddings"
+
+    def build_image_payload(self, model: str, image_b64: str) -> dict:
+        return {"model": model, "input": image_b64, "encoding_format": "float"}
+
+    def build_text_payload(self, model: str, texts: list[str]) -> dict:
+        return {"model": model, "input": texts, "encoding_format": "float"}
+
+
+class VoyageProvider(MultimodalEmbedProvider):
+    """Voyage Multimodal-3 — POST /multimodalembeddings.
+
+    Voyage multimodal API accepts full data URIs in the image_base64 field
+    (e.g., "data:image/png;base64,..."). No output_dimension support on
+    the multimodal endpoint (only on text-only Voyage models).
+    """
+
+    @property
+    def endpoint(self) -> str:
+        return "/multimodalembeddings"
+
+    def build_image_payload(self, model: str, image_b64: str) -> dict:
+        return {
+            "model": model,
+            "inputs": [{"content": [{"type": "image_base64", "image_base64": image_b64}]}],
+        }
+
+    def build_text_payload(self, model: str, texts: list[str]) -> dict:
+        return {
+            "model": model,
+            "inputs": [{"content": [{"type": "text", "text": t}]} for t in texts],
+        }
+
+
+# -----------------------------------------------------------------------
+# Standalone text embedding function (deepcopy-safe via functools.partial)
+# -----------------------------------------------------------------------
+
+
+async def httpx_text_embed(
+    texts: list[str],
+    model: str = "",
+    base_url: str = "",
+    api_key: str = "",
+) -> np.ndarray:
+    """Embed texts via httpx POST to an OpenAI-compatible /embeddings endpoint.
+
+    Designed to be used with ``functools.partial`` to bind model/base_url/api_key,
+    then wrapped in LightRAG's ``EmbeddingFunc``.  Unlike LightRAG's built-in
+    ``openai_embed`` this uses ``encoding_format: "float"`` and never sends
+    ``dimensions`` — compatible with Xinference VL embedding models.
+
+    A new ``httpx.AsyncClient`` is created per call (same pattern as
+    ``openai_embed`` which creates a new ``AsyncOpenAI`` per call).
+    """
+    if not texts:
+        return np.empty((0,), dtype=np.float32)
+
+    async with httpx.AsyncClient(
+        timeout=120.0,
+        headers={"Authorization": f"Bearer {api_key}"},
+        transport=httpx.AsyncHTTPTransport(retries=2),
+    ) as client:
+        resp = await client.post(
+            f"{base_url.rstrip('/')}/embeddings",
+            json={
+                "model": model,
+                "input": texts,
+                "encoding_format": "float",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()["data"]
+        return np.array([item["embedding"] for item in data], dtype=np.float32)
+
+
 class VisualEmbedder:
-    """Embed page images (and text queries) via an OpenAI-compatible multimodal embedding API."""
+    """Embed page images (and text queries) via an OpenAI-compatible multimodal embedding API.
+
+    Reuses a single ``httpx.AsyncClient`` for connection pooling across requests.
+    Call ``aclose()`` when done to release resources.
+    """
 
     def __init__(
         self,
@@ -28,12 +133,21 @@ class VisualEmbedder:
         api_key: str,
         dim: int,
         batch_size: int = 4,
+        timeout: float = 120.0,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
         self.dim = dim
         self.batch_size = batch_size
+        self._client = httpx.AsyncClient(
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {api_key}"},
+            transport=httpx.AsyncHTTPTransport(retries=2),
+        )
+
+    async def aclose(self) -> None:
+        """Release the underlying HTTP connection pool."""
+        await self._client.aclose()
 
     # ------------------------------------------------------------------
     # Public API
@@ -42,95 +156,74 @@ class VisualEmbedder:
     async def embed_pages(self, images: list[Image.Image]) -> np.ndarray:
         """Embed a list of PIL images into visual vectors.
 
+        Multimodal embedding APIs treat a list of images as a single
+        composite input (returning 1 vector), so each image must be
+        embedded individually.  ``batch_size`` controls concurrency.
+
         Returns:
             np.ndarray of shape ``(len(images), dim)`` with dtype float32.
         """
         if not images:
             return np.empty((0, self.dim), dtype=np.float32)
 
-        all_embeddings: list[list[float]] = []
-        for start in range(0, len(images), self.batch_size):
-            batch = images[start : start + self.batch_size]
-            embeddings = await self._embed_image_batch(batch)
-            all_embeddings.extend(embeddings)
+        sem = asyncio.Semaphore(self.batch_size)
 
-        return np.asarray(all_embeddings, dtype=np.float32)
+        async def _embed_one(img: Image.Image) -> list[float]:
+            async with sem:
+                # Xinference VL embedding expects the data URI string directly,
+                # not the OpenAI vision dict format.
+                embeddings = await self._post_embeddings(self._image_to_b64(img))
+                return embeddings[0]
 
-    async def embed_query(self, query: str) -> np.ndarray:
-        """Embed a text query into the same vector space as images.
+        results = await asyncio.gather(*[_embed_one(img) for img in images])
+        return np.asarray(results, dtype=np.float32)
+
+    async def embed_texts(self, texts: list[str]) -> np.ndarray:
+        """Embed a batch of texts via the same multimodal embedding API.
+
+        Used as the LightRAG ``embedding_func`` in unified mode so that
+        entity/relationship embedding goes through the same httpx client
+        (and ``encoding_format: "float"``) as visual embedding — avoiding
+        LightRAG's ``openai_embed`` which uses ``encoding_format: "base64"``
+        and the ``openai`` Python client, both of which can fail with
+        Xinference VL embedding models.
 
         Returns:
-            np.ndarray of shape ``(dim,)`` with dtype float32.
+            np.ndarray of shape ``(len(texts), dim)`` with dtype float32.
         """
-        url = f"{self.base_url}/embeddings"
-        payload = {
-            "model": self.model,
-            "input": query,
-            "encoding_format": "float",
-        }
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers=self._auth_headers(),
-            )
-            resp.raise_for_status()
-
-        data = resp.json()
-        embedding = data["data"][0]["embedding"]
-        self._validate_dim(embedding)
-        return np.asarray(embedding, dtype=np.float32)
+        if not texts:
+            return np.empty((0, self.dim), dtype=np.float32)
+        embeddings = await self._post_embeddings(texts)
+        return np.asarray(embeddings, dtype=np.float32)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _image_to_base64(self, image: Image.Image) -> str:
+    async def _post_embeddings(self, input_data: str | list) -> list[list[float]]:
+        """POST to /embeddings and return parsed embedding vectors."""
+        resp = await self._client.post(
+            f"{self.base_url}/embeddings",
+            json={
+                "model": self.model,
+                "input": input_data,
+                "encoding_format": "float",
+            },
+        )
+        resp.raise_for_status()
+
+        embeddings: list[list[float]] = []
+        for item in resp.json()["data"]:
+            emb = item["embedding"]
+            if len(emb) != self.dim:
+                raise ValueError(f"Expected embedding dim {self.dim}, got {len(emb)}")
+            embeddings.append(emb)
+        return embeddings
+
+    @staticmethod
+    def _image_to_b64(image: Image.Image) -> str:
         """Convert a PIL Image to a ``data:image/png;base64,...`` URI string."""
         buf = io.BytesIO()
         image.save(buf, format="PNG")
         encoded = base64.b64encode(buf.getvalue()).decode("ascii")
         return f"data:image/png;base64,{encoded}"
-
-    async def _embed_image_batch(self, images: list[Image.Image]) -> list[list[float]]:
-        """Call the embedding endpoint for a single batch of images."""
-        url = f"{self.base_url}/embeddings"
-        input_items = [
-            {
-                "type": "image_url",
-                "image_url": {"url": self._image_to_base64(img)},
-            }
-            for img in images
-        ]
-        payload = {
-            "model": self.model,
-            "input": input_items,
-            "encoding_format": "float",
-        }
-
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers=self._auth_headers(),
-            )
-            resp.raise_for_status()
-
-        data = resp.json()
-        embeddings: list[list[float]] = []
-        for item in data["data"]:
-            emb = item["embedding"]
-            self._validate_dim(emb)
-            embeddings.append(emb)
-        return embeddings
-
-    def _auth_headers(self) -> dict[str, str]:
-        """Return authorization headers for the API request."""
-        return {"Authorization": f"Bearer {self.api_key}"}
-
-    def _validate_dim(self, embedding: list[float]) -> None:
-        """Raise if the returned embedding dimension does not match ``self.dim``."""
-        if len(embedding) != self.dim:
-            msg = f"Expected embedding dimension {self.dim}, got {len(embedding)}"
-            raise ValueError(msg)
