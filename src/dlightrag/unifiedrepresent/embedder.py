@@ -134,11 +134,13 @@ class VisualEmbedder:
         dim: int,
         batch_size: int = 4,
         timeout: float = 120.0,
+        provider: MultimodalEmbedProvider | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.dim = dim
         self.batch_size = batch_size
+        self.provider = provider or OpenAICompatProvider()
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -170,10 +172,18 @@ class VisualEmbedder:
 
         async def _embed_one(img: Image.Image) -> list[float]:
             async with sem:
-                # Xinference VL embedding expects the data URI string directly,
-                # not the OpenAI vision dict format.
-                embeddings = await self._post_embeddings(self._image_to_b64(img))
-                return embeddings[0]
+                image_b64 = self._image_to_b64(img)
+                payload = self.provider.build_image_payload(self.model, image_b64)
+                resp = await self._client.post(
+                    f"{self.base_url}{self.provider.endpoint}",
+                    json=payload,
+                )
+                resp.raise_for_status()
+                embeddings = self.provider.parse_response(resp.json())
+                vec = embeddings[0]
+                if len(vec) != self.dim:
+                    raise ValueError(f"Expected embedding dim {self.dim}, got {len(vec)}")
+                return vec
 
         results = await asyncio.gather(*[_embed_one(img) for img in images])
         return np.asarray(results, dtype=np.float32)
@@ -193,32 +203,20 @@ class VisualEmbedder:
         """
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
-        embeddings = await self._post_embeddings(texts)
+        payload = self.provider.build_text_payload(self.model, texts)
+        resp = await self._client.post(
+            f"{self.base_url}{self.provider.endpoint}",
+            json=payload,
+        )
+        resp.raise_for_status()
+        embeddings = self.provider.parse_response(resp.json())
+        if len(embeddings) > 0 and len(embeddings[0]) != self.dim:
+            raise ValueError(f"Expected embedding dim {self.dim}, got {len(embeddings[0])}")
         return np.asarray(embeddings, dtype=np.float32)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    async def _post_embeddings(self, input_data: str | list) -> list[list[float]]:
-        """POST to /embeddings and return parsed embedding vectors."""
-        resp = await self._client.post(
-            f"{self.base_url}/embeddings",
-            json={
-                "model": self.model,
-                "input": input_data,
-                "encoding_format": "float",
-            },
-        )
-        resp.raise_for_status()
-
-        embeddings: list[list[float]] = []
-        for item in resp.json()["data"]:
-            emb = item["embedding"]
-            if len(emb) != self.dim:
-                raise ValueError(f"Expected embedding dim {self.dim}, got {len(emb)}")
-            embeddings.append(emb)
-        return embeddings
 
     @staticmethod
     def _image_to_b64(image: Image.Image) -> str:
