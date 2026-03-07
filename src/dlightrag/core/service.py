@@ -85,6 +85,8 @@ try:
 except ImportError:
     _HAS_RAGANYTHING = False
 
+from lightrag.utils import EmbeddingFunc  # noqa: E402
+
 from dlightrag.core.ingestion.pipeline import IngestionPipeline  # noqa: E402
 from dlightrag.core.retrieval.engine import (  # noqa: E402
     RetrievalEngine,
@@ -162,6 +164,15 @@ class RAGService:
         self.unified: Any = None  # UnifiedRepresentEngine
         self._lightrag: Any = None  # Direct LightRAG reference (unified mode)
         self._visual_chunks: Any = None  # Visual chunks KV store (unified mode)
+
+    @property
+    def lightrag(self) -> Any:
+        """Return the underlying LightRAG instance regardless of mode.
+
+        - Unified mode: ``self._lightrag`` (created directly)
+        - Caption mode: ``self.rag.lightrag`` (via RAGAnything)
+        """
+        return self._lightrag or getattr(self.rag, "lightrag", None)
 
     @staticmethod
     def _build_vector_db_kwargs(config: DlightragConfig) -> dict[str, Any]:
@@ -334,6 +345,7 @@ class RAGService:
         lightrag_kwargs: dict[str, Any] = {
             "workspace": config.workspace,
             "default_llm_timeout": config.llm_request_timeout,
+            "default_embedding_timeout": config.embedding_request_timeout,
             "chunk_token_size": config.chunk_size,
             "chunk_overlap_token_size": config.chunk_overlap,
             "max_parallel_insert": config.max_parallel_insert,
@@ -408,7 +420,50 @@ class RAGService:
         # Get model functions
         llm_func = get_llm_model_func(config)
         vision_func = get_vision_model_func(config) if self.enable_vlm else None
-        embedding_func = get_embedding_func(config)
+
+        # Use httpx_text_embed instead of LightRAG's openai_embed for text
+        # embedding.  openai_embed uses encoding_format:"base64" and the openai
+        # Python client — both fail with Xinference VL models.
+        # partial() with plain strings is deepcopy-safe (LightRAG's __post_init__
+        # does asdict→deepcopy on embedding_func).
+        from functools import partial
+
+        from dlightrag.unifiedrepresent.embedder import (
+            VisualEmbedder,
+            httpx_text_embed,
+            OpenAICompatProvider,
+            VoyageProvider,
+        )
+
+        emb_provider = config.effective_embedding_provider
+        emb_base_url = config._get_url(f"{emb_provider}_base_url") or ""
+        emb_api_key = config._get_provider_api_key(emb_provider) or ""
+
+        if emb_provider == "voyage":
+            embed_provider = VoyageProvider()
+        else:
+            embed_provider = OpenAICompatProvider()
+
+        embedding_func = EmbeddingFunc(
+            embedding_dim=config.embedding_dim,
+            max_token_size=8192,
+            func=partial(
+                httpx_text_embed,
+                model=config.embedding_model,
+                base_url=emb_base_url,
+                api_key=emb_api_key,
+                provider=embed_provider,
+            ),
+        )
+
+        # VisualEmbedder for image embedding (reuses persistent httpx client)
+        visual_embedder = VisualEmbedder(
+            model=config.embedding_model,
+            base_url=emb_base_url,
+            api_key=emb_api_key,
+            dim=config.embedding_dim,
+            provider=embed_provider,
+        )
 
         # LightRAG configuration (same storage backends as caption mode)
         # Do NOT pass rerank_model_func — we handle reranking ourselves
@@ -418,6 +473,7 @@ class RAGService:
             embedding_func=embedding_func,
             workspace=config.workspace,
             default_llm_timeout=config.llm_request_timeout,
+            default_embedding_timeout=config.embedding_request_timeout,
             chunk_token_size=config.chunk_size,
             chunk_overlap_token_size=config.chunk_overlap,
             max_parallel_insert=config.max_parallel_insert,
@@ -441,18 +497,20 @@ class RAGService:
         kv_cls = lightrag.key_string_value_json_storage_cls
         visual_chunks = kv_cls(
             namespace="visual_chunks",
+            workspace=config.workspace,
             global_config=dataclasses.asdict(lightrag),
             embedding_func=embedding_func,
         )
         await visual_chunks.initialize()
         self._visual_chunks = visual_chunks
 
-        # Create engine
+        # Create engine (pass pre-built embedder to avoid creating a duplicate)
         self.unified = UnifiedRepresentEngine(
             lightrag=lightrag,
             visual_chunks=visual_chunks,
             config=config,
             vision_model_func=vision_func,
+            visual_embedder=visual_embedder,
         )
 
         # Create hash index for deduplication (same backend as caption mode)
@@ -520,7 +578,11 @@ class RAGService:
             )
 
     async def close(self) -> None:
-        """Clean up storages (best-effort)."""
+        """Clean up storages and worker pools (best-effort)."""
+        # Shutdown LightRAG worker pools first — they hold background asyncio
+        # tasks that block asyncio.run() from exiting.
+        await self._shutdown_worker_pools()
+
         if self.rag is not None:
             try:
                 await self.rag.finalize_storages()
@@ -528,6 +590,11 @@ class RAGService:
                 logger.warning("Failed to finalize storages", exc_info=True)
 
         # Unified mode cleanup
+        if self.unified is not None:
+            try:
+                await self.unified.aclose()
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to close unified engine", exc_info=True)
         if self._visual_chunks is not None:
             try:
                 await self._visual_chunks.finalize()
@@ -538,6 +605,30 @@ class RAGService:
                 await self._lightrag.finalize_storages()
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize LightRAG storages", exc_info=True)
+
+    async def _shutdown_worker_pools(self) -> None:
+        """Shutdown LightRAG's EmbeddingFunc/LLM worker pools.
+
+        LightRAG wraps embedding_func and llm_model_func with
+        priority_limit_async_func_call which creates background asyncio
+        tasks.  finalize_storages() does NOT shut these down, so they
+        block asyncio.run() from exiting.  The wrapped functions expose
+        a ``.shutdown()`` coroutine we can call explicitly.
+        """
+        lr = self.lightrag
+        if lr is None:
+            return
+
+        for attr in ("embedding_func", "llm_model_func"):
+            try:
+                obj = getattr(lr, attr, None)
+                # EmbeddingFunc stores the wrapped func in .func
+                func = getattr(obj, "func", obj)
+                shutdown = getattr(func, "shutdown", None)
+                if shutdown is not None:
+                    await shutdown()
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to shutdown %s worker pool", attr, exc_info=True)
 
     # === INGESTION API ===
 
@@ -563,21 +654,13 @@ class RAGService:
                 path = Path(kwargs["path"])
                 replace = kwargs.get("replace", self.config.ingestion_replace_default)
 
-                # Content-aware deduplication
-                should_skip, content_hash, reason = await self._hash_index.should_skip_file(
-                    path, replace
-                )
-                if should_skip:
-                    logger.info("Skipped (dedup): %s - %s", path.name, reason)
-                    return {"status": "skipped", "reason": reason, "file_path": str(path)}
+                if path.is_file():
+                    return await self._unified_ingest_single_local(path, replace)
 
-                result = await self.unified.aingest(file_path=str(path))
+                if path.is_dir():
+                    return await self._unified_ingest_local_dir(path, replace)
 
-                # Register in hash index
-                if content_hash and result.get("doc_id"):
-                    await self._hash_index.register(content_hash, result["doc_id"], str(path))
-
-                return result
+                raise FileNotFoundError(f"Path not found: {path}")
 
             if source_type == "azure_blob":
                 return await self._unified_ingest_azure_blob(**kwargs)
@@ -647,6 +730,67 @@ class RAGService:
             table=kwargs.get("table"),
         )
         return ingestion_result.model_dump(exclude_none=True)
+
+    async def _unified_ingest_single_local(self, path: Path, replace: bool) -> dict[str, Any]:
+        """Unified mode: ingest a single local file with dedup."""
+        should_skip, content_hash, reason = await self._hash_index.should_skip_file(path, replace)
+        if should_skip:
+            logger.info("Skipped (dedup): %s - %s", path.name, reason)
+            return {"status": "skipped", "reason": reason, "file_path": str(path)}
+
+        result = await self.unified.aingest(file_path=str(path))
+
+        if content_hash and result.get("doc_id"):
+            await self._hash_index.register(content_hash, result["doc_id"], str(path))
+
+        return result
+
+    async def _unified_ingest_local_dir(self, path: Path, replace: bool) -> dict[str, Any]:
+        """Unified mode: recursively ingest all supported files in a directory."""
+        from dlightrag.unifiedrepresent.renderer import (
+            _IMAGE_EXTENSIONS,
+            _OFFICE_EXTENSIONS,
+        )
+
+        supported = {".pdf"} | _IMAGE_EXTENSIONS | _OFFICE_EXTENSIONS
+
+        files = sorted(f for f in path.rglob("*") if f.is_file() and f.suffix.lower() in supported)
+
+        if not files:
+            logger.warning("No supported files found in %s", path)
+            return {
+                "status": "success",
+                "source_type": "local",
+                "folder": str(path),
+                "processed": 0,
+                "skipped": 0,
+                "total_files": 0,
+            }
+
+        results: list[dict[str, Any]] = []
+        skipped = 0
+        for file_path in files:
+            result = await self._unified_ingest_single_local(file_path, replace)
+            if result.get("status") == "skipped":
+                skipped += 1
+            results.append(result)
+
+        processed = len(results) - skipped
+        logger.info(
+            "Directory ingestion complete: %s (%d processed, %d skipped)",
+            path,
+            processed,
+            skipped,
+        )
+        return {
+            "status": "success",
+            "source_type": "local",
+            "folder": str(path),
+            "results": results,
+            "processed": processed,
+            "skipped": skipped,
+            "total_files": len(files),
+        }
 
     async def _unified_ingest_azure_blob(self, **kwargs: Any) -> dict[str, Any]:
         """Unified mode: download blob(s) to temp → visual pipeline."""
