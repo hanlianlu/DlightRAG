@@ -87,13 +87,17 @@ async def httpx_text_embed(
     model: str = "",
     base_url: str = "",
     api_key: str = "",
+    provider: MultimodalEmbedProvider | None = None,
 ) -> np.ndarray:
-    """Embed texts via httpx POST to an OpenAI-compatible /embeddings endpoint.
+    """Embed texts via httpx POST to an embedding endpoint.
 
-    Designed to be used with ``functools.partial`` to bind model/base_url/api_key,
-    then wrapped in LightRAG's ``EmbeddingFunc``.  Unlike LightRAG's built-in
-    ``openai_embed`` this uses ``encoding_format: "float"`` and never sends
-    ``dimensions`` — compatible with Xinference VL embedding models.
+    Designed to be used with ``functools.partial`` to bind model/base_url/api_key
+    (and optionally provider), then wrapped in LightRAG's ``EmbeddingFunc``.
+
+    When *provider* is ``None`` (the default), uses ``OpenAICompatProvider`` which
+    posts to ``/embeddings`` with ``encoding_format: "float"`` — compatible with
+    Xinference VL embedding models.  Pass ``VoyageProvider()`` to hit the Voyage
+    ``/multimodalembeddings`` endpoint instead.
 
     A new ``httpx.AsyncClient`` is created per call (same pattern as
     ``openai_embed`` which creates a new ``AsyncOpenAI`` per call).
@@ -101,22 +105,23 @@ async def httpx_text_embed(
     if not texts:
         return np.empty((0,), dtype=np.float32)
 
+    prov = provider or OpenAICompatProvider()
+    payload = prov.build_text_payload(model, texts)
+
     async with httpx.AsyncClient(
         timeout=120.0,
         headers={"Authorization": f"Bearer {api_key}"},
         transport=httpx.AsyncHTTPTransport(retries=2),
     ) as client:
         resp = await client.post(
-            f"{base_url.rstrip('/')}/embeddings",
-            json={
-                "model": model,
-                "input": texts,
-                "encoding_format": "float",
-            },
+            f"{base_url.rstrip('/')}{prov.endpoint}",
+            json=payload,
         )
         resp.raise_for_status()
-        data = resp.json()["data"]
-        return np.array([item["embedding"] for item in data], dtype=np.float32)
+        return np.array(
+            prov.parse_response(resp.json()),
+            dtype=np.float32,
+        )
 
 
 class VisualEmbedder:
