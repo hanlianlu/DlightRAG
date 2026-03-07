@@ -46,3 +46,8 @@ do so clearly
 provided context, say so
 - Be concise but thorough — include relevant details from both the visual \
 content and knowledge graph"""
+
+VISUAL_RERANK_PROMPT = """\
+Rate how relevant this document page is to the following query.
+Query: {query}
+Respond with ONLY a number from 0 to 10 (0 = completely irrelevant, 10 = highly relevant)."""
