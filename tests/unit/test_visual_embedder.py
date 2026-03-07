@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from dlightrag.unifiedrepresent.embedder import VisualEmbedder
+from dlightrag.unifiedrepresent.embedder import VoyageProvider, VisualEmbedder, httpx_text_embed
 
 DIM = 128
 
@@ -50,27 +50,9 @@ class TestVisualEmbedderInit:
         emb = _make_embedder(base_url="https://api.example.com/v1///")
         assert emb.base_url == "https://api.example.com/v1"
 
-
-# ---------------------------------------------------------------------------
-# TestValidateDim
-# ---------------------------------------------------------------------------
-
-
-class TestValidateDim:
-    def test_matching_dim_passes(self) -> None:
-        emb = _make_embedder(dim=DIM)
-        # Should not raise.
-        emb._validate_dim([0.0] * DIM)
-
-    def test_mismatching_dim_raises(self) -> None:
-        emb = _make_embedder(dim=DIM)
-        with pytest.raises(ValueError, match="Expected embedding dimension"):
-            emb._validate_dim([0.0] * (DIM + 1))
-
-    def test_error_message_contains_both_dims(self) -> None:
-        emb = _make_embedder(dim=DIM)
-        with pytest.raises(ValueError, match=rf"{DIM}.*{DIM + 5}"):
-            emb._validate_dim([0.0] * (DIM + 5))
+    def test_client_has_auth_header(self) -> None:
+        emb = _make_embedder(api_key="sk-secret-key")
+        assert emb._client.headers["authorization"] == "Bearer sk-secret-key"
 
 
 # ---------------------------------------------------------------------------
@@ -88,121 +70,140 @@ class TestEmbedPages:
 
     async def test_single_image(self) -> None:
         emb = _make_embedder()
-        mock_resp = _mock_response(DIM, n=1)
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=1))
 
-        with patch("httpx.AsyncClient") as MockClient:
-            ctx = AsyncMock()
-            ctx.__aenter__.return_value = mock_client
-            MockClient.return_value = ctx
-
-            result = await emb.embed_pages([_tiny_image()])
+        result = await emb.embed_pages([_tiny_image()])
 
         assert result.shape == (1, DIM)
         assert result.dtype == np.float32
 
-    async def test_batching_five_images_batch_size_two(self) -> None:
+    async def test_concurrency_five_images_batch_size_two(self) -> None:
         emb = _make_embedder(batch_size=2)
         images = [_tiny_image() for _ in range(5)]
 
-        mock_client = AsyncMock()
+        # Each image is embedded individually → 5 HTTP calls (batch_size controls concurrency).
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=1))
 
-        # Batches: [2, 2, 1] -> 3 HTTP calls with matching response sizes.
-        responses = [
-            _mock_response(DIM, n=2),
-            _mock_response(DIM, n=2),
-            _mock_response(DIM, n=1),
-        ]
-        mock_client.post.side_effect = responses
+        result = await emb.embed_pages(images)
 
-        with patch("httpx.AsyncClient") as MockClient:
-            ctx = AsyncMock()
-            ctx.__aenter__.return_value = mock_client
-            MockClient.return_value = ctx
-
-            result = await emb.embed_pages(images)
-
-        assert mock_client.post.call_count == 3
+        assert emb._client.post.call_count == 5
         assert result.shape == (5, DIM)
 
     async def test_result_dtype_is_float32(self) -> None:
         emb = _make_embedder()
-        mock_resp = _mock_response(DIM, n=2)
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=1))
 
-        with patch("httpx.AsyncClient") as MockClient:
-            ctx = AsyncMock()
-            ctx.__aenter__.return_value = mock_client
-            MockClient.return_value = ctx
-
-            result = await emb.embed_pages([_tiny_image(), _tiny_image()])
+        result = await emb.embed_pages([_tiny_image(), _tiny_image()])
 
         assert result.dtype == np.float32
 
 
 # ---------------------------------------------------------------------------
-# TestEmbedQuery
+# TestEmbedTexts
 # ---------------------------------------------------------------------------
 
 
-class TestEmbedQuery:
-    async def test_returns_1d_array(self) -> None:
+class TestEmbedTexts:
+    async def test_empty_list_returns_zero_rows(self) -> None:
         emb = _make_embedder()
-        mock_resp = _mock_response(DIM, n=1)
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
-
-        with patch("httpx.AsyncClient") as MockClient:
-            ctx = AsyncMock()
-            ctx.__aenter__.return_value = mock_client
-            MockClient.return_value = ctx
-
-            result = await emb.embed_query("test query")
-
-        assert result.shape == (DIM,)
+        result = await emb.embed_texts([])
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (0, DIM)
         assert result.dtype == np.float32
+
+    async def test_batch_of_three(self) -> None:
+        emb = _make_embedder()
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=3))
+
+        result = await emb.embed_texts(["a", "b", "c"])
+
+        assert result.shape == (3, DIM)
+        assert result.dtype == np.float32
+        # Single HTTP call with all texts batched
+        emb._client.post.assert_awaited_once()
+
+    async def test_sends_encoding_format_float(self) -> None:
+        emb = _make_embedder()
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=1))
+
+        await emb.embed_texts(["hello"])
+
+        payload = emb._client.post.call_args[1]["json"]
+        assert payload["encoding_format"] == "float"
+        assert payload["input"] == ["hello"]
 
     async def test_calls_embeddings_endpoint(self) -> None:
         emb = _make_embedder(base_url="https://api.example.com/v1")
-        mock_resp = _mock_response(DIM, n=1)
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=1))
 
-        with patch("httpx.AsyncClient") as MockClient:
-            ctx = AsyncMock()
-            ctx.__aenter__.return_value = mock_client
-            MockClient.return_value = ctx
+        await emb.embed_texts(["hello"])
 
-            await emb.embed_query("hello")
-
-        call_args = mock_client.post.call_args
+        call_args = emb._client.post.call_args
         assert call_args[0][0] == "https://api.example.com/v1/embeddings"
 
     async def test_dim_mismatch_raises(self) -> None:
         emb = _make_embedder(dim=DIM)
-        # Return embedding with wrong dimension.
-        mock_resp = _mock_response(DIM + 10, n=1)
+        emb._client.post = AsyncMock(return_value=_mock_response(DIM + 10, n=1))
+
+        with pytest.raises(ValueError, match="Expected embedding dim"):
+            await emb.embed_texts(["query"])
+
+
+# ---------------------------------------------------------------------------
+# TestVoyageProvider
+# ---------------------------------------------------------------------------
+
+
+class TestVoyageProvider:
+    def test_image_payload_passes_full_data_uri(self) -> None:
+        prov = VoyageProvider()
+        data_uri = "data:image/png;base64,AAAA"
+        payload = prov.build_image_payload("voyage-multimodal-3", data_uri)
+        img_content = payload["inputs"][0]["content"][0]
+        assert img_content["type"] == "image_base64"
+        assert img_content["image_base64"] == data_uri
+
+    def test_text_payload_nested_structure(self) -> None:
+        prov = VoyageProvider()
+        payload = prov.build_text_payload("voyage-multimodal-3", ["hello", "world"])
+        assert len(payload["inputs"]) == 2
+        assert payload["inputs"][0]["content"][0] == {"type": "text", "text": "hello"}
+        assert payload["inputs"][1]["content"][0] == {"type": "text", "text": "world"}
+
+    def test_endpoint(self) -> None:
+        prov = VoyageProvider()
+        assert prov.endpoint == "/multimodalembeddings"
+
+
+# ---------------------------------------------------------------------------
+# TestHttpxTextEmbedVoyage
+# ---------------------------------------------------------------------------
+
+
+class TestHttpxTextEmbedVoyage:
+    async def test_uses_voyage_endpoint_and_payload(self) -> None:
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "data": [{"embedding": [0.1] * 128}],
+        }
+
         mock_client = AsyncMock()
-        mock_client.post.return_value = mock_resp
+        mock_client.post = AsyncMock(return_value=mock_resp)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("httpx.AsyncClient") as MockClient:
-            ctx = AsyncMock()
-            ctx.__aenter__.return_value = mock_client
-            MockClient.return_value = ctx
+        with patch("dlightrag.unifiedrepresent.embedder.httpx.AsyncClient", return_value=mock_client):
+            result = await httpx_text_embed(
+                texts=["hello"],
+                model="voyage-multimodal-3",
+                base_url="https://api.voyageai.com/v1",
+                api_key="sk-test",
+                provider=VoyageProvider(),
+            )
 
-            with pytest.raises(ValueError, match="Expected embedding dimension"):
-                await emb.embed_query("query")
-
-
-# ---------------------------------------------------------------------------
-# TestAuthHeaders
-# ---------------------------------------------------------------------------
-
-
-class TestAuthHeaders:
-    def test_returns_bearer_token(self) -> None:
-        emb = _make_embedder(api_key="sk-secret-key")
-        headers = emb._auth_headers()
-        assert headers == {"Authorization": "Bearer sk-secret-key"}
+        call_args = mock_client.post.call_args
+        assert "/multimodalembeddings" in call_args[0][0]
+        payload = call_args[1]["json"]
+        assert payload["inputs"][0]["content"][0]["type"] == "text"
+        assert result.shape == (1, 128)
