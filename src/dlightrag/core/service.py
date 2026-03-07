@@ -429,10 +429,10 @@ class RAGService:
         from functools import partial
 
         from dlightrag.unifiedrepresent.embedder import (
-            VisualEmbedder,
-            httpx_text_embed,
             OpenAICompatProvider,
+            VisualEmbedder,
             VoyageProvider,
+            httpx_text_embed,
         )
 
         emb_provider = config.effective_embedding_provider

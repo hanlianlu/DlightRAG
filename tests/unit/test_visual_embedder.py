@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from dlightrag.unifiedrepresent.embedder import VoyageProvider, VisualEmbedder, httpx_text_embed
+from dlightrag.unifiedrepresent.embedder import VisualEmbedder, VoyageProvider, httpx_text_embed
 
 DIM = 128
 
