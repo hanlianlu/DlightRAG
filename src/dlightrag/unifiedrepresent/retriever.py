@@ -32,6 +32,7 @@ class VisualRetriever:
         rerank_model: str | None = None,
         rerank_base_url: str | None = None,
         rerank_api_key: str | None = None,
+        rerank_backend: str | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -40,6 +41,7 @@ class VisualRetriever:
         self.rerank_model = rerank_model
         self.rerank_base_url = rerank_base_url
         self.rerank_api_key = rerank_api_key
+        self.rerank_backend = rerank_backend
 
     # ------------------------------------------------------------------
     # Public API
@@ -103,7 +105,9 @@ class VisualRetriever:
         }
 
         # Phase 3: Visual reranking (optional)
-        if self.rerank_model and self.rerank_base_url and resolved:
+        if self.rerank_backend == "llm" and self.vision_model_func and resolved:
+            resolved = await self._llm_visual_rerank(query, resolved, chunk_top_k)
+        elif self.rerank_base_url and self.rerank_model and resolved:
             resolved = await self._visual_rerank(query, resolved, chunk_top_k)
         else:
             # No reranking — just take top chunk_top_k by insertion order
