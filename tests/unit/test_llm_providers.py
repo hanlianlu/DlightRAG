@@ -111,7 +111,7 @@ class TestGetLlmModelFunc:
 class TestGetVisionModelFunc:
     """Test vision model factory dispatching."""
 
-    def test_no_vision_model_returns_none(self) -> None:
+    def test_no_vision_model_falls_back_to_chat_model(self) -> None:
         from dlightrag.models.llm import get_vision_model_func
 
         config = DlightragConfig(  # type: ignore[call-arg]
@@ -119,9 +119,10 @@ class TestGetVisionModelFunc:
             openai_api_key="test-key",
             vision_model=None,
         )
-        # vision_model_name will be None, so should return None
+        # vision_model_name falls back to chat_model_name
+        assert config.vision_model_name == config.chat_model_name
         func = get_vision_model_func(config)
-        assert func is None
+        assert func is not None
 
 
 class TestGetEmbeddingFunc:

@@ -167,10 +167,7 @@ def get_vision_model_func(
 
     cfg = config or get_config()
     vision_provider = cfg.effective_vision_provider
-    vision_deployment = cfg.vision_model_name
-    if not vision_deployment:
-        logger.warning("No vision model configured; disabling VLM.")
-        return None
+    vision_deployment = cfg.vision_model_name  # falls back to chat_model
 
     extra = cfg.vision_model_kwargs
 

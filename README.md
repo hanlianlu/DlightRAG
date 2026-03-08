@@ -112,6 +112,16 @@ The first decision — determines your ingestion pipeline, model requirements, a
 | `caption` (default) | Document parsing → VLM captioning → text embedding → KG | Text-heavy documents, structured elements |
 | `unified` | Page rendering → multimodal embedding → VLM entity extraction → KG | Visually rich documents (charts, diagrams, complex layouts) |
 
+**Caption mode parsers** (`DLIGHTRAG_PARSER`):
+
+| Parser | Description |
+|--------|-------------|
+| `mineru` (default) | MinerU PDF parser — fast, good for text-heavy documents |
+| `docling` | Docling parser — alternative structure-aware parser |
+| `vlm` | VLM-based OCR — renders pages and uses vision model to extract structured content; no external parser dependency, requires `VISION_MODEL` |
+
+All caption mode parsers use Docling's HybridChunker for structure-aware chunking.
+
 **Model usage by stage:**
 
 | Stage | Caption | Unified |
@@ -156,6 +166,8 @@ Each provider uses its own API key. For **Ollama**, use `openai` provider with `
 | `DLIGHTRAG_GRAPH_STORAGE` | `PGGraphStorage` | PGGraphStorage, Neo4JStorage, NetworkXStorage, ... |
 | `DLIGHTRAG_KV_STORAGE` | `PGKVStorage` | PGKVStorage, JsonKVStorage, RedisKVStorage, ... |
 | `DLIGHTRAG_DOC_STATUS_STORAGE` | `PGDocStatusStorage` | PGDocStatusStorage, JsonDocStatusStorage, ... |
+
+> **Note:** When using PostgreSQL backends, LightRAG maps its internal namespace names to different table names (e.g. `text_chunks` → `LIGHTRAG_DOC_CHUNKS`, `full_docs` → `LIGHTRAG_DOC_FULL`). DlightRAG's unified mode adds a `visual_chunks` table via its own KV storage.
 
 ### Workspaces
 
@@ -227,7 +239,7 @@ docker compose up postgres -d       # PostgreSQL only
 ```bash
 uv run pytest tests/unit            # unit tests (no external services)
 uv run pytest tests/integration     # integration tests (requires PostgreSQL)
-uv run ruff check src/ tests/ scripts/ && uv run ruff format --check src/ tests/ scripts/
+uv run ruff check src/ tests/ scripts/ --fix && uv run ruff format src/ tests/ scripts/
 ```
 
 > **Skip PostgreSQL** for development:

@@ -234,7 +234,7 @@ class DlightragConfig(BaseSettings):
         description="Page rendering DPI for unified mode. Higher = better quality but larger images.",
     )
     working_dir: str = Field(default="./dlightrag_storage")
-    parser: Literal["mineru", "docling"] = Field(default="mineru")
+    parser: Literal["mineru", "docling", "vlm"] = Field(default="mineru")
     parse_method: Literal["auto", "ocr", "txt"] = Field(default="auto")
     mineru_backend: str | None = Field(
         default=None,
@@ -357,8 +357,9 @@ class DlightragConfig(BaseSettings):
         return self.ingestion_model
 
     @property
-    def vision_model_name(self) -> str | None:
-        return self.vision_model
+    def vision_model_name(self) -> str:
+        """Resolve vision model. Falls back to chat_model_name."""
+        return self.vision_model or self.chat_model_name
 
     @property
     def effective_embedding_provider(self) -> str:

@@ -1,31 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """VLM prompts for unified representational RAG.
 
-Used during both ingestion (page description) and query (answer generation).
+Used during query (answer generation) and visual reranking.
+OCR/ingestion prompts live in :mod:`dlightrag.core.vlm_ocr`.
 """
-
-PAGE_DESCRIPTION_PROMPT = """\
-Analyze this document page image and provide a comprehensive text description.
-
-Your description should capture ALL information on the page including:
-- Main text content and headings
-- Table data (describe structure and key values)
-- Figure/chart descriptions (describe what they show, trends, data points)
-- Formulas and equations (write them out in text form)
-- Layout structure (sections, columns, sidebars)
-- Captions, footnotes, and references
-
-Pay special attention to identifying and describing these entity types: {entity_types}
-
-For each entity found, include:
-- The entity name
-- Its type (from the list above)
-- A brief description of the entity's role or significance on this page
-- Any relationships between entities
-
-Provide a thorough, accurate description that preserves all factual information \
-from the page. Write in clear, structured paragraphs. Do not add information that \
-is not visible on the page."""
 
 UNIFIED_ANSWER_SYSTEM_PROMPT = """\
 You are an expert document analysis assistant. You answer questions based on \
