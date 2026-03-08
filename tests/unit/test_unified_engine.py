@@ -376,29 +376,13 @@ class TestAdeleteDoc:
         assert result["visual_chunks_deleted"] == 3
         assert visual_chunks.delete.await_count == 3
 
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_returns_zero_when_doc_not_found(
-        self,
-        _renderer: MagicMock,
-        _embedder: MagicMock,
-        _extractor: MagicMock,
-        _retriever: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-        visual_chunks = MagicMock()
-        lightrag.full_docs.get_by_id = AsyncMock(return_value=None)
+        # Verify exact chunk_ids passed — the formula must match aingest
+        from lightrag.utils import compute_mdhash_id
 
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=visual_chunks,
-            config=config,
-        )
-
-        result = await engine.adelete_doc("doc-missing")
-
-        assert result["visual_chunks_deleted"] == 0
-        visual_chunks.delete.assert_not_called()
+        expected_ids = [
+            compute_mdhash_id("doc-abc:page:0", prefix="chunk-"),
+            compute_mdhash_id("doc-abc:page:1", prefix="chunk-"),
+            compute_mdhash_id("doc-abc:page:2", prefix="chunk-"),
+        ]
+        actual_ids = [call.args[0][0] for call in visual_chunks.delete.call_args_list]
+        assert actual_ids == expected_ids

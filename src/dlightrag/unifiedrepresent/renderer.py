@@ -106,7 +106,7 @@ class PageRenderer:
             pages: list[tuple[int, Image.Image]] = []
             for idx in range(len(doc)):
                 page = doc[idx]
-                bitmap = page.render(scale=scale)
+                bitmap = page.render(scale=scale)  # type: ignore[arg-type]
                 pil_image = bitmap.to_pil()
                 pages.append((idx, pil_image))
 

@@ -364,45 +364,11 @@ data: {"type": "done"}
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────┐
-│   Python SDK  ·  REST API (:8100)  ·  MCP (:8101)    │
-└─────────────────────────┬────────────────────────────┘
-                          │  workspace(s) param
-               ┌──────────▼──────────┐
-               │  RAGServiceManager  │  lazy per-workspace cache + federation
-               └──────────┬──────────┘
-                          │
-                 ┌────────▼────────┐
-                 │   RAGService    │  one per workspace
-                 └────┬───┬───┬───-┘
-                      │   │   │
-          ┌───────────▼┐  │  ┌▼──────────────┐
-          │ Ingestion  │  │  │  Retrieval    │
-          │ Pipeline   │  │  │  Engine       │
-          │            │  │  │               │
-          │ local      │  │  │  retrieve()   │
-          │ azure blob │  │  │  answer()     │
-          │ snowflake  │  │  └───────┬───────┘
-          └──────┬─────┘  │          │
-                 │  ┌─────▼─────┐    │
-                 └──│RAGAnything│───-┘  single shared instance
-                    │ (LightRAG)│
-                    └─────┬─────┘
-                          │
-            ┌─────────────┴─────────────────┐
-            │                               │
-  ┌─────────▼─────────┐      ┌──────────────▼───────┐
-  │   LLM Providers   │      │      Storage         │
-  │  Chat · Embed     │      │  PostgreSQL          │
-  │  Vision · Rerank  │      │  (pgvector + AGE)    │
-  │                   │      │                      │
-  │  OpenAI · Azure   │      │  Neo4j · Milvus      │
-  │  Anthropic ·      │      │  Redis · JSON · ...  │
-  │  Gemini · Qwen    │      └──────────────────────┘
-  │  Ollama · ...     │
-  └───────────────────┘
-```
+<p align="center">
+  <img src="docs/architecture.png" alt="DlightRAG Architecture" width="800" />
+</p>
+
+<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a></sub>
 
 
 ## License

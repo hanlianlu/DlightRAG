@@ -113,11 +113,20 @@ async def httpx_text_embed(
         headers={"Authorization": f"Bearer {api_key}"},
         transport=httpx.AsyncHTTPTransport(retries=2),
     ) as client:
-        resp = await client.post(
-            f"{base_url.rstrip('/')}{prov.endpoint}",
-            json=payload,
-        )
-        resp.raise_for_status()
+        for attempt in range(4):  # 1 initial + 3 retries
+            resp = await client.post(
+                f"{base_url.rstrip('/')}{prov.endpoint}",
+                json=payload,
+            )
+            if resp.status_code == 429 and attempt < 3:
+                retry_after = float(resp.headers.get("retry-after", 2 ** (attempt + 1)))
+                logger.warning(
+                    "429 rate-limited, retrying in %.1fs (attempt %d/3)", retry_after, attempt + 1
+                )
+                await asyncio.sleep(retry_after)
+                continue
+            resp.raise_for_status()
+            break
         return np.array(
             prov.parse_response(resp.json()),
             dtype=np.float32,
@@ -179,11 +188,22 @@ class VisualEmbedder:
             async with sem:
                 image_b64 = self._image_to_b64(img)
                 payload = self.provider.build_image_payload(self.model, image_b64)
-                resp = await self._client.post(
-                    f"{self.base_url}{self.provider.endpoint}",
-                    json=payload,
-                )
-                resp.raise_for_status()
+                for attempt in range(4):  # 1 initial + 3 retries
+                    resp = await self._client.post(
+                        f"{self.base_url}{self.provider.endpoint}",
+                        json=payload,
+                    )
+                    if resp.status_code == 429 and attempt < 3:
+                        retry_after = float(resp.headers.get("retry-after", 2 ** (attempt + 1)))
+                        logger.warning(
+                            "429 rate-limited, retrying in %.1fs (attempt %d/3)",
+                            retry_after,
+                            attempt + 1,
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                    resp.raise_for_status()
+                    break
                 embeddings = self.provider.parse_response(resp.json())
                 vec = embeddings[0]
                 if len(vec) != self.dim:
@@ -209,11 +229,20 @@ class VisualEmbedder:
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
         payload = self.provider.build_text_payload(self.model, texts)
-        resp = await self._client.post(
-            f"{self.base_url}{self.provider.endpoint}",
-            json=payload,
-        )
-        resp.raise_for_status()
+        for attempt in range(4):  # 1 initial + 3 retries
+            resp = await self._client.post(
+                f"{self.base_url}{self.provider.endpoint}",
+                json=payload,
+            )
+            if resp.status_code == 429 and attempt < 3:
+                retry_after = float(resp.headers.get("retry-after", 2 ** (attempt + 1)))
+                logger.warning(
+                    "429 rate-limited, retrying in %.1fs (attempt %d/3)", retry_after, attempt + 1
+                )
+                await asyncio.sleep(retry_after)
+                continue
+            resp.raise_for_status()
+            break
         embeddings = self.provider.parse_response(resp.json())
         if len(embeddings) > 0 and len(embeddings[0]) != self.dim:
             raise ValueError(f"Expected embedding dim {self.dim}, got {len(embeddings[0])}")

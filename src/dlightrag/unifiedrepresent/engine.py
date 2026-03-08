@@ -63,6 +63,7 @@ class UnifiedRepresentEngine:
                 base_url=emb_base_url,
                 api_key=emb_api_key,
                 dim=config.embedding_dim,
+                batch_size=config.embedding_func_max_async,
             )
 
         self.extractor = EntityExtractor(
@@ -140,6 +141,8 @@ class UnifiedRepresentEngine:
                 "content": info["content"],  # VLM text description
                 "full_doc_id": doc_id,
                 "file_path": str(path),
+                "tokens": len(info["content"].split()),
+                "chunk_order_index": info["page_index"],
             }
         await self._upsert_with_visual_vectors(chunks_data, visual_vectors)
 

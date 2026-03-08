@@ -11,11 +11,13 @@ import base64
 import io
 import logging
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, Literal, cast
 
 import httpx
 from lightrag import LightRAG, QueryParam
 from lightrag.constants import GRAPH_FIELD_SEP
+
+QueryMode = Literal["local", "global", "hybrid", "naive", "mix", "bypass"]
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ class VisualRetriever:
         """
         # Phase 1: LightRAG retrieval
         param = QueryParam(
-            mode=mode,
+            mode=cast(QueryMode, mode),
             only_need_context=True,
             top_k=top_k,
             enable_rerank=False,  # We handle reranking ourselves
@@ -327,6 +329,8 @@ class VisualRetriever:
                 # Fallback to text content if no image
                 documents.append(vd.get("content", ""))
 
+        if self.rerank_base_url is None:
+            raise RuntimeError("rerank_base_url is required for visual reranking")
         url = f"{self.rerank_base_url.rstrip('/')}/rerank"
         payload = {
             "model": self.rerank_model,

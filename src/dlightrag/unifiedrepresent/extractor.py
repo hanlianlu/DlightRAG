@@ -15,6 +15,12 @@ from typing import Any
 from lightrag.operate import extract_entities, merge_nodes_and_edges
 from lightrag.utils import compute_mdhash_id
 
+# LightRAG v1.4.10 merge_nodes_and_edges unconditionally does
+# ``async with pipeline_status_lock`` — crashes when lock is None.
+# We provide a real lock + status dict to satisfy the contract.
+_NOOP_PIPELINE_STATUS: dict = {"latest_message": "", "history_messages": []}
+_PIPELINE_STATUS_LOCK = asyncio.Lock()
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,7 +31,7 @@ class EntityExtractor:
         self,
         lightrag: Any,  # LightRAG instance
         entity_types: list[str],
-        vision_model_func: Callable,
+        vision_model_func: Callable | None = None,
         max_concurrent_vlm: int = 4,
     ) -> None:
         self.lightrag = lightrag
@@ -45,6 +51,9 @@ class EntityExtractor:
         (VLM description). These are used to populate text_chunks and
         visual_chunks.
         """
+        if self.vision_model_func is None:
+            raise ValueError("vision_model_func is required for entity extraction")
+
         # 1. Generate VLM descriptions for all pages (semaphore-controlled)
         description_tasks = [
             self._describe_page(image, page_index) for page_index, image in enumerate(images)
@@ -67,7 +76,7 @@ class EntityExtractor:
 
         # 3. Call extract_entities
         chunk_results = await extract_entities(
-            chunks=chunks_dict,
+            chunks=chunks_dict,  # type: ignore[arg-type]
             global_config=self.lightrag.__dict__,
             llm_response_cache=self.lightrag.llm_response_cache,
             text_chunks_storage=self.lightrag.text_chunks,
@@ -84,6 +93,10 @@ class EntityExtractor:
             full_relations_storage=self.lightrag.full_relations,
             doc_id=doc_id,
             llm_response_cache=self.lightrag.llm_response_cache,
+            entity_chunks_storage=self.lightrag.entity_chunks,
+            relation_chunks_storage=self.lightrag.relation_chunks,
+            pipeline_status=_NOOP_PIPELINE_STATUS,
+            pipeline_status_lock=_PIPELINE_STATUS_LOCK,
             file_path=file_path,
         )
 
@@ -101,17 +114,24 @@ class EntityExtractor:
 
     async def _describe_page(self, image: Any, page_index: int) -> str:
         """Call VLM to generate text description of a page image."""
+        import io
+
         from dlightrag.unifiedrepresent.prompts import PAGE_DESCRIPTION_PROMPT
 
         prompt = PAGE_DESCRIPTION_PROMPT.format(entity_types=", ".join(self.entity_types))
 
+        if self.vision_model_func is None:
+            raise RuntimeError("vision_model_func is required but was not set")
+
+        # Convert PIL Image to PNG bytes — vision_model_func expects image_data=bytes
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        image_bytes = buf.getvalue()
+
         async with self._vlm_semaphore:
-            # vision_model_func expects: (prompt, images=[image])
-            # The exact calling convention follows DlightRAG's existing
-            # vision model pattern
             description = await self.vision_model_func(
                 prompt,
-                images=[image],
+                image_data=image_bytes,
             )
 
         if not description or not description.strip():

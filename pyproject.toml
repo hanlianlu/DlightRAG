@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "0.2.6"
+version = "1.0.0"
 description = "DlightRAG - Dual-mode multi-modal RAG service based on LightRAG"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -28,7 +28,7 @@ dependencies = [
     "snowflake-connector-python>=4.3.0",
     # Document parsing
     "docling>=2.76.0",
-    "pypdfium2>=4.0",
+    "pypdfium2>=4.30.0",
     # MCP server
     "mcp[cli]>=1.9.0",
     # REST API server

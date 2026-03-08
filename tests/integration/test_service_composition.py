@@ -72,6 +72,7 @@ def fs_config(tmp_path: Path) -> DlightragConfig:
         working_dir=str(working_dir),
         workspace="test-ws",
         openai_api_key="test-key",
+        rag_mode="caption",
         kv_storage="JsonKVStorage",
         doc_status_storage="JsonDocStatusStorage",
         vector_storage="NanoVectorDBStorage",
@@ -118,6 +119,8 @@ class TestServiceComposition:
         """Ingestion and retrieval share the same RAGAnything instance."""
         service = await RAGService.create(config=fs_config, enable_vlm=False)
         try:
+            assert service.ingestion is not None
+            assert service.retrieval is not None
             assert service.ingestion.rag is service.rag
             assert service.retrieval.rag is service.rag
         finally:

@@ -146,8 +146,8 @@ async def reset_all(
     service = await RAGService.create(config=config)
 
     try:
-        # Get the LightRAG instance
-        lightrag = getattr(service.ingestion.rag, "lightrag", None) if service.ingestion else None
+        # Get the LightRAG instance (unified property handles both modes)
+        lightrag = service.lightrag
         if lightrag is None:
             print("\nERROR: Could not access LightRAG instance from RAGService")
             return stats

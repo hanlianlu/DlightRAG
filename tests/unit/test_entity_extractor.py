@@ -26,6 +26,8 @@ class _FakeLightRAG:
         self.relationships_vdb = MagicMock()
         self.full_entities = MagicMock()
         self.full_relations = MagicMock()
+        self.entity_chunks = MagicMock()
+        self.relation_chunks = MagicMock()
 
 
 def _make_lightrag() -> _FakeLightRAG:
@@ -106,11 +108,13 @@ class TestDescribePage:
         vision_fn = AsyncMock(return_value="desc")
         ext = EntityExtractor(_make_lightrag(), ["person"], vision_fn)
         mock_image = MagicMock()
+        mock_image.save = MagicMock()  # PIL Image.save
 
         await ext._describe_page(mock_image, page_index=0)
 
         _, kwargs = vision_fn.call_args
-        assert kwargs["images"] == [mock_image]
+        assert "image_data" in kwargs
+        assert isinstance(kwargs["image_data"], bytes)
 
 
 # ---------------------------------------------------------------------------

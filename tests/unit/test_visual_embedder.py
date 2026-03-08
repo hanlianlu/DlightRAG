@@ -193,7 +193,9 @@ class TestHttpxTextEmbedVoyage:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 
-        with patch("dlightrag.unifiedrepresent.embedder.httpx.AsyncClient", return_value=mock_client):
+        with patch(
+            "dlightrag.unifiedrepresent.embedder.httpx.AsyncClient", return_value=mock_client
+        ):
             result = await httpx_text_embed(
                 texts=["hello"],
                 model="voyage-multimodal-3",
