@@ -443,3 +443,56 @@ class TestAingestFromLocalEdgeCases:
         assert result.total_files == 2
         # At least one succeeded
         assert result.processed >= 1
+
+
+# ---------------------------------------------------------------------------
+# TestVlmParserRouting
+# ---------------------------------------------------------------------------
+
+
+class TestVlmParserRouting:
+    """Test that parser='vlm' routes to VlmOcrParser."""
+
+    @pytest.mark.asyncio
+    async def test_vlm_parser_used_when_configured(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """When vlm_parser is set, pipeline uses it instead of rag.parse_document."""
+        from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
+
+        mock_vlm_parser = MagicMock(spec=VlmOcrParser)
+        mock_vlm_parser.parse = AsyncMock(
+            return_value=(
+                [{"type": "text", "text": "VLM extracted", "page_idx": 0}],
+                "doc-vlm-001",
+            )
+        )
+
+        pipeline = _make_pipeline(test_config)
+        pipeline.vlm_parser = mock_vlm_parser
+
+        file_path = tmp_path / "test.pdf"
+        file_path.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        result = await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+        assert result.status == "success"
+        mock_vlm_parser.parse.assert_called_once()
+        pipeline.rag.parse_document.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_parser_without_vlm(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """Without vlm_parser, pipeline uses rag.parse_document."""
+        pipeline = _make_pipeline(test_config)
+
+        file_path = tmp_path / "test.pdf"
+        file_path.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        result = await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+        assert result.status == "success"
+        pipeline.rag.parse_document.assert_called_once()

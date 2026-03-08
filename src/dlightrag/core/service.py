@@ -342,6 +342,21 @@ class RAGService:
         embedding_func = get_embedding_func(config)
         rerank_func = get_rerank_func(config)
 
+        # Create VLM OCR parser if configured
+        vlm_parser = None
+        if config.parser == "vlm":
+            if vision_func is None:
+                raise ValueError(
+                    "parser='vlm' requires a vision model. "
+                    "Set vision_model and vision_provider in config."
+                )
+            from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
+
+            vlm_parser = VlmOcrParser(
+                vision_model_func=vision_func,
+                dpi=config.page_render_dpi,
+            )
+
         # LightRAG configuration
         lightrag_kwargs: dict[str, Any] = {
             "workspace": config.workspace,
@@ -397,6 +412,7 @@ class RAGService:
             mineru_backend=mineru_backend,
             cancel_checker=self._cancel_checker,
             hash_index=hash_index,
+            vlm_parser=vlm_parser,
         )
 
         self.retrieval = RetrievalEngine(rag=self.rag, config=config)
