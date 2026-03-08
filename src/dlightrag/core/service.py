@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.core.chunking import docling_hybrid_chunking_func
 
 logger = logging.getLogger(__name__)
 
@@ -341,6 +342,21 @@ class RAGService:
         embedding_func = get_embedding_func(config)
         rerank_func = get_rerank_func(config)
 
+        # Create VLM OCR parser if configured
+        vlm_parser = None
+        if config.parser == "vlm":
+            if vision_func is None:
+                raise ValueError(
+                    "parser='vlm' requires a vision model. "
+                    "Set vision_model and vision_provider in config."
+                )
+            from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
+
+            vlm_parser = VlmOcrParser(
+                vision_model_func=vision_func,
+                dpi=config.page_render_dpi,
+            )
+
         # LightRAG configuration
         lightrag_kwargs: dict[str, Any] = {
             "workspace": config.workspace,
@@ -358,6 +374,7 @@ class RAGService:
             "doc_status_storage": config.doc_status_storage,
             "rerank_model_func": rerank_func,
             "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
+            "chunking_func": docling_hybrid_chunking_func,
             "addon_params": {
                 "entity_types": config.kg_entity_types,
                 "language": "English",
@@ -395,6 +412,7 @@ class RAGService:
             mineru_backend=mineru_backend,
             cancel_checker=self._cancel_checker,
             hash_index=hash_index,
+            vlm_parser=vlm_parser,
         )
 
         self.retrieval = RetrievalEngine(rag=self.rag, config=config)

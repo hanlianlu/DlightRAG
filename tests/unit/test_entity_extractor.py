@@ -69,16 +69,16 @@ class TestDescribePage:
 
         assert result == "Page description text"
 
-    async def test_prompt_contains_entity_types(self) -> None:
+    async def test_uses_ocr_prompt_and_system_prompt(self) -> None:
         vision_fn = AsyncMock(return_value="Some description")
-        entity_types = ["person", "organization", "location"]
-        ext = EntityExtractor(_make_lightrag(), entity_types, vision_fn)
+        ext = EntityExtractor(_make_lightrag(), ["person"], vision_fn)
 
         await ext._describe_page(MagicMock(), page_index=0)
 
-        # The first positional arg to vision_model_func is the prompt
         prompt = vision_fn.call_args[0][0]
-        assert "person, organization, location" in prompt
+        kwargs = vision_fn.call_args[1]
+        assert "structured JSON" in prompt
+        assert "system_prompt" in kwargs
 
     async def test_empty_response_returns_fallback(self) -> None:
         vision_fn = AsyncMock(return_value="")

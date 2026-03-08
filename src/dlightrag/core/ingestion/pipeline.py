@@ -27,6 +27,7 @@ from dlightrag.core.ingestion.policy import IngestionPolicy, PolicyStats
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
+    from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
     from dlightrag.sourcing.base import AsyncDataSource
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,7 @@ class IngestionPipeline:
         mineru_backend: str | None = None,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         hash_index: HashIndexProtocol | None = None,
+        vlm_parser: VlmOcrParser | None = None,
     ) -> None:
         self.rag = rag_instance
         self.config = config
@@ -98,6 +100,9 @@ class IngestionPipeline:
         self._hash_index = hash_index or HashIndex(
             self.config.working_dir_path,
         )
+
+        # VLM OCR parser (used when config.parser == "vlm")
+        self.vlm_parser = vlm_parser
 
         # Callback for cancellation checking (replaces Redis task registry)
         self._cancel_checker = cancel_checker
@@ -213,19 +218,22 @@ class IngestionPipeline:
                 await self._check_cancelled()
 
                 # Step 1: Parse document (returns raw content_list)
-                parse_method = self.config.parse_method
-
-                # Build kwargs for parse_document (backend only for MinerU parser)
-                parse_kwargs: dict[str, Any] = {}
-                if self.mineru_backend:
-                    parse_kwargs["backend"] = self.mineru_backend
-
-                content_list, doc_id = await self.rag.parse_document(
-                    file_path=str(file_path),
-                    output_dir=str(artifacts_dir),
-                    parse_method=parse_method,
-                    **parse_kwargs,
-                )
+                if self.vlm_parser:
+                    content_list, doc_id = await self.vlm_parser.parse(
+                        file_path=str(file_path),
+                        output_dir=str(artifacts_dir),
+                    )
+                else:
+                    parse_method = self.config.parse_method
+                    parse_kwargs: dict[str, Any] = {}
+                    if self.mineru_backend:
+                        parse_kwargs["backend"] = self.mineru_backend
+                    content_list, doc_id = await self.rag.parse_document(
+                        file_path=str(file_path),
+                        output_dir=str(artifacts_dir),
+                        parse_method=parse_method,
+                        **parse_kwargs,
+                    )
 
                 # Step 2: Apply policy to filter discarded/noise content
                 result = self.policy.apply(content_list)

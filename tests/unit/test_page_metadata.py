@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from dlightrag.core.ingestion.page_metadata import (
     build_page_boundary_map,
     find_page_for_offset,
@@ -347,3 +349,46 @@ class TestInjectPageIdxToChunks:
         updated = await inject_page_idx_to_chunks(lightrag, "doc-1", content_list)
 
         assert updated == 0
+
+
+# ---------------------------------------------------------------------------
+# TestInjectPageIdxWithRawContent
+# ---------------------------------------------------------------------------
+
+
+class TestInjectPageIdxWithRawContent:
+    """Test page_idx injection when chunks have _raw_content (from HybridChunker)."""
+
+    @pytest.mark.asyncio
+    async def test_uses_raw_content_for_matching(self) -> None:
+        """When chunk has _raw_content, use it for offset matching instead of content."""
+        content_list = [
+            {"type": "text", "text": "Page one text", "page_idx": 0},
+            {"type": "text", "text": "Page two text", "page_idx": 1},
+        ]
+        chunk_data_001 = {
+            "content": "Introduction\nPage one text",
+            "_raw_content": "Page one text",
+            "chunk_order_index": 0,
+        }
+        chunk_data_002 = {
+            "content": "Methods\nPage two text",
+            "_raw_content": "Page two text",
+            "chunk_order_index": 1,
+        }
+
+        lightrag = MagicMock()
+        lightrag.text_chunks = MagicMock()
+        lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[chunk_data_001, chunk_data_002])
+        lightrag.text_chunks.upsert = AsyncMock()
+        lightrag.doc_status = MagicMock()
+        lightrag.doc_status.get_by_id = AsyncMock(
+            return_value={"chunks_list": ["chunk-001", "chunk-002"]}
+        )
+
+        updated = await inject_page_idx_to_chunks(lightrag, "doc-001", content_list)
+        assert updated == 2
+
+        upserted = lightrag.text_chunks.upsert.call_args[0][0]
+        assert upserted["chunk-001"]["page_idx"] == 0
+        assert upserted["chunk-002"]["page_idx"] == 1
