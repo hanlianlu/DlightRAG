@@ -124,8 +124,7 @@ class TestRespectsChunkTokenSize:
 
     def test_respects_chunk_token_size(self) -> None:
         long_text = "\n\n".join(
-            f"Paragraph {i} with several words to fill up the content block."
-            for i in range(50)
+            f"Paragraph {i} with several words to fill up the content block." for i in range(50)
         )
         small_limit = 30
         result = docling_hybrid_chunking_func(
@@ -191,8 +190,7 @@ class TestChunkOrderIndicesSequential:
 
     def test_chunk_order_indices_sequential(self) -> None:
         long_text = "\n\n".join(
-            f"Paragraph number {i} has enough words to be meaningful content."
-            for i in range(20)
+            f"Paragraph number {i} has enough words to be meaningful content." for i in range(20)
         )
         result = docling_hybrid_chunking_func(
             tokenizer=_word_tokenizer(),

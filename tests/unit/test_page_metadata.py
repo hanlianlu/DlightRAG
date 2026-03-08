@@ -379,9 +379,7 @@ class TestInjectPageIdxWithRawContent:
 
         lightrag = MagicMock()
         lightrag.text_chunks = MagicMock()
-        lightrag.text_chunks.get_by_ids = AsyncMock(
-            return_value=[chunk_data_001, chunk_data_002]
-        )
+        lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[chunk_data_001, chunk_data_002])
         lightrag.text_chunks.upsert = AsyncMock()
         lightrag.doc_status = MagicMock()
         lightrag.doc_status.get_by_id = AsyncMock(

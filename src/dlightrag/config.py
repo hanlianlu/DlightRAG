@@ -357,8 +357,9 @@ class DlightragConfig(BaseSettings):
         return self.ingestion_model
 
     @property
-    def vision_model_name(self) -> str | None:
-        return self.vision_model
+    def vision_model_name(self) -> str:
+        """Resolve vision model. Falls back to chat_model_name."""
+        return self.vision_model or self.chat_model_name
 
     @property
     def effective_embedding_provider(self) -> str:
