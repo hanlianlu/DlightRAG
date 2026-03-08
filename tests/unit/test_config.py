@@ -300,6 +300,12 @@ class TestDlightragConfig:
         assert os.environ.get("QDRANT_URL") == "http://qdrant:6333"
         assert os.environ.get("QDRANT_API_KEY") == "qdrant-secret"
 
+    def test_vlm_parser_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """parser='vlm' should be a valid config value."""
+        monkeypatch.setenv("DLIGHTRAG_OPENAI_API_KEY", "test-key")
+        config = DlightragConfig(parser="vlm")  # type: ignore[call-arg]
+        assert config.parser == "vlm"
+
     def test_milvus_env_bridge_full(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test Milvus env vars are fully bridged."""
         for key in (
