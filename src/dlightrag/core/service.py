@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.core.chunking import docling_hybrid_chunking_func
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +359,7 @@ class RAGService:
             "doc_status_storage": config.doc_status_storage,
             "rerank_model_func": rerank_func,
             "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
+            "chunking_func": docling_hybrid_chunking_func,
             "addon_params": {
                 "entity_types": config.kg_entity_types,
                 "language": "English",
