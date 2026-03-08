@@ -67,13 +67,13 @@ RULES:
 # ---------------------------------------------------------------------------
 
 
-def _parse_vlm_response(raw: str) -> list[dict]:
+def _parse_vlm_response(raw: str) -> list[dict] | None:
     """Parse VLM response into a list of block dicts.
 
     Strategy:
     1. Try ``json.loads(raw)`` directly -- expect ``{"blocks": [...]}``.
     2. Fallback: regex-extract the first ``{...}`` blob and parse it.
-    3. If all parsing fails, return an empty list.
+    3. If all parsing fails, return ``None`` (distinct from empty ``[]``).
     """
     # Attempt 1: direct parse
     try:
@@ -93,7 +93,7 @@ def _parse_vlm_response(raw: str) -> list[dict]:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    return []
+    return None
 
 
 def _blocks_to_content_list(blocks: list[dict], page_idx: int) -> list[dict]:
@@ -258,4 +258,12 @@ class VlmOcrParser:
 
         # Parse and convert
         blocks = _parse_vlm_response(raw)
-        return _blocks_to_content_list(blocks, page_idx)
+        if blocks is None and raw and raw.strip():
+            # Fallback: use raw response as single text block
+            logger.warning(
+                "VLM OCR: could not parse structured output for page %d, "
+                "falling back to raw text",
+                page_idx,
+            )
+            return [{"type": "text", "text": raw.strip(), "page_idx": page_idx}]
+        return _blocks_to_content_list(blocks or [], page_idx)

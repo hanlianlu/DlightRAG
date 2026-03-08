@@ -186,12 +186,12 @@ class TestInvalidJsonFallback:
 
         # Should have the fallback text entry + page image entry
         text_entries = [e for e in content_list if e.get("type") == "text"]
-        assert len(text_entries) == 0
+        assert len(text_entries) == 1
+        assert "not valid JSON" in text_entries[0]["text"]
 
-        # Only the page image entry should remain
-        assert len(content_list) == 1
-        assert content_list[0]["type"] == "image"
-        assert content_list[0]["img_path"] is not None
+        # Page image entry should also be present
+        img_entries = [e for e in content_list if e.get("type") == "image"]
+        assert len(img_entries) == 1
 
 
 class TestEmptyPage:
