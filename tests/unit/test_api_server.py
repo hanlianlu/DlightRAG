@@ -522,7 +522,7 @@ class TestAnswerStreamMode:
         events = [json_mod.loads(line.removeprefix("data: ")) for line in lines]
         error_events = [e for e in events if e["type"] == "error"]
         assert len(error_events) == 1
-        assert "LLM exploded" in error_events[0]["message"]
+        assert "Internal server error" in error_events[0]["message"]
 
     async def test_stream_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
