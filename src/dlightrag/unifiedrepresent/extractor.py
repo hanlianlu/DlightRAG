@@ -113,29 +113,35 @@ class EntityExtractor:
         ]
 
     async def _describe_page(self, image: Any, page_index: int) -> str:
-        """Call VLM to generate text description of a page image."""
-        import io
-
-        from dlightrag.unifiedrepresent.prompts import PAGE_DESCRIPTION_PROMPT
-
-        prompt = PAGE_DESCRIPTION_PROMPT.format(entity_types=", ".join(self.entity_types))
+        """Call VLM to extract structured content and convert to text."""
+        from dlightrag.core.vlm_ocr import (
+            OCR_SYSTEM_PROMPT,
+            OCR_USER_PROMPT,
+            blocks_to_text,
+            image_to_png_bytes,
+            parse_vlm_response,
+        )
 
         if self.vision_model_func is None:
             raise RuntimeError("vision_model_func is required but was not set")
 
-        # Convert PIL Image to PNG bytes — vision_model_func expects image_data=bytes
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        image_bytes = buf.getvalue()
+        image_bytes = image_to_png_bytes(image)
 
         async with self._vlm_semaphore:
-            description = await self.vision_model_func(
-                prompt,
+            raw = await self.vision_model_func(
+                OCR_USER_PROMPT,
                 image_data=image_bytes,
+                system_prompt=OCR_SYSTEM_PROMPT,
             )
 
-        if not description or not description.strip():
-            logger.warning("VLM returned empty description for page %d", page_index)
+        if not raw or not raw.strip():
+            logger.warning("VLM returned empty response for page %d", page_index)
             return f"[Page {page_index + 1}: no content extracted]"
 
-        return description.strip()
+        blocks = parse_vlm_response(raw)
+        if blocks is None:
+            # Could not parse structured JSON — use raw text as fallback
+            return raw.strip()
+
+        text = blocks_to_text(blocks)
+        return text or f"[Page {page_index + 1}: no content extracted]"

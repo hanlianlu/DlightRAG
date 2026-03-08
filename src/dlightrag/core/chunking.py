@@ -15,12 +15,13 @@ import logging
 import re
 from typing import Any
 
-from docling.chunking import HybridChunker
+from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 from docling_core.transforms.chunker.tokenizer.huggingface import (
     HuggingFaceTokenizer,
     get_default_tokenizer,
 )
-from docling_core.types.doc import DocItemLabel, DoclingDocument
+from docling_core.types.doc.document import DoclingDocument
+from docling_core.types.doc.labels import DocItemLabel
 
 logger = logging.getLogger(__name__)
 

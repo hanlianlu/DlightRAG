@@ -131,11 +131,7 @@ class TestFigureEntries:
 
     async def test_figure_entries_have_no_img_path(self, tmp_path: Path) -> None:
         vlm_response = json.dumps(
-            {
-                "blocks": [
-                    {"type": "figure", "description": "A bar chart showing revenue."}
-                ]
-            }
+            {"blocks": [{"type": "figure", "description": "A bar chart showing revenue."}]}
         )
         parser = _make_parser(vlm_response)
         output_dir = str(tmp_path / "out")
@@ -144,9 +140,7 @@ class TestFigureEntries:
             content_list, _ = await parser.parse("/fake/doc.pdf", output_dir)
 
         figure_entries = [
-            e
-            for e in content_list
-            if e.get("type") == "image" and e.get("img_path") is None
+            e for e in content_list if e.get("type") == "image" and e.get("img_path") is None
         ]
         assert len(figure_entries) == 1
         assert figure_entries[0]["image_caption"] == ["A bar chart showing revenue."]
@@ -165,9 +159,7 @@ class TestPageImageEntry:
             content_list, _ = await parser.parse("/fake/doc.pdf", output_dir)
 
         page_img_entries = [
-            e
-            for e in content_list
-            if e.get("type") == "image" and e.get("img_path") is not None
+            e for e in content_list if e.get("type") == "image" and e.get("img_path") is not None
         ]
         assert len(page_img_entries) == 1
         assert "page_0.png" in page_img_entries[0]["img_path"]
@@ -215,9 +207,7 @@ class TestMultiPage:
     """Multi-page documents produce entries with correct page_idx."""
 
     async def test_multi_page(self, tmp_path: Path) -> None:
-        page0_response = json.dumps(
-            {"blocks": [{"type": "text", "text": "Page zero content."}]}
-        )
+        page0_response = json.dumps({"blocks": [{"type": "text", "text": "Page zero content."}]})
         page1_response = json.dumps(
             {"blocks": [{"type": "heading", "level": 1, "text": "Page One Title"}]}
         )
@@ -257,9 +247,7 @@ class TestVlmOcrEndToEnd:
 
         parser = _make_parser(vlm_response)
         with _patch_renderer(parser):
-            content_list, _ = await parser.parse(
-                str(tmp_path / "test.pdf"), str(tmp_path / "out")
-            )
+            content_list, _ = await parser.parse(str(tmp_path / "test.pdf"), str(tmp_path / "out"))
 
         policy = IngestionPolicy()
         result = policy.apply(content_list)

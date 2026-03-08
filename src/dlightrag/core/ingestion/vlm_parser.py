@@ -8,92 +8,21 @@ RAGAnything-compatible ``content_list``.
 
 from __future__ import annotations
 
-import io
-import json
 import logging
-import re
 from collections.abc import Callable
 from pathlib import Path
 
 from lightrag.utils import compute_mdhash_id
 
+from dlightrag.core.vlm_ocr import (
+    OCR_SYSTEM_PROMPT,
+    OCR_USER_PROMPT,
+    image_to_png_bytes,
+    parse_vlm_response,
+)
 from dlightrag.unifiedrepresent.renderer import PageRenderer
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Prompts
-# ---------------------------------------------------------------------------
-
-_SYSTEM_PROMPT = (
-    "You are a document OCR expert. You extract ALL content from document page "
-    "images into structured JSON with perfect accuracy. You never hallucinate or "
-    "invent text that is not visible in the image. You preserve the original "
-    "language — never translate."
-)
-
-_USER_PROMPT = """\
-Extract all content from this document page into structured JSON.
-
-Return a JSON object: {"blocks": [...]} where each block is one of:
-
-1. heading — {"type": "heading", "level": 1-4, "text": "..."}
-   (1=title, 2=section, 3=subsection, 4=sub-subsection)
-
-2. text — {"type": "text", "text": "..."}
-   (Use Markdown: - for lists, > for quotes, **bold**, *italic*)
-
-3. table — {"type": "table", "html": "<table>...</table>"}
-   (Use <th> for headers. colspan/rowspan as needed.
-    Do NOT use <br> in cells. Do NOT use Markdown table syntax.)
-
-4. formula — {"type": "formula", "latex": "..."}
-   (Use \\( \\) for inline, \\[ \\] for block math.
-    Do NOT use $ delimiters or Unicode math symbols.)
-
-5. figure — {"type": "figure", "description": "..."}
-   (Describe content, data trends, labels, key information.)
-
-RULES:
-- Output blocks in natural reading order.
-- Extract ALL visible text including headers, footers, captions, footnotes.
-- ACCURACY IS CRITICAL: double-check numerical values. Watch for 6<->8, 5<->6, 0<->O, 1<->l.
-- Empty page: return {"blocks": []}.
-- Return ONLY the JSON object. No explanation, no markdown fences."""
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse_vlm_response(raw: str) -> list[dict] | None:
-    """Parse VLM response into a list of block dicts.
-
-    Strategy:
-    1. Try ``json.loads(raw)`` directly -- expect ``{"blocks": [...]}``.
-    2. Fallback: regex-extract the first ``{...}`` blob and parse it.
-    3. If all parsing fails, return ``None`` (distinct from empty ``[]``).
-    """
-    # Attempt 1: direct parse
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict) and "blocks" in data:
-            return data["blocks"]
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    # Attempt 2: regex extract outermost { ... }
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if match:
-        try:
-            data = json.loads(match.group())
-            if isinstance(data, dict) and "blocks" in data:
-                return data["blocks"]
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    return None
 
 
 def _blocks_to_content_list(blocks: list[dict], page_idx: int) -> list[dict]:
@@ -179,9 +108,7 @@ class VlmOcrParser:
         self.vision_model_func = vision_model_func
         self.renderer = PageRenderer(dpi=dpi)
 
-    async def parse(
-        self, file_path: str, output_dir: str
-    ) -> tuple[list[dict], str]:
+    async def parse(self, file_path: str, output_dir: str) -> tuple[list[dict], str]:
         """Parse a document file into a RAGAnything content_list.
 
         Parameters
@@ -245,24 +172,21 @@ class VlmOcrParser:
             Content-list entries extracted from the page.
         """
         # Convert PIL Image to PNG bytes
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        image_bytes = buf.getvalue()
+        image_bytes = image_to_png_bytes(image)
 
         # Call vision model
         raw = await self.vision_model_func(
-            _USER_PROMPT,
+            OCR_USER_PROMPT,
             image_data=image_bytes,
-            system_prompt=_SYSTEM_PROMPT,
+            system_prompt=OCR_SYSTEM_PROMPT,
         )
 
         # Parse and convert
-        blocks = _parse_vlm_response(raw)
+        blocks = parse_vlm_response(raw)
         if blocks is None and raw and raw.strip():
             # Fallback: use raw response as single text block
             logger.warning(
-                "VLM OCR: could not parse structured output for page %d, "
-                "falling back to raw text",
+                "VLM OCR: could not parse structured output for page %d, falling back to raw text",
                 page_idx,
             )
             return [{"type": "text", "text": raw.strip(), "page_idx": page_idx}]
