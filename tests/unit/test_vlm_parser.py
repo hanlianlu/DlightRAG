@@ -236,3 +236,32 @@ class TestMultiPage:
         p1 = [e for e in content_list if e.get("page_idx") == 1]
         assert any(e.get("text") == "# Page One Title" for e in p1)
         assert any(e.get("img_path") is not None for e in p1)
+
+
+class TestVlmOcrEndToEnd:
+    """End-to-end: VLM parser output survives IngestionPolicy filtering."""
+
+    async def test_content_list_passes_policy_filter(self, tmp_path: Path) -> None:
+        from dlightrag.core.ingestion.policy import IngestionPolicy
+
+        vlm_response = json.dumps(
+            {
+                "blocks": [
+                    {"type": "heading", "level": 1, "text": "Report"},
+                    {"type": "text", "text": "Summary paragraph."},
+                    {"type": "table", "html": "<table><tr><td>Data</td></tr></table>"},
+                    {"type": "figure", "description": "Revenue chart."},
+                ]
+            }
+        )
+
+        parser = _make_parser(vlm_response)
+        with _patch_renderer(parser):
+            content_list, _ = await parser.parse(
+                str(tmp_path / "test.pdf"), str(tmp_path / "out")
+            )
+
+        policy = IngestionPolicy()
+        result = policy.apply(content_list)
+        assert result.stats.indexed > 0
+        assert result.stats.dropped_by_type == 0
