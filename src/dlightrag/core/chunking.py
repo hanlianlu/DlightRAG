@@ -16,12 +16,16 @@ import re
 from typing import Any
 
 from docling.chunking import HybridChunker
+from docling_core.transforms.chunker.tokenizer.huggingface import (
+    HuggingFaceTokenizer,
+    get_default_tokenizer,
+)
 from docling_core.types.doc import DocItemLabel, DoclingDocument
 
 logger = logging.getLogger(__name__)
 
 # Regex matching markdown headings (# through ####).
-_HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$")
+_HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
 
 
 def _build_docling_document(content: str) -> DoclingDocument:
@@ -85,7 +89,11 @@ def docling_hybrid_chunking_func(
         return []
 
     doc = _build_docling_document(content)
-    chunker = HybridChunker(max_tokens=chunk_token_size)
+    tok = HuggingFaceTokenizer(
+        tokenizer=get_default_tokenizer().tokenizer,
+        max_tokens=chunk_token_size,
+    )
+    chunker = HybridChunker(tokenizer=tok)
 
     results: list[dict[str, Any]] = []
     for idx, chunk in enumerate(chunker.chunk(doc)):
