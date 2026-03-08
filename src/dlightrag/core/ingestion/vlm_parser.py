@@ -29,7 +29,7 @@ _SYSTEM_PROMPT = (
     "You are a document OCR expert. You extract ALL content from document page "
     "images into structured JSON with perfect accuracy. You never hallucinate or "
     "invent text that is not visible in the image. You preserve the original "
-    "language \u2014 never translate."
+    "language — never translate."
 )
 
 _USER_PROMPT = """\
