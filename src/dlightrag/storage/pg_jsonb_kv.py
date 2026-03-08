@@ -66,6 +66,11 @@ class PGJsonbKVStorage(BaseKVStorage):
 
     _pool: Any = field(default=None, repr=False)
 
+    def _get_pool(self) -> Any:
+        if self._pool is None:
+            raise RuntimeError("PGJsonbKVStorage not initialized — call initialize() first")
+        return self._pool
+
     async def initialize(self) -> None:
         if self._pool is None:
             from lightrag.kg.postgres_impl import ClientManager
@@ -75,7 +80,7 @@ class PGJsonbKVStorage(BaseKVStorage):
         await self._ensure_table()
 
     async def _ensure_table(self) -> None:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             await conn.execute(_CREATE_TABLE)
 
     async def finalize(self) -> None:
@@ -91,11 +96,11 @@ class PGJsonbKVStorage(BaseKVStorage):
         if not data:
             return
         rows = [(self.workspace, self.namespace, k, json.dumps(v)) for k, v in data.items()]
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             await conn.executemany(_UPSERT, rows)
 
     async def get_by_id(self, id: str) -> dict[str, Any] | None:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             row = await conn.fetchrow(_GET_BY_ID, self.workspace, self.namespace, id)
             if row is None:
                 return None
@@ -104,7 +109,7 @@ class PGJsonbKVStorage(BaseKVStorage):
     async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any] | None]:
         if not ids:
             return []
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             rows = await conn.fetch(_GET_BY_IDS, self.workspace, self.namespace, ids)
         lookup = {row["id"]: row["data"] for row in rows}
         return [lookup.get(id_) for id_ in ids]
@@ -112,7 +117,7 @@ class PGJsonbKVStorage(BaseKVStorage):
     async def filter_keys(self, keys: set[str]) -> set[str]:
         if not keys:
             return set()
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             rows = await conn.fetch(_FILTER_EXISTING, self.workspace, self.namespace, list(keys))
         existing = {row["id"] for row in rows}
         return keys - existing
@@ -120,16 +125,16 @@ class PGJsonbKVStorage(BaseKVStorage):
     async def delete(self, ids: list[str]) -> None:
         if not ids:
             return
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             await conn.execute(_DELETE, self.workspace, self.namespace, ids)
 
     async def is_empty(self) -> bool:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             row = await conn.fetchrow(_IS_EMPTY, self.workspace, self.namespace)
             return row is None
 
     async def drop(self) -> dict[str, str]:
-        async with self._pool.acquire() as conn:
+        async with self._get_pool().acquire() as conn:
             result = await conn.execute(_DROP, self.workspace, self.namespace)
         logger.info("Dropped %s/%s: %s", self.workspace, self.namespace, result)
-        return {"status": "dropped", "namespace": self.namespace}
+        return {"status": "success", "message": "data dropped"}
