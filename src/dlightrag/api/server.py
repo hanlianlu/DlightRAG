@@ -218,7 +218,8 @@ async def answer(body: AnswerRequest, request: Request):
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception as exc:
             logger.exception("Error during SSE streaming")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            # Return a generic error message to the client to avoid exposing internal details.
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Internal server error during streaming'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),
