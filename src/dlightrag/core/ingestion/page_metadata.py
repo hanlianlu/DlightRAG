@@ -148,15 +148,17 @@ async def inject_page_idx_to_chunks(
     search_pos = 0
 
     for chunk_id, chunk_data in indexed:
-        content = chunk_data.get("content", "")
-        if not content:
+        # Prefer _raw_content (from HybridChunker) for offset matching;
+        # fall back to content for backward compatibility.
+        match_text = chunk_data.get("_raw_content") or chunk_data.get("content", "")
+        if not match_text:
             continue
 
         # Find chunk's start position in merged text (sequential search)
-        pos = merged_text.find(content, search_pos)
+        pos = merged_text.find(match_text, search_pos)
         if pos == -1:
             # Fallback: search from beginning (handles overlap edge cases)
-            pos = merged_text.find(content)
+            pos = merged_text.find(match_text)
         if pos == -1:
             continue
 
