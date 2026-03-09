@@ -210,8 +210,10 @@ class TestAingest:
         vc_arg = visual_chunks.upsert.call_args[0][0]
         assert "chunk-aaa" in vc_arg
         assert "image_data" in vc_arg["chunk-aaa"]
-        assert vc_arg["chunk-aaa"]["doc_id"] == "doc-test"
+        assert vc_arg["chunk-aaa"]["full_doc_id"] == "doc-test"
+        assert vc_arg["chunk-aaa"]["file_path"] == "/fake/doc.pdf"
         assert vc_arg["chunk-aaa"]["doc_title"] == "Test Doc"
+        assert "content" not in vc_arg["chunk-aaa"]
 
         # Verify _upsert_with_visual_vectors called
         engine._upsert_with_visual_vectors.assert_awaited_once()

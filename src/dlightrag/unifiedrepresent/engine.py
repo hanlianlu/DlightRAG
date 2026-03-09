@@ -174,9 +174,8 @@ class UnifiedRepresentEngine:
             visual_data[chunk_id] = {
                 "image_data": image_b64,
                 "page_index": page_idx,
-                "doc_id": doc_id,
-                "source_file": str(path),
-                "content": info["content"],  # VLM text for fallback
+                "full_doc_id": doc_id,
+                "file_path": str(path),
                 # Document metadata from render
                 "doc_title": render_result.metadata.get("title", ""),
                 "doc_author": render_result.metadata.get("author", ""),
