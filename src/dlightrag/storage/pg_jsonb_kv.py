@@ -1,9 +1,14 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Generic JSONB-based KV storage for PostgreSQL.
 
-Implements LightRAG's BaseKVStorage with a single generic table, avoiding
-PGKVStorage's hardcoded namespace handling that breaks custom namespaces
-like ``visual_chunks``.
+LightRAG's ``PGKVStorage`` maps namespaces to 7 hardcoded tables via
+``NAMESPACE_TABLE_MAP``. Custom namespaces (e.g. ``visual_chunks``) hit
+three failure modes: ``KeyError`` in ``get_by_id`` (missing SQL template),
+silent no-op in ``upsert`` (no matching elif branch), and SQL syntax errors
+in ``filter_keys``/``delete`` (``namespace_to_table_name`` returns None).
+
+This module sidesteps that with a single generic table keyed by
+``(workspace, namespace, id)`` and a JSONB data column.
 """
 
 from __future__ import annotations

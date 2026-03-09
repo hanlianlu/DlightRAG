@@ -69,7 +69,10 @@ class DlightragConfig(BaseSettings):
         default=300, description="HNSW ef_construction (index build quality)"
     )
     pg_hnsw_ef_search: int = Field(
-        default=256, description="HNSW ef_search (query exploration, pgvector default is 40)"
+        default=256,
+        description="HNSW ef_search (query-time exploration depth, pgvector default is 40). "
+        "Bridged via POSTGRES_SERVER_SETTINGS because LightRAG's POSTGRES_HNSW_EF "
+        "is actually ef_construction despite the misleading name.",
     )
 
     # ===== Storage Backends (configurable, default PostgreSQL) =====
@@ -428,13 +431,18 @@ class DlightragConfig(BaseSettings):
                 "POSTGRES_WORKSPACE": self.workspace,
                 "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
                 "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
+                # NB: LightRAG's POSTGRES_HNSW_EF is actually ef_construction
+                # (used in CREATE INDEX ... WITH (ef_construction = ...)),
+                # not ef_search. The name is misleading in LightRAG.
                 "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
             }
             for key, value in pg_env_map.items():
                 if key not in os.environ:
                     os.environ[key] = value
 
-            # Inject hnsw.ef_search via POSTGRES_SERVER_SETTINGS
+            # ef_search is a session-level GUC, not an index build param.
+            # LightRAG has no native support for it, so we inject it via
+            # POSTGRES_SERVER_SETTINGS → asyncpg create_pool(server_settings=...).
             if "POSTGRES_SERVER_SETTINGS" not in os.environ:
                 os.environ["POSTGRES_SERVER_SETTINGS"] = f"hnsw.ef_search={self.pg_hnsw_ef_search}"
 
