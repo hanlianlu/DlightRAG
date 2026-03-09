@@ -100,6 +100,7 @@ class VisualRetriever:
 
         # Phase 2: Visual resolution
         chunk_id_list = list(chunk_ids)
+        logger.info("[Visual Resolve] Looking up %d chunk_ids in visual_chunks", len(chunk_id_list))
         visual_data = await self.visual_chunks.get_by_ids(chunk_id_list)
         # visual_data is a list (same order as input); filter out None/missing.
         # Some KV backends (e.g., PG) may return JSONB as raw strings — parse them.
@@ -115,6 +116,7 @@ class VisualRetriever:
                     continue
             if isinstance(vd, dict):
                 resolved[cid] = vd
+        logger.info("[Visual Resolve] Resolved %d/%d chunks", len(resolved), len(chunk_id_list))
 
         # Phase 3: Visual reranking (optional)
         if self.rerank_backend == "llm" and self.vision_model_func and resolved:
@@ -122,8 +124,9 @@ class VisualRetriever:
         elif self.rerank_base_url and self.rerank_model and resolved:
             resolved = await self._visual_rerank(query, resolved, chunk_top_k)
         else:
-            # No reranking — just take top chunk_top_k by insertion order
             resolved = dict(list(resolved.items())[:chunk_top_k])
+            logger.info("[Visual Rerank] Skipped (backend=%s, vision=%s, resolved=%d)",
+                        self.rerank_backend, self.vision_model_func is not None, len(resolved))
 
         # Build return dict
         sources: dict[str, dict] = {}

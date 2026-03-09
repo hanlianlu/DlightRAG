@@ -345,6 +345,8 @@ def main() -> None:
         load_dotenv(args.env_file, override=True)
 
     config = get_config()
+    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
+
     uvicorn.run(
         "dlightrag.api.server:app",
         host=config.api_host,
