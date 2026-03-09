@@ -71,14 +71,17 @@ class VisualRetriever:
         )
         result = await self.lightrag.aquery_data(query, param=param)
 
-        # Extract chunk_ids from result
+        # Extract chunk_ids and text content from result
         data = result.get("data", {})
+        chunk_text: dict[str, str] = {}
         chunk_ids: set[str] = set()
 
         # From chunks section
         for chunk in data.get("chunks", []):
-            if chunk.get("chunk_id"):
-                chunk_ids.add(chunk["chunk_id"])
+            cid = chunk.get("chunk_id")
+            if cid:
+                chunk_ids.add(cid)
+                chunk_text[cid] = chunk.get("content", "")
 
         # From entities source_id
         for entity in data.get("entities", []):
@@ -122,7 +125,7 @@ class VisualRetriever:
         if self.rerank_backend == "llm" and self.vision_model_func and resolved:
             resolved = await self._llm_visual_rerank(query, resolved, chunk_top_k)
         elif self.rerank_base_url and self.rerank_model and resolved:
-            resolved = await self._visual_rerank(query, resolved, chunk_top_k)
+            resolved = await self._visual_rerank(query, resolved, chunk_top_k, chunk_text)
         else:
             resolved = dict(list(resolved.items())[:chunk_top_k])
             logger.info("[Visual Rerank] Skipped (backend=%s, vision=%s, resolved=%d)",
@@ -132,13 +135,13 @@ class VisualRetriever:
         sources: dict[str, dict] = {}
         media: list[dict] = []
         for cid, vd in resolved.items():
-            doc_id = vd.get("doc_id", "")
+            doc_id = vd.get("full_doc_id", "")
             if doc_id not in sources:
                 sources[doc_id] = {
                     "doc_id": doc_id,
                     "title": vd.get("doc_title", ""),
                     "author": vd.get("doc_author", ""),
-                    "path": vd.get("source_file", ""),
+                    "path": vd.get("file_path", ""),
                 }
             media.append(
                 {
@@ -158,7 +161,7 @@ class VisualRetriever:
                         "reference_id": cid,
                         "page_index": vd.get("page_index"),
                         "relevance_score": vd.get("relevance_score"),
-                        "content": vd.get("content", ""),
+                        "content": chunk_text.get(cid, ""),
                     }
                     for cid, vd in resolved.items()
                 ],
@@ -301,6 +304,7 @@ class VisualRetriever:
         query: str,
         resolved: dict[str, dict],
         top_k: int,
+        chunk_text: dict[str, str] | None = None,
     ) -> dict[str, dict]:
         """Rerank resolved visual chunks using multimodal reranker API.
 
@@ -323,7 +327,7 @@ class VisualRetriever:
                 )
             else:
                 # Fallback to text content if no image
-                documents.append(vd.get("content", ""))
+                documents.append(chunk_text.get(cid, "") if chunk_text else "")
 
         if self.rerank_base_url is None:
             raise RuntimeError("rerank_base_url is required for visual reranking")

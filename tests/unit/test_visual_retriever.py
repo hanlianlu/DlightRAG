@@ -68,16 +68,16 @@ def _make_visual_data() -> list[dict | None]:
         {
             "image_data": _TINY_PNG_B64,
             "page_index": 0,
-            "doc_id": "doc-1",
+            "full_doc_id": "doc-1",
+            "file_path": "/test/doc.pdf",
             "doc_title": "Test",
-            "content": "text abc",
         },
         {
             "image_data": _TINY_PNG_B64,
             "page_index": 1,
-            "doc_id": "doc-1",
+            "full_doc_id": "doc-1",
+            "file_path": "/test/doc.pdf",
             "doc_title": "Test",
-            "content": "text def",
         },
     ]
 
@@ -236,9 +236,9 @@ class TestRetrieve:
                 {
                     "image_data": _TINY_PNG_B64,
                     "page_index": 0,
-                    "doc_id": "doc-1",
+                    "full_doc_id": "doc-1",
+                    "file_path": "/test/doc.pdf",
                     "doc_title": "Test",
-                    "content": "text",
                 },
                 None,  # chunk-def not found
             ]
@@ -269,9 +269,9 @@ class TestRetrieveNoRerank:
             {
                 "image_data": f"img{i}",
                 "page_index": i,
-                "doc_id": "doc-1",
+                "full_doc_id": "doc-1",
+                "file_path": "/test/doc.pdf",
                 "doc_title": "Test",
-                "content": f"text {i}",
             }
             for i in range(5)
         ]
@@ -339,9 +339,9 @@ class TestVisualRerank:
         )
 
         resolved = {
-            "c-0": {"image_data": "img0", "content": "text0"},
-            "c-1": {"image_data": "img1", "content": "text1"},
-            "c-2": {"image_data": "img2", "content": "text2"},
+            "c-0": {"image_data": "img0"},
+            "c-1": {"image_data": "img1"},
+            "c-2": {"image_data": "img2"},
         }
 
         mock_response = MagicMock()
@@ -377,9 +377,9 @@ class TestVisualRerank:
         )
 
         resolved = {
-            "c-0": {"image_data": "img0", "content": "text0"},
-            "c-1": {"image_data": "img1", "content": "text1"},
-            "c-2": {"image_data": "img2", "content": "text2"},
+            "c-0": {"image_data": "img0"},
+            "c-1": {"image_data": "img1"},
+            "c-2": {"image_data": "img2"},
         }
 
         mock_response = MagicMock()
@@ -410,9 +410,9 @@ class TestVisualRerank:
         )
 
         resolved = {
-            "c-0": {"content": "text0"},
-            "c-1": {"content": "text1"},
-            "c-2": {"content": "text2"},
+            "c-0": {},
+            "c-1": {},
+            "c-2": {},
         }
 
         with patch("httpx.AsyncClient") as mock_client_cls:
@@ -427,6 +427,42 @@ class TestVisualRerank:
         # Fallback: first top_k items by insertion order
         assert len(result) == 2
         assert list(result.keys()) == ["c-0", "c-1"]
+
+    async def test_text_fallback_from_chunk_text(self) -> None:
+        """Chunks without image_data should use chunk_text for rerank documents."""
+        retriever = _make_retriever(
+            rerank_model="reranker-v1",
+            rerank_base_url="http://localhost:8080",
+        )
+
+        resolved = {
+            "c-0": {"image_data": "img0"},
+            "c-1": {},  # no image — should fall back to chunk_text
+        }
+        chunk_text = {"c-1": "text description of page"}
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "results": [
+                {"index": 0, "relevance_score": 0.9},
+                {"index": 1, "relevance_score": 0.7},
+            ],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client.post.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_client_cls.return_value = mock_client
+
+            await retriever._visual_rerank("query", resolved, top_k=2, chunk_text=chunk_text)
+
+        payload = mock_client.post.call_args[1]["json"]
+        docs = payload["documents"]
+        assert docs[0]["type"] == "image_url"  # c-0 has image
+        assert docs[1] == "text description of page"  # c-1 falls back to text
 
     async def test_empty_resolved_returns_empty(self) -> None:
         retriever = _make_retriever(
@@ -444,7 +480,7 @@ class TestVisualRerank:
         )
 
         resolved = {
-            "c-0": {"image_data": "imgdata", "content": "text0"},
+            "c-0": {"image_data": "imgdata"},
         }
 
         mock_response = MagicMock()
@@ -521,9 +557,9 @@ class TestLlmVisualRerank:
 
         img = _TINY_PNG_B64
         resolved = {
-            "chunk-a": {"image_data": img, "content": "page a"},
-            "chunk-b": {"image_data": img, "content": "page b"},
-            "chunk-c": {"image_data": img, "content": "page c"},
+            "chunk-a": {"image_data": img},
+            "chunk-b": {"image_data": img},
+            "chunk-c": {"image_data": img},
         }
 
         ret = _make_retriever(
@@ -541,7 +577,7 @@ class TestLlmVisualRerank:
 
     async def test_missing_image_data_scores_zero(self) -> None:
         resolved = {
-            "chunk-a": {"content": "no image"},  # no image_data key
+            "chunk-a": {},  # no image_data key
         }
         vision_func = AsyncMock(return_value="8")
         ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
@@ -552,7 +588,7 @@ class TestLlmVisualRerank:
 
     async def test_vision_error_scores_zero(self) -> None:
         resolved = {
-            "chunk-a": {"image_data": _TINY_PNG_B64, "content": "page"},
+            "chunk-a": {"image_data": _TINY_PNG_B64},
         }
         vision_func = AsyncMock(side_effect=RuntimeError("API timeout"))
         ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
