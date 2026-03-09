@@ -151,7 +151,7 @@ DLIGHTRAG_VISION_MODEL=qwen3-vl-32b
 
 | Variable | Default | Description |
 |---|---|---|
-| `DLIGHTRAG_LLM_PROVIDER` | `openai` | `openai`, `azure_openai`, `anthropic`, `google_gemini`, `qwen`, `minimax`, `xinference`, `openrouter` |
+| `DLIGHTRAG_LLM_PROVIDER` | `openai` | `openai`, `azure_openai`, `anthropic`, `google_gemini`, `qwen`, `minimax`, `xinference`, `openrouter`, `ollama`, `voyage` |
 | `DLIGHTRAG_EMBEDDING_PROVIDER` | (follows `llm_provider`) | Override embedding provider |
 | `DLIGHTRAG_VISION_PROVIDER` | (follows `llm_provider`) | Override vision provider |
 | `DLIGHTRAG_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model |
