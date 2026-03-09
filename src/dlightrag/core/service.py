@@ -252,28 +252,14 @@ class RAGService:
             await conn.close()
 
     async def _ensure_pg_schema(self, conn) -> None:
-        """Ensure required PostgreSQL extensions and tables exist (idempotent).
+        """Ensure required PostgreSQL extensions and DlightRAG tables exist.
 
-        All statements use IF NOT EXISTS so this is safe to run on every startup.
-        Extensions are best-effort (may need superuser -- Docker init.sql handles
-        this; remote PG may have them pre-installed). Table creation is critical.
+        Extension creation is delegated to LightRAG (``configure_vector_extension``,
+        ``configure_age_extension``). We only verify they are available (fail-fast)
+        and create DlightRAG's own tables.
         """
-        # Best-effort: extensions need superuser; Docker init.sql handles this,
-        # remote PG users with limited privileges must pre-install them.
-        for sql in [
-            "CREATE EXTENSION IF NOT EXISTS vector",
-            "CREATE EXTENSION IF NOT EXISTS age",
-            "LOAD 'age'",
-            'SET search_path = ag_catalog, "$user", public',
-        ]:
-            try:
-                await conn.execute(sql)
-            except Exception as e:
-                logger.warning(
-                    f"Extension setup skipped (may need superuser): {sql[:50]}... -- {e}"
-                )
-
-        # Verify extensions are actually available (regardless of who installed them)
+        # Fail-fast: verify extensions are available (LightRAG creates them but
+        # only warns on failure — we want a hard error before wasting time).
         installed = {r["extname"] for r in await conn.fetch("SELECT extname FROM pg_extension")}
         missing = {"vector", "age"} - installed
         if missing:
@@ -283,7 +269,7 @@ class RAGService:
                 + "; ".join(f"CREATE EXTENSION {ext}" for ext in sorted(missing))
             )
 
-        # Critical: table must exist for hash-based deduplication
+        # DlightRAG's own table for content-hash deduplication
         await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_file_hashes (
             content_hash TEXT PRIMARY KEY,
             doc_id TEXT NOT NULL,
@@ -513,9 +499,10 @@ class RAGService:
         await lightrag.initialize_storages()
         self._lightrag = lightrag
 
-        # Create visual_chunks KV store
-        # PGKVStorage hardcodes namespace handlers and breaks on custom namespaces
-        # like "visual_chunks". Use our PGJsonbKVStorage (generic JSONB table) instead.
+        # Create visual_chunks KV store.
+        # LightRAG's PGKVStorage only supports 7 hardcoded namespaces; custom ones
+        # (like "visual_chunks") cause KeyError / silent no-op / SQL errors.
+        # See pg_jsonb_kv.py module docstring for details.
         kv_cls = lightrag.key_string_value_json_storage_cls
         if config.kv_storage.startswith("PG"):
             from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
