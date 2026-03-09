@@ -518,23 +518,23 @@ class TestVisualRerank:
 class TestParseRerankScore:
     """Test _parse_rerank_score static method: parsing, clamping, edge cases."""
 
-    def test_valid_integer(self) -> None:
-        assert VisualRetriever._parse_rerank_score("8") == 0.8
-
     def test_valid_float(self) -> None:
-        assert VisualRetriever._parse_rerank_score("7.5") == 0.75
+        assert VisualRetriever._parse_rerank_score("0.8") == 0.8
+
+    def test_valid_decimal(self) -> None:
+        assert VisualRetriever._parse_rerank_score("0.75") == 0.75
 
     def test_whitespace_stripped(self) -> None:
-        assert VisualRetriever._parse_rerank_score("  9 \n") == 0.9
+        assert VisualRetriever._parse_rerank_score("  0.9 \n") == 0.9
 
     def test_non_numeric_returns_zero(self) -> None:
         assert VisualRetriever._parse_rerank_score("This page is very relevant") == 0.0
 
-    def test_clamped_above_ten(self) -> None:
-        assert VisualRetriever._parse_rerank_score("15") == 1.0
+    def test_clamped_above_one(self) -> None:
+        assert VisualRetriever._parse_rerank_score("1.5") == 1.0
 
     def test_clamped_below_zero(self) -> None:
-        assert VisualRetriever._parse_rerank_score("-3") == 0.0
+        assert VisualRetriever._parse_rerank_score("-0.3") == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +550,7 @@ class TestLlmVisualRerank:
 
         async def mock_vision(prompt, **kwargs):
             nonlocal call_count
-            scores = ["3", "9", "6"]
+            scores = ["0.3", "0.9", "0.6"]
             result = scores[call_count]
             call_count += 1
             return result
@@ -572,7 +572,7 @@ class TestLlmVisualRerank:
         assert len(result) == 2
         scores_out = [v["relevance_score"] for v in result.values()]
         assert scores_out == sorted(scores_out, reverse=True)
-        # chunk-b scored 9, chunk-c scored 6 — those are the top 2
+        # chunk-b scored 0.9, chunk-c scored 0.6 — those are the top 2
         assert list(result.keys()) == ["chunk-b", "chunk-c"]
 
     async def test_no_image_no_text_scores_zero(self) -> None:
@@ -580,7 +580,7 @@ class TestLlmVisualRerank:
         resolved = {
             "chunk-a": {},  # no image_data key
         }
-        vision_func = AsyncMock(return_value="8")
+        vision_func = AsyncMock(return_value="0.8")
         ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
 
         result = await ret._llm_visual_rerank("query", resolved, top_k=5)
@@ -592,13 +592,13 @@ class TestLlmVisualRerank:
         resolved = {
             "chunk-a": {},  # no image_data
         }
-        vision_func = AsyncMock(return_value="7")
+        vision_func = AsyncMock(return_value="0.7")
         ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
 
         result = await ret._llm_visual_rerank(
             "query", resolved, top_k=5, chunk_text={"chunk-a": "page text"}
         )
-        assert result["chunk-a"]["relevance_score"] == 0.7  # 7/10 normalized
+        assert result["chunk-a"]["relevance_score"] == 0.7
         vision_func.assert_awaited_once()
 
     async def test_vision_error_scores_zero(self) -> None:

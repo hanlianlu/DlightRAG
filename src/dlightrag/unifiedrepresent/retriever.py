@@ -250,7 +250,7 @@ class VisualRetriever:
         """Rerank visual chunks using VLM pointwise scoring.
 
         Sends each page image to vision_model_func with a scoring prompt.
-        Pages scored 0-10 by VLM, normalized to 0-1, sorted descending.
+        Pages scored 0-1 by VLM, sorted descending.
         Falls back to text prompt when image is unavailable.
         """
         import asyncio
@@ -297,10 +297,10 @@ class VisualRetriever:
 
     @staticmethod
     def _parse_rerank_score(response: str) -> float:
-        """Parse VLM 0-10 response and normalize to 0-1 scale."""
+        """Parse VLM response to a 0-1 relevance score."""
         try:
             score = float(response.strip())
-            return max(0.0, min(1.0, score / 10.0))
+            return max(0.0, min(1.0, score))
         except (ValueError, TypeError):
             logger.warning("Could not parse rerank score from: %r", response)
             return 0.0

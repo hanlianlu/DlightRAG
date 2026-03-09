@@ -28,4 +28,4 @@ content and knowledge graph"""
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
 Query: {query}
-Respond with ONLY a number from 0 to 10 (0 = completely irrelevant, 10 = highly relevant)."""
+Respond with ONLY a number from 0.0 to 1.0 (0.0 = completely irrelevant, 1.0 = highly relevant)."""
