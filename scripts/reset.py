@@ -84,7 +84,8 @@ async def _clean_pg_orphan_tables(workspace: str, *, dry_run: bool) -> int:
     LightRAG creates suffixed vector tables like ``lightrag_vdb_entity_<model>_<dim>d``
     per embedding model. Switching modes or models leaves orphaned tables that the
     normal ``storage.drop()`` path doesn't reach. This finds ALL ``lightrag_vdb_*``
-    and ``dlightrag_*`` tables and deletes workspace data from any not already handled.
+    and ``dlightrag_*`` tables, deletes workspace data from any not already handled,
+    and drops tables that become completely empty afterwards.
 
     Uses the asyncpg pool directly (same pattern as PGHashIndex).
     """
@@ -136,7 +137,15 @@ async def _clean_pg_orphan_tables(workspace: str, *, dry_run: bool) -> int:
                         f'DELETE FROM "{table}" WHERE workspace = $1',
                         workspace,
                     )
-                    print(f"  orphan table {table}: deleted {count} rows")
+                    # Drop the table entirely if no rows remain (any workspace)
+                    remaining = await conn.fetchrow(
+                        f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
+                    )
+                    if not remaining["has_rows"]:
+                        await conn.execute(f'DROP TABLE "{table}"')
+                        print(f"  orphan table {table}: deleted {count} rows, dropped empty table")
+                    else:
+                        print(f"  orphan table {table}: deleted {count} rows")
                 cleaned += 1
 
             return cleaned

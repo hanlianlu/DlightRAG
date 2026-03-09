@@ -288,6 +288,7 @@ class RAGService:
     async def _do_initialize(self) -> None:
         """Create RAG backend and compose pipelines based on rag_mode."""
         config = self.config
+        logger.info("RAG mode: %s", config.rag_mode)
 
         if config.rag_mode == "unified":
             await self._do_initialize_unified()
