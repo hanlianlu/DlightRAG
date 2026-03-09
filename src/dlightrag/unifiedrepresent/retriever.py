@@ -128,8 +128,12 @@ class VisualRetriever:
             resolved = await self._visual_rerank(query, resolved, chunk_top_k, chunk_text)
         else:
             resolved = dict(list(resolved.items())[:chunk_top_k])
-            logger.info("[Visual Rerank] Skipped (backend=%s, vision=%s, resolved=%d)",
-                        self.rerank_backend, self.vision_model_func is not None, len(resolved))
+            logger.info(
+                "[Visual Rerank] Skipped (backend=%s, vision=%s, resolved=%d)",
+                self.rerank_backend,
+                self.vision_model_func is not None,
+                len(resolved),
+            )
 
         # Build return dict
         sources: dict[str, dict] = {}

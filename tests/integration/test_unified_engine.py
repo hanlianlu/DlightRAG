@@ -151,7 +151,7 @@ class TestAingestDataConsistency:
         vc_data = visual_chunks.upsert.call_args[0][0]
         for _chunk_id, chunk in vc_data.items():
             assert "image_data" in chunk
-            assert chunk["doc_id"] == "doc-consist"
+            assert chunk["full_doc_id"] == "doc-consist"
             assert "page_index" in chunk
 
         # Verify full_docs stores page_count (needed for deletion)
