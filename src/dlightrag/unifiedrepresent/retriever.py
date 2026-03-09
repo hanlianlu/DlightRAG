@@ -123,7 +123,7 @@ class VisualRetriever:
 
         # Phase 3: Visual reranking (optional)
         if self.rerank_backend == "llm" and self.vision_model_func and resolved:
-            resolved = await self._llm_visual_rerank(query, resolved, chunk_top_k)
+            resolved = await self._llm_visual_rerank(query, resolved, chunk_top_k, chunk_text)
         elif self.rerank_base_url and self.rerank_model and resolved:
             resolved = await self._visual_rerank(query, resolved, chunk_top_k, chunk_text)
         else:
@@ -245,11 +245,13 @@ class VisualRetriever:
         query: str,
         resolved: dict[str, dict],
         top_k: int,
+        chunk_text: dict[str, str] | None = None,
     ) -> dict[str, dict]:
         """Rerank visual chunks using VLM pointwise scoring.
 
         Sends each page image to vision_model_func with a scoring prompt.
-        Pages are scored 0-10, sorted descending, top_k returned.
+        Pages scored 0-10 by VLM, normalized to 0-1, sorted descending.
+        Falls back to text prompt when image is unavailable.
         """
         import asyncio
 
@@ -267,12 +269,16 @@ class VisualRetriever:
         async def _score_one(cid: str) -> tuple[str, float]:
             vd = resolved[cid]
             img_data = vd.get("image_data")
-            if not img_data:
+            text = chunk_text.get(cid, "") if chunk_text else ""
+            if not img_data and not text:
                 return cid, 0.0
             async with sem:
                 try:
-                    img_bytes = base64.b64decode(img_data)
-                    resp = await vision_model_func(prompt, image_data=img_bytes)
+                    if img_data:
+                        img_bytes = base64.b64decode(img_data)
+                        resp = await vision_model_func(prompt, image_data=img_bytes)
+                    else:
+                        resp = await vision_model_func(f"{prompt}\n\nDocument text:\n{text}")
                     return cid, self._parse_rerank_score(resp)
                 except Exception:
                     logger.warning("VLM rerank failed for chunk %s", cid, exc_info=True)
@@ -291,10 +297,10 @@ class VisualRetriever:
 
     @staticmethod
     def _parse_rerank_score(response: str) -> float:
-        """Parse VLM response to a 0-10 relevance score."""
+        """Parse VLM 0-10 response and normalize to 0-1 scale."""
         try:
             score = float(response.strip())
-            return max(0.0, min(10.0, score))
+            return max(0.0, min(1.0, score / 10.0))
         except (ValueError, TypeError):
             logger.warning("Could not parse rerank score from: %r", response)
             return 0.0
