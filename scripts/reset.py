@@ -104,7 +104,7 @@ async def _clean_pg_orphan_tables(workspace: str, *, dry_run: bool) -> int:
             table_rows = await conn.fetch(
                 "SELECT tablename FROM pg_tables "
                 "WHERE schemaname = 'public' "
-                "AND (tablename LIKE 'lightrag_vdb_%' OR tablename LIKE 'dlightrag_%') "
+                "AND (tablename LIKE 'lightrag_%' OR tablename LIKE 'dlightrag_%') "
                 "ORDER BY tablename"
             )
             if not table_rows:
@@ -122,31 +122,41 @@ async def _clean_pg_orphan_tables(workspace: str, *, dry_run: bool) -> int:
                 if col is None:
                     continue
 
+                # Check if table has any rows for this workspace
                 count_row = await conn.fetchrow(
                     f'SELECT COUNT(*) as count FROM "{table}" WHERE workspace = $1',
                     workspace,
                 )
                 count = count_row["count"] if count_row else 0
-                if count == 0:
-                    continue
 
-                if dry_run:
-                    print(f"  [DRY RUN] orphan table {table}: {count} rows")
-                else:
-                    await conn.execute(
-                        f'DELETE FROM "{table}" WHERE workspace = $1',
-                        workspace,
-                    )
-                    # Drop the table entirely if no rows remain (any workspace)
+                if count > 0:
+                    if dry_run:
+                        print(f"  [DRY RUN] orphan table {table}: {count} rows")
+                    else:
+                        await conn.execute(
+                            f'DELETE FROM "{table}" WHERE workspace = $1',
+                            workspace,
+                        )
+                        print(f"  orphan table {table}: deleted {count} rows")
+                    cleaned += 1
+
+                # Drop the table entirely if no rows remain (any workspace)
+                if not dry_run:
                     remaining = await conn.fetchrow(
                         f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
                     )
                     if not remaining["has_rows"]:
                         await conn.execute(f'DROP TABLE "{table}"')
-                        print(f"  orphan table {table}: deleted {count} rows, dropped empty table")
-                    else:
-                        print(f"  orphan table {table}: deleted {count} rows")
-                cleaned += 1
+                        print(f"  dropped empty table {table}")
+                        cleaned += 1
+                elif count == 0:
+                    # In dry-run, check if table is already empty
+                    total = await conn.fetchrow(
+                        f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
+                    )
+                    if not total["has_rows"]:
+                        print(f"  [DRY RUN] would drop empty table {table}")
+                        cleaned += 1
 
             return cleaned
     except Exception as exc:
