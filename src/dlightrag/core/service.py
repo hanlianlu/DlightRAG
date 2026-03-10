@@ -361,12 +361,15 @@ class RAGService:
             "doc_status_storage": config.doc_status_storage,
             "rerank_model_func": rerank_func,
             "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
-            "chunking_func": docling_hybrid_chunking_func,
             "addon_params": {
                 "entity_types": config.kg_entity_types,
                 "language": "English",
             },
         }
+
+        # Only use our custom HybridChunker for parsers that benefit from it
+        if config.parser in ("docling", "vlm"):
+            lightrag_kwargs["chunking_func"] = docling_hybrid_chunking_func
 
         # ONE RAGAnything with unified llm_func (chat model)
         logger.info("Creating RAGAnything instance...")
