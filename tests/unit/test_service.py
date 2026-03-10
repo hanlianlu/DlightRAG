@@ -417,7 +417,7 @@ class TestRAGServiceUnifiedMode:
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
         """Unified mode aretrieve returns a RetrievalResult."""
-        from dlightrag.core.retrieval.engine import RetrievalResult
+        from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = RAGService(config=test_config)
         service._initialized = True
@@ -435,7 +435,7 @@ class TestRAGServiceUnifiedMode:
 
     async def test_aanswer_unified_delegates(self, test_config: DlightragConfig) -> None:
         """Unified mode aanswer returns a RetrievalResult with answer."""
-        from dlightrag.core.retrieval.engine import RetrievalResult
+        from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = RAGService(config=test_config)
         service._initialized = True

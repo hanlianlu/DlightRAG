@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import _get_config, app
 from dlightrag.config import DlightragConfig
-from dlightrag.core.retrieval.engine import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
 
 # ---------------------------------------------------------------------------

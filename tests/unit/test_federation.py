@@ -12,7 +12,7 @@ from dlightrag.core.federation import (
     federated_retrieve,
     merge_results,
 )
-from dlightrag.core.retrieval.engine import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 
 
 def _make_result(
