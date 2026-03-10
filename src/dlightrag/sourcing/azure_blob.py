@@ -4,8 +4,88 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC
 
 from dlightrag.sourcing.base import AsyncDataSource, DataSource
+
+try:
+    from azure.storage.blob import generate_blob_sas
+except ImportError:  # pragma: no cover
+    generate_blob_sas = None  # type: ignore[assignment]
+
+
+def _parse_connection_string(connection_string: str) -> dict[str, str]:
+    """Parse Azure Storage connection string into key-value pairs."""
+    pairs: dict[str, str] = {}
+    for part in connection_string.split(";"):
+        part = part.strip()
+        if "=" in part:
+            key, _, value = part.partition("=")
+            # AccountKey values contain '=' (base64), so only split on first '='
+            pairs[key] = value
+    # AccountKey may have been truncated — re-extract properly
+    if "AccountKey" in connection_string:
+        start = connection_string.index("AccountKey=") + len("AccountKey=")
+        end = connection_string.find(";", start)
+        pairs["AccountKey"] = connection_string[start:end] if end != -1 else connection_string[start:]
+    return pairs
+
+
+def generate_azure_sas_url(
+    connection_string: str,
+    raw_path: str,
+    expiry_seconds: int = 3600,
+) -> str:
+    """Generate a time-limited Azure SAS signed URL.
+
+    Parses account_name and account_key from the connection string.
+    Converts azure://container/blob path into a signed HTTPS URL.
+
+    Args:
+        connection_string: Azure Storage connection string
+            (contains AccountName and AccountKey).
+        raw_path: Path in azure://container/blob format.
+        expiry_seconds: SAS URL expiry in seconds (default: 1 hour).
+
+    Returns:
+        Signed HTTPS URL, e.g.:
+        "https://myaccount.blob.core.windows.net/mycontainer/doc.pdf?sv=...&sig=..."
+
+    Raises:
+        ValueError: If raw_path is not in azure:// format or
+            connection_string is missing required fields.
+    """
+    from datetime import datetime, timedelta
+
+    from azure.storage.blob import BlobSasPermissions
+
+    if not raw_path.startswith("azure://"):
+        raise ValueError(f"Expected azure:// path, got: {raw_path!r}")
+
+    stripped = raw_path.removeprefix("azure://")
+    if "/" not in stripped or not stripped:
+        raise ValueError(f"Invalid azure path (need container/blob): {raw_path!r}")
+
+    container, blob = stripped.split("/", 1)
+    if not container or not blob:
+        raise ValueError(f"Invalid azure path (empty container or blob): {raw_path!r}")
+
+    parsed = _parse_connection_string(connection_string)
+    account_name = parsed.get("AccountName", "")
+    account_key = parsed.get("AccountKey", "")
+    if not account_name or not account_key:
+        raise ValueError("Connection string missing AccountName or AccountKey")
+
+    sas_token = generate_blob_sas(
+        account_name=account_name,
+        account_key=account_key,
+        container_name=container,
+        blob_name=blob,
+        permission=BlobSasPermissions(read=True),
+        expiry=datetime.now(tz=UTC) + timedelta(seconds=expiry_seconds),
+    )
+
+    return f"https://{account_name}.blob.core.windows.net/{container}/{blob}?{sas_token}"
 
 
 class AzureBlobDataSource(DataSource, AsyncDataSource):
@@ -104,4 +184,4 @@ class AzureBlobDataSource(DataSource, AsyncDataSource):
             self._async_blob_service = None
 
 
-__all__ = ["AzureBlobDataSource"]
+__all__ = ["AzureBlobDataSource", "generate_azure_sas_url"]
