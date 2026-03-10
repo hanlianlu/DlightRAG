@@ -145,6 +145,8 @@ class TestAingestDataConsistency:
             assert chunk["full_doc_id"] == "doc-consist"
             assert chunk["source_type"] == "unified_represent"
             assert "chunk_order_index" in chunk
+            assert "page_idx" in chunk
+            assert chunk["page_idx"] == chunk["chunk_order_index"]
             assert "content" in chunk
 
         # Verify visual_chunks has required fields for VLM answer generation

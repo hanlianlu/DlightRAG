@@ -156,6 +156,7 @@ class UnifiedRepresentEngine:
                 "file_path": str(path),
                 "tokens": len(info["content"].split()),
                 "chunk_order_index": info["page_index"],
+                "page_idx": info["page_index"],
                 "source_type": "unified_represent",
             }
         await self.lightrag.text_chunks.upsert(text_chunks_data)
