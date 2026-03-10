@@ -45,7 +45,6 @@ class RetrievalEngine:
     def __init__(self, rag: Any, config: Any) -> None:
         self.rag = rag
         self.config = config
-        self._url_transformer: Callable[[str], str] | None = None
         self._path_resolver: PathResolver | None = None
 
     async def aretrieve(
@@ -104,7 +103,6 @@ class RetrievalEngine:
         return await augment_retrieval_result(
             result,
             str(self.config.working_dir_path),
-            url_transformer=getattr(self, "_url_transformer", None),
             lightrag=lightrag,
             path_resolver=getattr(self, "_path_resolver", None),
         )
@@ -180,7 +178,6 @@ class RetrievalEngine:
         return await augment_retrieval_result(
             result,
             str(self.config.working_dir_path),
-            url_transformer=getattr(self, "_url_transformer", None),
             lightrag=lightrag,
             path_resolver=getattr(self, "_path_resolver", None),
         )
@@ -257,7 +254,6 @@ class RetrievalEngine:
         augmented = await augment_retrieval_result(
             temp_result,
             str(self.config.working_dir_path),
-            url_transformer=getattr(self, "_url_transformer", None),
             lightrag=lightrag,
             path_resolver=getattr(self, "_path_resolver", None),
         )
