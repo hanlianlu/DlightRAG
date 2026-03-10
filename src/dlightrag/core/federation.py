@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from dlightrag.core.retrieval.engine import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 
 logger = logging.getLogger(__name__)
 

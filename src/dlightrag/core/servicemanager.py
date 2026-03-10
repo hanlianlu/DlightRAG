@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
 
 from dlightrag.core.federation import federated_answer, federated_retrieve
-from dlightrag.core.retrieval.engine import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.service import RAGService
 
 logger = logging.getLogger(__name__)

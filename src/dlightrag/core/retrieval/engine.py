@@ -12,25 +12,16 @@ import hashlib
 import logging
 import re
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from lightrag import QueryParam
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.utils.content_filters import filter_content_for_snippet
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RetrievalResult:
-    """Wrapper for RAG query results."""
-
-    answer: str | None = field(default=None)
-    contexts: dict[str, Any] = field(default_factory=dict)
-    raw: dict[str, Any] = field(default_factory=dict)
 
 
 class RetrievalEngine:

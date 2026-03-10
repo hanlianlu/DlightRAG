@@ -9,13 +9,13 @@ import pytest
 
 from dlightrag.core.retrieval.engine import (
     RetrievalEngine,
-    RetrievalResult,
     _extract_rag_relative,
     _to_download_url,
     augment_retrieval_result,
     build_sources_and_media_from_contexts,
 )
 from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.retrieval.protocols import RetrievalResult
 
 # ---------------------------------------------------------------------------
 # TestExtractRagRelative

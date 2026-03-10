@@ -34,7 +34,7 @@ __all__ = [
 
 def _lazy_imports():
     """Lazy imports for heavy modules — only loaded when accessed."""
-    from dlightrag.core.retrieval.engine import RetrievalResult
+    from dlightrag.core.retrieval.protocols import RetrievalResult
     from dlightrag.core.service import RAGService
 
     return RAGService, RetrievalResult
