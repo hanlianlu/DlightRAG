@@ -305,6 +305,25 @@ class TestNestedGroups:
         assert result[0]["text"] == "Deeply nested"
         assert result[0]["page_idx"] == 5
 
+    def test_circular_group_ref(self, tmp_path: Path) -> None:
+        """Circular group references do not cause infinite recursion."""
+        doc = {
+            "body": {"children": [{"$ref": "groups/0"}]},
+            "texts": [
+                {"orig": "ok", "label": "paragraph", "prov": [{"page_no": 0}]},
+            ],
+            "groups": [
+                {"children": [{"$ref": "groups/1"}, {"$ref": "texts/0"}]},
+                {"children": [{"$ref": "groups/0"}]},  # circular
+            ],
+            "pictures": [],
+            "tables": [],
+        }
+        result = rebuild_text_items_from_docling_json(_write_docling_json(tmp_path, doc))
+        assert result is not None
+        assert len(result) == 1
+        assert result[0]["text"] == "ok"
+
     def test_mixed_body_refs(self, tmp_path: Path) -> None:
         """Body with direct text refs and group refs produces correct order."""
         doc = {

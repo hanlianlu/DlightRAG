@@ -77,11 +77,6 @@ def _resolve_children(
         if not ref:
             continue
 
-        # Guard against circular references
-        if ref in _seen:
-            continue
-        _seen.add(ref)
-
         parts = ref.split("/", 1)
         if len(parts) != 2:
             continue
@@ -96,6 +91,10 @@ def _resolve_children(
             if 0 <= idx < len(texts):
                 out.append(_text_block_to_item(texts[idx]))
         elif collection == "groups":
+            # Guard against circular group references
+            if ref in _seen:
+                continue
+            _seen.add(ref)
             if 0 <= idx < len(groups):
                 group = groups[idx]
                 group_children = group.get("children", [])
