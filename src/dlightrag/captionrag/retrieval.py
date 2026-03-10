@@ -343,7 +343,9 @@ def build_sources_and_media_from_contexts(
                 "type": "file",
                 "title": Path(str(file_path)).name,
                 "path": str(file_path),
-                "url": path_resolver.resolve(str(file_path)) if path_resolver else _to_download_url(
+                "url": path_resolver.resolve(str(file_path))
+                if path_resolver
+                else _to_download_url(
                     str(file_path),
                     url_transformer=url_transformer,
                     working_dir=rag_working_dir,
@@ -372,7 +374,9 @@ def build_sources_and_media_from_contexts(
                 "source_chunk_id": chunk_id,
                 "title": Path(str(file_path)).name,
                 "path": img_path,
-                "url": path_resolver.resolve(img_path) if path_resolver else _to_download_url(
+                "url": path_resolver.resolve(img_path)
+                if path_resolver
+                else _to_download_url(
                     img_path,
                     url_transformer=url_transformer,
                     working_dir=rag_working_dir,

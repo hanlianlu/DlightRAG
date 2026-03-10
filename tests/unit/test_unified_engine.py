@@ -410,11 +410,16 @@ class TestProtocolCompliance:
         config = _make_config()
         lightrag = _make_lightrag()
         engine = UnifiedRepresentEngine(
-            lightrag=lightrag, visual_chunks=MagicMock(), config=config,
+            lightrag=lightrag,
+            visual_chunks=MagicMock(),
+            config=config,
         )
-        engine.retriever.retrieve = AsyncMock(return_value={
-            "contexts": {"chunks": []}, "raw": {"sources": []},
-        })
+        engine.retriever.retrieve = AsyncMock(
+            return_value={
+                "contexts": {"chunks": []},
+                "raw": {"sources": []},
+            }
+        )
         result = await engine.aretrieve("test query")
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
@@ -428,11 +433,17 @@ class TestProtocolCompliance:
         config = _make_config()
         lightrag = _make_lightrag()
         engine = UnifiedRepresentEngine(
-            lightrag=lightrag, visual_chunks=MagicMock(), config=config,
+            lightrag=lightrag,
+            visual_chunks=MagicMock(),
+            config=config,
         )
-        engine.retriever.answer = AsyncMock(return_value={
-            "answer": "the answer", "contexts": {"chunks": []}, "raw": {},
-        })
+        engine.retriever.answer = AsyncMock(
+            return_value={
+                "answer": "the answer",
+                "contexts": {"chunks": []},
+                "raw": {},
+            }
+        )
         result = await engine.aanswer("what is X?")
         assert isinstance(result, RetrievalResult)
         assert result.answer == "the answer"
@@ -445,7 +456,9 @@ class TestProtocolCompliance:
         config = _make_config()
         lightrag = _make_lightrag()
         engine = UnifiedRepresentEngine(
-            lightrag=lightrag, visual_chunks=MagicMock(), config=config,
+            lightrag=lightrag,
+            visual_chunks=MagicMock(),
+            config=config,
         )
         engine.retriever.retrieve = AsyncMock(return_value={"contexts": {}, "raw": {}})
         # Should not raise — **kwargs absorbs multimodal_content

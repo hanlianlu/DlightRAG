@@ -8,17 +8,20 @@ Primary interface for offline/batch data ingestion operations.
 from __future__ import annotations
 
 import logging
+import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from starlette.responses import RedirectResponse
 
-from dlightrag.api.file_routes import create_file_router
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+from dlightrag.sourcing.azure_blob import generate_azure_sas_url
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +33,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.exception("Failed to initialize RAG service manager")
         raise
-    config = get_config()
-    _app.include_router(
-        create_file_router(config),
-        dependencies=[Depends(_verify_auth)],
-    )
     yield
     await _app.state.manager.close()
 
@@ -323,6 +321,61 @@ async def workspaces(request: Request) -> dict[str, Any]:
     manager = _get_manager(request)
     ws_list = await manager.list_workspaces()
     return {"workspaces": ws_list}
+
+
+@app.get("/api/files/{file_path:path}", response_model=None, dependencies=[Depends(_verify_auth)])
+async def serve_file(file_path: str) -> StreamingResponse | RedirectResponse:
+    """Serve a file by relative path.
+
+    - Local paths: 200 + StreamingResponse
+    - azure://: 302 redirect to SAS signed URL
+    - snowflake://: 400 (no file to serve)
+    """
+    config = get_config()
+
+    # --- Azure blob: 302 redirect ---
+    if file_path.startswith("azure://"):
+        if not config.blob_connection_string:
+            raise HTTPException(503, "Azure blob storage not configured")
+        sas_url = generate_azure_sas_url(
+            connection_string=config.blob_connection_string,
+            raw_path=file_path,
+            expiry_seconds=config.azure_sas_expiry,
+        )
+        return RedirectResponse(url=sas_url, status_code=302)
+
+    # --- Snowflake: no file to serve ---
+    if file_path.startswith("snowflake://"):
+        raise HTTPException(400, "Snowflake sources have no downloadable file")
+
+    # --- Unknown remote scheme ---
+    if "://" in file_path:
+        raise HTTPException(400, f"Unsupported scheme: {file_path.split('://', 1)[0]}")
+
+    # --- Local file: stream from working_dir ---
+    working_dir = config.working_dir_path.resolve()
+    full_path = (working_dir / file_path).resolve()
+
+    # Security: path traversal + symlink escape check
+    if not full_path.is_relative_to(working_dir):
+        raise HTTPException(403, "Access denied")
+    if not full_path.is_file():
+        raise HTTPException(404, "File not found")
+
+    content_type, _ = mimetypes.guess_type(str(full_path))
+    return StreamingResponse(
+        _stream_file(full_path),
+        media_type=content_type or "application/octet-stream",
+    )
+
+
+async def _stream_file(path: Path, chunk_size: int = 64 * 1024) -> AsyncIterator[bytes]:
+    """Stream a file in chunks to avoid loading it entirely into memory."""
+    import aiofiles
+
+    async with aiofiles.open(path, "rb") as f:
+        while chunk := await f.read(chunk_size):
+            yield chunk
 
 
 @app.exception_handler(RAGServiceUnavailableError)

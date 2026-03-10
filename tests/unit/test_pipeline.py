@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.config import DlightragConfig
 from dlightrag.captionrag.pipeline import (
     IngestionCancelledError,
     IngestionPipeline,
 )
+from dlightrag.config import DlightragConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -18,9 +18,9 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from dlightrag.config import DlightragConfig, set_config
 from dlightrag.captionrag.pipeline import IngestionPipeline
 from dlightrag.captionrag.retrieval import RetrievalEngine
+from dlightrag.config import DlightragConfig, set_config
 from dlightrag.core.service import RAGService
 from dlightrag.core.servicemanager import RAGServiceManager
 

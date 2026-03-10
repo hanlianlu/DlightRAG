@@ -149,16 +149,12 @@ async def _ingest_azure_blob(
 
     try:
         if blob_path:
-            return await _ingest_single_blob(
-                engine, config, hash_index, source, blob_path, replace
-            )
+            return await _ingest_single_blob(engine, config, hash_index, source, blob_path, replace)
 
         blob_ids = await source.alist_documents(prefix=prefix)
         results: list[dict[str, Any]] = []
         for bid in blob_ids:
-            result = await _ingest_single_blob(
-                engine, config, hash_index, source, bid, replace
-            )
+            result = await _ingest_single_blob(engine, config, hash_index, source, bid, replace)
             results.append(result)
 
         return {
@@ -199,9 +195,7 @@ async def _ingest_single_blob(
         result = await engine.aingest(file_path=str(target))
 
         if content_hash and result.get("doc_id"):
-            await hash_index.register(
-                content_hash, result["doc_id"], f"azure://{blob_path}"
-            )
+            await hash_index.register(content_hash, result["doc_id"], f"azure://{blob_path}")
 
         return result
     finally:

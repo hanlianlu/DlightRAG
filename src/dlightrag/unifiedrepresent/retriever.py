@@ -150,7 +150,9 @@ class VisualRetriever:
                     "doc_id": doc_id,
                     "title": vd.get("doc_title", ""),
                     "author": vd.get("doc_author", ""),
-                    "path": self.path_resolver.resolve(raw_path) if self.path_resolver and raw_path else raw_path,
+                    "path": self.path_resolver.resolve(raw_path)
+                    if self.path_resolver and raw_path
+                    else raw_path,
                 }
             media.append(
                 {
