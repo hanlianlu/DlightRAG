@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 from dlightrag.unifiedrepresent.renderer import RenderResult
 
@@ -293,7 +294,9 @@ class TestAretrieve:
             top_k=60,
             chunk_top_k=10,
         )
-        assert result is expected
+        assert isinstance(result, RetrievalResult)
+        assert result.answer is None
+        assert result.contexts == expected.get("contexts", {})
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +338,8 @@ class TestAanswer:
             top_k=60,
             chunk_top_k=10,
         )
-        assert result is expected
+        assert isinstance(result, RetrievalResult)
+        assert result.answer == expected.get("answer")
 
 
 # ---------------------------------------------------------------------------
@@ -388,3 +392,62 @@ class TestAdeleteDoc:
         ]
         actual_ids = [call.args[0][0] for call in visual_chunks.delete.call_args_list]
         assert actual_ids == expected_ids
+
+
+# ---------------------------------------------------------------------------
+# TestProtocolCompliance
+# ---------------------------------------------------------------------------
+
+
+class TestProtocolCompliance:
+    """Test that UnifiedRepresentEngine satisfies RetrievalBackend Protocol."""
+
+    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
+    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
+    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
+    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
+    async def test_aretrieve_returns_retrieval_result(self, _r, _em, _ex, _ret):
+        config = _make_config()
+        lightrag = _make_lightrag()
+        engine = UnifiedRepresentEngine(
+            lightrag=lightrag, visual_chunks=MagicMock(), config=config,
+        )
+        engine.retriever.retrieve = AsyncMock(return_value={
+            "contexts": {"chunks": []}, "raw": {"sources": []},
+        })
+        result = await engine.aretrieve("test query")
+        assert isinstance(result, RetrievalResult)
+        assert result.answer is None
+        assert result.contexts == {"chunks": []}
+
+    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
+    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
+    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
+    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
+    async def test_aanswer_returns_retrieval_result(self, _r, _em, _ex, _ret):
+        config = _make_config()
+        lightrag = _make_lightrag()
+        engine = UnifiedRepresentEngine(
+            lightrag=lightrag, visual_chunks=MagicMock(), config=config,
+        )
+        engine.retriever.answer = AsyncMock(return_value={
+            "answer": "the answer", "contexts": {"chunks": []}, "raw": {},
+        })
+        result = await engine.aanswer("what is X?")
+        assert isinstance(result, RetrievalResult)
+        assert result.answer == "the answer"
+
+    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
+    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
+    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
+    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
+    async def test_accepts_kwargs(self, _r, _em, _ex, _ret):
+        config = _make_config()
+        lightrag = _make_lightrag()
+        engine = UnifiedRepresentEngine(
+            lightrag=lightrag, visual_chunks=MagicMock(), config=config,
+        )
+        engine.retriever.retrieve = AsyncMock(return_value={"contexts": {}, "raw": {}})
+        # Should not raise — **kwargs absorbs multimodal_content
+        result = await engine.aretrieve("q", multimodal_content=[{"type": "image"}])
+        assert isinstance(result, RetrievalResult)

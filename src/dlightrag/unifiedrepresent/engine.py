@@ -19,6 +19,7 @@ import numpy as np
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
 from dlightrag.unifiedrepresent.renderer import PageRenderer
@@ -202,13 +203,19 @@ class UnifiedRepresentEngine:
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-    ) -> dict:
+        **kwargs: Any,
+    ) -> RetrievalResult:
         """Retrieve relevant visual chunks (Phases 1-3)."""
-        return await self.retriever.retrieve(
+        result = await self.retriever.retrieve(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
+        )
+        return RetrievalResult(
+            answer=None,
+            contexts=result.get("contexts", {}),
+            raw=result.get("raw", {}),
         )
 
     async def aanswer(
@@ -217,13 +224,19 @@ class UnifiedRepresentEngine:
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-    ) -> dict:
+        **kwargs: Any,
+    ) -> RetrievalResult:
         """Retrieve and generate answer (Phases 1-4)."""
-        return await self.retriever.answer(
+        result = await self.retriever.answer(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
+        )
+        return RetrievalResult(
+            answer=result.get("answer"),
+            contexts=result.get("contexts", {}),
+            raw=result.get("raw", {}),
         )
 
     async def aanswer_stream(
@@ -232,6 +245,7 @@ class UnifiedRepresentEngine:
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        **kwargs: Any,
     ) -> tuple[dict, dict, AsyncIterator[str] | None]:
         """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
         return await self.retriever.answer_stream(
