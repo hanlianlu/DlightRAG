@@ -17,6 +17,8 @@ import httpx
 from lightrag import LightRAG, QueryParam
 from lightrag.constants import GRAPH_FIELD_SEP
 
+from dlightrag.core.retrieval.path_resolver import PathResolver
+
 QueryMode = Literal["local", "global", "hybrid", "naive", "mix", "bypass"]
 
 logger = logging.getLogger(__name__)
@@ -35,6 +37,7 @@ class VisualRetriever:
         rerank_base_url: str | None = None,
         rerank_api_key: str | None = None,
         rerank_backend: str | None = None,
+        path_resolver: PathResolver | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -44,6 +47,7 @@ class VisualRetriever:
         self.rerank_base_url = rerank_base_url
         self.rerank_api_key = rerank_api_key
         self.rerank_backend = rerank_backend
+        self.path_resolver = path_resolver
 
     # ------------------------------------------------------------------
     # Public API
@@ -141,11 +145,12 @@ class VisualRetriever:
         for cid, vd in resolved.items():
             doc_id = vd.get("full_doc_id", "")
             if doc_id not in sources:
+                raw_path = vd.get("file_path", "")
                 sources[doc_id] = {
                     "doc_id": doc_id,
                     "title": vd.get("doc_title", ""),
                     "author": vd.get("doc_author", ""),
-                    "path": vd.get("file_path", ""),
+                    "path": self.path_resolver.resolve(raw_path) if self.path_resolver and raw_path else raw_path,
                 }
             media.append(
                 {

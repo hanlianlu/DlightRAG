@@ -18,6 +18,7 @@ from typing import Any
 import numpy as np
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
 
+from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
 from dlightrag.unifiedrepresent.renderer import PageRenderer
@@ -41,6 +42,7 @@ class UnifiedRepresentEngine:
         config: Any,  # DlightragConfig instance
         vision_model_func: Callable | None = None,
         visual_embedder: VisualEmbedder | None = None,
+        path_resolver: PathResolver | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -81,6 +83,7 @@ class UnifiedRepresentEngine:
             rerank_base_url=(config.rerank_base_url if config.enable_rerank else None),
             rerank_api_key=(config.effective_rerank_api_key if config.enable_rerank else None),
             rerank_backend=(config.rerank_backend if config.enable_rerank else None),
+            path_resolver=path_resolver,
         )
 
     # ------------------------------------------------------------------
