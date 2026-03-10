@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.core.retrieval.engine import (
+from dlightrag.captionrag.retrieval import (
     RetrievalEngine,
     _extract_rag_relative,
     _to_download_url,
@@ -291,7 +291,7 @@ class TestRetrievalEngineAretrieve:
         engine = RetrievalEngine(rag=mock_rag, config=cfg)
         return engine, mock_rag
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aretrieve_calls_lightrag_aquery_data(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, mock_rag = self._make_engine()
@@ -299,14 +299,14 @@ class TestRetrievalEngineAretrieve:
         mock_rag.lightrag.aquery_data.assert_awaited_once()
         assert isinstance(result, RetrievalResult)
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aretrieve_with_multimodal_enhances_query(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, mock_rag = self._make_engine()
         await engine.aretrieve("query", multimodal_content=[{"type": "image"}])
         mock_rag._process_multimodal_query_content.assert_awaited_once()
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aretrieve_without_multimodal_no_enhancement(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, mock_rag = self._make_engine()
@@ -349,14 +349,14 @@ class TestRetrievalEngineAanswer:
         engine = RetrievalEngine(rag=mock_rag, config=cfg)
         return engine, mock_rag
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aanswer_returns_answer(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, _ = self._make_engine()
         result = await engine.aanswer("query")
         assert result.answer == "The answer is 42"
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aanswer_calls_aquery_llm(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, mock_rag = self._make_engine()
@@ -396,7 +396,7 @@ class TestRetrievalEngineAanswerStream:
         engine = RetrievalEngine(rag=mock_rag, config=cfg)
         return engine, mock_rag
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aanswer_stream_returns_contexts_and_iterator(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, mock_rag = self._make_engine()
@@ -405,7 +405,7 @@ class TestRetrievalEngineAanswerStream:
         tokens = [t async for t in token_iter]
         assert tokens == ["Hello", " ", "world"]
 
-    @patch("dlightrag.core.retrieval.engine.augment_retrieval_result", new_callable=AsyncMock)
+    @patch("dlightrag.captionrag.retrieval.augment_retrieval_result", new_callable=AsyncMock)
     async def test_aanswer_stream_calls_aquery_with_stream_true(self, mock_augment) -> None:
         mock_augment.side_effect = lambda r, *a, **kw: r
         engine, mock_rag = self._make_engine()

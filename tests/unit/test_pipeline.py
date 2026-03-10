@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from dlightrag.config import DlightragConfig
-from dlightrag.core.ingestion.pipeline import (
+from dlightrag.captionrag.pipeline import (
     IngestionCancelledError,
     IngestionPipeline,
 )
@@ -459,7 +459,7 @@ class TestVlmParserRouting:
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
         """When vlm_parser is set, pipeline uses it instead of rag.parse_document."""
-        from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
+        from dlightrag.captionrag.vlm_parser import VlmOcrParser
 
         mock_vlm_parser = MagicMock(spec=VlmOcrParser)
         mock_vlm_parser.parse = AsyncMock(

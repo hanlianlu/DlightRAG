@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dlightrag.core.chunking import docling_hybrid_chunking_func
+from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 
 
 def _word_tokenizer() -> Any:
