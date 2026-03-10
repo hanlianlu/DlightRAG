@@ -118,7 +118,6 @@ class RAGService:
         rag = await RAGService.create(
             config=my_config,
             cancel_checker=my_cancel_fn,
-            url_transformer=my_url_fn,
         )
     """
 
@@ -128,14 +127,12 @@ class RAGService:
         config: DlightragConfig | None = None,
         enable_vlm: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-        url_transformer: Callable[[str], str] | None = None,
     ) -> RAGService:
         """Async factory method - creates and initializes RAGService."""
         instance = cls(
             config=config,
             enable_vlm=enable_vlm,
             cancel_checker=cancel_checker,
-            url_transformer=url_transformer,
         )
         await instance.initialize()
         return instance
@@ -145,7 +142,6 @@ class RAGService:
         config: DlightragConfig | None = None,
         enable_vlm: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
-        url_transformer: Callable[[str], str] | None = None,
     ) -> None:
         """Store configuration only. Use RAGService.create() for full initialization."""
         self.config = config or get_config()
@@ -155,7 +151,6 @@ class RAGService:
 
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
-        self._url_transformer = url_transformer
 
         # Caption mode (Mode 1): RAGAnything + composed pipelines
         self.rag: Any = None  # RAGAnything (caption mode)
@@ -411,7 +406,6 @@ class RAGService:
             working_dir=str(config.working_dir_path),
         )
         self.retrieval._path_resolver = self._path_resolver
-        self.retrieval._url_transformer = self._url_transformer
 
         logger.info("RAG pipelines initialized successfully (caption mode)")
 
