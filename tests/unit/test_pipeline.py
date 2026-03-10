@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -496,3 +497,128 @@ class TestVlmParserRouting:
         result = await pipeline._ingest_single_file_with_policy(file_path, artifacts)
         assert result.status == "success"
         pipeline.rag.parse_document.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# TestDoclingPostprocessing
+# ---------------------------------------------------------------------------
+
+
+class TestDoclingPostprocessing:
+    """Test Docling JSON post-processing step (step 2.5) in the pipeline."""
+
+    @pytest.mark.asyncio
+    async def test_docling_parser_rebuilds_text_items(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """When parser=docling and Docling JSON exists, text items are rebuilt with headings."""
+        test_config.parser = "docling"
+        pipeline = _make_pipeline(test_config)
+
+        # parse_document returns generic text + an image item
+        pipeline.rag.parse_document.return_value = (
+            [
+                {"type": "text", "text": "plain paragraph"},
+                {"type": "image", "img_path": "/img/fig1.png", "page_idx": 0},
+            ],
+            "doc-docling-001",
+        )
+
+        file_path = tmp_path / "report.pdf"
+        file_path.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        # Create Docling JSON at the expected path
+        docling_dir = artifacts / "report" / "docling"
+        docling_dir.mkdir(parents=True)
+        docling_json = {
+            "body": {
+                "children": [
+                    {"$ref": "texts/0"},
+                    {"$ref": "texts/1"},
+                ],
+            },
+            "texts": [
+                {
+                    "orig": "Introduction",
+                    "label": "section_header",
+                    "level": 2,
+                    "prov": [{"page_no": 1}],
+                },
+                {
+                    "orig": "Some body text here.",
+                    "label": "paragraph",
+                    "prov": [{"page_no": 1}],
+                },
+            ],
+        }
+        (docling_dir / "report.json").write_text(json.dumps(docling_json))
+
+        result = await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+
+        assert result.status == "success"
+        call_args = pipeline.rag.insert_content_list.call_args
+        content_list = call_args.kwargs.get("content_list") or call_args[1]["content_list"]
+
+        # Rebuilt texts come first: heading with ## prefix, then paragraph
+        text_items = [i for i in content_list if i["type"] == "text"]
+        assert text_items[0]["text"] == "## Introduction"
+        assert text_items[0]["page_idx"] == 1
+        assert text_items[1]["text"] == "Some body text here."
+
+        # Non-text items (image) are preserved
+        non_text = [i for i in content_list if i["type"] != "text"]
+        assert len(non_text) == 1
+        assert non_text[0]["type"] == "image"
+
+    @pytest.mark.asyncio
+    async def test_mineru_parser_no_postprocessing(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """When parser=mineru, original content_list passes through unchanged."""
+        test_config.parser = "mineru"
+        pipeline = _make_pipeline(test_config)
+
+        original_items = [
+            {"type": "text", "text": "original text"},
+            {"type": "image", "img_path": "/img/fig.png"},
+        ]
+        pipeline.rag.parse_document.return_value = (original_items, "doc-mineru-001")
+
+        file_path = tmp_path / "report.pdf"
+        file_path.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        result = await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+
+        assert result.status == "success"
+        call_args = pipeline.rag.insert_content_list.call_args
+        content_list = call_args.kwargs.get("content_list") or call_args[1]["content_list"]
+        # Content should be the original items (after policy, which keeps them)
+        assert content_list == original_items
+
+    @pytest.mark.asyncio
+    async def test_docling_json_missing_falls_back(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """When parser=docling but JSON doesn't exist, original content_list is used."""
+        test_config.parser = "docling"
+        pipeline = _make_pipeline(test_config)
+
+        original_items = [{"type": "text", "text": "fallback text"}]
+        pipeline.rag.parse_document.return_value = (original_items, "doc-docling-002")
+
+        file_path = tmp_path / "missing.pdf"
+        file_path.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+        # Deliberately do NOT create the docling JSON
+
+        result = await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+
+        assert result.status == "success"
+        call_args = pipeline.rag.insert_content_list.call_args
+        content_list = call_args.kwargs.get("content_list") or call_args[1]["content_list"]
+        assert content_list == original_items
