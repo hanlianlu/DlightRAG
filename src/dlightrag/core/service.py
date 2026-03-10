@@ -93,6 +93,7 @@ from dlightrag.core.retrieval.engine import (  # noqa: E402
     RetrievalEngine,
     RetrievalResult,
 )
+from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     get_embedding_func,
     get_llm_model_func,
@@ -406,6 +407,10 @@ class RAGService:
         )
 
         self.retrieval = RetrievalEngine(rag=self.rag, config=config)
+        self._path_resolver = PathResolver(
+            working_dir=str(config.working_dir_path),
+        )
+        self.retrieval._path_resolver = self._path_resolver
         self.retrieval._url_transformer = self._url_transformer
 
         logger.info("RAG pipelines initialized successfully (caption mode)")

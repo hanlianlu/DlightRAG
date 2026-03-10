@@ -15,6 +15,7 @@ from dlightrag.core.retrieval.engine import (
     augment_retrieval_result,
     build_sources_and_media_from_contexts,
 )
+from dlightrag.core.retrieval.path_resolver import PathResolver
 
 # ---------------------------------------------------------------------------
 # TestExtractRagRelative
@@ -177,6 +178,20 @@ class TestBuildSourcesAndMediaFromContexts:
         ]
         sources, media = build_sources_and_media_from_contexts(contexts)
         assert len(sources) == 0
+
+    def test_source_url_uses_path_resolver(self) -> None:
+        """Verify PathResolver integration: source URLs go through /api/files/."""
+        resolver = PathResolver(working_dir="/storage")
+        contexts = [
+            {
+                "chunk_id": "c1",
+                "file_path": "/storage/sources/local/report.pdf",
+                "reference_id": "ref-001",
+                "content": "Some text",
+            },
+        ]
+        sources, _ = build_sources_and_media_from_contexts(contexts, path_resolver=resolver)
+        assert sources[0]["url"] == "/api/files/sources/local/report.pdf"
 
 
 # ---------------------------------------------------------------------------
