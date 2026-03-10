@@ -526,6 +526,11 @@ class RAGService:
         await visual_chunks.initialize()
         self._visual_chunks = visual_chunks
 
+        # Create PathResolver for unified mode
+        self._path_resolver = PathResolver(
+            working_dir=str(config.working_dir_path),
+        )
+
         # Create engine (pass pre-built embedder to avoid creating a duplicate)
         self.unified = UnifiedRepresentEngine(
             lightrag=lightrag,
@@ -533,6 +538,7 @@ class RAGService:
             config=config,
             vision_model_func=vision_func,
             visual_embedder=visual_embedder,
+            path_resolver=self._path_resolver,
         )
 
         # Create hash index for deduplication (same backend as caption mode)
