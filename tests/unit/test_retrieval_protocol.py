@@ -26,17 +26,37 @@ class TestRetrievalResult:
 class TestRetrievalBackendProtocol:
     def test_structural_subtyping(self) -> None:
         class FakeBackend:
-            async def aretrieve(self, query: str, *, mode: str = "mix",
-                top_k: int | None = None, chunk_top_k: int | None = None,
-                **kwargs: Any) -> RetrievalResult:
+            async def aretrieve(
+                self,
+                query: str,
+                *,
+                mode: str = "mix",
+                top_k: int | None = None,
+                chunk_top_k: int | None = None,
+                **kwargs: Any,
+            ) -> RetrievalResult:
                 return RetrievalResult()
-            async def aanswer(self, query: str, *, mode: str = "mix",
-                top_k: int | None = None, chunk_top_k: int | None = None,
-                **kwargs: Any) -> RetrievalResult:
+
+            async def aanswer(
+                self,
+                query: str,
+                *,
+                mode: str = "mix",
+                top_k: int | None = None,
+                chunk_top_k: int | None = None,
+                **kwargs: Any,
+            ) -> RetrievalResult:
                 return RetrievalResult()
-            async def aanswer_stream(self, query: str, *, mode: str = "mix",
-                top_k: int | None = None, chunk_top_k: int | None = None,
-                **kwargs: Any) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]:
+
+            async def aanswer_stream(
+                self,
+                query: str,
+                *,
+                mode: str = "mix",
+                top_k: int | None = None,
+                chunk_top_k: int | None = None,
+                **kwargs: Any,
+            ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]:
                 raise NotImplementedError
 
         backend: RetrievalBackend = FakeBackend()

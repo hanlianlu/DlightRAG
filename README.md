@@ -210,6 +210,7 @@ Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BA
 | `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
 | `GET` | `/files` | List ingested documents |
 | `DELETE` | `/files` | Delete documents |
+| `GET` | `/api/files/{path}` | Serve/download a file (local: stream, Azure: 302 SAS redirect) |
 | `GET` | `/workspaces` | List available workspaces |
 | `GET` | `/health` | Health check with storage status |
 

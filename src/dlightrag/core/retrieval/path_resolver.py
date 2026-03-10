@@ -5,6 +5,7 @@ Normalizes raw storage paths (local, azure://, snowflake://) into
 /api/files/{path} URLs. The file-serving endpoint handles dispatch:
 local → stream, azure → 302 redirect to SAS URL.
 """
+
 from __future__ import annotations
 
 

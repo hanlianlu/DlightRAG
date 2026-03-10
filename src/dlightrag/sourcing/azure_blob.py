@@ -27,7 +27,9 @@ def _parse_connection_string(connection_string: str) -> dict[str, str]:
     if "AccountKey" in connection_string:
         start = connection_string.index("AccountKey=") + len("AccountKey=")
         end = connection_string.find(";", start)
-        pairs["AccountKey"] = connection_string[start:end] if end != -1 else connection_string[start:]
+        pairs["AccountKey"] = (
+            connection_string[start:end] if end != -1 else connection_string[start:]
+        )
     return pairs
 
 

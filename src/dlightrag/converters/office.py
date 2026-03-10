@@ -226,9 +226,6 @@ class LibreOfficeConverter:
                         "{urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0}page-height",
                         "21cm",
                     )
-                    props.set(
-                        "{urn:oasis:names:tc:opendocument:xmlns:style:1.0}scale-to-pages", "1"
-                    )
                     props.set("{urn:oasis:names:tc:opendocument:xmlns:style:1.0}scale-to-X", "1")
                     props.set("{urn:oasis:names:tc:opendocument:xmlns:style:1.0}scale-to-Y", "0")
 

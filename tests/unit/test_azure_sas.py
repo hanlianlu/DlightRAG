@@ -1,4 +1,5 @@
 """Tests for Azure SAS URL generation — verifies connection string parsing and SAS dispatch."""
+
 from __future__ import annotations
 
 from unittest.mock import patch
@@ -11,7 +12,6 @@ CONN_STR = "DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=dGVz
 
 
 class TestGenerateAzureSasUrl:
-
     def test_rejects_non_azure_path(self) -> None:
         """Guard: local paths must not reach SAS generation."""
         with pytest.raises(ValueError, match="azure://"):
@@ -25,7 +25,10 @@ class TestGenerateAzureSasUrl:
             raw_path="azure://mycontainer/reports/q1.pdf",
             expiry_seconds=3600,
         )
-        assert url == "https://myaccount.blob.core.windows.net/mycontainer/reports/q1.pdf?sv=2024&sig=abc"
+        assert (
+            url
+            == "https://myaccount.blob.core.windows.net/mycontainer/reports/q1.pdf?sv=2024&sig=abc"
+        )
         kw = mock_sas.call_args[1]
         assert kw["account_name"] == "myaccount"
         assert kw["container_name"] == "mycontainer"

@@ -22,20 +22,32 @@ class RetrievalBackend(Protocol):
     """Unified retrieval interface for caption and unified RAG modes."""
 
     async def aretrieve(
-        self, query: str, *, mode: str = "mix",
-        top_k: int | None = None, chunk_top_k: int | None = None,
+        self,
+        query: str,
+        *,
+        mode: str = "mix",
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult: ...
 
     async def aanswer(
-        self, query: str, *, mode: str = "mix",
-        top_k: int | None = None, chunk_top_k: int | None = None,
+        self,
+        query: str,
+        *,
+        mode: str = "mix",
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult: ...
 
     async def aanswer_stream(
-        self, query: str, *, mode: str = "mix",
-        top_k: int | None = None, chunk_top_k: int | None = None,
+        self,
+        query: str,
+        *,
+        mode: str = "mix",
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]: ...
 
