@@ -19,8 +19,8 @@ import numpy as np
 import pytest
 
 from dlightrag.config import DlightragConfig, set_config
-from dlightrag.core.ingestion.pipeline import IngestionPipeline
-from dlightrag.core.retrieval.engine import RetrievalEngine
+from dlightrag.captionrag.pipeline import IngestionPipeline
+from dlightrag.captionrag.retrieval import RetrievalEngine
 from dlightrag.core.service import RAGService
 from dlightrag.core.servicemanager import RAGServiceManager
 

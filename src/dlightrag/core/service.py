@@ -22,8 +22,8 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 
+from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core.chunking import docling_hybrid_chunking_func
 
 logger = logging.getLogger(__name__)
 
@@ -88,10 +88,10 @@ except ImportError:
 
 from lightrag.utils import EmbeddingFunc  # noqa: E402
 
-from dlightrag.core.ingestion.pipeline import IngestionPipeline  # noqa: E402
-from dlightrag.core.retrieval.engine import RetrievalEngine  # noqa: E402
-from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
+from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
+from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
 from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
+from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     get_embedding_func,
     get_llm_model_func,
@@ -331,7 +331,7 @@ class RAGService:
                     "parser='vlm' requires a vision model. "
                     "Set vision_model and vision_provider in config."
                 )
-            from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
+            from dlightrag.captionrag.vlm_parser import VlmOcrParser
 
             vlm_parser = VlmOcrParser(
                 vision_model_func=vision_func,

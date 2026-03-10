@@ -26,9 +26,9 @@ from dlightrag.core.ingestion.hash_index import HashIndex
 from dlightrag.core.ingestion.policy import IngestionPolicy, PolicyStats
 
 if TYPE_CHECKING:
+    from dlightrag.captionrag.vlm_parser import VlmOcrParser
     from dlightrag.config import DlightragConfig
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
-    from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
     from dlightrag.sourcing.base import AsyncDataSource
 
 logger = logging.getLogger(__name__)

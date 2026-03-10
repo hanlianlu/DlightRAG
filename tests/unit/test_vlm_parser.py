@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from dlightrag.core.ingestion.vlm_parser import VlmOcrParser
+from dlightrag.captionrag.vlm_parser import VlmOcrParser
 
 # ---------------------------------------------------------------------------
 # Helpers
