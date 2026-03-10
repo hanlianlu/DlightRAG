@@ -16,6 +16,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from dlightrag.api.file_routes import create_file_router
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
@@ -29,6 +30,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception:
         logger.exception("Failed to initialize RAG service manager")
         raise
+    config = get_config()
+    _app.include_router(
+        create_file_router(config),
+        dependencies=[Depends(_verify_auth)],
+    )
     yield
     await _app.state.manager.close()
 
