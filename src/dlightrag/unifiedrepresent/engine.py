@@ -200,6 +200,7 @@ class UnifiedRepresentEngine:
     async def aretrieve(
         self,
         query: str,
+        *,
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
@@ -221,6 +222,7 @@ class UnifiedRepresentEngine:
     async def aanswer(
         self,
         query: str,
+        *,
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
@@ -242,11 +244,12 @@ class UnifiedRepresentEngine:
     async def aanswer_stream(
         self,
         query: str,
+        *,
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> tuple[dict, dict, AsyncIterator[str] | None]:
+    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]:
         """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
         return await self.retriever.answer_stream(
             query=query,

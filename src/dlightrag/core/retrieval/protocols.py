@@ -37,7 +37,7 @@ class RetrievalBackend(Protocol):
         self, query: str, *, mode: str = "mix",
         top_k: int | None = None, chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]: ...
+    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]: ...
 
 
 __all__ = ["RetrievalBackend", "RetrievalResult"]
