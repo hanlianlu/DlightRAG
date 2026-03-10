@@ -98,6 +98,7 @@ from dlightrag.models.llm import (  # noqa: E402
     get_rerank_func,
     get_vision_model_func,
 )
+from dlightrag.unifiedrepresent.lifecycle import unified_delete_files, unified_ingest  # noqa: E402
 
 
 class RAGService:
@@ -159,6 +160,18 @@ class RAGService:
         self.unified: Any = None  # UnifiedRepresentEngine
         self._lightrag: Any = None  # Direct LightRAG reference (unified mode)
         self._visual_chunks: Any = None  # Visual chunks KV store (unified mode)
+        self._hash_index: Any = None  # Content-hash deduplication index
+
+        # Retrieval backend (satisfies RetrievalBackend Protocol).
+        # Explicitly wired by _do_initialize / _do_initialize_unified;
+        # falls back to self.unified or self.retrieval so tests that set
+        # those attributes directly (without going through initialize) still work.
+        self._backend: Any = None
+
+    @property
+    def _effective_backend(self) -> Any:
+        """Return the active retrieval backend, with lazy fallback."""
+        return self._backend or self.unified or self.retrieval
 
     @property
     def lightrag(self) -> Any:
@@ -404,6 +417,7 @@ class RAGService:
             working_dir=str(config.working_dir_path),
         )
         self.retrieval._path_resolver = self._path_resolver
+        self._backend = self.retrieval
 
         logger.info("RAG pipelines initialized successfully (caption mode)")
 
@@ -532,6 +546,7 @@ class RAGService:
             visual_embedder=visual_embedder,
             path_resolver=self._path_resolver,
         )
+        self._backend = self.unified
 
         # Create hash index for deduplication (same backend as caption mode)
         self._hash_index = await self._create_hash_index(config)
@@ -670,23 +685,13 @@ class RAGService:
 
         # Unified mode
         if self.unified is not None:
-            if source_type == "local":
-                path = Path(kwargs["path"])
-                replace = kwargs.get("replace", self.config.ingestion_replace_default)
-
-                if path.is_file():
-                    return await self._unified_ingest_single_local(path, replace)
-
-                if path.is_dir():
-                    return await self._unified_ingest_local_dir(path, replace)
-
-                raise FileNotFoundError(f"Path not found: {path}")
-
-            if source_type == "azure_blob":
-                return await self._unified_ingest_azure_blob(**kwargs)
-
-            # source_type == "snowflake"
-            return await self._unified_ingest_snowflake(**kwargs)
+            return await unified_ingest(
+                engine=self.unified,
+                config=self.config,
+                hash_index=self._hash_index,
+                source_type=source_type,
+                **kwargs,
+            )
 
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
@@ -751,189 +756,6 @@ class RAGService:
         )
         return ingestion_result.model_dump(exclude_none=True)
 
-    async def _unified_ingest_single_local(self, path: Path, replace: bool) -> dict[str, Any]:
-        """Unified mode: ingest a single local file with dedup."""
-        should_skip, content_hash, reason = await self._hash_index.should_skip_file(path, replace)
-        if should_skip:
-            logger.info("Skipped (dedup): %s - %s", path.name, reason)
-            return {"status": "skipped", "reason": reason, "file_path": str(path)}
-
-        result = await self.unified.aingest(file_path=str(path))
-
-        if content_hash and result.get("doc_id"):
-            await self._hash_index.register(content_hash, result["doc_id"], str(path))
-
-        return result
-
-    async def _unified_ingest_local_dir(self, path: Path, replace: bool) -> dict[str, Any]:
-        """Unified mode: recursively ingest all supported files in a directory."""
-        from dlightrag.unifiedrepresent.renderer import (
-            _IMAGE_EXTENSIONS,
-            _OFFICE_EXTENSIONS,
-        )
-
-        supported = {".pdf"} | _IMAGE_EXTENSIONS | _OFFICE_EXTENSIONS
-
-        files = sorted(f for f in path.rglob("*") if f.is_file() and f.suffix.lower() in supported)
-
-        if not files:
-            logger.warning("No supported files found in %s", path)
-            return {
-                "status": "success",
-                "source_type": "local",
-                "folder": str(path),
-                "processed": 0,
-                "skipped": 0,
-                "total_files": 0,
-            }
-
-        results: list[dict[str, Any]] = []
-        skipped = 0
-        for file_path in files:
-            result = await self._unified_ingest_single_local(file_path, replace)
-            if result.get("status") == "skipped":
-                skipped += 1
-            results.append(result)
-
-        processed = len(results) - skipped
-        logger.info(
-            "Directory ingestion complete: %s (%d processed, %d skipped)",
-            path,
-            processed,
-            skipped,
-        )
-        return {
-            "status": "success",
-            "source_type": "local",
-            "folder": str(path),
-            "results": results,
-            "processed": processed,
-            "skipped": skipped,
-            "total_files": len(files),
-        }
-
-    async def _unified_ingest_azure_blob(self, **kwargs: Any) -> dict[str, Any]:
-        """Unified mode: download blob(s) to temp → visual pipeline."""
-        from dlightrag.sourcing.azure_blob import AzureBlobDataSource
-
-        container_name: str = kwargs["container_name"]
-        blob_path: str | None = kwargs.get("blob_path")
-        prefix: str | None = kwargs.get("prefix")
-        source = kwargs.get("source")
-
-        if source is None:
-            source = AzureBlobDataSource(
-                container_name=container_name,
-                connection_string=self.config.blob_connection_string,
-            )
-
-        replace: bool = kwargs.get("replace", self.config.ingestion_replace_default)
-
-        if blob_path is None and prefix is None:
-            prefix = ""
-
-        try:
-            if blob_path:
-                return await self._unified_ingest_single_blob(source, blob_path, replace)
-
-            # Batch: list + ingest each
-            blob_ids = await source.alist_documents(prefix=prefix)
-            results: list[dict[str, Any]] = []
-            for bid in blob_ids:
-                result = await self._unified_ingest_single_blob(source, bid, replace)
-                results.append(result)
-
-            return {
-                "status": "success",
-                "source_type": "azure_blob",
-                "container": container_name,
-                "prefix": prefix,
-                "results": results,
-                "processed": len(results),
-            }
-        finally:
-            if hasattr(source, "aclose"):
-                await source.aclose()
-
-    async def _unified_ingest_single_blob(
-        self, source: Any, blob_path: str, replace: bool = False
-    ) -> dict[str, Any]:
-        """Download one blob to temp dir, ingest via unified engine, cleanup."""
-        import shutil
-        import uuid
-
-        tmpdir = self.config.temp_dir / uuid.uuid4().hex[:12]
-        tmpdir.mkdir(parents=True, exist_ok=True)
-        try:
-            target = tmpdir / Path(blob_path).name
-            content = await source.aload_document(blob_path)
-            await asyncio.to_thread(target.write_bytes, content)
-
-            # Content-aware deduplication
-            should_skip, content_hash, reason = await self._hash_index.should_skip_file(
-                target, replace
-            )
-            if should_skip:
-                logger.info("Skipped (dedup): %s - %s", blob_path, reason)
-                return {"status": "skipped", "reason": reason, "blob_path": blob_path}
-
-            logger.info("Downloaded blob to temp: %s", target)
-            result = await self.unified.aingest(file_path=str(target))
-
-            # Register with original blob path as file_path
-            if content_hash and result.get("doc_id"):
-                await self._hash_index.register(
-                    content_hash, result["doc_id"], f"azure://{blob_path}"
-                )
-
-            return result
-        finally:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-
-    async def _unified_ingest_snowflake(self, **kwargs: Any) -> dict[str, Any]:
-        """Unified mode: Snowflake text → LightRAG ainsert (no visual pipeline)."""
-        from dlightrag.sourcing.snowflake import SnowflakeDataSource
-
-        config = self.config
-        query: str = kwargs["query"]
-        table: str | None = kwargs.get("table")
-        source_label = table or "query"
-
-        source = await asyncio.to_thread(
-            SnowflakeDataSource,
-            account=config.snowflake_account or "",
-            user=config.snowflake_user or "",
-            password=config.snowflake_password or "",
-            warehouse=config.snowflake_warehouse,
-            database=config.snowflake_database,
-            schema=config.snowflake_schema,
-        )
-
-        try:
-            await asyncio.to_thread(source.execute_query, query, source_label)
-
-            texts: list[str] = []
-            for doc_id in source.list_documents():
-                raw = source.load_document(doc_id)
-                texts.append(raw.decode("utf-8", errors="ignore"))
-
-            if not texts:
-                logger.warning("Snowflake query returned no results")
-                return {"status": "success", "source_type": "snowflake", "processed": 0}
-
-            combined = "\n\n".join(texts)
-            await self._lightrag.ainsert(combined)
-            logger.info("Inserted %d Snowflake rows via LightRAG ainsert", len(texts))
-
-            return {
-                "status": "success",
-                "source_type": "snowflake",
-                "processed": len(texts),
-                "source_label": source_label,
-            }
-        finally:
-            await asyncio.to_thread(source.close)
-
     # === RETRIEVAL API ===
 
     async def aretrieve(
@@ -946,35 +768,12 @@ class RAGService:
         is_reretrieve: bool = False,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Retrieve structured data without generating answer.
-
-        Args:
-            query: User query
-            multimodal_content: Optional multimodal content
-            mode: Retrieval mode (local/global/hybrid/naive/mix)
-            top_k: Initial vector retrieval count
-            chunk_top_k: Final chunk count after round-robin
-            is_reretrieve: Whether this is a re-retrieve (disables internal rerank)
-
-        Returns:
-            RetrievalResult with contexts and raw retrieval data (no answer).
-        """
+        """Retrieve structured data without generating answer."""
         self._ensure_initialized()
-
-        if self.unified is not None:
-            result = await self.unified.aretrieve(
-                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k
-            )
-            return RetrievalResult(
-                answer=None,
-                contexts=result.get("contexts", {}),
-                raw=result.get("raw", {}),
-            )
-
-        if not self.retrieval:
-            raise RuntimeError("Retrieval engine not initialized")
-
-        return await self.retrieval.aretrieve(
+        backend = self._effective_backend
+        if not backend:
+            raise RuntimeError("Retrieval backend not initialized")
+        return await backend.aretrieve(
             query,
             multimodal_content=multimodal_content,
             mode=mode,
@@ -993,27 +792,12 @@ class RAGService:
         chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Retrieve contexts and generate an LLM answer.
-
-        Returns the same structured data as aretrieve() but with the
-        ``answer`` field populated by the LLM.
-        """
+        """Retrieve contexts and generate an LLM answer."""
         self._ensure_initialized()
-
-        if self.unified is not None:
-            result = await self.unified.aanswer(
-                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k
-            )
-            return RetrievalResult(
-                answer=result.get("answer"),
-                contexts=result.get("contexts", {}),
-                raw=result.get("raw", {}),
-            )
-
-        if not self.retrieval:
-            raise RuntimeError("Retrieval engine not initialized")
-
-        return await self.retrieval.aanswer(
+        backend = self._effective_backend
+        if not backend:
+            raise RuntimeError("Retrieval backend not initialized")
+        return await backend.aanswer(
             query,
             multimodal_content=multimodal_content,
             mode=mode,
@@ -1031,21 +815,12 @@ class RAGService:
         chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]:
-        """Streaming answer: retrieve contexts, then stream LLM tokens.
-
-        Returns (contexts, raw, token_iterator).
-        """
+        """Streaming answer: retrieve contexts, then stream LLM tokens."""
         self._ensure_initialized()
-
-        if self.unified is not None:
-            return await self.unified.aanswer_stream(
-                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k
-            )
-
-        if not self.retrieval:
-            raise RuntimeError("Retrieval engine not initialized")
-
-        return await self.retrieval.aanswer_stream(
+        backend = self._effective_backend
+        if not backend:
+            raise RuntimeError("Retrieval backend not initialized")
+        return await backend.aanswer_stream(
             query,
             multimodal_content=multimodal_content,
             mode=mode,
@@ -1105,7 +880,13 @@ class RAGService:
         """Unified file deletion."""
         self._ensure_initialized()
         if self.unified is not None:
-            return await self._unified_delete_files(file_paths=file_paths, filenames=filenames)
+            return await unified_delete_files(
+                engine=self.unified,
+                hash_index=self._hash_index,
+                lightrag=self._lightrag,
+                file_paths=file_paths,
+                filenames=filenames,
+            )
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
         return await self.ingestion.adelete_files(
@@ -1113,81 +894,6 @@ class RAGService:
             filenames=filenames,
             delete_source=delete_source,
         )
-
-    async def _unified_delete_files(
-        self,
-        *,
-        file_paths: list[str] | None = None,
-        filenames: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Delete files in unified mode: hash lookup -> adelete_by_doc_id -> visual_chunks."""
-        from dlightrag.core.ingestion.cleanup import collect_deletion_context
-
-        if not file_paths and not filenames:
-            return []
-
-        results: list[dict[str, Any]] = []
-        identifiers: list[str] = []
-        if file_paths:
-            identifiers.extend(file_paths)
-        if filenames:
-            identifiers.extend(filenames)
-
-        lightrag = self._lightrag
-
-        for identifier in identifiers:
-            ctx = await collect_deletion_context(
-                identifier=identifier,
-                hash_index=self._hash_index,
-                lightrag=lightrag,
-            )
-
-            deletion_result: dict[str, Any] = {
-                "identifier": identifier,
-                "doc_ids_found": list(ctx.doc_ids),
-                "sources_used": ctx.sources_used,
-                "cleanup_results": {},
-                "status": "deleted",
-            }
-
-            if not ctx.doc_ids:
-                deletion_result["status"] = "not_found"
-                deletion_result["file_path"] = identifier
-                deletion_result["doc_id"] = None
-                results.append(deletion_result)
-                continue
-
-            for doc_id in ctx.doc_ids:
-                # Phase 1: Clean visual_chunks (unified-specific)
-                if self.unified:
-                    try:
-                        vc_result = await self.unified.adelete_doc(doc_id)
-                        deletion_result["cleanup_results"]["visual_chunks"] = vc_result
-                    except Exception as exc:
-                        logger.warning("visual_chunks cleanup failed for %s: %s", doc_id, exc)
-                        deletion_result["cleanup_results"]["visual_chunks"] = f"error: {exc}"
-
-                # Phase 2: LightRAG cleanup (chunks_vdb, text_chunks, full_docs, KG)
-                if lightrag and hasattr(lightrag, "adelete_by_doc_id"):
-                    try:
-                        result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-                        deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = (
-                            result.status if hasattr(result, "status") else "completed"
-                        )
-                    except Exception as exc:
-                        logger.warning("LightRAG deletion failed for %s: %s", doc_id, exc)
-                        deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = f"error: {exc}"
-
-            # Phase 3: Remove from hash index
-            for content_hash in ctx.content_hashes:
-                if await self._hash_index.remove(content_hash):
-                    deletion_result["cleanup_results"]["hash_index"] = "removed"
-
-            deletion_result["file_path"] = list(ctx.file_paths)[0] if ctx.file_paths else identifier
-            deletion_result["doc_id"] = list(ctx.doc_ids)[0] if ctx.doc_ids else None
-            results.append(deletion_result)
-
-        return results
 
 
 __all__ = ["RAGService"]

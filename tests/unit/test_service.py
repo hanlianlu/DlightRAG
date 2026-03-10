@@ -347,14 +347,14 @@ class TestRAGServiceUnifiedMode:
         assert result["processed"] == 2
 
     async def test_aingest_unified_snowflake(self, test_config: DlightragConfig) -> None:
-        """Unified mode Snowflake inserts text via LightRAG ainsert."""
+        """Unified mode Snowflake inserts text via engine.lightrag.ainsert."""
         service = RAGService(config=test_config)
         service._initialized = True
         service.unified = MagicMock()
-        service._lightrag = MagicMock()
-        service._lightrag.ainsert = AsyncMock()
+        service.unified.lightrag = MagicMock()
+        service.unified.lightrag.ainsert = AsyncMock()
 
-        with patch("dlightrag.core.service.asyncio.to_thread") as mock_to_thread:
+        with patch("dlightrag.unifiedrepresent.lifecycle.asyncio.to_thread") as mock_to_thread:
             mock_source = MagicMock()
             mock_source.list_documents.return_value = ["row-1", "row-2"]
             mock_source.load_document.side_effect = [b"text one", b"text two"]
@@ -365,7 +365,7 @@ class TestRAGServiceUnifiedMode:
 
             result = await service.aingest(source_type="snowflake", query="SELECT * FROM t")
 
-        service._lightrag.ainsert.assert_awaited_once()
+        service.unified.lightrag.ainsert.assert_awaited_once()
         assert result["processed"] == 2
         assert result["source_type"] == "snowflake"
 
@@ -416,15 +416,19 @@ class TestRAGServiceUnifiedMode:
         assert result["page_count"] == 3
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
-        """Unified mode aretrieve returns a RetrievalResult."""
+        """Unified mode aretrieve delegates directly to unified engine."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        expected = RetrievalResult(
+            answer=None,
+            contexts={"chunks": []},
+            raw={"scores": [0.9]},
+        )
 
         service = RAGService(config=test_config)
         service._initialized = True
         service.unified = MagicMock()
-        service.unified.aretrieve = AsyncMock(
-            return_value={"contexts": {"chunks": []}, "raw": {"scores": [0.9]}}
-        )
+        service.unified.aretrieve = AsyncMock(return_value=expected)
 
         result = await service.aretrieve("test query")
         service.unified.aretrieve.assert_awaited_once()
@@ -434,19 +438,19 @@ class TestRAGServiceUnifiedMode:
         assert result.raw == {"scores": [0.9]}
 
     async def test_aanswer_unified_delegates(self, test_config: DlightragConfig) -> None:
-        """Unified mode aanswer returns a RetrievalResult with answer."""
+        """Unified mode aanswer delegates directly to unified engine."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        expected = RetrievalResult(
+            answer="The answer is 42.",
+            contexts={"chunks": ["c1"]},
+            raw={},
+        )
 
         service = RAGService(config=test_config)
         service._initialized = True
         service.unified = MagicMock()
-        service.unified.aanswer = AsyncMock(
-            return_value={
-                "answer": "The answer is 42.",
-                "contexts": {"chunks": ["c1"]},
-                "raw": {},
-            }
-        )
+        service.unified.aanswer = AsyncMock(return_value=expected)
 
         result = await service.aanswer("what is the answer?")
         service.unified.aanswer.assert_awaited_once()
