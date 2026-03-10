@@ -2,5 +2,6 @@
 """Retrieval engine for RAG queries."""
 
 from dlightrag.core.retrieval.engine import RetrievalEngine, RetrievalResult
+from dlightrag.core.retrieval.path_resolver import PathResolver
 
-__all__ = ["RetrievalEngine", "RetrievalResult"]
+__all__ = ["PathResolver", "RetrievalEngine", "RetrievalResult"]
