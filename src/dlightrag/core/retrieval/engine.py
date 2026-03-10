@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from lightrag import QueryParam
 
+from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.utils.content_filters import filter_content_for_snippet
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class RetrievalEngine:
         self.rag = rag
         self.config = config
         self._url_transformer: Callable[[str], str] | None = None
+        self._path_resolver: PathResolver | None = None
 
     async def aretrieve(
         self,
@@ -104,6 +106,7 @@ class RetrievalEngine:
             str(self.config.working_dir_path),
             url_transformer=getattr(self, "_url_transformer", None),
             lightrag=lightrag,
+            path_resolver=getattr(self, "_path_resolver", None),
         )
 
     async def aanswer(
@@ -179,6 +182,7 @@ class RetrievalEngine:
             str(self.config.working_dir_path),
             url_transformer=getattr(self, "_url_transformer", None),
             lightrag=lightrag,
+            path_resolver=getattr(self, "_path_resolver", None),
         )
 
     async def aanswer_stream(
@@ -255,6 +259,7 @@ class RetrievalEngine:
             str(self.config.working_dir_path),
             url_transformer=getattr(self, "_url_transformer", None),
             lightrag=lightrag,
+            path_resolver=getattr(self, "_path_resolver", None),
         )
 
         # Phase 2: Stream LLM answer
@@ -320,6 +325,7 @@ def build_sources_and_media_from_contexts(
     contexts: list[dict[str, Any]],
     url_transformer: Callable[[str], str] | None = None,
     rag_working_dir: str | None = None,
+    path_resolver: PathResolver | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Build sources/media lists from chunk contexts.
 
@@ -350,7 +356,7 @@ def build_sources_and_media_from_contexts(
                 "type": "file",
                 "title": Path(str(file_path)).name,
                 "path": str(file_path),
-                "url": _to_download_url(
+                "url": path_resolver.resolve(str(file_path)) if path_resolver else _to_download_url(
                     str(file_path),
                     url_transformer=url_transformer,
                     working_dir=rag_working_dir,
@@ -379,7 +385,7 @@ def build_sources_and_media_from_contexts(
                 "source_chunk_id": chunk_id,
                 "title": Path(str(file_path)).name,
                 "path": img_path,
-                "url": _to_download_url(
+                "url": path_resolver.resolve(img_path) if path_resolver else _to_download_url(
                     img_path,
                     url_transformer=url_transformer,
                     working_dir=rag_working_dir,
@@ -395,6 +401,7 @@ async def augment_retrieval_result(
     rag_working_dir: str | None = None,
     url_transformer: Callable[[str], str] | None = None,
     lightrag: Any = None,
+    path_resolver: PathResolver | None = None,
 ) -> RetrievalResult:
     """Attach sources/media (download URLs) derived from contexts into result.raw.
 
@@ -430,6 +437,7 @@ async def augment_retrieval_result(
         chunk_contexts,
         url_transformer=url_transformer,
         rag_working_dir=rag_working_dir,
+        path_resolver=path_resolver,
     )
 
     if sources or media:
