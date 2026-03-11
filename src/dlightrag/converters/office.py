@@ -33,8 +33,8 @@ SKIP_CONVERSION_EXTENSIONS = {".csv"}
 _EXCEL_UNIT_TO_CM = 0.201
 _DEFAULT_COLUMN_WIDTH = 8.43  # Excel default
 _PAGE_MARGIN_CM = 0.5
-_MIN_PAGE_WIDTH_CM = 21.0   # A4 portrait width
-_MAX_PAGE_WIDTH_CM = 63.0   # ~3x A4 landscape
+_MIN_PAGE_WIDTH_CM = 21.0  # A4 portrait width
+_MAX_PAGE_WIDTH_CM = 63.0  # ~3x A4 landscape
 _A4_PORTRAIT_HEIGHT_CM = 29.7
 _A4_LANDSCAPE_HEIGHT_CM = 21.0
 
@@ -42,6 +42,7 @@ _A4_LANDSCAPE_HEIGHT_CM = 21.0
 @dataclass
 class PageSetup:
     """Page dimensions for PDF conversion."""
+
     width_cm: float
     height_cm: float
     orientation: str  # "landscape" | "portrait"
@@ -99,7 +100,9 @@ class LibreOfficeConverter:
         try:
             wb = openpyxl.load_workbook(str(source_path), data_only=True)
         except Exception:
-            logger.warning("Cannot read %s with openpyxl, using A4 landscape fallback", source_path.name)
+            logger.warning(
+                "Cannot read %s with openpyxl, using A4 landscape fallback", source_path.name
+            )
             return fallback
 
         try:
@@ -116,7 +119,7 @@ class LibreOfficeConverter:
                     dim = ws.column_dimensions.get(col_letter)
                     if dim and dim.hidden:
                         continue
-                    width = (dim.width if dim and dim.width else _DEFAULT_COLUMN_WIDTH)
+                    width = dim.width if dim and dim.width else _DEFAULT_COLUMN_WIDTH
                     sheet_width += width
 
                 sheet_width_cm = sheet_width * _EXCEL_UNIT_TO_CM
