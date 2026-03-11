@@ -52,7 +52,12 @@ def _make_lightrag_result() -> dict:
                 },
             ],
             "chunks": [
-                {"chunk_id": "chunk-abc", "content": "text from chunk abc"},
+                {
+                    "chunk_id": "chunk-abc",
+                    "content": "text from chunk abc",
+                    "reference_id": "1",
+                    "file_path": "/test/doc.pdf",
+                },
             ],
         },
     }
@@ -210,8 +215,14 @@ class TestRetrieve:
         chunks = result["contexts"]["chunks"]
         # Both chunks resolved
         assert len(chunks) == 2
-        ref_ids = {c["reference_id"] for c in chunks}
-        assert ref_ids == {"chunk-abc", "chunk-def"}
+        # chunk-abc has reference_id="1" from chunks; chunk-def has "" (entity-sourced)
+        for chunk in chunks:
+            assert "chunk_id" in chunk
+            assert "reference_id" in chunk
+            assert "file_path" in chunk
+            assert "page_idx" in chunk
+        chunk_ids = {c["chunk_id"] for c in chunks}
+        assert chunk_ids == {"chunk-abc", "chunk-def"}
 
     async def test_media_contains_image_data(self) -> None:
         retriever = _make_retriever()
@@ -262,7 +273,10 @@ class TestRetrieveNoRerank:
             "data": {
                 "entities": [],
                 "relationships": [],
-                "chunks": [{"chunk_id": f"c-{i}", "content": f"text {i}"} for i in range(5)],
+                "chunks": [
+                    {"chunk_id": f"c-{i}", "content": f"text {i}", "reference_id": "1", "file_path": "/test/doc.pdf"}
+                    for i in range(5)
+                ],
             },
         }
         visual_data_list = [
