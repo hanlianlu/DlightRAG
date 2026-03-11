@@ -51,7 +51,10 @@ class UnifiedRepresentEngine:
         self.vision_model_func = vision_model_func
 
         # Sub-components
-        self.renderer = PageRenderer(dpi=config.page_render_dpi)
+        from dlightrag.converters.office import LibreOfficeConverter
+
+        converter = LibreOfficeConverter(config)
+        self.renderer = PageRenderer(dpi=config.page_render_dpi, converter=converter)
 
         # Use pre-built embedder (shared with LightRAG's embedding_func)
         # or create one from config as fallback.
