@@ -23,14 +23,18 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ```bash
 uv add dlightrag        # or: pip install dlightrag
+cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
 ```
 
 ```python
 import asyncio
+from dotenv import load_dotenv
 from dlightrag import RAGService, DlightragConfig
 
+load_dotenv()  # load .env
+
 async def main():
-    config = DlightragConfig(openai_api_key="sk-...")
+    config = DlightragConfig()
     service = await RAGService.create(config=config)
 
     await service.aingest(source_type="local", path="./docs")
