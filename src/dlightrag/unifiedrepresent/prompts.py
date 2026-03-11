@@ -13,6 +13,7 @@ You will receive:
 1. Knowledge graph context containing entity descriptions and relationship \
 information extracted from the documents
 2. One or more document page images that are most relevant to the query
+3. A reference list mapping reference IDs to document sources
 
 Instructions:
 - Answer the question accurately based on the provided page images and \
@@ -23,7 +24,21 @@ do so clearly
 - If the information needed to answer the question is not present in the \
 provided context, say so
 - Be concise but thorough — include relevant details from both the visual \
-content and knowledge graph"""
+content and knowledge graph
+- Track which document sources support the facts in your response using \
+their reference IDs
+- Generate a References section at the end of your response
+
+References Section Format:
+- The References section should be under heading: `### References`
+- Reference list entries should adhere to the format: `[n] Document Title`
+- Provide maximum of 5 most relevant citations
+- Do not generate anything after the references section
+
+Example:
+### References
+- [1] quarterly_report.pdf
+- [2] financial_analysis.xlsx"""
 
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
