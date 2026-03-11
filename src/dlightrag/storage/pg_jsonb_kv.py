@@ -8,11 +8,14 @@ silent no-op in ``upsert`` (no matching elif branch), and SQL syntax errors
 in ``filter_keys``/``delete`` (``namespace_to_table_name`` returns None).
 
 This module sidesteps that with a single generic table keyed by
-``(workspace, namespace, id)`` and a JSONB data column.
+``(workspace, namespace, id)`` and a JSONB data column. Large binary fields
+(e.g. ``image_data``) can be separated into a dedicated BYTEA column via
+the ``blob_field`` parameter to keep JSONB lean and browsable.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import dataclass, field
@@ -30,23 +33,28 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     namespace VARCHAR(255) NOT NULL,
     id        VARCHAR(255) NOT NULL,
     data      JSONB NOT NULL,
+    blob_data BYTEA,
     create_time TIMESTAMPTZ DEFAULT NOW(),
     update_time TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (workspace, namespace, id)
 )
 """
 
-_UPSERT = f"""
-INSERT INTO {TABLE} (workspace, namespace, id, data)
-VALUES ($1, $2, $3, $4::jsonb)
-ON CONFLICT (workspace, namespace, id)
-DO UPDATE SET data = EXCLUDED.data, update_time = NOW()
+_ADD_BLOB_COLUMN = f"""
+ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS blob_data BYTEA
 """
 
-_GET_BY_ID = f"SELECT data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = $3"
+_UPSERT = f"""
+INSERT INTO {TABLE} (workspace, namespace, id, data, blob_data)
+VALUES ($1, $2, $3, $4::jsonb, $5)
+ON CONFLICT (workspace, namespace, id)
+DO UPDATE SET data = EXCLUDED.data, blob_data = EXCLUDED.blob_data, update_time = NOW()
+"""
+
+_GET_BY_ID = f"SELECT data, blob_data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = $3"
 
 _GET_BY_IDS = (
-    f"SELECT id, data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = ANY($3)"
+    f"SELECT id, data, blob_data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = ANY($3)"
 )
 
 _DELETE = f"DELETE FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = ANY($3)"
@@ -59,6 +67,15 @@ _IS_EMPTY = f"SELECT 1 FROM {TABLE} WHERE workspace = $1 AND namespace = $2 LIMI
 
 _DROP = f"DELETE FROM {TABLE} WHERE workspace = $1 AND namespace = $2"
 
+_MIGRATE_BLOB = f"""
+UPDATE {TABLE}
+SET blob_data = decode(data->>'{{field}}', 'base64'),
+    data = data - '{{field}}'
+WHERE workspace = $1 AND namespace = $2
+  AND blob_data IS NULL
+  AND data ? '{{field}}'
+"""
+
 
 @dataclass
 class PGJsonbKVStorage(BaseKVStorage):
@@ -67,9 +84,19 @@ class PGJsonbKVStorage(BaseKVStorage):
     Uses a single ``dlightrag_kv_store`` table with (workspace, namespace, id)
     composite primary key. Reuses LightRAG's shared asyncpg pool via
     ``ClientManager`` (same pattern as ``PGHashIndex``).
+
+    Parameters
+    ----------
+    blob_field : str or None
+        If set, this key is extracted from the JSONB ``data`` and stored as
+        raw bytes in the ``blob_data`` BYTEA column. On read, the field is
+        merged back into the returned dict (base64-encoded, matching the
+        original format). This keeps JSONB small and browsable in tools
+        like DBeaver.
     """
 
     _pool: Any = field(default=None, repr=False)
+    blob_field: str | None = field(default=None)
 
     def _get_pool(self) -> Any:
         if self._pool is None:
@@ -87,6 +114,14 @@ class PGJsonbKVStorage(BaseKVStorage):
     async def _ensure_table(self) -> None:
         async with self._get_pool().acquire() as conn:
             await conn.execute(_CREATE_TABLE)
+            # Migrate existing tables that lack the blob_data column
+            await conn.execute(_ADD_BLOB_COLUMN)
+            # Migrate existing rows: move blob_field from JSONB to BYTEA
+            if self.blob_field:
+                sql = _MIGRATE_BLOB.replace("{field}", self.blob_field)
+                result = await conn.execute(sql, self.workspace, self.namespace)
+                if result and "UPDATE" in result and result != "UPDATE 0":
+                    logger.info("Migrated %s blob_field='%s': %s", self.namespace, self.blob_field, result)
 
     async def finalize(self) -> None:
         # Pool is borrowed from ClientManager — don't close it.
@@ -100,7 +135,17 @@ class PGJsonbKVStorage(BaseKVStorage):
     async def upsert(self, data: dict[str, dict[str, Any]]) -> None:
         if not data:
             return
-        rows = [(self.workspace, self.namespace, k, json.dumps(v)) for k, v in data.items()]
+        rows = []
+        for k, v in data.items():
+            blob_bytes = None
+            if self.blob_field and self.blob_field in v:
+                v = dict(v)  # Don't mutate caller's dict
+                raw = v.pop(self.blob_field)
+                if isinstance(raw, str):
+                    blob_bytes = base64.b64decode(raw)
+                elif isinstance(raw, bytes):
+                    blob_bytes = raw
+            rows.append((self.workspace, self.namespace, k, json.dumps(v), blob_bytes))
         async with self._get_pool().acquire() as conn:
             await conn.executemany(_UPSERT, rows)
 
@@ -114,19 +159,29 @@ class PGJsonbKVStorage(BaseKVStorage):
             return json.loads(raw)
         return raw
 
+    def _merge_blob(self, data: dict[str, Any], blob_data: bytes | None) -> dict[str, Any]:
+        """Merge blob_data back into the dict as base64 string."""
+        if self.blob_field and blob_data is not None:
+            data[self.blob_field] = base64.b64encode(blob_data).decode("ascii")
+        return data
+
     async def get_by_id(self, id: str) -> dict[str, Any] | None:
         async with self._get_pool().acquire() as conn:
             row = await conn.fetchrow(_GET_BY_ID, self.workspace, self.namespace, id)
             if row is None:
                 return None
-            return self._parse_data(row["data"])
+            data = self._parse_data(row["data"])
+            return self._merge_blob(data, row["blob_data"])
 
     async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any] | None]:
         if not ids:
             return []
         async with self._get_pool().acquire() as conn:
             rows = await conn.fetch(_GET_BY_IDS, self.workspace, self.namespace, ids)
-        lookup = {row["id"]: self._parse_data(row["data"]) for row in rows}
+        lookup = {}
+        for row in rows:
+            data = self._parse_data(row["data"])
+            lookup[row["id"]] = self._merge_blob(data, row["blob_data"])
         return [lookup.get(id_) for id_ in ids]
 
     async def filter_keys(self, keys: set[str]) -> set[str]:
