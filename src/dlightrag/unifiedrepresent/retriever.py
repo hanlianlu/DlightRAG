@@ -364,10 +364,12 @@ class VisualRetriever:
                 # Normalize VDB results to match text chunk schema
                 normalized = [
                     {
-                        "reference_id": c.get("id", ""),
-                        "page_index": c.get("chunk_order_index"),
-                        "relevance_score": c.get("distance", 0.0),
+                        "chunk_id": c.get("id", ""),
+                        "reference_id": "",  # Not available from VDB; set by merge
+                        "file_path": c.get("file_path", ""),
                         "content": c.get("content", ""),
+                        "page_idx": (c.get("chunk_order_index") or 0) + 1,  # 0→1-based
+                        "relevance_score": c.get("distance", 0.0),
                     }
                     for c in (raw_chunks or [])
                 ]
