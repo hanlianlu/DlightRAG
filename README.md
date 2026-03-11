@@ -99,12 +99,11 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 ### Web UI
 
 ```bash
-uv add "dlightrag[web]"   # or: pip install "dlightrag[web]"
 dlightrag-api --env-file .env
 # Open http://localhost:8100/web/
 ```
 
-Built-in chat interface with citation navigation and document management. Answers stream in real-time; click citation badges (e.g. `[1-2]`) to view source chunks with semantic highlights. File upload, deletion, and workspace switching are all handled in-browser.
+Built-in chat interface with citation navigation and document management — no extra dependencies needed. Answers stream in real-time; click citation badges (e.g. `[1-2]`) to view source chunks with semantic highlights. File upload, deletion, and workspace switching are all handled in-browser.
 
 
 ## Configuration
