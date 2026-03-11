@@ -143,7 +143,7 @@ body {
     background: var(--bg-surface);
     border: 1px solid rgba(120, 113, 108, 0.2);
     border-radius: var(--radius);
-    padding: 4px 4px 4px 16px;
+    padding: 4px 4px 4px 4px;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -437,6 +437,69 @@ body {
     color: var(--text-400);
 }
 
+/* === Workspace List (Multi-Select) === */
+
+.workspace-check-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    margin-bottom: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.workspace-check-item:hover {
+    background: var(--bg-elevated);
+}
+
+.workspace-check-item.selected {
+    background: rgba(87, 74, 36, 0.12);
+    border: 1px solid rgba(210, 182, 97, 0.2);
+}
+
+.workspace-check-item:not(.selected) {
+    border: 1px solid transparent;
+}
+
+.ws-checkbox {
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1.5px solid rgba(120, 113, 108, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: transparent;
+    transition: all 0.15s;
+}
+
+.ws-checkbox.checked {
+    background: rgba(87, 74, 36, 0.5);
+    border-color: var(--gold-200);
+    color: var(--gold-200);
+}
+
+.ws-check-name {
+    color: var(--text-300);
+    font-size: 13px;
+}
+
+.workspace-check-item.selected .ws-check-name {
+    color: var(--gold-200);
+    font-weight: 500;
+}
+
+/* === Empty State === */
+
+.empty-state {
+    color: var(--text-600);
+    text-align: center;
+}
+
 /* === Streaming Indicator === */
 
 .streaming-dot {
@@ -472,6 +535,175 @@ body {
 }
 
 .toast.visible { opacity: 1; }
+
+/* === Composer + Button === */
+
+.composer-plus {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: transparent;
+    border: none;
+    color: var(--text-500);
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-bottom: 2px;
+    transition: color 0.15s;
+}
+
+.composer-plus:hover {
+    color: var(--text-300);
+}
+
+/* === Thumbnail Strip === */
+
+.thumbnail-strip {
+    display: flex;
+    gap: 8px;
+    padding: 0 8px 8px 8px;
+}
+
+.thumbnail-strip:empty {
+    display: none;
+}
+
+.thumbnail-item {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.thumbnail-img {
+    width: 56px;
+    height: 56px;
+    border-radius: 10px;
+    object-fit: cover;
+    border: 1px solid rgba(120, 113, 108, 0.15);
+}
+
+.thumbnail-remove {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--bg-elevated);
+    border: 1px solid rgba(120, 113, 108, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 9px;
+    color: var(--text-400);
+    line-height: 1;
+    padding: 0;
+    transition: color 0.15s, background 0.15s;
+}
+
+.thumbnail-remove:hover {
+    color: var(--text-100);
+    background: var(--bg-surface);
+}
+
+/* === Drop Overlay === */
+
+.drop-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(87, 74, 36, 0.08);
+    border: 2px dashed var(--gold-400);
+    z-index: 150;
+    align-items: center;
+    justify-content: center;
+}
+
+.drop-overlay.active {
+    display: flex;
+}
+
+.drop-overlay-content {
+    color: var(--gold-200);
+    font-size: 15px;
+    text-align: center;
+    line-height: 1.8;
+}
+
+/* === Workspace Chips === */
+
+.workspace-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ws-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(87, 74, 36, 0.3);
+    border: 1px solid rgba(210, 182, 97, 0.25);
+    border-radius: 8px;
+    padding: 4px 8px 4px 10px;
+    font-size: 12px;
+    color: var(--gold-200);
+    font-weight: 500;
+}
+
+.ws-chip-remove {
+    background: none;
+    border: none;
+    color: var(--gold-400);
+    font-size: 10px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    transition: color 0.15s;
+}
+
+.ws-chip-remove:hover {
+    color: var(--gold-100);
+}
+
+.ws-add-btn {
+    display: inline-flex;
+    align-items: center;
+    background: transparent;
+    border: 1px dashed rgba(120, 113, 108, 0.25);
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: var(--text-500);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.ws-add-btn:hover {
+    color: var(--text-300);
+    border-color: rgba(120, 113, 108, 0.4);
+}
+
+/* === Message Image Thumbnails === */
+
+.message-images {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+}
+
+.message-img {
+    width: 72px;
+    height: 52px;
+    border-radius: 10px;
+    object-fit: cover;
+    border: 1px solid rgba(120, 113, 108, 0.12);
+}
 
 /* === Scrollbar === */
 
