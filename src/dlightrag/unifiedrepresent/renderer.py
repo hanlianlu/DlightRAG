@@ -13,14 +13,18 @@ import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pypdfium2 as pdfium
 from PIL import Image
 
+if TYPE_CHECKING:
+    from dlightrag.converters.office import LibreOfficeConverter
+
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp", ".gif"})
-_OFFICE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx"})
+_OFFICE_EXTENSIONS = frozenset({".docx", ".pptx", ".xlsx", ".doc", ".ppt", ".xls"})
 
 
 @dataclass
@@ -43,10 +47,20 @@ class PageRenderer:
     dpi:
         Rendering resolution in dots per inch. Default 250 balances quality
         and memory usage for typical A4/Letter documents.
+    converter:
+        Optional ``LibreOfficeConverter`` instance. When provided,
+        ``_render_office`` delegates to its ``file_to_pdf_bytes`` method,
+        enabling optimized conversion (e.g. adaptive page width for Excel).
+        When omitted, a bare ``libreoffice --headless`` call is used.
     """
 
-    def __init__(self, dpi: int = 250) -> None:
+    def __init__(
+        self,
+        dpi: int = 250,
+        converter: LibreOfficeConverter | None = None,
+    ) -> None:
         self.dpi = dpi
+        self._converter = converter
 
     async def render_file(self, path: str | Path) -> RenderResult:
         """Render a file to page images, dispatching by extension.
@@ -140,14 +154,57 @@ class PageRenderer:
 
         return await asyncio.to_thread(_load)
 
+    def _render_pdf_from_bytes(self, pdf_bytes: bytes) -> RenderResult:
+        """Render PDF from raw bytes (called via to_thread by _render_office)."""
+        doc = pdfium.PdfDocument(pdf_bytes)
+        try:
+            scale = self.dpi / 72
+            pages: list[tuple[int, Image.Image]] = []
+            for idx in range(len(doc)):
+                page = doc[idx]
+                bitmap = page.render(scale=scale)
+                pil_image = bitmap.to_pil()
+                pages.append((idx, pil_image))
+
+            metadata: dict[str, str | int] = {"original_format": "pdf", "page_count": len(doc)}
+            try:
+                meta = doc.get_metadata_dict()
+                if meta.get("Title"):
+                    metadata["title"] = meta["Title"]
+                if meta.get("Author"):
+                    metadata["author"] = meta["Author"]
+                if meta.get("CreationDate"):
+                    metadata["creation_date"] = meta["CreationDate"]
+            except Exception:  # noqa: BLE001
+                logger.debug("Could not extract PDF metadata from bytes")
+
+            return RenderResult(pages=pages, metadata=metadata)
+        finally:
+            doc.close()
+
     async def _render_office(self, path: Path) -> RenderResult:
         """Convert an Office document to PDF via LibreOffice, then render.
+
+        When a converter is provided, delegates to its ``file_to_pdf_bytes``
+        method for optimized conversion (adaptive page width for Excel).
+        Otherwise falls back to a bare ``libreoffice --headless`` call.
 
         Raises
         ------
         RuntimeError
             If LibreOffice is not installed or the conversion fails.
         """
+        if self._converter:
+
+            def _convert_and_render(p: Path) -> RenderResult:
+                pdf_bytes = self._converter.file_to_pdf_bytes(p)
+                return self._render_pdf_from_bytes(pdf_bytes)
+
+            render_result = await asyncio.to_thread(_convert_and_render, path)
+            render_result.metadata["original_format"] = path.suffix.lower().lstrip(".")
+            return render_result
+
+        # Fallback: bare LibreOffice (no converter provided)
         lo_bin = shutil.which("libreoffice") or shutil.which("soffice")
         if lo_bin is None:
             raise RuntimeError(

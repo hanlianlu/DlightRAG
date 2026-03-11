@@ -239,3 +239,112 @@ class TestRenderFile:
 
         with pytest.raises(FileNotFoundError, match="File not found"):
             await renderer.render_file(Path("/does/not/exist.pdf"))
+
+
+class TestRenderOfficeWithConverter:
+    """Test _render_office delegation to LibreOfficeConverter."""
+
+    async def test_delegates_to_converter(self, tmp_path):
+        """When converter is provided, _render_office uses file_to_pdf_bytes."""
+        mock_converter = MagicMock()
+        renderer = PageRenderer(dpi=144, converter=mock_converter)
+
+        doc_path = tmp_path / "doc.xlsx"
+        doc_path.touch()
+
+        mock_converter.file_to_pdf_bytes.return_value = b"%PDF-fake"
+
+        mock_render_result = RenderResult(
+            pages=[(0, Image.new("RGB", (10, 10)))],
+            metadata={"original_format": "pdf", "page_count": 1},
+        )
+
+        with patch.object(renderer, "_render_pdf_from_bytes", return_value=mock_render_result):
+            result = await renderer._render_office(doc_path)
+
+        mock_converter.file_to_pdf_bytes.assert_called_once_with(doc_path)
+        assert result.metadata["original_format"] == "xlsx"
+
+    async def test_no_converter_uses_fallback(self, tmp_path):
+        """Without converter, falls back to bare LibreOffice."""
+        renderer = PageRenderer(dpi=144)  # no converter
+
+        doc_path = tmp_path / "doc.docx"
+        doc_path.touch()
+
+        mock_run_result = MagicMock()
+        mock_run_result.returncode = 0
+        mock_render_result = RenderResult(
+            pages=[(0, Image.new("RGB", (10, 10)))],
+            metadata={"original_format": "pdf", "page_count": 1},
+        )
+
+        def fake_run(cmd, **kwargs):
+            outdir_idx = cmd.index("--outdir")
+            outdir = cmd[outdir_idx + 1]
+            (Path(outdir) / "doc.pdf").touch()
+            return mock_run_result
+
+        with (
+            patch(
+                "dlightrag.unifiedrepresent.renderer.shutil.which",
+                return_value="/usr/bin/libreoffice",
+            ),
+            patch("dlightrag.unifiedrepresent.renderer.subprocess.run", side_effect=fake_run),
+            patch.object(renderer, "_render_pdf_sync", return_value=mock_render_result),
+        ):
+            result = await renderer._render_office(doc_path)
+
+        assert result.metadata["original_format"] == "docx"
+
+
+class TestRenderPdfFromBytes:
+    """Test _render_pdf_from_bytes."""
+
+    def test_renders_from_bytes(self):
+        """Verify PDF bytes are rendered to page images."""
+        renderer = PageRenderer(dpi=72)
+
+        mock_pil_img = Image.new("RGB", (100, 100), "white")
+        mock_bitmap = MagicMock()
+        mock_bitmap.to_pil.return_value = mock_pil_img
+
+        mock_page = MagicMock()
+        mock_page.render.return_value = mock_bitmap
+
+        mock_doc = MagicMock()
+        mock_doc.__len__ = MagicMock(return_value=1)
+        mock_doc.__getitem__ = MagicMock(return_value=mock_page)
+        mock_doc.get_metadata_dict.return_value = {}
+
+        with patch(
+            "dlightrag.unifiedrepresent.renderer.pdfium.PdfDocument", return_value=mock_doc
+        ) as mock_cls:
+            result = renderer._render_pdf_from_bytes(b"%PDF-fake")
+
+        # Verify PdfDocument was called with bytes, not a path
+        mock_cls.assert_called_once_with(b"%PDF-fake")
+        assert len(result.pages) == 1
+        assert result.pages[0][1] is mock_pil_img
+        mock_doc.close.assert_called_once()
+
+
+class TestOfficeExtensionsExpanded:
+    """Test that legacy Office formats are accepted."""
+
+    async def test_xls_routes_to_render_office(self, tmp_path):
+        """xls files should be handled by _render_office, not raise ValueError."""
+        renderer = PageRenderer(dpi=144)
+        xls_path = tmp_path / "old.xls"
+        xls_path.touch()
+
+        mock_result = RenderResult(
+            pages=[(0, Image.new("RGB", (10, 10)))],
+            metadata={"original_format": "xls"},
+        )
+
+        with patch.object(renderer, "_render_office", return_value=mock_result) as mock:
+            result = await renderer.render_file(xls_path)
+
+        mock.assert_called_once_with(xls_path)
+        assert result.metadata["original_format"] == "xls"
