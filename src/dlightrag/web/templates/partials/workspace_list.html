@@ -1,9 +1,6 @@
 {% for ws in workspaces %}
-<div class="file-item"{% if ws == current_workspace %} style="border-color:var(--gold-500)"{% endif %}>
-    <span class="file-name">{{ ws }}</span>
-    <form method="post" action="/web/workspaces/switch">
-        <input type="hidden" name="workspace" value="{{ ws }}">
-        <button type="submit" class="topbar-btn" style="padding:4px 8px;font-size:11px">Switch</button>
-    </form>
+<div class="workspace-check-item" data-ws="{{ ws }}" onclick="toggleWorkspace('{{ ws }}')">
+    <div class="ws-checkbox"></div>
+    <span class="ws-check-name">{{ ws }}</span>
 </div>
 {% endfor %}
