@@ -96,8 +96,6 @@ cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
 dlightrag-api --env-file .env
 ```
 
-Built-in chat interface with citation navigation and document management. Answers stream in real-time; click citation badges (e.g. `[1-2]`) to view source chunks with semantic highlights. File upload, deletion, and workspace switching are all handled in-browser.
-
 ### MCP Server (for AI Agents)
 
 ```bash
