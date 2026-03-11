@@ -336,6 +336,68 @@ class LibreOfficeConverter:
                         continue
                     zip_ref.write(file_path, arcname, compress_type=zipfile.ZIP_DEFLATED)
 
+    _OFFICE_EXTENSIONS = {".xls", ".xlsx", ".doc", ".docx", ".ppt", ".pptx"}
+
+    def file_to_pdf_bytes(self, source_path: Path) -> bytes:
+        """Convert an Office file to PDF and return the raw PDF bytes.
+
+        Excel files use the adaptive-width Excel→ODS→PDF pipeline.
+        Other Office formats use standard LibreOffice conversion.
+        Raises OfficeConverterError on failure.
+        """
+        if not source_path.exists():
+            raise OfficeConverterError(f"Source file not found: {source_path}")
+
+        suffix = source_path.suffix.lower()
+        if suffix not in self._OFFICE_EXTENSIONS:
+            raise OfficeConverterError(f"Unsupported Office format: {suffix}")
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_path = Path(tmpdir)
+
+                if suffix in EXCEL_EXTENSIONS:
+                    pdf_path = self._convert_excel_to_pdf(
+                        source_path, tmp_path, tmp_path / "output.pdf"
+                    )
+                else:
+                    result = subprocess.run(
+                        [
+                            "libreoffice",
+                            "--headless",
+                            "--convert-to",
+                            "pdf",
+                            "--outdir",
+                            str(tmp_path),
+                            str(source_path),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=self.timeout,
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                    pdf_path = tmp_path / (source_path.stem + ".pdf")
+                    if result.returncode != 0 or not pdf_path.exists():
+                        raise OfficeConverterError(
+                            f"LibreOffice conversion failed: {result.stderr}"
+                        )
+
+                return pdf_path.read_bytes()
+
+        except OfficeConverterError:
+            raise
+        except subprocess.TimeoutExpired as e:
+            raise OfficeConverterError(
+                f"LibreOffice conversion timed out after {self.timeout}s"
+            ) from e
+        except FileNotFoundError as e:
+            raise OfficeConverterError(
+                "LibreOffice not found. Install: apt-get install libreoffice"
+            ) from e
+        except Exception as e:
+            raise OfficeConverterError(f"Unexpected conversion error: {e}") from e
+
     def convert_bytes_to_pdf(
         self,
         file_data: bytes,
