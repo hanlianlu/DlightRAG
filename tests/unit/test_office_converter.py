@@ -3,10 +3,17 @@
 
 from __future__ import annotations
 
+import inspect
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import openpyxl
+import pytest
 
 from dlightrag.config import DlightragConfig
-from dlightrag.converters.office import LibreOfficeConverter
+from dlightrag.converters.office import LibreOfficeConverter, OfficeConverterError, PageSetup
 
 
 class TestLibreOfficeConverter:
@@ -72,11 +79,6 @@ class TestLibreOfficeConverter:
         assert not converter._is_safe_to_delete(Path("/tmp/outside.xlsx"))
 
 
-import openpyxl
-
-from dlightrag.converters.office import PageSetup
-
-
 class TestEstimateExcelPageWidth:
     """Test adaptive page width estimation from Excel column widths."""
 
@@ -93,19 +95,27 @@ class TestEstimateExcelPageWidth:
                     ws.title = cfg["name"]
                 for col_letter, width in cfg["columns"]:
                     ws.column_dimensions[col_letter].width = width
-                    ws.cell(row=1, column=openpyxl.utils.column_index_from_string(col_letter), value="data")
+                    ws.cell(
+                        row=1,
+                        column=openpyxl.utils.column_index_from_string(col_letter),
+                        value="data",
+                    )
         else:
             ws = wb.active
             for col_letter, width in columns:
                 ws.column_dimensions[col_letter].width = width
-                ws.cell(row=1, column=openpyxl.utils.column_index_from_string(col_letter), value="data")
+                ws.cell(
+                    row=1,
+                    column=openpyxl.utils.column_index_from_string(col_letter),
+                    value="data",
+                )
         path = tmp_path / "test.xlsx"
         wb.save(str(path))
         wb.close()
         return path
 
     def test_narrow_excel_gives_portrait(self, test_config, tmp_path):
-        """3 narrow columns → total ~6cm + margins → clamped to 21cm → portrait."""
+        """3 narrow columns -> total ~6cm + margins -> clamped to 21cm -> portrait."""
         path = self._make_xlsx(tmp_path, [("A", 10), ("B", 10), ("C", 10)])
         converter = self._make_converter(test_config)
         setup = converter._estimate_excel_page_width(path)
@@ -115,7 +125,7 @@ class TestEstimateExcelPageWidth:
         assert setup.height_cm == 29.7
 
     def test_wide_excel_gives_landscape(self, test_config, tmp_path):
-        """20 columns at width 15 → ~60cm + margins → landscape."""
+        """20 columns at width 15 -> ~60cm + margins -> landscape."""
         cols = [(openpyxl.utils.get_column_letter(i + 1), 15) for i in range(20)]
         path = self._make_xlsx(tmp_path, cols)
         converter = self._make_converter(test_config)
@@ -126,7 +136,7 @@ class TestEstimateExcelPageWidth:
         assert setup.height_cm == 21.0
 
     def test_very_wide_clamped_to_max(self, test_config, tmp_path):
-        """50 columns at width 20 → way over 63cm → clamped to 63."""
+        """50 columns at width 20 -> way over 63cm -> clamped to 63."""
         cols = [(openpyxl.utils.get_column_letter(i + 1), 20) for i in range(50)]
         path = self._make_xlsx(tmp_path, cols)
         converter = self._make_converter(test_config)
@@ -155,10 +165,19 @@ class TestEstimateExcelPageWidth:
 
     def test_multi_sheet_uses_widest(self, test_config, tmp_path):
         """Width estimation should use the widest sheet."""
-        path = self._make_xlsx(tmp_path, [], sheet_configs=[
-            {"name": "Narrow", "columns": [("A", 10), ("B", 10)]},
-            {"name": "Wide", "columns": [(openpyxl.utils.get_column_letter(i+1), 15) for i in range(20)]},
-        ])
+        path = self._make_xlsx(
+            tmp_path,
+            [],
+            sheet_configs=[
+                {"name": "Narrow", "columns": [("A", 10), ("B", 10)]},
+                {
+                    "name": "Wide",
+                    "columns": [
+                        (openpyxl.utils.get_column_letter(i + 1), 15) for i in range(20)
+                    ],
+                },
+            ],
+        )
         converter = self._make_converter(test_config)
         setup = converter._estimate_excel_page_width(path)
         assert setup.width_cm > 21.0
@@ -185,11 +204,6 @@ class TestEstimateExcelPageWidth:
         assert setup.orientation == "landscape"
 
 
-import pytest
-from unittest.mock import patch, MagicMock
-from dlightrag.converters.office import OfficeConverterError
-
-
 class TestFileToPdfBytes:
     """Test file_to_pdf_bytes method."""
 
@@ -197,7 +211,7 @@ class TestFileToPdfBytes:
         return LibreOfficeConverter(test_config)
 
     def test_excel_delegates_to_convert_excel_to_pdf(self, test_config, tmp_path):
-        """xlsx files should go through the Excel→ODS→PDF pipeline."""
+        """xlsx files should go through the Excel->ODS->PDF pipeline."""
         converter = self._make_converter(test_config)
         xlsx_path = tmp_path / "test.xlsx"
         xlsx_path.touch()
@@ -275,13 +289,8 @@ class TestConvertBytesToPdfAdaptive:
     def test_apply_page_setup_param_removed(self, test_config):
         """apply_page_setup parameter should no longer exist."""
         converter = self._make_converter(test_config)
-        import inspect
         sig = inspect.signature(converter.convert_bytes_to_pdf)
         assert "apply_page_setup" not in sig.parameters
-
-
-import xml.etree.ElementTree as ET
-import zipfile
 
 
 class TestSetOdsPageSetup:
