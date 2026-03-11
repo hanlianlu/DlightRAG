@@ -16,9 +16,11 @@ def test_build_index_basic():
 
 def test_reverse_lookup():
     indexer = CitationIndexer()
-    indexer.build_index([
-        {"chunk_id": "c1", "reference_id": "1", "content": "text"},
-    ])
+    indexer.build_index(
+        [
+            {"chunk_id": "c1", "reference_id": "1", "content": "text"},
+        ]
+    )
     assert indexer.get_chunk_id("1", 1) == "c1"
     assert indexer.get_chunk_id("1", 99) is None
     assert indexer.get_chunk_id("999", 1) is None
@@ -63,10 +65,12 @@ def test_build_citation_index_convenience():
 
 def test_get_max_chunk_idx():
     indexer = CitationIndexer()
-    indexer.build_index([
-        {"chunk_id": "c1", "reference_id": "1", "content": "a"},
-        {"chunk_id": "c2", "reference_id": "1", "content": "b"},
-        {"chunk_id": "c3", "reference_id": "1", "content": "c"},
-    ])
+    indexer.build_index(
+        [
+            {"chunk_id": "c1", "reference_id": "1", "content": "a"},
+            {"chunk_id": "c2", "reference_id": "1", "content": "b"},
+            {"chunk_id": "c3", "reference_id": "1", "content": "c"},
+        ]
+    )
     assert indexer.get_max_chunk_idx("1") == 3
     assert indexer.get_max_chunk_idx("999") == 0

@@ -1,10 +1,10 @@
+from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import (
     CITATION_PATTERN,
-    extract_citation_keys,
     clean_invalid_citations,
+    extract_citation_keys,
     extract_cited_chunks,
 )
-from dlightrag.citations.indexer import CitationIndexer
 
 
 def test_citation_pattern_matches_ref_chunk():
@@ -31,9 +31,11 @@ def test_extract_citation_keys_empty():
 
 def test_clean_invalid_citations():
     indexer = CitationIndexer()
-    indexer.build_index([
-        {"chunk_id": "c1", "reference_id": "1", "content": "text"},
-    ])
+    indexer.build_index(
+        [
+            {"chunk_id": "c1", "reference_id": "1", "content": "text"},
+        ]
+    )
     text = "Valid [1-1] and invalid [1-99] and [2-1]."
     cleaned = clean_invalid_citations(indexer, text)
     assert "[1-1]" in cleaned
@@ -43,11 +45,13 @@ def test_clean_invalid_citations():
 
 def test_extract_cited_chunks():
     indexer = CitationIndexer()
-    indexer.build_index([
-        {"chunk_id": "c1", "reference_id": "1", "content": "text1"},
-        {"chunk_id": "c2", "reference_id": "1", "content": "text2"},
-        {"chunk_id": "c3", "reference_id": "2", "content": "text3"},
-    ])
+    indexer.build_index(
+        [
+            {"chunk_id": "c1", "reference_id": "1", "content": "text1"},
+            {"chunk_id": "c2", "reference_id": "1", "content": "text2"},
+            {"chunk_id": "c3", "reference_id": "2", "content": "text3"},
+        ]
+    )
     text = "See [1-1] and [2-1]."
     cited = extract_cited_chunks(indexer, text)
     assert "1" in cited

@@ -66,7 +66,7 @@ class DlightragConfig(BaseSettings):
     )
     pg_hnsw_m: int = Field(default=32, description="HNSW M parameter (connections per node)")
     pg_hnsw_ef_construction: int = Field(
-        default=300, description="HNSW ef_construction (index build quality)"
+        default=256, description="HNSW ef_construction (index build quality)"
     )
     pg_hnsw_ef_search: int = Field(
         default=256,

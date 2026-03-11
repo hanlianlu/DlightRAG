@@ -51,9 +51,7 @@ class CitationProcessor:
             cited_chunks=cited_chunks,
         )
 
-    def _build_sources(
-        self, cited_chunks: dict[str, list[str]]
-    ) -> list[SourceReference]:
+    def _build_sources(self, cited_chunks: dict[str, list[str]]) -> list[SourceReference]:
         """Build SourceReference list with ChunkSnippet details."""
         if not cited_chunks or not self._available_sources:
             return []

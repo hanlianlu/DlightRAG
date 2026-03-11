@@ -1,7 +1,8 @@
 """Smoke tests for web routes using FastAPI TestClient."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 from fastapi.testclient import TestClient
 
 

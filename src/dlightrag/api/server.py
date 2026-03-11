@@ -394,9 +394,10 @@ try:
     import importlib.util
 
     if importlib.util.find_spec("jinja2"):
-        from dlightrag.web.routes import router as web_router
-        from dlightrag.web.deps import _TEMPLATE_DIR
         from fastapi.staticfiles import StaticFiles
+
+        from dlightrag.web.deps import _TEMPLATE_DIR
+        from dlightrag.web.routes import router as web_router
 
         app.include_router(web_router)
         _static_dir = _TEMPLATE_DIR.parent / "static"

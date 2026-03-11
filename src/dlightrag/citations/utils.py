@@ -20,9 +20,7 @@ def split_source_ids(source_id: Any) -> list[str]:
     return [part.strip() for part in str(source_id).split(",") if part.strip()]
 
 
-def filter_content_for_display(
-    content: str, max_chars: int | None = None
-) -> str:
+def filter_content_for_display(content: str, max_chars: int | None = None) -> str:
     """Filter metadata lines while preserving structure for display."""
     lines = content.split("\n")
     filtered = []
