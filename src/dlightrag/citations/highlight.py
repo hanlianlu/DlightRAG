@@ -176,7 +176,7 @@ async def extract_highlights_for_sources(
 
     chunk_phrases: dict[str, set[str]] = {}
     for res in results:
-        if isinstance(res, Exception):
+        if isinstance(res, BaseException):
             logger.debug("Highlight task failed: %s", res)
             continue
         chunk_id, hp = res

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 import logging
-import re
 import shutil
 import tempfile
 from collections.abc import AsyncIterator
@@ -12,13 +12,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from markupsafe import Markup
 
 from dlightrag.citations import (
     CitationProcessor,
     SourceReference,
     extract_highlights_for_sources,
 )
-from dlightrag.citations.parser import CITATION_PATTERN
 
 from .deps import get_manager, get_workspace, templates
 
@@ -26,19 +26,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/web", tags=["web"])
 
 
-# === Page Routes ===
-
-
-@router.get("/", response_class=HTMLResponse)
-async def index(request: Request, workspace: str = Depends(get_workspace)):
-    """Main page."""
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "workspace": workspace},
-    )
-
-
-# === Answer Streaming ===
+# ---------------------------------------------------------------------------
+# Helpers — data preparation (no HTML)
+# ---------------------------------------------------------------------------
 
 
 def _contexts_to_flat_list(contexts: dict[str, Any]) -> list[dict[str, Any]]:
@@ -70,81 +60,28 @@ def _extract_available_sources(contexts: dict[str, Any]) -> list[SourceReference
     return list(seen.values())
 
 
-def _escape_html(text: str) -> str:
-    """Escape HTML special characters."""
-    return (
-        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+def _render_partial(name: str, **ctx: Any) -> str:
+    """Render a Jinja2 partial template to string."""
+    return templates.env.get_template(name).render(**ctx)
+
+
+# ---------------------------------------------------------------------------
+# Page routes
+# ---------------------------------------------------------------------------
+
+
+@router.get("/", response_class=HTMLResponse)
+async def index(request: Request, workspace: str = Depends(get_workspace)):
+    """Main page."""
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request, "workspace": workspace},
     )
 
 
-def _render_enriched_answer(answer_text: str) -> str:
-    """Replace [ref_id-chunk_idx] with clickable citation badges.
-
-    Strategy: split on citation pattern, escape non-citation segments,
-    wrap citation matches in badge HTML. Avoids double-escaping.
-    """
-    parts = CITATION_PATTERN.split(answer_text)
-    # split gives: [text, ref_id, chunk_idx, text, ref_id, chunk_idx, ...]
-    result = []
-    i = 0
-    while i < len(parts):
-        if i % 3 == 0:
-            # Text segment — escape HTML
-            result.append(_escape_html(parts[i]))
-        else:
-            # ref_id (i%3==1) and chunk_idx (i%3==2) pair
-            ref_id = parts[i]
-            chunk_idx = parts[i + 1]
-            result.append(
-                f'<span class="citation-badge" data-ref="{_escape_html(ref_id)}" '
-                f'data-chunk="{_escape_html(chunk_idx)}" onclick="filterSource(this)">'
-                f"[{_escape_html(ref_id)}-{_escape_html(chunk_idx)}]</span>"
-            )
-            i += 1  # Skip chunk_idx, already consumed
-        i += 1
-    return "".join(result)
-
-
-def _render_sources(sources: list[SourceReference]) -> str:
-    """Render source chunks as HTML for the source panel."""
-    parts: list[str] = []
-    for src in sources:
-        if not src.chunks:
-            continue
-        for chunk in src.chunks:
-            safe_content = _escape_html(chunk.content)
-            if chunk.highlight_phrases:
-                for phrase in chunk.highlight_phrases:
-                    safe_phrase = _escape_html(phrase)
-                    pattern = re.escape(safe_phrase)
-                    safe_content = re.sub(
-                        f"({pattern})",
-                        r'<span class="highlight">\1</span>',
-                        safe_content,
-                        flags=re.IGNORECASE,
-                        count=1,
-                    )
-
-            title = _escape_html(src.title or src.path)
-            page = f"p.{chunk.page_idx}" if chunk.page_idx else ""
-            parts.append(
-                f'<div class="source-chunk" data-ref="{_escape_html(src.id)}" '
-                f'data-chunk="{chunk.chunk_idx}">'
-                f'<div class="source-chunk-header">'
-                f'<span class="source-chunk-title">[{_escape_html(src.id)}-{chunk.chunk_idx}] {title}</span>'
-                f'<span class="source-chunk-page">{page}</span>'
-                f"</div>"
-                f'<div class="source-chunk-content">{safe_content}</div>'
-                f"</div>"
-            )
-
-    if parts:
-        parts.append(
-            '<button class="show-all-btn" onclick="showAllSources()" '
-            'style="display:none">Show all sources</button>'
-        )
-
-    return "\n".join(parts)
+# ---------------------------------------------------------------------------
+# Answer streaming (SSE)
+# ---------------------------------------------------------------------------
 
 
 @router.post("/answer")
@@ -153,24 +90,30 @@ async def answer_stream(
     workspace: str = Depends(get_workspace),
 ):
     """Stream answer via SSE, then swap in enriched citations."""
-    form = await request.form()
-    query = str(form.get("query", ""))
+    body = await request.json()
+    query = str(body.get("query", ""))
     if not query:
         return HTMLResponse("<span>Please enter a question.</span>")
+
+    conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
 
     manager = get_manager(request)
 
     async def event_generator() -> AsyncIterator[str]:
         full_answer = ""
+        kwargs: dict[str, Any] = {}
+        if conversation_history:
+            kwargs["conversation_history"] = conversation_history
         try:
             contexts, raw, token_iter = await manager.aanswer_stream(
                 query=query,
                 workspace=workspace,
+                **kwargs,
             )
 
             async for chunk in token_iter:
                 full_answer += chunk
-                escaped = _escape_html(chunk)
+                escaped = Markup.escape(chunk)
                 yield f"event: token\ndata: {escaped}\n\n"
 
             # Citation processing
@@ -198,20 +141,33 @@ async def answer_stream(
                 logger.warning("Highlight extraction failed", exc_info=True)
                 result_sources = result.sources
 
-            enriched_answer = _render_enriched_answer(result.answer)
-            source_html = _render_sources(result_sources)
-
-            done_html = (
-                f'<div id="answer-content">{enriched_answer}</div>'
-                f'<div id="source-data" style="display:none">{source_html}</div>'
+            # Render done payload via Jinja2 partials
+            done_html = _render_partial(
+                "partials/answer_done.html",
+                answer=result.answer,
+                sources=result_sources,
             )
-            # SSE requires each line to be a separate data: field
-            done_lines = done_html.replace("\n", " ")  # Flatten to single line
-            yield f"event: done\ndata: {done_lines}\n\n"
+            # SSE: flatten to single line
+            done_line = done_html.replace("\n", " ")
+            yield f"event: done\ndata: {done_line}\n\n"
+
+            # Server-driven budget: tell the frontend the char budget for next request.
+            # Conservative multiplier: 2 chars/token handles CJK (~1.5) with headroom.
+            try:
+                from dlightrag.config import get_config
+
+                cfg = get_config()
+                max_tokens = cfg.max_conversation_tokens
+                max_msgs = cfg.max_conversation_turns * 2
+                char_budget = max_tokens * 2
+                meta = {"history_char_budget": char_budget, "history_max_messages": max_msgs}
+                yield f"event: meta\ndata: {json.dumps(meta)}\n\n"
+            except Exception:
+                pass  # Non-critical; frontend falls back to defaults
 
         except Exception:
             logger.exception("Answer streaming failed")
-            yield "event: error\ndata: <span>Service error. Please try again.</span>\n\n"
+            yield "event: error\ndata: Service error. Please try again.\n\n"
 
     return StreamingResponse(
         event_generator(),
@@ -220,7 +176,9 @@ async def answer_stream(
     )
 
 
-# === File Management ===
+# ---------------------------------------------------------------------------
+# File management
+# ---------------------------------------------------------------------------
 
 
 @router.get("/files", response_class=HTMLResponse)
@@ -250,6 +208,8 @@ async def upload_files(
     tmp_dir = Path(tempfile.mkdtemp(prefix="dlightrag_upload_"))
     try:
         for f in files:
+            if not f.filename:
+                continue
             dest = tmp_dir / f.filename
             with open(dest, "wb") as out:
                 shutil.copyfileobj(f.file, out)
@@ -261,9 +221,7 @@ async def upload_files(
         )
     except Exception as e:
         logger.exception("Upload/ingestion failed")
-        return HTMLResponse(
-            f'<div class="file-item" style="color:#c44">Upload failed: {_escape_html(str(e))}</div>'
-        )
+        return HTMLResponse(_render_partial("partials/error.html", message=f"Upload failed: {e}"))
 
     return await file_list(request, workspace)
 
@@ -282,12 +240,14 @@ async def delete_files(
         await manager.delete_files(workspace, file_paths=file_paths)
     except Exception as e:
         logger.exception("Delete failed")
-        return HTMLResponse(f'<div style="color:#c44">Delete failed: {_escape_html(str(e))}</div>')
+        return HTMLResponse(_render_partial("partials/error.html", message=f"Delete failed: {e}"))
 
     return await file_list(request, workspace)
 
 
-# === Workspaces ===
+# ---------------------------------------------------------------------------
+# Workspaces
+# ---------------------------------------------------------------------------
 
 
 @router.get("/workspaces", response_class=HTMLResponse)
@@ -299,19 +259,10 @@ async def workspace_list(request: Request, workspace: str = Depends(get_workspac
     except Exception:
         workspaces = ["default"]
 
-    parts = []
-    for ws in workspaces:
-        active = " style='border-color:var(--gold-500)'" if ws == workspace else ""
-        parts.append(
-            f'<div class="file-item"{active}>'
-            f'<span class="file-name">{_escape_html(ws)}</span>'
-            f'<form method="post" action="/web/workspaces/switch">'
-            f'<input type="hidden" name="workspace" value="{_escape_html(ws)}">'
-            f'<button type="submit" class="topbar-btn" '
-            f'style="padding:4px 8px;font-size:11px">Switch</button>'
-            f"</form></div>"
-        )
-    return HTMLResponse("\n".join(parts))
+    return templates.TemplateResponse(
+        "partials/workspace_list.html",
+        {"request": request, "workspaces": workspaces, "current_workspace": workspace},
+    )
 
 
 @router.post("/workspaces/switch")

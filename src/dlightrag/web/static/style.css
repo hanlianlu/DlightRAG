@@ -54,6 +54,15 @@ body {
     padding: 10px 16px;
     background: var(--bg-surface);
     border-bottom: 1px solid var(--gold-600);
+    flex-shrink: 0;
+}
+
+.topbar-title {
+    flex: 1;
+    text-align: center;
+    color: var(--text-500);
+    font-size: 13px;
+    letter-spacing: 1px;
 }
 
 .topbar-btn {
@@ -77,20 +86,74 @@ body {
     color: var(--gold-200);
 }
 
-.query-form {
+/* === Chat Area === */
+
+.chat-area {
     flex: 1;
+    overflow-y: auto;
+    padding: 24px 24px 0;
+}
+
+.chat-messages {
+    max-width: 62%;
+    margin: 0 auto;
+}
+
+/* === Query Bar — centered initially, bottom when chatting === */
+
+.query-bar {
     display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px 24px 32px;
+    flex-shrink: 0;
+    /* Initial state: vertically centered via margin-top auto on chat-area */
+}
+
+/* When no messages yet, push query bar to center of viewport */
+.app:not(.has-messages) .chat-area {
+    flex: 1;
+}
+
+.app:not(.has-messages) .query-bar {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 100%;
+    max-width: 700px;
+    padding: 16px 24px;
+}
+
+/* When chatting, query bar stays at bottom */
+.app.has-messages .query-bar {
+    background: var(--bg-base);
+    border-top: 1px solid var(--gold-600);
+}
+
+.query-bar-inner {
+    width: 100%;
+    max-width: 700px;
+}
+
+.query-form {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
 }
 
 .query-input {
-    width: 100%;
+    flex: 1;
     background: var(--bg-surface);
     border: 1px solid var(--gold-600);
     color: var(--text-100);
-    padding: 8px 14px;
-    border-radius: 6px;
+    padding: 10px 14px;
+    border-radius: 8px;
     font-size: 14px;
+    font-family: inherit;
     outline: none;
+    resize: none;
+    line-height: 1.5;
     transition: border-color 0.2s;
 }
 
@@ -102,25 +165,24 @@ body {
     color: var(--text-500);
 }
 
-/* === Chat Area === */
-
-.chat-area {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px;
+.query-submit {
+    background: var(--gold-500);
+    border: 1px solid var(--gold-400);
+    color: var(--gold-100);
+    padding: 10px 18px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background 0.2s;
+    white-space: nowrap;
 }
 
-.chat-messages {
-    max-width: 62%;
-    margin: 0 auto;
+.query-submit:hover {
+    background: var(--gold-400);
 }
 
-.empty-state {
-    text-align: center;
-    color: var(--text-500);
-    padding: 80px 0;
-    font-size: 15px;
-}
+/* === Messages === */
 
 .user-message {
     background: var(--bg-elevated);

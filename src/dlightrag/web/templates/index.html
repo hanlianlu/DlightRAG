@@ -2,10 +2,11 @@
 {% block content %}
 <div class="app">
     <header class="topbar">
-        <button class="topbar-btn workspace-btn" id="workspace-btn">{{ workspace }}</button>
-        <form id="query-form" class="query-form">
-            <input type="text" name="query" placeholder="输入问题..." class="query-input" autocomplete="off">
-        </form>
+        <button class="topbar-btn workspace-btn" id="workspace-btn"
+                hx-get="/web/workspaces"
+                hx-target="#panel-content"
+                hx-swap="innerHTML">{{ workspace }}</button>
+        <span class="topbar-title">DlightRAG</span>
         <button class="topbar-btn" id="files-btn"
                 hx-get="/web/files"
                 hx-target="#panel-content"
@@ -14,18 +15,23 @@
         </button>
     </header>
 
-    <main class="chat-area">
-        <div id="chat-messages" class="chat-messages">
-            <div class="empty-state" id="empty-state">
-                Upload documents and ask questions to get started.
-            </div>
-        </div>
+    <main class="chat-area" id="chat-area">
+        <div id="chat-messages" class="chat-messages"></div>
     </main>
+
+    <div class="query-bar" id="query-bar">
+        <div class="query-bar-inner">
+            <form id="query-form" class="query-form">
+                <textarea name="query" placeholder="Ask a question..." class="query-input" rows="3" autocomplete="off"></textarea>
+                <button type="submit" class="query-submit">Send</button>
+            </form>
+        </div>
+    </div>
 
     <aside class="panel" id="panel">
         <div class="panel-header">
             <span id="panel-title">SOURCES</span>
-            <button class="panel-close" onclick="closePanel()">✕</button>
+            <button class="panel-close" onclick="closePanel()">&#10005;</button>
         </div>
         <div id="panel-content" class="panel-content"></div>
     </aside>

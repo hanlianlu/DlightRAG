@@ -2,8 +2,47 @@
  *
  * Security: All user input uses textContent (safe). Server-rendered HTML
  * (SSE tokens + done event) is trusted content from our own server with
- * _escape_html applied to all dynamic values in routes.py.
+ * Jinja2 auto-escaping applied to all dynamic values.
  */
+
+// === Conversation State ===
+
+// Conversation history sent to backend for multi-turn context.
+// Format: [{role: "user", content: "..."}, {role: "assistant", content: "..."}, ...]
+const conversationHistory = [];
+
+// Server-driven budget — updated from SSE `meta` event each response.
+// Defaults are generous fallbacks used before the first server response.
+let historyCharBudget = 300000;  // chars (~150K tokens mixed scripts)
+let historyMaxMessages = 100;    // message count cap (50 turns × 2)
+
+/**
+ * Build history window to send to backend.
+ * Applies server-driven limits: min(max messages, char budget).
+ * The backend still does authoritative token-level truncation.
+ */
+function getHistoryWindow() {
+    if (conversationHistory.length === 0) return [];
+
+    // Step 1: cap by message count
+    let window = conversationHistory.slice(-historyMaxMessages);
+
+    // Step 2: cap by char budget (walk backwards)
+    let totalChars = 0;
+    let cutoff = window.length;
+    for (let i = window.length - 1; i >= 0; i--) {
+        totalChars += (window[i].content || '').length;
+        if (totalChars > historyCharBudget) {
+            cutoff = i + 1;
+            break;
+        }
+    }
+    if (cutoff > 0 && cutoff < window.length) {
+        window = window.slice(cutoff);
+    }
+
+    return window;
+}
 
 // === Panel Management ===
 
@@ -75,12 +114,22 @@ function showAllSources() {
     if (showAllBtn) showAllBtn.style.display = 'none';
 }
 
+// === Layout State ===
+
+function activateChatMode() {
+    const app = document.querySelector('.app');
+    if (!app.classList.contains('has-messages')) {
+        app.classList.add('has-messages');
+    }
+}
+
 // === Streaming Answer via SSE ===
 
 async function submitQuery(query) {
     const chatMessages = document.getElementById('chat-messages');
-    const emptyState = document.getElementById('empty-state');
-    if (emptyState) emptyState.remove();
+
+    // Switch to chat mode (bottom input bar)
+    activateChatMode();
 
     // Add user message (textContent = safe from XSS)
     const userDiv = document.createElement('div');
@@ -111,13 +160,20 @@ async function submitQuery(query) {
     chatMessages.appendChild(aiDiv);
     chatMessages.scrollTop = chatMessages.scrollHeight;
 
-    try {
-        const formData = new FormData();
-        formData.append('query', query);
+    // Build history window using server-driven budget
+    const historyWindow = getHistoryWindow();
 
+    let fullAnswer = '';
+    let success = false;
+
+    try {
         const response = await fetch('/web/answer', {
             method: 'POST',
-            body: formData,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                query: query,
+                conversation_history: historyWindow,
+            }),
         });
 
         if (!response.ok) {
@@ -148,15 +204,26 @@ async function submitQuery(query) {
                     eventType = line.slice(7).trim();
                 } else if (line.startsWith('data: ')) {
                     const data = line.slice(6);
+                    if (eventType === 'token') {
+                        fullAnswer += data;
+                    }
                     handleSSEData(eventType, data, contentDiv, aiDiv, chatMessages, firstToken);
                     if (eventType === 'token' && firstToken) firstToken = false;
                     eventType = '';
                 }
             }
         }
+
+        success = true;
     } catch (err) {
         contentDiv.textContent = 'Connection error. Please try again.';
         contentDiv.style.color = '#c44';
+    }
+
+    // Only record in history on success (keeps history consistent)
+    if (success && fullAnswer) {
+        conversationHistory.push({role: 'user', content: query});
+        conversationHistory.push({role: 'assistant', content: fullAnswer});
     }
 }
 
@@ -189,6 +256,15 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatMessages, firstTo
             sourceData.removeAttribute('id');
             aiDiv.appendChild(sourceData);
         }
+    } else if (eventType === 'meta') {
+        // Server-driven budget update
+        try {
+            const meta = JSON.parse(data);
+            if (meta.history_char_budget) historyCharBudget = meta.history_char_budget;
+            if (meta.history_max_messages) historyMaxMessages = meta.history_max_messages;
+        } catch (e) {
+            // Ignore parse errors; keep existing budget
+        }
     } else if (eventType === 'error') {
         contentDiv.textContent = data;
         contentDiv.style.color = '#c44';
@@ -201,12 +277,23 @@ document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('query-form');
     if (!form) return;
 
+    const textarea = form.querySelector('.query-input');
+
+    // Submit on Enter (Shift+Enter for newline)
+    if (textarea) {
+        textarea.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                form.dispatchEvent(new Event('submit'));
+            }
+        });
+    }
+
     form.addEventListener('submit', function (e) {
         e.preventDefault();
-        const input = form.querySelector('.query-input');
-        const query = input.value.trim();
+        const query = textarea.value.trim();
         if (!query) return;
-        input.value = '';
+        textarea.value = '';
         submitQuery(query);
     });
 
@@ -218,16 +305,10 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Workspace button
+    // Workspace button opens panel (htmx loads content, JS opens panel)
     const wsBtn = document.getElementById('workspace-btn');
     if (wsBtn) {
-        wsBtn.addEventListener('click', function () {
-            const panelContent = document.getElementById('panel-content');
-            panelContent.setAttribute('hx-get', '/web/workspaces');
-            panelContent.setAttribute('hx-trigger', 'load');
-            panelContent.setAttribute('hx-swap', 'innerHTML');
-            htmx.process(panelContent);
-            htmx.trigger(panelContent, 'load');
+        wsBtn.addEventListener('htmx:afterRequest', function () {
             openPanel('WORKSPACES');
         });
     }

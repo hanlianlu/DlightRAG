@@ -1,0 +1,16 @@
+{% for src in sources %}
+{% if src.chunks %}
+{% for chunk in src.chunks %}
+<div class="source-chunk" data-ref="{{ src.id }}" data-chunk="{{ chunk.chunk_idx }}">
+    <div class="source-chunk-header">
+        <span class="source-chunk-title">[{{ src.id }}-{{ chunk.chunk_idx }}] {{ src.title or src.path }}</span>
+        <span class="source-chunk-page">{% if chunk.page_idx %}p.{{ chunk.page_idx }}{% endif %}</span>
+    </div>
+    <div class="source-chunk-content">{{ chunk.content | highlight_content(chunk.highlight_phrases) }}</div>
+</div>
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% if sources %}
+<button class="show-all-btn" onclick="showAllSources()" style="display:none">Show all sources</button>
+{% endif %}

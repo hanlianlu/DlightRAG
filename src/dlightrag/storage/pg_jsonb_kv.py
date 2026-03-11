@@ -51,11 +51,11 @@ ON CONFLICT (workspace, namespace, id)
 DO UPDATE SET data = EXCLUDED.data, blob_data = EXCLUDED.blob_data, update_time = NOW()
 """
 
-_GET_BY_ID = f"SELECT data, blob_data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = $3"
-
-_GET_BY_IDS = (
-    f"SELECT id, data, blob_data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = ANY($3)"
+_GET_BY_ID = (
+    f"SELECT data, blob_data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = $3"
 )
+
+_GET_BY_IDS = f"SELECT id, data, blob_data FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = ANY($3)"
 
 _DELETE = f"DELETE FROM {TABLE} WHERE workspace = $1 AND namespace = $2 AND id = ANY($3)"
 
@@ -121,7 +121,9 @@ class PGJsonbKVStorage(BaseKVStorage):
                 sql = _MIGRATE_BLOB.replace("{field}", self.blob_field)
                 result = await conn.execute(sql, self.workspace, self.namespace)
                 if result and "UPDATE" in result and result != "UPDATE 0":
-                    logger.info("Migrated %s blob_field='%s': %s", self.namespace, self.blob_field, result)
+                    logger.info(
+                        "Migrated %s blob_field='%s': %s", self.namespace, self.blob_field, result
+                    )
 
     async def finalize(self) -> None:
         # Pool is borrowed from ClientManager — don't close it.
