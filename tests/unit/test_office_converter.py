@@ -250,6 +250,36 @@ class TestFileToPdfBytes:
                 converter.file_to_pdf_bytes(pptx_path)
 
 
+class TestConvertBytesToPdfAdaptive:
+    """Test that convert_bytes_to_pdf uses adaptive width for Excel."""
+
+    def _make_converter(self, test_config):
+        return LibreOfficeConverter(test_config)
+
+    def test_excel_bytes_uses_adaptive_pipeline(self, test_config, tmp_path):
+        """Excel MIME type should trigger adaptive conversion."""
+        converter = self._make_converter(test_config)
+
+        fake_pdf_path = tmp_path / "output.pdf"
+        fake_pdf_path.write_bytes(b"%PDF-adaptive")
+
+        with patch.object(converter, "_convert_excel_to_pdf", return_value=fake_pdf_path) as mock:
+            result = converter.convert_bytes_to_pdf(
+                b"fake excel bytes",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+        assert result == b"%PDF-adaptive"
+        mock.assert_called_once()
+
+    def test_apply_page_setup_param_removed(self, test_config):
+        """apply_page_setup parameter should no longer exist."""
+        converter = self._make_converter(test_config)
+        import inspect
+        sig = inspect.signature(converter.convert_bytes_to_pdf)
+        assert "apply_page_setup" not in sig.parameters
+
+
 import xml.etree.ElementTree as ET
 import zipfile
 
