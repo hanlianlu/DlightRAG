@@ -389,6 +389,23 @@ async def rag_unavailable_handler(
     )
 
 
+# Mount web frontend (optional — only if jinja2 is installed)
+try:
+    import importlib.util
+
+    if importlib.util.find_spec("jinja2"):
+        from dlightrag.web.routes import router as web_router
+        from dlightrag.web.deps import _TEMPLATE_DIR
+        from fastapi.staticfiles import StaticFiles
+
+        app.include_router(web_router)
+        _static_dir = _TEMPLATE_DIR.parent / "static"
+        if _static_dir.exists():
+            app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+except ImportError:
+    pass  # Web frontend not installed
+
+
 def main() -> None:
     """Entry point for dlightrag-api."""
     import argparse

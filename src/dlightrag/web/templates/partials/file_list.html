@@ -1,0 +1,33 @@
+<div class="upload-zone" onclick="document.getElementById('file-input').click()">
+    Drop files here or click to upload
+    <form id="upload-form"
+          hx-post="/web/files/upload"
+          hx-target="#panel-content"
+          hx-swap="innerHTML"
+          hx-encoding="multipart/form-data"
+          style="display:none">
+        <input type="file" id="file-input" name="files" multiple
+               onchange="htmx.trigger('#upload-form', 'submit')">
+    </form>
+</div>
+
+{% if files %}
+{% for file in files %}
+<div class="file-item">
+    <span class="file-name">{{ file }}</span>
+    <button class="file-delete"
+            hx-delete="/web/files"
+            hx-headers='{"Content-Type": "application/json"}'
+            hx-vals='{"file_paths": ["{{ file }}"]}'
+            hx-target="#panel-content"
+            hx-swap="innerHTML"
+            hx-confirm="Delete {{ file }}?">
+        ✕
+    </button>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty-state" style="padding:40px 0;font-size:13px;">
+    No files ingested in workspace "{{ workspace }}".
+</div>
+{% endif %}

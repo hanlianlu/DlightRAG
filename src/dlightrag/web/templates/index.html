@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="app">
+    <header class="topbar">
+        <button class="topbar-btn workspace-btn" id="workspace-btn">{{ workspace }}</button>
+        <form id="query-form" class="query-form">
+            <input type="text" name="query" placeholder="输入问题..." class="query-input" autocomplete="off">
+        </form>
+        <button class="topbar-btn" id="files-btn"
+                hx-get="/web/files"
+                hx-target="#panel-content"
+                hx-swap="innerHTML">
+            Files
+        </button>
+    </header>
+
+    <main class="chat-area">
+        <div id="chat-messages" class="chat-messages">
+            <div class="empty-state" id="empty-state">
+                Upload documents and ask questions to get started.
+            </div>
+        </div>
+    </main>
+
+    <aside class="panel" id="panel">
+        <div class="panel-header">
+            <span id="panel-title">SOURCES</span>
+            <button class="panel-close" onclick="closePanel()">✕</button>
+        </div>
+        <div id="panel-content" class="panel-content"></div>
+    </aside>
+</div>
+{% endblock %}
