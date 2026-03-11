@@ -12,6 +12,7 @@ build/
 venv/
 ENV/
 docs/plans/
+docs/superpowers/
 
 # IDE
 .idea/
