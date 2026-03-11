@@ -114,32 +114,7 @@ class PageRenderer:
 
     def _render_pdf_sync(self, path: Path) -> RenderResult:
         """Synchronous PDF rendering (called via ``to_thread``)."""
-        doc = pdfium.PdfDocument(str(path))
-        try:
-            scale = self.dpi / 72
-            pages: list[tuple[int, Image.Image]] = []
-            for idx in range(len(doc)):
-                page = doc[idx]
-                bitmap = page.render(scale=scale)  # type: ignore[arg-type]
-                pil_image = bitmap.to_pil()
-                pages.append((idx, pil_image))
-
-            metadata: dict[str, str | int] = {"original_format": "pdf", "page_count": len(doc)}
-            # Extract PDF metadata fields when available.
-            try:
-                meta = doc.get_metadata_dict()
-                if meta.get("Title"):
-                    metadata["title"] = meta["Title"]
-                if meta.get("Author"):
-                    metadata["author"] = meta["Author"]
-                if meta.get("CreationDate"):
-                    metadata["creation_date"] = meta["CreationDate"]
-            except Exception:  # noqa: BLE001
-                logger.debug("Could not extract PDF metadata from %s", path)
-
-            return RenderResult(pages=pages, metadata=metadata)
-        finally:
-            doc.close()
+        return self._render_pdfium_doc(str(path))
 
     async def _load_image(self, path: Path) -> RenderResult:
         """Load a single image file as a one-page result."""
@@ -156,13 +131,17 @@ class PageRenderer:
 
     def _render_pdf_from_bytes(self, pdf_bytes: bytes) -> RenderResult:
         """Render PDF from raw bytes (called via to_thread by _render_office)."""
-        doc = pdfium.PdfDocument(pdf_bytes)
+        return self._render_pdfium_doc(pdf_bytes)
+
+    def _render_pdfium_doc(self, source: str | bytes) -> RenderResult:
+        """Render a PDF from a pdfium-compatible source (file path or bytes)."""
+        doc = pdfium.PdfDocument(source)
         try:
             scale = self.dpi / 72
             pages: list[tuple[int, Image.Image]] = []
             for idx in range(len(doc)):
                 page = doc[idx]
-                bitmap = page.render(scale=scale)
+                bitmap = page.render(scale=scale)  # type: ignore[arg-type]
                 pil_image = bitmap.to_pil()
                 pages.append((idx, pil_image))
 
@@ -176,7 +155,7 @@ class PageRenderer:
                 if meta.get("CreationDate"):
                     metadata["creation_date"] = meta["CreationDate"]
             except Exception:  # noqa: BLE001
-                logger.debug("Could not extract PDF metadata from bytes")
+                logger.debug("Could not extract PDF metadata from %s", source)
 
             return RenderResult(pages=pages, metadata=metadata)
         finally:
