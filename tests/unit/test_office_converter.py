@@ -348,6 +348,8 @@ class TestSetOdsPageSetup:
         assert props.get(f"{{{style}}}print-orientation") == "landscape"
         assert props.get(f"{{{fo}}}margin-left") == "0.5cm"
         assert props.get(f"{{{fo}}}margin-right") == "0.5cm"
+        assert props.get(f"{{{fo}}}margin-top") == "0.5cm"
+        assert props.get(f"{{{fo}}}margin-bottom") == "0.5cm"
         assert props.get(f"{{{style}}}scale-to-X") == "1"
         assert props.get(f"{{{style}}}scale-to-Y") == "0"
 
