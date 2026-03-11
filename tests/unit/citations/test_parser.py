@@ -1,6 +1,7 @@
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import (
     CITATION_PATTERN,
+    DOC_CITATION_PATTERN,
     clean_invalid_citations,
     extract_citation_keys,
     extract_cited_chunks,
@@ -58,3 +59,70 @@ def test_extract_cited_chunks():
     assert "c1" in cited["1"]
     assert "2" in cited
     assert "c3" in cited["2"]
+
+
+class TestDocCitationPattern:
+    """Test [n] doc-level citation pattern."""
+
+    def test_matches_single_digit(self):
+        assert DOC_CITATION_PATTERN.findall("See [1] for details") == ["1"]
+
+    def test_matches_multi_digit(self):
+        assert DOC_CITATION_PATTERN.findall("Sources [12] and [3]") == ["12", "3"]
+
+    def test_no_false_positive_on_chunk_format(self):
+        """[1-2] should NOT be matched by doc pattern."""
+        assert DOC_CITATION_PATTERN.findall("See [1-2]") == []
+
+    def test_no_match_on_empty_brackets(self):
+        assert DOC_CITATION_PATTERN.findall("See [] here") == []
+
+
+class TestExtractCitationKeysDocLevel:
+    """Test extract_citation_keys with doc-level [n] format."""
+
+    def test_extracts_doc_level(self):
+        keys = extract_citation_keys("Answer based on [1] and [2].")
+        assert keys == ["1", "2"]
+
+    def test_extracts_mixed(self):
+        keys = extract_citation_keys("From [1] and specifically [1-2].")
+        assert keys == ["1", "1-2"]
+
+    def test_deduplicates_doc_level(self):
+        keys = extract_citation_keys("[1] agrees with [1].")
+        assert keys == ["1"]
+
+
+class TestExtractCitedChunksDocLevel:
+    """Test extract_cited_chunks with doc-level citations."""
+
+    def test_doc_level_maps_to_all_chunks(self):
+        indexer = CitationIndexer()
+        indexer.build_index([
+            {"reference_id": "1", "chunk_id": "c1", "content": "text1"},
+            {"reference_id": "1", "chunk_id": "c2", "content": "text2"},
+            {"reference_id": "2", "chunk_id": "c3", "content": "text3"},
+        ])
+        result = extract_cited_chunks(indexer, "Based on [1].")
+        assert "1" in result
+        assert set(result["1"]) == {"c1", "c2"}
+
+
+class TestCleanInvalidCitationsDocLevel:
+    """Test removal of invalid doc-level citations."""
+
+    def test_keeps_valid_doc_citation(self):
+        indexer = CitationIndexer()
+        indexer.build_index([
+            {"reference_id": "1", "chunk_id": "c1", "content": "text"},
+        ])
+        assert "[1]" in clean_invalid_citations(indexer, "See [1].")
+
+    def test_removes_invalid_doc_citation(self):
+        indexer = CitationIndexer()
+        indexer.build_index([
+            {"reference_id": "1", "chunk_id": "c1", "content": "text"},
+        ])
+        cleaned = clean_invalid_citations(indexer, "See [99].")
+        assert "[99]" not in cleaned
