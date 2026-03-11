@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from starlette.responses import RedirectResponse
 
 from dlightrag.config import DlightragConfig, get_config
@@ -102,6 +102,14 @@ class AnswerRequest(BaseModel):
     chunk_top_k: int | None = None
     conversation_history: list[dict[str, str]] | None = None
     workspaces: list[str] | None = None
+    multimodal_content: list[dict[str, Any]] | None = None
+
+    @field_validator("multimodal_content")
+    @classmethod
+    def validate_image_count(cls, v: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        if v and len(v) > 3:
+            raise ValueError("Maximum 3 multimodal items per query")
+        return v
 
 
 class DeleteRequest(BaseModel):
@@ -188,6 +196,8 @@ async def answer(body: AnswerRequest, request: Request):
     kwargs: dict[str, Any] = {}
     if body.conversation_history:
         kwargs["conversation_history"] = body.conversation_history
+    if body.multimodal_content:
+        kwargs["multimodal_content"] = body.multimodal_content
 
     if not body.stream:
         result = await manager.aanswer(
