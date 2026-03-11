@@ -70,7 +70,7 @@ _DROP = f"DELETE FROM {TABLE} WHERE workspace = $1 AND namespace = $2"
 _MIGRATE_BLOB = f"""
 UPDATE {TABLE}
 SET blob_data = decode(data->>'{{field}}', 'base64'),
-    data = data - '{{field}}'
+    data = (data - '{{field}}') || '{{"_blob_field": "{{field}}"}}'::jsonb
 WHERE workspace = $1 AND namespace = $2
   AND blob_data IS NULL
   AND data ? '{{field}}'
@@ -141,6 +141,7 @@ class PGJsonbKVStorage(BaseKVStorage):
             if self.blob_field and self.blob_field in v:
                 v = dict(v)  # Don't mutate caller's dict
                 raw = v.pop(self.blob_field)
+                v["_blob_field"] = self.blob_field  # Mark which field is in blob_data
                 if isinstance(raw, str):
                     blob_bytes = base64.b64decode(raw)
                 elif isinstance(raw, bytes):
@@ -161,6 +162,7 @@ class PGJsonbKVStorage(BaseKVStorage):
 
     def _merge_blob(self, data: dict[str, Any], blob_data: bytes | None) -> dict[str, Any]:
         """Merge blob_data back into the dict as base64 string."""
+        data.pop("_blob_field", None)  # Remove internal marker
         if self.blob_field and blob_data is not None:
             data[self.blob_field] = base64.b64encode(blob_data).decode("ascii")
         return data
