@@ -2,10 +2,15 @@
 {% block content %}
 <div class="app">
     <header class="topbar">
-        <button class="topbar-btn workspace-btn" id="workspace-btn"
-                hx-get="/web/workspaces"
-                hx-target="#panel-content"
-                hx-swap="innerHTML">{{ workspace }}</button>
+        <div class="workspace-chips" id="workspace-chips">
+            <span class="ws-chip" data-ws="{{ workspace }}">
+                {{ workspace }}
+            </span>
+            <button class="ws-add-btn" id="ws-add-btn"
+                    hx-get="/web/workspaces"
+                    hx-target="#panel-content"
+                    hx-swap="innerHTML">+ workspace</button>
+        </div>
         <div class="topbar-spacer"></div>
         <button class="topbar-btn" id="files-btn"
                 hx-get="/web/files"
@@ -22,16 +27,29 @@
         </div>
     </main>
 
+    <!-- Drop zone overlay (hidden by default) -->
+    <div class="drop-overlay" id="drop-overlay">
+        <div class="drop-overlay-content">
+            Drop images here.<br>Up to 3 images (PNG, JPG, WebP)
+        </div>
+    </div>
+
     <div class="composer" id="composer">
         <div class="composer-inner">
+            <!-- Thumbnail strip (outside, above composer) -->
+            <div class="thumbnail-strip" id="thumbnail-strip"></div>
             <form id="query-form" class="composer-form">
-                <textarea name="query" placeholder="Ask a question..." class="composer-input" rows="1" autocomplete="off"></textarea>
+                <button type="button" class="composer-plus" id="composer-plus" aria-label="Attach image">+</button>
+                <textarea name="query" placeholder="Inquiry anything" class="composer-input" rows="1" autocomplete="off"></textarea>
                 <button type="submit" class="composer-send" aria-label="Send">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                 </button>
             </form>
         </div>
     </div>
+
+    <!-- Hidden file input for image upload -->
+    <input type="file" id="image-input" accept="image/*" multiple style="display:none">
 
     <aside class="panel" id="panel">
         <div class="panel-header">
