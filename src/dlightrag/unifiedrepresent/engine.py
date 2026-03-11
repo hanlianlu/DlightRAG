@@ -218,6 +218,20 @@ class UnifiedRepresentEngine:
                 images.append(base64.b64decode(item["data"]))
         return images or None
 
+    @staticmethod
+    def _build_conversation_context(
+        conversation_history: list[dict[str, str]] | None,
+    ) -> str | None:
+        """Convert conversation history list to a context string for VLM."""
+        if not conversation_history:
+            return None
+        lines = []
+        for msg in conversation_history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            lines.append(f"{role}: {content}")
+        return "\n".join(lines) or None
+
     async def aretrieve(
         self,
         query: str,
@@ -230,12 +244,14 @@ class UnifiedRepresentEngine:
     ) -> RetrievalResult:
         """Retrieve relevant visual chunks (Phases 1-3)."""
         images = self._extract_image_bytes(multimodal_content)
+        conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
         result = await self.retriever.retrieve(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
             images=images,
+            conversation_context=conversation_context,
         )
         return RetrievalResult(
             answer=None,
@@ -255,12 +271,14 @@ class UnifiedRepresentEngine:
     ) -> RetrievalResult:
         """Retrieve and generate answer (Phases 1-4)."""
         images = self._extract_image_bytes(multimodal_content)
+        conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
         result = await self.retriever.answer(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
             images=images,
+            conversation_context=conversation_context,
         )
         return RetrievalResult(
             answer=result.get("answer"),
@@ -280,12 +298,14 @@ class UnifiedRepresentEngine:
     ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]:
         """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
         images = self._extract_image_bytes(multimodal_content)
+        conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
         return await self.retriever.answer_stream(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
             images=images,
+            conversation_context=conversation_context,
         )
 
     async def adelete_doc(self, doc_id: str) -> dict[str, Any]:

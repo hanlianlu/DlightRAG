@@ -20,7 +20,7 @@ let historyMaxMessages = 100;    // message count cap (50 turns × 2)
 
 const MAX_IMAGES = 3;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
-const pendingImages = []; // [{file, base64, objectUrl}]
+const pendingImages = []; // [{file, base64, dataUrl, objectUrl}]
 
 function addImage(file) {
     if (pendingImages.length >= MAX_IMAGES) return;
@@ -29,9 +29,10 @@ function addImage(file) {
 
     const reader = new FileReader();
     reader.onload = function(e) {
-        const base64 = e.target.result.split(',')[1]; // strip data:...;base64,
+        const dataUrl = e.target.result; // full data:mime;base64,... URL
+        const base64 = dataUrl.split(',')[1]; // strip prefix for API submission
         const objectUrl = URL.createObjectURL(file);
-        pendingImages.push({file, base64, objectUrl});
+        pendingImages.push({file, base64, dataUrl, objectUrl});
         renderThumbnails();
     };
     reader.readAsDataURL(file);
@@ -266,7 +267,7 @@ async function submitQuery(query) {
         pendingImages.forEach(function(img) {
             var imgEl = document.createElement('img');
             imgEl.className = 'message-img';
-            imgEl.src = img.objectUrl;
+            imgEl.src = img.dataUrl;
             imgEl.alt = 'Attached image';
             msgImages.appendChild(imgEl);
         });
@@ -527,6 +528,17 @@ document.addEventListener('DOMContentLoaded', function () {
         wsAddBtn.addEventListener('htmx:afterRequest', function() {
             openPanel('WORKSPACES');
             updateWorkspacePanelCheckboxes();
+        });
+    }
+
+    // Workspace toggle via event delegation (avoids inline onclick XSS)
+    var panelContent = document.getElementById('panel-content');
+    if (panelContent) {
+        panelContent.addEventListener('click', function(e) {
+            var item = e.target.closest('.workspace-check-item');
+            if (!item) return;
+            var ws = item.getAttribute('data-ws');
+            if (ws) toggleWorkspace(ws);
         });
     }
 

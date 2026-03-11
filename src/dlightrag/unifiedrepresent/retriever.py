@@ -20,6 +20,7 @@ from lightrag.constants import GRAPH_FIELD_SEP
 from PIL import Image
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.unifiedrepresent.multimodal_query import enhance_query_with_images
 
 QueryMode = Literal["local", "global", "hybrid", "naive", "mix", "bypass"]
 
@@ -64,17 +65,17 @@ class VisualRetriever:
         top_k: int = 60,
         chunk_top_k: int = 10,
         images: list[bytes] | None = None,
+        conversation_context: str | None = None,
     ) -> dict:
         """Run Phase 1-3 with optional dual-path for multimodal queries."""
         # Dual-path: if images provided, run VLM-enhanced text query + visual embedding
         if images:
-            from dlightrag.unifiedrepresent.multimodal_query import enhance_query_with_images
-
             if self.vision_model_func:
                 enhanced_query = await enhance_query_with_images(
                     query=query,
                     images=images,
                     vision_model_func=self.vision_model_func,
+                    conversation_context=conversation_context,
                 )
             else:
                 enhanced_query = query
@@ -245,12 +246,20 @@ class VisualRetriever:
         top_k: int = 60,
         chunk_top_k: int = 10,
         images: list[bytes] | None = None,
+        conversation_context: str | None = None,
     ) -> dict:
         """Run Phase 1-4: retrieve + VLM answer generation.
 
         Returns dict with keys: answer, contexts, raw
         """
-        retrieval = await self.retrieve(query, mode, top_k, chunk_top_k, images=images)
+        retrieval = await self.retrieve(
+            query,
+            mode,
+            top_k,
+            chunk_top_k,
+            images=images,
+            conversation_context=conversation_context,
+        )
 
         if not self.vision_model_func:
             return {"answer": None, **retrieval}
@@ -278,12 +287,20 @@ class VisualRetriever:
         top_k: int = 60,
         chunk_top_k: int = 10,
         images: list[bytes] | None = None,
+        conversation_context: str | None = None,
     ) -> tuple[dict, dict, AsyncIterator[str] | None]:
         """Run Phase 1-3 batch + Phase 4 streaming.
 
         Returns (contexts, raw, token_iterator).
         """
-        retrieval = await self.retrieve(query, mode, top_k, chunk_top_k, images=images)
+        retrieval = await self.retrieve(
+            query,
+            mode,
+            top_k,
+            chunk_top_k,
+            images=images,
+            conversation_context=conversation_context,
+        )
 
         if not self.vision_model_func:
             return retrieval["contexts"], retrieval["raw"], None
@@ -332,12 +349,22 @@ class VisualRetriever:
                 vec = await self.embedder.embed_pages([pil_img])
                 embedding = vec[0].tolist()
 
-                chunks = await self.lightrag.chunks_vdb.query(
+                raw_chunks = await self.lightrag.chunks_vdb.query(
                     query="",
                     top_k=top_k,
                     query_embedding=embedding,
                 )
-                per_image_results.append(chunks if chunks else [])
+                # Normalize VDB results to match text chunk schema
+                normalized = [
+                    {
+                        "reference_id": c.get("id", ""),
+                        "page_index": c.get("chunk_order_index"),
+                        "relevance_score": c.get("distance", 0.0),
+                        "content": c.get("content", ""),
+                    }
+                    for c in (raw_chunks or [])
+                ]
+                per_image_results.append(normalized)
             except Exception:
                 logger.warning("Visual embedding query failed for image", exc_info=True)
                 per_image_results.append([])
