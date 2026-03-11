@@ -237,8 +237,9 @@ class LibreOfficeConverter:
             if result.returncode != 0 or not ods_path.exists():
                 raise OfficeConverterError(f"Excel->ODS conversion failed: {result.stderr}")
 
-            # Step 2: Modify ODS page setup
-            self._set_ods_landscape_fit(ods_path)
+            # Step 2: Modify ODS page setup (adaptive width)
+            setup = self._estimate_excel_page_width(source_path)
+            self._set_ods_page_setup(ods_path, setup)
 
             # Step 3: ODS -> PDF
             result = subprocess.run(
@@ -270,8 +271,8 @@ class LibreOfficeConverter:
 
             return pdf_output
 
-    def _set_ods_landscape_fit(self, ods_path: Path) -> None:
-        """Modify ODS XML to set landscape orientation and fit-to-width scaling."""
+    def _set_ods_page_setup(self, ods_path: Path, setup: PageSetup) -> None:
+        """Modify ODS XML to set page dimensions, orientation, and fit-to-width scaling."""
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
             extract_dir = temp_path / "ods_content"
@@ -299,23 +300,22 @@ class LibreOfficeConverter:
                 "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
             }
 
+            fo_ns = ns["fo"]
+            style_ns = ns["style"]
+            margin = f"{_PAGE_MARGIN_CM}cm"
+
             for page_layout in root.findall(".//style:page-layout", ns):
                 props = page_layout.find("style:page-layout-properties", ns)
                 if props is not None:
-                    props.set(
-                        "{urn:oasis:names:tc:opendocument:xmlns:style:1.0}print-orientation",
-                        "landscape",
-                    )
-                    props.set(
-                        "{urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0}page-width",
-                        "29.7cm",
-                    )
-                    props.set(
-                        "{urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0}page-height",
-                        "21cm",
-                    )
-                    props.set("{urn:oasis:names:tc:opendocument:xmlns:style:1.0}scale-to-X", "1")
-                    props.set("{urn:oasis:names:tc:opendocument:xmlns:style:1.0}scale-to-Y", "0")
+                    props.set(f"{{{style_ns}}}print-orientation", setup.orientation)
+                    props.set(f"{{{fo_ns}}}page-width", f"{setup.width_cm}cm")
+                    props.set(f"{{{fo_ns}}}page-height", f"{setup.height_cm}cm")
+                    props.set(f"{{{fo_ns}}}margin-left", margin)
+                    props.set(f"{{{fo_ns}}}margin-right", margin)
+                    props.set(f"{{{fo_ns}}}margin-top", margin)
+                    props.set(f"{{{fo_ns}}}margin-bottom", margin)
+                    props.set(f"{{{style_ns}}}scale-to-X", "1")
+                    props.set(f"{{{style_ns}}}scale-to-Y", "0")
 
             tree.write(styles_xml, encoding="utf-8", xml_declaration=True)
             self._repack_ods(ods_path, extract_dir)
