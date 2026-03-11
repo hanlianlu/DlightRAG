@@ -128,3 +128,45 @@ class TestTextRetrieveOutputSchema:
         result = await retriever._text_retrieve("query", top_k=60, chunk_top_k=10)
         chunk = result["contexts"]["chunks"][0]
         assert chunk["page_idx"] == 1, "page_idx should be 1-based"
+
+
+from unittest.mock import patch
+
+
+class TestQueryByVisualEmbedding:
+    """Test query_by_visual_embedding output schema."""
+
+    async def test_output_has_required_fields(self):
+        retriever = _make_retriever()
+        retriever.embedder = MagicMock()
+
+        import numpy as np
+
+        retriever.embedder.embed_pages = AsyncMock(
+            return_value=np.array([[0.1] * 1024], dtype=np.float32)
+        )
+
+        retriever.lightrag.chunks_vdb.query = AsyncMock(return_value=[
+            {
+                "id": "chunk-xyz",
+                "content": "page content",
+                "chunk_order_index": 2,
+                "distance": 0.85,
+                "file_path": "/data/doc.pdf",
+            },
+        ])
+
+        img_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        with patch("dlightrag.unifiedrepresent.retriever.Image") as mock_image:
+            mock_pil = MagicMock()
+            mock_image.open.return_value = mock_pil
+
+            results = await retriever.query_by_visual_embedding([img_bytes], top_k=5)
+
+        assert len(results) == 1
+        chunk = results[0]
+        assert "chunk_id" in chunk
+        assert "page_idx" in chunk
+        assert "content" in chunk
+        assert chunk["chunk_id"] == "chunk-xyz"
+        assert chunk["page_idx"] == 3  # 0-based 2 -> 1-based 3
