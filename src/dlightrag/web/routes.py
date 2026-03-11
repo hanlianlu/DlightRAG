@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import shutil
@@ -97,6 +98,31 @@ async def answer_stream(
 
     conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
 
+    # Extract images (base64 from frontend)
+    images_b64: list[str] = body.get("images", [])
+    multimodal_content: list[dict[str, Any]] | None = None
+    tmp_paths: list[str] = []
+    if images_b64:
+        multimodal_content = []
+        for b64 in images_b64[:3]:  # enforce 3-image limit
+            try:
+                img_bytes = base64.b64decode(b64)
+                if len(img_bytes) > 10 * 1024 * 1024:  # 10MB server-side limit
+                    logger.warning("Skipping oversized image (%d bytes)", len(img_bytes))
+                    continue
+                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                tmp.write(img_bytes)
+                tmp.close()
+                tmp_paths.append(tmp.name)
+                multimodal_content.append({"type": "image", "img_path": tmp.name})
+            except Exception:
+                logger.warning("Failed to decode uploaded image", exc_info=True)
+        if not multimodal_content:
+            multimodal_content = None
+
+    # Extract workspaces (multi-select from frontend)
+    workspaces: list[str] | None = body.get("workspaces")
+
     manager = get_manager(request)
 
     async def event_generator() -> AsyncIterator[str]:
@@ -108,6 +134,8 @@ async def answer_stream(
             contexts, raw, token_iter = await manager.aanswer_stream(
                 query=query,
                 workspace=workspace,
+                workspaces=workspaces,
+                multimodal_content=multimodal_content,
                 **kwargs,
             )
 
@@ -177,6 +205,10 @@ async def answer_stream(
         except Exception:
             logger.exception("Answer streaming failed")
             yield "event: error\ndata: Service error. Please try again.\n\n"
+        finally:
+            # Clean up temp image files
+            for p in tmp_paths:
+                Path(p).unlink(missing_ok=True)
 
     return StreamingResponse(
         event_generator(),
