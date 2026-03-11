@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,6 +27,24 @@ logger = logging.getLogger(__name__)
 
 EXCEL_EXTENSIONS = {".xls", ".xlsx"}
 SKIP_CONVERSION_EXTENSIONS = {".csv"}
+
+# Conversion factor: 1 Excel width unit ≈ 0.201cm
+# Based on Excel's default Calibri 11pt character width (7.59px at 96 DPI).
+_EXCEL_UNIT_TO_CM = 0.201
+_DEFAULT_COLUMN_WIDTH = 8.43  # Excel default
+_PAGE_MARGIN_CM = 0.5
+_MIN_PAGE_WIDTH_CM = 21.0   # A4 portrait width
+_MAX_PAGE_WIDTH_CM = 63.0   # ~3x A4 landscape
+_A4_PORTRAIT_HEIGHT_CM = 29.7
+_A4_LANDSCAPE_HEIGHT_CM = 21.0
+
+
+@dataclass
+class PageSetup:
+    """Page dimensions for PDF conversion."""
+    width_cm: float
+    height_cm: float
+    orientation: str  # "landscape" | "portrait"
 
 
 class OfficeConverterError(Exception):
@@ -64,6 +83,75 @@ class LibreOfficeConverter:
         if suffix in SKIP_CONVERSION_EXTENSIONS:
             return False
         return suffix in EXCEL_EXTENSIONS
+
+    def _estimate_excel_page_width(self, source_path: Path) -> PageSetup:
+        """Estimate optimal page width from Excel column widths."""
+        fallback = PageSetup(
+            width_cm=29.7, height_cm=_A4_LANDSCAPE_HEIGHT_CM, orientation="landscape"
+        )
+        try:
+            import openpyxl
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            logger.warning("openpyxl not installed, using A4 landscape fallback")
+            return fallback
+
+        try:
+            wb = openpyxl.load_workbook(str(source_path), data_only=True)
+        except Exception:
+            logger.warning("Cannot read %s with openpyxl, using A4 landscape fallback", source_path.name)
+            return fallback
+
+        try:
+            max_width_cm = 0.0
+
+            for ws in wb.worksheets:
+                max_col = ws.max_column or 0
+                if max_col == 0:
+                    continue
+
+                sheet_width = 0.0
+                for col_idx in range(1, max_col + 1):
+                    col_letter = get_column_letter(col_idx)
+                    dim = ws.column_dimensions.get(col_letter)
+                    if dim and dim.hidden:
+                        continue
+                    width = (dim.width if dim and dim.width else _DEFAULT_COLUMN_WIDTH)
+                    sheet_width += width
+
+                sheet_width_cm = sheet_width * _EXCEL_UNIT_TO_CM
+                max_width_cm = max(max_width_cm, sheet_width_cm)
+
+            if max_width_cm == 0.0:
+                return fallback
+
+            total_width_cm = max_width_cm + 2 * _PAGE_MARGIN_CM
+
+            total_width_cm = max(_MIN_PAGE_WIDTH_CM, min(_MAX_PAGE_WIDTH_CM, total_width_cm))
+
+            if total_width_cm <= _MIN_PAGE_WIDTH_CM:
+                setup = PageSetup(
+                    width_cm=_MIN_PAGE_WIDTH_CM,
+                    height_cm=_A4_PORTRAIT_HEIGHT_CM,
+                    orientation="portrait",
+                )
+            else:
+                setup = PageSetup(
+                    width_cm=total_width_cm,
+                    height_cm=_A4_LANDSCAPE_HEIGHT_CM,
+                    orientation="landscape",
+                )
+
+            logger.info(
+                "Excel page setup for %s: %.1fcm x %.1fcm (%s)",
+                source_path.name,
+                setup.width_cm,
+                setup.height_cm,
+                setup.orientation,
+            )
+            return setup
+        finally:
+            wb.close()
 
     def convert_to_pdf(self, source_path: Path, output_dir: Path) -> Path:
         """Convert Excel file to PDF using LibreOffice.
@@ -341,6 +429,7 @@ def convert_office_bytes_to_pdf(
 __all__ = [
     "LibreOfficeConverter",
     "OfficeConverterError",
+    "PageSetup",
     "create_converter",
     "convert_office_bytes_to_pdf",
     "EXCEL_EXTENSIONS",
