@@ -127,6 +127,7 @@ function activateChatMode() {
 
 async function submitQuery(query) {
     const chatMessages = document.getElementById('chat-messages');
+    const chatArea = document.getElementById('chat-area');
 
     // Switch to chat mode (bottom input bar)
     activateChatMode();
@@ -158,7 +159,7 @@ async function submitQuery(query) {
     aiDiv.appendChild(contentDiv);
 
     chatMessages.appendChild(aiDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    chatArea.scrollTop = chatArea.scrollHeight;
 
     // Build history window using server-driven budget
     const historyWindow = getHistoryWindow();
@@ -207,7 +208,7 @@ async function submitQuery(query) {
                     if (eventType === 'token') {
                         fullAnswer += data;
                     }
-                    handleSSEData(eventType, data, contentDiv, aiDiv, chatMessages, firstToken);
+                    handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken);
                     if (eventType === 'token' && firstToken) firstToken = false;
                     eventType = '';
                 }
@@ -227,7 +228,7 @@ async function submitQuery(query) {
     }
 }
 
-function handleSSEData(eventType, data, contentDiv, aiDiv, chatMessages, firstToken) {
+function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken) {
     if (eventType === 'token') {
         if (firstToken) {
             contentDiv.textContent = '';
@@ -236,7 +237,7 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatMessages, firstTo
         const span = document.createElement('span');
         span.textContent = data;
         contentDiv.appendChild(span);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        chatArea.scrollTop = chatArea.scrollHeight;
     } else if (eventType === 'done') {
         // Trusted server-rendered enriched HTML with citation badges + source data
         const tmp = document.createElement('div');
@@ -277,10 +278,18 @@ document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('query-form');
     if (!form) return;
 
-    const textarea = form.querySelector('.query-input');
+    const textarea = form.querySelector('.composer-input');
 
-    // Submit on Enter (Shift+Enter for newline)
+    // Auto-resize textarea as user types
+    function autoResize() {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 160) + 'px';
+    }
+
     if (textarea) {
+        textarea.addEventListener('input', autoResize);
+
+        // Submit on Enter (Shift+Enter for newline)
         textarea.addEventListener('keydown', function (e) {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -294,6 +303,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const query = textarea.value.trim();
         if (!query) return;
         textarea.value = '';
+        textarea.style.height = 'auto';
         submitQuery(query);
     });
 

@@ -111,10 +111,19 @@ async def answer_stream(
                 **kwargs,
             )
 
-            async for chunk in token_iter:
-                full_answer += chunk
-                escaped = Markup.escape(chunk)
+            # token_iter may be an AsyncIterator, a plain str, or None
+            # depending on the RAG mode and provider capabilities.
+            if token_iter is None:
+                pass
+            elif isinstance(token_iter, str):
+                full_answer = token_iter
+                escaped = Markup.escape(token_iter)
                 yield f"event: token\ndata: {escaped}\n\n"
+            else:
+                async for chunk in token_iter:
+                    full_answer += chunk
+                    escaped = Markup.escape(chunk)
+                    yield f"event: token\ndata: {escaped}\n\n"
 
             # Citation processing
             flat_contexts = _contexts_to_flat_list(contexts)

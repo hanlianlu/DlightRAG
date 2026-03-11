@@ -217,8 +217,15 @@ async def answer(body: AnswerRequest, request: Request):
     async def event_generator() -> AsyncIterator[str]:
         yield f"data: {json.dumps({'type': 'context', 'data': contexts, 'raw': raw}, ensure_ascii=False)}\n\n"
         try:
-            async for chunk in token_iter:
-                yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+            # token_iter may be an AsyncIterator, a plain str, or None
+            # depending on the RAG mode and provider capabilities.
+            if token_iter is None:
+                pass
+            elif isinstance(token_iter, str):
+                yield f"data: {json.dumps({'type': 'token', 'content': token_iter}, ensure_ascii=False)}\n\n"
+            else:
+                async for chunk in token_iter:
+                    yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
             logger.exception("Error during SSE streaming")
