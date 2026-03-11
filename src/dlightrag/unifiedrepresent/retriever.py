@@ -12,6 +12,7 @@ import io
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import httpx
@@ -275,7 +276,12 @@ class VisualRetriever:
         from dlightrag.unifiedrepresent.prompts import UNIFIED_ANSWER_SYSTEM_PROMPT
 
         kg_context = self._format_kg_context(retrieval["contexts"])
-        user_prompt = f"Knowledge Graph Context:\n{kg_context}\n\nQuestion: {query}"
+        ref_list = self._format_reference_list(retrieval["contexts"])
+        user_prompt = (
+            f"Knowledge Graph Context:\n{kg_context}\n\n"
+            f"Reference Document List:\n{ref_list}\n\n"
+            f"Question: {query}"
+        )
 
         messages = self._build_vlm_messages(
             UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, retrieval["raw"]["media"]
@@ -315,7 +321,12 @@ class VisualRetriever:
         from dlightrag.unifiedrepresent.prompts import UNIFIED_ANSWER_SYSTEM_PROMPT
 
         kg_context = self._format_kg_context(retrieval["contexts"])
-        user_prompt = f"Knowledge Graph Context:\n{kg_context}\n\nQuestion: {query}"
+        ref_list = self._format_reference_list(retrieval["contexts"])
+        user_prompt = (
+            f"Knowledge Graph Context:\n{kg_context}\n\n"
+            f"Reference Document List:\n{ref_list}\n\n"
+            f"Question: {query}"
+        )
 
         messages = self._build_vlm_messages(
             UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, retrieval["raw"]["media"]
@@ -565,3 +576,18 @@ class VisualRetriever:
                 parts.append(f"- {src} -> {tgt}: {desc}")
 
         return "\n".join(parts) if parts else "No knowledge graph context available."
+
+    @staticmethod
+    def _format_reference_list(contexts: dict) -> str:
+        """Build reference list from chunk contexts for VLM citation."""
+        chunks = contexts.get("chunks", [])
+        seen: dict[str, str] = {}  # reference_id -> file_name
+        for chunk in chunks:
+            ref_id = str(chunk.get("reference_id", ""))
+            if ref_id and ref_id not in seen:
+                file_path = chunk.get("file_path", "")
+                seen[ref_id] = Path(file_path).name if file_path else f"Source {ref_id}"
+        if not seen:
+            return "No reference documents available."
+        lines = [f"[{ref_id}] {name}" for ref_id, name in seen.items()]
+        return "\n".join(lines)
