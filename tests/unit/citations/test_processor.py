@@ -74,3 +74,38 @@ def test_cited_chunks_populated():
     result = proc.process("See [1-1].")
     assert "1" in result.cited_chunks
     assert "c1" in result.cited_chunks["1"]
+
+
+class TestCitationProcessorFlatPageIdx:
+    """Test that page_idx is read from flat context field (not nested metadata)."""
+
+    def test_page_idx_from_flat_field(self):
+        contexts = [
+            {
+                "chunk_id": "c1",
+                "reference_id": "1",
+                "content": "Page one content",
+                "file_path": "/data/doc.pdf",
+                "page_idx": 1,
+            },
+            {
+                "chunk_id": "c2",
+                "reference_id": "1",
+                "content": "Page two content",
+                "file_path": "/data/doc.pdf",
+                "page_idx": 2,
+            },
+        ]
+        sources = [
+            SourceReference(id="1", path="/data/doc.pdf", title="doc.pdf"),
+        ]
+
+        processor = CitationProcessor(contexts=contexts, available_sources=sources)
+        result = processor.process("According to [1], the data shows...")
+
+        assert len(result.sources) == 1
+        src = result.sources[0]
+        assert src.chunks is not None
+        assert len(src.chunks) == 2
+        assert src.chunks[0].page_idx == 1
+        assert src.chunks[1].page_idx == 2
