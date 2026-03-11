@@ -20,6 +20,7 @@ from lightrag import QueryParam
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.utils.content_filters import filter_content_for_snippet
+from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
 
@@ -129,20 +130,11 @@ class RetrievalEngine:
         # Truncate conversation history
         history = kwargs.pop("conversation_history", None)
         if history:
-            max_msgs = self.config.max_conversation_turns * 2
-            if len(history) > max_msgs:
-                history = history[-max_msgs:]
-            token_budget = self.config.max_conversation_tokens
-            total = 0
-            cutoff = 0
-            for i in range(len(history) - 1, -1, -1):
-                total += len(history[i].get("content", "")) // 4
-                if total > token_budget:
-                    cutoff = i + 1
-                    break
-            if cutoff:
-                history = history[cutoff:]
-            kwargs["conversation_history"] = history
+            kwargs["conversation_history"] = truncate_conversation_history(
+                history,
+                max_messages=self.config.max_conversation_turns * 2,
+                max_tokens=self.config.max_conversation_tokens,
+            )
 
         query_kwargs = {
             "top_k": adjusted_top_k,
@@ -206,20 +198,11 @@ class RetrievalEngine:
         # Truncate conversation history (same logic as aanswer)
         history = kwargs.pop("conversation_history", None)
         if history:
-            max_msgs = self.config.max_conversation_turns * 2
-            if len(history) > max_msgs:
-                history = history[-max_msgs:]
-            token_budget = self.config.max_conversation_tokens
-            total = 0
-            cutoff = 0
-            for i in range(len(history) - 1, -1, -1):
-                total += len(history[i].get("content", "")) // 4
-                if total > token_budget:
-                    cutoff = i + 1
-                    break
-            if cutoff:
-                history = history[cutoff:]
-            kwargs["conversation_history"] = history
+            kwargs["conversation_history"] = truncate_conversation_history(
+                history,
+                max_messages=self.config.max_conversation_turns * 2,
+                max_tokens=self.config.max_conversation_tokens,
+            )
 
         query_kwargs = {
             "top_k": adjusted_top_k,

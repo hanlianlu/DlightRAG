@@ -14,15 +14,15 @@
 {% if files %}
 {% for file in files %}
 <div class="file-item">
-    <span class="file-name">{{ file }}</span>
+    <span class="file-name" title="{{ file }}">{{ file | basename }}</span>
     <button class="file-delete"
             hx-delete="/web/files"
             hx-headers='{"Content-Type": "application/json"}'
-            hx-vals='{"file_paths": ["{{ file }}"]}'
+            hx-vals='{"file_paths": {{ [file] | tojson }}}'
             hx-target="#panel-content"
             hx-swap="innerHTML"
-            hx-confirm="Delete {{ file }}?">
-        ✕
+            hx-confirm="Delete {{ file | basename }}?">
+        &#10005;
     </button>
 </div>
 {% endfor %}
