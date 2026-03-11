@@ -172,9 +172,7 @@ class TestEstimateExcelPageWidth:
                 {"name": "Narrow", "columns": [("A", 10), ("B", 10)]},
                 {
                     "name": "Wide",
-                    "columns": [
-                        (openpyxl.utils.get_column_letter(i + 1), 15) for i in range(20)
-                    ],
+                    "columns": [(openpyxl.utils.get_column_letter(i + 1), 15) for i in range(20)],
                 },
             ],
         )
@@ -310,17 +308,17 @@ class TestSetOdsPageSetup:
         styles_xml = extract_dir / "styles.xml"
         styles_xml.write_text(
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<office:document-styles '
+            "<office:document-styles "
             'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
             'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
             'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
-            '<office:automatic-styles>'
+            "<office:automatic-styles>"
             '<style:page-layout style:name="pm1">'
             '<style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" '
             'style:print-orientation="portrait"/>'
-            '</style:page-layout>'
-            '</office:automatic-styles>'
-            '</office:document-styles>'
+            "</style:page-layout>"
+            "</office:automatic-styles>"
+            "</office:document-styles>"
         )
 
         with zipfile.ZipFile(ods_path, "w") as zf:
