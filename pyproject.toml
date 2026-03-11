@@ -36,15 +36,11 @@ dependencies = [
     "fastapi>=0.135.1",
     "uvicorn[standard]>=0.41.0",
     "python-multipart>=0.0.22",
+    # Web frontend
+    "jinja2>=3.1",
     # LLM providers (Anthropic, Google Gemini)
     "anthropic>=0.84.0",
     "google-genai>=1.65.0",
-]
-
-[project.optional-dependencies]
-web = [
-    "jinja2>=3.1",
-    "python-multipart>=0.0.9",
 ]
 
 [dependency-groups]
