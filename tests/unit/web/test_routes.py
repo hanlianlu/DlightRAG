@@ -11,7 +11,10 @@ def app():
     from dlightrag.api.server import app as real_app
 
     mock_manager = MagicMock()
-    mock_manager.list_ingested_files = AsyncMock(return_value=["report.pdf", "analysis.xlsx"])
+    mock_manager.list_ingested_files = AsyncMock(return_value=[
+        {"file_path": "/data/report.pdf", "file_name": "report.pdf"},
+        {"file_path": "/data/analysis.xlsx", "file_name": "analysis.xlsx"},
+    ])
     mock_manager.list_workspaces = AsyncMock(return_value=["default", "finance"])
     real_app.state.manager = mock_manager
 
