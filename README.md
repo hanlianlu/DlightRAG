@@ -100,6 +100,7 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 
 ```bash
 uv add dlightrag        # or: pip install dlightrag
+cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
 dlightrag-api --env-file .env
 # Open http://localhost:8100/web/
 ```
