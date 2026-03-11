@@ -16,6 +16,130 @@ const conversationHistory = [];
 let historyCharBudget = 300000;  // chars (~150K tokens mixed scripts)
 let historyMaxMessages = 100;    // message count cap (50 turns × 2)
 
+// === Image Upload State ===
+
+const MAX_IMAGES = 3;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+const pendingImages = []; // [{file, base64, objectUrl}]
+
+function addImage(file) {
+    if (pendingImages.length >= MAX_IMAGES) return;
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > MAX_IMAGE_SIZE) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const base64 = e.target.result.split(',')[1]; // strip data:...;base64,
+        const objectUrl = URL.createObjectURL(file);
+        pendingImages.push({file, base64, objectUrl});
+        renderThumbnails();
+    };
+    reader.readAsDataURL(file);
+}
+
+function removeImage(index) {
+    const removed = pendingImages.splice(index, 1);
+    if (removed.length > 0) URL.revokeObjectURL(removed[0].objectUrl);
+    renderThumbnails();
+}
+
+function clearImages() {
+    pendingImages.forEach(function(img) { URL.revokeObjectURL(img.objectUrl); });
+    pendingImages.length = 0;
+    renderThumbnails();
+}
+
+function renderThumbnails() {
+    const strip = document.getElementById('thumbnail-strip');
+    if (!strip) return;
+    strip.replaceChildren();
+    pendingImages.forEach(function(img, idx) {
+        var item = document.createElement('div');
+        item.className = 'thumbnail-item';
+
+        var imgEl = document.createElement('img');
+        imgEl.className = 'thumbnail-img';
+        imgEl.src = img.objectUrl;
+        imgEl.alt = 'Attached image';
+        item.appendChild(imgEl);
+
+        var btn = document.createElement('button');
+        btn.className = 'thumbnail-remove';
+        btn.textContent = 'x';
+        btn.setAttribute('data-idx', idx);
+        btn.addEventListener('click', function() { removeImage(idx); });
+        item.appendChild(btn);
+
+        strip.appendChild(item);
+    });
+}
+
+// === Workspace State ===
+
+let activeWorkspaces = [];
+
+function initWorkspaces() {
+    const chips = document.querySelectorAll('#workspace-chips .ws-chip');
+    activeWorkspaces = [];
+    chips.forEach(function(chip) {
+        var ws = chip.getAttribute('data-ws');
+        if (ws) activeWorkspaces.push(ws);
+    });
+    if (activeWorkspaces.length === 0) activeWorkspaces = ['default'];
+}
+
+function toggleWorkspace(ws) {
+    var idx = activeWorkspaces.indexOf(ws);
+    if (idx >= 0) {
+        if (activeWorkspaces.length <= 1) return;
+        activeWorkspaces.splice(idx, 1);
+    } else {
+        activeWorkspaces.push(ws);
+    }
+    renderWorkspaceChips();
+    updateWorkspacePanelCheckboxes();
+}
+
+function renderWorkspaceChips() {
+    var container = document.getElementById('workspace-chips');
+    if (!container) return;
+
+    var addBtn = document.getElementById('ws-add-btn');
+
+    container.replaceChildren();
+    activeWorkspaces.forEach(function(ws) {
+        var chip = document.createElement('span');
+        chip.className = 'ws-chip';
+        chip.setAttribute('data-ws', ws);
+        chip.textContent = ws;
+
+        if (activeWorkspaces.length > 1) {
+            var removeBtn = document.createElement('button');
+            removeBtn.className = 'ws-chip-remove';
+            removeBtn.textContent = 'x';
+            removeBtn.addEventListener('click', function(e) {
+                e.stopPropagation();
+                toggleWorkspace(ws);
+            });
+            chip.appendChild(removeBtn);
+        }
+        container.appendChild(chip);
+    });
+
+    if (addBtn) container.appendChild(addBtn);
+}
+
+function updateWorkspacePanelCheckboxes() {
+    var items = document.querySelectorAll('#panel-content .workspace-check-item');
+    items.forEach(function(item) {
+        var ws = item.getAttribute('data-ws');
+        var isActive = activeWorkspaces.indexOf(ws) >= 0;
+        item.classList.toggle('selected', isActive);
+        var checkbox = item.querySelector('.ws-checkbox');
+        if (checkbox) checkbox.classList.toggle('checked', isActive);
+    });
+}
+
 /**
  * Build history window to send to backend.
  * Applies server-driven limits: min(max messages, char budget).
@@ -129,14 +253,31 @@ async function submitQuery(query) {
     const chatMessages = document.getElementById('chat-messages');
     const chatArea = document.getElementById('chat-area');
 
-    // Switch to chat mode (bottom input bar)
     activateChatMode();
 
-    // Add user message (textContent = safe from XSS)
-    const userDiv = document.createElement('div');
+    // Add user message with optional image thumbnails
+    var userWrapper = document.createElement('div');
+    userWrapper.style.marginLeft = 'auto';
+    userWrapper.style.maxWidth = '85%';
+
+    if (pendingImages.length > 0) {
+        var msgImages = document.createElement('div');
+        msgImages.className = 'message-images';
+        pendingImages.forEach(function(img) {
+            var imgEl = document.createElement('img');
+            imgEl.className = 'message-img';
+            imgEl.src = img.objectUrl;
+            imgEl.alt = 'Attached image';
+            msgImages.appendChild(imgEl);
+        });
+        userWrapper.appendChild(msgImages);
+    }
+
+    var userDiv = document.createElement('div');
     userDiv.className = 'user-message';
     userDiv.textContent = query;
-    chatMessages.appendChild(userDiv);
+    userWrapper.appendChild(userDiv);
+    chatMessages.appendChild(userWrapper);
 
     // Add AI message container
     const aiDiv = document.createElement('div');
@@ -161,8 +302,11 @@ async function submitQuery(query) {
     chatMessages.appendChild(aiDiv);
     chatArea.scrollTop = chatArea.scrollHeight;
 
-    // Build history window using server-driven budget
     const historyWindow = getHistoryWindow();
+
+    // Capture image data before clearing
+    var imageData = pendingImages.map(function(img) { return img.base64; });
+    clearImages();
 
     let fullAnswer = '';
     let success = false;
@@ -173,6 +317,8 @@ async function submitQuery(query) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 query: query,
+                images: imageData,
+                workspaces: activeWorkspaces,
                 conversation_history: historyWindow,
             }),
         });
@@ -194,9 +340,8 @@ async function submitQuery(query) {
 
             buffer += decoder.decode(result.value, { stream: true });
 
-            // Parse SSE events from buffer
             const lines = buffer.split('\n');
-            buffer = lines.pop() || '';  // Keep incomplete line
+            buffer = lines.pop() || '';
 
             let eventType = '';
             for (let i = 0; i < lines.length; i++) {
@@ -221,7 +366,6 @@ async function submitQuery(query) {
         contentDiv.style.color = '#c44';
     }
 
-    // Only record in history on success (keeps history consistent)
     if (success && fullAnswer) {
         conversationHistory.push({role: 'user', content: query});
         conversationHistory.push({role: 'assistant', content: fullAnswer});
@@ -304,6 +448,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (!query) return;
         textarea.value = '';
         textarea.style.height = 'auto';
+        closePanel();
         submitQuery(query);
     });
 
@@ -315,11 +460,89 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Workspace button opens panel (htmx loads content, JS opens panel)
-    const wsBtn = document.getElementById('workspace-btn');
-    if (wsBtn) {
-        wsBtn.addEventListener('htmx:afterRequest', function () {
-            openPanel('WORKSPACES');
+    // Image upload: + button
+    var plusBtn = document.getElementById('composer-plus');
+    var imageInput = document.getElementById('image-input');
+    if (plusBtn && imageInput) {
+        plusBtn.addEventListener('click', function() {
+            imageInput.click();
+        });
+        imageInput.addEventListener('change', function() {
+            var files = Array.from(imageInput.files || []);
+            files.forEach(function(f) { addImage(f); });
+            imageInput.value = '';
         });
     }
+
+    // Drag and drop
+    var dropOverlay = document.getElementById('drop-overlay');
+    var dragCounter = 0;
+
+    document.addEventListener('dragenter', function(e) {
+        e.preventDefault();
+        if (e.dataTransfer && e.dataTransfer.types.indexOf('Files') >= 0) {
+            dragCounter++;
+            if (dropOverlay) dropOverlay.classList.add('active');
+        }
+    });
+
+    document.addEventListener('dragleave', function(e) {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter <= 0) {
+            dragCounter = 0;
+            if (dropOverlay) dropOverlay.classList.remove('active');
+        }
+    });
+
+    document.addEventListener('dragover', function(e) {
+        e.preventDefault();
+    });
+
+    document.addEventListener('drop', function(e) {
+        e.preventDefault();
+        dragCounter = 0;
+        if (dropOverlay) dropOverlay.classList.remove('active');
+        var files = Array.from(e.dataTransfer.files || []);
+        files.forEach(function(f) {
+            if (f.type.startsWith('image/')) addImage(f);
+        });
+    });
+
+    // Clipboard paste
+    document.addEventListener('paste', function(e) {
+        var items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (var i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith('image/')) {
+                var file = items[i].getAsFile();
+                if (file) addImage(file);
+            }
+        }
+    });
+
+    // Workspace: + workspace button opens panel
+    var wsAddBtn = document.getElementById('ws-add-btn');
+    if (wsAddBtn) {
+        wsAddBtn.addEventListener('htmx:afterRequest', function() {
+            openPanel('WORKSPACES');
+            updateWorkspacePanelCheckboxes();
+        });
+    }
+
+    // Panel auto-close on chat area click
+    var chatArea = document.getElementById('chat-area');
+    if (chatArea) {
+        chatArea.addEventListener('click', function() {
+            closePanel();
+        });
+    }
+
+    // Panel auto-close on Escape
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closePanel();
+    });
+
+    // Initialize workspace state
+    initWorkspaces();
 });
