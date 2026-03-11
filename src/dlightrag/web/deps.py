@@ -23,34 +23,39 @@ DEFAULT_WORKSPACE = "default"
 
 
 def _citation_badges(text: str) -> Markup:
-    """Replace [ref_id-chunk_idx] patterns with clickable citation badge HTML.
+    """Replace citation patterns with clickable badge HTML.
 
-    Input text is auto-escaped by Jinja2 before this filter runs when used
-    as ``{{ answer | citation_badges }}``. We split on the citation pattern,
-    so non-citation segments are already escaped and citation groups are safe
-    alphanumeric/digit strings.
+    Handles both [ref_id-chunk_idx] and [n] doc-level formats.
+    Escapes all text first (XSS safe), then replaces citations with badges.
     """
-    parts = CITATION_PATTERN.split(str(text))
-    # split gives: [text, ref_id, chunk_idx, text, ref_id, chunk_idx, ...]
-    result: list[str] = []
-    i = 0
-    while i < len(parts):
-        if i % 3 == 0:
-            # Text segment — already escaped by Jinja2 auto-escape
-            result.append(Markup.escape(parts[i]))
-        else:
-            ref_id = Markup.escape(parts[i])
-            chunk_idx = Markup.escape(parts[i + 1])
-            result.append(
-                Markup(
-                    '<span class="citation-badge" data-ref="{}" '
-                    'data-chunk="{}" onclick="filterSource(this)">'
-                    "[{}-{}]</span>"
-                ).format(ref_id, chunk_idx, ref_id, chunk_idx)
-            )
-            i += 1  # Skip chunk_idx, already consumed
-        i += 1
-    return Markup("".join(result))
+    from dlightrag.citations.parser import DOC_CITATION_PATTERN
+
+    # Escape entire text first — citation patterns survive HTML escaping
+    escaped = str(Markup.escape(str(text)))
+
+    # First pass: replace chunk-level [ref-chunk] with badges
+    def _chunk_badge(m: re.Match) -> str:
+        ref_id = m.group(1)  # already escaped
+        chunk_idx = m.group(2)  # already escaped
+        return (
+            f'<span class="citation-badge" data-ref="{ref_id}" '
+            f'data-chunk="{chunk_idx}" onclick="filterSource(this)">'
+            f"[{ref_id}-{chunk_idx}]</span>"
+        )
+
+    result = CITATION_PATTERN.sub(_chunk_badge, escaped)
+
+    # Second pass: replace doc-level [n] with badges
+    def _doc_badge(m: re.Match) -> str:
+        ref_id = m.group(1)  # already escaped
+        return (
+            f'<span class="citation-badge" data-ref="{ref_id}" '
+            f'onclick="filterSource(this)">'
+            f"[{ref_id}]</span>"
+        )
+
+    result = DOC_CITATION_PATTERN.sub(_doc_badge, result)
+    return Markup(result)
 
 
 def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
