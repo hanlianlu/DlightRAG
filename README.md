@@ -14,7 +14,7 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 - **Cross-workspace federation** — query across workspaces with round-robin merging
 - **Content-aware dedup** — files hashed by content, preventing duplicate ingestion
 - **Flexible sourcing** — local filesystem, Azure Blob Storage, Snowflake
-- **Three interfaces** — Python SDK, REST API, MCP server
+- **Four interfaces** — Python SDK, REST API, MCP server, Web UI
 
 
 ## Quick Start
@@ -95,6 +95,16 @@ dlightrag-mcp --env-file /path/to/.env
 ```
 
 Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
+
+### Web UI
+
+```bash
+uv add "dlightrag[web]"   # or: pip install "dlightrag[web]"
+dlightrag-api --env-file .env
+# Open http://localhost:8100/web/
+```
+
+Built-in chat interface with citation navigation and document management. Answers stream in real-time; click citation badges (e.g. `[1-2]`) to view source chunks with semantic highlights. File upload, deletion, and workspace switching are all handled in-browser.
 
 
 ## Configuration
