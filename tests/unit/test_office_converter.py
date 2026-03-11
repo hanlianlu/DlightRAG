@@ -185,6 +185,71 @@ class TestEstimateExcelPageWidth:
         assert setup.orientation == "landscape"
 
 
+import pytest
+from unittest.mock import patch, MagicMock
+from dlightrag.converters.office import OfficeConverterError
+
+
+class TestFileToPdfBytes:
+    """Test file_to_pdf_bytes method."""
+
+    def _make_converter(self, test_config):
+        return LibreOfficeConverter(test_config)
+
+    def test_excel_delegates_to_convert_excel_to_pdf(self, test_config, tmp_path):
+        """xlsx files should go through the Excel→ODS→PDF pipeline."""
+        converter = self._make_converter(test_config)
+        xlsx_path = tmp_path / "test.xlsx"
+        xlsx_path.touch()
+
+        fake_pdf = tmp_path / "test.pdf"
+        fake_pdf.write_bytes(b"%PDF-1.4 fake")
+
+        with patch.object(converter, "_convert_excel_to_pdf", return_value=fake_pdf):
+            result = converter.file_to_pdf_bytes(xlsx_path)
+
+        assert result == b"%PDF-1.4 fake"
+
+    def test_docx_uses_standard_libreoffice(self, test_config, tmp_path):
+        """docx files should use standard libreoffice conversion."""
+        converter = self._make_converter(test_config)
+        docx_path = tmp_path / "doc.docx"
+        docx_path.touch()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            outdir = cmd[cmd.index("--outdir") + 1]
+            (Path(outdir) / "doc.pdf").write_bytes(b"%PDF-docx")
+            return mock_result
+
+        with patch("dlightrag.converters.office.subprocess.run", side_effect=fake_run):
+            result = converter.file_to_pdf_bytes(docx_path)
+
+        assert result == b"%PDF-docx"
+
+    def test_nonexistent_file_raises(self, test_config, tmp_path):
+        """Missing file should raise OfficeConverterError."""
+        converter = self._make_converter(test_config)
+        with pytest.raises(OfficeConverterError, match="Source file not found"):
+            converter.file_to_pdf_bytes(tmp_path / "missing.xlsx")
+
+    def test_failed_conversion_raises(self, test_config, tmp_path):
+        """Failed LibreOffice conversion should raise OfficeConverterError."""
+        converter = self._make_converter(test_config)
+        pptx_path = tmp_path / "slides.pptx"
+        pptx_path.touch()
+
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_result.stderr = "error"
+
+        with patch("dlightrag.converters.office.subprocess.run", return_value=mock_result):
+            with pytest.raises(OfficeConverterError, match="conversion failed"):
+                converter.file_to_pdf_bytes(pptx_path)
+
+
 import xml.etree.ElementTree as ET
 import zipfile
 
