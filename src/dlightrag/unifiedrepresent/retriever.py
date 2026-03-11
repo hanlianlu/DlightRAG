@@ -131,9 +131,10 @@ class VisualRetriever:
         )
         result = await self.lightrag.aquery_data(query, param=param)
 
-        # Extract chunk_ids and text content from result
+        # Extract chunk_ids, text, and reference metadata from result
         data = result.get("data", {})
         chunk_text: dict[str, str] = {}
+        chunk_meta: dict[str, dict[str, str]] = {}  # chunk_id -> {reference_id, file_path}
         chunk_ids: set[str] = set()
 
         # From chunks section
@@ -142,6 +143,10 @@ class VisualRetriever:
             if cid:
                 chunk_ids.add(cid)
                 chunk_text[cid] = chunk.get("content", "")
+                chunk_meta[cid] = {
+                    "reference_id": str(chunk.get("reference_id", "")),
+                    "file_path": chunk.get("file_path", ""),
+                }
 
         # From entities source_id
         for entity in data.get("entities", []):
@@ -225,10 +230,12 @@ class VisualRetriever:
                 "relationships": data.get("relationships", []),
                 "chunks": [
                     {
-                        "reference_id": cid,
-                        "page_index": vd.get("page_index"),
-                        "relevance_score": vd.get("relevance_score"),
+                        "chunk_id": cid,
+                        "reference_id": chunk_meta.get(cid, {}).get("reference_id", ""),
+                        "file_path": chunk_meta.get(cid, {}).get("file_path", vd.get("file_path", "")),
                         "content": chunk_text.get(cid, ""),
+                        "page_idx": (vd.get("page_index", 0) or 0) + 1,  # 0-based -> 1-based
+                        "relevance_score": vd.get("relevance_score"),
                     }
                     for cid, vd in resolved.items()
                 ],
