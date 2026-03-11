@@ -183,3 +183,93 @@ class TestEstimateExcelPageWidth:
         assert setup.width_cm == 29.7
         assert setup.height_cm == 21.0
         assert setup.orientation == "landscape"
+
+
+import xml.etree.ElementTree as ET
+import zipfile
+
+
+class TestSetOdsPageSetup:
+    """Test ODS XML page setup modification."""
+
+    def _make_converter(self, test_config):
+        return LibreOfficeConverter(test_config)
+
+    def _make_minimal_ods(self, tmp_path):
+        """Create a minimal ODS file with styles.xml for testing."""
+        ods_path = tmp_path / "test.ods"
+        extract_dir = tmp_path / "ods_build"
+        extract_dir.mkdir()
+
+        (extract_dir / "mimetype").write_text("application/vnd.oasis.opendocument.spreadsheet")
+
+        styles_xml = extract_dir / "styles.xml"
+        styles_xml.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<office:document-styles '
+            'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+            'xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" '
+            'xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">'
+            '<office:automatic-styles>'
+            '<style:page-layout style:name="pm1">'
+            '<style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" '
+            'style:print-orientation="portrait"/>'
+            '</style:page-layout>'
+            '</office:automatic-styles>'
+            '</office:document-styles>'
+        )
+
+        with zipfile.ZipFile(ods_path, "w") as zf:
+            zf.write(extract_dir / "mimetype", "mimetype", compress_type=zipfile.ZIP_STORED)
+            zf.write(styles_xml, "styles.xml", compress_type=zipfile.ZIP_DEFLATED)
+
+        return ods_path
+
+    def test_sets_custom_dimensions(self, test_config, tmp_path):
+        """Verify page width, height, orientation, margins are written to ODS."""
+        ods_path = self._make_minimal_ods(tmp_path)
+        converter = self._make_converter(test_config)
+        setup = PageSetup(width_cm=45.0, height_cm=21.0, orientation="landscape")
+
+        converter._set_ods_page_setup(ods_path, setup)
+
+        extract_dir = tmp_path / "verify"
+        with zipfile.ZipFile(ods_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+        tree = ET.parse(extract_dir / "styles.xml")
+        ns = {
+            "style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0",
+            "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
+        }
+        props = tree.getroot().find(".//style:page-layout-properties", ns)
+        assert props is not None
+
+        fo = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
+        style = "urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+
+        assert props.get(f"{{{fo}}}page-width") == "45.0cm"
+        assert props.get(f"{{{fo}}}page-height") == "21.0cm"
+        assert props.get(f"{{{style}}}print-orientation") == "landscape"
+        assert props.get(f"{{{fo}}}margin-left") == "0.5cm"
+        assert props.get(f"{{{fo}}}margin-right") == "0.5cm"
+        assert props.get(f"{{{style}}}scale-to-X") == "1"
+        assert props.get(f"{{{style}}}scale-to-Y") == "0"
+
+    def test_portrait_setup(self, test_config, tmp_path):
+        """Verify portrait orientation is set correctly."""
+        ods_path = self._make_minimal_ods(tmp_path)
+        converter = self._make_converter(test_config)
+        setup = PageSetup(width_cm=21.0, height_cm=29.7, orientation="portrait")
+
+        converter._set_ods_page_setup(ods_path, setup)
+
+        extract_dir = tmp_path / "verify"
+        with zipfile.ZipFile(ods_path, "r") as zf:
+            zf.extractall(extract_dir)
+
+        tree = ET.parse(extract_dir / "styles.xml")
+        ns = {"style": "urn:oasis:names:tc:opendocument:xmlns:style:1.0"}
+        props = tree.getroot().find(".//style:page-layout-properties", ns)
+        assert props is not None
+        assert props.get(f"{{{ns['style']}}}print-orientation") == "portrait"
