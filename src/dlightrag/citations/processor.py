@@ -79,11 +79,12 @@ class CitationProcessor:
 
                 content = filter_content_for_display(ctx.get("content", ""))
                 metadata = ctx.get("metadata", {})
+                page_idx = ctx.get("page_idx") or metadata.get("page_idx")
                 chunks.append(
                     ChunkSnippet(
                         chunk_id=cid,
                         chunk_idx=ctx.get("chunk_idx"),
-                        page_idx=metadata.get("page_idx"),
+                        page_idx=page_idx,
                         content=content,
                     )
                 )
