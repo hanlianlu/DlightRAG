@@ -88,6 +88,7 @@ class UnifiedRepresentEngine:
             rerank_api_key=(config.effective_rerank_api_key if config.enable_rerank else None),
             rerank_backend=(config.rerank_backend if config.enable_rerank else None),
             path_resolver=path_resolver,
+            embedder=self.embedder,
         )
 
     # ------------------------------------------------------------------

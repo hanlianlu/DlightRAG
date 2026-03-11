@@ -8,6 +8,7 @@ visual reranking -> VLM answer generation.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
@@ -16,6 +17,7 @@ from typing import Any, Literal, cast
 import httpx
 from lightrag import LightRAG, QueryParam
 from lightrag.constants import GRAPH_FIELD_SEP
+from PIL import Image
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
 
@@ -38,6 +40,7 @@ class VisualRetriever:
         rerank_api_key: str | None = None,
         rerank_backend: str | None = None,
         path_resolver: PathResolver | None = None,
+        embedder: Any | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -48,6 +51,7 @@ class VisualRetriever:
         self.rerank_api_key = rerank_api_key
         self.rerank_backend = rerank_backend
         self.path_resolver = path_resolver
+        self.embedder = embedder
 
     # ------------------------------------------------------------------
     # Public API
@@ -246,6 +250,53 @@ class VisualRetriever:
         )
 
         return retrieval["contexts"], retrieval["raw"], token_iterator
+
+    async def query_by_visual_embedding(
+        self,
+        images: list[bytes],
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Query chunks_vdb using visual embeddings of uploaded images.
+
+        Each image is embedded via VisualEmbedder and queried against the
+        chunks vector database directly. Results from multiple images are
+        merged via round-robin interleaving.
+
+        Args:
+            images: List of raw image bytes.
+            top_k: Number of results per image.
+
+        Returns:
+            Round-robin merged list of chunk dicts from all images.
+        """
+        if not images or self.embedder is None:
+            return []
+
+        per_image_results: list[list[dict[str, Any]]] = []
+        for img_bytes in images:
+            try:
+                pil_img = Image.open(io.BytesIO(img_bytes))
+                vec = await self.embedder.embed_pages([pil_img])
+                embedding = vec[0].tolist()
+
+                chunks = await self.lightrag.chunks_vdb.query(
+                    query="",
+                    top_k=top_k,
+                    query_embedding=embedding,
+                )
+                per_image_results.append(chunks if chunks else [])
+            except Exception:
+                logger.warning("Visual embedding query failed for image", exc_info=True)
+                per_image_results.append([])
+
+        # Round-robin merge across images
+        merged: list[dict[str, Any]] = []
+        max_len = max((len(r) for r in per_image_results), default=0)
+        for i in range(max_len):
+            for img_results in per_image_results:
+                if i < len(img_results):
+                    merged.append(img_results[i])
+        return merged
 
     # ------------------------------------------------------------------
     # Internal helpers
