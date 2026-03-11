@@ -76,11 +76,30 @@ curl -X POST http://localhost:8100/answer \
   -d '{"query": "What are the key findings?", "stream": true}'
 ```
 
+### Web UI
+
+If you already have the REST API running (via Docker or `dlightrag-api`), the Web UI is available at:
+
+```
+http://localhost:8100/web/
+```
+
+Without Docker:
+
+```bash
+uv add dlightrag        # or: pip install dlightrag
+cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+dlightrag-api --env-file .env
+```
+
+Built-in chat interface with citation navigation and document management. Answers stream in real-time; click citation badges (e.g. `[1-2]`) to view source chunks with semantic highlights. File upload, deletion, and workspace switching are all handled in-browser.
+
 ### MCP Server (for AI Agents)
 
 ```bash
 uv tool install dlightrag   # or: pip install dlightrag
-dlightrag-mcp --env-file /path/to/.env
+cp .env.example .env        # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+dlightrag-mcp --env-file .env
 ```
 
 ```json
@@ -95,17 +114,6 @@ dlightrag-mcp --env-file /path/to/.env
 ```
 
 Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
-
-### Web UI
-
-```bash
-uv add dlightrag        # or: pip install dlightrag
-cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
-dlightrag-api --env-file .env
-# Open http://localhost:8100/web/
-```
-
-Built-in chat interface with citation navigation and document management. Answers stream in real-time; click citation badges (e.g. `[1-2]`) to view source chunks with semantic highlights. File upload, deletion, and workspace switching are all handled in-browser.
 
 
 ## Configuration
