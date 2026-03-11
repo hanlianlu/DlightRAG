@@ -201,6 +201,23 @@ class UnifiedRepresentEngine:
             "file_path": str(path),
         }
 
+    @staticmethod
+    def _extract_image_bytes(
+        multimodal_content: list[dict[str, Any]] | None,
+    ) -> list[bytes] | None:
+        """Convert multimodal_content dicts to raw image bytes."""
+        if not multimodal_content:
+            return None
+        images: list[bytes] = []
+        for item in multimodal_content:
+            if item.get("type") != "image":
+                continue
+            if item.get("img_path"):
+                images.append(Path(item["img_path"]).read_bytes())
+            elif item.get("data"):
+                images.append(base64.b64decode(item["data"]))
+        return images or None
+
     async def aretrieve(
         self,
         query: str,
@@ -208,14 +225,17 @@ class UnifiedRepresentEngine:
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve relevant visual chunks (Phases 1-3)."""
+        images = self._extract_image_bytes(multimodal_content)
         result = await self.retriever.retrieve(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
+            images=images,
         )
         return RetrievalResult(
             answer=None,
@@ -230,14 +250,17 @@ class UnifiedRepresentEngine:
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve and generate answer (Phases 1-4)."""
+        images = self._extract_image_bytes(multimodal_content)
         result = await self.retriever.answer(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
+            images=images,
         )
         return RetrievalResult(
             answer=result.get("answer"),
@@ -252,14 +275,17 @@ class UnifiedRepresentEngine:
         mode: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]:
         """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
+        images = self._extract_image_bytes(multimodal_content)
         return await self.retriever.answer_stream(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
+            images=images,
         )
 
     async def adelete_doc(self, doc_id: str) -> dict[str, Any]:

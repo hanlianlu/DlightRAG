@@ -63,6 +63,57 @@ class VisualRetriever:
         mode: str = "mix",
         top_k: int = 60,
         chunk_top_k: int = 10,
+        images: list[bytes] | None = None,
+    ) -> dict:
+        """Run Phase 1-3 with optional dual-path for multimodal queries."""
+        # Dual-path: if images provided, run VLM-enhanced text query + visual embedding
+        if images:
+            from dlightrag.unifiedrepresent.multimodal_query import enhance_query_with_images
+
+            if self.vision_model_func:
+                enhanced_query = await enhance_query_with_images(
+                    query=query,
+                    images=images,
+                    vision_model_func=self.vision_model_func,
+                )
+            else:
+                enhanced_query = query
+                logger.warning("No vision_model_func; using original query for text path")
+
+            # Text path: standard retrieval with enhanced query
+            text_result = await self._text_retrieve(
+                enhanced_query,
+                mode,
+                top_k,
+                chunk_top_k,
+            )
+
+            # Image path: visual embedding direct query
+            visual_chunks = await self.query_by_visual_embedding(images, top_k=chunk_top_k)
+
+            # Round-robin merge text chunks + visual chunks
+            text_chunks = text_result.get("contexts", {}).get("chunks", [])
+            merged_chunks: list[dict[str, Any]] = []
+            max_len = max(len(text_chunks), len(visual_chunks))
+            for i in range(max_len):
+                if i < len(text_chunks):
+                    merged_chunks.append(text_chunks[i])
+                if i < len(visual_chunks):
+                    merged_chunks.append(visual_chunks[i])
+
+            # Cap at chunk_top_k to maintain consistent result count with text-only queries
+            text_result["contexts"]["chunks"] = merged_chunks[:chunk_top_k]
+            return text_result
+
+        # Text-only: unchanged existing path
+        return await self._text_retrieve(query, mode, top_k, chunk_top_k)
+
+    async def _text_retrieve(
+        self,
+        query: str,
+        mode: str = "mix",
+        top_k: int = 60,
+        chunk_top_k: int = 10,
     ) -> dict:
         """Run Phase 1-3: LightRAG retrieval -> visual resolution -> reranking.
 
@@ -193,12 +244,13 @@ class VisualRetriever:
         mode: str = "mix",
         top_k: int = 60,
         chunk_top_k: int = 10,
+        images: list[bytes] | None = None,
     ) -> dict:
         """Run Phase 1-4: retrieve + VLM answer generation.
 
         Returns dict with keys: answer, contexts, raw
         """
-        retrieval = await self.retrieve(query, mode, top_k, chunk_top_k)
+        retrieval = await self.retrieve(query, mode, top_k, chunk_top_k, images=images)
 
         if not self.vision_model_func:
             return {"answer": None, **retrieval}
@@ -225,12 +277,13 @@ class VisualRetriever:
         mode: str = "mix",
         top_k: int = 60,
         chunk_top_k: int = 10,
+        images: list[bytes] | None = None,
     ) -> tuple[dict, dict, AsyncIterator[str] | None]:
         """Run Phase 1-3 batch + Phase 4 streaming.
 
         Returns (contexts, raw, token_iterator).
         """
-        retrieval = await self.retrieve(query, mode, top_k, chunk_top_k)
+        retrieval = await self.retrieve(query, mode, top_k, chunk_top_k, images=images)
 
         if not self.vision_model_func:
             return retrieval["contexts"], retrieval["raw"], None
