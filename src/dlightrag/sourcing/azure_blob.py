@@ -78,6 +78,9 @@ def generate_azure_sas_url(
     if not account_name or not account_key:
         raise ValueError("Connection string missing AccountName or AccountKey")
 
+    if generate_blob_sas is None:
+        raise ImportError("azure-storage-blob is required for SAS URL generation")
+
     sas_token = generate_blob_sas(
         account_name=account_name,
         account_key=account_key,
