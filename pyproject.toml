@@ -29,6 +29,7 @@ dependencies = [
     # Document parsing
     "docling>=2.76.0",
     "pypdfium2>=4.30.0",
+    "openpyxl>=3.1",
     # MCP server
     "mcp[cli]>=1.9.0",
     # REST API server
