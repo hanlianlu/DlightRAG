@@ -402,10 +402,11 @@ class LibreOfficeConverter:
         self,
         file_data: bytes,
         mime_type: str,
-        *,
-        apply_page_setup: bool = False,
     ) -> bytes | None:
-        """Convert Office document bytes to PDF bytes (in-memory)."""
+        """Convert Office document bytes to PDF bytes (in-memory).
+
+        Excel files automatically use the adaptive-width pipeline.
+        """
         ext_map = {
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
             "application/msword": ".doc",
@@ -423,7 +424,7 @@ class LibreOfficeConverter:
                 input_file = tmp_path / f"input{ext}"
                 input_file.write_bytes(file_data)
 
-                if is_excel and apply_page_setup:
+                if is_excel:
                     pdf_path = self._convert_excel_to_pdf(
                         input_file, tmp_path, tmp_path / "output.pdf"
                     )
