@@ -293,6 +293,8 @@ class TestAretrieve:
             mode="mix",
             top_k=60,
             chunk_top_k=10,
+            images=None,
+            conversation_context=None,
         )
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
@@ -337,6 +339,8 @@ class TestAanswer:
             mode="mix",
             top_k=60,
             chunk_top_k=10,
+            images=None,
+            conversation_context=None,
         )
         assert isinstance(result, RetrievalResult)
         assert result.answer == expected.get("answer")
