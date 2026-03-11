@@ -283,7 +283,10 @@ class TestAretrieve:
             config=config,
         )
 
-        expected = {"chunks": [], "kg_context": ""}
+        expected = {
+            "contexts": {"entities": [], "relationships": [], "chunks": []},
+            "raw": {"sources": [], "media": []},
+        }
         engine.retriever.retrieve = AsyncMock(return_value=expected)
 
         result = await engine.aretrieve("test query")
@@ -329,7 +332,11 @@ class TestAanswer:
             config=config,
         )
 
-        expected = {"answer": "test answer", "sources": []}
+        expected = {
+            "answer": "test answer",
+            "contexts": {"entities": [], "relationships": [], "chunks": []},
+            "raw": {"sources": [], "media": []},
+        }
         engine.retriever.answer = AsyncMock(return_value=expected)
 
         result = await engine.aanswer("what is X?")
