@@ -51,11 +51,14 @@ def _extract_available_sources(contexts: dict[str, Any]) -> list[SourceReference
             ref_id = str(ctx.get("reference_id", ""))
             if not ref_id or ref_id in seen:
                 continue
+            # Read file_path from flat field (both modes) or nested metadata
             metadata = ctx.get("metadata", {})
+            file_path = ctx.get("file_path") or metadata.get("file_path", "")
+            file_name = metadata.get("file_name") or (Path(file_path).name if file_path else "")
             seen[ref_id] = SourceReference(
                 id=ref_id,
-                path=metadata.get("file_name", metadata.get("file_path", "")),
-                title=metadata.get("file_name"),
+                path=file_path,
+                title=file_name or None,
                 type=metadata.get("file_type"),
             )
     return list(seen.values())
