@@ -6,24 +6,29 @@
                 hx-get="/web/workspaces"
                 hx-target="#panel-content"
                 hx-swap="innerHTML">{{ workspace }}</button>
-        <span class="topbar-title">DlightRAG</span>
+        <div class="topbar-spacer"></div>
         <button class="topbar-btn" id="files-btn"
                 hx-get="/web/files"
                 hx-target="#panel-content"
-                hx-swap="innerHTML">
-            Files
-        </button>
+                hx-swap="innerHTML">Files</button>
     </header>
 
     <main class="chat-area" id="chat-area">
-        <div id="chat-messages" class="chat-messages"></div>
+        <div id="chat-messages" class="chat-messages">
+            <div class="welcome" id="welcome">
+                <div class="welcome-brand">DlightRAG</div>
+                <div class="welcome-sub">Ask anything about your documents</div>
+            </div>
+        </div>
     </main>
 
-    <div class="query-bar" id="query-bar">
-        <div class="query-bar-inner">
-            <form id="query-form" class="query-form">
-                <textarea name="query" placeholder="Ask a question..." class="query-input" rows="3" autocomplete="off"></textarea>
-                <button type="submit" class="query-submit">Send</button>
+    <div class="composer" id="composer">
+        <div class="composer-inner">
+            <form id="query-form" class="composer-form">
+                <textarea name="query" placeholder="Ask a question..." class="composer-input" rows="1" autocomplete="off"></textarea>
+                <button type="submit" class="composer-send" aria-label="Send">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                </button>
             </form>
         </div>
     </div>
