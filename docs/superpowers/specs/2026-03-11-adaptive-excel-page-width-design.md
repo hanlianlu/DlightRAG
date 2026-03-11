@@ -20,7 +20,7 @@ Two issues in the current Office-to-PDF conversion:
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Column width source | openpyxl (`data_only=True`, normal mode) | `read_only=True` lacks `column_dimensions`; verified via testing |
-| Excel unit → cm | 1 unit ≈ 0.201cm (7.59px at 96 DPI) | Standard Excel rendering metric |
+| Excel unit → cm | 1 unit ≈ 0.201cm (7.59px at 96 DPI) | Based on Excel's default Calibri 11pt character width metric |
 | Page width bounds | min 21cm, max 63cm | 21cm = A4 portrait width; 63cm ≈ 3x A4 landscape; beyond 63cm fit-to-width compresses |
 | Margins | 0.5cm all sides | User requirement |
 | Orientation | Auto: width <= 21cm → portrait, else landscape | Narrow Excels benefit from portrait; wide ones need landscape |
@@ -40,7 +40,7 @@ IngestionPipeline (caption mode)
 UnifiedRepresentEngine
     └─ PageRenderer(converter=LibreOfficeConverter)
            └─ _render_office()
-                  └─ converter.convert_to_pdf_bytes()  # NEW: file → PDF bytes
+                  └─ converter.file_to_pdf_bytes()     # NEW: file → PDF bytes
                   └─ _render_pdf_from_bytes()           # render PDF bytes to images
 ```
 
@@ -65,12 +65,17 @@ class PageSetup:
 #### `_estimate_excel_page_width(source_path) -> PageSetup` (new)
 
 1. Open with `openpyxl.load_workbook(path, data_only=True)`.
-2. Read active sheet `column_dimensions`; default width = 8.43 for unset columns.
-3. Sum all column widths up to `max_column`, multiply by 0.201 cm/unit.
+2. Iterate all sheets, for each sheet:
+   a. Read `column_dimensions`; default width = 8.43 for unset columns.
+   b. **Skip hidden columns** (`dim.hidden == True`).
+   c. Sum visible column widths up to `max_column`, multiply by 0.201 cm/unit.
+3. Take the **max width across all sheets** (LibreOffice converts all sheets to PDF;
+   the page setup applies globally, so we size for the widest sheet).
 4. Add 1.0cm (left + right margins).
 5. Clamp to [21cm, 63cm].
 6. Orientation: width <= 21cm → portrait (21 x 29.7), else landscape (width x 21).
-7. On any failure (`.xls`, corrupt file, import error): return A4 landscape fallback
+7. Log computed `PageSetup` at INFO level for debugging.
+8. On any failure (`.xls`, corrupt file, import error): return A4 landscape fallback
    (29.7 x 21, landscape).
 
 #### `_set_ods_page_setup(ods_path, setup: PageSetup)` (renamed from `_set_ods_landscape_fit`)
@@ -90,20 +95,35 @@ setup = self._estimate_excel_page_width(source_path)
 self._set_ods_page_setup(ods_path, setup)
 ```
 
-#### `convert_to_pdf_bytes(source_path: Path) -> bytes` (new)
+#### `file_to_pdf_bytes(source_path: Path) -> bytes` (new)
 
-Public method for `PageRenderer` consumption:
+Public method for `PageRenderer` consumption. Raises `OfficeConverterError` on failure.
 - Excel (`.xls`, `.xlsx`): uses `_convert_excel_to_pdf` flow → returns PDF bytes.
 - Other Office (`.docx`, `.pptx`, `.doc`, `.ppt`): standard `libreoffice --headless --convert-to pdf`.
 - Returns raw PDF bytes (not a file path).
+- Raises `OfficeConverterError` on conversion failure (consistent with `convert_to_pdf`).
+
+Named `file_to_pdf_bytes` (not `convert_to_pdf_bytes`) to clearly distinguish from
+the existing `convert_bytes_to_pdf` (bytes → bytes) method.
 
 #### `convert_bytes_to_pdf(file_data, mime_type, ...)` (modified)
 
 For Excel MIME types: writes temp file → calls `_estimate_excel_page_width` →
-full adaptive conversion flow. Replaces the `apply_page_setup` parameter with
-automatic detection.
+full adaptive conversion flow. The `apply_page_setup` parameter is removed; Excel
+files always get adaptive page setup automatically.
+
+**Breaking change**: callers passing `apply_page_setup=False` to explicitly skip
+page setup will now always get it. No current callers depend on this behavior
+(verified: only `_convert_excel_to_pdf` passes `apply_page_setup=True`).
 
 ### `PageRenderer` changes
+
+#### `_OFFICE_EXTENSIONS` expansion
+
+Expand from `{".docx", ".pptx", ".xlsx"}` to also include `{".doc", ".ppt", ".xls"}`
+so that legacy Office formats are routed to `_render_office` instead of raising
+`ValueError`. The converter handles these via standard LibreOffice conversion
+(with A4 landscape fallback for `.xls`).
 
 #### `__init__` signature
 
@@ -119,7 +139,7 @@ def __init__(
 
 ```
 if self._converter:
-    pdf_bytes = converter.convert_to_pdf_bytes(path)  # via asyncio.to_thread
+    pdf_bytes = self._converter.file_to_pdf_bytes(path)  # via asyncio.to_thread
     return self._render_pdf_from_bytes(pdf_bytes)
 else:
     ... existing bare LibreOffice fallback ...
@@ -139,6 +159,13 @@ converter = LibreOfficeConverter(config)
 self.renderer = PageRenderer(dpi=config.page_render_dpi, converter=converter)
 ```
 
+The converter is always instantiated. It is lightweight (no I/O in `__init__`) and
+`file_to_pdf_bytes` is only called when `_render_office` actually processes an Office
+file. The `excel_auto_convert_to_pdf` config flag only gates `should_convert()` in the
+caption ingestion pipeline; `file_to_pdf_bytes` is unconditional — if PageRenderer
+receives an Office file, it always converts it (this is the correct behavior for
+unified represent mode where every file must become page images).
+
 ### `pyproject.toml`
 
 Add `openpyxl` to dependencies.
@@ -147,7 +174,7 @@ Add `openpyxl` to dependencies.
 
 | File | Type | Summary |
 |------|------|---------|
-| `src/dlightrag/converters/office.py` | Modified | `PageSetup`, `_estimate_excel_page_width`, `convert_to_pdf_bytes`, parameterized page setup, adaptive `convert_bytes_to_pdf` |
+| `src/dlightrag/converters/office.py` | Modified | `PageSetup`, `_estimate_excel_page_width`, `file_to_pdf_bytes`, parameterized page setup, adaptive `convert_bytes_to_pdf` |
 | `src/dlightrag/unifiedrepresent/renderer.py` | Modified | Accept optional converter, delegate `_render_office`, add `_render_pdf_from_bytes` |
 | `src/dlightrag/unifiedrepresent/engine.py` | Modified | Pass converter to PageRenderer |
 | `pyproject.toml` | Modified | Add `openpyxl` dependency |
@@ -161,8 +188,8 @@ Add `openpyxl` to dependencies.
 | `.xls` file | openpyxl can't read → fallback to A4 landscape |
 | Corrupt/password-protected Excel | openpyxl raises → fallback to A4 landscape |
 | Excel with 0 columns | fallback to A4 landscape |
-| Excel with hidden columns | openpyxl still reports their width; included in calculation |
-| Multiple sheets with different widths | Uses active sheet only |
+| Excel with hidden columns | Excluded from width calculation (`dim.hidden` check) |
+| Multiple sheets with different widths | Max width across all sheets (LibreOffice renders all sheets) |
 | Calculated width exactly 21cm | Portrait orientation |
 | Calculated width 63.1cm | Clamped to 63cm, fit-to-width compresses slightly |
 | LibreOffice not installed | Existing error handling preserved |
