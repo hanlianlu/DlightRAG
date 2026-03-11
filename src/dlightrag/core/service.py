@@ -523,12 +523,15 @@ class RAGService:
             from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
 
             kv_cls = PGJsonbKVStorage
-        visual_chunks = kv_cls(
-            namespace="visual_chunks",
-            workspace=config.workspace,
-            global_config=dataclasses.asdict(lightrag),
-            embedding_func=embedding_func,
-        )
+        kv_kwargs: dict[str, Any] = {
+            "namespace": "visual_chunks",
+            "workspace": config.workspace,
+            "global_config": dataclasses.asdict(lightrag),
+            "embedding_func": embedding_func,
+        }
+        if kv_cls is PGJsonbKVStorage:
+            kv_kwargs["blob_field"] = "image_data"
+        visual_chunks = kv_cls(**kv_kwargs)
         await visual_chunks.initialize()
         self._visual_chunks = visual_chunks
 

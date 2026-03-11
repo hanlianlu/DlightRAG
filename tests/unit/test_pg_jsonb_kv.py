@@ -52,8 +52,8 @@ class TestUpsertAndGet:
         """get_by_id returns data dict for existing key."""
         storage = _make_storage()
         mock_conn = AsyncMock()
-        # asyncpg returns JSONB as already-parsed dict
-        mock_conn.fetchrow.return_value = {"data": {"img_b64": "abc"}}
+        # asyncpg returns JSONB as already-parsed dict, blob_data as bytes or None
+        mock_conn.fetchrow.return_value = {"data": {"img_b64": "abc"}, "blob_data": None}
         storage._pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
         storage._pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -82,8 +82,8 @@ class TestUpsertAndGet:
         storage = _make_storage()
         mock_conn = AsyncMock()
         mock_conn.fetch.return_value = [
-            {"id": "b", "data": {"page": 1}},
-            {"id": "a", "data": {"page": 0}},
+            {"id": "b", "data": {"page": 1}, "blob_data": None},
+            {"id": "a", "data": {"page": 0}, "blob_data": None},
         ]
         storage._pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
         storage._pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -132,7 +132,7 @@ class TestInitialize:
 
     @pytest.mark.asyncio
     async def test_ensure_table_creates_table(self) -> None:
-        """_ensure_table executes CREATE TABLE IF NOT EXISTS."""
+        """_ensure_table executes CREATE TABLE and ALTER TABLE for blob column."""
         storage = _make_storage()
         mock_conn = AsyncMock()
         storage._pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
@@ -140,11 +140,15 @@ class TestInitialize:
 
         await storage._ensure_table()
 
-        mock_conn.execute.assert_called_once()
-        sql = mock_conn.execute.call_args[0][0]
-        assert "CREATE TABLE IF NOT EXISTS" in sql
-        assert "dlightrag_kv_store" in sql
-        assert "JSONB" in sql
+        # CREATE TABLE + ALTER TABLE ADD COLUMN (no blob_field set, so no migration)
+        assert mock_conn.execute.call_count == 2
+        create_sql = mock_conn.execute.call_args_list[0][0][0]
+        assert "CREATE TABLE IF NOT EXISTS" in create_sql
+        assert "dlightrag_kv_store" in create_sql
+        assert "JSONB" in create_sql
+        assert "blob_data" in create_sql
+        alter_sql = mock_conn.execute.call_args_list[1][0][0]
+        assert "ADD COLUMN IF NOT EXISTS blob_data" in alter_sql
 
 
 class TestNamespaceIsolation:
