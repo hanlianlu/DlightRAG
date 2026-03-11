@@ -6,8 +6,9 @@ import logging
 import re
 import shutil
 import tempfile
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -71,7 +72,9 @@ def _extract_available_sources(contexts: dict[str, Any]) -> list[SourceReference
 
 def _escape_html(text: str) -> str:
     """Escape HTML special characters."""
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
 
 
 def _render_enriched_answer(answer_text: str) -> str:
@@ -259,8 +262,7 @@ async def upload_files(
     except Exception as e:
         logger.exception("Upload/ingestion failed")
         return HTMLResponse(
-            f'<div class="file-item" style="color:#c44">'
-            f"Upload failed: {_escape_html(str(e))}</div>"
+            f'<div class="file-item" style="color:#c44">Upload failed: {_escape_html(str(e))}</div>'
         )
 
     return await file_list(request, workspace)
@@ -280,9 +282,7 @@ async def delete_files(
         await manager.delete_files(workspace, file_paths=file_paths)
     except Exception as e:
         logger.exception("Delete failed")
-        return HTMLResponse(
-            f'<div style="color:#c44">Delete failed: {_escape_html(str(e))}</div>'
-        )
+        return HTMLResponse(f'<div style="color:#c44">Delete failed: {_escape_html(str(e))}</div>')
 
     return await file_list(request, workspace)
 

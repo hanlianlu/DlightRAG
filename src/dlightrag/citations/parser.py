@@ -30,9 +30,7 @@ def extract_citation_keys(answer_text: str) -> list[str]:
     return keys
 
 
-def extract_cited_chunks(
-    indexer: CitationIndexer, answer_text: str
-) -> dict[str, list[str]]:
+def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str, list[str]]:
     """Extract cited chunk_ids grouped by ref_id."""
     result: dict[str, list[str]] = {}
     seen: set[tuple[str, str]] = set()
@@ -55,9 +53,7 @@ def extract_cited_chunks(
     return result
 
 
-def clean_invalid_citations(
-    indexer: CitationIndexer, answer_text: str
-) -> str:
+def clean_invalid_citations(indexer: CitationIndexer, answer_text: str) -> str:
     """Remove citations that reference non-existent chunks."""
 
     def _replace(m: re.Match) -> str:

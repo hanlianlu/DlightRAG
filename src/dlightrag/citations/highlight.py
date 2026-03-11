@@ -11,7 +11,8 @@ import json
 import logging
 import re
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
@@ -43,7 +44,9 @@ class HighlightPhrases(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?\u3002\uff01\uff1f])\s+|(?<=[.!?\u3002\uff01\uff1f])(?=\S)")
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?<=[.!?\u3002\uff01\uff1f])\s+|(?<=[.!?\u3002\uff01\uff1f])(?=\S)"
+)
 _CITATION_RE = re.compile(r"\[\w+-\d+\]")
 
 
@@ -107,12 +110,9 @@ class HighlightExtractor:
         citing_sentence = citing_sentence[:_MAX_INPUT_CHARS]
         chunk_content = chunk_content[:_MAX_INPUT_CHARS]
 
-        prompt = (
-            f"System: {_HIGHLIGHT_SYSTEM_PROMPT}\n\n"
-            + _HIGHLIGHT_USER_PROMPT.format(
-                citing_sentence=citing_sentence,
-                chunk_content=chunk_content,
-            )
+        prompt = f"System: {_HIGHLIGHT_SYSTEM_PROMPT}\n\n" + _HIGHLIGHT_USER_PROMPT.format(
+            citing_sentence=citing_sentence,
+            chunk_content=chunk_content,
         )
 
         try:
@@ -124,9 +124,7 @@ class HighlightExtractor:
             parsed = json.loads(text)
             result = HighlightPhrases(**parsed)
         except Exception:
-            logger.debug(
-                "Highlight extraction failed for chunk %s", chunk_id, exc_info=True
-            )
+            logger.debug("Highlight extraction failed for chunk %s", chunk_id, exc_info=True)
             result = HighlightPhrases()
 
         chunk_lower = chunk_content.lower()
@@ -160,9 +158,7 @@ async def extract_highlights_for_sources(
         chunk_id: str, chunk_content: str, sentence: str
     ) -> tuple[str, HighlightPhrases]:
         async with semaphore:
-            return chunk_id, await extractor.extract_highlights(
-                sentence, chunk_content, chunk_id
-            )
+            return chunk_id, await extractor.extract_highlights(sentence, chunk_content, chunk_id)
 
     tasks = []
     for src in sources:

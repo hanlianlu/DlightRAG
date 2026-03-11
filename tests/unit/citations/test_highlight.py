@@ -50,6 +50,7 @@ class TestHighlightExtractor:
     def mock_llm(self):
         async def llm_func(prompt: str, **kwargs) -> str:
             return '{"phrases": ["market growth"], "confidence": 0.9}'
+
         return llm_func
 
     @pytest.fixture()

@@ -1,4 +1,4 @@
-from dlightrag.citations.utils import split_source_ids, filter_content_for_display
+from dlightrag.citations.utils import filter_content_for_display, split_source_ids
 
 
 def test_split_source_ids_comma_separated():
