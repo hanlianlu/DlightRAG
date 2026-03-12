@@ -667,6 +667,7 @@ dependencies = [
     { name = "google-genai" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "markdown-it-py", extra = ["plugins"] },
     { name = "mcp", extra = ["cli"] },
     { name = "numpy" },
     { name = "openai" },
@@ -674,6 +675,7 @@ dependencies = [
     { name = "pgvector" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pygments" },
     { name = "pypdfium2" },
     { name = "python-dotenv" },
     { name = "python-multipart" },
@@ -700,6 +702,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.65.0" },
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
     { name = "numpy", specifier = ">=2.4.2" },
     { name = "openai", specifier = ">=2.24.0" },
@@ -707,6 +710,7 @@ requires-dist = [
     { name = "pgvector", specifier = ">=0.4.2" },
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
+    { name = "pygments", specifier = ">=2.17" },
     { name = "pypdfium2", specifier = ">=4.30.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "python-multipart", specifier = ">=0.0.22" },
@@ -1629,6 +1633,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/94/54/e7d793b573f298e1c9013b8c4dade17d481164aa517d1d7148619c2cedbf/markdown_it_py-4.0.0-py3-none-any.whl", hash = "sha256:87327c59b172c5011896038353a81343b6754500a08cd7a4973bb48c6d578147", size = 87321, upload-time = "2025-08-11T12:57:51.923Z" },
 ]
 
+[package.optional-dependencies]
+plugins = [
+    { name = "mdit-py-plugins" },
+]
+
 [[package]]
 name = "marko"
 version = "2.2.2"
@@ -1712,6 +1721,18 @@ wheels = [
 cli = [
     { name = "python-dotenv" },
     { name = "typer" },
+]
+
+[[package]]
+name = "mdit-py-plugins"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b2/fd/a756d36c0bfba5f6e39a1cdbdbfdd448dc02692467d83816dff4592a1ebc/mdit_py_plugins-0.5.0.tar.gz", hash = "sha256:f4918cb50119f50446560513a8e311d574ff6aaed72606ddae6d35716fe809c6", size = 44655, upload-time = "2025-08-11T07:25:49.083Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/86/dd6e5db36df29e76c7a7699123569a4a18c1623ce68d826ed96c62643cae/mdit_py_plugins-0.5.0-py3-none-any.whl", hash = "sha256:07a08422fc1936a5d26d146759e9155ea466e842f5ab2f7d2266dd084c8dab1f", size = 57205, upload-time = "2025-08-11T07:25:47.597Z" },
 ]
 
 [[package]]
