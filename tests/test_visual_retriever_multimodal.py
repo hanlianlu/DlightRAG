@@ -65,10 +65,10 @@ async def test_query_by_visual_embedding_single_image():
     assert call_kwargs.kwargs.get("query_embedding") is not None
     assert len(results) == 2
     # Verify normalized schema matches text chunk format
-    assert results[0]["reference_id"] == "chunk-1"
+    assert results[0]["chunk_id"] == "chunk-1"
     assert results[0]["relevance_score"] == 0.9
     assert "content" in results[0]
-    assert "page_index" in results[0]
+    assert "page_idx" in results[0]
 
 
 @pytest.mark.asyncio
