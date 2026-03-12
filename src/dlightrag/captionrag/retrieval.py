@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from lightrag import QueryParam
 
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,7 @@ class RetrievalEngine:
     def __init__(self, rag: Any, config: Any) -> None:
         self.rag = rag
         self.config = config
+        self._path_resolver: Any | None = None
 
     async def aretrieve(
         self,
@@ -48,7 +49,7 @@ class RetrievalEngine:
         lightrag = getattr(self.rag, "lightrag", None)
         if lightrag is None:
             logger.warning("LightRAG not initialized - no documents ingested yet")
-            return RetrievalResult(answer=None, contexts={})
+            return RetrievalResult(answer=None)
 
         enhanced_query = query
         if multimodal_content and hasattr(self.rag, "_process_multimodal_query_content"):
@@ -99,7 +100,7 @@ class RetrievalEngine:
         lightrag = getattr(self.rag, "lightrag", None)
         if lightrag is None:
             logger.warning("LightRAG not initialized - no documents ingested yet")
-            return RetrievalResult(answer=None, contexts={})
+            return RetrievalResult(answer=None)
 
         enhanced_query = query
         if multimodal_content and hasattr(self.rag, "_process_multimodal_query_content"):
@@ -152,7 +153,7 @@ class RetrievalEngine:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], AsyncIterator[str]]:
+    ) -> tuple[RetrievalContexts, AsyncIterator[str]]:
         """Two-phase streaming: retrieve contexts, then stream LLM answer.
 
         Returns:
@@ -210,7 +211,7 @@ class RetrievalEngine:
 
         return contexts, token_iter
 
-    async def _attach_page_idx(self, contexts: dict[str, Any]) -> None:
+    async def _attach_page_idx(self, contexts: RetrievalContexts) -> None:
         """Attach 1-based page_idx from text_chunks KV store to chunk contexts."""
         chunk_contexts = contexts.get("chunks", [])
         lightrag = getattr(self.rag, "lightrag", None)

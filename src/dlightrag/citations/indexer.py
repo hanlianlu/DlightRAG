@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from .utils import split_source_ids
@@ -11,11 +12,21 @@ logger = logging.getLogger(__name__)
 
 
 class CitationIndexer:
-    """Bidirectional index: (ref_id, chunk_idx) <-> chunk_id."""
+    """Bidirectional index: (ref_id, chunk_idx) <-> chunk_id.
+
+    Also stores per-chunk metadata (file_path, page_idx) so that
+    :meth:`format_reference_list` can render the hierarchical reference
+    list for VLM prompts — ensuring a single source of truth for the
+    ``[ref_id-chunk_idx]`` mapping.
+    """
 
     def __init__(self) -> None:
         self._index: dict[str, dict[str, int]] = {}
         self._reverse: dict[str, dict[int, str]] = {}
+        # Per-ref doc metadata: ref_id -> file_name
+        self._doc_names: dict[str, str] = {}
+        # Per-chunk metadata: chunk_id -> {"page_idx": int, ...}
+        self._chunk_meta: dict[str, dict[str, Any]] = {}
 
     def build_index(self, contexts: list[dict[str, Any]]) -> None:
         valid_chunk_ids: set[str] = set()
@@ -34,6 +45,14 @@ class CitationIndexer:
                 ref_chunks.setdefault(ref_id, [])
                 if chunk_id not in ref_chunks[ref_id]:
                     ref_chunks[ref_id].append(chunk_id)
+                    # Store metadata on first encounter
+                    self._chunk_meta[chunk_id] = {
+                        "page_idx": ctx.get("page_idx", 0),
+                    }
+                # Store doc-level metadata (first chunk wins)
+                if ref_id not in self._doc_names:
+                    fp = ctx.get("file_path", "")
+                    self._doc_names[ref_id] = Path(fp).name if fp else f"Source {ref_id}"
             else:
                 source_id = ctx.get("source_id")
                 if source_id:
@@ -81,6 +100,39 @@ class CitationIndexer:
                     ctx["chunk_idxs"] = idxs
             enriched.append(ctx)
         return enriched
+
+    def format_reference_list(self) -> str:
+        """Render a hierarchical reference list for VLM prompts.
+
+        Uses the same index built by :meth:`build_index`, guaranteeing
+        that ``[n-m]`` markers in the prompt map to the same chunk_ids
+        that :meth:`get_chunk_id` resolves during citation processing.
+
+        Example output::
+
+            [1] quarterly_report.pdf
+              [1-1] Page 3
+              [1-2] Page 7
+            [2] spec.pdf
+              [2-1] Page 1
+        """
+        if not self._reverse:
+            return "No reference documents available."
+
+        lines: list[str] = []
+        for ref_id in self._reverse:
+            name = self._doc_names.get(ref_id, f"Source {ref_id}")
+            lines.append(f"[{ref_id}] {name}")
+            max_idx = max(self._reverse[ref_id])
+            for idx in range(1, max_idx + 1):
+                cid = self._reverse[ref_id].get(idx)
+                if cid is None:
+                    continue
+                meta = self._chunk_meta.get(cid, {})
+                page_idx = meta.get("page_idx", 0)
+                page_label = f"Page {page_idx}" if page_idx else f"Chunk {idx}"
+                lines.append(f"  [{ref_id}-{idx}] {page_label}")
+        return "\n".join(lines)
 
     @staticmethod
     def format_citation(ref_id: str | int, chunk_idx: int) -> str:

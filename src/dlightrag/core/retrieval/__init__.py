@@ -2,6 +2,21 @@
 """Shared retrieval types and utilities."""
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
-from dlightrag.core.retrieval.protocols import RetrievalBackend, RetrievalResult
+from dlightrag.core.retrieval.protocols import (
+    ChunkContext,
+    EntityContext,
+    RelationshipContext,
+    RetrievalBackend,
+    RetrievalContexts,
+    RetrievalResult,
+)
 
-__all__ = ["PathResolver", "RetrievalBackend", "RetrievalResult"]
+__all__ = [
+    "ChunkContext",
+    "EntityContext",
+    "PathResolver",
+    "RelationshipContext",
+    "RetrievalBackend",
+    "RetrievalContexts",
+    "RetrievalResult",
+]

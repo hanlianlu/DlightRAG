@@ -91,7 +91,7 @@ from lightrag.utils import EmbeddingFunc  # noqa: E402
 from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
 from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
 from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
-from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
+from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     get_embedding_func,
     get_llm_model_func,
@@ -816,7 +816,7 @@ class RAGService:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], AsyncIterator[str]]:
+    ) -> tuple[RetrievalContexts, AsyncIterator[str]]:
         """Streaming answer: retrieve contexts, then stream LLM tokens."""
         self._ensure_initialized()
         backend = self._effective_backend

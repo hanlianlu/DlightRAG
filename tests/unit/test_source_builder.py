@@ -1,4 +1,5 @@
 """Tests for build_sources() shared utility."""
+
 from __future__ import annotations
 
 from dlightrag.citations.source_builder import build_sources

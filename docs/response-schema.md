@@ -81,7 +81,7 @@ Same parameters as REST API, passed as tool arguments.
 
 | Interface | `retrieve` | `answer` | Streaming |
 |---|---|---|---|
-| Python SDK | `RetrievalResult` | `RetrievalResult` | `(contexts, raw, token_iter)` |
+| Python SDK | `RetrievalResult` | `RetrievalResult` | `(contexts, token_iter)` |
 | REST API | JSON object | JSON object | SSE (`stream: true`) |
 | MCP Server | JSON text | JSON text | N/A |
 | Web UI | — | SSE (HTML) | Built-in |
@@ -92,18 +92,16 @@ Same parameters as REST API, passed as tool arguments.
 # Retrieve: contexts only, no LLM answer
 result = await service.aretrieve(query="What are the key findings?")
 result.answer     # None
-result.contexts   # {"chunks": [...], "entities": [...], "relationships": [...]}
-result.raw        # {"sources": [...], "media": [...]}
+result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
 
 # Answer: contexts + LLM-generated answer
 result = await service.aanswer(query="What are the key findings?")
 result.answer     # "The key findings are... [1-1] [2-3]"
 result.contexts   # same structure as retrieve
-result.raw        # same structure as retrieve
 
 # Streaming answer
-contexts, raw, token_iter = await service.aanswer_stream(query="What are the key findings?")
-# contexts and raw are available immediately
+contexts, token_iter = await service.aanswer_stream(query="What are the key findings?")
+# contexts (RetrievalContexts) available immediately
 async for token in token_iter:
     print(token, end="")
 ```
@@ -143,7 +141,7 @@ curl -X POST http://localhost:8100/answer \
 {
   "answer": "The key findings are... [1-1] [2-3]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
-  "raw": { "sources": [...], "media": [...] }
+  "sources": [...]
 }
 ```
 
@@ -151,13 +149,13 @@ curl -X POST http://localhost:8100/answer \
 
 | Event | Payload | Description |
 |---|---|---|
-| `context` | `{type, data, raw}` | Full contexts + sources (sent first) |
+| `context` | `{type, data, sources}` | Full contexts + sources (sent first) |
 | `token` | `{type, content}` | LLM answer token (repeats) |
 | `done` | `{type}` | Stream complete |
 | `error` | `{type, message}` | Error mid-stream |
 
 ```
-data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":[...]},"raw":{"sources":[...],"media":[...]}}
+data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":[...]},"sources":[...]}
 
 data: {"type":"token","content":"The key findings"}
 
@@ -170,7 +168,7 @@ data: {"type":"done"}
 
 ### MCP Server
 
-MCP tools return JSON text. The shape is slightly flattened — `sources` is promoted to top level (no `raw` wrapper):
+MCP tools return JSON text with `sources` at top level:
 
 ```json
 {
@@ -183,7 +181,11 @@ MCP tools return JSON text. The shape is slightly flattened — `sources` is pro
 
 ## Contexts Object
 
-All modes return `contexts` with three arrays. Chunks are the primary retrieval unit; entities and relationships come from the knowledge graph.
+All modes return `contexts` as a `RetrievalContexts` TypedDict with three arrays. Chunks are the primary retrieval unit; entities and relationships come from the knowledge graph.
+
+```python
+from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, EntityContext, RelationshipContext
+```
 
 ### chunks
 
@@ -194,18 +196,22 @@ All modes return `contexts` with three arrays. Chunks are the primary retrieval 
   "file_path": "/data/report.pdf",
   "content": "Page text content...",
   "page_idx": 2,
+  "image_data": "iVBORw0KGgo...",
   "relevance_score": 0.87
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `chunk_id` | string | Unique chunk identifier |
-| `reference_id` | string | Document-level ID (groups chunks from the same file) |
-| `file_path` | string | Source file path |
-| `content` | string | Chunk text content |
-| `page_idx` | int | **1-based** page number |
-| `relevance_score` | float | 0–1 relevance score (present when reranking is enabled) |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `chunk_id` | string | yes | Unique chunk identifier |
+| `reference_id` | string | yes | Document-level ID (groups chunks from the same file) |
+| `file_path` | string | yes | Source file path |
+| `content` | string | yes | Chunk text content |
+| `page_idx` | int \| null | no | **1-based** page number |
+| `image_data` | string \| null | no | Base64-encoded page image (unified mode only) |
+| `relevance_score` | float \| null | no | 0–1 relevance score (when reranking is enabled) |
+| `metadata` | object | no | Extra metadata (`file_name`, `file_type`, etc.) |
+| `_workspace` | string | no | Source workspace (federated queries only) |
 
 ### entities
 
@@ -218,6 +224,14 @@ All modes return `contexts` with three arrays. Chunks are the primary retrieval 
 }
 ```
 
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `entity_name` | string | yes | Entity name/label |
+| `entity_type` | string | yes | Category (Person, Organization, Technology, etc.) |
+| `description` | string | yes | Summary description |
+| `source_id` | string | yes | Comma-separated `chunk_id` values linking to source chunks |
+| `reference_id` | string | no | Document reference (inferred from source_id) |
+
 ### relationships
 
 ```json
@@ -229,65 +243,64 @@ All modes return `contexts` with three arrays. Chunks are the primary retrieval 
 }
 ```
 
-> `source_id` in entities/relationships is a comma-separated list of `chunk_id` values linking back to source chunks.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `src_id` | string | yes | Source entity name |
+| `tgt_id` | string | yes | Target entity name |
+| `description` | string | yes | Relationship description |
+| `source_id` | string | yes | Comma-separated `chunk_id` values linking to source chunks |
+| `reference_id` | string | no | Document reference (inferred from source_id) |
 
 
-## Sources and Media
+## Sources
 
-The `raw` object (REST/SDK) or `sources` array (MCP) contains document-level metadata and associated media.
+Sources are document-level groupings derived from chunks via `build_sources()`. They appear in REST/MCP responses and drive the Web UI's source panel.
 
-### Caption Mode
-
-**sources:**
 ```json
 {
   "id": "1",
-  "type": "file",
   "title": "report.pdf",
   "path": "/data/report.pdf",
+  "type": "file",
   "url": "file://sources/local/report.pdf",
-  "snippet": "First 100 characters of content...",
-  "chunk_ids": ["abc123", "def456"]
+  "chunks": [
+    {
+      "chunk_id": "abc123",
+      "chunk_idx": 0,
+      "page_idx": 2,
+      "content": "First 200 characters of content...",
+      "image_data": null
+    },
+    {
+      "chunk_id": "def456",
+      "chunk_idx": 1,
+      "page_idx": 5,
+      "content": "Another chunk...",
+      "image_data": "iVBORw0KGgo..."
+    }
+  ]
 }
 ```
 
-**media** (extracted images):
-```json
-{
-  "id": "a1b2c3",
-  "type": "image",
-  "reference_id": "1",
-  "source_chunk_id": "abc123",
-  "title": "report.pdf",
-  "path": "/data/images/figure_001.png",
-  "url": "file://sources/local/images/figure_001.png",
-  "caption": "Figure 1: System architecture"
-}
-```
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Reference ID (matches `reference_id` in chunks) |
+| `title` | string \| null | Document title (filename or metadata) |
+| `path` | string | Source file path |
+| `type` | string \| null | File type |
+| `url` | string \| null | Resolved download URL (via PathResolver) |
+| `chunks` | list | Chunk snippets sorted by `page_idx` |
 
-### Unified Mode
+Each **chunk snippet** within a source:
 
-**sources:**
-```json
-{
-  "doc_id": "doc-abc123",
-  "title": "Quarterly Report",
-  "author": "Author Name",
-  "path": "/data/report.pdf"
-}
-```
-
-**media** (rendered page images, base64-encoded):
-```json
-{
-  "chunk_id": "abc123",
-  "page_index": 0,
-  "image_data": "iVBORw0KGgo...",
-  "relevance_score": 0.92
-}
-```
-
-> **Note:** In media, `page_index` is **0-based** (raw storage value). In chunks, `page_idx` is **1-based** (display value).
+| Field | Type | Description |
+|---|---|---|
+| `chunk_id` | string | Unique chunk identifier |
+| `chunk_idx` | int | 0-based position within this source |
+| `page_idx` | int \| null | 1-based page number |
+| `content` | string | Filtered display content |
+| `image_data` | string \| null | Base64 page image (unified mode) |
+| `highlight_phrases` | list \| null | Semantic highlight phrases (when available) |
 
 
 ## Citations
@@ -299,7 +312,7 @@ When using `answer`, the LLM response may contain inline citations in two format
 | `[ref_id-chunk_idx]` | `[1-2]` | Chunk-level: document 1, chunk 2 |
 | `[n]` | `[3]` | Document-level: all chunks from document 3 |
 
-- `ref_id` maps to `reference_id` in chunks and `id`/`doc_id` in sources
+- `ref_id` maps to `reference_id` in chunks and `id` in sources
 - `chunk_idx` is **1-based**, matching the chunk's position within its document
 
 ### Resolving a citation
@@ -308,7 +321,7 @@ To trace `[1-2]` back to source material:
 
 1. Find chunks where `reference_id == "1"` — these are all chunks from that document
 2. The 2nd chunk (1-based) in that group is the cited chunk
-3. Use `chunk_id` to look up the source in `sources` (by matching `id` or `doc_id`)
+3. Use `chunk_id` to look up the source in `sources` (by matching `id`)
 4. Use `page_idx` on the chunk for the page number
 5. Use `file_path` or source `url` to access the original file via `GET /api/files/{path}`
 

@@ -19,7 +19,7 @@ import numpy as np
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
 from dlightrag.unifiedrepresent.renderer import PageRenderer
@@ -293,7 +293,7 @@ class UnifiedRepresentEngine:
         chunk_top_k: int | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], AsyncIterator[str] | None]:
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
         images = self._extract_image_bytes(multimodal_content)
         conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))

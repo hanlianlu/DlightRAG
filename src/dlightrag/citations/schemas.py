@@ -12,6 +12,7 @@ class ChunkSnippet(BaseModel):
     chunk_idx: int | None = None
     page_idx: int | None = None
     content: str
+    image_data: str | None = None  # base64-encoded page image (unified mode)
     highlight_phrases: list[str] | None = None
     highlight_phrases_map: dict[str, list[str]] | None = None
 
