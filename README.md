@@ -7,7 +7,7 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ## Features
 
-- **Dual multimodal RAG modes** — caption mode (parse → caption → embed) for pipeline based mulitimodal paradigm; unified mode (render → multimodal embed) for more modern multimodal paradigm
+- **Dual multimodal RAG modes** — caption mode (parse → caption → embed) for pipeline based multimodal paradigm; unified mode (render → multimodal embed) for more modern multimodal paradigm
 - **Knowledge graph + vector retrieval** — fusional search with LightRAG's foundation
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images, etc.
 - **Reranking** — generic LLM-based listwise; Specialized rerankers support from Cohere, Jina, Aliyun, Azure Cohere; Support any additional backend via custom endpoint

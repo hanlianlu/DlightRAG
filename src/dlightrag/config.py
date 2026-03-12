@@ -225,6 +225,11 @@ class DlightragConfig(BaseSettings):
         description="API key for the rerank endpoint. "
         "Used by cohere/jina/aliyun backends. Falls back to provider-specific keys.",
     )
+    rerank_score_threshold: float = Field(
+        default=0.5,
+        description="Minimum relevance score to keep a chunk after reranking. "
+        "Chunks scored below this are filtered out to save LLM tokens.",
+    )
 
     # ===== RAG Processing =====
     rag_mode: Literal["caption", "unified"] = Field(

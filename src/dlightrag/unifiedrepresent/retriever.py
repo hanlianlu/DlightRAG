@@ -201,6 +201,23 @@ class VisualRetriever:
                 len(resolved),
             )
 
+        # Filter low-score chunks after reranking (only affects scored chunks)
+        threshold = getattr(self.config, "rerank_score_threshold", 0.5)
+        before = len(resolved)
+        resolved = {
+            cid: vd
+            for cid, vd in resolved.items()
+            if vd.get("relevance_score") is None or vd["relevance_score"] >= threshold
+        }
+        filtered = before - len(resolved)
+        if filtered:
+            logger.info(
+                "[Rerank Filter] Removed %d/%d chunks below %.2f threshold",
+                filtered,
+                before,
+                threshold,
+            )
+
         # Build return dict
         sources: dict[str, dict] = {}
         media: list[dict] = []

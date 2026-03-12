@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from dlightrag.unifiedrepresent.retriever import VisualRetriever
 
@@ -128,9 +128,6 @@ class TestTextRetrieveOutputSchema:
         result = await retriever._text_retrieve("query", top_k=60, chunk_top_k=10)
         chunk = result["contexts"]["chunks"][0]
         assert chunk["page_idx"] == 1, "page_idx should be 1-based"
-
-
-from unittest.mock import patch
 
 
 class TestQueryByVisualEmbedding:

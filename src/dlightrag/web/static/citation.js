@@ -542,10 +542,11 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Panel auto-close on chat area click
+    // Panel auto-close on chat area click (skip citation badge clicks)
     var chatArea = document.getElementById('chat-area');
     if (chatArea) {
-        chatArea.addEventListener('click', function() {
+        chatArea.addEventListener('click', function(e) {
+            if (e.target.closest('.citation-badge')) return;
             closePanel();
         });
     }

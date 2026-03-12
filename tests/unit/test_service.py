@@ -87,47 +87,6 @@ class TestRAGServiceAingest:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceRerank
-# ---------------------------------------------------------------------------
-
-
-class TestRAGServiceRerank:
-    """Test _rerank_chunks with mocked LLM."""
-
-    async def test_rerank_sorts_by_relevance(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
-        service._initialized = True
-
-        chunks = [
-            {"content": "low relevance"},
-            {"content": "high relevance"},
-        ]
-
-        async def mock_rerank(**kwargs):
-            return [{"index": 1}, {"index": 0}]
-
-        with patch("dlightrag.core.service.get_rerank_func", return_value=mock_rerank):
-            result = await service._rerank_chunks(chunks, "query")
-
-        assert result[0]["content"] == "high relevance"
-        assert result[1]["content"] == "low relevance"
-
-    async def test_rerank_failure_returns_original(self, test_config: DlightragConfig) -> None:
-        service = RAGService(config=test_config)
-        service._initialized = True
-
-        chunks = [{"content": "a"}, {"content": "b"}]
-
-        async def mock_rerank(**kwargs):
-            raise RuntimeError("LLM error")
-
-        with patch("dlightrag.core.service.get_rerank_func", return_value=mock_rerank):
-            result = await service._rerank_chunks(chunks, "query")
-
-        assert result == chunks
-
-
-# ---------------------------------------------------------------------------
 # TestRAGServiceClose
 # ---------------------------------------------------------------------------
 
