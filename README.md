@@ -235,7 +235,9 @@ Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BA
 | `GET` | `/workspaces` | List available workspaces |
 | `GET` | `/health` | Health check with storage status |
 
-All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` to enable bearer auth. See [`docs/response-schema.md`](docs/response-schema.md) for full response structure across all interfaces.
+All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` to enable bearer auth.
+
+> **[Response Schema Reference](docs/response-schema.md)** — detailed `retrieve` / `answer` response structures, citation format, and usage examples for Python SDK, REST API, and MCP server.
 
 ### SSE Streaming
 
