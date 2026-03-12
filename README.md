@@ -237,18 +237,7 @@ Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BA
 
 All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` to enable bearer auth.
 
-> **[Response Schema Reference](docs/response-schema.md)** — detailed `retrieve` / `answer` response structures, citation format, and usage examples for Python SDK, REST API, and MCP server.
-
-### SSE Streaming
-
-Set `"stream": true` to receive Server-Sent Events:
-
-| Event type | Payload | Description |
-|---|---|---|
-| `context` | `{type, data, raw}` | Contexts and sources (sent first) |
-| `token` | `{type, content}` | LLM answer token |
-| `done` | `{type}` | Stream complete |
-| `error` | `{type, message}` | Error mid-stream |
+> **[Response Schema Reference](docs/response-schema.md)** — detailed `retrieve` / `answer` response structures, SSE streaming format, citation format, and usage examples for Python SDK, REST API, and MCP server.
 
 
 ## Development
