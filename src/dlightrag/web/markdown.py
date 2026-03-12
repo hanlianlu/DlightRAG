@@ -15,7 +15,7 @@ from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
-_FORMATTER = HtmlFormatter(cssclass="highlight", wrapcode=True)
+_FORMATTER = HtmlFormatter(nowrap=True)
 
 
 def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
@@ -24,6 +24,11 @@ def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
     Returns highlighted HTML if language is known, a plain ``<pre><code>``
     block for unknown languages, or empty string (no lang) to fall back to
     the default ``<pre><code>`` wrapper.
+
+    markdown-it-py uses the returned string as-is only when it starts with
+    ``<pre``.  Using ``nowrap=True`` in the formatter means Pygments emits
+    bare spans without its own ``<div>``/``<pre>`` wrapper, so we can add our
+    own ``<pre>`` here and avoid double-wrapping.
     """
     if not lang:
         return ""
@@ -32,7 +37,9 @@ def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
     except ClassNotFound:
         # Return plain pre/code so the renderer does not add a language class
         return "<pre><code>" + _html.escape(code) + "</code></pre>"
-    return pygments_highlight(code, lexer, _FORMATTER)
+    highlighted = pygments_highlight(code, lexer, _FORMATTER)
+    # Wrap in <pre> so markdown-it uses it as-is (starts with <pre)
+    return f'<pre class="highlight"><code>{highlighted}</code></pre>'
 
 
 _md = MarkdownIt("gfm-like", {"html": False, "highlight": _highlight_fn}).disable("linkify")

@@ -25,9 +25,17 @@ def test_render_markdown_fenced_code_highlighted():
 
     md = "```python\nprint('hello')\n```"
     result = render_markdown(md)
-    # Pygments wraps in div.highlight
+    # Pygments output is wrapped in <pre class="highlight">
     assert 'class="highlight"' in result
     assert "print" in result
+
+
+def test_render_markdown_no_double_pre_wrapping():
+    from dlightrag.web.markdown import render_markdown
+
+    result = render_markdown("```python\nx = 1\n```")
+    # Should not have double <pre> wrapping
+    assert result.count("<pre") == 1
 
 
 def test_render_markdown_fenced_code_unknown_lang():
