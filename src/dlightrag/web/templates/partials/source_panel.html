@@ -1,15 +1,33 @@
 {% for src in sources %}
-{% if src.chunks %}
-{% for chunk in src.chunks %}
-<div class="source-chunk" data-ref="{{ src.id }}" data-chunk="{{ chunk.chunk_idx }}">
-    <div class="source-chunk-header">
-        <span class="source-chunk-title">[{{ src.id }}-{{ chunk.chunk_idx }}] {{ src.title or src.path }}</span>
-        <span class="source-chunk-page">{% if chunk.page_idx %}p.{{ chunk.page_idx }}{% endif %}</span>
+<div class="source-doc" data-ref="{{ src.id }}">
+  <div class="source-doc-header" onclick="toggleDoc(this)">
+    <span class="collapse-icon">▶</span>
+    <span class="source-doc-title">{{ src.title or src.path }}</span>
+    <span class="source-doc-badge">[{{ src.id }}]</span>
+    <span class="source-doc-count">{{ src.chunks|length }}</span>
+  </div>
+  <div class="source-doc-chunks">
+    {% for chunk in src.chunks %}
+    <div class="source-chunk" data-ref="{{ src.id }}" data-chunk="{{ chunk.chunk_idx }}">
+      <div class="source-chunk-header">
+        <span class="source-chunk-page">
+          {% if chunk.page_idx %}p.{{ chunk.page_idx }}{% else %}#{{ chunk.chunk_idx }}{% endif %}
+        </span>
+      </div>
+      {% if chunk.image_data %}
+      <div class="source-chunk-image">
+        <img src="data:image/png;base64,{{ chunk.image_data }}"
+             alt="Page {{ chunk.page_idx or '' }}" loading="lazy">
+      </div>
+      {% elif chunk.content %}
+      <div class="source-chunk-content">
+        {{ chunk.content | highlight_content(chunk.highlight_phrases) }}
+      </div>
+      {% endif %}
     </div>
-    <div class="source-chunk-content">{{ chunk.content | highlight_content(chunk.highlight_phrases) }}</div>
+    {% endfor %}
+  </div>
 </div>
-{% endfor %}
-{% endif %}
 {% endfor %}
 {% if sources %}
 <button class="show-all-btn" onclick="showAllSources()" style="display:none">Show all sources</button>
