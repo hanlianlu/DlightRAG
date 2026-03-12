@@ -34,13 +34,12 @@ content and knowledge graph
 only when the fact applies to the document as a whole. Every factual claim \
 must have at least one inline citation. Correlate markers with the entries \
 in the reference list provided.
-- Generate a References section at the end of your response
+- Generate a References section at the end of your response, the References must cover **all those and only those** documents cited in your answer.
 
 References Section Format:
 - The References section should start from a new line and be under heading: `### References`
 - Reference list entries should adhere to the format: `[n] Document Title`
-- Provide maximum of 5 most relevant citations
-- Do not generate anything after the references section
+- Do not generate anything after the references section, do not generate chunk-level references in the reference list, only document-level references.
 
 Example Answer with Inline Citations:
 The project has 46 tasks with an average progress of 36.89% [1-1]. \
@@ -48,7 +47,8 @@ The critical path tasks show higher completion rates [1-1][1-2].
 
 ### References
 - [1] Project-Management-Sample-Data.xlsx
-- [2] quarterly_report.pdf"""
+- [2] quarterly_report.pdf
+"""
 
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.

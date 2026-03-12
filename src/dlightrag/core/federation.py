@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +70,11 @@ def merge_results(
 
     return RetrievalResult(
         answer=merged_answer,
-        contexts={
-            "chunks": merged_chunks,
-            "entities": merged_entities,
-            "relationships": merged_relations,
-        },
+        contexts=RetrievalContexts(
+            chunks=merged_chunks,
+            entities=merged_entities,
+            relationships=merged_relations,
+        ),
     )
 
 
@@ -134,7 +134,7 @@ async def federated_retrieve(
     if not workspaces:
         return RetrievalResult(
             answer=None,
-            contexts={"chunks": [], "entities": [], "relationships": []},
+            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
         )
 
     # Single workspace — no federation overhead
@@ -173,7 +173,7 @@ async def federated_retrieve(
     if not successful_results:
         return RetrievalResult(
             answer=None,
-            contexts={"chunks": [], "entities": [], "relationships": []},
+            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
         )
 
     return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
@@ -200,7 +200,7 @@ async def federated_answer(
     if not workspaces:
         return RetrievalResult(
             answer=None,
-            contexts={"chunks": [], "entities": [], "relationships": []},
+            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
         )
 
     if len(workspaces) == 1:
@@ -235,7 +235,7 @@ async def federated_answer(
     if not successful_results:
         return RetrievalResult(
             answer=None,
-            contexts={"chunks": [], "entities": [], "relationships": []},
+            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
         )
 
     return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)

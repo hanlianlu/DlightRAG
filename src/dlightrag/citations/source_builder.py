@@ -3,6 +3,7 @@
 Groups chunks by reference_id into SourceReference objects with ChunkSnippets.
 Called by both web routes and API server after retrieval.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,10 +14,11 @@ from .utils import filter_content_for_display
 
 if TYPE_CHECKING:
     from dlightrag.core.retrieval.path_resolver import PathResolver
+    from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 
 def build_sources(
-    contexts: dict[str, Any],
+    contexts: RetrievalContexts,
     path_resolver: PathResolver | None = None,
 ) -> list[SourceReference]:
     """Group chunks by reference_id into document-level SourceReferences.
@@ -48,7 +50,9 @@ def build_sources(
         metadata = first.get("metadata", {})
 
         # Sort by page_idx (None last)
-        sorted_chunks = sorted(group, key=lambda c: (c.get("page_idx") is None, c.get("page_idx") or 0))
+        sorted_chunks = sorted(
+            group, key=lambda c: (c.get("page_idx") is None, c.get("page_idx") or 0)
+        )
 
         snippets = [
             ChunkSnippet(

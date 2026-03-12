@@ -6,19 +6,53 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any
 
-from dlightrag.core.retrieval.protocols import RetrievalBackend, RetrievalResult
+from dlightrag.core.retrieval.protocols import (
+    RetrievalBackend,
+    RetrievalContexts,
+    RetrievalResult,
+)
 
 
 class TestRetrievalResult:
     def test_defaults(self) -> None:
         r = RetrievalResult()
         assert r.answer is None
-        assert r.contexts == {}
+        assert r.contexts == {"chunks": [], "entities": [], "relationships": []}
 
     def test_with_values(self) -> None:
-        r = RetrievalResult(answer="hello", contexts={"k": "v"})
+        ctx = RetrievalContexts(
+            chunks=[
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "r1",
+                    "file_path": "/f",
+                    "content": "hello",
+                }
+            ],
+            entities=[],
+            relationships=[],
+        )
+        r = RetrievalResult(answer="hello", contexts=ctx)
         assert r.answer == "hello"
-        assert r.contexts == {"k": "v"}
+        assert len(r.contexts["chunks"]) == 1
+        assert r.contexts["chunks"][0]["chunk_id"] == "c1"
+
+    def test_typeddict_structural_compat(self) -> None:
+        """Plain dicts that match the TypedDict structure work fine."""
+        plain_dict = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "r1",
+                    "file_path": "/f",
+                    "content": "text",
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+        r = RetrievalResult(answer=None, contexts=plain_dict)
+        assert r.contexts["chunks"][0]["content"] == "text"
 
 
 class TestRetrievalBackendProtocol:

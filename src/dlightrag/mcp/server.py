@@ -13,12 +13,11 @@ import json
 import logging
 from typing import Any
 
-from dlightrag.citations.source_builder import build_sources
-
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.servicemanager import RAGServiceManager
 

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
 
 from dlightrag.core.federation import federated_answer, federated_retrieve
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
 
 logger = logging.getLogger(__name__)
@@ -211,7 +211,7 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], AsyncIterator[str]]:
+    ) -> tuple[RetrievalContexts, AsyncIterator[str]]:
         """Streaming answer from a single workspace.
 
         Federated streaming is not supported — uses first workspace if

@@ -10,7 +10,6 @@ import pytest
 from dlightrag.captionrag.retrieval import RetrievalEngine
 from dlightrag.core.retrieval.protocols import RetrievalResult
 
-
 # ---------------------------------------------------------------------------
 # TestRetrievalEngineAretrieve
 # ---------------------------------------------------------------------------
@@ -57,7 +56,7 @@ class TestRetrievalEngineAretrieve:
         engine = RetrievalEngine(rag=mock_rag, config=cfg)
         result = await engine.aretrieve("query")
         assert result.answer is None
-        assert result.contexts == {}
+        assert result.contexts == {"chunks": [], "entities": [], "relationships": []}
 
     async def test_aretrieve_page_idx_injected(self) -> None:
         """page_idx from text_chunks KV store is attached to chunk contexts (0->1-based)."""

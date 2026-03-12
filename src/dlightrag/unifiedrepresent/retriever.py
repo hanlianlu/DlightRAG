@@ -12,7 +12,6 @@ import io
 import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from pathlib import Path
 from typing import Any, Literal, cast
 
 import httpx
