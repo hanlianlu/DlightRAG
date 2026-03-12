@@ -112,17 +112,26 @@ async def answer_stream(
 
             # token_iter may be an AsyncIterator, a plain str, or None
             # depending on the RAG mode and provider capabilities.
+            #
+            # SSE protocol: newlines terminate data lines. Token chunks may
+            # contain newlines (e.g. markdown paragraphs), so each line of
+            # the chunk must be sent as a separate "data:" line within the
+            # same event.  The client concatenates them with "\n" restored.
             if token_iter is None:
                 pass
             elif isinstance(token_iter, str):
                 full_answer = token_iter
-                escaped = Markup.escape(token_iter)
-                yield f"event: token\ndata: {escaped}\n\n"
+                sse_lines = "".join(
+                    f"data: {line}\n" for line in str(Markup.escape(token_iter)).split("\n")
+                )
+                yield f"event: token\n{sse_lines}\n"
             else:
                 async for chunk in token_iter:
                     full_answer += chunk
-                    escaped = Markup.escape(chunk)
-                    yield f"event: token\ndata: {escaped}\n\n"
+                    sse_lines = "".join(
+                        f"data: {line}\n" for line in str(Markup.escape(chunk)).split("\n")
+                    )
+                    yield f"event: token\n{sse_lines}\n"
 
             # Build sources from contexts
             flat_contexts = []
