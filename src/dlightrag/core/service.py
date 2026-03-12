@@ -145,7 +145,6 @@ class RAGService:
         """Store configuration only. Use RAGService.create() for full initialization."""
         self.config = config or get_config()
         self.enable_vlm = enable_vlm
-        self.enable_rerank = self.config.enable_rerank
         self._initialized: bool = False
 
         # Callbacks for decoupled integration
@@ -831,36 +830,6 @@ class RAGService:
             chunk_top_k=chunk_top_k,
             **kwargs,
         )
-
-    async def _rerank_chunks(
-        self,
-        chunks: list[dict],
-        query: str,
-    ) -> list[dict]:
-        """Rerank chunks by relevance. Only sorts, never truncates."""
-        if not chunks:
-            return []
-
-        rerank_func = get_rerank_func(self.config)
-        chunk_texts = [c.get("content", "") for c in chunks]
-
-        try:
-            rerank_results = await rerank_func(
-                query=query,
-                documents=chunk_texts,
-                domain_knowledge=self.config.domain_knowledge_hints or None,
-            )
-
-            reranked = [
-                chunks[item["index"]] for item in rerank_results if item["index"] < len(chunks)
-            ]
-
-            logger.info(f"[Rerank] Sorted {len(reranked)} chunks by relevance")
-            return reranked
-
-        except Exception as e:
-            logger.warning(f"[Rerank] Failed: {e}, using original order")
-            return chunks
 
     # === FILE MANAGEMENT API ===
 
