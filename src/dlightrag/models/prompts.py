@@ -81,7 +81,7 @@ Examine the image and determine its PRIMARY content type:
 CRITICAL: Put ALL content in the detailed_description field. Do NOT create extra fields.
 
 If content_type is "table", your detailed_description MUST contain (in this order):
-1. Brief intro: "Technical specification table with X rows × Y columns."
+1. Brief intro: "Technical specification table with X rows x Y columns."
 2. The COMPLETE table in Markdown format - include ALL data, not a subset:
    | Header1 | Header2 | Header3 |
    |---------|---------|---------|
