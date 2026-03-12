@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from starlette.responses import RedirectResponse
 
+from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
@@ -180,10 +181,11 @@ async def retrieve(body: RetrieveRequest, request: Request) -> dict[str, Any]:
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
     )
+    sources = build_sources(result.contexts)
     return {
         "answer": result.answer,
         "contexts": result.contexts,
-        "raw": result.raw,
+        "sources": [s.model_dump() for s in sources],
     }
 
 
@@ -208,14 +210,15 @@ async def answer(body: AnswerRequest, request: Request):
             chunk_top_k=body.chunk_top_k,
             **kwargs,
         )
+        sources = build_sources(result.contexts)
         return {
             "answer": result.answer,
             "contexts": result.contexts,
-            "raw": result.raw,
+            "sources": [s.model_dump() for s in sources],
         }
 
     # Streaming mode
-    contexts, raw, token_iter = await manager.aanswer_stream(
+    contexts, token_iter = await manager.aanswer_stream(
         body.query,
         workspaces=body.workspaces,
         mode=body.mode,
@@ -224,8 +227,10 @@ async def answer(body: AnswerRequest, request: Request):
         **kwargs,
     )
 
+    sources = build_sources(contexts)
+
     async def event_generator() -> AsyncIterator[str]:
-        yield f"data: {json.dumps({'type': 'context', 'data': contexts, 'raw': raw}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'context', 'data': contexts, 'sources': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
         try:
             # token_iter may be an AsyncIterator, a plain str, or None
             # depending on the RAG mode and provider capabilities.
