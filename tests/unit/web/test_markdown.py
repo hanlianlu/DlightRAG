@@ -95,3 +95,60 @@ def test_render_markdown_lists():
     result = render_markdown(md)
     assert "<li>" in result
     assert "item 1" in result
+
+
+def test_citation_badges_basic():
+    """[1-2] in plain text becomes a citation badge."""
+    from dlightrag.web.deps import _citation_badges
+
+    result = str(_citation_badges("See [1-2] for details."))
+    assert 'class="citation-badge"' in result
+    assert 'data-ref="1"' in result
+    assert 'data-chunk="2"' in result
+
+
+def test_citation_badges_doc_level():
+    """[3] doc-level citation becomes a badge."""
+    from dlightrag.web.deps import _citation_badges
+
+    result = str(_citation_badges("See [3] for details."))
+    assert 'class="citation-badge"' in result
+    assert 'data-ref="3"' in result
+
+
+def test_citation_badges_in_inline_code_skipped():
+    """[1-2] inside inline code must NOT become a badge."""
+    from dlightrag.web.deps import _citation_badges
+
+    result = str(_citation_badges("Use `array[1-2]` in code."))
+    # The [1-2] is inside <code>, should not be a badge
+    assert "<code>" in result
+    assert result.count('class="citation-badge"') == 0
+
+
+def test_citation_badges_in_fenced_code_skipped():
+    """[1-2] inside fenced code must NOT become a badge."""
+    from dlightrag.web.deps import _citation_badges
+
+    md = "```\narray[1-2] = value\n```\n\nSee [1-2] for info."
+    result = str(_citation_badges(md))
+    # Only the [1-2] outside code should be a badge
+    assert result.count('class="citation-badge"') == 1
+
+
+def test_citation_badges_in_table():
+    """[1-2] in a table cell should become a badge."""
+    from dlightrag.web.deps import _citation_badges
+
+    md = "| Source | Note |\n|---|---|\n| [1-2] | data |"
+    result = str(_citation_badges(md))
+    assert 'class="citation-badge"' in result
+
+
+def test_citation_badges_markdown_rendering():
+    """Verify markdown is actually rendered (not just escaped)."""
+    from dlightrag.web.deps import _citation_badges
+
+    result = str(_citation_badges("**bold** text [1-1]"))
+    assert "<strong>bold</strong>" in result
+    assert 'class="citation-badge"' in result
