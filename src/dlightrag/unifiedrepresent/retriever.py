@@ -250,7 +250,9 @@ class VisualRetriever:
                     {
                         "chunk_id": cid,
                         "reference_id": chunk_meta.get(cid, {}).get("reference_id", ""),
-                        "file_path": chunk_meta.get(cid, {}).get("file_path", vd.get("file_path", "")),
+                        "file_path": chunk_meta.get(cid, {}).get(
+                            "file_path", vd.get("file_path", "")
+                        ),
                         "content": chunk_text.get(cid, ""),
                         "page_idx": (vd.get("page_index", 0) or 0) + 1,  # 0-based -> 1-based
                         "relevance_score": vd.get("relevance_score"),

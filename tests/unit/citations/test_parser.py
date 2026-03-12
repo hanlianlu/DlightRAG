@@ -99,11 +99,13 @@ class TestExtractCitedChunksDocLevel:
 
     def test_doc_level_maps_to_all_chunks(self):
         indexer = CitationIndexer()
-        indexer.build_index([
-            {"reference_id": "1", "chunk_id": "c1", "content": "text1"},
-            {"reference_id": "1", "chunk_id": "c2", "content": "text2"},
-            {"reference_id": "2", "chunk_id": "c3", "content": "text3"},
-        ])
+        indexer.build_index(
+            [
+                {"reference_id": "1", "chunk_id": "c1", "content": "text1"},
+                {"reference_id": "1", "chunk_id": "c2", "content": "text2"},
+                {"reference_id": "2", "chunk_id": "c3", "content": "text3"},
+            ]
+        )
         result = extract_cited_chunks(indexer, "Based on [1].")
         assert "1" in result
         assert set(result["1"]) == {"c1", "c2"}
@@ -114,15 +116,19 @@ class TestCleanInvalidCitationsDocLevel:
 
     def test_keeps_valid_doc_citation(self):
         indexer = CitationIndexer()
-        indexer.build_index([
-            {"reference_id": "1", "chunk_id": "c1", "content": "text"},
-        ])
+        indexer.build_index(
+            [
+                {"reference_id": "1", "chunk_id": "c1", "content": "text"},
+            ]
+        )
         assert "[1]" in clean_invalid_citations(indexer, "See [1].")
 
     def test_removes_invalid_doc_citation(self):
         indexer = CitationIndexer()
-        indexer.build_index([
-            {"reference_id": "1", "chunk_id": "c1", "content": "text"},
-        ])
+        indexer.build_index(
+            [
+                {"reference_id": "1", "chunk_id": "c1", "content": "text"},
+            ]
+        )
         cleaned = clean_invalid_citations(indexer, "See [99].")
         assert "[99]" not in cleaned

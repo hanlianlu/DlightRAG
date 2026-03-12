@@ -274,7 +274,12 @@ class TestRetrieveNoRerank:
                 "entities": [],
                 "relationships": [],
                 "chunks": [
-                    {"chunk_id": f"c-{i}", "content": f"text {i}", "reference_id": "1", "file_path": "/test/doc.pdf"}
+                    {
+                        "chunk_id": f"c-{i}",
+                        "content": f"text {i}",
+                        "reference_id": "1",
+                        "file_path": "/test/doc.pdf",
+                    }
                     for i in range(5)
                 ],
             },
