@@ -28,13 +28,11 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ## Quick Start with Four Interfaces
 
-### Web UI
-
-<p align="center">
-  <video src="docs/DlightRAG_demo.mp4" width="1440" controls>
-    Your browser does not support the video tag.
-  </video>
-</p>
+### Web UI 
+##### Click the image to watch demo (YouTube)
+<a href="https://www.youtube.com/watch?v=0VM9SH5MukA">
+  <img src="docs/DlightRAG_GUI_img.png" alt="Watch Demo on YouTube" width="1440" />
+</a>
 
 If you already have the REST API running (via Docker or `dlightrag-api`), the Web UI is available at:
 
