@@ -20,6 +20,7 @@ from lightrag import LightRAG, QueryParam
 from lightrag.constants import GRAPH_FIELD_SEP
 from PIL import Image
 
+from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.unifiedrepresent.multimodal_query import enhance_query_with_images
 
@@ -258,30 +259,7 @@ class VisualRetriever:
                 threshold,
             )
 
-        # Build return dict
-        sources: dict[str, dict] = {}
-        media: list[dict] = []
-        for cid, vd in resolved.items():
-            doc_id = vd.get("full_doc_id", "")
-            if doc_id not in sources:
-                raw_path = vd.get("file_path", "")
-                sources[doc_id] = {
-                    "doc_id": doc_id,
-                    "title": vd.get("doc_title", ""),
-                    "author": vd.get("doc_author", ""),
-                    "path": self.path_resolver.resolve(raw_path)
-                    if self.path_resolver and raw_path
-                    else raw_path,
-                }
-            media.append(
-                {
-                    "chunk_id": cid,
-                    "page_index": vd.get("page_index"),
-                    "image_data": vd.get("image_data"),
-                    "relevance_score": vd.get("relevance_score"),
-                }
-            )
-
+        # Build return dict — all data lives in contexts, no separate "raw"
         return {
             "contexts": {
                 "entities": data.get("entities", []),
@@ -294,15 +272,12 @@ class VisualRetriever:
                             "file_path", vd.get("file_path", "")
                         ),
                         "content": chunk_text.get(cid, ""),
+                        "image_data": vd.get("image_data"),
                         "page_idx": (vd.get("page_index", 0) or 0) + 1,  # 0-based -> 1-based
                         "relevance_score": vd.get("relevance_score"),
                     }
                     for cid, vd in resolved.items()
                 ],
-            },
-            "raw": {
-                "sources": list(sources.values()),
-                "media": media,
             },
         }
 
@@ -334,8 +309,10 @@ class VisualRetriever:
         # Phase 4: Build multimodal prompt and call VLM
         from dlightrag.unifiedrepresent.prompts import UNIFIED_ANSWER_SYSTEM_PROMPT
 
-        kg_context = self._format_kg_context(retrieval["contexts"])
-        ref_list = self._format_reference_list(retrieval["contexts"])
+        contexts = retrieval["contexts"]
+        kg_context = self._format_kg_context(contexts)
+        indexer = self._build_citation_indexer(contexts)
+        ref_list = indexer.format_reference_list()
         user_prompt = (
             f"Knowledge Graph Context:\n{kg_context}\n\n"
             f"Reference Document List:\n{ref_list}\n\n"
@@ -343,7 +320,7 @@ class VisualRetriever:
         )
 
         messages = self._build_vlm_messages(
-            UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, retrieval["raw"]["media"]
+            UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, contexts["chunks"]
         )
         answer_text = await self.vision_model_func(
             user_prompt,
@@ -360,10 +337,11 @@ class VisualRetriever:
         chunk_top_k: int = 10,
         images: list[bytes] | None = None,
         conversation_context: str | None = None,
-    ) -> tuple[dict, dict, AsyncIterator[str] | None]:
+    ) -> tuple[dict, AsyncIterator[str] | None]:
         """Run Phase 1-3 batch + Phase 4 streaming.
 
-        Returns (contexts, raw, token_iterator).
+        Returns (contexts, token_iterator).
+        All data lives in contexts; there is no separate raw dict.
         """
         retrieval = await self.retrieve(
             query,
@@ -374,13 +352,16 @@ class VisualRetriever:
             conversation_context=conversation_context,
         )
 
+        contexts = retrieval["contexts"]
+
         if not self.vision_model_func:
-            return retrieval["contexts"], retrieval["raw"], None
+            return contexts, None
 
         from dlightrag.unifiedrepresent.prompts import UNIFIED_ANSWER_SYSTEM_PROMPT
 
-        kg_context = self._format_kg_context(retrieval["contexts"])
-        ref_list = self._format_reference_list(retrieval["contexts"])
+        kg_context = self._format_kg_context(contexts)
+        indexer = self._build_citation_indexer(contexts)
+        ref_list = indexer.format_reference_list()
         user_prompt = (
             f"Knowledge Graph Context:\n{kg_context}\n\n"
             f"Reference Document List:\n{ref_list}\n\n"
@@ -388,7 +369,7 @@ class VisualRetriever:
         )
 
         messages = self._build_vlm_messages(
-            UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, retrieval["raw"]["media"]
+            UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, contexts["chunks"]
         )
         token_iterator = await self.vision_model_func(
             user_prompt,
@@ -396,7 +377,7 @@ class VisualRetriever:
             stream=True,
         )
 
-        return retrieval["contexts"], retrieval["raw"], token_iterator
+        return contexts, token_iterator
 
     async def query_by_visual_embedding(
         self,
@@ -594,10 +575,10 @@ class VisualRetriever:
             return dict(list(resolved.items())[:top_k])
 
     @staticmethod
-    def _build_vlm_messages(system_prompt: str, user_prompt: str, media: list[dict]) -> list[dict]:
-        """Build OpenAI-format multimodal messages with inline base64 images."""
+    def _build_vlm_messages(system_prompt: str, user_prompt: str, chunks: list[dict]) -> list[dict]:
+        """Build OpenAI-format multimodal messages with inline base64 images from chunks."""
         content: list[dict] = []
-        for item in media:
+        for item in chunks:
             img_data = item.get("image_data")
             if img_data:
                 content.append(
@@ -637,48 +618,17 @@ class VisualRetriever:
         return "\n".join(parts) if parts else "No knowledge graph context available."
 
     @staticmethod
-    def _format_reference_list(contexts: dict) -> str:
-        """Build hierarchical reference list with doc and chunk entries.
+    def _build_citation_indexer(contexts: dict) -> CitationIndexer:
+        """Build a CitationIndexer from the retrieval contexts dict.
 
-        Output example::
-
-            [1] quarterly_report.pdf
-              [1-1] Page 3
-              [1-2] Page 7
-            [2] spec.pdf
-              [2-1] Page 1
+        Flattens all context types (chunks, entities, relationships) into
+        a single list, matching the shape expected by
+        :meth:`CitationIndexer.build_index`.
         """
-        chunks = contexts.get("chunks", [])
-        # doc_info: ref_id -> file_name
-        doc_info: dict[str, str] = {}
-        # chunk_entries: ref_id -> list of page_idx values
-        chunk_entries: dict[str, list[int]] = {}
-        # Mirror CitationIndexer.build_index: skip chunks without content,
-        # deduplicate by chunk_id per ref_id so indices stay aligned.
-        seen_chunks: dict[str, set[str]] = {}  # ref_id -> set of chunk_ids
-
-        for chunk in chunks:
-            ref_id = str(chunk.get("reference_id", ""))
-            chunk_id = chunk.get("chunk_id", "")
-            if not ref_id or not chunk_id or not chunk.get("content"):
-                continue
-            if chunk_id in seen_chunks.get(ref_id, set()):
-                continue
-            seen_chunks.setdefault(ref_id, set()).add(chunk_id)
-            if ref_id not in doc_info:
-                file_path = chunk.get("file_path", "")
-                doc_info[ref_id] = Path(file_path).name if file_path else f"Source {ref_id}"
-            page_idx = chunk.get("page_idx", 0)
-            chunk_entries.setdefault(ref_id, []).append(page_idx)
-
-        if not doc_info:
-            return "No reference documents available."
-
-        lines: list[str] = []
-        for ref_id, name in doc_info.items():
-            lines.append(f"[{ref_id}] {name}")
-            entries = chunk_entries.get(ref_id, [])
-            for idx, page_idx in enumerate(entries, 1):
-                page_label = f"Page {page_idx}" if page_idx else f"Chunk {idx}"
-                lines.append(f"  [{ref_id}-{idx}] {page_label}")
-        return "\n".join(lines)
+        flat: list[dict[str, Any]] = []
+        for items in contexts.values():
+            if isinstance(items, list):
+                flat.extend(items)
+        indexer = CitationIndexer()
+        indexer.build_index(flat)
+        return indexer

@@ -256,7 +256,6 @@ class UnifiedRepresentEngine:
         return RetrievalResult(
             answer=None,
             contexts=result.get("contexts", {}),
-            raw=result.get("raw", {}),
         )
 
     async def aanswer(
@@ -283,7 +282,6 @@ class UnifiedRepresentEngine:
         return RetrievalResult(
             answer=result.get("answer"),
             contexts=result.get("contexts", {}),
-            raw=result.get("raw", {}),
         )
 
     async def aanswer_stream(
@@ -295,7 +293,7 @@ class UnifiedRepresentEngine:
         chunk_top_k: int | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]:
+    ) -> tuple[dict[str, Any], AsyncIterator[str] | None]:
         """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
         images = self._extract_image_bytes(multimodal_content)
         conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
