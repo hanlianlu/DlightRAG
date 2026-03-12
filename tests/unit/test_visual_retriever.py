@@ -177,16 +177,11 @@ class TestRetrieve:
 
         # Top-level keys
         assert "contexts" in result
-        assert "raw" in result
 
         # Contexts sub-keys
         assert "entities" in result["contexts"]
         assert "relationships" in result["contexts"]
         assert "chunks" in result["contexts"]
-
-        # Raw sub-keys
-        assert "sources" in result["raw"]
-        assert "media" in result["raw"]
 
     async def test_entities_passed_through(self) -> None:
         retriever = _make_retriever()
@@ -228,21 +223,12 @@ class TestRetrieve:
         chunk_ids = {c["chunk_id"] for c in chunks}
         assert chunk_ids == {"chunk-abc", "chunk-def"}
 
-    async def test_media_contains_image_data(self) -> None:
+    async def test_chunks_contain_image_data(self) -> None:
         retriever = _make_retriever()
         result = await retriever.retrieve("query")
-        media = result["raw"]["media"]
-        assert len(media) == 2
-        assert all(m["image_data"] is not None for m in media)
-
-    async def test_sources_deduped_by_doc_id(self) -> None:
-        retriever = _make_retriever()
-        result = await retriever.retrieve("query")
-        sources = result["raw"]["sources"]
-        # Both chunks have doc_id="doc-1", so only one source
-        assert len(sources) == 1
-        assert sources[0]["doc_id"] == "doc-1"
-        assert sources[0]["title"] == "Test"
+        chunks = result["contexts"]["chunks"]
+        assert len(chunks) == 2
+        assert all(c["image_data"] is not None for c in chunks)
 
     async def test_none_visual_data_filtered(self) -> None:
         """Visual chunks returning None for some IDs should be filtered out."""
@@ -301,6 +287,7 @@ class TestRetrieveNoRerank:
 
         lightrag = MagicMock()
         lightrag.aquery_data = AsyncMock(return_value=many_chunks)
+        lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[])
 
         visual_chunks = MagicMock()
         visual_chunks.get_by_ids = AsyncMock(return_value=visual_data_list)
@@ -315,7 +302,6 @@ class TestRetrieveNoRerank:
 
         result = await retriever.retrieve("query", chunk_top_k=2)
         assert len(result["contexts"]["chunks"]) == 2
-        assert len(result["raw"]["media"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +321,6 @@ class TestAnswer:
 
         assert result["answer"] == "The answer is 42."
         assert "contexts" in result
-        assert "raw" in result
         vision_func.assert_awaited_once()
 
     async def test_no_vision_func_returns_none(self) -> None:
@@ -343,7 +328,6 @@ class TestAnswer:
         result = await retriever.answer("query")
         assert result["answer"] is None
         assert "contexts" in result
-        assert "raw" in result
 
 
 # ---------------------------------------------------------------------------
