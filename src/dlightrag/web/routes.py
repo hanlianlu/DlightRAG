@@ -167,7 +167,7 @@ async def answer_stream(
                     sources=highlighted_sources,
                 )
                 yield f"event: highlights\ndata: {json.dumps(highlights_html)}\n\n"
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("Highlight extraction timed out, skipping")
             except Exception:
                 logger.warning("Highlight extraction failed", exc_info=True)
