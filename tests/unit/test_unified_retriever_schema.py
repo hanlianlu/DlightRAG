@@ -27,56 +27,60 @@ class TestTextRetrieveOutputSchema:
     async def test_chunks_have_required_fields(self):
         retriever = _make_retriever()
 
-        retriever.lightrag.aquery_data = AsyncMock(return_value={
-            "data": {
-                "entities": [],
-                "relationships": [],
-                "chunks": [
-                    {
-                        "chunk_id": "chunk-abc",
-                        "reference_id": "1",
-                        "content": "Page one text",
-                        "file_path": "/data/report.pdf",
-                    },
-                    {
-                        "chunk_id": "chunk-def",
-                        "reference_id": "1",
-                        "content": "Page two text",
-                        "file_path": "/data/report.pdf",
-                    },
-                    {
-                        "chunk_id": "chunk-ghi",
-                        "reference_id": "2",
-                        "content": "Analysis content",
-                        "file_path": "/data/analysis.xlsx",
-                    },
-                ],
-            },
-        })
+        retriever.lightrag.aquery_data = AsyncMock(
+            return_value={
+                "data": {
+                    "entities": [],
+                    "relationships": [],
+                    "chunks": [
+                        {
+                            "chunk_id": "chunk-abc",
+                            "reference_id": "1",
+                            "content": "Page one text",
+                            "file_path": "/data/report.pdf",
+                        },
+                        {
+                            "chunk_id": "chunk-def",
+                            "reference_id": "1",
+                            "content": "Page two text",
+                            "file_path": "/data/report.pdf",
+                        },
+                        {
+                            "chunk_id": "chunk-ghi",
+                            "reference_id": "2",
+                            "content": "Analysis content",
+                            "file_path": "/data/analysis.xlsx",
+                        },
+                    ],
+                },
+            }
+        )
 
-        retriever.visual_chunks.get_by_ids = AsyncMock(return_value=[
-            {
-                "full_doc_id": "doc-1",
-                "file_path": "/data/report.pdf",
-                "page_index": 0,
-                "image_data": "base64data1",
-                "doc_title": "Report",
-            },
-            {
-                "full_doc_id": "doc-1",
-                "file_path": "/data/report.pdf",
-                "page_index": 1,
-                "image_data": "base64data2",
-                "doc_title": "Report",
-            },
-            {
-                "full_doc_id": "doc-2",
-                "file_path": "/data/analysis.xlsx",
-                "page_index": 0,
-                "image_data": "base64data3",
-                "doc_title": "Analysis",
-            },
-        ])
+        retriever.visual_chunks.get_by_ids = AsyncMock(
+            return_value=[
+                {
+                    "full_doc_id": "doc-1",
+                    "file_path": "/data/report.pdf",
+                    "page_index": 0,
+                    "image_data": "base64data1",
+                    "doc_title": "Report",
+                },
+                {
+                    "full_doc_id": "doc-1",
+                    "file_path": "/data/report.pdf",
+                    "page_index": 1,
+                    "image_data": "base64data2",
+                    "doc_title": "Report",
+                },
+                {
+                    "full_doc_id": "doc-2",
+                    "file_path": "/data/analysis.xlsx",
+                    "page_index": 0,
+                    "image_data": "base64data3",
+                    "doc_title": "Analysis",
+                },
+            ]
+        )
 
         result = await retriever._text_retrieve("test query", top_k=60, chunk_top_k=10)
 
@@ -100,30 +104,34 @@ class TestTextRetrieveOutputSchema:
         """page_idx in output should be 1-based (0→1, 1→2)."""
         retriever = _make_retriever()
 
-        retriever.lightrag.aquery_data = AsyncMock(return_value={
-            "data": {
-                "entities": [],
-                "relationships": [],
-                "chunks": [
-                    {
-                        "chunk_id": "chunk-abc",
-                        "reference_id": "1",
-                        "content": "text",
-                        "file_path": "/data/doc.pdf",
-                    },
-                ],
-            },
-        })
+        retriever.lightrag.aquery_data = AsyncMock(
+            return_value={
+                "data": {
+                    "entities": [],
+                    "relationships": [],
+                    "chunks": [
+                        {
+                            "chunk_id": "chunk-abc",
+                            "reference_id": "1",
+                            "content": "text",
+                            "file_path": "/data/doc.pdf",
+                        },
+                    ],
+                },
+            }
+        )
 
-        retriever.visual_chunks.get_by_ids = AsyncMock(return_value=[
-            {
-                "full_doc_id": "doc-1",
-                "file_path": "/data/doc.pdf",
-                "page_index": 0,
-                "image_data": "base64",
-                "doc_title": "Doc",
-            },
-        ])
+        retriever.visual_chunks.get_by_ids = AsyncMock(
+            return_value=[
+                {
+                    "full_doc_id": "doc-1",
+                    "file_path": "/data/doc.pdf",
+                    "page_index": 0,
+                    "image_data": "base64",
+                    "doc_title": "Doc",
+                },
+            ]
+        )
 
         result = await retriever._text_retrieve("query", top_k=60, chunk_top_k=10)
         chunk = result["contexts"]["chunks"][0]
@@ -143,15 +151,17 @@ class TestQueryByVisualEmbedding:
             return_value=np.array([[0.1] * 1024], dtype=np.float32)
         )
 
-        retriever.lightrag.chunks_vdb.query = AsyncMock(return_value=[
-            {
-                "id": "chunk-xyz",
-                "content": "page content",
-                "chunk_order_index": 2,
-                "distance": 0.85,
-                "file_path": "/data/doc.pdf",
-            },
-        ])
+        retriever.lightrag.chunks_vdb.query = AsyncMock(
+            return_value=[
+                {
+                    "id": "chunk-xyz",
+                    "content": "page content",
+                    "chunk_order_index": 2,
+                    "distance": 0.85,
+                    "file_path": "/data/doc.pdf",
+                },
+            ]
+        )
 
         img_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         with patch("dlightrag.unifiedrepresent.retriever.Image") as mock_image:
