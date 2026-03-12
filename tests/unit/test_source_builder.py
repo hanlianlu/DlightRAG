@@ -1,9 +1,6 @@
 """Tests for build_sources() shared utility."""
 from __future__ import annotations
 
-import pytest
-
-from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.citations.source_builder import build_sources
 
 
