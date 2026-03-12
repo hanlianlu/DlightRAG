@@ -402,6 +402,17 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
             sourceData.removeAttribute('id');
             aiDiv.appendChild(sourceData);
         }
+
+        // Render LaTeX math formulas via KaTeX (client-side)
+        if (window.renderMathInElement) {
+            renderMathInElement(contentDiv, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '$', right: '$', display: false},
+                ],
+                throwOnError: false,
+            });
+        }
     } else if (eventType === 'meta') {
         // Server-driven budget update
         try {
