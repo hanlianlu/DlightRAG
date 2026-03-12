@@ -43,7 +43,7 @@ class CitationProcessor:
         """Clean citations, extract chunks, build source references."""
         cleaned = clean_invalid_citations(self._indexer, answer_text)
         cited_chunks = extract_cited_chunks(self._indexer, cleaned)
-        sources = self._build_sources(cited_chunks)
+        sources = self._filter_cited_sources(cited_chunks)
 
         return CitationResult(
             answer=cleaned,
@@ -51,7 +51,7 @@ class CitationProcessor:
             cited_chunks=cited_chunks,
         )
 
-    def _build_sources(self, cited_chunks: dict[str, list[str]]) -> list[SourceReference]:
+    def _filter_cited_sources(self, cited_chunks: dict[str, list[str]]) -> list[SourceReference]:
         """Build SourceReference list with ChunkSnippet details."""
         if not cited_chunks or not self._available_sources:
             return []
@@ -86,6 +86,7 @@ class CitationProcessor:
                         chunk_idx=ctx.get("chunk_idx"),
                         page_idx=page_idx,
                         content=content,
+                        image_data=ctx.get("image_data"),
                     )
                 )
 
