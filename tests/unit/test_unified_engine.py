@@ -285,7 +285,6 @@ class TestAretrieve:
 
         expected = {
             "contexts": {"entities": [], "relationships": [], "chunks": []},
-            "raw": {"sources": [], "media": []},
         }
         engine.retriever.retrieve = AsyncMock(return_value=expected)
 
@@ -335,7 +334,6 @@ class TestAanswer:
         expected = {
             "answer": "test answer",
             "contexts": {"entities": [], "relationships": [], "chunks": []},
-            "raw": {"sources": [], "media": []},
         }
         engine.retriever.answer = AsyncMock(return_value=expected)
 
@@ -428,7 +426,6 @@ class TestProtocolCompliance:
         engine.retriever.retrieve = AsyncMock(
             return_value={
                 "contexts": {"chunks": []},
-                "raw": {"sources": []},
             }
         )
         result = await engine.aretrieve("test query")
@@ -452,7 +449,6 @@ class TestProtocolCompliance:
             return_value={
                 "answer": "the answer",
                 "contexts": {"chunks": []},
-                "raw": {},
             }
         )
         result = await engine.aanswer("what is X?")
@@ -471,7 +467,7 @@ class TestProtocolCompliance:
             visual_chunks=MagicMock(),
             config=config,
         )
-        engine.retriever.retrieve = AsyncMock(return_value={"contexts": {}, "raw": {}})
+        engine.retriever.retrieve = AsyncMock(return_value={"contexts": {}})
         # Should not raise — **kwargs absorbs multimodal_content
         result = await engine.aretrieve("q", multimodal_content=[{"type": "image"}])
         assert isinstance(result, RetrievalResult)
