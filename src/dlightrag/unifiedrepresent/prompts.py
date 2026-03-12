@@ -30,7 +30,7 @@ their reference IDs
 - Generate a References section at the end of your response
 
 References Section Format:
-- The References section should be under heading: `### References`
+- The References section should start from a new line and be under heading: `### References`
 - Reference list entries should adhere to the format: `[n] Document Title`
 - Provide maximum of 5 most relevant citations
 - Do not generate anything after the references section
