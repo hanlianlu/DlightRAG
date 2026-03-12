@@ -7,17 +7,88 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ## Features
 
-- **Dual multimodal RAG modes** — caption mode (parse → caption → embed) for pipeline based multimodal paradigm; unified mode (render → multimodal embed) for more modern multimodal paradigm
-- **Knowledge graph + vector retrieval** — fusional search with LightRAG's foundation
+- **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
+- **Knowledge graph + vector retrieval** — Fusional search based on LightRAG's foundation
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images, etc.
-- **Reranking** — generic LLM-based listwise; Specialized rerankers support from Cohere, Jina, Aliyun, Azure Cohere; Support any additional backend via custom endpoint
-- **Cross-workspace federation** — query across workspaces with round-robin merging
-- **Content-aware dedup** — files hashed by content, preventing duplicate ingestion
-- **Flexible sourcing** — local filesystem, Azure Blob Storage, Snowflake
-- **Four interfaces** — Python SDK, REST API, MCP server, Web UI
+- **Reranking** — Generic LLM-based list/point-wise; Specialized rerankers support from Cohere, Jina, Aliyun, Azure Cohere; Support any additional backend via custom endpoint
+- **Cross-workspace federation** — Query across workspaces with round-robin merging
+- **Citation and highlighter** — Answer / Retrieved contexts with source, page, citation, highlighting attribution.
+- **Flexible sourcing** — Local filesystem, Azure Blob Storage, Snowflake
+- **Four interfaces** — Web UI, REST API, MCP server, and Python SDK
 
 
 ## Quick Start with Four Interfaces
+
+### Web UI
+
+<p align="center">
+  <video src="docs/DlightRAG_GUI.mp4" width="1200" controls autoplay loop muted>
+    Your browser does not support the video tag.
+  </video>
+</p>
+
+If you already have the REST API running (via Docker or `dlightrag-api`), the Web UI is available at:
+
+```
+http://localhost:8100/web/
+```
+
+Without Docker:
+
+```bash
+uv add dlightrag        # or: pip install dlightrag
+cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+dlightrag-api --env-file .env
+```
+
+### Docker (Self-Hosted)
+
+```bash
+git clone https://github.com/hanlianlu/dlightrag.git && cd dlightrag
+cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+docker compose up
+```
+
+Includes PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`).
+
+> **Local models (Ollama, Xinference, etc.):** use `host.docker.internal` instead of `localhost` in base URL settings.
+
+```bash
+curl http://localhost:8100/health
+
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "local", "path": "/app/dlightrag_storage/sources"}'
+
+curl -X POST http://localhost:8100/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the key findings?"}'
+
+curl -X POST http://localhost:8100/answer \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the key findings?", "stream": true}'
+```
+
+### MCP Server (for AI Agents)
+
+```bash
+uv tool install dlightrag   # or: pip install dlightrag
+cp .env.example .env        # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+dlightrag-mcp --env-file .env
+```
+
+```json
+{
+  "mcpServers": {
+    "dlightrag": {
+      "command": "uvx",
+      "args": ["dlightrag-mcp", "--env-file", "/absolute/path/to/.env"]
+    }
+  }
+}
+```
+
+Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
 
 ### Python SDK
 
@@ -51,71 +122,6 @@ asyncio.run(main())
 ```
 
 > Requires PostgreSQL with pgvector + AGE, or JSON fallback for development (see [Configuration](#configuration)).
-
-### Docker (Self-Hosted)
-
-```bash
-git clone https://github.com/hanlianlu/dlightrag.git && cd dlightrag
-cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
-docker compose up
-```
-
-Includes PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`).
-
-> **Local models (Ollama, Xinference, etc.):** use `host.docker.internal` instead of `localhost` in base URL settings.
-
-```bash
-curl http://localhost:8100/health
-
-curl -X POST http://localhost:8100/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "/app/dlightrag_storage/sources"}'
-
-curl -X POST http://localhost:8100/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What are the key findings?"}'
-
-curl -X POST http://localhost:8100/answer \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What are the key findings?", "stream": true}'
-```
-
-### Web UI
-
-If you already have the REST API running (via Docker or `dlightrag-api`), the Web UI is available at:
-
-```
-http://localhost:8100/web/
-```
-
-Without Docker:
-
-```bash
-uv add dlightrag        # or: pip install dlightrag
-cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
-dlightrag-api --env-file .env
-```
-
-### MCP Server (for AI Agents)
-
-```bash
-uv tool install dlightrag   # or: pip install dlightrag
-cp .env.example .env        # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
-dlightrag-mcp --env-file .env
-```
-
-```json
-{
-  "mcpServers": {
-    "dlightrag": {
-      "command": "uvx",
-      "args": ["dlightrag-mcp", "--env-file", "/absolute/path/to/.env"]
-    }
-  }
-}
-```
-
-Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
 
 
 ## API Reference
@@ -257,14 +263,6 @@ uv run pytest tests/unit            # unit tests (no external services)
 uv run pytest tests/integration     # integration tests (requires PostgreSQL)
 uv run ruff check src/ tests/ scripts/ --fix && uv run ruff format src/ tests/ scripts/
 ```
-
-> **Skip PostgreSQL** for development:
-> ```
-> DLIGHTRAG_VECTOR_STORAGE=NanoVectorDBStorage
-> DLIGHTRAG_GRAPH_STORAGE=NetworkXStorage
-> DLIGHTRAG_KV_STORAGE=JsonKVStorage
-> DLIGHTRAG_DOC_STATUS_STORAGE=JsonDocStatusStorage
-> ```
 
 
 ## Architecture
