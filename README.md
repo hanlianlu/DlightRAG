@@ -118,6 +118,11 @@ dlightrag-mcp --env-file .env
 Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
 
 
+## Response Schema
+
+All interfaces return the same core structure from `retrieve` and `answer`. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — contexts (chunks, entities, relationships), sources, media, SSE streaming format, citation format, and multimodal queries.
+
+
 ## Configuration
 
 All settings via `DLIGHTRAG_` env vars, `.env` file, or constructor args. See [`.env.example`](.env.example) for the full reference.
@@ -220,11 +225,6 @@ Each workspace has its own knowledge graph, vector store, and document index. `D
 | `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_AZURE_COHERE_API_KEY` |
 
 Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BASE_URL` + `RERANK_MODEL`.
-
-
-## Response Schema
-
-All interfaces return the same core structure from `retrieve` and `answer`. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — contexts (chunks, entities, relationships), sources, media, SSE streaming format, citation format, and multimodal queries.
 
 
 ## REST API
