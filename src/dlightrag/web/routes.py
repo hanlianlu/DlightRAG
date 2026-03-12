@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -138,28 +139,38 @@ async def answer_stream(
             )
             result = processor.process(full_answer)
 
-            # Highlight extraction (best-effort)
+            # Send done event immediately (sources without highlights)
+            done_html = _render_partial(
+                "partials/answer_done.html",
+                answer=result.answer,
+                sources=result.sources,
+            )
+            yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
+
+            # Highlight extraction (best-effort, async follow-up)
+            # Sends a separate SSE event to patch source panel with highlights.
             try:
                 from dlightrag.config import get_config
                 from dlightrag.models.llm import get_llm_model_func
 
                 llm_func = get_llm_model_func(get_config())
-                result_sources = await extract_highlights_for_sources(
-                    sources=result.sources,
-                    answer_text=result.answer,
-                    llm_func=llm_func,
+                highlighted_sources = await asyncio.wait_for(
+                    extract_highlights_for_sources(
+                        sources=result.sources,
+                        answer_text=result.answer,
+                        llm_func=llm_func,
+                    ),
+                    timeout=30.0,
                 )
+                highlights_html = _render_partial(
+                    "partials/source_panel.html",
+                    sources=highlighted_sources,
+                )
+                yield f"event: highlights\ndata: {json.dumps(highlights_html)}\n\n"
+            except asyncio.TimeoutError:
+                logger.warning("Highlight extraction timed out, skipping")
             except Exception:
                 logger.warning("Highlight extraction failed", exc_info=True)
-                result_sources = result.sources
-
-            # Render done payload via Jinja2 partials
-            done_html = _render_partial(
-                "partials/answer_done.html",
-                answer=result.answer,
-                sources=result_sources,
-            )
-            yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
 
             # Server-driven budget: tell the frontend the char budget for next request.
             # Conservative multiplier: 2 chars/token handles CJK (~1.5) with headroom.
