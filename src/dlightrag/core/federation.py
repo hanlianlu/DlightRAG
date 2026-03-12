@@ -60,22 +60,6 @@ def merge_results(
     if chunk_top_k is not None:
         merged_chunks = merged_chunks[:chunk_top_k]
 
-    # Merge sources with workspace tag
-    merged_sources: list[dict[str, Any]] = []
-    for result, ws in zip(results, workspaces, strict=True):
-        for source in result.raw.get("sources", []):
-            s = dict(source)
-            s["_workspace"] = ws
-            merged_sources.append(s)
-
-    # Merge media with workspace tag
-    merged_media: list[dict[str, Any]] = []
-    for result, ws in zip(results, workspaces, strict=True):
-        for media in result.raw.get("media", []):
-            m = dict(media)
-            m["_workspace"] = ws
-            merged_media.append(m)
-
     # Merge entities/relations (round-robin, same as chunks)
     merged_entities = _round_robin_merge_key(results, workspaces, "entities")
     merged_relations = _round_robin_merge_key(results, workspaces, "relationships")
@@ -90,11 +74,6 @@ def merge_results(
             "chunks": merged_chunks,
             "entities": merged_entities,
             "relationships": merged_relations,
-        },
-        raw={
-            "sources": merged_sources,
-            "media": merged_media,
-            "workspaces": workspaces,
         },
     )
 
@@ -156,7 +135,6 @@ async def federated_retrieve(
         return RetrievalResult(
             answer=None,
             contexts={"chunks": [], "entities": [], "relationships": []},
-            raw={"sources": [], "media": [], "workspaces": []},
         )
 
     # Single workspace — no federation overhead
@@ -168,9 +146,6 @@ async def federated_retrieve(
         # Tag chunks with workspace
         for chunk in result.contexts.get("chunks", []):
             chunk["_workspace"] = workspaces[0]
-        for source in result.raw.get("sources", []):
-            source["_workspace"] = workspaces[0]
-        result.raw["workspaces"] = workspaces
         return result
 
     # Parallel queries
@@ -199,12 +174,6 @@ async def federated_retrieve(
         return RetrievalResult(
             answer=None,
             contexts={"chunks": [], "entities": [], "relationships": []},
-            raw={
-                "sources": [],
-                "media": [],
-                "workspaces": [],
-                "errors": [str(r) for r in raw_results],
-            },
         )
 
     return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
@@ -232,7 +201,6 @@ async def federated_answer(
         return RetrievalResult(
             answer=None,
             contexts={"chunks": [], "entities": [], "relationships": []},
-            raw={"sources": [], "media": [], "workspaces": []},
         )
 
     if len(workspaces) == 1:
@@ -242,9 +210,6 @@ async def federated_answer(
         )
         for chunk in result.contexts.get("chunks", []):
             chunk["_workspace"] = workspaces[0]
-        for source in result.raw.get("sources", []):
-            source["_workspace"] = workspaces[0]
-        result.raw["workspaces"] = workspaces
         return result
 
     async def _query_workspace(ws: str) -> RetrievalResult | Exception:
@@ -271,12 +236,6 @@ async def federated_answer(
         return RetrievalResult(
             answer=None,
             contexts={"chunks": [], "entities": [], "relationships": []},
-            raw={
-                "sources": [],
-                "media": [],
-                "workspaces": [],
-                "errors": [str(r) for r in raw_results],
-            },
         )
 
     return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)

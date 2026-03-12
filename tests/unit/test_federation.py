@@ -17,7 +17,6 @@ from dlightrag.core.retrieval.protocols import RetrievalResult
 
 def _make_result(
     chunks: list[dict] | None = None,
-    sources: list[dict] | None = None,
     answer: str | None = None,
 ) -> RetrievalResult:
     """Helper to create a RetrievalResult with given data."""
@@ -27,10 +26,6 @@ def _make_result(
             "chunks": chunks or [],
             "entities": [],
             "relationships": [],
-        },
-        raw={
-            "sources": sources or [],
-            "media": [],
         },
     )
 
@@ -64,17 +59,6 @@ class TestMergeResults:
 
         assert len(merged.contexts["chunks"]) == 5
 
-    def test_sources_merged_and_tagged(self) -> None:
-        r1 = _make_result(sources=[{"id": "s1", "title": "Doc A"}])
-        r2 = _make_result(sources=[{"id": "s2", "title": "Doc B"}])
-
-        merged = merge_results([r1, r2], ["ws-a", "ws-b"])
-        sources = merged.raw["sources"]
-
-        assert len(sources) == 2
-        assert sources[0]["_workspace"] == "ws-a"
-        assert sources[1]["_workspace"] == "ws-b"
-
     def test_answers_concatenated(self) -> None:
         r1 = _make_result(answer="Answer from A")
         r2 = _make_result(answer="Answer from B")
@@ -95,16 +79,7 @@ class TestMergeResults:
     def test_empty_results(self) -> None:
         merged = merge_results([], [])
         assert merged.contexts["chunks"] == []
-        assert merged.raw["sources"] == []
         assert merged.answer is None
-
-    def test_workspaces_recorded_in_raw(self) -> None:
-        r1 = _make_result()
-        r2 = _make_result()
-
-        merged = merge_results([r1, r2], ["ws-a", "ws-b"])
-
-        assert merged.raw["workspaces"] == ["ws-a", "ws-b"]
 
 
 class TestFederatedRetrieve:
@@ -113,9 +88,7 @@ class TestFederatedRetrieve:
     @pytest.mark.asyncio
     async def test_single_workspace_no_federation(self) -> None:
         mock_svc = AsyncMock()
-        mock_svc.aretrieve.return_value = _make_result(
-            chunks=[{"id": "c1"}], sources=[{"id": "s1"}]
-        )
+        mock_svc.aretrieve.return_value = _make_result(chunks=[{"id": "c1"}])
 
         async def get_svc(ws: str):
             return mock_svc
@@ -124,7 +97,6 @@ class TestFederatedRetrieve:
 
         mock_svc.aretrieve.assert_awaited_once()
         assert result.contexts["chunks"][0]["_workspace"] == "ws-only"
-        assert result.raw["workspaces"] == ["ws-only"]
 
     @pytest.mark.asyncio
     async def test_multi_workspace_parallel(self) -> None:
@@ -173,7 +145,6 @@ class TestFederatedRetrieve:
         result = await federated_retrieve("query", ["ws-a", "ws-b"], get_svc)
 
         assert result.contexts["chunks"] == []
-        assert "errors" in result.raw
 
     @pytest.mark.asyncio
     async def test_workspace_filter_rbac(self) -> None:
