@@ -17,12 +17,21 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 - **Four interfaces** — Web UI, REST API, MCP server, and Python SDK
 
 
+## Architecture
+
+<p align="center">
+  <img src="docs/architecture.png" alt="DlightRAG Architecture" width="1080" />
+</p>
+
+<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a></sub>
+
+
 ## Quick Start with Four Interfaces
 
 ### Web UI
 
 <p align="center">
-  <video src="docs/DlightRAG_GUI.mp4" width="1200" controls autoplay loop muted>
+  <video src="docs/DlightRAG_demo.mp4" width="1440" controls>
     Your browser does not support the video tag.
   </video>
 </p>
@@ -263,15 +272,6 @@ uv run pytest tests/unit            # unit tests (no external services)
 uv run pytest tests/integration     # integration tests (requires PostgreSQL)
 uv run ruff check src/ tests/ scripts/ --fix && uv run ruff format src/ tests/ scripts/
 ```
-
-
-## Architecture
-
-<p align="center">
-  <img src="docs/architecture.png" alt="DlightRAG Architecture" width="800" />
-</p>
-
-<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a></sub>
 
 
 ## License
