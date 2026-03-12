@@ -383,6 +383,10 @@ async function submitQuery(query) {
         let buffer = '';
         let firstToken = true;
 
+        // SSE parser state: accumulate data lines until empty line dispatches
+        let sseEvent = '';
+        let sseDataParts = [];
+
         while (true) {
             const result = await reader.read();
             if (result.done) break;
@@ -392,19 +396,27 @@ async function submitQuery(query) {
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
-            let eventType = '';
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i];
-                if (line.startsWith('event: ')) {
-                    eventType = line.slice(7).trim();
-                } else if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (eventType === 'token') {
-                        fullAnswer += data;
+                if (line === '') {
+                    // Empty line = event dispatch (SSE spec)
+                    if (sseDataParts.length > 0) {
+                        const data = sseDataParts.join('\n');
+                        if (sseEvent === 'token') {
+                            fullAnswer += data;
+                        }
+                        handleSSEData(sseEvent, data, contentDiv, aiDiv, chatArea, firstToken);
+                        if (sseEvent === 'token' && firstToken) firstToken = false;
                     }
-                    handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken);
-                    if (eventType === 'token' && firstToken) firstToken = false;
-                    eventType = '';
+                    sseEvent = '';
+                    sseDataParts = [];
+                } else if (line.startsWith('event: ')) {
+                    sseEvent = line.slice(7).trim();
+                } else if (line.startsWith('data: ')) {
+                    sseDataParts.push(line.slice(6));
+                } else if (line.startsWith('data:')) {
+                    // "data:" with no space = empty data line (SSE spec)
+                    sseDataParts.push(line.slice(5));
                 }
             }
         }
