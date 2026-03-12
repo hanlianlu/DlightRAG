@@ -17,9 +17,9 @@ from markupsafe import Markup
 
 from dlightrag.citations import (
     CitationProcessor,
-    SourceReference,
     extract_highlights_for_sources,
 )
+from dlightrag.citations.source_builder import build_sources
 
 from .deps import get_manager, get_workspace, templates
 
@@ -30,38 +30,6 @@ router = APIRouter(prefix="/web", tags=["web"])
 # ---------------------------------------------------------------------------
 # Helpers — data preparation (no HTML)
 # ---------------------------------------------------------------------------
-
-
-def _contexts_to_flat_list(contexts: dict[str, Any]) -> list[dict[str, Any]]:
-    """Flatten DlightRAG contexts dict into list for CitationIndexer."""
-    flat: list[dict[str, Any]] = []
-    for items in contexts.values():
-        if isinstance(items, list):
-            flat.extend(items)
-    return flat
-
-
-def _extract_available_sources(contexts: dict[str, Any]) -> list[SourceReference]:
-    """Build available SourceReference list from context metadata."""
-    seen: dict[str, SourceReference] = {}
-    for items in contexts.values():
-        if not isinstance(items, list):
-            continue
-        for ctx in items:
-            ref_id = str(ctx.get("reference_id", ""))
-            if not ref_id or ref_id in seen:
-                continue
-            # Read file_path from flat field (both modes) or nested metadata
-            metadata = ctx.get("metadata", {})
-            file_path = ctx.get("file_path") or metadata.get("file_path", "")
-            file_name = metadata.get("file_name") or (Path(file_path).name if file_path else "")
-            seen[ref_id] = SourceReference(
-                id=ref_id,
-                path=file_path,
-                title=file_name or None,
-                type=metadata.get("file_type"),
-            )
-    return list(seen.values())
 
 
 def _render_partial(name: str, **ctx: Any) -> str:
@@ -134,7 +102,7 @@ async def answer_stream(
         if conversation_history:
             kwargs["conversation_history"] = conversation_history
         try:
-            contexts, raw, token_iter = await manager.aanswer_stream(
+            contexts, token_iter = await manager.aanswer_stream(
                 query=query,
                 workspace=workspace,
                 workspaces=workspaces,
@@ -156,13 +124,17 @@ async def answer_stream(
                     escaped = Markup.escape(chunk)
                     yield f"event: token\ndata: {escaped}\n\n"
 
-            # Citation processing
-            flat_contexts = _contexts_to_flat_list(contexts)
-            available_sources = _extract_available_sources(contexts)
+            # Build sources from contexts
+            flat_contexts = []
+            for items in contexts.values():
+                if isinstance(items, list):
+                    flat_contexts.extend(items)
+
+            sources = build_sources(contexts)
 
             processor = CitationProcessor(
                 contexts=flat_contexts,
-                available_sources=available_sources,
+                available_sources=sources,
             )
             result = processor.process(full_answer)
 
