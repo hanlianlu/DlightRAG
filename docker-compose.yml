@@ -51,7 +51,8 @@ services:
     command: ["dlightrag-mcp"]
 
   postgres:
-    build: postgres/
+    image: ghcr.io/hanlianlu/dlightrag-postgres:latest
+    # build: postgres/  # uncomment to build the image locally
     ports:
       - "5432:5432"
     environment:
