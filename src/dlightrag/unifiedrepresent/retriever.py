@@ -167,6 +167,46 @@ class VisualRetriever:
                     if cid:
                         chunk_ids.add(cid)
 
+        # Backfill content and metadata for chunks discovered via entities/relationships.
+        # These chunk_ids came from source_id fields and lack text/reference metadata.
+        missing_cids = chunk_ids - set(chunk_text.keys())
+        if missing_cids:
+            # Build reverse map: file_path -> reference_id from known chunks
+            path_to_ref: dict[str, str] = {}
+            for meta in chunk_meta.values():
+                fp = meta.get("file_path", "")
+                rid = meta.get("reference_id", "")
+                if fp and rid:
+                    path_to_ref[fp] = rid
+
+            missing_list = list(missing_cids)
+            text_data = await self.lightrag.text_chunks.get_by_ids(missing_list)
+            recovered = 0
+            for cid, td in zip(missing_list, text_data, strict=False):
+                if td is None:
+                    continue
+                if isinstance(td, str):
+                    try:
+                        td = json.loads(td)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                if isinstance(td, dict):
+                    content = td.get("content", "")
+                    file_path = td.get("file_path", "")
+                    if content:
+                        chunk_text[cid] = content
+                        recovered += 1
+                    if cid not in chunk_meta:
+                        chunk_meta[cid] = {
+                            "reference_id": path_to_ref.get(file_path, ""),
+                            "file_path": file_path,
+                        }
+            logger.info(
+                "[Backfill] Recovered text for %d/%d entity/relationship chunks",
+                recovered,
+                len(missing_cids),
+            )
+
         # Phase 2: Visual resolution
         chunk_id_list = list(chunk_ids)
         logger.info("[Visual Resolve] Looking up %d chunk_ids in visual_chunks", len(chunk_id_list))
@@ -598,15 +638,47 @@ class VisualRetriever:
 
     @staticmethod
     def _format_reference_list(contexts: dict) -> str:
-        """Build reference list from chunk contexts for VLM citation."""
+        """Build hierarchical reference list with doc and chunk entries.
+
+        Output example::
+
+            [1] quarterly_report.pdf
+              [1-1] Page 3
+              [1-2] Page 7
+            [2] spec.pdf
+              [2-1] Page 1
+        """
         chunks = contexts.get("chunks", [])
-        seen: dict[str, str] = {}  # reference_id -> file_name
+        # doc_info: ref_id -> file_name
+        doc_info: dict[str, str] = {}
+        # chunk_entries: ref_id -> list of page_idx values
+        chunk_entries: dict[str, list[int]] = {}
+        # Mirror CitationIndexer.build_index: skip chunks without content,
+        # deduplicate by chunk_id per ref_id so indices stay aligned.
+        seen_chunks: dict[str, set[str]] = {}  # ref_id -> set of chunk_ids
+
         for chunk in chunks:
             ref_id = str(chunk.get("reference_id", ""))
-            if ref_id and ref_id not in seen:
+            chunk_id = chunk.get("chunk_id", "")
+            if not ref_id or not chunk_id or not chunk.get("content"):
+                continue
+            if chunk_id in seen_chunks.get(ref_id, set()):
+                continue
+            seen_chunks.setdefault(ref_id, set()).add(chunk_id)
+            if ref_id not in doc_info:
                 file_path = chunk.get("file_path", "")
-                seen[ref_id] = Path(file_path).name if file_path else f"Source {ref_id}"
-        if not seen:
+                doc_info[ref_id] = Path(file_path).name if file_path else f"Source {ref_id}"
+            page_idx = chunk.get("page_idx", 0)
+            chunk_entries.setdefault(ref_id, []).append(page_idx)
+
+        if not doc_info:
             return "No reference documents available."
-        lines = [f"[{ref_id}] {name}" for ref_id, name in seen.items()]
+
+        lines: list[str] = []
+        for ref_id, name in doc_info.items():
+            lines.append(f"[{ref_id}] {name}")
+            entries = chunk_entries.get(ref_id, [])
+            for idx, page_idx in enumerate(entries, 1):
+                page_label = f"Page {page_idx}" if page_idx else f"Chunk {idx}"
+                lines.append(f"  [{ref_id}-{idx}] {page_label}")
         return "\n".join(lines)

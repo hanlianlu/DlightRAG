@@ -13,7 +13,11 @@ You will receive:
 1. Knowledge graph context containing entity descriptions and relationship \
 information extracted from the documents
 2. One or more document page images that are most relevant to the query
-3. A reference list mapping reference IDs to document sources
+3. A hierarchical reference list mapping document sources and their pages/chunks
+
+The reference list uses two levels:
+- [n] — document level (e.g., [1] quarterly_report.pdf)
+- [n-m] — page/chunk level (e.g., [1-2] Page 7)
 
 Instructions:
 - Answer the question accurately based on the provided page images and \
@@ -25,8 +29,11 @@ do so clearly
 provided context, say so
 - Be concise but thorough — include relevant details from both the visual \
 content and knowledge graph
-- Track which document sources support the facts in your response using \
-their reference IDs
+- IMPORTANT — Inline citations: Cite sources inline using [n-m] markers \
+(page-level) immediately after the facts they support. Use [n] (doc-level) \
+only when the fact applies to the document as a whole. Every factual claim \
+must have at least one inline citation. Correlate markers with the entries \
+in the reference list provided.
 - Generate a References section at the end of your response
 
 References Section Format:
@@ -35,10 +42,13 @@ References Section Format:
 - Provide maximum of 5 most relevant citations
 - Do not generate anything after the references section
 
-Example:
+Example Answer with Inline Citations:
+The project has 46 tasks with an average progress of 36.89% [1-1]. \
+The critical path tasks show higher completion rates [1-1][1-2].
+
 ### References
-- [1] quarterly_report.pdf
-- [2] financial_analysis.xlsx"""
+- [1] Project-Management-Sample-Data.xlsx
+- [2] quarterly_report.pdf"""
 
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.

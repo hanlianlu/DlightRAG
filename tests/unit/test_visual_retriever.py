@@ -98,6 +98,10 @@ def _make_retriever(
 ) -> VisualRetriever:
     lightrag = MagicMock()
     lightrag.aquery_data = AsyncMock(return_value=_make_lightrag_result())
+    # Backfill lookup for entity/relationship chunks missing text
+    lightrag.text_chunks.get_by_ids = AsyncMock(
+        return_value=[{"content": "backfilled text", "file_path": "/test/doc.pdf"}],
+    )
 
     visual_chunks = MagicMock()
     visual_chunks.get_by_ids = AsyncMock(
