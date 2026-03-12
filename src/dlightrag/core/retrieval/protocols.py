@@ -14,7 +14,6 @@ class RetrievalResult:
 
     answer: str | None = field(default=None)
     contexts: dict[str, Any] = field(default_factory=dict)
-    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable
@@ -49,7 +48,7 @@ class RetrievalBackend(Protocol):
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str] | None]: ...
+    ) -> tuple[dict[str, Any], AsyncIterator[str] | None]: ...
 
 
 __all__ = ["RetrievalBackend", "RetrievalResult"]

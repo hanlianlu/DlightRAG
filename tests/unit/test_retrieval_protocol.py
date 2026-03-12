@@ -14,13 +14,11 @@ class TestRetrievalResult:
         r = RetrievalResult()
         assert r.answer is None
         assert r.contexts == {}
-        assert r.raw == {}
 
     def test_with_values(self) -> None:
-        r = RetrievalResult(answer="hello", contexts={"k": "v"}, raw={"x": 1})
+        r = RetrievalResult(answer="hello", contexts={"k": "v"})
         assert r.answer == "hello"
         assert r.contexts == {"k": "v"}
-        assert r.raw == {"x": 1}
 
 
 class TestRetrievalBackendProtocol:
@@ -56,7 +54,7 @@ class TestRetrievalBackendProtocol:
                 top_k: int | None = None,
                 chunk_top_k: int | None = None,
                 **kwargs: Any,
-            ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]:
+            ) -> tuple[dict[str, Any], AsyncIterator[str] | None]:
                 raise NotImplementedError
 
         backend: RetrievalBackend = FakeBackend()
