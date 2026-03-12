@@ -30,7 +30,7 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ### Web UI 
 ##### Click the image to watch demo (YouTube)
-<a href="https://www.youtube.com/watch?v=0VM9SH5MukA">
+<a href="https://www.youtube.com/watch?v=F1RXUW4Xfuc">
   <img src="docs/DlightRAG_GUI_img.png" alt="Watch Demo on YouTube" width="1440" />
 </a>
 
