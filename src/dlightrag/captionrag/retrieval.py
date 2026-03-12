@@ -81,20 +81,7 @@ class RetrievalEngine:
 
         contexts = retrieval_data.get("data", {})
 
-        # Attach page_idx from text_chunks KV store
-        chunk_contexts = contexts.get("chunks", [])
-        if lightrag and hasattr(lightrag, "text_chunks") and chunk_contexts:
-            chunk_ids = [ctx.get("chunk_id") for ctx in chunk_contexts if ctx.get("chunk_id")]
-            if chunk_ids:
-                try:
-                    chunk_data_list = await lightrag.text_chunks.get_by_ids(chunk_ids)
-                    for cid, cdata in zip(chunk_ids, chunk_data_list, strict=True):
-                        if cdata and cdata.get("page_idx") is not None:
-                            for ctx in chunk_contexts:
-                                if ctx.get("chunk_id") == cid:
-                                    ctx["page_idx"] = cdata["page_idx"] + 1  # 0→1-based
-                except Exception as e:
-                    logger.warning(f"Failed to load page_idx: {e}")
+        await self._attach_page_idx(contexts)
 
         return RetrievalResult(answer=None, contexts=contexts)
 
@@ -152,20 +139,7 @@ class RetrievalEngine:
         answer = llm_response.get("content")
         contexts = result_data.get("data", {})
 
-        # Attach page_idx from text_chunks KV store
-        chunk_contexts = contexts.get("chunks", [])
-        if lightrag and hasattr(lightrag, "text_chunks") and chunk_contexts:
-            chunk_ids = [ctx.get("chunk_id") for ctx in chunk_contexts if ctx.get("chunk_id")]
-            if chunk_ids:
-                try:
-                    chunk_data_list = await lightrag.text_chunks.get_by_ids(chunk_ids)
-                    for cid, cdata in zip(chunk_ids, chunk_data_list, strict=True):
-                        if cdata and cdata.get("page_idx") is not None:
-                            for ctx in chunk_contexts:
-                                if ctx.get("chunk_id") == cid:
-                                    ctx["page_idx"] = cdata["page_idx"] + 1  # 0→1-based
-                except Exception as e:
-                    logger.warning(f"Failed to load page_idx: {e}")
+        await self._attach_page_idx(contexts)
 
         return RetrievalResult(answer=answer, contexts=contexts)
 
@@ -226,8 +200,20 @@ class RetrievalEngine:
 
         contexts = retrieval_data.get("data", {})
 
-        # Attach page_idx from text_chunks KV store
+        await self._attach_page_idx(contexts)
+
+        # Phase 2: Stream LLM answer
+        stream_param = QueryParam(
+            mode=mode or self.config.default_mode, stream=True, **query_kwargs
+        )
+        token_iter = await lightrag.aquery(enhanced_query, param=stream_param)
+
+        return contexts, token_iter
+
+    async def _attach_page_idx(self, contexts: dict[str, Any]) -> None:
+        """Attach 1-based page_idx from text_chunks KV store to chunk contexts."""
         chunk_contexts = contexts.get("chunks", [])
+        lightrag = getattr(self.rag, "lightrag", None)
         if lightrag and hasattr(lightrag, "text_chunks") and chunk_contexts:
             chunk_ids = [ctx.get("chunk_id") for ctx in chunk_contexts if ctx.get("chunk_id")]
             if chunk_ids:
@@ -240,15 +226,6 @@ class RetrievalEngine:
                                     ctx["page_idx"] = cdata["page_idx"] + 1  # 0→1-based
                 except Exception as e:
                     logger.warning(f"Failed to load page_idx: {e}")
-
-        # Phase 2: Stream LLM answer
-        stream_param = QueryParam(
-            mode=mode or self.config.default_mode, stream=True, **query_kwargs
-        )
-        token_iter = await lightrag.aquery(enhanced_query, param=stream_param)
-
-        return contexts, token_iter
-
 
 
 __all__ = [

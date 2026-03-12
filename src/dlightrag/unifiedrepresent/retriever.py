@@ -122,7 +122,6 @@ class VisualRetriever:
 
         Returns dict with keys:
             contexts: {entities, relationships, chunks}
-            raw: {sources, media}
         """
         # Phase 1: LightRAG retrieval
         param = QueryParam(
@@ -292,7 +291,7 @@ class VisualRetriever:
     ) -> dict:
         """Run Phase 1-4: retrieve + VLM answer generation.
 
-        Returns dict with keys: answer, contexts, raw
+        Returns dict with keys: answer, contexts
         """
         retrieval = await self.retrieve(
             query,
