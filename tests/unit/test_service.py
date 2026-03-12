@@ -381,7 +381,6 @@ class TestRAGServiceUnifiedMode:
         expected = RetrievalResult(
             answer=None,
             contexts={"chunks": []},
-            raw={"scores": [0.9]},
         )
 
         service = RAGService(config=test_config)
@@ -394,7 +393,6 @@ class TestRAGServiceUnifiedMode:
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
         assert result.contexts == {"chunks": []}
-        assert result.raw == {"scores": [0.9]}
 
     async def test_aanswer_unified_delegates(self, test_config: DlightragConfig) -> None:
         """Unified mode aanswer delegates directly to unified engine."""
@@ -403,7 +401,6 @@ class TestRAGServiceUnifiedMode:
         expected = RetrievalResult(
             answer="The answer is 42.",
             contexts={"chunks": ["c1"]},
-            raw={},
         )
 
         service = RAGService(config=test_config)

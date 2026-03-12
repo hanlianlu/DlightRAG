@@ -211,7 +211,7 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]:
+    ) -> tuple[dict[str, Any], AsyncIterator[str]]:
         """Streaming answer from a single workspace.
 
         Federated streaming is not supported — uses first workspace if

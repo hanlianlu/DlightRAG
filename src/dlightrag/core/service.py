@@ -816,7 +816,7 @@ class RAGService:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> tuple[dict[str, Any], dict[str, Any], AsyncIterator[str]]:
+    ) -> tuple[dict[str, Any], AsyncIterator[str]]:
         """Streaming answer: retrieve contexts, then stream LLM tokens."""
         self._ensure_initialized()
         backend = self._effective_backend
