@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Any
 
+from dlightrag.citations.source_builder import build_sources
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
@@ -224,7 +226,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         {
                             "answer": result.answer,
                             "contexts": result.contexts,
-                            "sources": result.raw.get("sources", []),
+                            "sources": [s.model_dump() for s in build_sources(result.contexts)],
                         },
                         default=str,
                         indent=2,
@@ -251,7 +253,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         {
                             "answer": result.answer,
                             "contexts": result.contexts,
-                            "sources": result.raw.get("sources", []),
+                            "sources": [s.model_dump() for s in build_sources(result.contexts)],
                         },
                         default=str,
                         indent=2,
