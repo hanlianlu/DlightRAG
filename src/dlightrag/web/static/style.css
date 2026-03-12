@@ -316,6 +316,76 @@ body {
     padding: 16px 20px;
 }
 
+/* === Document-Level Source Grouping === */
+
+.source-doc {
+    border-bottom: 1px solid rgba(120, 113, 108, 0.1);
+}
+
+.source-doc:last-child {
+    border-bottom: none;
+}
+
+.source-doc-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.source-doc-header:hover {
+    background: rgba(161, 98, 7, 0.08);
+}
+
+.collapse-icon {
+    font-size: 10px;
+    transition: transform 0.2s ease;
+    color: var(--text-secondary, #a8a29e);
+    flex-shrink: 0;
+    width: 12px;
+}
+
+.source-doc.expanded .collapse-icon {
+    transform: rotate(90deg);
+}
+
+.source-doc-title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary, #e7e5e4);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.source-doc-badge {
+    font-size: 11px;
+    color: var(--gold-400, #e6a817);
+    font-weight: 600;
+}
+
+.source-doc-count {
+    font-size: 11px;
+    color: var(--text-secondary, #a8a29e);
+    flex-shrink: 0;
+}
+
+.source-doc-count::after {
+    content: ' chunks';
+}
+
+.source-doc-chunks {
+    display: none;
+    padding: 0 8px 8px;
+}
+
+.source-doc.expanded .source-doc-chunks {
+    display: block;
+}
+
 /* === Source Chunks === */
 
 .source-chunk {
@@ -349,6 +419,14 @@ body {
     font-size: 11px;
 }
 
+.source-chunk-image {
+    margin-top: 8px;
+}
+.source-chunk-image img {
+    max-width: 100%;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
 .source-chunk-content {
     color: var(--text-400);
     font-size: 12.5px;
