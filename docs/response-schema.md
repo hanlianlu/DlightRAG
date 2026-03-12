@@ -1,18 +1,9 @@
-# Response Schema Reference
+# API Reference
 
-All interfaces — Python SDK, REST API, MCP server, Web UI — share the same underlying retrieval result. This document describes the response structure for `retrieve` and `answer` operations.
-
-## Quick Reference
-
-| Interface | `retrieve` | `answer` | Streaming |
-|---|---|---|---|
-| Python SDK | `RetrievalResult` | `RetrievalResult` | `(contexts, raw, token_iter)` |
-| REST API | JSON object | JSON object | SSE (`stream: true`) |
-| MCP Server | JSON text | JSON text | N/A |
-| Web UI | — | SSE (HTML) | Built-in |
+Request and response structures for `ingest`, `retrieve`, and `answer` — shared across Python SDK, REST API, MCP server, and Web UI.
 
 
-## Response Structure
+## Ingestion
 
 ### Python SDK
 
@@ -21,6 +12,83 @@ from dlightrag import RAGService, DlightragConfig
 
 service = await RAGService.create(config=DlightragConfig())
 
+# Local files or directory
+result = await service.aingest(source_type="local", path="./docs")
+
+# Azure Blob Storage
+result = await service.aingest(
+    source_type="azure_blob",
+    container_name="documents",
+    prefix="reports/",       # or blob_path="reports/q1.pdf"
+)
+
+# Snowflake
+result = await service.aingest(source_type="snowflake", query="SELECT * FROM docs")
+```
+
+### REST API
+
+```bash
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "local", "path": "/data/docs"}'
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `source_type` | `string` | yes | `local`, `azure_blob`, `snowflake` |
+| `path` | `string` | local | File or directory path |
+| `container_name` | `string` | azure_blob | Blob container name |
+| `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
+| `prefix` | `string` | — | Blob prefix filter |
+| `query` | `string` | snowflake | SQL query |
+| `table` | `string` | — | Snowflake table name |
+| `replace` | `boolean` | — | Replace existing documents with same name |
+| `workspace` | `string` | — | Target workspace (default: `default`) |
+
+### MCP Server
+
+Same parameters as REST API, passed as tool arguments.
+
+### Ingestion Response
+
+```json
+{
+  "status": "success",
+  "source_type": "local",
+  "processed": 5,
+  "skipped": 2,
+  "total_files": 7,
+  "source_path": "/data/docs",
+  "skipped_files": ["duplicate.pdf", "already_indexed.pdf"],
+  "stats": { "total": 7, "indexed": 5, "dropped_by_type": 0 }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `string` | `success` or `error` |
+| `processed` | `int` | Files successfully ingested |
+| `skipped` | `int` | Files skipped (dedup or unsupported) |
+| `total_files` | `int` | Total files found |
+| `skipped_files` | `list` | Names of skipped files |
+| `error` | `string` | Error message (only when `status: "error"`) |
+
+
+## Retrieval & Answer
+
+### Quick Reference
+
+| Interface | `retrieve` | `answer` | Streaming |
+|---|---|---|---|
+| Python SDK | `RetrievalResult` | `RetrievalResult` | `(contexts, raw, token_iter)` |
+| REST API | JSON object | JSON object | SSE (`stream: true`) |
+| MCP Server | JSON text | JSON text | N/A |
+| Web UI | — | SSE (HTML) | Built-in |
+
+### Python SDK
+
+```python
 # Retrieve: contexts only, no LLM answer
 result = await service.aretrieve(query="What are the key findings?")
 result.answer     # None
