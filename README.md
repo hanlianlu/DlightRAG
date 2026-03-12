@@ -17,7 +17,7 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 - **Four interfaces** — Python SDK, REST API, MCP server, Web UI
 
 
-## Quick Start
+## Quick Start with Four Interfaces
 
 ### Python SDK
 
@@ -118,9 +118,9 @@ dlightrag-mcp --env-file .env
 Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
 
 
-## Response Schema
+## API Reference
 
-All interfaces return the same core structure from `retrieve` and `answer`. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — contexts (chunks, entities, relationships), sources, media, SSE streaming format, citation format, and multimodal queries.
+Request and response structures for `ingest`, `retrieve`, and `answer` across all interfaces. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
 
 
 ## Configuration
