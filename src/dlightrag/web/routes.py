@@ -13,7 +13,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
-from markupsafe import Markup
 
 from dlightrag.citations import (
     CitationProcessor,
@@ -113,25 +112,17 @@ async def answer_stream(
             # token_iter may be an AsyncIterator, a plain str, or None
             # depending on the RAG mode and provider capabilities.
             #
-            # SSE protocol: newlines terminate data lines. Token chunks may
-            # contain newlines (e.g. markdown paragraphs), so each line of
-            # the chunk must be sent as a separate "data:" line within the
-            # same event.  The client concatenates them with "\n" restored.
+            # Tokens are JSON-encoded so newlines and special chars are
+            # properly escaped within the SSE data line.
             if token_iter is None:
                 pass
             elif isinstance(token_iter, str):
                 full_answer = token_iter
-                sse_lines = "".join(
-                    f"data: {line}\n" for line in str(Markup.escape(token_iter)).split("\n")
-                )
-                yield f"event: token\n{sse_lines}\n"
+                yield f"event: token\ndata: {json.dumps(token_iter)}\n\n"
             else:
                 async for chunk in token_iter:
                     full_answer += chunk
-                    sse_lines = "".join(
-                        f"data: {line}\n" for line in str(Markup.escape(chunk)).split("\n")
-                    )
-                    yield f"event: token\n{sse_lines}\n"
+                    yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
 
             # Build sources from contexts
             flat_contexts = []
@@ -168,9 +159,7 @@ async def answer_stream(
                 answer=result.answer,
                 sources=result_sources,
             )
-            # SSE: flatten to single line
-            done_line = done_html.replace("\n", " ")
-            yield f"event: done\ndata: {done_line}\n\n"
+            yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
 
             # Server-driven budget: tell the frontend the char budget for next request.
             # Conservative multiplier: 2 chars/token handles CJK (~1.5) with headroom.

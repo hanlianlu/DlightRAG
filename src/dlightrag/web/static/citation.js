@@ -403,7 +403,8 @@ async function submitQuery(query) {
                     if (sseDataParts.length > 0) {
                         const data = sseDataParts.join('\n');
                         if (sseEvent === 'token') {
-                            fullAnswer += data;
+                            // Token data is JSON-encoded; decode for history
+                            try { fullAnswer += JSON.parse(data); } catch (_) { fullAnswer += data; }
                         }
                         handleSSEData(sseEvent, data, contentDiv, aiDiv, chatArea, firstToken);
                         if (sseEvent === 'token' && firstToken) firstToken = false;
@@ -438,21 +439,29 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
         if (firstToken) {
             contentDiv.textContent = '';
         }
-        // Server-escaped HTML token — append as trusted content
+        // Token data is JSON-encoded; decode to get raw text
+        let text;
+        try { text = JSON.parse(data); } catch (_) { text = data; }
         const span = document.createElement('span');
-        span.textContent = data;
+        span.textContent = text;
         contentDiv.appendChild(span);
         chatArea.scrollTop = chatArea.scrollHeight;
     } else if (eventType === 'done') {
-        // Trusted server-rendered enriched HTML with citation badges + source data
+        // Trusted server-rendered enriched HTML with citation badges + source data.
+        // Data is JSON-encoded; decode to get raw HTML.
+        let html;
+        try { html = JSON.parse(data); } catch (_) { html = data; }
+
         const tmp = document.createElement('div');
-        tmp.innerHTML = data;  // eslint-disable-line -- trusted server content
+        tmp.innerHTML = html;  // eslint-disable-line -- trusted server content
 
         const answerContent = tmp.querySelector('#answer-content');
         const sourceData = tmp.querySelector('#source-data');
 
         if (answerContent) {
             contentDiv.innerHTML = answerContent.innerHTML;  // eslint-disable-line -- trusted server content
+        } else {
+            console.error('[DlightRAG] done event: #answer-content not found. HTML length:', html.length);
         }
 
         if (sourceData) {
