@@ -204,11 +204,14 @@ function filterSource(badge) {
         panelContent.appendChild(clone.firstChild);
     }
 
-    // Filter: show only the clicked chunk
+    // Filter: show only the clicked chunk (or all chunks for doc-level citations)
     const chunks = panelContent.querySelectorAll('.source-chunk');
     let found = false;
     chunks.forEach(function(c) {
-        if (c.dataset.ref === ref && c.dataset.chunk === chunk) {
+        const refMatch = c.dataset.ref === ref;
+        // Doc-level citations (e.g., [2]) have no data-chunk → show all chunks for that ref
+        const chunkMatch = !chunk || c.dataset.chunk === chunk;
+        if (refMatch && chunkMatch) {
             c.style.display = '';
             c.classList.add('active');
             found = true;
