@@ -222,6 +222,11 @@ Each workspace has its own knowledge graph, vector store, and document index. `D
 Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BASE_URL` + `RERANK_MODEL`.
 
 
+## Response Schema
+
+All interfaces return the same core structure from `retrieve` and `answer`. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — contexts (chunks, entities, relationships), sources, media, SSE streaming format, citation format, and multimodal queries.
+
+
 ## REST API
 
 | Method | Endpoint | Description |
@@ -236,8 +241,6 @@ Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BA
 | `GET` | `/health` | Health check with storage status |
 
 All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` to enable bearer auth.
-
-> **[Response Schema Reference](docs/response-schema.md)** — detailed `retrieve` / `answer` response structures, SSE streaming format, citation format, and usage examples for Python SDK, REST API, and MCP server.
 
 
 ## Development
