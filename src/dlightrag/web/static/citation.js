@@ -204,41 +204,86 @@ function filterSource(badge) {
         panelContent.appendChild(clone.firstChild);
     }
 
-    // Filter: show only the clicked chunk (or all chunks for doc-level citations)
-    const chunks = panelContent.querySelectorAll('.source-chunk');
-    let found = false;
-    chunks.forEach(function(c) {
-        const refMatch = c.dataset.ref === ref;
-        // Doc-level citations (e.g., [2]) have no data-chunk → show all chunks for that ref
-        const chunkMatch = !chunk || c.dataset.chunk === chunk;
-        if (refMatch && chunkMatch) {
-            c.style.display = '';
-            c.classList.add('active');
-            found = true;
+    // Accordion: expand matching doc, collapse others
+    var docs = panelContent.querySelectorAll('.source-doc');
+    docs.forEach(function(doc) {
+        var chunksContainer = doc.querySelector('.source-doc-chunks');
+        if (doc.dataset.ref === ref) {
+            doc.classList.add('expanded');
+            if (chunksContainer) chunksContainer.style.display = '';
+
+            // If chunk-level, show only that chunk
+            if (chunk) {
+                var docChunks = doc.querySelectorAll('.source-chunk');
+                docChunks.forEach(function(c) {
+                    if (c.dataset.chunk === chunk) {
+                        c.style.display = '';
+                        c.classList.add('active');
+                    } else {
+                        c.style.display = 'none';
+                    }
+                });
+            }
         } else {
-            c.style.display = 'none';
-            c.classList.remove('active');
+            doc.classList.remove('expanded');
+            if (chunksContainer) chunksContainer.style.display = 'none';
         }
     });
 
     // Show "Show all" button
-    const showAllBtn = panelContent.querySelector('.show-all-btn');
-    if (showAllBtn && found) {
-        showAllBtn.style.display = '';
-    }
+    var showAllBtn = panelContent.querySelector('.show-all-btn');
+    if (showAllBtn) showAllBtn.style.display = '';
 
     openPanel('SOURCES');
 }
 
-function showAllSources() {
-    const panelContent = document.getElementById('panel-content');
-    const chunks = panelContent.querySelectorAll('.source-chunk');
-    chunks.forEach(function(c) {
-        c.style.display = '';
-        c.classList.remove('active');
+function toggleDoc(header) {
+    var doc = header.closest('.source-doc');
+    if (!doc) return;
+    var panelContent = doc.closest('#panel-content') || doc.parentElement;
+
+    // Accordion: collapse all others
+    var allDocs = panelContent.querySelectorAll('.source-doc');
+    allDocs.forEach(function(d) {
+        if (d !== doc) {
+            d.classList.remove('expanded');
+            var chunks = d.querySelector('.source-doc-chunks');
+            if (chunks) chunks.style.display = 'none';
+        }
     });
 
-    const showAllBtn = panelContent.querySelector('.show-all-btn');
+    // Toggle this doc
+    var isExpanded = doc.classList.contains('expanded');
+    doc.classList.toggle('expanded', !isExpanded);
+    var chunksContainer = doc.querySelector('.source-doc-chunks');
+    if (chunksContainer) {
+        chunksContainer.style.display = isExpanded ? 'none' : '';
+        // Show all chunks when toggling open
+        if (!isExpanded) {
+            chunksContainer.querySelectorAll('.source-chunk').forEach(function(c) {
+                c.style.display = '';
+                c.classList.remove('active');
+            });
+        }
+    }
+}
+
+function showAllSources() {
+    var panelContent = document.getElementById('panel-content');
+    var docs = panelContent.querySelectorAll('.source-doc');
+    docs.forEach(function(doc) {
+        doc.classList.add('expanded');
+        var chunks = doc.querySelector('.source-doc-chunks');
+        if (chunks) {
+            chunks.style.display = '';
+            chunks.querySelectorAll('.source-chunk').forEach(function(c) {
+                c.style.display = '';
+                c.classList.remove('active');
+            });
+        }
+    });
+
+    var showAllBtn = panelContent.querySelector('.show-all-btn');
     if (showAllBtn) showAllBtn.style.display = 'none';
 }
 
