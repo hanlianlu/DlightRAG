@@ -482,6 +482,15 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
                 throwOnError: false,
             });
         }
+    } else if (eventType === 'highlights') {
+        // Async highlight update — replace source panel with highlighted version.
+        // Data is JSON-encoded HTML of the updated source_panel.html partial.
+        let highlightsHtml;
+        try { highlightsHtml = JSON.parse(data); } catch (_) { highlightsHtml = data; }
+        const sourceData = aiDiv.querySelector('.source-data');
+        if (sourceData) {
+            sourceData.innerHTML = highlightsHtml;  // eslint-disable-line -- trusted server content
+        }
     } else if (eventType === 'meta') {
         // Server-driven budget update
         try {
