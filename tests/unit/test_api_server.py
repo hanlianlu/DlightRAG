@@ -32,10 +32,10 @@ def mock_service():
     service = AsyncMock()
     service.aingest = AsyncMock(return_value={"status": "success", "processed": 1})
     service.aretrieve = AsyncMock(
-        return_value=RetrievalResult(answer="42", contexts={"chunks": []}, raw={})
+        return_value=RetrievalResult(answer="42", contexts={"chunks": []})
     )
     service.aanswer = AsyncMock(
-        return_value=RetrievalResult(answer="The answer is 42", contexts={"chunks": []}, raw={})
+        return_value=RetrievalResult(answer="The answer is 42", contexts={"chunks": []})
     )
     service.alist_ingested_files = AsyncMock(return_value=[])
     service.adelete_files = AsyncMock(return_value=[{"status": "deleted"}])
@@ -260,7 +260,7 @@ class TestRetrieveEndpoint:
         body = resp.json()
         assert "answer" in body
         assert "contexts" in body
-        assert "raw" in body
+        assert "sources" in body
 
     async def test_retrieve_with_custom_mode(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -388,7 +388,7 @@ class TestAnswerEndpoint:
         body = resp.json()
         assert "answer" in body
         assert "contexts" in body
-        assert "raw" in body
+        assert "sources" in body
         assert body["answer"] == "The answer is 42"
 
     async def test_answer_with_conversation_history(
@@ -470,7 +470,7 @@ class TestAnswerStreamMode:
             for t in ["Hello", " world"]:
                 yield t
 
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, {}, mock_tokens()))
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test", "stream": True})
         assert resp.status_code == 200
@@ -486,7 +486,7 @@ class TestAnswerStreamMode:
                 yield t
 
         mock_manager.aanswer_stream = AsyncMock(
-            return_value=({"chunks": [{"id": "c1"}]}, {"sources": []}, mock_tokens())
+            return_value=({"chunks": [{"id": "c1"}]}, mock_tokens())
         )
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test", "stream": True})
@@ -512,7 +512,7 @@ class TestAnswerStreamMode:
             yield "start"
             raise RuntimeError("LLM exploded")
 
-        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, {}, mock_tokens()))
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test", "stream": True})
         lines = [line for line in resp.text.split("\n") if line.startswith("data: ")]
