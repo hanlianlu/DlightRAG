@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
-from dlightrag.models.streaming import StreamingAnswerParser
+import pytest
+
+from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
 
 
 class TestStreamingAnswerParser:
@@ -92,3 +94,38 @@ class TestStreamingAnswerParser:
         full = out1 + out2
         assert "hello\nworld" in full
         assert result.references == []
+
+
+@pytest.mark.asyncio
+class TestAnswerStream:
+    async def test_wraps_async_iterator(self) -> None:
+        """AnswerStream yields answer tokens and populates references."""
+
+        async def fake_stream():
+            yield '{"answer": "Hello'
+            yield " world"
+            yield '", "references": [{"id": 1, "title": "doc.pdf"}]}'
+
+        parser = StreamingAnswerParser()
+        stream = AnswerStream(fake_stream(), parser)
+        parts = []
+        async for token in stream:
+            parts.append(token)
+        assert "".join(parts) == "Hello world"
+        assert len(stream.references) == 1
+        assert stream.references[0].title == "doc.pdf"
+
+    async def test_passthrough_for_non_json(self) -> None:
+        """Non-JSON stream passes through as-is with empty references."""
+
+        async def fake_stream():
+            yield "Plain text answer"
+            yield " continues here."
+
+        parser = StreamingAnswerParser()
+        stream = AnswerStream(fake_stream(), parser)
+        parts = []
+        async for token in stream:
+            parts.append(token)
+        assert "Plain text answer continues here." in "".join(parts)
+        assert stream.references == []
