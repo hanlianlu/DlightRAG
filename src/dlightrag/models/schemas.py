@@ -6,6 +6,14 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class VisualRerankScore(BaseModel):
+    """Single pointwise relevance score from the unified-mode VLM visual reranker."""
+
+    score: float = Field(ge=0, le=1, description="Relevance score 0.0-1.0")
+
+    model_config = {"extra": "forbid"}
+
+
 class RankedChunk(BaseModel):
     """Single reranked chunk result from LLM reranker."""
 
@@ -40,4 +48,4 @@ class StructuredAnswer(BaseModel):
     )
 
 
-__all__ = ["RankedChunk", "Reference", "RerankResult", "StructuredAnswer"]
+__all__ = ["RankedChunk", "Reference", "RerankResult", "StructuredAnswer", "VisualRerankScore"]

@@ -11,6 +11,7 @@ import base64
 import io
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Literal, cast
 
@@ -486,7 +487,11 @@ class VisualRetriever:
         """
         import asyncio
 
+        from dlightrag.models.llm import provider_supports_structured_vision
+        from dlightrag.models.schemas import VisualRerankScore
         from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
+
+        use_schema = provider_supports_structured_vision(self.provider)
 
         if not resolved or not self.vision_model_func:
             return dict(list(resolved.items())[:top_k])
@@ -506,11 +511,33 @@ class VisualRetriever:
             async with sem:
                 try:
                     if img_data:
-                        img_bytes = base64.b64decode(img_data)
-                        resp = await vision_model_func(prompt, image_data=img_bytes)
+                        if use_schema:
+                            messages = self._build_vlm_messages(
+                                system_prompt="",
+                                user_prompt=prompt,
+                                chunks=[vd],
+                            )
+                            resp = await vision_model_func(
+                                "",
+                                messages=messages,
+                                response_schema=VisualRerankScore,
+                            )
+                        else:
+                            img_bytes = base64.b64decode(img_data)
+                            resp = await vision_model_func(prompt, image_data=img_bytes)
                     else:
-                        resp = await vision_model_func(f"{prompt}\n\nDocument text:\n{text}")
-                    return cid, self._parse_rerank_score(resp)
+                        text_prompt = f"{prompt}\n\nDocument text:\n{text}"
+                        if use_schema:
+                            resp = await vision_model_func(
+                                "",
+                                messages=[{"role": "user", "content": text_prompt}],
+                                response_schema=VisualRerankScore,
+                            )
+                        else:
+                            resp = await vision_model_func(text_prompt)
+                    score = self._parse_rerank_score(resp)
+                    logger.info("[Visual Rerank] chunk=%s score=%.2f", cid, score)
+                    return cid, score
                 except Exception:
                     logger.warning("VLM rerank failed for chunk %s", cid, exc_info=True)
                     return cid, 0.0
@@ -528,13 +555,50 @@ class VisualRetriever:
 
     @staticmethod
     def _parse_rerank_score(response: str) -> float:
-        """Parse VLM response to a 0-1 relevance score."""
-        try:
-            score = float(response.strip())
-            return max(0.0, min(1.0, score))
-        except (ValueError, TypeError):
+        """Parse VLM response to a 0-1 relevance score.
+
+        Handles multiple output formats:
+        1. Plain float ("0.82")
+        2. JSON from structured output ({"score": 0.82})
+        3. Free-form text with trailing score (think-mode models)
+        """
+        if response is None:
             logger.warning("Could not parse rerank score from: %r", response)
             return 0.0
+
+        text = str(response).strip()
+
+        # 1. Plain float
+        try:
+            return max(0.0, min(1.0, float(text)))
+        except (ValueError, TypeError):
+            pass
+
+        # Strip chat wrappers from local servers
+        text = text.replace("<|im_end|>", "").strip()
+
+        # 2. JSON (e.g. {"score": 0.82} from response_schema)
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                for key in ("score", "relevance_score"):
+                    if key in parsed:
+                        return max(0.0, min(1.0, float(parsed[key])))
+        except Exception:
+            pass
+
+        # 3. Last number in [0, 1] range from free-form text
+        numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
+        for token in reversed(numbers):
+            try:
+                val = float(token)
+            except ValueError:
+                continue
+            if 0.0 <= val <= 1.0:
+                return val
+
+        logger.warning("Could not parse rerank score from: %r", response)
+        return 0.0
 
     async def _visual_rerank(
         self,

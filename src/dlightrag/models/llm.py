@@ -182,10 +182,17 @@ def get_vision_model_func(
     return None
 
 
-_STRUCTURED_VISION_PROVIDERS = frozenset({
-    "openai", "azure_openai", "anthropic", "google_gemini",
-    "qwen", "minimax", "openrouter",
-})
+_STRUCTURED_VISION_PROVIDERS = frozenset(
+    {
+        "openai",
+        "azure_openai",
+        "anthropic",
+        "google_gemini",
+        "qwen",
+        "minimax",
+        "openrouter",
+    }
+)
 
 
 def provider_supports_structured_vision(provider: str) -> bool:
@@ -409,6 +416,7 @@ def _build_anthropic_vision_func(
                     # (output_schema support varies by SDK version)
 
                 if stream:
+
                     async def _stream_tokens() -> AsyncIterator[str]:
                         async with client.messages.stream(**kwargs) as stream_resp:  # type: ignore[arg-type]
                             async for text in stream_resp.text_stream:
@@ -528,6 +536,7 @@ def _build_google_vision_func(
                     config_dict["response_schema"] = response_schema.model_json_schema()
 
                 if stream:
+
                     async def _stream_tokens() -> AsyncIterator[str]:
                         async for chunk in await client.aio.models.generate_content_stream(
                             model=vision_deployment,

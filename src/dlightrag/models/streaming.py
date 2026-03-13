@@ -185,7 +185,7 @@ class StreamingAnswerParser:
         return result
 
 
-class AnswerStream:
+class AnswerStream(AsyncIterator[str]):
     """Async iterator that wraps a raw token stream with JSON parsing.
 
     After iteration completes, ``self.references`` contains the parsed
@@ -204,8 +204,15 @@ class AnswerStream:
         self._raw = raw_iterator
         self._parser = parser
         self.references: list[Reference] = []
+        self._gen = self._iterate()
 
-    async def __aiter__(self):
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self
+
+    async def __anext__(self) -> str:
+        return await self._gen.__anext__()
+
+    async def _iterate(self) -> AsyncIterator[str]:  # type: ignore[override]
         async for chunk in self._raw:
             text = self._parser.feed(chunk)
             if text:
