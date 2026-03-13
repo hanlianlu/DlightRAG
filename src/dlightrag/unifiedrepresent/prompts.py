@@ -49,10 +49,20 @@ The references array must include **all and only** documents cited in your \
 answer. **Example**: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
 """
 
-FREETEXT_REMINDER = """\
-**IMPORTANT — Output format**: End your response with a `### References` section: \
-listing only the documents you cited. Format: `[n] Document Title`. \
-Do not include chunk-level references."""
+FREETEXT_REMINDER = """\n\n
+**IMPORTANT — Additional Output**:
+- Generate a References section at the end of your response, the References must cover **all those and only those** documents cited in your answer.
+
+**References Section Format**:
+- The References section should start from a new line and be under heading: `### References`
+- Reference list entries should adhere to the format: `[n] Document Title`
+- Do not generate anything after the references section, do not generate chunk-level references in the reference list, only document-level references.
+
+**Example References Section**:
+### References
+- [1] Project-Management-Sample-Data.xlsx
+- [2] quarterly_report.pdf \n\n
+"""
 
 
 def get_answer_system_prompt(structured: bool = False) -> str:

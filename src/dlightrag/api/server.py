@@ -211,6 +211,21 @@ async def answer(body: AnswerRequest, request: Request):
             **kwargs,
         )
         sources = build_sources(result.contexts)
+        # Log references before returning
+        try:
+            from dlightrag.utils.logging import log_references
+
+            log_references(
+                "api.answer_response",
+                getattr(result, "references", []),
+                query=body.query,
+                workspaces=body.workspaces,
+                mode=body.mode,
+            )
+        except Exception:
+            import logging
+
+            logging.getLogger("dlightrag.references").debug("log_references failed", exc_info=True)
         return {
             "answer": result.answer,
             "contexts": result.contexts,

@@ -360,6 +360,21 @@ class VisualRetriever:
             answer_text = await self.vision_model_func(user_prompt, messages=messages)
             result = StructuredAnswer(answer=answer_text, references=[])
 
+        # Log references info
+        try:
+            from dlightrag.utils.logging import log_references
+
+            log_references(
+                "ragservice.answer",
+                getattr(result, "references", []),
+                query=query,
+                mode=mode,
+                provider=getattr(self, "provider", None),
+                structured=structured,
+            )
+        except Exception:
+            logger.debug("log_references failed", exc_info=True)
+
         return {"answer": result.answer, "references": result.references, **retrieval}
 
     async def answer_stream(
@@ -427,6 +442,23 @@ class VisualRetriever:
         if structured and hasattr(token_iterator, "__aiter__"):
             parser = StreamingAnswerParser()
             token_iterator = AnswerStream(token_iterator, parser)
+
+        # Log references if available (for streaming, may be on token_iterator)
+        try:
+            from dlightrag.utils.logging import log_references
+
+            refs = getattr(token_iterator, "references", None)
+            if refs is not None:
+                log_references(
+                    "ragservice.answer_stream",
+                    refs,
+                    query=query,
+                    mode=mode,
+                    provider=getattr(self, "provider", None),
+                    structured=structured,
+                )
+        except Exception:
+            logger.debug("log_references failed", exc_info=True)
 
         return contexts, token_iterator
 
