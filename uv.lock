@@ -670,7 +670,6 @@ dependencies = [
     { name = "markdown-it-py", extra = ["plugins"] },
     { name = "mcp", extra = ["cli"] },
     { name = "numpy" },
-    { name = "ollama" },
     { name = "openai" },
     { name = "openpyxl" },
     { name = "pgvector" },
@@ -706,7 +705,6 @@ requires-dist = [
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
     { name = "numpy", specifier = ">=2.4.2" },
-    { name = "ollama", specifier = ">=0.4.0" },
     { name = "openai", specifier = ">=2.24.0" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "pgvector", specifier = ">=0.4.2" },
@@ -2090,19 +2088,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5e/07/3e15ab404f75875c5e48c47163300eb90b7409044d8711fc3aaf52503f2e/ocrmac-1.0.1.tar.gz", hash = "sha256:507fe5e4cbd67b2d03f6729a52bbc11f9d0b58241134eb958a5daafd4b9d93d9", size = 1454317, upload-time = "2026-01-08T16:44:26.412Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/37/15/7cc16507a2aca927abe395f1c545f17ae76b1f8ed44f43ebe4e8670ee203/ocrmac-1.0.1-py3-none-any.whl", hash = "sha256:1cef25426f7ae6bbd57fe3dc5553b25461ae8ad0d2b428a9bbadbf5907349024", size = 9955, upload-time = "2026-01-08T16:44:25.555Z" },
-]
-
-[[package]]
-name = "ollama"
-version = "0.6.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pydantic" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/5a/652dac4b7affc2b37b95386f8ae78f22808af09d720689e3d7a86b6ed98e/ollama-0.6.1.tar.gz", hash = "sha256:478c67546836430034b415ed64fa890fd3d1ff91781a9d548b3325274e69d7c6", size = 51620, upload-time = "2025-11-13T23:02:17.416Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/4f/4a617ee93d8208d2bcf26b2d8b9402ceaed03e3853c754940e2290fed063/ollama-0.6.1-py3-none-any.whl", hash = "sha256:fc4c984b345735c5486faeee67d8a265214a31cbb828167782dc642ce0a2bf8c", size = 14354, upload-time = "2025-11-13T23:02:16.292Z" },
 ]
 
 [[package]]

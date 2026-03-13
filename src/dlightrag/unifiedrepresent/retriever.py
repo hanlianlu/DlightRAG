@@ -311,11 +311,14 @@ class VisualRetriever:
         kg_context = self._format_kg_context(contexts)
         indexer = self._build_citation_indexer(contexts)
         ref_list = indexer.format_reference_list()
-        user_prompt = (
-            f"Knowledge Graph Context:\n{kg_context}\n\n"
-            f"Reference Document List:\n{ref_list}\n\n"
-            f"Question: {query}"
-        )
+        prompt_parts = [
+            f"Knowledge Graph Context:\n{kg_context}",
+            f"Reference Document List:\n{ref_list}",
+        ]
+        if conversation_context:
+            prompt_parts.append(f"Conversation History:\n{conversation_context}")
+        prompt_parts.append(f"Question: {query}")
+        user_prompt = "\n\n".join(prompt_parts)
 
         messages = self._build_vlm_messages(
             UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, contexts["chunks"]
@@ -360,11 +363,14 @@ class VisualRetriever:
         kg_context = self._format_kg_context(contexts)
         indexer = self._build_citation_indexer(contexts)
         ref_list = indexer.format_reference_list()
-        user_prompt = (
-            f"Knowledge Graph Context:\n{kg_context}\n\n"
-            f"Reference Document List:\n{ref_list}\n\n"
-            f"Question: {query}"
-        )
+        prompt_parts = [
+            f"Knowledge Graph Context:\n{kg_context}",
+            f"Reference Document List:\n{ref_list}",
+        ]
+        if conversation_context:
+            prompt_parts.append(f"Conversation History:\n{conversation_context}")
+        prompt_parts.append(f"Question: {query}")
+        user_prompt = "\n\n".join(prompt_parts)
 
         messages = self._build_vlm_messages(
             UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, contexts["chunks"]
