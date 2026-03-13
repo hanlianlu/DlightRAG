@@ -68,6 +68,11 @@ def merge_results(
     answers = [r.answer for r in results if r.answer]
     merged_answer = "\n\n---\n\n".join(answers) if answers else None
 
+    # Merge references (naive concatenation, no re-numbering)
+    merged_refs = []
+    for r in results:
+        merged_refs.extend(r.references)
+
     return RetrievalResult(
         answer=merged_answer,
         contexts=RetrievalContexts(
@@ -75,6 +80,7 @@ def merge_results(
             entities=merged_entities,
             relationships=merged_relations,
         ),
+        references=merged_refs,
     )
 
 
