@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-# PostgreSQL with pgvector + Apache AGE for dlightrag
+# PostgreSQL with pgvector + Apache AGE for dlightrag (multi-arch: amd64 + arm64)
 
 FROM pgvector/pgvector:pg17
 
