@@ -543,6 +543,20 @@ class TestParseRerankScore:
     def test_clamped_below_zero(self) -> None:
         assert VisualRetriever._parse_rerank_score("-0.3") == 0.0
 
+    def test_json_schema_output(self) -> None:
+        assert VisualRetriever._parse_rerank_score('{"score": 0.62}') == 0.62
+
+    def test_thinking_with_trailing_score(self) -> None:
+        text = "<think>analysis about figure 10 and section 4.4</think>\n\n0.0<|im_end|>\n"
+        assert VisualRetriever._parse_rerank_score(text) == 0.0
+
+    def test_thinking_with_nonzero_score(self) -> None:
+        text = "<think>relevant content found</think>\n\n0.85<|im_end|>\n"
+        assert VisualRetriever._parse_rerank_score(text) == 0.85
+
+    def test_none_returns_zero(self) -> None:
+        assert VisualRetriever._parse_rerank_score(None) == 0.0  # type: ignore[arg-type]
+
 
 # ---------------------------------------------------------------------------
 # TestLlmVisualRerank

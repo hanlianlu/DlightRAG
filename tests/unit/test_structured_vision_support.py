@@ -9,8 +9,13 @@ from dlightrag.models.llm import provider_supports_structured_vision
 class TestProviderSupportsStructuredVision:
     def test_cloud_providers_supported(self) -> None:
         for provider in (
-            "openai", "azure_openai", "anthropic", "google_gemini",
-            "qwen", "minimax", "openrouter",
+            "openai",
+            "azure_openai",
+            "anthropic",
+            "google_gemini",
+            "qwen",
+            "minimax",
+            "openrouter",
         ):
             assert provider_supports_structured_vision(provider) is True, provider
 
