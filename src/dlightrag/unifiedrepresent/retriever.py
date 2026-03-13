@@ -43,6 +43,7 @@ class VisualRetriever:
         rerank_backend: str | None = None,
         path_resolver: PathResolver | None = None,
         embedder: Any | None = None,
+        provider: str = "openai",
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -52,6 +53,7 @@ class VisualRetriever:
         self.rerank_base_url = rerank_base_url
         self.rerank_api_key = rerank_api_key
         self.rerank_backend = rerank_backend
+        self.provider = provider
         self.path_resolver = path_resolver
         self.embedder = embedder
 
@@ -302,12 +304,17 @@ class VisualRetriever:
         )
 
         if not self.vision_model_func:
-            return {"answer": None, **retrieval}
+            return {"answer": None, "references": [], **retrieval}
 
         # Phase 4: Build multimodal prompt and call VLM
-        from dlightrag.unifiedrepresent.prompts import UNIFIED_ANSWER_SYSTEM_PROMPT
+        from dlightrag.models.llm import provider_supports_structured_vision
+        from dlightrag.models.schemas import StructuredAnswer
+        from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 
         contexts = retrieval["contexts"]
+        structured = provider_supports_structured_vision(self.provider)
+        system_prompt = get_answer_system_prompt(structured=structured)
+
         kg_context = self._format_kg_context(contexts)
         indexer = self._build_citation_indexer(contexts)
         ref_list = indexer.format_reference_list()
@@ -320,15 +327,24 @@ class VisualRetriever:
         prompt_parts.append(f"Question: {query}")
         user_prompt = "\n\n".join(prompt_parts)
 
-        messages = self._build_vlm_messages(
-            UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, contexts["chunks"]
-        )
-        answer_text = await self.vision_model_func(
-            user_prompt,
-            messages=messages,
-        )
+        messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
 
-        return {"answer": answer_text, **retrieval}
+        if structured:
+            raw = await self.vision_model_func(
+                user_prompt,
+                messages=messages,
+                response_schema=StructuredAnswer,
+            )
+            try:
+                result = StructuredAnswer.model_validate_json(raw)
+            except Exception:
+                logger.warning("Structured answer parse failed, degrading to raw text")
+                result = StructuredAnswer(answer=raw, references=[])
+        else:
+            answer_text = await self.vision_model_func(user_prompt, messages=messages)
+            result = StructuredAnswer(answer=answer_text, references=[])
+
+        return {"answer": result.answer, "references": result.references, **retrieval}
 
     async def answer_stream(
         self,
@@ -358,7 +374,13 @@ class VisualRetriever:
         if not self.vision_model_func:
             return contexts, None
 
-        from dlightrag.unifiedrepresent.prompts import UNIFIED_ANSWER_SYSTEM_PROMPT
+        from dlightrag.models.llm import provider_supports_structured_vision
+        from dlightrag.models.schemas import StructuredAnswer
+        from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
+        from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+
+        structured = provider_supports_structured_vision(self.provider)
+        system_prompt = get_answer_system_prompt(structured=structured)
 
         kg_context = self._format_kg_context(contexts)
         indexer = self._build_citation_indexer(contexts)
@@ -372,14 +394,17 @@ class VisualRetriever:
         prompt_parts.append(f"Question: {query}")
         user_prompt = "\n\n".join(prompt_parts)
 
-        messages = self._build_vlm_messages(
-            UNIFIED_ANSWER_SYSTEM_PROMPT, user_prompt, contexts["chunks"]
-        )
+        messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
         token_iterator = await self.vision_model_func(
             user_prompt,
             messages=messages,
             stream=True,
+            response_schema=StructuredAnswer if structured else None,
         )
+
+        if structured and hasattr(token_iterator, "__aiter__"):
+            parser = StreamingAnswerParser()
+            token_iterator = AnswerStream(token_iterator, parser)
 
         return contexts, token_iterator
 

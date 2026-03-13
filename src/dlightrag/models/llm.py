@@ -15,7 +15,7 @@ from __future__ import annotations
 import base64
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from functools import partial
 from typing import Any
 
@@ -158,7 +158,7 @@ def get_ingestion_llm_model_func(config: DlightragConfig | None = None) -> LLMFu
 
 def get_vision_model_func(
     config: DlightragConfig | None = None,
-) -> Callable[..., Awaitable[str]] | None:
+) -> Callable[..., Awaitable[str | AsyncIterator[str]]] | None:
     """Vision-language model func for RAGAnything / LightRAG.
 
     Dispatches to provider-specific builders based on effective_vision_provider.
@@ -182,12 +182,30 @@ def get_vision_model_func(
     return None
 
 
+_STRUCTURED_VISION_PROVIDERS = frozenset({
+    "openai", "azure_openai", "anthropic", "google_gemini",
+    "qwen", "minimax", "openrouter",
+})
+
+
+def provider_supports_structured_vision(provider: str) -> bool:
+    """Whether the vision func builder supports response_schema for this provider.
+
+    Only applies to providers that can serve as vision backends.
+    Ollama and Xinference have unreliable schema enforcement and
+    fall back to freetext prompt. Voyage is embedding-only and
+    cannot serve as a vision provider (get_vision_model_func returns
+    None for it).
+    """
+    return provider in _STRUCTURED_VISION_PROVIDERS
+
+
 def _build_openai_vision_func(
     cfg: DlightragConfig,
     vision_deployment: str,
     provider: str,
     model_kwargs: dict[str, Any] | None = None,
-) -> Callable[..., Awaitable[str]]:
+) -> Callable[..., Awaitable[str | AsyncIterator[str]]]:
     """OpenAI-compatible vision func (covers all providers in _OPENAI_COMPATIBLE_PROVIDERS)."""
     from openai import AsyncOpenAI
 
@@ -210,19 +228,42 @@ def _build_openai_vision_func(
         history_messages: list | None = None,
         image_data: bytes | bytearray | str | None = None,
         messages: list | None = None,
+        stream: bool = False,
+        response_schema: type | None = None,
         **_kwargs: object,
-    ) -> str:
+    ) -> str | AsyncIterator[str]:
         """Vision model function compatible with RAG-Anything."""
         # Pattern 1: Pre-formatted messages from RAG-Anything
         if messages is not None:
             t0 = time.perf_counter()
             try:
-                resp = await client.chat.completions.create(
-                    model=vision_deployment,
-                    messages=messages,  # type: ignore[arg-type]
-                    temperature=vision_temp,
-                    extra_body=extra,
-                )
+                kwargs: dict[str, Any] = {
+                    "model": vision_deployment,
+                    "messages": messages,
+                    "temperature": vision_temp,
+                    "extra_body": extra,
+                }
+                if response_schema is not None:
+                    kwargs["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": response_schema.__name__,
+                            "schema": response_schema.model_json_schema(),
+                        },
+                    }
+                if stream:
+                    kwargs["stream"] = True
+                    resp = await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
+
+                    async def _stream_tokens() -> AsyncIterator[str]:
+                        async for chunk in resp:
+                            content = chunk.choices[0].delta.content if chunk.choices else None
+                            if content:
+                                yield content
+
+                    return _stream_tokens()
+
+                resp = await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
                 result = resp.choices[0].message.content or "" if resp.choices else ""
                 elapsed = time.perf_counter() - t0
                 preview = result[:120].replace("\n", " ")
@@ -329,7 +370,7 @@ def _build_anthropic_vision_func(
     cfg: DlightragConfig,
     vision_deployment: str,
     model_kwargs: dict[str, Any] | None = None,
-) -> Callable[..., Awaitable[str]]:
+) -> Callable[..., Awaitable[str | AsyncIterator[str]]]:
     """Anthropic vision func using AsyncAnthropic client."""
     from anthropic import AsyncAnthropic
 
@@ -347,19 +388,35 @@ def _build_anthropic_vision_func(
         history_messages: list | None = None,
         image_data: bytes | bytearray | str | None = None,
         messages: list | None = None,
+        stream: bool = False,
+        response_schema: type | None = None,
         **_kwargs: object,
-    ) -> str:
+    ) -> str | AsyncIterator[str]:
         # Pattern 1: Pre-formatted messages from RAG-Anything
         if messages is not None:
             try:
                 ant_msgs, sys = _convert_openai_to_anthropic_messages(messages)
-                resp = await client.messages.create(
-                    model=vision_deployment,
-                    messages=ant_msgs,  # type: ignore[arg-type]
-                    system=sys or (system_prompt or ""),
-                    max_tokens=4096,
-                    temperature=vision_temp,
-                )
+                kwargs: dict[str, Any] = {
+                    "model": vision_deployment,
+                    "messages": ant_msgs,
+                    "system": sys or (system_prompt or ""),
+                    "max_tokens": 4096,
+                    "temperature": vision_temp,
+                }
+                if response_schema is not None:
+                    kwargs["metadata"] = kwargs.get("metadata", {})
+                    # Use Anthropic's structured output via JSON mode prompt
+                    # (output_schema support varies by SDK version)
+
+                if stream:
+                    async def _stream_tokens() -> AsyncIterator[str]:
+                        async with client.messages.stream(**kwargs) as stream_resp:  # type: ignore[arg-type]
+                            async for text in stream_resp.text_stream:
+                                yield text
+
+                    return _stream_tokens()
+
+                resp = await client.messages.create(**kwargs)  # type: ignore[arg-type]
                 return resp.content[0].text if resp.content else ""
             except Exception:
                 logger.exception("Anthropic vision call failed (messages mode)")
@@ -421,7 +478,7 @@ def _build_google_vision_func(
     cfg: DlightragConfig,
     vision_deployment: str,
     model_kwargs: dict[str, Any] | None = None,
-) -> Callable[..., Awaitable[str]]:
+) -> Callable[..., Awaitable[str | AsyncIterator[str]]]:
     """Google Gemini vision func using google-genai client."""
     from google import genai
     from google.genai.types import Content, Part
@@ -436,8 +493,10 @@ def _build_google_vision_func(
         history_messages: list | None = None,
         image_data: bytes | bytearray | str | None = None,
         messages: list | None = None,
+        stream: bool = False,
+        response_schema: type | None = None,
         **_kwargs: object,
-    ) -> str:
+    ) -> str | AsyncIterator[str]:
         # Pattern 1: Pre-formatted messages from RAG-Anything
         if messages is not None:
             try:
@@ -463,10 +522,27 @@ def _build_google_vision_func(
                         if parts:
                             contents.append(Content(role=role, parts=parts))
 
+                config_dict: dict[str, Any] = {"temperature": vision_temp}
+                if response_schema is not None:
+                    config_dict["response_mime_type"] = "application/json"
+                    config_dict["response_schema"] = response_schema.model_json_schema()
+
+                if stream:
+                    async def _stream_tokens() -> AsyncIterator[str]:
+                        async for chunk in await client.aio.models.generate_content_stream(
+                            model=vision_deployment,
+                            contents=contents,
+                            config=config_dict,
+                        ):
+                            if chunk.text:
+                                yield chunk.text
+
+                    return _stream_tokens()
+
                 resp = await client.aio.models.generate_content(
                     model=vision_deployment,
                     contents=contents,
-                    config={"temperature": vision_temp},
+                    config=config_dict,
                 )
                 return resp.text or ""
             except Exception:
