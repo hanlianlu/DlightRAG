@@ -5,7 +5,7 @@ Used during query (answer generation) and visual reranking.
 OCR/ingestion prompts live in :mod:`dlightrag.core.vlm_ocr`.
 """
 
-UNIFIED_ANSWER_SYSTEM_PROMPT = """\
+_ANSWER_CORE = """\
 You are an expert document analysis assistant. You answer questions based on \
 the provided document page images and knowledge graph context.
 
@@ -34,21 +34,52 @@ content and knowledge graph
 only when the fact applies to the document as a whole. Every factual claim \
 must have at least one inline citation. Correlate markers with the entries \
 in the reference list provided.
-- Generate a References section at the end of your response, the References must cover **all those and only those** documents cited in your answer.
-
-References Section Format:
-- The References section should start from a new line and be under heading: `### References`
-- Reference list entries should adhere to the format: `[n] Document Title`
-- Do not generate anything after the references section, do not generate chunk-level references in the reference list, only document-level references.
 
 Example Answer with Inline Citations:
 The project has 46 tasks with an average progress of 36.89% [1-1]. \
 The critical path tasks show higher completion rates [1-1][1-2].
+"""
+
+_ANSWER_STRUCTURED_SUFFIX = """
+Output your response as a JSON object with exactly two keys:
+- "answer": your full markdown answer with inline [n-m] citations
+- "references": an array of objects, each with "id" (int) and "title" (string)
+
+The references array must include **all and only** documents cited in your \
+answer. Example: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
+"""
+
+_ANSWER_FREETEXT_SUFFIX = """
+- Generate a References section at the end of your response, the References \
+must cover **all those and only those** documents cited in your answer.
+
+References Section Format:
+- The References section should start from a new line and be under heading: \
+`### References`
+- Reference list entries should adhere to the format: `[n] Document Title`
+- Do not generate anything after the references section, do not generate \
+chunk-level references in the reference list, only document-level references.
 
 ### References
 - [1] Project-Management-Sample-Data.xlsx
 - [2] quarterly_report.pdf
 """
+
+
+def get_answer_system_prompt(structured: bool = False) -> str:
+    """Return the system prompt for unified mode answer generation.
+
+    Args:
+        structured: If True, instruct the LLM to output JSON with a
+            references array. If False, instruct the LLM to append a
+            ``### References`` markdown section (legacy behavior).
+    """
+    suffix = _ANSWER_STRUCTURED_SUFFIX if structured else _ANSWER_FREETEXT_SUFFIX
+    return _ANSWER_CORE + suffix
+
+
+# Keep the old name as an alias for backward compatibility
+UNIFIED_ANSWER_SYSTEM_PROMPT = get_answer_system_prompt(structured=False)
 
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
