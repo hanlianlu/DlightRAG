@@ -8,8 +8,12 @@ from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 
 class TestGetAnswerSystemPrompt:
     def test_freetext_contains_references_heading(self) -> None:
+        from dlightrag.unifiedrepresent.prompts import FREETEXT_REMINDER
+
+        # Simulate user prompt拼接
         prompt = get_answer_system_prompt(structured=False)
-        assert "### References" in prompt
+        user_prompt = prompt + "\n" + FREETEXT_REMINDER
+        assert "### References" in user_prompt
         assert "json" not in prompt.lower() or "JSON" not in prompt
 
     def test_structured_contains_json_instruction(self) -> None:
@@ -31,5 +35,8 @@ class TestGetAnswerSystemPrompt:
             assert "36.89%" in prompt
 
     def test_backward_compat_default_is_freetext(self) -> None:
+        from dlightrag.unifiedrepresent.prompts import FREETEXT_REMINDER
+
         prompt = get_answer_system_prompt()
-        assert "### References" in prompt
+        user_prompt = prompt + "\n" + FREETEXT_REMINDER
+        assert "### References" in user_prompt
