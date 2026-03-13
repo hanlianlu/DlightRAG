@@ -49,29 +49,23 @@ The references array must include **all and only** documents cited in your \
 answer. **Example**: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
 """
 
-_ANSWER_FREETEXT_SUFFIX = """
-- Generate a References section at the end of your response, the References \
-must cover **all those and only those** documents cited in your answer.
-
-References Section Format:
-- The References section should start from a new line and be under heading: \
-`### References`
-- Reference list entries should adhere to the format: `[n] Document Title`
-- Do not generate anything after the references section, do not generate \
-chunk-level references in the reference list, only document-level references.
-"""
+FREETEXT_REMINDER = """\
+**IMPORTANT — Output format**: End your response with a `### References` section: \
+listing only the documents you cited. Format: `[n] Document Title`. \
+Do not include chunk-level references."""
 
 
 def get_answer_system_prompt(structured: bool = False) -> str:
     """Return the system prompt for unified mode answer generation.
 
     Args:
-        structured: If True, instruct the LLM to output JSON with a
-            references array. If False, instruct the LLM to append a
-            ``### References`` markdown section (legacy behavior).
+        structured: If True, append JSON output instructions to the
+            system prompt. If False, return the core prompt only
+            (freetext references reminder is appended to user prompt).
     """
-    suffix = _ANSWER_STRUCTURED_SUFFIX if structured else _ANSWER_FREETEXT_SUFFIX
-    return _ANSWER_CORE + suffix
+    if structured:
+        return _ANSWER_CORE + _ANSWER_STRUCTURED_SUFFIX
+    return _ANSWER_CORE
 
 
 # Keep the old name as an alias for backward compatibility
@@ -82,3 +76,10 @@ Rate how relevant this document page is to the following query.
 Query: {query}
 Respond **ONLY** with a number ranging from 0.0 to 1.0 (0.0 = completely irrelevant, 1.0 = fully relevant).
 """
+
+__all__ = [
+    "FREETEXT_REMINDER",
+    "UNIFIED_ANSWER_SYSTEM_PROMPT",
+    "VISUAL_RERANK_PROMPT",
+    "get_answer_system_prompt",
+]

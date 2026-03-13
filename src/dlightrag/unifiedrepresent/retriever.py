@@ -71,7 +71,13 @@ class VisualRetriever:
         images: list[bytes] | None = None,
         conversation_context: str | None = None,
     ) -> dict:
-        """Run Phase 1-3 with optional dual-path for multimodal queries."""
+        """Run Phase 1-3 with optional dual-path for multimodal queries.
+
+        The returned dict always contains an ``enhanced_query`` key holding the
+        query string that was actually used for text-path retrieval.  For pure
+        text queries this equals *query*; when *images* are supplied it includes
+        VLM-generated image descriptions.
+        """
         # Dual-path: if images provided, run VLM-enhanced text query + visual embedding
         if images:
             if self.vision_model_func:
@@ -108,10 +114,13 @@ class VisualRetriever:
 
             # Cap at chunk_top_k to maintain consistent result count with text-only queries
             text_result["contexts"]["chunks"] = merged_chunks[:chunk_top_k]
+            text_result["enhanced_query"] = enhanced_query
             return text_result
 
         # Text-only: unchanged existing path
-        return await self._text_retrieve(query, mode, top_k, chunk_top_k)
+        result = await self._text_retrieve(query, mode, top_k, chunk_top_k)
+        result["enhanced_query"] = query
+        return result
 
     async def _text_retrieve(
         self,
@@ -310,9 +319,13 @@ class VisualRetriever:
         # Phase 4: Build multimodal prompt and call VLM
         from dlightrag.models.llm import provider_supports_structured_vision
         from dlightrag.models.schemas import StructuredAnswer
-        from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+        from dlightrag.unifiedrepresent.prompts import (
+            FREETEXT_REMINDER,
+            get_answer_system_prompt,
+        )
 
         contexts = retrieval["contexts"]
+        answer_query = retrieval.get("enhanced_query", query)
         structured = provider_supports_structured_vision(self.provider)
         system_prompt = get_answer_system_prompt(structured=structured)
 
@@ -325,7 +338,9 @@ class VisualRetriever:
         ]
         if conversation_context:
             prompt_parts.append(f"Conversation History:\n{conversation_context}")
-        prompt_parts.append(f"Question: {query}")
+        prompt_parts.append(f"Question: {answer_query}")
+        if not structured:
+            prompt_parts.append(FREETEXT_REMINDER)
         user_prompt = "\n\n".join(prompt_parts)
 
         messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
@@ -371,6 +386,7 @@ class VisualRetriever:
         )
 
         contexts = retrieval["contexts"]
+        answer_query = retrieval.get("enhanced_query", query)
 
         if not self.vision_model_func:
             return contexts, None
@@ -378,7 +394,10 @@ class VisualRetriever:
         from dlightrag.models.llm import provider_supports_structured_vision
         from dlightrag.models.schemas import StructuredAnswer
         from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
-        from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+        from dlightrag.unifiedrepresent.prompts import (
+            FREETEXT_REMINDER,
+            get_answer_system_prompt,
+        )
 
         structured = provider_supports_structured_vision(self.provider)
         system_prompt = get_answer_system_prompt(structured=structured)
@@ -392,7 +411,9 @@ class VisualRetriever:
         ]
         if conversation_context:
             prompt_parts.append(f"Conversation History:\n{conversation_context}")
-        prompt_parts.append(f"Question: {query}")
+        prompt_parts.append(f"Question: {answer_query}")
+        if not structured:
+            prompt_parts.append(FREETEXT_REMINDER)
         user_prompt = "\n\n".join(prompt_parts)
 
         messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
