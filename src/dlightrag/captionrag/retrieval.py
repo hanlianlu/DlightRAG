@@ -15,7 +15,6 @@ from typing import Any, Literal
 from lightrag import QueryParam
 
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
 
@@ -112,15 +111,6 @@ class RetrievalEngine:
         adjusted_chunk_top_k = chunk_top_k or self.config.chunk_top_k
         enable_rerank = kwargs.pop("enable_rerank", self.config.enable_rerank)
 
-        # Truncate conversation history
-        history = kwargs.pop("conversation_history", None)
-        if history:
-            kwargs["conversation_history"] = truncate_conversation_history(
-                history,
-                max_messages=self.config.max_conversation_turns * 2,
-                max_tokens=self.config.max_conversation_tokens,
-            )
-
         query_kwargs = {
             "top_k": adjusted_top_k,
             "chunk_top_k": adjusted_chunk_top_k,
@@ -173,15 +163,6 @@ class RetrievalEngine:
         adjusted_top_k = top_k or self.config.top_k
         adjusted_chunk_top_k = chunk_top_k or self.config.chunk_top_k
         enable_rerank = kwargs.pop("enable_rerank", self.config.enable_rerank)
-
-        # Truncate conversation history (same logic as aanswer)
-        history = kwargs.pop("conversation_history", None)
-        if history:
-            kwargs["conversation_history"] = truncate_conversation_history(
-                history,
-                max_messages=self.config.max_conversation_turns * 2,
-                max_tokens=self.config.max_conversation_tokens,
-            )
 
         query_kwargs = {
             "top_k": adjusted_top_k,

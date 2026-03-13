@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
 
@@ -785,6 +786,17 @@ class RAGService:
             **kwargs,
         )
 
+    def _truncate_history(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """Truncate conversation_history in kwargs (single point of truncation)."""
+        history = kwargs.get("conversation_history")
+        if history:
+            kwargs["conversation_history"] = truncate_conversation_history(
+                history,
+                max_messages=self.config.max_conversation_turns * 2,
+                max_tokens=self.config.max_conversation_tokens,
+            )
+        return kwargs
+
     async def aanswer(
         self,
         query: str,
@@ -799,6 +811,7 @@ class RAGService:
         backend = self._effective_backend
         if not backend:
             raise RuntimeError("Retrieval backend not initialized")
+        self._truncate_history(kwargs)
         return await backend.aanswer(
             query,
             multimodal_content=multimodal_content,
@@ -822,6 +835,7 @@ class RAGService:
         backend = self._effective_backend
         if not backend:
             raise RuntimeError("Retrieval backend not initialized")
+        self._truncate_history(kwargs)
         return await backend.aanswer_stream(
             query,
             multimodal_content=multimodal_content,
