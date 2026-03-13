@@ -19,7 +19,7 @@ The reference list uses two levels:
 - [n] — document level (e.g., [1] quarterly_report.pdf)
 - [n-m] — page/chunk level (e.g., [1-2] Page 7)
 
-Instructions:
+**Instructions**:
 - Answer the question accurately based on the provided page images and \
 knowledge graph context
 - Reference specific content visible in the images when relevant
@@ -35,7 +35,7 @@ only when the fact applies to the document as a whole. Every factual claim \
 must have at least one inline citation. Correlate markers with the entries \
 in the reference list provided.
 
-Example Answer with Inline Citations:
+**Examples with Inline Citations**:
 The project has 46 tasks with an average progress of 36.89% [1-1]. \
 The critical path tasks show higher completion rates [1-1][1-2].
 """
@@ -46,7 +46,7 @@ Output your response as a JSON object with exactly two keys:
 - "references": an array of objects, each with "id" (int) and "title" (string)
 
 The references array must include **all and only** documents cited in your \
-answer. Example: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
+answer. **Example**: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
 """
 
 _ANSWER_FREETEXT_SUFFIX = """
@@ -59,10 +59,6 @@ References Section Format:
 - Reference list entries should adhere to the format: `[n] Document Title`
 - Do not generate anything after the references section, do not generate \
 chunk-level references in the reference list, only document-level references.
-
-### References
-- [1] Project-Management-Sample-Data.xlsx
-- [2] quarterly_report.pdf
 """
 
 
@@ -84,4 +80,5 @@ UNIFIED_ANSWER_SYSTEM_PROMPT = get_answer_system_prompt(structured=False)
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
 Query: {query}
-Respond with ONLY a number from 0.0 to 1.0 (0.0 = completely irrelevant, 1.0 = highly relevant)."""
+Respond **ONLY** with a number ranging from 0.0 to 1.0 (0.0 = completely irrelevant, 1.0 = fully relevant).
+"""
