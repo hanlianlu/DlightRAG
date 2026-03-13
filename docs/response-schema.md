@@ -96,8 +96,9 @@ result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "rel
 
 # Answer: contexts + LLM-generated answer
 result = await service.aanswer(query="What are the key findings?")
-result.answer     # "The key findings are... [1-1] [2-3]"
-result.contexts   # same structure as retrieve
+result.answer      # "The key findings are... [1-1] [2-3]"
+result.contexts    # same structure as retrieve
+result.references  # [Reference(id=1, title="report.pdf"), ...] (unified mode with structured output)
 
 # Streaming answer
 contexts, token_iter = await service.aanswer_stream(query="What are the key findings?")
@@ -141,6 +142,7 @@ curl -X POST http://localhost:8100/answer \
 {
   "answer": "The key findings are... [1-1] [2-3]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
+  "references": [{"id": 1, "title": "report.pdf"}, {"id": 2, "title": "spec.pdf"}],
   "sources": [...]
 }
 ```
@@ -151,6 +153,7 @@ curl -X POST http://localhost:8100/answer \
 |---|---|---|
 | `context` | `{type, data, sources}` | Full contexts + sources (sent first) |
 | `token` | `{type, content}` | LLM answer token (repeats) |
+| `references` | `{type, data}` | Structured references (after all tokens, before done) |
 | `done` | `{type}` | Stream complete |
 | `error` | `{type, message}` | Error mid-stream |
 
@@ -160,6 +163,8 @@ data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":
 data: {"type":"token","content":"The key findings"}
 
 data: {"type":"token","content":" are..."}
+
+data: {"type":"references","data":[{"id":1,"title":"report.pdf"}]}
 
 data: {"type":"done"}
 ```
@@ -174,6 +179,7 @@ MCP tools return JSON text with `sources` at top level:
 {
   "answer": "The key findings are... [1-1]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
+  "references": [{"id": 1, "title": "report.pdf"}],
   "sources": [...]
 }
 ```
@@ -301,6 +307,27 @@ Each **chunk snippet** within a source:
 | `content` | string | Filtered display content |
 | `image_data` | string \| null | Base64 page image (unified mode) |
 | `highlight_phrases` | list \| null | Semantic highlight phrases (when available) |
+
+
+## References
+
+When using unified mode with a provider that supports structured output, the `answer` response includes a `references` array containing document-level references cited in the answer. This is a validated subset of `sources` — only documents actually cited by the LLM appear here.
+
+```json
+{
+  "id": 1,
+  "title": "report.pdf"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | int | Reference number matching `[n]` in inline citations |
+| `title` | string | Document title/filename |
+
+**Relationship to `sources`:** `sources` contains all documents from retrieval; `references` contains only those the LLM cited. For providers that don't support structured output (Ollama, Xinference) or caption mode, `references` is an empty array.
+
+**Supported providers:** OpenAI, Azure OpenAI, Anthropic, Google Gemini, Qwen, Minimax, OpenRouter.
 
 
 ## Citations
