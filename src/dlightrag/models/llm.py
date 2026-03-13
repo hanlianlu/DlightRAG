@@ -182,6 +182,24 @@ def get_vision_model_func(
     return None
 
 
+_STRUCTURED_VISION_PROVIDERS = frozenset({
+    "openai", "azure_openai", "anthropic", "google_gemini",
+    "qwen", "minimax", "openrouter",
+})
+
+
+def provider_supports_structured_vision(provider: str) -> bool:
+    """Whether the vision func builder supports response_schema for this provider.
+
+    Only applies to providers that can serve as vision backends.
+    Ollama and Xinference have unreliable schema enforcement and
+    fall back to freetext prompt. Voyage is embedding-only and
+    cannot serve as a vision provider (get_vision_model_func returns
+    None for it).
+    """
+    return provider in _STRUCTURED_VISION_PROVIDERS
+
+
 def _build_openai_vision_func(
     cfg: DlightragConfig,
     vision_deployment: str,
