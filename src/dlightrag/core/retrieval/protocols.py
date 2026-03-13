@@ -5,7 +5,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict, runtime_checkable
+
+if TYPE_CHECKING:
+    from dlightrag.models.schemas import Reference
 
 # ── Structured context types ──────────────────────────────────────
 
@@ -65,6 +68,7 @@ class RetrievalResult:
     contexts: RetrievalContexts = field(
         default_factory=lambda: RetrievalContexts(chunks=[], entities=[], relationships=[])
     )
+    references: list[Reference] = field(default_factory=list)
 
 
 # ── Backend protocol ──────────────────────────────────────────────

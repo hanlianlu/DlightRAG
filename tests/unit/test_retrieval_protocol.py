@@ -55,6 +55,19 @@ class TestRetrievalResult:
         assert r.contexts["chunks"][0]["content"] == "text"
 
 
+class TestRetrievalResultReferences:
+    def test_default_empty_references(self) -> None:
+        result = RetrievalResult()
+        assert result.references == []
+
+    def test_references_populated(self) -> None:
+        from dlightrag.models.schemas import Reference
+
+        refs = [Reference(id=1, title="doc.pdf")]
+        result = RetrievalResult(answer="text", references=refs)
+        assert result.references[0].title == "doc.pdf"
+
+
 class TestRetrievalBackendProtocol:
     def test_structural_subtyping(self) -> None:
         class FakeBackend:

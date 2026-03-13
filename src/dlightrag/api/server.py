@@ -214,6 +214,7 @@ async def answer(body: AnswerRequest, request: Request):
         return {
             "answer": result.answer,
             "contexts": result.contexts,
+            "references": [r.model_dump() for r in result.references] if result.references else [],
             "sources": [s.model_dump() for s in sources],
         }
 
@@ -241,6 +242,10 @@ async def answer(body: AnswerRequest, request: Request):
             else:
                 async for chunk in token_iter:
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+            # Emit structured references if available (from AnswerStream)
+            if hasattr(token_iter, "references") and token_iter.references:
+                refs_data = [r.model_dump() for r in token_iter.references]
+                yield f"data: {json.dumps({'type': 'references', 'data': refs_data}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
             logger.exception("Error during SSE streaming")
