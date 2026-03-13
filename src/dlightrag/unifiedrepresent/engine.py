@@ -89,6 +89,7 @@ class UnifiedRepresentEngine:
             rerank_backend=(config.rerank_backend if config.enable_rerank else None),
             path_resolver=path_resolver,
             embedder=self.embedder,
+            provider=config.effective_vision_provider,
         )
 
     # ------------------------------------------------------------------
@@ -282,6 +283,7 @@ class UnifiedRepresentEngine:
         return RetrievalResult(
             answer=result.get("answer"),
             contexts=result.get("contexts", {}),
+            references=result.get("references", []),
         )
 
     async def aanswer_stream(
