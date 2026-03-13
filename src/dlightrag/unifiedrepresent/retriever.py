@@ -536,7 +536,7 @@ class VisualRetriever:
                         else:
                             resp = await vision_model_func(text_prompt)
                     score = self._parse_rerank_score(resp)
-                    logger.info("[Visual Rerank] chunk=%s score=%.2f", cid, score)
+                    logger.debug("[Visual Rerank] chunk=%s score=%.2f", cid, score)
                     return cid, score
                 except Exception:
                     logger.warning("VLM rerank failed for chunk %s", cid, exc_info=True)
