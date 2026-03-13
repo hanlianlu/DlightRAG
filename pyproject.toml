@@ -40,9 +40,10 @@ dependencies = [
     "jinja2>=3.1",
     "markdown-it-py[plugins]>=3.0",
     "pygments>=2.17",
-    # LLM providers (Anthropic, Google Gemini)
+    # LLM providers (Anthropic, Google Gemini, Ollama)
     "anthropic>=0.84.0",
     "google-genai>=1.65.0",
+    "ollama>=0.4.0",
 ]
 
 [dependency-groups]
