@@ -36,15 +36,14 @@ def _lazy_imports():
     """Lazy imports for heavy modules — only loaded when accessed."""
     from dlightrag.core.retrieval.protocols import RetrievalResult
     from dlightrag.core.service import RAGService
+    from dlightrag.core.servicemanager import RAGServiceManager
 
-    return RAGService, RetrievalResult
+    return RAGService, RAGServiceManager, RetrievalResult
 
 
 # Re-export for convenience (lazy to avoid heavy import on package load)
 def __getattr__(name: str):
-    if name in ("RAGService", "RetrievalResult"):
-        RAGService, RetrievalResult = _lazy_imports()
-        if name == "RAGService":
-            return RAGService
-        return RetrievalResult
+    if name in ("RAGService", "RAGServiceManager", "RetrievalResult"):
+        RAGService, RAGServiceManager, RetrievalResult = _lazy_imports()
+        return {"RAGService": RAGService, "RAGServiceManager": RAGServiceManager, "RetrievalResult": RetrievalResult}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

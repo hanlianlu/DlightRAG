@@ -169,7 +169,7 @@ data: {"type":"references","data":[{"id":1,"title":"report.pdf"}]}
 data: {"type":"done"}
 ```
 
-**Additional REST parameters:** `workspaces` (list, for federated search), `conversation_history` (list, for answer only).
+**Additional REST parameters:** `workspaces` (list, for federated search).
 
 ### MCP Server
 
