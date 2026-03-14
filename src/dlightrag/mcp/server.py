@@ -141,18 +141,6 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of top results to retrieve",
                     },
-                    "conversation_history": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "role": {"type": "string", "enum": ["user", "assistant"]},
-                                "content": {"type": "string"},
-                            },
-                            "required": ["role", "content"],
-                        },
-                        "description": "Previous conversation turns for multi-turn context",
-                    },
                     "workspaces": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -235,15 +223,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         if name == "answer":
             manager = await _ensure_manager()
-            kwargs: dict[str, Any] = {}
-            if arguments.get("conversation_history"):
-                kwargs["conversation_history"] = arguments["conversation_history"]
             result = await manager.aanswer(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
                 mode=arguments.get("mode", "mix"),
                 top_k=arguments.get("top_k"),
-                **kwargs,
             )
             return [
                 TextContent(
