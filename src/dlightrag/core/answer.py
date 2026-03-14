@@ -15,7 +15,10 @@ from typing import Any
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import parse_freetext_references
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.models.llm import provider_supports_structured_vision
+from dlightrag.models.llm import (
+    provider_supports_structured_text,
+    provider_supports_structured_vision,
+)
 from dlightrag.models.schemas import StructuredAnswer
 from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
 from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
@@ -28,8 +31,13 @@ class AnswerEngine:
     """Mode-agnostic answer generator with citation support.
 
     Inspects chunks for ``image_data`` to route between VLM (multimodal)
-    and LLM (text-only) paths. Uses ``provider_supports_structured_vision``
-    to auto-detect whether to request structured JSON output.
+    and LLM (text-only) paths. Both paths support structured JSON output
+    when the provider allows it:
+
+    - VLM path: passes ``response_schema`` (our custom param handled by
+      ``get_vision_model_func``).
+    - Text path: passes ``response_format`` (OpenAI SDK param handled by
+      LightRAG's ``openai_complete_if_cache``).
     """
 
     def __init__(
@@ -64,10 +72,14 @@ class AnswerEngine:
             logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
-        # Structured output only for VLM path (our custom vision func).
-        # Text-only LLM path uses LightRAG's model func which doesn't
-        # support response_schema — always freetext with ref parsing.
-        structured = has_images and provider_supports_structured_vision(self.provider)
+        # Structured output uses different params per path:
+        #  - VLM: response_schema (our vision func)
+        #  - Text: response_format (OpenAI SDK via openai_complete_if_cache)
+        structured = (
+            provider_supports_structured_vision(self.provider)
+            if has_images
+            else provider_supports_structured_text(self.provider)
+        )
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
 
@@ -100,12 +112,19 @@ class AnswerEngine:
                 logger.info("[AE] generate: VLM freetext path")
                 raw = await model_func(user_prompt, messages=messages)
         else:
-            # Text-only LLM path — always freetext
-            logger.info("[AE] generate: LLM text freetext path")
-            raw = await model_func(
-                user_prompt,
-                system_prompt=system_prompt,
-            )
+            if structured:
+                logger.info("[AE] generate: LLM text structured path, sending response_format")
+                raw = await model_func(
+                    user_prompt,
+                    system_prompt=system_prompt,
+                    response_format=StructuredAnswer,
+                )
+            else:
+                logger.info("[AE] generate: LLM text freetext path")
+                raw = await model_func(
+                    user_prompt,
+                    system_prompt=system_prompt,
+                )
 
         logger.info(
             "[AE] generate: LLM returned type=%s len=%d first200=%s",
@@ -155,8 +174,11 @@ class AnswerEngine:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        # Structured output only for VLM path (see generate() comment).
-        structured = has_images and provider_supports_structured_vision(self.provider)
+        structured = (
+            provider_supports_structured_vision(self.provider)
+            if has_images
+            else provider_supports_structured_text(self.provider)
+        )
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
 
@@ -189,13 +211,21 @@ class AnswerEngine:
                 response_schema=StructuredAnswer if structured else None,
             )
         else:
-            # Text-only LLM path — always freetext, no response_schema
-            logger.info("[AE] generate_stream: LLM text freetext path")
-            token_iterator = await model_func(
-                user_prompt,
-                system_prompt=system_prompt,
-                stream=True,
-            )
+            if structured:
+                logger.info("[AE] generate_stream: LLM text structured path, response_format")
+                token_iterator = await model_func(
+                    user_prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                    response_format=StructuredAnswer,
+                )
+            else:
+                logger.info("[AE] generate_stream: LLM text freetext path")
+                token_iterator = await model_func(
+                    user_prompt,
+                    system_prompt=system_prompt,
+                    stream=True,
+                )
 
         logger.info(
             "[AE] generate_stream: model_func returned type=%s",

@@ -207,6 +207,27 @@ def provider_supports_structured_vision(provider: str) -> bool:
     return provider in _STRUCTURED_VISION_PROVIDERS
 
 
+# Providers whose text LLM func (openai_complete_if_cache or azure equivalent)
+# supports response_format for structured JSON output.
+# Anthropic / Google Gemini use separate LLM funcs that don't handle
+# response_format the same way. Ollama has unreliable schema enforcement.
+_STRUCTURED_TEXT_PROVIDERS = frozenset(
+    {
+        "openai",
+        "azure_openai",
+        "qwen",
+        "minimax",
+        "openrouter",
+        "xinference",
+    }
+)
+
+
+def provider_supports_structured_text(provider: str) -> bool:
+    """Whether the text LLM func supports response_format for structured output."""
+    return provider in _STRUCTURED_TEXT_PROVIDERS
+
+
 def _build_openai_vision_func(
     cfg: DlightragConfig,
     vision_deployment: str,
