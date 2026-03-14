@@ -245,8 +245,20 @@ class RAGServiceManager:
 
     # --- Management ---
 
-    async def list_workspaces(self) -> list[str]:
-        """Discover available workspaces based on storage backend."""
+    async def list_workspaces(self, *, compatible_only: bool = False) -> list[str]:
+        """Discover available workspaces.
+
+        Args:
+            compatible_only: If True, filter to workspaces whose embedding
+                model matches the current global config (PG-only).
+        """
+        all_ws = await self._list_all_workspaces()
+        if not compatible_only:
+            return all_ws
+        return await self._filter_compatible(all_ws)
+
+    async def _list_all_workspaces(self) -> list[str]:
+        """Internal: discover all workspaces regardless of compatibility."""
         config = self._config
 
         if config.kv_storage.startswith("PG"):
@@ -286,6 +298,36 @@ class RAGServiceManager:
         if config.workspace not in cached:
             cached.append(config.workspace)
         return sorted(cached)
+
+    async def _filter_compatible(self, workspaces: list[str]) -> list[str]:
+        """Filter workspaces to those using the same embedding model."""
+        if not self._config.kv_storage.startswith("PG"):
+            return workspaces  # non-PG: no metadata, all compatible
+        compatible = []
+        try:
+            import asyncpg
+
+            conn = await asyncpg.connect(
+                host=self._config.postgres_host,
+                port=self._config.postgres_port,
+                user=self._config.postgres_user,
+                password=self._config.postgres_password,
+                database=self._config.postgres_database,
+            )
+            try:
+                for ws in workspaces:
+                    row = await conn.fetchrow(
+                        "SELECT embedding_model FROM dlightrag_workspace_meta WHERE workspace = $1",
+                        ws,
+                    )
+                    if row is None or row["embedding_model"] == self._config.embedding_model:
+                        compatible.append(ws)
+            finally:
+                await conn.close()
+        except Exception:
+            logger.debug("workspace compatibility filter failed, returning all", exc_info=True)
+            return workspaces
+        return compatible
 
     def _discover_filesystem_workspaces(self) -> list[str]:
         """Scan working_dir for subdirectories containing LightRAG data files."""
