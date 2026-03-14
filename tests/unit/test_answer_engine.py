@@ -153,36 +153,37 @@ class TestAnswerEngineGenerateVLM:
 class TestAnswerEngineGenerateStructured:
     """Test structured JSON parsing with providers that support it."""
 
-    async def test_structured_json_parsing(self) -> None:
+    async def test_structured_vlm_json_parsing(self) -> None:
+        """VLM structured path parses JSON with references."""
         structured_json = json.dumps(
             {
                 "answer": "Revenue grew 15% [1-1].",
                 "references": [{"id": 1, "title": "report.pdf"}],
             }
         )
-        llm_func = AsyncMock(return_value=structured_json)
-        engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
+        vlm_func = AsyncMock(return_value=structured_json)
+        engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
 
-        result = await engine.generate("What is revenue?", _text_contexts())
+        result = await engine.generate("What is revenue?", _image_contexts())
 
         assert result.answer == "Revenue grew 15% [1-1]."
         assert len(result.references) == 1
         assert result.references[0].id == 1
         assert result.references[0].title == "report.pdf"
 
-    async def test_structured_text_path_passes_response_schema(self) -> None:
-        """Text-only structured path must pass response_schema to LLM."""
-        structured_json = json.dumps({"answer": "Answer.", "references": []})
-        llm_func = AsyncMock(return_value=structured_json)
+    async def test_text_only_never_passes_response_schema(self) -> None:
+        """Text-only path always uses freetext — no response_schema to LLM."""
+        raw = "Answer text.\n\n### References\n[1] report.pdf"
+        llm_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
 
         await engine.generate("query", _text_contexts())
 
         _, kwargs = llm_func.call_args
-        assert kwargs.get("response_schema") is StructuredAnswer
+        assert "response_schema" not in kwargs
 
-    async def test_structured_parse_failure_degrades_to_freetext_parsing(self) -> None:
-        """If JSON parsing fails, try freetext reference extraction."""
+    async def test_text_only_freetext_extracts_references(self) -> None:
+        """Text-only path extracts references from freetext output."""
         raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
         llm_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
@@ -282,12 +283,30 @@ class TestAnswerEngineGenerateStream:
         assert "messages" in kwargs
         assert kwargs["stream"] is True
 
-    async def test_stream_structured_wraps_with_answer_stream(self) -> None:
-        """Structured providers should wrap the iterator with AnswerStream."""
+    async def test_stream_vlm_structured_wraps_with_answer_stream(self) -> None:
+        """VLM structured providers should wrap the iterator with AnswerStream."""
 
         async def mock_stream():
             for token in ['{"answer": "hello', " world", '", "references": []}']:
                 yield token
+
+        vlm_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
+
+        contexts = _image_contexts()
+        _, token_iter = await engine.generate_stream("query", contexts)
+
+        assert token_iter is not None
+        # For VLM structured providers, should be wrapped in AnswerStream
+        from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
+
+        assert isinstance(token_iter, AnswerStreamCls)
+
+    async def test_stream_text_only_not_wrapped(self) -> None:
+        """Text-only path should NOT wrap with AnswerStream (always freetext)."""
+
+        async def mock_stream():
+            yield "plain answer text"
 
         llm_func = AsyncMock(return_value=mock_stream())
         engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
@@ -296,10 +315,9 @@ class TestAnswerEngineGenerateStream:
         _, token_iter = await engine.generate_stream("query", contexts)
 
         assert token_iter is not None
-        # For structured providers, should be wrapped in AnswerStream
         from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
 
-        assert isinstance(token_iter, AnswerStreamCls)
+        assert not isinstance(token_iter, AnswerStreamCls)
 
 
 # ---------------------------------------------------------------------------
@@ -508,11 +526,13 @@ class TestAnswerEngineFreetextReferences:
 
 
 class TestAnswerEngineStreamStructured:
-    """Test streaming text-only path passes response_schema when structured."""
+    """Test streaming paths handle response_schema correctly."""
 
-    async def test_stream_text_structured_passes_response_schema(self) -> None:
+    async def test_stream_text_never_passes_response_schema(self) -> None:
+        """Text-only path should never pass response_schema (always freetext)."""
+
         async def mock_stream():
-            yield '{"answer": "hello", "references": []}'
+            yield "plain text answer"
 
         llm_func = AsyncMock(return_value=mock_stream())
         engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
@@ -520,7 +540,7 @@ class TestAnswerEngineStreamStructured:
         await engine.generate_stream("query", _text_contexts())
 
         _, kwargs = llm_func.call_args
-        assert kwargs.get("response_schema") is StructuredAnswer
+        assert "response_schema" not in kwargs
         assert kwargs.get("stream") is True
 
     async def test_stream_text_freetext_no_response_schema(self) -> None:
