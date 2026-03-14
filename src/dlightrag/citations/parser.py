@@ -11,6 +11,8 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+from dlightrag.models.schemas import Reference
+
 if TYPE_CHECKING:
     from .indexer import CitationIndexer
 
@@ -112,3 +114,35 @@ def clean_invalid_citations(indexer: CitationIndexer, answer_text: str) -> str:
     text = CITATION_PATTERN.sub(_replace_chunk, answer_text)
     text = DOC_CITATION_PATTERN.sub(_replace_doc, text)
     return text
+
+
+# Heading regex used by parse_freetext_references
+_REFERENCES_HEADING_RE = re.compile(r"(?m)^#{1,3}\s*references\s*$", re.IGNORECASE)
+
+
+def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
+    """Extract references from freetext LLM output.
+
+    Looks for a ``### References`` section at the end of the response
+    with lines like ``[n] Document Title`` or ``- [n] Document Title``.
+    Returns ``(answer_text, references)`` where *answer_text* has the
+    references section stripped.
+    """
+    parts = _REFERENCES_HEADING_RE.split(raw)
+    if len(parts) < 2:
+        return raw, []
+
+    answer_text = parts[0].rstrip()
+    ref_section = parts[-1]
+
+    refs: list[Reference] = []
+    for match in re.finditer(r"\[(\d+)\]\s*(.+)", ref_section):
+        ref_id = int(match.group(1))
+        title = match.group(2).strip().rstrip(".")
+        refs.append(Reference(id=ref_id, title=title))
+
+    logger.info(
+        "[Parser] parse_freetext_references: found %d refs",
+        len(refs),
+    )
+    return answer_text, refs

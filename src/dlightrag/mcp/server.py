@@ -17,6 +17,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
+from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -229,6 +230,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 mode=arguments.get("mode", "mix"),
                 top_k=arguments.get("top_k"),
             )
+            # Build cited-only sources via CitationProcessor
+            flat_contexts: list[dict[str, Any]] = []
+            for items in result.contexts.values():
+                if isinstance(items, list):
+                    flat_contexts.extend(items)
+            all_sources = build_sources(result.contexts)
+            if result.answer and flat_contexts:
+                processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
+                cited = processor.process(result.answer)
+                sources = cited.sources
+            else:
+                sources = []
             return [
                 TextContent(
                     type="text",
@@ -236,7 +249,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                         {
                             "answer": result.answer,
                             "contexts": result.contexts,
-                            "sources": [s.model_dump() for s in build_sources(result.contexts)],
+                            "references": [r.model_dump() for r in result.references]
+                            if result.references
+                            else [],
+                            "sources": [s.model_dump() for s in sources],
                         },
                         default=str,
                         indent=2,

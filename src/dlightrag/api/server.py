@@ -19,6 +19,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from starlette.responses import RedirectResponse
 
+from dlightrag.citations.parser import parse_freetext_references
+from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
@@ -207,22 +209,18 @@ async def answer(body: AnswerRequest, request: Request):
             chunk_top_k=body.chunk_top_k,
             **kwargs,
         )
-        sources = build_sources(result.contexts)
-        # Log references before returning
-        try:
-            from dlightrag.utils.logging import log_references
-
-            log_references(
-                "api.answer_response",
-                getattr(result, "references", []),
-                query=body.query,
-                workspaces=body.workspaces,
-                mode=body.mode,
-            )
-        except Exception:
-            import logging
-
-            logging.getLogger("dlightrag.answer").debug("log_references failed", exc_info=True)
+        # Build cited-only sources via CitationProcessor
+        flat_contexts: list[dict[str, Any]] = []
+        for items in result.contexts.values():
+            if isinstance(items, list):
+                flat_contexts.extend(items)
+        all_sources = build_sources(result.contexts)
+        if result.answer and flat_contexts:
+            processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
+            cited = processor.process(result.answer)
+            sources = cited.sources
+        else:
+            sources = []
         return {
             "answer": result.answer,
             "contexts": result.contexts,
@@ -240,29 +238,53 @@ async def answer(body: AnswerRequest, request: Request):
         **kwargs,
     )
 
-    sources = build_sources(contexts)
-
     async def event_generator() -> AsyncIterator[str]:
-        yield f"data: {json.dumps({'type': 'context', 'data': contexts, 'sources': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
+        # Send raw contexts first (sources computed after answer completes)
+        yield f"data: {json.dumps({'type': 'context', 'data': contexts}, ensure_ascii=False)}\n\n"
+        full_answer = ""
         try:
-            # token_iter may be an AsyncIterator, a plain str, or None
-            # depending on the RAG mode and provider capabilities.
             if token_iter is None:
                 pass
             elif isinstance(token_iter, str):
+                full_answer = token_iter
                 yield f"data: {json.dumps({'type': 'token', 'content': token_iter}, ensure_ascii=False)}\n\n"
             else:
                 async for chunk in token_iter:
+                    full_answer += chunk
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
-            # Emit structured references if available (from AnswerStream)
+
+            # Extract references: structured (AnswerStream) or freetext (parse)
             refs = getattr(token_iter, "references", None)
-            if refs:
-                refs_data = [r.model_dump() for r in refs]
-                yield f"data: {json.dumps({'type': 'references', 'data': refs_data}, ensure_ascii=False)}\n\n"
+            if not refs and full_answer:
+                full_answer, parsed_refs = parse_freetext_references(full_answer)
+                refs = parsed_refs or None
+
+            logger.info(
+                "[API] SSE: token_iter type=%s refs_count=%s",
+                type(token_iter).__name__,
+                len(refs) if refs else 0,
+            )
+
+            refs_data = [r.model_dump() for r in refs] if refs else []
+            yield f"data: {json.dumps({'type': 'references', 'data': refs_data}, ensure_ascii=False)}\n\n"
+
+            # Build cited-only sources
+            flat_contexts: list[dict[str, Any]] = []
+            for items in contexts.values():
+                if isinstance(items, list):
+                    flat_contexts.extend(items)
+            all_sources = build_sources(contexts)
+            if full_answer and flat_contexts:
+                processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
+                cited = processor.process(full_answer)
+                sources = cited.sources
+            else:
+                sources = []
+
+            yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:
             logger.exception("Error during SSE streaming")
-            # Return a generic error message to the client to avoid exposing internal details.
             yield f"data: {json.dumps({'type': 'error', 'message': 'Internal server error during streaming'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

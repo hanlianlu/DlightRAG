@@ -19,6 +19,7 @@ from dlightrag.citations import (
     CitationProcessor,
     extract_highlights_for_sources,
 )
+from dlightrag.citations.parser import parse_freetext_references
 from dlightrag.citations.source_builder import build_sources
 
 from .deps import get_manager, get_workspace, templates
@@ -157,13 +158,27 @@ async def answer_stream(
                     full_answer += chunk
                     yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
 
-            # Emit structured references if available (from AnswerStream)
+            # Extract references: structured (AnswerStream) or freetext (parse)
             refs = getattr(token_iter, "references", None)
+            if not refs and full_answer:
+                full_answer, parsed_refs = parse_freetext_references(full_answer)
+                refs = parsed_refs or None
+
+            logger.info(
+                "[WebUI] SSE: token_iter type=%s refs_count=%s",
+                type(token_iter).__name__,
+                len(refs) if refs else 0,
+            )
             if refs:
                 refs_data = [r.model_dump() for r in refs]
                 yield f"event: references\ndata: {json.dumps(refs_data)}\n\n"
+                # Reconstruct references section for display rendering.
+                # The answer text itself is kept clean (no ### References),
+                # but the rendered HTML includes a references block.
+                ref_lines = [f"[{r.id}] {r.title}" for r in refs]
+                full_answer += "\n\n### References\n" + "\n".join(ref_lines)
 
-            # Build sources from contexts
+            # Build cited-only sources
             flat_contexts = []
             for items in contexts.values():
                 if isinstance(items, list):
