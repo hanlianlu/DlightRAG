@@ -248,6 +248,32 @@ async def reset_all(
             if orphans == 0:
                 print("  (none found)")
 
+        # Clean dlightrag_workspace_meta for this workspace
+        if config.kv_storage.startswith("PG"):
+            try:
+                from lightrag.kg.postgres_impl import ClientManager
+
+                db = await ClientManager.get_client()
+                pool = db.pool
+                if pool is not None:
+                    async with pool.acquire() as conn:
+                        # Check if table exists
+                        exists = await conn.fetchval(
+                            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                            "WHERE table_name = 'dlightrag_workspace_meta')"
+                        )
+                        if exists:
+                            if dry_run:
+                                print(f"\n  [DRY RUN] dlightrag_workspace_meta: would delete workspace={config.workspace}")
+                            else:
+                                await conn.execute(
+                                    "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
+                                    config.workspace,
+                                )
+                                print(f"\n  dlightrag_workspace_meta: deleted workspace={config.workspace}")
+            except Exception as exc:
+                print(f"\n  dlightrag_workspace_meta: ERROR — {exc}")
+
         # Clean DlightRAG hash_index if present
         hash_index = getattr(service.ingestion, "_hash_index", None)
         if hash_index is not None and hasattr(hash_index, "clear"):

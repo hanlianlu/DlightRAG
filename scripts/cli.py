@@ -232,6 +232,52 @@ def cmd_answer(args: argparse.Namespace) -> None:
     _print_json(resp.json())
 
 
+def _rewrite_query_sync(question: str, history: list[dict[str, str]]) -> str:
+    """Rewrite a follow-up question into a standalone query using LLM.
+
+    Called from cmd_chat when there is conversation history.
+    Uses the REST API's /answer endpoint with a rewriting prompt.
+    Falls back to the original question on any error.
+    """
+    if not history:
+        return question
+
+    system = (
+        "You are a query rewriter. Given a conversation history and a follow-up "
+        "message, rewrite the follow-up into a standalone search query that "
+        "captures the full intent. Output ONLY the rewritten query, nothing else. "
+        "If the message is already self-contained, return it unchanged."
+    )
+
+    history_text = "\n".join(
+        f"{m['role']}: {m['content']}" for m in history[-20:]
+    )
+
+    rewrite_query = (
+        f"{system}\n\n"
+        f"Conversation history:\n{history_text}\n\n"
+        f"Follow-up message: {question}\n\n"
+        f"Standalone query:"
+    )
+
+    # Use the /answer endpoint as a simple LLM call
+    url = f"{_get_api_url()}/answer"
+    try:
+        resp = httpx.post(
+            url,
+            json={"query": rewrite_query, "mode": "naive"},
+            headers=_headers(),
+            timeout=_get_timeout(),
+        )
+        resp.raise_for_status()
+        rewritten = resp.json().get("answer", "").strip()
+        if rewritten:
+            return rewritten
+    except Exception:
+        pass  # Fall through to original question
+    return question
+
+
 def cmd_chat(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/answer"
     history: list[dict[str, str]] = []
@@ -257,13 +303,14 @@ def cmd_chat(args: argparse.Namespace) -> None:
             print("-- history cleared --\n")
             continue
 
-        payload: dict = {"query": question, "mode": args.mode}
+        # Rewrite follow-up questions into standalone queries
+        standalone_query = _rewrite_query_sync(question, history)
+
+        payload: dict = {"query": standalone_query, "mode": args.mode}
         if args.top_k is not None:
             payload["top_k"] = args.top_k
         if args.workspaces:
             payload["workspaces"] = args.workspaces
-        if history:
-            payload["conversation_history"] = history
 
         try:
             resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
@@ -287,7 +334,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
                 print(f"  Sources: {', '.join(sorted(titles))}")
         print()
 
-        # Append this turn to history
+        # Append this turn to history (original question, not rewritten)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer_text})
 
