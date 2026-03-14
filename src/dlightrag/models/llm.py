@@ -90,17 +90,29 @@ def get_llm_model_func(
         # model must be positional (1st arg) so that callers passing
         # prompt as 1st positional arg (e.g. RAGAnything modal processors)
         # don't collide with a keyword `model`.
-        return partial(openai_complete_if_cache, model, api_key=api_key, base_url=base_url)
+        base = partial(openai_complete_if_cache, model, api_key=api_key, base_url=base_url)
+
+        async def llm_func(prompt, **kwargs):
+            return await base(prompt, **kwargs)
+
+        llm_func.supports_structured = True
+        return llm_func
 
     if prov == "azure_openai":
         from lightrag.llm.azure_openai import azure_openai_complete_if_cache
 
-        return partial(
+        base = partial(
             azure_openai_complete_if_cache,
             model,
             api_key=api_key,
             base_url=base_url,
         )
+
+        async def llm_func_azure(prompt, **kwargs):
+            return await base(prompt, **kwargs)
+
+        llm_func_azure.supports_structured = True
+        return llm_func_azure
 
     if prov == "anthropic":
         from lightrag.llm.anthropic import anthropic_complete_if_cache
@@ -133,6 +145,7 @@ def get_llm_model_func(
                 kwargs.pop(k, None)
             return await _ollama_model_if_cache(model, prompt, host=host, **kwargs)
 
+        _ollama_wrapper.supports_structured = False
         return _ollama_wrapper
 
     raise ValueError(f"Unsupported LLM provider: {prov}")
