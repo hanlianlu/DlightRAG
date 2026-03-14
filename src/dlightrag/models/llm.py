@@ -195,7 +195,6 @@ def get_vision_model_func(
     return None
 
 
-
 def _build_openai_vision_func(
     cfg: DlightragConfig,
     vision_deployment: str,
@@ -313,7 +312,7 @@ def _build_openai_vision_func(
             logger.exception("Vision failed %.1fs", time.perf_counter() - t0)
             return ""
 
-    vision_model_func.supports_structured = (provider not in ("ollama", "xinference"))
+    vision_model_func.supports_structured = provider not in ("ollama", "xinference")
     return vision_model_func
 
 
@@ -695,25 +694,13 @@ def _json_kwargs_for_provider(provider: str) -> dict[str, Any]:
 
 
 def _extract_json(text: str) -> str:
-    """Extract JSON from LLM response (handles markdown fences)."""
-    import re
+    """Extract JSON from LLM response (handles markdown fences).
 
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        return match.group(1).strip()
-    # Try to find raw JSON object — match outermost braces
-    start = text.find("{")
-    if start != -1:
-        depth = 0
-        for i in range(start, len(text)):
-            if text[i] == "{":
-                depth += 1
-            elif text[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
-        return text[start:]
-    return text
+    .. deprecated:: Use :func:`dlightrag.utils.text.extract_json` instead.
+    """
+    from dlightrag.utils.text import extract_json
+
+    return extract_json(text)
 
 
 def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
