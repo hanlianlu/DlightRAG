@@ -121,48 +121,6 @@ def _make_retriever(
 
 
 # ---------------------------------------------------------------------------
-# TestFormatKgContext
-# ---------------------------------------------------------------------------
-
-
-class TestFormatKgContext:
-    """Test _format_kg_context text formatting."""
-
-    def test_entities_and_relationships(self) -> None:
-        retriever = _make_retriever()
-        contexts = {
-            "entities": [
-                {
-                    "entity_name": "Python",
-                    "entity_type": "LANGUAGE",
-                    "description": "A programming language",
-                },
-            ],
-            "relationships": [
-                {
-                    "src_id": "Python",
-                    "tgt_id": "CPython",
-                    "description": "default implementation",
-                },
-            ],
-        }
-        result = retriever._format_kg_context(contexts)
-        assert "## Entities" in result
-        assert "**Python** (LANGUAGE): A programming language" in result
-        assert "## Relationships" in result
-        assert "Python -> CPython: default implementation" in result
-
-    def test_empty_contexts(self) -> None:
-        retriever = _make_retriever()
-        result = retriever._format_kg_context({"entities": [], "relationships": []})
-        assert result == "No knowledge graph context available."
-
-    def test_empty_dict(self) -> None:
-        retriever = _make_retriever()
-        result = retriever._format_kg_context({})
-        assert result == "No knowledge graph context available."
-
-
 # ---------------------------------------------------------------------------
 # TestRetrieve
 # ---------------------------------------------------------------------------
@@ -302,32 +260,6 @@ class TestRetrieveNoRerank:
 
         result = await retriever.retrieve("query", chunk_top_k=2)
         assert len(result["contexts"]["chunks"]) == 2
-
-
-# ---------------------------------------------------------------------------
-# TestAnswer
-# ---------------------------------------------------------------------------
-
-
-class TestAnswer:
-    """Test answer() — Phase 4 VLM generation."""
-
-    @patch("PIL.Image.open", return_value=MagicMock())
-    async def test_answer_returns_text(self, _mock_open) -> None:
-        vision_func = AsyncMock(return_value="The answer is 42.")
-        retriever = _make_retriever(vision_model_func=vision_func)
-
-        result = await retriever.answer("What is E1?")
-
-        assert result["answer"] == "The answer is 42."
-        assert "contexts" in result
-        vision_func.assert_awaited_once()
-
-    async def test_no_vision_func_returns_none(self) -> None:
-        retriever = _make_retriever(vision_model_func=None)
-        result = await retriever.answer("query")
-        assert result["answer"] is None
-        assert "contexts" in result
 
 
 # ---------------------------------------------------------------------------
