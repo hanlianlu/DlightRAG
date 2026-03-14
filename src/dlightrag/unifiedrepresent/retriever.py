@@ -43,7 +43,6 @@ class VisualRetriever:
         rerank_backend: str | None = None,
         path_resolver: PathResolver | None = None,
         embedder: Any | None = None,
-        provider: str = "openai",
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -53,7 +52,6 @@ class VisualRetriever:
         self.rerank_base_url = rerank_base_url
         self.rerank_api_key = rerank_api_key
         self.rerank_backend = rerank_backend
-        self.provider = provider
         self.path_resolver = path_resolver
         self.embedder = embedder
 
@@ -366,11 +364,10 @@ class VisualRetriever:
         """
         import asyncio
 
-        from dlightrag.models.llm import provider_supports_structured
         from dlightrag.models.schemas import VisualRerankScore
         from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
 
-        use_schema = provider_supports_structured(self.provider, vision=True)
+        use_schema = getattr(self.vision_model_func, 'supports_structured', False)
 
         if not resolved or not self.vision_model_func:
             return dict(list(resolved.items())[:top_k])
