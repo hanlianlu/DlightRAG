@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.core.federation import (
-    federated_answer,
     federated_retrieve,
     merge_results,
 )
@@ -59,22 +58,21 @@ class TestMergeResults:
 
         assert len(merged.contexts["chunks"]) == 5
 
-    def test_answers_concatenated(self) -> None:
+    def test_answer_always_none(self) -> None:
         r1 = _make_result(answer="Answer from A")
         r2 = _make_result(answer="Answer from B")
 
         merged = merge_results([r1, r2], ["ws-a", "ws-b"])
 
-        assert "Answer from A" in merged.answer
-        assert "Answer from B" in merged.answer
+        assert merged.answer is None
 
-    def test_none_answers_skipped(self) -> None:
-        r1 = _make_result(answer=None)
-        r2 = _make_result(answer="Only B answered")
+    def test_references_empty(self) -> None:
+        r1 = _make_result(chunks=[{"id": "a1"}])
+        r2 = _make_result(chunks=[{"id": "b1"}])
 
         merged = merge_results([r1, r2], ["ws-a", "ws-b"])
 
-        assert merged.answer == "Only B answered"
+        assert merged.references == []
 
     def test_empty_results(self) -> None:
         merged = merge_results([], [])
@@ -187,37 +185,3 @@ class TestFederatedRetrieve:
         result = await federated_retrieve("query", [], get_svc)
 
         assert result.contexts["chunks"] == []
-
-
-class TestFederatedAnswer:
-    """Test federated_answer orchestration."""
-
-    @pytest.mark.asyncio
-    async def test_single_workspace_uses_aanswer(self) -> None:
-        mock_svc = AsyncMock()
-        mock_svc.aanswer.return_value = _make_result(chunks=[{"id": "c1"}], answer="The answer")
-
-        async def get_svc(ws: str):
-            return mock_svc
-
-        result = await federated_answer("query", ["ws-only"], get_svc)
-
-        mock_svc.aanswer.assert_awaited_once()
-        assert result.answer == "The answer"
-
-    @pytest.mark.asyncio
-    async def test_multi_workspace_merges_answers(self) -> None:
-        svc_a = AsyncMock()
-        svc_a.aanswer.return_value = _make_result(answer="Answer A")
-        svc_b = AsyncMock()
-        svc_b.aanswer.return_value = _make_result(answer="Answer B")
-
-        services = {"a": svc_a, "b": svc_b}
-
-        async def get_svc(ws: str):
-            return services[ws]
-
-        result = await federated_answer("query", ["a", "b"], get_svc)
-
-        assert "Answer A" in result.answer
-        assert "Answer B" in result.answer
