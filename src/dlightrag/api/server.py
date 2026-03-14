@@ -222,7 +222,7 @@ async def answer(body: AnswerRequest, request: Request):
         except Exception:
             import logging
 
-            logging.getLogger("dlightrag.references").debug("log_references failed", exc_info=True)
+            logging.getLogger("dlightrag.answer").debug("log_references failed", exc_info=True)
         return {
             "answer": result.answer,
             "contexts": result.contexts,
