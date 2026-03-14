@@ -15,7 +15,7 @@ import logging
 import os
 import platform
 import sys
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +91,7 @@ from lightrag.utils import EmbeddingFunc  # noqa: E402
 from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
 from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
 from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult  # noqa: E402
+from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     get_embedding_func,
     get_llm_model_func,
@@ -783,65 +782,6 @@ class RAGService:
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             is_reretrieve=is_reretrieve,
-            **kwargs,
-        )
-
-    def _truncate_history(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Truncate conversation_history in kwargs (single point of truncation)."""
-        history = kwargs.get("conversation_history")
-        if history:
-            kwargs["conversation_history"] = truncate_conversation_history(
-                history,
-                max_messages=self.config.max_conversation_turns * 2,
-                max_tokens=self.config.max_conversation_tokens,
-            )
-        return kwargs
-
-    async def aanswer(
-        self,
-        query: str,
-        multimodal_content: list[dict[str, Any]] | None = None,
-        mode: Literal["local", "global", "hybrid", "naive", "mix"] | None = "mix",
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        **kwargs: Any,
-    ) -> RetrievalResult:
-        """Retrieve contexts and generate an LLM answer."""
-        self._ensure_initialized()
-        backend = self._effective_backend
-        if not backend:
-            raise RuntimeError("Retrieval backend not initialized")
-        self._truncate_history(kwargs)
-        return await backend.aanswer(
-            query,
-            multimodal_content=multimodal_content,
-            mode=mode,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            **kwargs,
-        )
-
-    async def aanswer_stream(
-        self,
-        query: str,
-        multimodal_content: list[dict[str, Any]] | None = None,
-        mode: Literal["local", "global", "hybrid", "naive", "mix"] | None = "mix",
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        **kwargs: Any,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str]]:
-        """Streaming answer: retrieve contexts, then stream LLM tokens."""
-        self._ensure_initialized()
-        backend = self._effective_backend
-        if not backend:
-            raise RuntimeError("Retrieval backend not initialized")
-        self._truncate_history(kwargs)
-        return await backend.aanswer_stream(
-            query,
-            multimodal_content=multimodal_content,
-            mode=mode,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
             **kwargs,
         )
 
