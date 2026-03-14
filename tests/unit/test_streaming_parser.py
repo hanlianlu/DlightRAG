@@ -129,3 +129,32 @@ class TestAnswerStream:
             parts.append(token)
         assert "Plain text answer continues here." in "".join(parts)
         assert stream.references == []
+
+    def test_markdown_code_fence_stripped(self) -> None:
+        """JSON wrapped in ```json ... ``` fences should be parsed correctly."""
+        parser = StreamingAnswerParser()
+        tokens = [
+            "```json\n",
+            '{"answer": "Hello',
+            ' world", "references": []}',
+            "\n```",
+        ]
+        parts = []
+        for t in tokens:
+            out = parser.feed(t)
+            if out:
+                parts.append(out)
+        result = parser.finish()
+        assert "".join(parts) == "Hello world"
+        assert result.answer == "Hello world"
+        assert result.references == []
+
+    def test_code_fence_single_chunk(self) -> None:
+        """Full fenced JSON in one chunk."""
+        parser = StreamingAnswerParser()
+        raw = '```json\n{"answer": "Test answer.", "references": [{"id": 1, "title": "doc.pdf"}]}\n```'
+        emitted = parser.feed(raw)
+        result = parser.finish()
+        assert "Test answer." in emitted
+        assert result.answer == "Test answer."
+        assert len(result.references) == 1

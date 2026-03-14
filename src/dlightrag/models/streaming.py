@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from enum import Enum, auto
 
@@ -80,9 +81,13 @@ class StreamingAnswerParser:
             )
             return StructuredAnswer(answer=full, references=[])
 
-        # Try to parse the full accumulated JSON
+        # Try to parse the full accumulated JSON.
+        # Use _extract_json to handle code fences, preamble text, etc.
+        from dlightrag.models.llm import _extract_json
+
+        raw = _extract_json(self._full_json)
         try:
-            data = json.loads(self._full_json)
+            data = json.loads(raw)
             answer = data.get("answer", "")
             raw_refs = data.get("references", [])
             if not isinstance(raw_refs, list):
@@ -114,8 +119,16 @@ class StreamingAnswerParser:
         """Accumulate until we find the answer value start, then switch state."""
         self._buffer += chunk
 
-        # Check if this doesn't look like JSON at all
+        # Strip markdown code fences (```json, ``` JSON, etc.) that some models add.
         stripped = self._buffer.lstrip()
+        fence_match = re.match(r"```\w*\s*\n?", stripped)
+        if fence_match:
+            self._buffer = stripped[fence_match.end():]
+            stripped = self._buffer.lstrip()
+        elif stripped.startswith("```"):
+            return ""  # incomplete fence line, wait for more data
+
+        # Check if this doesn't look like JSON at all
         if stripped and not stripped.startswith("{"):
             logger.info(
                 "[StreamParser] switching to PASSTHROUGH: buffer doesn't start "
