@@ -55,7 +55,7 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="retrieve",
-            description="Query the RAG knowledge base for relevant information.",
+            description="Query the RAG knowledge base for relevant information. Supports structured metadata filters for precise document lookups.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -77,6 +77,18 @@ async def list_tools() -> list[Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Workspace names to search. Omit to search default workspace.",
+                    },
+                    "filters": {
+                        "type": "object",
+                        "description": "Metadata filters for structured queries (filename, doc_author, etc.)",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "filename_pattern": {"type": "string", "description": "SQL ILIKE pattern"},
+                            "file_extension": {"type": "string"},
+                            "doc_title": {"type": "string"},
+                            "doc_author": {"type": "string"},
+                            "custom": {"type": "object"},
+                        },
                     },
                 },
                 "required": ["query"],
@@ -201,11 +213,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
         if name == "retrieve":
             manager = await _ensure_manager()
+            kwargs: dict[str, Any] = {}
+            if arguments.get("filters"):
+                from dlightrag.core.retrieval.models import MetadataFilter
+
+                kwargs["filters"] = MetadataFilter(**arguments["filters"])
             result = await manager.aretrieve(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
                 mode=arguments.get("mode", "mix"),
                 top_k=arguments.get("top_k"),
+                **kwargs,
             )
             return [
                 TextContent(

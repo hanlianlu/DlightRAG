@@ -77,6 +77,20 @@ async def _verify_auth(request: Request, config: DlightragConfig = Depends(_get_
 # ═══════════════════════════════════════════════════════════════════
 
 
+class MetadataFilterRequest(BaseModel):
+    """Structured metadata filter for retrieval queries."""
+
+    filename: str | None = None
+    filename_pattern: str | None = None
+    file_extension: str | None = None
+    doc_title: str | None = None
+    doc_author: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    rag_mode: str | None = None
+    custom: dict[str, Any] | None = None
+
+
 class IngestRequest(BaseModel):
     source_type: Literal["local", "azure_blob", "snowflake"]
     path: str | None = None
@@ -87,6 +101,7 @@ class IngestRequest(BaseModel):
     table: str | None = None
     replace: bool | None = None
     workspace: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class RetrieveRequest(BaseModel):
@@ -95,6 +110,7 @@ class RetrieveRequest(BaseModel):
     top_k: int | None = None
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
+    filters: MetadataFilterRequest | None = None
 
 
 class AnswerRequest(BaseModel):
@@ -175,12 +191,20 @@ async def ingest(body: IngestRequest, request: Request) -> dict[str, Any]:
 async def retrieve(body: RetrieveRequest, request: Request) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
     manager = _get_manager(request)
+
+    kwargs: dict[str, Any] = {}
+    if body.filters:
+        from dlightrag.core.retrieval.models import MetadataFilter
+
+        kwargs["filters"] = MetadataFilter(**body.filters.model_dump(exclude_none=True))
+
     result = await manager.aretrieve(
         body.query,
         workspaces=body.workspaces,
         mode=body.mode,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
+        **kwargs,
     )
     sources = build_sources(result.contexts)
     return {
@@ -329,6 +353,64 @@ async def delete_files(body: DeleteRequest, request: Request) -> dict[str, Any]:
             detail="File deletion is not supported in unified RAG mode",
         ) from exc
     return {"results": results, "workspace": ws}
+
+
+# ── Metadata CRUD ─────────────────────────────────────────────────
+
+
+@app.get("/metadata/{doc_id}", dependencies=[Depends(_verify_auth)])
+async def get_metadata(
+    doc_id: str, request: Request, workspace: str | None = Query(default=None)
+) -> dict[str, Any]:
+    """Get document metadata by doc_id."""
+    manager = _get_manager(request)
+    ws = workspace or get_config().workspace
+    svc = await manager._get_service(ws)
+    if svc._metadata_index is None:
+        raise HTTPException(status_code=400, detail="Metadata index not available (non-PG backend)")
+    meta = await svc._metadata_index.get(doc_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"No metadata for doc_id={doc_id}")
+    # Convert non-serializable types
+    result = {}
+    for k, v in meta.items():
+        if hasattr(v, "isoformat"):
+            result[k] = v.isoformat()
+        else:
+            result[k] = v
+    return {"doc_id": doc_id, "metadata": result}
+
+
+@app.put("/metadata/{doc_id}", dependencies=[Depends(_verify_auth)])
+async def update_metadata(
+    doc_id: str, request: Request, workspace: str | None = Query(default=None)
+) -> dict[str, Any]:
+    """Update document metadata (merge with existing)."""
+    manager = _get_manager(request)
+    ws = workspace or get_config().workspace
+    svc = await manager._get_service(ws)
+    if svc._metadata_index is None:
+        raise HTTPException(status_code=400, detail="Metadata index not available (non-PG backend)")
+    body = await request.json()
+    await svc._metadata_index.upsert(doc_id, body)
+    return {"doc_id": doc_id, "status": "updated"}
+
+
+@app.post("/metadata/search", dependencies=[Depends(_verify_auth)])
+async def search_metadata(
+    body: MetadataFilterRequest, request: Request, workspace: str | None = Query(default=None)
+) -> dict[str, Any]:
+    """Search documents by metadata filters."""
+    manager = _get_manager(request)
+    ws = workspace or get_config().workspace
+    svc = await manager._get_service(ws)
+    if svc._metadata_index is None:
+        raise HTTPException(status_code=400, detail="Metadata index not available (non-PG backend)")
+    from dlightrag.core.retrieval.models import MetadataFilter
+
+    filters = MetadataFilter(**body.model_dump(exclude_none=True))
+    doc_ids = await svc._metadata_index.query(filters)
+    return {"doc_ids": doc_ids, "count": len(doc_ids)}
 
 
 @app.get("/health")
