@@ -290,6 +290,13 @@ class RAGService:
         await conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_file_hashes_workspace ON dlightrag_file_hashes(workspace)"
         )
+        # Workspace metadata for compatibility filtering (federated queries)
+        await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
+            workspace TEXT PRIMARY KEY,
+            embedding_model TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        )""")
         logger.info("PostgreSQL schema ensured")
 
     async def _do_initialize(self) -> None:
@@ -668,6 +675,34 @@ class RAGService:
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to shutdown %s worker pool", attr, exc_info=True)
 
+    async def _upsert_workspace_meta(self) -> None:
+        """Record embedding model for this workspace (PG-only, best-effort)."""
+        if not self.config.kv_storage.startswith("PG"):
+            return
+        try:
+            import asyncpg
+
+            conn = await asyncpg.connect(
+                host=self.config.postgres_host,
+                port=self.config.postgres_port,
+                user=self.config.postgres_user,
+                password=self.config.postgres_password,
+                database=self.config.postgres_database,
+            )
+            try:
+                await conn.execute(
+                    """INSERT INTO dlightrag_workspace_meta (workspace, embedding_model)
+                       VALUES ($1, $2)
+                       ON CONFLICT (workspace)
+                       DO UPDATE SET embedding_model = $2, updated_at = NOW()""",
+                    self.config.workspace,
+                    self.config.embedding_model,
+                )
+            finally:
+                await conn.close()
+        except Exception:
+            logger.debug("workspace meta upsert failed", exc_info=True)
+
     # === INGESTION API ===
 
     async def aingest(
@@ -685,6 +720,7 @@ class RAGService:
                 snowflake: query, table
         """
         self._ensure_initialized()
+        await self._upsert_workspace_meta()
 
         # Unified mode
         if self.unified is not None:
