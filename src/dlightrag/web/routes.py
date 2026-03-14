@@ -219,7 +219,7 @@ async def answer_stream(
                             answer_text=result.answer,
                             llm_func=llm_func,
                         ),
-                        timeout=30.0,
+                        timeout=15.0,
                     )
                     highlights_html = _render_partial(
                         "partials/source_panel.html",
