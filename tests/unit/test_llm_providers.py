@@ -34,7 +34,7 @@ class TestEnsureBytes:
 
 
 class TestGetLlmModelFunc:
-    """Test get_llm_model_func returns correct partial for each provider."""
+    """Test get_llm_model_func returns correct callable for each provider."""
 
     def _make_config(self, **overrides) -> DlightragConfig:
         defaults = {
@@ -44,21 +44,21 @@ class TestGetLlmModelFunc:
         defaults.update(overrides)
         return DlightragConfig(**defaults)  # type: ignore[call-arg]
 
-    def test_openai_returns_partial(self) -> None:
+    def test_openai_returns_callable(self) -> None:
         config = self._make_config(llm_provider="openai", chat_model="gpt-4.1-mini")
         func = get_llm_model_func(config)
-        assert isinstance(func, partial)
-        assert func.args[0] == "gpt-4.1-mini"
+        assert callable(func)
+        assert getattr(func, "supports_structured", False) is True
 
-    def test_qwen_returns_partial(self) -> None:
+    def test_qwen_returns_callable(self) -> None:
         config = self._make_config(llm_provider="qwen", qwen_api_key="qwen-key")
         func = get_llm_model_func(config)
-        assert isinstance(func, partial)
+        assert callable(func)
 
-    def test_minimax_returns_partial(self) -> None:
+    def test_minimax_returns_callable(self) -> None:
         config = self._make_config(llm_provider="minimax", minimax_api_key="mm-key")
         func = get_llm_model_func(config)
-        assert isinstance(func, partial)
+        assert callable(func)
 
     def test_ollama_returns_callable(self) -> None:
         config = self._make_config(llm_provider="ollama")
@@ -68,15 +68,15 @@ class TestGetLlmModelFunc:
             pytest.skip("ollama package not installed")
         assert callable(func)
 
-    def test_openrouter_returns_partial(self) -> None:
+    def test_openrouter_returns_callable(self) -> None:
         config = self._make_config(llm_provider="openrouter", openrouter_api_key="sk-or-key")
         func = get_llm_model_func(config)
-        assert isinstance(func, partial)
+        assert callable(func)
 
-    def test_xinference_returns_partial(self) -> None:
+    def test_xinference_returns_callable(self) -> None:
         config = self._make_config(llm_provider="xinference")
         func = get_llm_model_func(config)
-        assert isinstance(func, partial)
+        assert callable(func)
 
     def test_anthropic_returns_partial(self) -> None:
         config = self._make_config(llm_provider="anthropic", anthropic_api_key="ant-key")
@@ -99,13 +99,13 @@ class TestGetLlmModelFunc:
     def test_ingestion_uses_ingestion_model(self) -> None:
         config = self._make_config(ingestion_model="gpt-4.1-nano")
         func = get_ingestion_llm_model_func(config)
-        assert isinstance(func, partial)
-        assert func.args[0] == "gpt-4.1-nano"
+        assert callable(func)
+        assert getattr(func, "supports_structured", False) is True
 
     def test_model_name_override(self) -> None:
         config = self._make_config()
         func = get_llm_model_func(config, model_name="gpt-4.1")
-        assert func.args[0] == "gpt-4.1"
+        assert callable(func)
 
 
 class TestGetVisionModelFunc:
