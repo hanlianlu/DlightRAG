@@ -100,3 +100,15 @@ class TestVisionFuncStructuredAttribute:
         func = get_vision_model_func(self._make_config("google_gemini"))
         assert func is not None
         assert getattr(func, "supports_structured", False) is True
+
+
+class TestLogAnswerProviderOptional:
+    """Test that log_answer_llm_output works with and without provider."""
+
+    def test_log_without_provider(self) -> None:
+        from dlightrag.utils.logging import log_answer_llm_output
+        log_answer_llm_output("test", structured=False, query="q")
+
+    def test_log_with_provider(self) -> None:
+        from dlightrag.utils.logging import log_answer_llm_output
+        log_answer_llm_output("test", structured=False, provider="openai", query="q")
