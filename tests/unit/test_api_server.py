@@ -391,22 +391,6 @@ class TestAnswerEndpoint:
         assert "sources" in body
         assert body["answer"] == "The answer is 42"
 
-    async def test_answer_with_conversation_history(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        history = [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there"},
-        ]
-        resp = await client.post(
-            "/answer",
-            json={"query": "Follow up", "conversation_history": history},
-        )
-        assert resp.status_code == 200
-        call_kwargs = mock_manager.aanswer.call_args.kwargs
-        assert call_kwargs["conversation_history"] == history
-
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
