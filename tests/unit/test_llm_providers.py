@@ -193,30 +193,30 @@ class TestJsonKwargsForProvider:
 
 
 class TestExtractJson:
-    """Test _extract_json handles various LLM response formats."""
+    """Test extract_json handles various LLM response formats."""
 
     def test_raw_json(self) -> None:
-        from dlightrag.models.llm import _extract_json
+        from dlightrag.utils.text import extract_json
 
-        assert _extract_json('{"key": "value"}') == '{"key": "value"}'
+        assert extract_json('{"key": "value"}') == '{"key": "value"}'
 
     def test_markdown_fenced_json(self) -> None:
-        from dlightrag.models.llm import _extract_json
+        from dlightrag.utils.text import extract_json
 
         text = 'Here is the result:\n```json\n{"key": "value"}\n```'
-        assert _extract_json(text) == '{"key": "value"}'
+        assert extract_json(text) == '{"key": "value"}'
 
     def test_text_with_embedded_json(self) -> None:
-        from dlightrag.models.llm import _extract_json
+        from dlightrag.utils.text import extract_json
 
         text = 'Some preamble text {"key": "value"}'
-        assert _extract_json(text) == '{"key": "value"}'
+        assert extract_json(text) == '{"key": "value"}'
 
     def test_json_with_trailing_text(self) -> None:
-        from dlightrag.models.llm import _extract_json
+        from dlightrag.utils.text import extract_json
 
         text = '{"key": "value"} Here is my reasoning...'
-        assert _extract_json(text) == '{"key": "value"}'
+        assert extract_json(text) == '{"key": "value"}'
 
 
 class TestConvertOpenaiToAnthropicMessages:

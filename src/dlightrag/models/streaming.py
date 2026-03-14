@@ -82,10 +82,10 @@ class StreamingAnswerParser:
             return StructuredAnswer(answer=full, references=[])
 
         # Try to parse the full accumulated JSON.
-        # Use _extract_json to handle code fences, preamble text, etc.
-        from dlightrag.models.llm import _extract_json
+        # Use extract_json to handle code fences, preamble text, etc.
+        from dlightrag.utils.text import extract_json
 
-        raw = _extract_json(self._full_json)
+        raw = extract_json(self._full_json)
         try:
             data = json.loads(raw)
             answer = data.get("answer", "")
