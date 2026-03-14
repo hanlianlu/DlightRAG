@@ -78,7 +78,6 @@ def get_answer_system_prompt(structured: bool = False) -> str:
     return _ANSWER_CORE + FREETEXT_REMINDER
 
 
-
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
 Query: {query}

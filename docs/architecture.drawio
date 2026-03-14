@@ -1,29 +1,32 @@
 <mxfile host="65bd71144e">
     <diagram name="DlightRAG Architecture" id="arch">
-        <mxGraphModel dx="398" dy="646" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+        <mxGraphModel dx="883" dy="997" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
                 <mxCell id="interfaces" value="&lt;b style=&#39;font-size:11px;color:#4b5563&#39;&gt;Interfaces&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#9ca3af;strokeWidth=1;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
                     <mxGeometry x="200" y="-6" width="500" height="65" as="geometry"/>
                 </mxCell>
-                <mxCell id="sdk" value="Python SDK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
-                    <mxGeometry x="25" y="22" width="130" height="32" as="geometry"/>
+                <mxCell id="sdk" value="Python SDK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
+                    <mxGeometry x="10" y="22" width="110" height="32" as="geometry"/>
                 </mxCell>
-                <mxCell id="rest" value="REST API :8100" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
-                    <mxGeometry x="180" y="22" width="140" height="32" as="geometry"/>
+                <mxCell id="rest" value="REST API :8100" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
+                    <mxGeometry x="130" y="22" width="120" height="32" as="geometry"/>
                 </mxCell>
-                <mxCell id="mcp" value="MCP :8101" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
-                    <mxGeometry x="345" y="22" width="130" height="32" as="geometry"/>
+                <mxCell id="mcp" value="MCP :8101" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
+                    <mxGeometry x="260" y="22" width="110" height="32" as="geometry"/>
+                </mxCell>
+                <mxCell id="webui" value="Web UI :8100" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;arcSize=50;" vertex="1" parent="interfaces">
+                    <mxGeometry x="380" y="22" width="110" height="32" as="geometry"/>
                 </mxCell>
                 <mxCell id="rsm" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;federation · answer generation · workspace compatibility&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
                     <mxGeometry x="200" y="100" width="500" height="50" as="geometry"/>
                 </mxCell>
                 <mxCell id="ae" value="&lt;b&gt;AnswerEngine&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;prompt · LLM/VLM · citation · streaming&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#66bb6a;strokeWidth=1.5;fontSize=11;fontFamily=Inter;" parent="1" vertex="1">
-                    <mxGeometry x="530" y="185" width="230" height="50" as="geometry"/>
+                    <mxGeometry x="470" y="190" width="230" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="rs" value="&lt;b&gt;RAGService&lt;/b&gt; &amp;ensp; &lt;i style=&#39;color:#6b7280&#39;&gt;ingestion · retrieval&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
-                    <mxGeometry x="200" y="190" width="310" height="40" as="geometry"/>
+                    <mxGeometry x="200" y="190" width="250" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="caption" value="&lt;b style=&#39;font-size:11px;color:#92631a&#39;&gt;Caption Mode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf6ea;strokeColor=#d4a85c;strokeWidth=1.5;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
                     <mxGeometry x="70" y="310" width="400" height="220" as="geometry"/>
@@ -44,33 +47,30 @@
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="unified" value="&lt;b style=&#39;font-size:11px;color:#3d556e&#39;&gt;Unified Mode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf1f7;strokeColor=#6b83a5;strokeWidth=1.5;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
-                    <mxGeometry x="520" y="310" width="280" height="220" as="geometry"/>
+                    <mxGeometry x="490" y="310" width="310" height="220" as="geometry"/>
                 </mxCell>
                 <mxCell id="ure" value="&lt;b&gt;UnifiedRepresentEngine&lt;/b&gt;&lt;br&gt;page render · multimodal embed&lt;br&gt;VLM extraction · context retrieval" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="unified" vertex="1">
-                    <mxGeometry x="20" y="50.76923076923077" width="240" height="126.9230769230769" as="geometry"/>
+                    <mxGeometry x="22.142857142857146" y="50.76923076923077" width="265.7142857142857" height="126.9230769230769" as="geometry"/>
                 </mxCell>
                 <mxCell id="lr" value="&lt;b style=&#39;font-size:13px&#39;&gt;LightRAG&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#7a5d00&#39;&gt;knowledge graph · vector search&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef0c7;strokeColor=#c48b00;strokeWidth=2;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
                     <mxGeometry x="290" y="585" width="320" height="55" as="geometry"/>
                 </mxCell>
                 <mxCell id="providers" value="&lt;b style=&#39;font-size:11px;color:#4b5563&#39;&gt;LLM Providers&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#9ca3af;strokeWidth=1;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
-                    <mxGeometry x="150" y="695" width="240" height="65" as="geometry"/>
+                    <mxGeometry x="135" y="695" width="270" height="65" as="geometry"/>
                 </mxCell>
                 <mxCell id="p" value="Chat · Vision · Embed · Rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;arcSize=50;" parent="providers" vertex="1">
-                    <mxGeometry x="15" y="26" width="210" height="30.72727272727273" as="geometry"/>
+                    <mxGeometry x="16.875" y="26" width="236.25" height="30.72727272727273" as="geometry"/>
                 </mxCell>
                 <mxCell id="storage" value="&lt;b style=&#39;font-size:11px;color:#4b5563&#39;&gt;Storage Backends&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3f4f6;strokeColor=#9ca3af;strokeWidth=1;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
-                    <mxGeometry x="535" y="695" width="250" height="65" as="geometry"/>
+                    <mxGeometry x="512.5" y="695" width="265" height="65" as="geometry"/>
                 </mxCell>
                 <mxCell id="s" value="PostgreSQL · Neo4j · Milvus · Redis · JSON · ..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="storage" vertex="1">
-                    <mxGeometry x="10" y="26" width="230" height="30.72727272727273" as="geometry"/>
+                    <mxGeometry x="10.600000000000001" y="26" width="243.8" height="30.72727272727273" as="geometry"/>
                 </mxCell>
                 <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="interfaces" target="rsm" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rsm" target="rs" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
-                <mxCell id="e_ae" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#66bb6a;strokeWidth=1.5;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rsm" target="ae" edge="1">
+                <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rsm" target="rs" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="e3" value="rag_mode = caption" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;fontSize=10;fontColor=#6b7280;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rs" target="caption" edge="1">
@@ -104,6 +104,12 @@
                 </mxCell>
                 <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="lr" target="storage" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" value="" style="endArrow=classicThin;startArrow=classicThin;html=1;entryX=0.75;entryY=1;entryDx=0;entryDy=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;edgeStyle=orthogonalEdgeStyle;fillColor=#d5e8d4;strokeColor=#82b366;startFill=1;endFill=1;rounded=0;curved=0;" edge="1" parent="1" source="ae" target="rsm">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="410" y="230" as="sourcePoint"/>
+                        <mxPoint x="460" y="180" as="targetPoint"/>
+                    </mxGeometry>
                 </mxCell>
             </root>
         </mxGraphModel>

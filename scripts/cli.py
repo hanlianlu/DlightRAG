@@ -249,9 +249,7 @@ def _rewrite_query_sync(question: str, history: list[dict[str, str]]) -> str:
         "If the message is already self-contained, return it unchanged."
     )
 
-    history_text = "\n".join(
-        f"{m['role']}: {m['content']}" for m in history[-20:]
-    )
+    history_text = "\n".join(f"{m['role']}: {m['content']}" for m in history[-20:])
 
     rewrite_query = (
         f"{system}\n\n"

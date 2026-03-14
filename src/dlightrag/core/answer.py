@@ -74,9 +74,7 @@ class AnswerEngine:
         )
 
         if has_images:
-            messages = self._build_vlm_messages(
-                system_prompt, user_prompt, contexts["chunks"]
-            )
+            messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
             if structured:
                 raw = await model_func(
                     user_prompt,
@@ -144,9 +142,7 @@ class AnswerEngine:
         )
 
         if has_images:
-            messages = self._build_vlm_messages(
-                system_prompt, user_prompt, contexts["chunks"]
-            )
+            messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
             token_iterator = await model_func(
                 user_prompt,
                 messages=messages,
@@ -173,10 +169,7 @@ class AnswerEngine:
     @staticmethod
     def _has_images(contexts: RetrievalContexts) -> bool:
         """Check if any chunk contains image data."""
-        return any(
-            chunk.get("image_data")
-            for chunk in contexts.get("chunks", [])
-        )
+        return any(chunk.get("image_data") for chunk in contexts.get("chunks", []))
 
     def _select_model_func(self, has_images: bool) -> Callable[..., Any] | None:
         """Select appropriate model function based on content type."""
