@@ -112,14 +112,13 @@ class TestRAGServiceClose:
 
 
 class TestRAGServiceRetrieve:
-    """Test aretrieve and aanswer delegation to RetrievalEngine."""
+    """Test aretrieve delegation to RetrievalEngine."""
 
     def _make_retrieval_service(self, config: DlightragConfig) -> RAGService:
         service = RAGService(config=config)
         service._initialized = True
         service.retrieval = MagicMock()
         service.retrieval.aretrieve = AsyncMock(return_value=MagicMock())
-        service.retrieval.aanswer = AsyncMock(return_value=MagicMock())
         service.rag = MagicMock()
         service.ingestion = MagicMock()
         return service
@@ -140,38 +139,6 @@ class TestRAGServiceRetrieve:
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.aretrieve("query")
-
-
-# ---------------------------------------------------------------------------
-# TestConversationHistoryTruncation
-# ---------------------------------------------------------------------------
-
-
-class TestConversationHistoryTruncation:
-    """Test aanswer delegates to RetrievalEngine (truncation now lives there)."""
-
-    def _make_retrieval_service(self, config: DlightragConfig) -> RAGService:
-        service = RAGService(config=config)
-        service._initialized = True
-        service.retrieval = MagicMock()
-        service.retrieval.aretrieve = AsyncMock(return_value=MagicMock())
-        service.retrieval.aanswer = AsyncMock(return_value=MagicMock())
-        service.rag = MagicMock()
-        service.ingestion = MagicMock()
-        return service
-
-    async def test_aanswer_delegates_to_retrieval(self, test_config):
-        service = self._make_retrieval_service(test_config)
-        await service.aanswer("query", conversation_history=[{"role": "user", "content": "hi"}])
-        service.retrieval.aanswer.assert_awaited_once()
-        call_kwargs = service.retrieval.aanswer.call_args.kwargs
-        assert "conversation_history" in call_kwargs
-
-    async def test_aanswer_none_history_delegates(self, test_config):
-        """None history is passed through to retrieval engine."""
-        service = self._make_retrieval_service(test_config)
-        await service.aanswer("query", conversation_history=None)
-        service.retrieval.aanswer.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -393,26 +360,6 @@ class TestRAGServiceUnifiedMode:
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
         assert result.contexts == {"chunks": []}
-
-    async def test_aanswer_unified_delegates(self, test_config: DlightragConfig) -> None:
-        """Unified mode aanswer delegates directly to unified engine."""
-        from dlightrag.core.retrieval.protocols import RetrievalResult
-
-        expected = RetrievalResult(
-            answer="The answer is 42.",
-            contexts={"chunks": ["c1"]},
-        )
-
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service.unified = MagicMock()
-        service.unified.aanswer = AsyncMock(return_value=expected)
-
-        result = await service.aanswer("what is the answer?")
-        service.unified.aanswer.assert_awaited_once()
-        assert isinstance(result, RetrievalResult)
-        assert result.answer == "The answer is 42."
-        assert result.contexts == {"chunks": ["c1"]}
 
     async def test_close_unified_cleanup(self, test_config: DlightragConfig) -> None:
         """close() calls finalize on visual_chunks and LightRAG storages."""
