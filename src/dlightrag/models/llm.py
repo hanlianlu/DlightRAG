@@ -22,6 +22,7 @@ from typing import Any
 from lightrag.utils import EmbeddingFunc
 
 from dlightrag.config import DlightragConfig
+from dlightrag.utils.text import extract_json
 
 logger = logging.getLogger(__name__)
 
@@ -693,16 +694,6 @@ def _json_kwargs_for_provider(provider: str) -> dict[str, Any]:
     return {}  # anthropic: prompt-only
 
 
-def _extract_json(text: str) -> str:
-    """Extract JSON from LLM response (handles markdown fences).
-
-    .. deprecated:: Use :func:`dlightrag.utils.text.extract_json` instead.
-    """
-    from dlightrag.utils.text import extract_json
-
-    return extract_json(text)
-
-
 def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
     """LLM-based listwise reranker using native LLM function + Pydantic parsing.
 
@@ -752,7 +743,7 @@ def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
                 **json_kwargs,
             )
 
-            parsed = RerankResult.model_validate_json(_extract_json(result_str))
+            parsed = RerankResult.model_validate_json(extract_json(result_str))
 
             seen: set[int] = set()
             results = []
