@@ -64,23 +64,13 @@ def merge_results(
     merged_entities = _round_robin_merge_key(results, workspaces, "entities")
     merged_relations = _round_robin_merge_key(results, workspaces, "relationships")
 
-    # Build merged answer (concatenate non-None answers)
-    answers = [r.answer for r in results if r.answer]
-    merged_answer = "\n\n---\n\n".join(answers) if answers else None
-
-    # Merge references (naive concatenation, no re-numbering)
-    merged_refs = []
-    for r in results:
-        merged_refs.extend(r.references)
-
     return RetrievalResult(
-        answer=merged_answer,
+        answer=None,
         contexts=RetrievalContexts(
             chunks=merged_chunks,
             entities=merged_entities,
             relationships=merged_relations,
         ),
-        references=merged_refs,
     )
 
 
@@ -168,68 +158,6 @@ async def federated_retrieve(
     raw_results = await asyncio.gather(*[_query_workspace(ws) for ws in workspaces])
 
     # Filter out failed workspaces
-    successful_results: list[RetrievalResult] = []
-    successful_workspaces: list[str] = []
-    for ws, result in zip(workspaces, raw_results, strict=True):
-        if isinstance(result, Exception):
-            continue
-        successful_results.append(result)
-        successful_workspaces.append(ws)
-
-    if not successful_results:
-        return RetrievalResult(
-            answer=None,
-            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
-        )
-
-    return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
-
-
-async def federated_answer(
-    query: str,
-    workspaces: list[str],
-    get_service: Callable[[str], Awaitable[Any]],
-    *,
-    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix",
-    top_k: int | None = None,
-    chunk_top_k: int | None = None,
-    workspace_filter: WorkspaceFilter | None = None,
-    **kwargs: Any,
-) -> RetrievalResult:
-    """Execute federated answer (retrieve + LLM) across multiple workspaces.
-
-    Same as federated_retrieve but calls aanswer() on each service.
-    """
-    if workspace_filter is not None:
-        workspaces = await workspace_filter(workspaces)
-
-    if not workspaces:
-        return RetrievalResult(
-            answer=None,
-            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
-        )
-
-    if len(workspaces) == 1:
-        svc = await get_service(workspaces[0])
-        result = await svc.aanswer(
-            query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs
-        )
-        for chunk in result.contexts.get("chunks", []):
-            chunk["_workspace"] = workspaces[0]
-        return result
-
-    async def _query_workspace(ws: str) -> RetrievalResult | Exception:
-        try:
-            svc = await get_service(ws)
-            return await svc.aanswer(
-                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs
-            )
-        except Exception as exc:
-            logger.warning("Federated answer failed for workspace '%s': %s", ws, exc)
-            return exc
-
-    raw_results = await asyncio.gather(*[_query_workspace(ws) for ws in workspaces])
-
     successful_results: list[RetrievalResult] = []
     successful_workspaces: list[str] = []
     for ws, result in zip(workspaces, raw_results, strict=True):
