@@ -45,5 +45,9 @@ def _lazy_imports():
 def __getattr__(name: str):
     if name in ("RAGService", "RAGServiceManager", "RetrievalResult"):
         RAGService, RAGServiceManager, RetrievalResult = _lazy_imports()
-        return {"RAGService": RAGService, "RAGServiceManager": RAGServiceManager, "RetrievalResult": RetrievalResult}[name]
+        return {
+            "RAGService": RAGService,
+            "RAGServiceManager": RAGServiceManager,
+            "RetrievalResult": RetrievalResult,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -564,4 +564,3 @@ class VisualRetriever:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
         ]
-

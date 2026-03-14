@@ -6,12 +6,9 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.schemas import StructuredAnswer
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -135,9 +132,7 @@ class TestAnswerEngineGenerateVLM:
         assert messages[1]["role"] == "user"
         # User content includes image_url block
         user_content = messages[1]["content"]
-        assert any(
-            block.get("type") == "image_url" for block in user_content
-        )
+        assert any(block.get("type") == "image_url" for block in user_content)
 
     async def test_vlm_fallback_to_llm_when_no_vision_func(self) -> None:
         """If no vision_model_func, fall back to llm_model_func for images."""
@@ -186,9 +181,7 @@ class TestAnswerEngineGenerateStructured:
         assert result.references == []
 
     async def test_structured_vlm_sends_response_schema(self) -> None:
-        structured_json = json.dumps(
-            {"answer": "Chart shows growth [1-1].", "references": []}
-        )
+        structured_json = json.dumps({"answer": "Chart shows growth [1-1].", "references": []})
         vlm_func = AsyncMock(return_value=structured_json)
         engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
 
@@ -265,9 +258,7 @@ class TestAnswerEngineGenerateStream:
         engine = AnswerEngine(vision_model_func=vlm_func, provider="ollama")
 
         contexts = _image_contexts()
-        result_contexts, token_iter = await engine.generate_stream(
-            "describe", contexts
-        )
+        result_contexts, token_iter = await engine.generate_stream("describe", contexts)
 
         assert result_contexts is contexts
         assert token_iter is not None
@@ -279,8 +270,9 @@ class TestAnswerEngineGenerateStream:
 
     async def test_stream_structured_wraps_with_answer_stream(self) -> None:
         """Structured providers should wrap the iterator with AnswerStream."""
+
         async def mock_stream():
-            for token in ['{"answer": "hello', ' world', '", "references": []}']:
+            for token in ['{"answer": "hello', " world", '", "references": []}']:
                 yield token
 
         llm_func = AsyncMock(return_value=mock_stream())
@@ -372,13 +364,11 @@ class TestAnswerEngineHelpers:
             }
             for i in range(30)
         ]
-        contexts: RetrievalContexts = {
-            "chunks": [], "entities": entities, "relationships": []
-        }
+        contexts: RetrievalContexts = {"chunks": [], "entities": entities, "relationships": []}
         result = AnswerEngine._format_kg_context(contexts)
         # Should have header + 20 entities = 21 lines in entity section
-        lines = [l for l in result.split("\n") if l.strip()]
-        entity_lines = [l for l in lines if l.startswith("- **")]
+        lines = [line for line in result.split("\n") if line.strip()]
+        entity_lines = [line for line in lines if line.startswith("- **")]
         assert len(entity_lines) == 20
 
     def test_build_user_prompt_contains_all_parts(self) -> None:

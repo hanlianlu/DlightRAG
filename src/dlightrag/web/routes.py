@@ -58,9 +58,7 @@ async def _rewrite_query(
         "If the message is already self-contained, return it unchanged."
     )
 
-    history_text = "\n".join(
-        f"{m['role']}: {m['content']}" for m in conversation_history[-20:]
-    )
+    history_text = "\n".join(f"{m['role']}: {m['content']}" for m in conversation_history[-20:])
 
     user_prompt = (
         f"Conversation history:\n{history_text}\n\n"

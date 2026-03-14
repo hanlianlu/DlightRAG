@@ -264,13 +264,17 @@ async def reset_all(
                         )
                         if exists:
                             if dry_run:
-                                print(f"\n  [DRY RUN] dlightrag_workspace_meta: would delete workspace={config.workspace}")
+                                print(
+                                    f"\n  [DRY RUN] dlightrag_workspace_meta: would delete workspace={config.workspace}"
+                                )
                             else:
                                 await conn.execute(
                                     "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
                                     config.workspace,
                                 )
-                                print(f"\n  dlightrag_workspace_meta: deleted workspace={config.workspace}")
+                                print(
+                                    f"\n  dlightrag_workspace_meta: deleted workspace={config.workspace}"
+                                )
             except Exception as exc:
                 print(f"\n  dlightrag_workspace_meta: ERROR — {exc}")
 
