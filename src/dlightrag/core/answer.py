@@ -61,7 +61,7 @@ class AnswerEngine:
             logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
-        structured = getattr(model_func, 'supports_structured', False)
+        structured = getattr(model_func, "supports_structured", False)
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
 
@@ -84,7 +84,9 @@ class AnswerEngine:
             if structured:
                 logger.info("[AE] generate: VLM structured path")
                 raw = await model_func(
-                    user_prompt, messages=messages, response_format=StructuredAnswer,
+                    user_prompt,
+                    messages=messages,
+                    response_format=StructuredAnswer,
                 )
             else:
                 logger.info("[AE] generate: VLM freetext path")
@@ -93,7 +95,9 @@ class AnswerEngine:
             if structured:
                 logger.info("[AE] generate: LLM text structured path")
                 raw = await model_func(
-                    user_prompt, system_prompt=system_prompt, response_format=StructuredAnswer,
+                    user_prompt,
+                    system_prompt=system_prompt,
+                    response_format=StructuredAnswer,
                 )
             else:
                 logger.info("[AE] generate: LLM text freetext path")
@@ -146,7 +150,7 @@ class AnswerEngine:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        structured = getattr(model_func, 'supports_structured', False)
+        structured = getattr(model_func, "supports_structured", False)
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
 
@@ -164,31 +168,25 @@ class AnswerEngine:
             query=query,
         )
 
+        # NOTE: streaming never passes response_format because
+        # openai_complete_if_cache routes to .parse() which doesn't
+        # support stream=True.  The system_prompt already instructs JSON
+        # output; StreamingAnswerParser handles incremental parsing.
         if has_images:
             messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-            if structured:
-                logger.info("[AE] generate_stream: VLM structured path")
-                token_iterator = await model_func(
-                    user_prompt, messages=messages, stream=True,
-                    response_format=StructuredAnswer,
-                )
-            else:
-                logger.info("[AE] generate_stream: VLM freetext path")
-                token_iterator = await model_func(
-                    user_prompt, messages=messages, stream=True,
-                )
+            logger.info("[AE] generate_stream: VLM %s path", "structured" if structured else "freetext")
+            token_iterator = await model_func(
+                user_prompt,
+                messages=messages,
+                stream=True,
+            )
         else:
-            if structured:
-                logger.info("[AE] generate_stream: LLM text structured path")
-                token_iterator = await model_func(
-                    user_prompt, system_prompt=system_prompt, stream=True,
-                    response_format=StructuredAnswer,
-                )
-            else:
-                logger.info("[AE] generate_stream: LLM text freetext path")
-                token_iterator = await model_func(
-                    user_prompt, system_prompt=system_prompt, stream=True,
-                )
+            logger.info("[AE] generate_stream: LLM text %s path", "structured" if structured else "freetext")
+            token_iterator = await model_func(
+                user_prompt,
+                system_prompt=system_prompt,
+                stream=True,
+            )
 
         logger.info(
             "[AE] generate_stream: model_func returned type=%s",
