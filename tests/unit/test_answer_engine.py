@@ -69,7 +69,6 @@ class TestAnswerEngineGenerateLLM:
         llm_func = AsyncMock(return_value="The answer is 42.")
         engine = AnswerEngine(
             llm_model_func=llm_func,
-            provider="ollama",  # freetext provider
         )
         result = await engine.generate("What is revenue?", _text_contexts())
 
@@ -80,7 +79,7 @@ class TestAnswerEngineGenerateLLM:
 
     async def test_llm_text_path_passes_system_prompt(self) -> None:
         llm_func = AsyncMock(return_value="Answer.")
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
         await engine.generate("query", _text_contexts())
 
         _, kwargs = llm_func.call_args
@@ -90,7 +89,7 @@ class TestAnswerEngineGenerateLLM:
     async def test_contexts_passed_through_unchanged(self) -> None:
         """The original contexts dict should be returned as-is."""
         llm_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
         contexts = _text_contexts()
         result = await engine.generate("q", contexts)
 
@@ -111,7 +110,6 @@ class TestAnswerEngineGenerateVLM:
         vlm_func = AsyncMock(return_value="Image analysis result.")
         engine = AnswerEngine(
             vision_model_func=vlm_func,
-            provider="ollama",  # freetext
         )
         result = await engine.generate("Describe the chart", _image_contexts())
 
@@ -120,7 +118,7 @@ class TestAnswerEngineGenerateVLM:
 
     async def test_vlm_path_uses_messages_with_images(self) -> None:
         vlm_func = AsyncMock(return_value="result")
-        engine = AnswerEngine(vision_model_func=vlm_func, provider="ollama")
+        engine = AnswerEngine(vision_model_func=vlm_func)
         await engine.generate("query", _image_contexts())
 
         _, kwargs = vlm_func.call_args
@@ -137,7 +135,7 @@ class TestAnswerEngineGenerateVLM:
     async def test_vlm_fallback_to_llm_when_no_vision_func(self) -> None:
         """If no vision_model_func, fall back to llm_model_func for images."""
         llm_func = AsyncMock(return_value="fallback answer")
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
         result = await engine.generate("query", _image_contexts())
 
         # Should use llm_func since vision_model_func is None
@@ -162,7 +160,8 @@ class TestAnswerEngineGenerateStructured:
             }
         )
         vlm_func = AsyncMock(return_value=structured_json)
-        engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
+        vlm_func.supports_structured = True
+        engine = AnswerEngine(vision_model_func=vlm_func)
 
         result = await engine.generate("What is revenue?", _image_contexts())
 
@@ -177,7 +176,8 @@ class TestAnswerEngineGenerateStructured:
             {"answer": "Revenue grew 15%.", "references": [{"id": 1, "title": "report.pdf"}]}
         )
         llm_func = AsyncMock(return_value=structured_json)
-        engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
+        llm_func.supports_structured = True
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         result = await engine.generate("query", _text_contexts())
 
@@ -190,7 +190,8 @@ class TestAnswerEngineGenerateStructured:
         """Text-only + non-structured provider (ollama) uses freetext."""
         raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
         llm_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        llm_func.supports_structured = False
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         result = await engine.generate("query", _text_contexts())
 
@@ -203,7 +204,8 @@ class TestAnswerEngineGenerateStructured:
     async def test_structured_vlm_sends_response_format(self) -> None:
         structured_json = json.dumps({"answer": "Chart shows growth [1-1].", "references": []})
         vlm_func = AsyncMock(return_value=structured_json)
-        engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
+        vlm_func.supports_structured = True
+        engine = AnswerEngine(vision_model_func=vlm_func)
 
         await engine.generate("describe chart", _image_contexts())
 
@@ -251,7 +253,7 @@ class TestAnswerEngineGenerateStream:
                 yield token
 
         llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         contexts = _text_contexts()
         result_contexts, token_iter = await engine.generate_stream("query", contexts)
@@ -275,7 +277,7 @@ class TestAnswerEngineGenerateStream:
                 yield token
 
         vlm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(vision_model_func=vlm_func, provider="ollama")
+        engine = AnswerEngine(vision_model_func=vlm_func)
 
         contexts = _image_contexts()
         result_contexts, token_iter = await engine.generate_stream("describe", contexts)
@@ -296,7 +298,8 @@ class TestAnswerEngineGenerateStream:
                 yield token
 
         vlm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
+        vlm_func.supports_structured = True
+        engine = AnswerEngine(vision_model_func=vlm_func)
 
         contexts = _image_contexts()
         _, token_iter = await engine.generate_stream("query", contexts)
@@ -315,7 +318,8 @@ class TestAnswerEngineGenerateStream:
                 yield token
 
         llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
+        llm_func.supports_structured = True
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         contexts = _text_contexts()
         _, token_iter = await engine.generate_stream("query", contexts)
@@ -334,7 +338,8 @@ class TestAnswerEngineGenerateStream:
             yield "plain answer text"
 
         llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        llm_func.supports_structured = False
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         contexts = _text_contexts()
         _, token_iter = await engine.generate_stream("query", contexts)
@@ -429,7 +434,7 @@ class TestAnswerEngineHelpers:
         assert len(entity_lines) == 20
 
     def test_build_user_prompt_contains_all_parts(self) -> None:
-        engine = AnswerEngine(provider="ollama")
+        engine = AnswerEngine()
         contexts = _text_contexts()
         prompt = engine._build_user_prompt("What is revenue?", contexts)
 
@@ -456,7 +461,7 @@ class TestAnswerEngineLogging:
 
     async def test_generate_calls_log_answer_llm_output(self) -> None:
         llm_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
             await engine.generate("query", _text_contexts())
@@ -465,7 +470,7 @@ class TestAnswerEngineLogging:
 
     async def test_generate_calls_log_references(self) -> None:
         llm_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         with patch("dlightrag.core.answer.log_references") as mock_log:
             await engine.generate("query", _text_contexts())
@@ -478,7 +483,7 @@ class TestAnswerEngineLogging:
             yield "token"
 
         llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
             await engine.generate_stream("query", _text_contexts())
@@ -534,7 +539,7 @@ class TestAnswerEngineFreetextReferences:
 
         raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
         llm_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         result = asyncio.get_event_loop().run_until_complete(
             engine.generate("query", _text_contexts())
@@ -560,7 +565,8 @@ class TestAnswerEngineStreamStructured:
             yield '{"answer": "test", "references": []}'
 
         llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
+        llm_func.supports_structured = True
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         await engine.generate_stream("query", _text_contexts())
 
@@ -575,7 +581,8 @@ class TestAnswerEngineStreamStructured:
             yield "plain text"
 
         llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+        llm_func.supports_structured = False
+        engine = AnswerEngine(llm_model_func=llm_func)
 
         await engine.generate_stream("query", _text_contexts())
 
