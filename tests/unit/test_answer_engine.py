@@ -328,8 +328,6 @@ class TestAnswerEngineGenerateStream:
         from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
 
         assert isinstance(token_iter, AnswerStreamCls)
-        _, kwargs = llm_func.call_args
-        assert kwargs.get("response_format") is StructuredAnswer
 
     async def test_stream_text_freetext_not_wrapped(self) -> None:
         """Text-only + non-structured provider should NOT wrap with AnswerStream."""
@@ -556,10 +554,10 @@ class TestAnswerEngineFreetextReferences:
 
 
 class TestAnswerEngineStreamStructured:
-    """Test streaming paths handle response_format correctly."""
+    """Test streaming never passes response_format (incompatible with .parse())."""
 
-    async def test_stream_text_structured_uses_response_format(self) -> None:
-        """Text-only + structured provider passes response_format."""
+    async def test_stream_text_structured_no_response_format(self) -> None:
+        """Structured streaming must NOT pass response_format (would hit .parse())."""
 
         async def mock_stream():
             yield '{"answer": "test", "references": []}'
@@ -571,7 +569,7 @@ class TestAnswerEngineStreamStructured:
         await engine.generate_stream("query", _text_contexts())
 
         _, kwargs = llm_func.call_args
-        assert kwargs.get("response_format") is StructuredAnswer
+        assert "response_format" not in kwargs
         assert kwargs.get("stream") is True
 
     async def test_stream_text_freetext_no_response_format(self) -> None:
