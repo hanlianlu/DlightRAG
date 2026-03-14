@@ -282,6 +282,7 @@ class DlightragConfig(BaseSettings):
     max_relation_tokens: int = Field(default=10000)
     max_total_tokens: int = Field(default=40000)
     default_mode: Literal["local", "global", "hybrid", "naive", "mix"] = Field(default="mix")
+    rrf_k: int = Field(default=60, description="RRF fusion parameter k for multi-path retrieval")
     max_conversation_turns: int = Field(default=50)
     max_conversation_tokens: int = Field(default=150000)
 
