@@ -841,14 +841,22 @@ class RAGService:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         is_reretrieve: bool = False,
+        filters: Any = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Retrieve structured data without generating answer."""
+        """Retrieve structured data without generating answer.
+
+        Args:
+            filters: Optional MetadataFilter for structured metadata queries.
+                     Also auto-detected from query text via QueryAnalyzer.
+        """
         self._ensure_initialized()
         backend = self._effective_backend
         if not backend:
             raise RuntimeError("Retrieval backend not initialized")
-        return await backend.aretrieve(
+
+        # Phase 1: KG retrieval (existing path)
+        kg_result = await backend.aretrieve(
             query,
             multimodal_content=multimodal_content,
             mode=mode,
@@ -857,6 +865,104 @@ class RAGService:
             is_reretrieve=is_reretrieve,
             **kwargs,
         )
+
+        # Phase 2: Multi-path retrieval (metadata + vector, supplementary)
+        if self._metadata_index is not None or (
+            self.config.rag_mode == "unified" and self._lightrag
+        ):
+            try:
+                supplementary = await self._run_multi_path_retrieval(
+                    query, filters, top_k=top_k or self.config.top_k,
+                )
+                if supplementary:
+                    self._merge_supplementary_chunks(kg_result, supplementary)
+            except Exception as exc:
+                logger.warning("Multi-path retrieval failed (non-fatal): %s", exc)
+
+        return kg_result
+
+    async def _run_multi_path_retrieval(
+        self,
+        query: str,
+        explicit_filters: Any,
+        top_k: int = 60,
+    ) -> list[dict[str, Any]]:
+        """Run QueryAnalyzer + Orchestrator for supplementary chunk retrieval."""
+        from dlightrag.core.retrieval.orchestrator import RetrievalOrchestrator
+        from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
+
+        analyzer = QueryAnalyzer()
+        plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
+
+        if not plan.metadata_filters and not plan.semantic_query:
+            return []
+
+        chunks_vdb = None
+        embedding_func = None
+        if self._lightrag and self.config.rag_mode == "unified":
+            chunks_vdb = getattr(self._lightrag, "chunks_vdb", None)
+            ef = getattr(self._lightrag, "embedding_func", None)
+            if ef and hasattr(ef, "func"):
+                embedding_func = ef.func
+
+        orchestrator = RetrievalOrchestrator(
+            metadata_index=self._metadata_index,
+            lightrag=self._lightrag or getattr(self.rag, "lightrag", None),
+            rag_mode=self.config.rag_mode,
+            chunks_vdb=chunks_vdb,
+            embedding_func=embedding_func,
+            rrf_k=self.config.rrf_k,
+        )
+
+        chunk_ids = await orchestrator.orchestrate(plan, top_k=top_k)
+        if not chunk_ids:
+            return []
+
+        return await self._resolve_chunk_contexts(chunk_ids)
+
+    async def _resolve_chunk_contexts(
+        self,
+        chunk_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Resolve chunk_ids to ChunkContext dicts via text_chunks KV store."""
+        lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
+        if not lr or not hasattr(lr, "text_chunks"):
+            return []
+
+        try:
+            chunk_data_list = await lr.text_chunks.get_by_ids(chunk_ids)
+        except Exception:
+            return []
+
+        contexts: list[dict[str, Any]] = []
+        for cid, cdata in zip(chunk_ids, chunk_data_list, strict=True):
+            if not cdata:
+                continue
+            ctx: dict[str, Any] = {
+                "chunk_id": cid,
+                "reference_id": cdata.get("full_doc_id", ""),
+                "file_path": cdata.get("file_path", ""),
+                "content": cdata.get("content", ""),
+                "metadata": {"source": "multi_path_retrieval"},
+            }
+            if cdata.get("page_idx") is not None:
+                ctx["page_idx"] = cdata["page_idx"] + 1  # 0-based to 1-based
+            contexts.append(ctx)
+        return contexts
+
+    @staticmethod
+    def _merge_supplementary_chunks(
+        result: RetrievalResult,
+        supplementary: list[dict[str, Any]],
+    ) -> None:
+        """Merge supplementary chunks into the result, avoiding duplicates."""
+        existing_ids = {
+            c.get("chunk_id") for c in result.contexts.get("chunks", [])
+        }
+        for ctx in supplementary:
+            if ctx.get("chunk_id") not in existing_ids:
+                result.contexts.setdefault("chunks", []).append(ctx)
+                existing_ids.add(ctx.get("chunk_id"))
 
     # === FILE MANAGEMENT API ===
 
