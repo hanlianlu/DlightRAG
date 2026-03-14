@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
@@ -87,26 +86,6 @@ class RetrievalBackend(Protocol):
         chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult: ...
-
-    async def aanswer(
-        self,
-        query: str,
-        *,
-        mode: str = "mix",
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        **kwargs: Any,
-    ) -> RetrievalResult: ...
-
-    async def aanswer_stream(
-        self,
-        query: str,
-        *,
-        mode: str = "mix",
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        **kwargs: Any,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]: ...
 
 
 __all__ = [
