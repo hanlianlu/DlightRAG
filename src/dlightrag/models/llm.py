@@ -195,26 +195,6 @@ def get_vision_model_func(
     return None
 
 
-# Providers whose vision func reliably handles response_format for structured
-# JSON output.  Ollama/Xinference have unreliable schema enforcement.
-_STRUCTURED_VISION_PROVIDERS = frozenset(
-    {"openai", "azure_openai", "anthropic", "google_gemini", "qwen", "minimax", "openrouter"}
-)
-
-# Providers whose text LLM func (openai_complete_if_cache or azure equivalent)
-# handles response_format.  Anthropic/Gemini use separate LightRAG funcs that
-# don't support it.  Ollama has unreliable schema enforcement.
-_STRUCTURED_TEXT_PROVIDERS = frozenset(
-    {"openai", "azure_openai", "qwen", "minimax", "openrouter", "xinference"}
-)
-
-
-def provider_supports_structured(provider: str, *, vision: bool = False) -> bool:
-    """Whether the model func for *provider* supports ``response_format``."""
-    if vision:
-        return provider in _STRUCTURED_VISION_PROVIDERS
-    return provider in _STRUCTURED_TEXT_PROVIDERS
-
 
 def _build_openai_vision_func(
     cfg: DlightragConfig,
