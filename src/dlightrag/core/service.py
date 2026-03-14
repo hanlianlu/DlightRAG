@@ -160,6 +160,7 @@ class RAGService:
         self._lightrag: Any = None  # Direct LightRAG reference (unified mode)
         self._visual_chunks: Any = None  # Visual chunks KV store (unified mode)
         self._hash_index: Any = None  # Content-hash deduplication index
+        self._metadata_index: Any = None  # Document metadata index
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by _do_initialize / _do_initialize_unified;
@@ -412,6 +413,9 @@ class RAGService:
         # Auto-detect hash index backend based on storage config
         hash_index = await self._create_hash_index(config)
 
+        # Initialize metadata index (best-effort — PG only for now)
+        self._metadata_index = await self._create_metadata_index(config)
+
         # Compose pipelines
         self.ingestion = IngestionPipeline(
             self.rag,
@@ -421,6 +425,7 @@ class RAGService:
             cancel_checker=self._cancel_checker,
             hash_index=hash_index,
             vlm_parser=vlm_parser,
+            metadata_index=self._metadata_index,
         )
 
         self.retrieval = RetrievalEngine(rag=self.rag, config=config)
@@ -565,6 +570,9 @@ class RAGService:
         # Create hash index for deduplication (same backend as caption mode)
         self._hash_index = await self._create_hash_index(config)
 
+        # Initialize metadata index
+        self._metadata_index = await self._create_metadata_index(config)
+
         logger.info("Unified representational RAG mode initialized")
 
     async def _create_hash_index(self, config: DlightragConfig) -> HashIndexProtocol:
@@ -618,6 +626,29 @@ class RAGService:
 
         logger.info("Hash index: HashIndex (JSON file)")
         return HashIndex(config.working_dir_path, workspace=config.workspace)
+
+    async def _create_metadata_index(self, config: DlightragConfig) -> Any:
+        """Create PGMetadataIndex if using PostgreSQL backend, else None.
+
+        Metadata index is best-effort: non-PG backends silently skip it.
+        """
+        if not config.kv_storage.startswith("PG"):
+            logger.info("Metadata index: disabled (non-PG backend)")
+            return None
+
+        try:
+            from dlightrag.core.retrieval.metadata_index import PGMetadataIndex
+
+            idx = PGMetadataIndex(workspace=config.workspace)
+            await idx.initialize()
+            logger.info("Metadata index: PGMetadataIndex (PostgreSQL)")
+            return idx
+        except ImportError:
+            logger.warning("asyncpg not available — metadata index disabled")
+            return None
+        except Exception as e:
+            logger.warning("PGMetadataIndex creation failed — metadata index disabled: %s", e)
+            return None
 
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""
@@ -733,6 +764,7 @@ class RAGService:
                 config=self.config,
                 hash_index=self._hash_index,
                 source_type=source_type,
+                metadata_index=self._metadata_index,
                 **kwargs,
             )
 

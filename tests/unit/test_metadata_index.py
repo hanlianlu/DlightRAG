@@ -163,3 +163,38 @@ class TestSystemFieldsSeparation:
             "page_count", "rag_mode",
         }
         assert _SYSTEM_FIELDS == expected
+
+
+class TestExtractSystemMetadata:
+    def test_basic_extraction(self) -> None:
+        from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+        meta = extract_system_metadata("/data/reports/annual-report.pdf", rag_mode="caption")
+        assert meta["filename"] == "annual-report.pdf"
+        assert meta["filename_stem"] == "annual-report"
+        assert meta["file_extension"] == "pdf"
+        assert meta["rag_mode"] == "caption"
+        assert meta.get("page_count") is None
+
+    def test_with_page_count(self) -> None:
+        from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+        meta = extract_system_metadata("/tmp/doc.pdf", rag_mode="unified", page_count=5)
+        assert meta["page_count"] == 5
+        assert meta["rag_mode"] == "unified"
+
+    def test_no_extension(self) -> None:
+        from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+        meta = extract_system_metadata("/tmp/README")
+        assert meta["file_extension"] is None
+        assert meta["filename"] == "README"
+
+    def test_pathlib_input(self) -> None:
+        from pathlib import Path
+
+        from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+        meta = extract_system_metadata(Path("/docs/slides.pptx"), rag_mode="caption")
+        assert meta["filename"] == "slides.pptx"
+        assert meta["file_extension"] == "pptx"

@@ -30,6 +30,7 @@ async def unified_ingest(
     config: DlightragConfig,
     hash_index: HashIndexProtocol,
     source_type: Literal["local", "azure_blob", "snowflake"],
+    metadata_index: Any = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Unified ingestion entry point — dispatches by source_type."""
@@ -38,13 +39,13 @@ async def unified_ingest(
         replace = kwargs.get("replace", config.ingestion_replace_default)
 
         if path.is_file():
-            return await _ingest_single_local(engine, hash_index, path, replace)
+            return await _ingest_single_local(engine, hash_index, path, replace, metadata_index)
         if path.is_dir():
-            return await _ingest_local_dir(engine, config, hash_index, path, replace)
+            return await _ingest_local_dir(engine, config, hash_index, path, replace, metadata_index)
         raise FileNotFoundError(f"Path not found: {path}")
 
     if source_type == "azure_blob":
-        return await _ingest_azure_blob(engine, config, hash_index, **kwargs)
+        return await _ingest_azure_blob(engine, config, hash_index, metadata_index=metadata_index, **kwargs)
 
     # source_type == "snowflake"
     return await _ingest_snowflake(engine, config, **kwargs)
@@ -55,6 +56,7 @@ async def _ingest_single_local(
     hash_index: HashIndexProtocol,
     path: Path,
     replace: bool,
+    metadata_index: Any = None,
 ) -> dict[str, Any]:
     """Ingest a single local file with dedup."""
     should_skip, content_hash, reason = await hash_index.should_skip_file(path, replace)
@@ -67,6 +69,19 @@ async def _ingest_single_local(
     if content_hash and result.get("doc_id"):
         await hash_index.register(content_hash, result["doc_id"], str(path))
 
+    # Upsert document metadata (best-effort)
+    if result.get("doc_id") and metadata_index is not None:
+        try:
+            from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+            meta = extract_system_metadata(
+                path, rag_mode="unified",
+                page_count=result.get("page_count"),
+            )
+            await metadata_index.upsert(result["doc_id"], meta)
+        except Exception as e:
+            logger.warning("Metadata upsert failed for %s: %s", path.name, e)
+
     return result
 
 
@@ -76,6 +91,7 @@ async def _ingest_local_dir(
     hash_index: HashIndexProtocol,
     path: Path,
     replace: bool,
+    metadata_index: Any = None,
 ) -> dict[str, Any]:
     """Recursively ingest all supported files in a directory."""
     from dlightrag.unifiedrepresent.renderer import (
@@ -100,7 +116,7 @@ async def _ingest_local_dir(
     results: list[dict[str, Any]] = []
     skipped = 0
     for file_path in files:
-        result = await _ingest_single_local(engine, hash_index, file_path, replace)
+        result = await _ingest_single_local(engine, hash_index, file_path, replace, metadata_index)
         if result.get("status") == "skipped":
             skipped += 1
         results.append(result)
@@ -127,6 +143,7 @@ async def _ingest_azure_blob(
     engine: UnifiedRepresentEngine,
     config: DlightragConfig,
     hash_index: HashIndexProtocol,
+    metadata_index: Any = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Download blob(s) to temp -> visual pipeline."""
@@ -149,12 +166,12 @@ async def _ingest_azure_blob(
 
     try:
         if blob_path:
-            return await _ingest_single_blob(engine, config, hash_index, source, blob_path, replace)
+            return await _ingest_single_blob(engine, config, hash_index, source, blob_path, replace, metadata_index)
 
         blob_ids = await source.alist_documents(prefix=prefix)
         results: list[dict[str, Any]] = []
         for bid in blob_ids:
-            result = await _ingest_single_blob(engine, config, hash_index, source, bid, replace)
+            result = await _ingest_single_blob(engine, config, hash_index, source, bid, replace, metadata_index)
             results.append(result)
 
         return {
@@ -177,6 +194,7 @@ async def _ingest_single_blob(
     source: Any,
     blob_path: str,
     replace: bool = False,
+    metadata_index: Any = None,
 ) -> dict[str, Any]:
     """Download one blob to temp dir, ingest via unified engine, cleanup."""
     tmpdir = config.temp_dir / uuid.uuid4().hex[:12]
@@ -196,6 +214,19 @@ async def _ingest_single_blob(
 
         if content_hash and result.get("doc_id"):
             await hash_index.register(content_hash, result["doc_id"], f"azure://{blob_path}")
+
+        # Upsert document metadata (best-effort)
+        if result.get("doc_id") and metadata_index is not None:
+            try:
+                from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+                meta = extract_system_metadata(
+                    target, rag_mode="unified",
+                    page_count=result.get("page_count"),
+                )
+                await metadata_index.upsert(result["doc_id"], meta)
+            except Exception as e:
+                logger.warning("Metadata upsert failed for %s: %s", target.name, e)
 
         return result
     finally:

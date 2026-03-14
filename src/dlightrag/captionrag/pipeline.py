@@ -82,6 +82,7 @@ class IngestionPipeline:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         hash_index: HashIndexProtocol | None = None,
         vlm_parser: VlmOcrParser | None = None,
+        metadata_index: Any = None,
     ) -> None:
         self.rag = rag_instance
         self.config = config
@@ -104,6 +105,9 @@ class IngestionPipeline:
 
         # VLM OCR parser (used when config.parser == "vlm")
         self.vlm_parser = vlm_parser
+
+        # Document metadata index (PGMetadataIndex or None)
+        self._metadata_index = metadata_index
 
         # Callback for cancellation checking (replaces Redis task registry)
         self._cancel_checker = cancel_checker
@@ -289,6 +293,19 @@ class IngestionPipeline:
                     await self._hash_index.register(
                         content_hash, doc_id, source_uri or str(file_path)
                     )
+
+                # Step 5: Upsert document metadata (best-effort)
+                if doc_id and self._metadata_index is not None:
+                    try:
+                        from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+                        meta = extract_system_metadata(
+                            file_path, rag_mode="caption",
+                            page_count=getattr(result, "page_count", None),
+                        )
+                        await self._metadata_index.upsert(doc_id, meta)
+                    except Exception as e:
+                        logger.warning("Metadata upsert failed for %s: %s", file_path.name, e)
 
                 return IngestionResult(
                     status="success",
