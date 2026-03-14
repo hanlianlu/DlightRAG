@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
 
-from dlightrag.core.federation import federated_answer, federated_retrieve
+from dlightrag.core.answer import AnswerEngine
+from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
 
@@ -54,6 +55,7 @@ class RAGServiceManager:
         self._last_error: str | None = None
         self._last_error_ts: float | None = None
         self._retry_after: float = 30.0
+        self._answer_engine: AnswerEngine | None = None
 
     @classmethod
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
@@ -160,6 +162,24 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.adelete_files(**kwargs)
 
+    def _get_answer_engine(self) -> AnswerEngine:
+        """Lazy-create AnswerEngine from global config."""
+        if self._answer_engine is None:
+            from dlightrag.models.llm import get_llm_model_func, get_vision_model_func
+
+            self._answer_engine = AnswerEngine(
+                llm_model_func=get_llm_model_func(self._config),
+                vision_model_func=get_vision_model_func(self._config),
+                provider=self._config.llm_provider,
+            )
+        return self._answer_engine
+
+    def get_llm_func(self):
+        """Return the global LLM model function (for web UI query rewriting etc.)."""
+        from dlightrag.models.llm import get_llm_model_func
+
+        return get_llm_model_func(self._config)
+
     # --- Read operations (single or federated) ---
 
     async def aretrieve(
@@ -191,14 +211,13 @@ class RAGServiceManager:
         workspaces: list[str] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Answer from one or more workspaces (federated if multiple)."""
+        """Answer from one or more workspaces: retrieve -> AnswerEngine."""
         ws_list = workspaces or [workspace or self._config.workspace]
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                if len(ws_list) == 1:
-                    svc = await self._get_service(ws_list[0])
-                    return await svc.aanswer(query, **kwargs)
-                return await federated_answer(query, ws_list, self._get_service, **kwargs)
+                retrieval = await self.aretrieve(query, workspaces=ws_list, **kwargs)
+                engine = self._get_answer_engine()
+                return await engine.generate(query, retrieval.contexts)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -212,18 +231,13 @@ class RAGServiceManager:
         workspaces: list[str] | None = None,
         **kwargs: Any,
     ) -> tuple[RetrievalContexts, AsyncIterator[str]]:
-        """Streaming answer from a single workspace.
-
-        Federated streaming is not supported — uses first workspace if
-        multiple are provided.
-        """
+        """Streaming answer from one or more workspaces: retrieve -> AnswerEngine."""
         ws_list = workspaces or [workspace or self._config.workspace]
-        if len(ws_list) > 1:
-            logger.warning("Streaming only supports single workspace, using '%s'", ws_list[0])
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                svc = await self._get_service(ws_list[0])
-                return await svc.aanswer_stream(query, **kwargs)
+                retrieval = await self.aretrieve(query, workspaces=ws_list, **kwargs)
+                engine = self._get_answer_engine()
+                return await engine.generate_stream(query, retrieval.contexts)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
