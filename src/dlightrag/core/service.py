@@ -885,6 +885,7 @@ class RAGService:
                 lightrag=self._lightrag,
                 file_paths=file_paths,
                 filenames=filenames,
+                metadata_index=self._metadata_index,
             )
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
