@@ -37,6 +37,40 @@ def _render_partial(name: str, **ctx: Any) -> str:
     return templates.env.get_template(name).render(**ctx)
 
 
+async def _rewrite_query(
+    user_message: str,
+    conversation_history: list[dict[str, str]] | None,
+    llm_func,
+) -> str:
+    """Rewrite user message into standalone query using conversation context.
+
+    Skips LLM call if no conversation history (first turn).
+    Uses last 10 turns (20 messages) for context.
+    Raises on LLM failure (no fallback).
+    """
+    if not conversation_history:
+        return user_message
+
+    system = (
+        "You are a query rewriter. Given a conversation history and a follow-up "
+        "message, rewrite the follow-up into a standalone search query that "
+        "captures the full intent. Output ONLY the rewritten query, nothing else. "
+        "If the message is already self-contained, return it unchanged."
+    )
+
+    history_text = "\n".join(
+        f"{m['role']}: {m['content']}" for m in conversation_history[-20:]
+    )
+
+    user_prompt = (
+        f"Conversation history:\n{history_text}\n\n"
+        f"Follow-up message: {user_message}\n\n"
+        f"Standalone query:"
+    )
+
+    return await llm_func(user_prompt, system_prompt=system)
+
+
 # ---------------------------------------------------------------------------
 # Page routes
 # ---------------------------------------------------------------------------
@@ -98,16 +132,16 @@ async def answer_stream(
 
     async def event_generator() -> AsyncIterator[str]:
         full_answer = ""
-        kwargs: dict[str, Any] = {}
-        if conversation_history:
-            kwargs["conversation_history"] = conversation_history
         try:
+            # Rewrite query using conversation context
+            llm_func = manager.get_llm_func()
+            standalone_query = await _rewrite_query(query, conversation_history, llm_func)
+
             contexts, token_iter = await manager.aanswer_stream(
-                query=query,
+                query=standalone_query,
                 workspace=workspace,
                 workspaces=workspaces,
                 multimodal_content=multimodal_content,
-                **kwargs,
             )
 
             # token_iter may be an AsyncIterator, a plain str, or None
@@ -176,20 +210,6 @@ async def answer_stream(
                 logger.warning("Highlight extraction timed out, skipping")
             except Exception:
                 logger.warning("Highlight extraction failed", exc_info=True)
-
-            # Server-driven budget: tell the frontend the char budget for next request.
-            # Conservative multiplier: 2 chars/token handles CJK (~1.5) with headroom.
-            try:
-                from dlightrag.config import get_config
-
-                cfg = get_config()
-                max_tokens = cfg.max_conversation_tokens
-                max_msgs = cfg.max_conversation_turns * 2
-                char_budget = max_tokens * 2
-                meta = {"history_char_budget": char_budget, "history_max_messages": max_msgs}
-                yield f"event: meta\ndata: {json.dumps(meta)}\n\n"
-            except Exception:
-                pass  # Non-critical; frontend falls back to defaults
 
         except Exception:
             logger.exception("Answer streaming failed")
