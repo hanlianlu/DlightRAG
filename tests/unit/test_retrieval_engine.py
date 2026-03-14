@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from dlightrag.captionrag.retrieval import RetrievalEngine
 from dlightrag.core.retrieval.protocols import RetrievalResult
 
@@ -89,94 +87,3 @@ class TestRetrievalEngineAretrieve:
         result = await engine.aretrieve("query")
         chunk = result.contexts["chunks"][0]
         assert chunk["page_idx"] == 3  # 0-based 2 -> 1-based 3
-
-
-# ---------------------------------------------------------------------------
-# TestRetrievalEngineAanswer
-# ---------------------------------------------------------------------------
-
-
-class TestRetrievalEngineAanswer:
-    """Test LLM answer retrieval."""
-
-    def _make_engine(self) -> tuple[RetrievalEngine, MagicMock]:
-        from dlightrag.config import DlightragConfig
-
-        cfg = DlightragConfig(openai_api_key="test")  # type: ignore[call-arg]
-        mock_rag = MagicMock()
-        mock_rag.lightrag = MagicMock()
-        mock_rag.lightrag.aquery_llm = AsyncMock(
-            return_value={
-                "llm_response": {"content": "The answer is 42"},
-                "data": {"chunks": [{"id": "c1"}], "entities": [], "relationships": []},
-            }
-        )
-        mock_rag._process_multimodal_query_content = AsyncMock(return_value="enhanced")
-        engine = RetrievalEngine(rag=mock_rag, config=cfg)
-        return engine, mock_rag
-
-    async def test_aanswer_returns_answer(self) -> None:
-        engine, _ = self._make_engine()
-        result = await engine.aanswer("query")
-        assert result.answer == "The answer is 42"
-
-    async def test_aanswer_calls_aquery_llm(self) -> None:
-        engine, mock_rag = self._make_engine()
-        await engine.aanswer("query")
-        mock_rag.lightrag.aquery_llm.assert_awaited_once()
-
-
-# ---------------------------------------------------------------------------
-# TestRetrievalEngineAanswerStream
-# ---------------------------------------------------------------------------
-
-
-class TestRetrievalEngineAanswerStream:
-    """Test streaming answer retrieval."""
-
-    def _make_engine(self) -> tuple[RetrievalEngine, MagicMock]:
-        from dlightrag.config import DlightragConfig
-
-        cfg = DlightragConfig(openai_api_key="test")  # type: ignore[call-arg]
-        mock_rag = MagicMock()
-        mock_rag.lightrag = MagicMock()
-
-        # aquery_data returns retrieval contexts
-        mock_rag.lightrag.aquery_data = AsyncMock(
-            return_value={
-                "data": {"chunks": [{"id": "c1"}], "entities": [], "relationships": []},
-            }
-        )
-
-        # aquery returns an async iterator when stream=True
-        async def mock_stream():
-            for token in ["Hello", " ", "world"]:
-                yield token
-
-        mock_rag.lightrag.aquery = AsyncMock(return_value=mock_stream())
-        mock_rag._process_multimodal_query_content = AsyncMock(return_value="enhanced")
-        engine = RetrievalEngine(rag=mock_rag, config=cfg)
-        return engine, mock_rag
-
-    async def test_aanswer_stream_returns_contexts_and_iterator(self) -> None:
-        engine, mock_rag = self._make_engine()
-        contexts, token_iter = await engine.aanswer_stream("query")
-        assert "chunks" in contexts
-        tokens = [t async for t in token_iter]
-        assert tokens == ["Hello", " ", "world"]
-
-    async def test_aanswer_stream_calls_aquery_with_stream_true(self) -> None:
-        engine, mock_rag = self._make_engine()
-        await engine.aanswer_stream("query")
-        mock_rag.lightrag.aquery.assert_awaited_once()
-        mock_rag.lightrag.aquery_data.assert_awaited_once()
-
-    async def test_aanswer_stream_no_lightrag_raises(self) -> None:
-        from dlightrag.config import DlightragConfig
-
-        cfg = DlightragConfig(openai_api_key="test")  # type: ignore[call-arg]
-        mock_rag = MagicMock()
-        mock_rag.lightrag = None
-        engine = RetrievalEngine(rag=mock_rag, config=cfg)
-        with pytest.raises(RuntimeError, match="not initialized"):
-            await engine.aanswer_stream("query")

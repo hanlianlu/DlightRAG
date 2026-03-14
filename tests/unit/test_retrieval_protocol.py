@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 from dlightrag.core.retrieval.protocols import (
@@ -81,28 +80,6 @@ class TestRetrievalBackendProtocol:
                 **kwargs: Any,
             ) -> RetrievalResult:
                 return RetrievalResult()
-
-            async def aanswer(
-                self,
-                query: str,
-                *,
-                mode: str = "mix",
-                top_k: int | None = None,
-                chunk_top_k: int | None = None,
-                **kwargs: Any,
-            ) -> RetrievalResult:
-                return RetrievalResult()
-
-            async def aanswer_stream(
-                self,
-                query: str,
-                *,
-                mode: str = "mix",
-                top_k: int | None = None,
-                chunk_top_k: int | None = None,
-                **kwargs: Any,
-            ) -> tuple[dict[str, Any], AsyncIterator[str] | None]:
-                raise NotImplementedError
 
         backend: RetrievalBackend = FakeBackend()
         assert isinstance(backend, FakeBackend)
