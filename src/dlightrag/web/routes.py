@@ -201,29 +201,35 @@ async def answer_stream(
             yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
 
             # Highlight extraction (best-effort, async follow-up)
-            # Sends a separate SSE event to patch source panel with highlights.
-            try:
-                from dlightrag.config import get_config
-                from dlightrag.models.llm import get_llm_model_func
+            # Skip for image-only sources (unified mode) — no text to highlight.
+            has_text_chunks = any(
+                chunk.content and not chunk.image_data
+                for src in result.sources if src.chunks
+                for chunk in src.chunks
+            )
+            if has_text_chunks:
+                try:
+                    from dlightrag.config import get_config
+                    from dlightrag.models.llm import get_llm_model_func
 
-                llm_func = get_llm_model_func(get_config())
-                highlighted_sources = await asyncio.wait_for(
-                    extract_highlights_for_sources(
-                        sources=result.sources,
-                        answer_text=result.answer,
-                        llm_func=llm_func,
-                    ),
-                    timeout=30.0,
-                )
-                highlights_html = _render_partial(
-                    "partials/source_panel.html",
-                    sources=highlighted_sources,
-                )
-                yield f"event: highlights\ndata: {json.dumps(highlights_html)}\n\n"
-            except TimeoutError:
-                logger.warning("Highlight extraction timed out, skipping")
-            except Exception:
-                logger.warning("Highlight extraction failed", exc_info=True)
+                    llm_func = get_llm_model_func(get_config())
+                    highlighted_sources = await asyncio.wait_for(
+                        extract_highlights_for_sources(
+                            sources=result.sources,
+                            answer_text=result.answer,
+                            llm_func=llm_func,
+                        ),
+                        timeout=30.0,
+                    )
+                    highlights_html = _render_partial(
+                        "partials/source_panel.html",
+                        sources=highlighted_sources,
+                    )
+                    yield f"event: highlights\ndata: {json.dumps(highlights_html)}\n\n"
+                except TimeoutError:
+                    logger.warning("Highlight extraction timed out, skipping")
+                except Exception:
+                    logger.warning("Highlight extraction failed", exc_info=True)
 
         except Exception:
             logger.exception("Answer streaming failed")
