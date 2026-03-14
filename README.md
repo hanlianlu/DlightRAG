@@ -2,6 +2,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/dlightrag)](https://pypi.org/project/dlightrag/)
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
 Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) — knowledge graph + vector retrieval as a modern and unified production-ready service.
 
