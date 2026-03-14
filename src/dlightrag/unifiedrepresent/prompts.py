@@ -75,21 +75,18 @@ def get_answer_system_prompt(structured: bool = False) -> str:
     """
     if structured:
         return _ANSWER_CORE + _ANSWER_STRUCTURED_SUFFIX
-    return _ANSWER_CORE
+    return _ANSWER_CORE + FREETEXT_REMINDER
 
 
-# Keep the old name as an alias for backward compatibility
-UNIFIED_ANSWER_SYSTEM_PROMPT = get_answer_system_prompt(structured=False)
 
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
 Query: {query}
-Respond **ONLY** with a number ranging from 0.0 to 1.0 (0.0 = completely irrelevant, 1.0 = fully relevant).
+Respond **ONLY** with a decimal number ranging from 0.00 to 1.00 (0.00 = completely irrelevant, 1.00 = fully relevant).
 """
 
 __all__ = [
     "FREETEXT_REMINDER",
-    "UNIFIED_ANSWER_SYSTEM_PROMPT",
     "VISUAL_RERANK_PROMPT",
     "get_answer_system_prompt",
 ]
