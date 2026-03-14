@@ -7,7 +7,7 @@ def log_answer_llm_output(
     location: str,
     *,
     structured: bool,
-    provider: str,
+    provider: str | None = None,
     query: str,
     raw: str | None = None,
     answer_text: str | None = None,
@@ -17,7 +17,7 @@ def log_answer_llm_output(
     统一记录LLM answer相关的原始输出、路径分支、异常等。
     """
     logger = logging.getLogger("dlightrag.answer")
-    ctx = f"structured={structured} provider={provider} query={query[:40]}"
+    ctx = f"structured={structured} provider={provider or 'N/A'} query={query[:40]}"
     if parse_error is not None:
         logger.warning(
             f"[ANSWER][{location}][parse_fail] {ctx} raw={str(raw)[:100]} exc={parse_error}"
