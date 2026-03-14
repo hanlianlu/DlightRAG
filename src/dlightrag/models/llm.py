@@ -182,49 +182,24 @@ def get_vision_model_func(
     return None
 
 
+# Providers whose vision func reliably handles response_format for structured
+# JSON output.  Ollama/Xinference have unreliable schema enforcement.
 _STRUCTURED_VISION_PROVIDERS = frozenset(
-    {
-        "openai",
-        "azure_openai",
-        "anthropic",
-        "google_gemini",
-        "qwen",
-        "minimax",
-        "openrouter",
-    }
+    {"openai", "azure_openai", "anthropic", "google_gemini", "qwen", "minimax", "openrouter"}
 )
-
-
-def provider_supports_structured_vision(provider: str) -> bool:
-    """Whether the vision func builder supports response_schema for this provider.
-
-    Only applies to providers that can serve as vision backends.
-    Ollama and Xinference have unreliable schema enforcement and
-    fall back to freetext prompt. Voyage is embedding-only and
-    cannot serve as a vision provider (get_vision_model_func returns
-    None for it).
-    """
-    return provider in _STRUCTURED_VISION_PROVIDERS
-
 
 # Providers whose text LLM func (openai_complete_if_cache or azure equivalent)
-# supports response_format for structured JSON output.
-# Anthropic / Google Gemini use separate LLM funcs that don't handle
-# response_format the same way. Ollama has unreliable schema enforcement.
+# handles response_format.  Anthropic/Gemini use separate LightRAG funcs that
+# don't support it.  Ollama has unreliable schema enforcement.
 _STRUCTURED_TEXT_PROVIDERS = frozenset(
-    {
-        "openai",
-        "azure_openai",
-        "qwen",
-        "minimax",
-        "openrouter",
-        "xinference",
-    }
+    {"openai", "azure_openai", "qwen", "minimax", "openrouter", "xinference"}
 )
 
 
-def provider_supports_structured_text(provider: str) -> bool:
-    """Whether the text LLM func supports response_format for structured output."""
+def provider_supports_structured(provider: str, *, vision: bool = False) -> bool:
+    """Whether the model func for *provider* supports ``response_format``."""
+    if vision:
+        return provider in _STRUCTURED_VISION_PROVIDERS
     return provider in _STRUCTURED_TEXT_PROVIDERS
 
 
@@ -257,7 +232,7 @@ def _build_openai_vision_func(
         image_data: bytes | bytearray | str | None = None,
         messages: list | None = None,
         stream: bool = False,
-        response_schema: type | None = None,
+        response_format: type | None = None,
         **_kwargs: object,
     ) -> str | AsyncIterator[str]:
         """Vision model function compatible with RAG-Anything."""
@@ -271,12 +246,12 @@ def _build_openai_vision_func(
                     "temperature": vision_temp,
                     "extra_body": extra,
                 }
-                if response_schema is not None:
+                if response_format is not None:
                     kwargs["response_format"] = {
                         "type": "json_schema",
                         "json_schema": {
-                            "name": response_schema.__name__,
-                            "schema": response_schema.model_json_schema(),
+                            "name": response_format.__name__,
+                            "schema": response_format.model_json_schema(),
                         },
                     }
                 if stream:
@@ -417,7 +392,7 @@ def _build_anthropic_vision_func(
         image_data: bytes | bytearray | str | None = None,
         messages: list | None = None,
         stream: bool = False,
-        response_schema: type | None = None,
+        response_format: type | None = None,
         **_kwargs: object,
     ) -> str | AsyncIterator[str]:
         # Pattern 1: Pre-formatted messages from RAG-Anything
@@ -431,7 +406,7 @@ def _build_anthropic_vision_func(
                     "max_tokens": 4096,
                     "temperature": vision_temp,
                 }
-                if response_schema is not None:
+                if response_format is not None:
                     kwargs["metadata"] = kwargs.get("metadata", {})
                     # Use Anthropic's structured output via JSON mode prompt
                     # (output_schema support varies by SDK version)
@@ -523,7 +498,7 @@ def _build_google_vision_func(
         image_data: bytes | bytearray | str | None = None,
         messages: list | None = None,
         stream: bool = False,
-        response_schema: type | None = None,
+        response_format: type | None = None,
         **_kwargs: object,
     ) -> str | AsyncIterator[str]:
         # Pattern 1: Pre-formatted messages from RAG-Anything
@@ -552,9 +527,9 @@ def _build_google_vision_func(
                             contents.append(Content(role=role, parts=parts))
 
                 config_dict: dict[str, Any] = {"temperature": vision_temp}
-                if response_schema is not None:
+                if response_format is not None:
                     config_dict["response_mime_type"] = "application/json"
-                    config_dict["response_schema"] = response_schema.model_json_schema()
+                    config_dict["response_schema"] = response_format.model_json_schema()
 
                 if stream:
 

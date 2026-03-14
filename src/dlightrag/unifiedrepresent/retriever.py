@@ -366,11 +366,11 @@ class VisualRetriever:
         """
         import asyncio
 
-        from dlightrag.models.llm import provider_supports_structured_vision
+        from dlightrag.models.llm import provider_supports_structured
         from dlightrag.models.schemas import VisualRerankScore
         from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
 
-        use_schema = provider_supports_structured_vision(self.provider)
+        use_schema = provider_supports_structured(self.provider, vision=True)
 
         if not resolved or not self.vision_model_func:
             return dict(list(resolved.items())[:top_k])
@@ -399,7 +399,7 @@ class VisualRetriever:
                             resp = await vision_model_func(
                                 "",
                                 messages=messages,
-                                response_schema=VisualRerankScore,
+                                response_format=VisualRerankScore,
                             )
                         else:
                             img_bytes = base64.b64decode(img_data)
@@ -410,7 +410,7 @@ class VisualRetriever:
                             resp = await vision_model_func(
                                 "",
                                 messages=[{"role": "user", "content": text_prompt}],
-                                response_schema=VisualRerankScore,
+                                response_format=VisualRerankScore,
                             )
                         else:
                             resp = await vision_model_func(text_prompt)
