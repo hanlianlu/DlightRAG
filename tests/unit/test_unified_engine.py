@@ -296,59 +296,10 @@ class TestAretrieve:
             top_k=60,
             chunk_top_k=10,
             images=None,
-            conversation_context=None,
         )
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
         assert result.contexts == expected.get("contexts", {})
-
-
-# ---------------------------------------------------------------------------
-# TestAanswer
-# ---------------------------------------------------------------------------
-
-
-class TestAanswer:
-    """Test aanswer delegates to retriever.answer."""
-
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_delegates_to_retriever_answer(
-        self,
-        _renderer_cls: MagicMock,
-        _embedder_cls: MagicMock,
-        _extractor_cls: MagicMock,
-        _retriever_cls: MagicMock,
-    ) -> None:
-        config = _make_config()
-        lightrag = _make_lightrag()
-
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=MagicMock(),
-            config=config,
-        )
-
-        expected = {
-            "answer": "test answer",
-            "contexts": {"entities": [], "relationships": [], "chunks": []},
-        }
-        engine.retriever.answer = AsyncMock(return_value=expected)
-
-        result = await engine.aanswer("what is X?")
-
-        engine.retriever.answer.assert_awaited_once_with(
-            query="what is X?",
-            mode="mix",
-            top_k=60,
-            chunk_top_k=10,
-            images=None,
-            conversation_context=None,
-        )
-        assert isinstance(result, RetrievalResult)
-        assert result.answer == expected.get("answer")
 
 
 # ---------------------------------------------------------------------------
@@ -432,28 +383,6 @@ class TestProtocolCompliance:
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
         assert result.contexts == {"chunks": []}
-
-    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
-    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
-    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
-    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_aanswer_returns_retrieval_result(self, _r, _em, _ex, _ret):
-        config = _make_config()
-        lightrag = _make_lightrag()
-        engine = UnifiedRepresentEngine(
-            lightrag=lightrag,
-            visual_chunks=MagicMock(),
-            config=config,
-        )
-        engine.retriever.answer = AsyncMock(
-            return_value={
-                "answer": "the answer",
-                "contexts": {"chunks": []},
-            }
-        )
-        result = await engine.aanswer("what is X?")
-        assert isinstance(result, RetrievalResult)
-        assert result.answer == "the answer"
 
     @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
     @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
