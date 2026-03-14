@@ -13,6 +13,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
+from dlightrag.citations.parser import parse_freetext_references
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.llm import provider_supports_structured_vision
 from dlightrag.models.schemas import StructuredAnswer
@@ -60,11 +61,21 @@ class AnswerEngine:
         model_func = self._select_model_func(has_images)
 
         if model_func is None:
+            logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
         structured = provider_supports_structured_vision(self.provider)
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
+
+        logger.info(
+            "[AE] generate: provider=%s structured=%s has_images=%s chunks=%d query=%s",
+            self.provider,
+            structured,
+            has_images,
+            len(contexts.get("chunks", [])),
+            query[:60],
+        )
 
         log_answer_llm_output(
             "answer_engine.generate",
@@ -76,28 +87,46 @@ class AnswerEngine:
         if has_images:
             messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
             if structured:
+                logger.info("[AE] generate: VLM structured path, sending response_schema")
                 raw = await model_func(
                     user_prompt,
                     messages=messages,
                     response_schema=StructuredAnswer,
                 )
             else:
+                logger.info("[AE] generate: VLM freetext path")
                 raw = await model_func(user_prompt, messages=messages)
         else:
             # Text-only LLM path
             if structured:
+                logger.info("[AE] generate: LLM text structured path, sending response_schema")
                 raw = await model_func(
                     user_prompt,
                     system_prompt=system_prompt,
+                    response_schema=StructuredAnswer,
                 )
             else:
+                logger.info("[AE] generate: LLM text freetext path")
                 raw = await model_func(
                     user_prompt,
                     system_prompt=system_prompt,
                 )
 
+        logger.info(
+            "[AE] generate: LLM returned type=%s len=%d first200=%s",
+            type(raw).__name__,
+            len(raw) if isinstance(raw, str) else -1,
+            repr(raw[:200]) if isinstance(raw, str) else repr(raw),
+        )
+
         # Parse response
         result = self._parse_response(raw, structured, query)
+
+        logger.info(
+            "[AE] generate: parsed refs=%d answer_len=%d",
+            len(result.references),
+            len(result.answer) if result.answer else 0,
+        )
 
         log_references(
             "answer_engine.generate",
@@ -128,11 +157,21 @@ class AnswerEngine:
         model_func = self._select_model_func(has_images)
 
         if model_func is None:
+            logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
         structured = provider_supports_structured_vision(self.provider)
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
+
+        logger.info(
+            "[AE] generate_stream: provider=%s structured=%s has_images=%s chunks=%d query=%s",
+            self.provider,
+            structured,
+            has_images,
+            len(contexts.get("chunks", [])),
+            query[:60],
+        )
 
         log_answer_llm_output(
             "answer_engine.generate_stream",
@@ -143,6 +182,10 @@ class AnswerEngine:
 
         if has_images:
             messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
+            logger.info(
+                "[AE] generate_stream: VLM path, response_schema=%s",
+                "StructuredAnswer" if structured else "None",
+            )
             token_iterator = await model_func(
                 user_prompt,
                 messages=messages,
@@ -150,15 +193,32 @@ class AnswerEngine:
                 response_schema=StructuredAnswer if structured else None,
             )
         else:
+            logger.info(
+                "[AE] generate_stream: LLM text path, response_schema=%s",
+                "StructuredAnswer" if structured else "None",
+            )
             token_iterator = await model_func(
                 user_prompt,
                 system_prompt=system_prompt,
                 stream=True,
+                response_schema=StructuredAnswer if structured else None,
             )
 
+        logger.info(
+            "[AE] generate_stream: model_func returned type=%s",
+            type(token_iterator).__name__,
+        )
+
         if structured and hasattr(token_iterator, "__aiter__"):
+            logger.info("[AE] generate_stream: wrapping with AnswerStream (structured)")
             parser = StreamingAnswerParser()
             token_iterator = AnswerStream(token_iterator, parser)
+        else:
+            logger.info(
+                "[AE] generate_stream: NOT wrapping (structured=%s has_aiter=%s)",
+                structured,
+                hasattr(token_iterator, "__aiter__"),
+            )
 
         return contexts, token_iterator
 
@@ -257,9 +317,8 @@ class AnswerEngine:
     ) -> StructuredAnswer:
         """Parse LLM response into a StructuredAnswer.
 
-        Structured mode: parse JSON. On failure, degrade to raw text with
-        empty references.
-        Freetext mode: wrap raw text directly.
+        Structured mode: parse JSON. On failure, degrade to freetext parsing.
+        Freetext mode: extract references from ``### References`` section.
         """
         if structured:
             log_answer_llm_output(
@@ -270,8 +329,21 @@ class AnswerEngine:
                 raw=raw,
             )
             try:
-                return StructuredAnswer.model_validate_json(raw)
+                result = StructuredAnswer.model_validate_json(raw)
+                logger.info(
+                    "[AE] _parse_response: JSON parse OK, refs=%d answer_len=%d",
+                    len(result.references),
+                    len(result.answer),
+                )
+                return result
             except Exception as e:
+                logger.warning(
+                    "[AE] _parse_response: JSON parse FAILED (%s: %s), "
+                    "raw_first200=%s — falling back to freetext parsing",
+                    type(e).__name__,
+                    e,
+                    repr(raw[:200]),
+                )
                 log_answer_llm_output(
                     "answer_engine.generate",
                     structured=structured,
@@ -280,8 +352,12 @@ class AnswerEngine:
                     raw=raw,
                     parse_error=e,
                 )
-                logger.warning("Structured answer parse failed, degrading to raw text")
-                return StructuredAnswer(answer=raw, references=[])
+                answer_text, refs = parse_freetext_references(raw)
+                logger.info(
+                    "[AE] _parse_response: freetext fallback got refs=%d",
+                    len(refs),
+                )
+                return StructuredAnswer(answer=answer_text, references=refs)
         else:
             log_answer_llm_output(
                 "answer_engine.generate",
@@ -290,7 +366,13 @@ class AnswerEngine:
                 query=query,
                 answer_text=raw,
             )
-            return StructuredAnswer(answer=raw, references=[])
+            logger.info("[AE] _parse_response: freetext mode, extracting refs from raw")
+            answer_text, refs = parse_freetext_references(raw)
+            logger.info(
+                "[AE] _parse_response: freetext extracted refs=%d",
+                len(refs),
+            )
+            return StructuredAnswer(answer=answer_text, references=refs)
 
 
 __all__ = ["AnswerEngine"]

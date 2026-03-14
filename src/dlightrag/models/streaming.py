@@ -64,8 +64,20 @@ class StreamingAnswerParser:
 
     def finish(self) -> StructuredAnswer:
         """Call after stream ends. Returns parsed result or degraded fallback."""
+        logger.info(
+            "[StreamParser] finish: state=%s full_json_len=%d",
+            self._state.name,
+            len(self._full_json),
+        )
+
         if self._state == _State.PASSTHROUGH:
             full = "".join(self._passthrough_parts)
+            logger.info(
+                "[StreamParser] finish: PASSTHROUGH mode, returning raw text "
+                "(len=%d) with empty refs. first200=%s",
+                len(full),
+                repr(full[:200]),
+            )
             return StructuredAnswer(answer=full, references=[])
 
         # Try to parse the full accumulated JSON
@@ -81,10 +93,21 @@ class StreamingAnswerParser:
                     refs.append(Reference.model_validate(r))
                 except Exception:
                     pass
+            logger.info(
+                "[StreamParser] finish: JSON parse OK, refs=%d answer_len=%d",
+                len(refs),
+                len(answer),
+            )
             return StructuredAnswer(answer=answer, references=refs)
-        except (json.JSONDecodeError, Exception):
+        except (json.JSONDecodeError, Exception) as exc:
             answer = "".join(self._answer_parts) or self._full_json
-            logger.warning("Structured answer parse failed, degrading to raw text")
+            logger.warning(
+                "[StreamParser] finish: JSON parse FAILED (%s: %s) "
+                "full_json_first200=%s — returning empty refs",
+                type(exc).__name__,
+                exc,
+                repr(self._full_json[:200]),
+            )
             return StructuredAnswer(answer=answer, references=[])
 
     def _handle_before_answer(self, chunk: str) -> str:
@@ -94,6 +117,11 @@ class StreamingAnswerParser:
         # Check if this doesn't look like JSON at all
         stripped = self._buffer.lstrip()
         if stripped and not stripped.startswith("{"):
+            logger.info(
+                "[StreamParser] switching to PASSTHROUGH: buffer doesn't start "
+                "with '{', starts with: %s",
+                repr(stripped[:50]),
+            )
             self._state = _State.PASSTHROUGH
             self._passthrough_parts.append(self._buffer)
             return self._buffer

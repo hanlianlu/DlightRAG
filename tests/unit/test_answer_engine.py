@@ -170,15 +170,29 @@ class TestAnswerEngineGenerateStructured:
         assert result.references[0].id == 1
         assert result.references[0].title == "report.pdf"
 
-    async def test_structured_parse_failure_degrades_to_raw_text(self) -> None:
-        """If JSON parsing fails, return raw text with empty references."""
-        llm_func = AsyncMock(return_value="not valid json {broken")
+    async def test_structured_text_path_passes_response_schema(self) -> None:
+        """Text-only structured path must pass response_schema to LLM."""
+        structured_json = json.dumps({"answer": "Answer.", "references": []})
+        llm_func = AsyncMock(return_value=structured_json)
+        engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
+
+        await engine.generate("query", _text_contexts())
+
+        _, kwargs = llm_func.call_args
+        assert kwargs.get("response_schema") is StructuredAnswer
+
+    async def test_structured_parse_failure_degrades_to_freetext_parsing(self) -> None:
+        """If JSON parsing fails, try freetext reference extraction."""
+        raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
+        llm_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
 
         result = await engine.generate("query", _text_contexts())
 
-        assert result.answer == "not valid json {broken"
-        assert result.references == []
+        assert "Revenue grew 15%" in result.answer
+        assert len(result.references) == 1
+        assert result.references[0].id == 1
+        assert result.references[0].title == "report.pdf"
 
     async def test_structured_vlm_sends_response_schema(self) -> None:
         structured_json = json.dumps({"answer": "Chart shows growth [1-1].", "references": []})
@@ -427,3 +441,96 @@ class TestAnswerEngineLogging:
             await engine.generate_stream("query", _text_contexts())
             mock_log.assert_called_once()
             assert mock_log.call_args[0][0] == "answer_engine.generate_stream"
+
+
+# ---------------------------------------------------------------------------
+# TestAnswerEngine — Freetext reference parsing
+# ---------------------------------------------------------------------------
+
+
+class TestAnswerEngineFreetextReferences:
+    """Test parse_freetext_references extracts references from LLM output."""
+
+    def test_parses_references_section(self) -> None:
+        from dlightrag.citations.parser import parse_freetext_references
+
+        raw = (
+            "Revenue grew 15% [1-1].\n\n"
+            "### References\n"
+            "- [1] report.pdf\n"
+            "- [2] quarterly_report.pdf\n"
+        )
+        answer, refs = parse_freetext_references(raw)
+        assert "Revenue grew 15%" in answer
+        assert "### References" not in answer
+        assert len(refs) == 2
+        assert refs[0].id == 1
+        assert refs[0].title == "report.pdf"
+        assert refs[1].id == 2
+        assert refs[1].title == "quarterly_report.pdf"
+
+    def test_no_references_section_returns_empty(self) -> None:
+        from dlightrag.citations.parser import parse_freetext_references
+
+        raw = "Just a plain answer with no references section."
+        answer, refs = parse_freetext_references(raw)
+        assert answer == raw
+        assert refs == []
+
+    def test_case_insensitive_heading(self) -> None:
+        from dlightrag.citations.parser import parse_freetext_references
+
+        raw = "Answer text.\n\n## references\n[1] doc.pdf"
+        answer, refs = parse_freetext_references(raw)
+        assert len(refs) == 1
+        assert refs[0].title == "doc.pdf"
+
+    def test_freetext_generate_extracts_references(self) -> None:
+        """End-to-end: freetext provider generates references section, engine parses it."""
+        import asyncio
+
+        raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
+        llm_func = AsyncMock(return_value=raw)
+        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+
+        result = asyncio.get_event_loop().run_until_complete(
+            engine.generate("query", _text_contexts())
+        )
+
+        assert "Growth is 15%" in result.answer
+        assert len(result.references) == 1
+        assert result.references[0].title == "report.pdf"
+
+
+# ---------------------------------------------------------------------------
+# TestAnswerEngine — Structured text path passes response_schema
+# ---------------------------------------------------------------------------
+
+
+class TestAnswerEngineStreamStructured:
+    """Test streaming text-only path passes response_schema when structured."""
+
+    async def test_stream_text_structured_passes_response_schema(self) -> None:
+        async def mock_stream():
+            yield '{"answer": "hello", "references": []}'
+
+        llm_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(llm_model_func=llm_func, provider="openai")
+
+        await engine.generate_stream("query", _text_contexts())
+
+        _, kwargs = llm_func.call_args
+        assert kwargs.get("response_schema") is StructuredAnswer
+        assert kwargs.get("stream") is True
+
+    async def test_stream_text_freetext_no_response_schema(self) -> None:
+        async def mock_stream():
+            yield "plain text"
+
+        llm_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(llm_model_func=llm_func, provider="ollama")
+
+        await engine.generate_stream("query", _text_contexts())
+
+        _, kwargs = llm_func.call_args
+        assert kwargs.get("response_schema") is None
