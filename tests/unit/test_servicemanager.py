@@ -158,21 +158,125 @@ class TestRouting:
         assert call_kwargs["config"].workspace == test_cfg.workspace
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
-    async def test_aanswer_single_workspace(self, mock_create, test_cfg) -> None:
+    async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:
+        """aanswer() routes through aretrieve() then AnswerEngine.generate()."""
         mock_svc = AsyncMock()
-        mock_svc.aanswer.return_value = MagicMock()
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts)
         mock_create.return_value = mock_svc
-        manager = RAGServiceManager(config=test_cfg)
-        await manager.aanswer("query", workspace="ws-a")
-        mock_svc.aanswer.assert_awaited_once()
 
-    @patch("dlightrag.core.servicemanager.federated_answer", new_callable=AsyncMock)
-    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
-    async def test_aanswer_multi_workspace_federates(self, mock_create, mock_fed, test_cfg) -> None:
-        mock_fed.return_value = MagicMock()
+        mock_engine = AsyncMock()
+        mock_engine.generate.return_value = MagicMock()
+
         manager = RAGServiceManager(config=test_cfg)
-        await manager.aanswer("query", workspaces=["ws-a", "ws-b"])
-        mock_fed.assert_awaited_once()
+        manager._answer_engine = mock_engine
+
+        await manager.aanswer("query", workspace="ws-a")
+        mock_svc.aretrieve.assert_awaited_once()
+        mock_engine.generate.assert_awaited_once_with("query", mock_contexts)
+
+
+class TestAnswerViaEngine:
+    """aanswer and aanswer_stream route through AnswerEngine."""
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:
+        """aanswer() calls aretrieve() then AnswerEngine.generate()."""
+        mock_svc = AsyncMock()
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_retrieval = MagicMock(contexts=mock_contexts)
+        mock_svc.aretrieve.return_value = mock_retrieval
+        mock_create.return_value = mock_svc
+
+        mock_engine = AsyncMock()
+        expected_result = MagicMock()
+        mock_engine.generate.return_value = expected_result
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_engine = mock_engine
+
+        result = await manager.aanswer("what is X?", workspace="ws-a")
+        mock_svc.aretrieve.assert_awaited_once()
+        mock_engine.generate.assert_awaited_once_with("what is X?", mock_contexts)
+        assert result is expected_result
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_stream_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:
+        """aanswer_stream() calls aretrieve() then AnswerEngine.generate_stream()."""
+        mock_svc = AsyncMock()
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_retrieval = MagicMock(contexts=mock_contexts)
+        mock_svc.aretrieve.return_value = mock_retrieval
+        mock_create.return_value = mock_svc
+
+        mock_engine = AsyncMock()
+        mock_stream = AsyncMock()
+        mock_engine.generate_stream.return_value = (mock_contexts, mock_stream)
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_engine = mock_engine
+
+        contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws-a")
+        mock_svc.aretrieve.assert_awaited_once()
+        mock_engine.generate_stream.assert_awaited_once_with("what is X?", mock_contexts)
+        assert contexts is mock_contexts
+        assert stream is mock_stream
+
+    @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_multi_workspace_uses_federated_retrieve(
+        self, mock_create, mock_fed_retrieve, test_cfg
+    ) -> None:
+        """aanswer() with multiple workspaces federates retrieval, then uses engine."""
+        mock_contexts = {"chunks": [{"text": "ctx"}], "entities": [], "relationships": []}
+        mock_fed_retrieve.return_value = MagicMock(contexts=mock_contexts)
+
+        mock_engine = AsyncMock()
+        expected_result = MagicMock()
+        mock_engine.generate.return_value = expected_result
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_engine = mock_engine
+
+        result = await manager.aanswer("query", workspaces=["ws-a", "ws-b"])
+        mock_fed_retrieve.assert_awaited_once()
+        mock_engine.generate.assert_awaited_once_with("query", mock_contexts)
+        assert result is expected_result
+
+    @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_stream_multi_workspace(
+        self, mock_create, mock_fed_retrieve, test_cfg
+    ) -> None:
+        """aanswer_stream() with multiple workspaces federates retrieval."""
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_fed_retrieve.return_value = MagicMock(contexts=mock_contexts)
+
+        mock_engine = AsyncMock()
+        mock_stream = AsyncMock()
+        mock_engine.generate_stream.return_value = (mock_contexts, mock_stream)
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_engine = mock_engine
+
+        contexts, stream = await manager.aanswer_stream("query", workspaces=["ws-a", "ws-b"])
+        mock_fed_retrieve.assert_awaited_once()
+        mock_engine.generate_stream.assert_awaited_once_with("query", mock_contexts)
+        assert contexts is mock_contexts
+
+    def test_get_answer_engine_lazy_creates(self, test_cfg) -> None:
+        """_get_answer_engine() lazily creates an AnswerEngine instance."""
+        manager = RAGServiceManager(config=test_cfg)
+        assert manager._answer_engine is None
+        with patch("dlightrag.models.llm.get_llm_model_func") as mock_llm, \
+             patch("dlightrag.models.llm.get_vision_model_func") as mock_vis:
+            mock_llm.return_value = MagicMock()
+            mock_vis.return_value = MagicMock()
+            engine = manager._get_answer_engine()
+            assert engine is not None
+            # Second call returns same instance
+            engine2 = manager._get_answer_engine()
+            assert engine2 is engine
 
 
 class TestDelegation:
