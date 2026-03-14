@@ -11,7 +11,8 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 - **Knowledge graph + vector retrieval** — Fusional search based on LightRAG's foundation
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images, etc.
 - **Reranking** — Generic LLM-based list/point-wise; Specialized rerankers support from Cohere, Jina, Aliyun, Azure Cohere; Support any additional backend via custom endpoint
-- **Cross-workspace federation** — Query across workspaces with round-robin merging
+- **Cross-workspace federation** — Query across embedding-compatible workspaces with round-robin merging
+- **Conversational query rewriting** — Web UI rewrites follow-up messages into standalone queries via LLM
 - **Citation and highlighter** — Answer / Retrieved contexts with source, page, citation, highlighting attribution.
 - **Flexible sourcing** — Local filesystem, Azure Blob Storage, Snowflake
 - **Four interfaces** — Web UI, REST API, MCP server, and Python SDK
@@ -107,23 +108,21 @@ cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
 ```python
 import asyncio
 from dotenv import load_dotenv
-from dlightrag import RAGService, DlightragConfig
+from dlightrag import RAGServiceManager, DlightragConfig
 
 load_dotenv()  # load .env
 
 async def main():
     config = DlightragConfig()
-    service = await RAGService.create(config=config)
+    manager = RAGServiceManager(config)
 
-    await service.aingest(source_type="local", path="./docs")
+    await manager.aingest(workspace="default", source_type="local", path="./docs")
 
-    result = await service.aretrieve(query="What are the key findings?")
+    result = await manager.aretrieve(query="What are the key findings?")
     print(result.contexts)
 
-    result = await service.aanswer(query="What are the key findings?")
+    result = await manager.aanswer(query="What are the key findings?")
     print(result.answer)
-
-    await service.close()
 
 asyncio.run(main())
 ```
@@ -170,7 +169,7 @@ All caption mode parsers use Docling's HybridChunker for structure-aware chunkin
 | Entity extraction | `CHAT_MODEL` | `CHAT_MODEL` |
 | Embedding | `EMBEDDING_MODEL` | `EMBEDDING_MODEL` (multimodal) |
 | Rerank | `RERANK_*` via LightRAG | `VISION_MODEL` ² or `RERANK_*` API |
-| Answer generation | `CHAT_MODEL` | `VISION_MODEL` (sees page images) |
+| Answer generation | `CHAT_MODEL` via AnswerEngine | `VISION_MODEL` via AnswerEngine (sees page images) |
 
 ¹ Falls back to `CHAT_MODEL` if vision model not configured.
 ² When `RERANK_BACKEND=llm` (pointwise VLM scoring).

@@ -16,11 +16,14 @@
                 <mxCell id="mcp" value="MCP :8101" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;arcSize=50;" parent="interfaces" vertex="1">
                     <mxGeometry x="345" y="22" width="130" height="32" as="geometry"/>
                 </mxCell>
-                <mxCell id="rsm" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;lazy per-workspace cache · cross-workspace federation&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
+                <mxCell id="rsm" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;federation · answer generation · workspace compatibility&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
                     <mxGeometry x="200" y="100" width="500" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="rs" value="&lt;b&gt;RAGService&lt;/b&gt; &amp;ensp; &lt;i style=&#39;color:#6b7280&#39;&gt;one per workspace&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
-                    <mxGeometry x="270" y="190" width="360" height="40" as="geometry"/>
+                <mxCell id="ae" value="&lt;b&gt;AnswerEngine&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;prompt · LLM/VLM · citation · streaming&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#66bb6a;strokeWidth=1.5;fontSize=11;fontFamily=Inter;" parent="1" vertex="1">
+                    <mxGeometry x="530" y="185" width="230" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="rs" value="&lt;b&gt;RAGService&lt;/b&gt; &amp;ensp; &lt;i style=&#39;color:#6b7280&#39;&gt;ingestion · retrieval&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
+                    <mxGeometry x="200" y="190" width="310" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="caption" value="&lt;b style=&#39;font-size:11px;color:#92631a&#39;&gt;Caption Mode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf6ea;strokeColor=#d4a85c;strokeWidth=1.5;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
                     <mxGeometry x="70" y="310" width="400" height="220" as="geometry"/>
@@ -28,7 +31,7 @@
                 <mxCell id="ip" value="&lt;b&gt;IngestionPipeline&lt;/b&gt;&lt;br&gt;policy filter · dedup · concurrency" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="caption" vertex="1">
                     <mxGeometry x="20" y="35" width="170" height="55" as="geometry"/>
                 </mxCell>
-                <mxCell id="re" value="&lt;b&gt;RetrievalEngine&lt;/b&gt;&lt;br&gt;rerank · citation · streaming" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="caption" vertex="1">
+                <mxCell id="re" value="&lt;b&gt;RetrievalEngine&lt;/b&gt;&lt;br&gt;rerank · context retrieval" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="caption" vertex="1">
                     <mxGeometry x="210" y="35" width="170" height="55" as="geometry"/>
                 </mxCell>
                 <mxCell id="ra" value="&lt;b&gt;RAGAnything&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;document parsing · VLM captioning&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="caption" vertex="1">
@@ -43,7 +46,7 @@
                 <mxCell id="unified" value="&lt;b style=&#39;font-size:11px;color:#3d556e&#39;&gt;Unified Mode&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#edf1f7;strokeColor=#6b83a5;strokeWidth=1.5;verticalAlign=top;spacingTop=-2;container=1;collapsible=0;" parent="1" vertex="1">
                     <mxGeometry x="520" y="310" width="280" height="220" as="geometry"/>
                 </mxCell>
-                <mxCell id="ure" value="&lt;b&gt;UnifiedRepresentEngine&lt;/b&gt;&lt;br&gt;page render · multimodal embed&lt;br&gt;VLM extraction · visual retrieval" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="unified" vertex="1">
+                <mxCell id="ure" value="&lt;b&gt;UnifiedRepresentEngine&lt;/b&gt;&lt;br&gt;page render · multimodal embed&lt;br&gt;VLM extraction · context retrieval" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=11;fontFamily=Inter;" parent="unified" vertex="1">
                     <mxGeometry x="20" y="50.76923076923077" width="240" height="126.9230769230769" as="geometry"/>
                 </mxCell>
                 <mxCell id="lr" value="&lt;b style=&#39;font-size:13px&#39;&gt;LightRAG&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#7a5d00&#39;&gt;knowledge graph · vector search&lt;/i&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef0c7;strokeColor=#c48b00;strokeWidth=2;fontSize=12;fontFamily=Inter;" parent="1" vertex="1">
@@ -64,7 +67,10 @@
                 <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="interfaces" target="rsm" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rsm" target="rs" edge="1">
+                <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rsm" target="rs" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="e_ae" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#66bb6a;strokeWidth=1.5;exitX=0.8;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rsm" target="ae" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
                 <mxCell id="e3" value="rag_mode = caption" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#94a3b8;strokeWidth=1.5;fontSize=10;fontColor=#6b7280;exitX=0.3;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="rs" target="caption" edge="1">
