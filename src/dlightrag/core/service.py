@@ -296,6 +296,11 @@ class RAGService:
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )""")
+        # pg_trgm for fuzzy metadata search (best-effort, not required)
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+        except Exception:
+            logger.info("pg_trgm extension not available — fuzzy metadata search disabled")
         logger.info("PostgreSQL schema ensured")
 
     async def _do_initialize(self) -> None:
