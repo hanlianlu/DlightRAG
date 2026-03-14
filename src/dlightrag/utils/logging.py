@@ -3,6 +3,33 @@ from collections.abc import Sequence
 from typing import Any
 
 
+def log_answer_llm_output(
+    location: str,
+    *,
+    structured: bool,
+    provider: str,
+    query: str,
+    raw: str = None,
+    answer_text: str = None,
+    parse_error: Exception = None,
+):
+    """
+    统一记录LLM answer相关的原始输出、路径分支、异常等。
+    """
+    logger = logging.getLogger("dlightrag.answer")
+    ctx = f"structured={structured} provider={provider} query={query[:40]}"
+    if parse_error is not None:
+        logger.warning(
+            f"[ANSWER][{location}][parse_fail] {ctx} raw={str(raw)[:100]} exc={parse_error}"
+        )
+    elif raw is not None:
+        logger.info(f"[ANSWER][{location}][llm_raw] {ctx} raw={str(raw)[:100]}")
+    elif answer_text is not None:
+        logger.info(f"[ANSWER][{location}][llm_raw] {ctx} answer_text={str(answer_text)[:100]}")
+    else:
+        logger.info(f"[ANSWER][{location}][llm_path] {ctx}")
+
+
 def log_references(location: str, refs: Sequence[Any], **context):
     """Unified references logging for all layers.
     Args:
@@ -10,7 +37,7 @@ def log_references(location: str, refs: Sequence[Any], **context):
         refs: list or sequence of references (can be empty)
         context: extra info, e.g. query, workspace, mode, etc.
     """
-    logger = logging.getLogger("dlightrag.references")
+    logger = logging.getLogger("dlightrag.answer")
     level = logging.WARNING if not refs else logging.INFO
     sample = refs[:2] if refs else []
     ctx_str = " ".join(f"{k}={str(v)[:40]}" for k, v in context.items())
