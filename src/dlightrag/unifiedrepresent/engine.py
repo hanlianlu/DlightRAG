@@ -11,7 +11,7 @@ import asyncio
 import base64
 import io
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +19,7 @@ import numpy as np
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
 from dlightrag.unifiedrepresent.renderer import PageRenderer
@@ -33,7 +33,7 @@ class UnifiedRepresentEngine:
 
     Holds a LightRAG instance, a visual_chunks KV store, and all
     sub-components (renderer, embedder, extractor, retriever). Exposes
-    ``aingest()``, ``aretrieve()``, ``aanswer()``, ``aanswer_stream()``.
+    ``aingest()``, ``aretrieve()``, ``adelete_doc()``, ``aclose()``.
     """
 
     def __init__(
@@ -219,20 +219,6 @@ class UnifiedRepresentEngine:
                 images.append(base64.b64decode(item["data"]))
         return images or None
 
-    @staticmethod
-    def _build_conversation_context(
-        conversation_history: list[dict[str, str]] | None,
-    ) -> str | None:
-        """Convert conversation history list to a context string for VLM."""
-        if not conversation_history:
-            return None
-        lines = []
-        for msg in conversation_history:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            lines.append(f"{role}: {content}")
-        return "\n".join(lines) or None
-
     async def aretrieve(
         self,
         query: str,
@@ -245,67 +231,16 @@ class UnifiedRepresentEngine:
     ) -> RetrievalResult:
         """Retrieve relevant visual chunks (Phases 1-3)."""
         images = self._extract_image_bytes(multimodal_content)
-        conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
         result = await self.retriever.retrieve(
             query=query,
             mode=mode or self.config.default_mode,
             top_k=top_k or self.config.top_k,
             chunk_top_k=chunk_top_k or self.config.chunk_top_k,
             images=images,
-            conversation_context=conversation_context,
         )
         return RetrievalResult(
             answer=None,
             contexts=result.get("contexts", {}),
-        )
-
-    async def aanswer(
-        self,
-        query: str,
-        *,
-        mode: str | None = None,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> RetrievalResult:
-        """Retrieve and generate answer (Phases 1-4)."""
-        images = self._extract_image_bytes(multimodal_content)
-        conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
-        result = await self.retriever.answer(
-            query=query,
-            mode=mode or self.config.default_mode,
-            top_k=top_k or self.config.top_k,
-            chunk_top_k=chunk_top_k or self.config.chunk_top_k,
-            images=images,
-            conversation_context=conversation_context,
-        )
-        return RetrievalResult(
-            answer=result.get("answer"),
-            contexts=result.get("contexts", {}),
-            references=result.get("references", []),
-        )
-
-    async def aanswer_stream(
-        self,
-        query: str,
-        *,
-        mode: str | None = None,
-        top_k: int | None = None,
-        chunk_top_k: int | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
-        **kwargs: Any,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Retrieve and stream answer (Phases 1-3 batch + Phase 4 streaming)."""
-        images = self._extract_image_bytes(multimodal_content)
-        conversation_context = self._build_conversation_context(kwargs.get("conversation_history"))
-        return await self.retriever.answer_stream(
-            query=query,
-            mode=mode or self.config.default_mode,
-            top_k=top_k or self.config.top_k,
-            chunk_top_k=chunk_top_k or self.config.chunk_top_k,
-            images=images,
-            conversation_context=conversation_context,
         )
 
     async def adelete_doc(self, doc_id: str) -> dict[str, Any]:

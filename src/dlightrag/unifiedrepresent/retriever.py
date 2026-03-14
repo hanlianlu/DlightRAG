@@ -2,7 +2,7 @@
 """Visual retrieval pipeline for unified representational RAG.
 
 Handles query processing: LightRAG KG retrieval -> visual chunk resolution ->
-visual reranking -> VLM answer generation.
+visual reranking.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import io
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from typing import Any, Literal, cast
 
 import httpx
@@ -20,7 +20,6 @@ from lightrag import LightRAG, QueryParam
 from lightrag.constants import GRAPH_FIELD_SEP
 from PIL import Image
 
-from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.unifiedrepresent.multimodal_query import enhance_query_with_images
 
@@ -69,7 +68,6 @@ class VisualRetriever:
         top_k: int = 60,
         chunk_top_k: int = 10,
         images: list[bytes] | None = None,
-        conversation_context: str | None = None,
     ) -> dict:
         """Run Phase 1-3 with optional dual-path for multimodal queries.
 
@@ -85,7 +83,6 @@ class VisualRetriever:
                     query=query,
                     images=images,
                     vision_model_func=self.vision_model_func,
-                    conversation_context=conversation_context,
                 )
             else:
                 enhanced_query = query
@@ -290,177 +287,6 @@ class VisualRetriever:
                 ],
             },
         }
-
-    async def answer(
-        self,
-        query: str,
-        mode: str = "mix",
-        top_k: int = 60,
-        chunk_top_k: int = 10,
-        images: list[bytes] | None = None,
-        conversation_context: str | None = None,
-    ) -> dict:
-        """Run Phase 1-4: retrieve + VLM answer generation.
-
-        Returns dict with keys: answer, contexts
-        """
-        retrieval = await self.retrieve(
-            query,
-            mode,
-            top_k,
-            chunk_top_k,
-            images=images,
-            conversation_context=conversation_context,
-        )
-
-        if not self.vision_model_func:
-            return {"answer": None, "references": [], **retrieval}
-
-        # Phase 4: Build multimodal prompt and call VLM
-        from dlightrag.models.llm import provider_supports_structured_vision
-        from dlightrag.models.schemas import StructuredAnswer
-        from dlightrag.unifiedrepresent.prompts import (
-            FREETEXT_REMINDER,
-            get_answer_system_prompt,
-        )
-
-        contexts = retrieval["contexts"]
-        answer_query = retrieval.get("enhanced_query", query)
-        structured = provider_supports_structured_vision(self.provider)
-        system_prompt = get_answer_system_prompt(structured=structured)
-
-        kg_context = self._format_kg_context(contexts)
-        indexer = self._build_citation_indexer(contexts)
-        ref_list = indexer.format_reference_list()
-        prompt_parts = [
-            f"Knowledge Graph Context:\n{kg_context}",
-            f"Reference Document List:\n{ref_list}",
-        ]
-        if conversation_context:
-            prompt_parts.append(f"Conversation History:\n{conversation_context}")
-        prompt_parts.append(f"Question: {answer_query}")
-        if not structured:
-            prompt_parts.append(FREETEXT_REMINDER)
-        user_prompt = "\n\n".join(prompt_parts)
-
-        messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-
-        if structured:
-            raw = await self.vision_model_func(
-                user_prompt,
-                messages=messages,
-                response_schema=StructuredAnswer,
-            )
-            try:
-                result = StructuredAnswer.model_validate_json(raw)
-            except Exception:
-                logger.warning("Structured answer parse failed, degrading to raw text")
-                result = StructuredAnswer(answer=raw, references=[])
-        else:
-            answer_text = await self.vision_model_func(user_prompt, messages=messages)
-            result = StructuredAnswer(answer=answer_text, references=[])
-
-        # Log references info
-        try:
-            from dlightrag.utils.logging import log_references
-
-            log_references(
-                "ragservice.answer",
-                getattr(result, "references", []),
-                query=query,
-                mode=mode,
-                provider=getattr(self, "provider", None),
-                structured=structured,
-            )
-        except Exception:
-            logger.debug("log_references failed", exc_info=True)
-
-        return {"answer": result.answer, "references": result.references, **retrieval}
-
-    async def answer_stream(
-        self,
-        query: str,
-        mode: str = "mix",
-        top_k: int = 60,
-        chunk_top_k: int = 10,
-        images: list[bytes] | None = None,
-        conversation_context: str | None = None,
-    ) -> tuple[dict, AsyncIterator[str] | None]:
-        """Run Phase 1-3 batch + Phase 4 streaming.
-
-        Returns (contexts, token_iterator).
-        All data lives in contexts; there is no separate raw dict.
-        """
-        retrieval = await self.retrieve(
-            query,
-            mode,
-            top_k,
-            chunk_top_k,
-            images=images,
-            conversation_context=conversation_context,
-        )
-
-        contexts = retrieval["contexts"]
-        answer_query = retrieval.get("enhanced_query", query)
-
-        if not self.vision_model_func:
-            return contexts, None
-
-        from dlightrag.models.llm import provider_supports_structured_vision
-        from dlightrag.models.schemas import StructuredAnswer
-        from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
-        from dlightrag.unifiedrepresent.prompts import (
-            FREETEXT_REMINDER,
-            get_answer_system_prompt,
-        )
-
-        structured = provider_supports_structured_vision(self.provider)
-        system_prompt = get_answer_system_prompt(structured=structured)
-
-        kg_context = self._format_kg_context(contexts)
-        indexer = self._build_citation_indexer(contexts)
-        ref_list = indexer.format_reference_list()
-        prompt_parts = [
-            f"Knowledge Graph Context:\n{kg_context}",
-            f"Reference Document List:\n{ref_list}",
-        ]
-        if conversation_context:
-            prompt_parts.append(f"Conversation History:\n{conversation_context}")
-        prompt_parts.append(f"Question: {answer_query}")
-        if not structured:
-            prompt_parts.append(FREETEXT_REMINDER)
-        user_prompt = "\n\n".join(prompt_parts)
-
-        messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-        token_iterator = await self.vision_model_func(
-            user_prompt,
-            messages=messages,
-            stream=True,
-            response_schema=StructuredAnswer if structured else None,
-        )
-
-        if structured and hasattr(token_iterator, "__aiter__"):
-            parser = StreamingAnswerParser()
-            token_iterator = AnswerStream(token_iterator, parser)
-
-        # Log references if available (for streaming, may be on token_iterator)
-        try:
-            from dlightrag.utils.logging import log_references
-
-            refs = getattr(token_iterator, "references", None)
-            if refs is not None:
-                log_references(
-                    "ragservice.answer_stream",
-                    refs,
-                    query=query,
-                    mode=mode,
-                    provider=getattr(self, "provider", None),
-                    structured=structured,
-                )
-        except Exception:
-            logger.debug("log_references failed", exc_info=True)
-
-        return contexts, token_iterator
 
     async def query_by_visual_embedding(
         self,
@@ -739,42 +565,3 @@ class VisualRetriever:
             {"role": "user", "content": content},
         ]
 
-    def _format_kg_context(self, contexts: dict) -> str:
-        """Format KG context (entities + relationships) as text for VLM prompt."""
-        parts: list[str] = []
-
-        entities = contexts.get("entities", [])
-        if entities:
-            parts.append("## Entities")
-            for e in entities[:20]:  # Limit to avoid prompt overflow
-                name = e.get("entity_name", "")
-                etype = e.get("entity_type", "")
-                desc = e.get("description", "")
-                parts.append(f"- **{name}** ({etype}): {desc}")
-
-        rels = contexts.get("relationships", [])
-        if rels:
-            parts.append("\n## Relationships")
-            for r in rels[:20]:
-                src = r.get("src_id", "")
-                tgt = r.get("tgt_id", "")
-                desc = r.get("description", "")
-                parts.append(f"- {src} -> {tgt}: {desc}")
-
-        return "\n".join(parts) if parts else "No knowledge graph context available."
-
-    @staticmethod
-    def _build_citation_indexer(contexts: dict) -> CitationIndexer:
-        """Build a CitationIndexer from the retrieval contexts dict.
-
-        Flattens all context types (chunks, entities, relationships) into
-        a single list, matching the shape expected by
-        :meth:`CitationIndexer.build_index`.
-        """
-        flat: list[dict[str, Any]] = []
-        for items in contexts.values():
-            if isinstance(items, list):
-                flat.extend(items)
-        indexer = CitationIndexer()
-        indexer.build_index(flat)
-        return indexer
