@@ -101,7 +101,6 @@ class AnswerRequest(BaseModel):
     stream: bool = False
     top_k: int | None = None
     chunk_top_k: int | None = None
-    conversation_history: list[dict[str, str]] | None = None
     workspaces: list[str] | None = None
     multimodal_content: list[dict[str, Any]] | None = None
 
@@ -196,8 +195,6 @@ async def answer(body: AnswerRequest, request: Request):
 
     manager = _get_manager(request)
     kwargs: dict[str, Any] = {}
-    if body.conversation_history:
-        kwargs["conversation_history"] = body.conversation_history
     if body.multimodal_content:
         kwargs["multimodal_content"] = body.multimodal_content
 
