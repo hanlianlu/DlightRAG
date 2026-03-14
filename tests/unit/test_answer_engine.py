@@ -20,8 +20,8 @@ from dlightrag.models.schemas import StructuredAnswer
 
 def _text_contexts() -> RetrievalContexts:
     """Contexts with text-only chunks (no image_data)."""
-    return RetrievalContexts(
-        chunks=[
+    return {
+        "chunks": [
             {
                 "chunk_id": "c1",
                 "reference_id": "1",
@@ -30,7 +30,7 @@ def _text_contexts() -> RetrievalContexts:
                 "page_idx": 3,
             },
         ],
-        entities=[
+        "entities": [
             {
                 "entity_name": "Revenue",
                 "entity_type": "Metric",
@@ -38,14 +38,14 @@ def _text_contexts() -> RetrievalContexts:
                 "source_id": "c1",
             },
         ],
-        relationships=[],
-    )
+        "relationships": [],
+    }
 
 
 def _image_contexts() -> RetrievalContexts:
     """Contexts with image data in chunks."""
-    return RetrievalContexts(
-        chunks=[
+    return {
+        "chunks": [
             {
                 "chunk_id": "c1",
                 "reference_id": "1",
@@ -55,9 +55,9 @@ def _image_contexts() -> RetrievalContexts:
                 "image_data": "iVBORw0KGgoAAAANS",
             },
         ],
-        entities=[],
-        relationships=[],
-    )
+        "entities": [],
+        "relationships": [],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ class TestAnswerEngineHelpers:
         assert AnswerEngine._has_images(_text_contexts()) is False
 
     def test_has_images_empty(self) -> None:
-        empty = RetrievalContexts(chunks=[], entities=[], relationships=[])
+        empty: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
         assert AnswerEngine._has_images(empty) is False
 
     def test_build_vlm_messages_structure(self) -> None:
@@ -332,9 +332,9 @@ class TestAnswerEngineHelpers:
         assert types.count("image_url") == 1
 
     def test_format_kg_context_with_entities_and_rels(self) -> None:
-        contexts = RetrievalContexts(
-            chunks=[],
-            entities=[
+        contexts: RetrievalContexts = {
+            "chunks": [],
+            "entities": [
                 {
                     "entity_name": "Acme",
                     "entity_type": "Company",
@@ -342,7 +342,7 @@ class TestAnswerEngineHelpers:
                     "source_id": "s1",
                 },
             ],
-            relationships=[
+            "relationships": [
                 {
                     "src_id": "Acme",
                     "tgt_id": "Revenue",
@@ -350,7 +350,7 @@ class TestAnswerEngineHelpers:
                     "source_id": "s1",
                 },
             ],
-        )
+        }
         result = AnswerEngine._format_kg_context(contexts)
         assert "## Entities" in result
         assert "**Acme**" in result
@@ -358,7 +358,7 @@ class TestAnswerEngineHelpers:
         assert "Acme -> Revenue" in result
 
     def test_format_kg_context_empty(self) -> None:
-        contexts = RetrievalContexts(chunks=[], entities=[], relationships=[])
+        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
         result = AnswerEngine._format_kg_context(contexts)
         assert result == "No knowledge graph context available."
 
@@ -372,9 +372,9 @@ class TestAnswerEngineHelpers:
             }
             for i in range(30)
         ]
-        contexts = RetrievalContexts(
-            chunks=[], entities=entities, relationships=[]
-        )
+        contexts: RetrievalContexts = {
+            "chunks": [], "entities": entities, "relationships": []
+        }
         result = AnswerEngine._format_kg_context(contexts)
         # Should have header + 20 entities = 21 lines in entity section
         lines = [l for l in result.split("\n") if l.strip()]

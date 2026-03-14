@@ -174,9 +174,10 @@ class PageRenderer:
             If LibreOffice is not installed or the conversion fails.
         """
         if self._converter:
+            converter = self._converter  # bind for closure
 
             def _convert_and_render(p: Path) -> RenderResult:
-                pdf_bytes = self._converter.file_to_pdf_bytes(p)
+                pdf_bytes = converter.file_to_pdf_bytes(p)
                 return self._render_pdf_from_bytes(pdf_bytes)
 
             render_result = await asyncio.to_thread(_convert_and_render, path)

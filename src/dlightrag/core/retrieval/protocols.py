@@ -48,12 +48,12 @@ class RelationshipContext(TypedDict):
     _workspace: NotRequired[str]
 
 
-class RetrievalContexts(TypedDict):
-    """Top-level contexts structure returned by retrieval backends."""
-
-    chunks: list[ChunkContext]
-    entities: list[EntityContext]
-    relationships: list[RelationshipContext]
+# RetrievalContexts is intentionally a plain type alias rather than a TypedDict.
+# Contexts flow through JSON/DB boundaries as ``dict[str, Any]`` and are built
+# incrementally in federation merges, so a strict TypedDict creates invariance
+# errors throughout the codebase.  The per-field TypedDicts above (ChunkContext,
+# EntityContext, RelationshipContext) still document the expected shape.
+RetrievalContexts = dict[str, list[dict[str, Any]]]
 
 
 # ── Result dataclass ──────────────────────────────────────────────
@@ -65,7 +65,7 @@ class RetrievalResult:
 
     answer: str | None = field(default=None)
     contexts: RetrievalContexts = field(
-        default_factory=lambda: RetrievalContexts(chunks=[], entities=[], relationships=[])
+        default_factory=lambda: {"chunks": [], "entities": [], "relationships": []}
     )
     references: list[Reference] = field(default_factory=list)
 

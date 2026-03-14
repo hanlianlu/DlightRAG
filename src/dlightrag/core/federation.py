@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +66,11 @@ def merge_results(
 
     return RetrievalResult(
         answer=None,
-        contexts=RetrievalContexts(
-            chunks=merged_chunks,
-            entities=merged_entities,
-            relationships=merged_relations,
-        ),
+        contexts={
+            "chunks": merged_chunks,
+            "entities": merged_entities,
+            "relationships": merged_relations,
+        },
     )
 
 
@@ -130,7 +130,7 @@ async def federated_retrieve(
     if not workspaces:
         return RetrievalResult(
             answer=None,
-            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
+            contexts={"chunks": [], "entities": [], "relationships": []},
         )
 
     # Single workspace — no federation overhead
@@ -169,7 +169,7 @@ async def federated_retrieve(
     if not successful_results:
         return RetrievalResult(
             answer=None,
-            contexts=RetrievalContexts(chunks=[], entities=[], relationships=[]),
+            contexts={"chunks": [], "entities": [], "relationships": []},
         )
 
     return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)
