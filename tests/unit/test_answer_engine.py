@@ -172,7 +172,7 @@ class TestAnswerEngineGenerateStructured:
         assert result.references[0].title == "report.pdf"
 
     async def test_text_structured_passes_response_format(self) -> None:
-        """Text-only + structured provider passes response_format (not response_schema)."""
+        """Text-only + structured provider passes response_format."""
         structured_json = json.dumps(
             {"answer": "Revenue grew 15%.", "references": [{"id": 1, "title": "report.pdf"}]}
         )
@@ -183,7 +183,6 @@ class TestAnswerEngineGenerateStructured:
 
         _, kwargs = llm_func.call_args
         assert kwargs.get("response_format") is StructuredAnswer
-        assert "response_schema" not in kwargs
         assert result.answer == "Revenue grew 15%."
         assert len(result.references) == 1
 
@@ -197,12 +196,11 @@ class TestAnswerEngineGenerateStructured:
 
         _, kwargs = llm_func.call_args
         assert "response_format" not in kwargs
-        assert "response_schema" not in kwargs
         assert "Revenue grew 15%" in result.answer
         assert len(result.references) == 1
         assert result.references[0].title == "report.pdf"
 
-    async def test_structured_vlm_sends_response_schema(self) -> None:
+    async def test_structured_vlm_sends_response_format(self) -> None:
         structured_json = json.dumps({"answer": "Chart shows growth [1-1].", "references": []})
         vlm_func = AsyncMock(return_value=structured_json)
         engine = AnswerEngine(vision_model_func=vlm_func, provider="openai")
@@ -210,7 +208,7 @@ class TestAnswerEngineGenerateStructured:
         await engine.generate("describe chart", _image_contexts())
 
         _, kwargs = vlm_func.call_args
-        assert kwargs.get("response_schema") is StructuredAnswer
+        assert kwargs.get("response_format") is StructuredAnswer
 
 
 # ---------------------------------------------------------------------------
@@ -326,10 +324,8 @@ class TestAnswerEngineGenerateStream:
         from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
 
         assert isinstance(token_iter, AnswerStreamCls)
-        # Should pass response_format, not response_schema
         _, kwargs = llm_func.call_args
         assert kwargs.get("response_format") is StructuredAnswer
-        assert "response_schema" not in kwargs
 
     async def test_stream_text_freetext_not_wrapped(self) -> None:
         """Text-only + non-structured provider should NOT wrap with AnswerStream."""
@@ -550,15 +546,15 @@ class TestAnswerEngineFreetextReferences:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngine — Structured text path passes response_schema
+# TestAnswerEngine — Structured streaming params
 # ---------------------------------------------------------------------------
 
 
 class TestAnswerEngineStreamStructured:
-    """Test streaming paths handle structured params correctly."""
+    """Test streaming paths handle response_format correctly."""
 
     async def test_stream_text_structured_uses_response_format(self) -> None:
-        """Text-only + structured provider passes response_format, never response_schema."""
+        """Text-only + structured provider passes response_format."""
 
         async def mock_stream():
             yield '{"answer": "test", "references": []}'
@@ -570,11 +566,10 @@ class TestAnswerEngineStreamStructured:
 
         _, kwargs = llm_func.call_args
         assert kwargs.get("response_format") is StructuredAnswer
-        assert "response_schema" not in kwargs
         assert kwargs.get("stream") is True
 
-    async def test_stream_text_freetext_no_structured_params(self) -> None:
-        """Non-structured provider passes neither response_format nor response_schema."""
+    async def test_stream_text_freetext_no_response_format(self) -> None:
+        """Non-structured provider passes no response_format."""
 
         async def mock_stream():
             yield "plain text"
@@ -586,4 +581,3 @@ class TestAnswerEngineStreamStructured:
 
         _, kwargs = llm_func.call_args
         assert "response_format" not in kwargs
-        assert "response_schema" not in kwargs
