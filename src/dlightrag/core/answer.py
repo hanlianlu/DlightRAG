@@ -15,7 +15,6 @@ from typing import Any
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import parse_freetext_references
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.models.llm import provider_supports_structured
 from dlightrag.models.schemas import StructuredAnswer
 from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
 from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
@@ -37,11 +36,9 @@ class AnswerEngine:
         *,
         llm_model_func: Callable[..., Any] | None = None,
         vision_model_func: Callable[..., Any] | None = None,
-        provider: str = "openai",
     ) -> None:
         self.llm_model_func = llm_model_func
         self.vision_model_func = vision_model_func
-        self.provider = provider
 
     # ------------------------------------------------------------------
     # Public API
@@ -64,13 +61,12 @@ class AnswerEngine:
             logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
-        structured = provider_supports_structured(self.provider, vision=has_images)
+        structured = getattr(model_func, 'supports_structured', False)
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
 
         logger.info(
-            "[AE] generate: provider=%s structured=%s has_images=%s chunks=%d query=%s",
-            self.provider,
+            "[AE] generate: structured=%s has_images=%s chunks=%d query=%s",
             structured,
             has_images,
             len(contexts.get("chunks", [])),
@@ -80,7 +76,6 @@ class AnswerEngine:
         log_answer_llm_output(
             "answer_engine.generate",
             structured=structured,
-            provider=self.provider,
             query=query,
         )
 
@@ -124,7 +119,6 @@ class AnswerEngine:
             "answer_engine.generate",
             result.references,
             query=query,
-            provider=self.provider,
             structured=structured,
         )
 
@@ -152,13 +146,12 @@ class AnswerEngine:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        structured = provider_supports_structured(self.provider, vision=has_images)
+        structured = getattr(model_func, 'supports_structured', False)
         system_prompt = get_answer_system_prompt(structured=structured)
         user_prompt = self._build_user_prompt(query, contexts)
 
         logger.info(
-            "[AE] generate_stream: provider=%s structured=%s has_images=%s chunks=%d query=%s",
-            self.provider,
+            "[AE] generate_stream: structured=%s has_images=%s chunks=%d query=%s",
             structured,
             has_images,
             len(contexts.get("chunks", [])),
@@ -168,7 +161,6 @@ class AnswerEngine:
         log_answer_llm_output(
             "answer_engine.generate_stream",
             structured=structured,
-            provider=self.provider,
             query=query,
         )
 
@@ -318,7 +310,6 @@ class AnswerEngine:
             log_answer_llm_output(
                 "answer_engine.generate",
                 structured=structured,
-                provider=self.provider,
                 query=query,
                 raw=raw,
             )
@@ -341,7 +332,6 @@ class AnswerEngine:
                 log_answer_llm_output(
                     "answer_engine.generate",
                     structured=structured,
-                    provider=self.provider,
                     query=query,
                     raw=raw,
                     parse_error=e,
@@ -356,7 +346,6 @@ class AnswerEngine:
             log_answer_llm_output(
                 "answer_engine.generate",
                 structured=structured,
-                provider=self.provider,
                 query=query,
                 answer_text=raw,
             )

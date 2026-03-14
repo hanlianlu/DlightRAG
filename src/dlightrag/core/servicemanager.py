@@ -170,7 +170,6 @@ class RAGServiceManager:
             self._answer_engine = AnswerEngine(
                 llm_model_func=get_llm_model_func(self._config),
                 vision_model_func=get_vision_model_func(self._config),
-                provider=self._config.llm_provider,
             )
         return self._answer_engine
 
