@@ -333,6 +333,7 @@ def _build_openai_vision_func(
             logger.exception("Vision failed %.1fs", time.perf_counter() - t0)
             return ""
 
+    vision_model_func.supports_structured = (provider not in ("ollama", "xinference"))
     return vision_model_func
 
 
@@ -488,6 +489,7 @@ def _build_anthropic_vision_func(
             logger.exception("Anthropic vision call failed (image_data mode)")
             return ""
 
+    vision_model_func.supports_structured = True
     return vision_model_func
 
 
@@ -593,6 +595,7 @@ def _build_google_vision_func(
             logger.exception("Google vision call failed (image_data mode)")
             return ""
 
+    vision_model_func.supports_structured = True
     return vision_model_func
 
 
