@@ -33,13 +33,14 @@ async def collect_deletion_context(
     identifier: str,
     hash_index: HashIndexProtocol | None,
     lightrag: Any = None,
+    metadata_index: Any = None,
 ) -> DeletionContext:
-    """Find doc_id(s) for a file using hash index and LightRAG doc_status.
+    """Find doc_id(s) for a file using hash index, doc_status, and metadata index.
 
     Strategy order:
     1. Hash index - authoritative source for content_hash -> doc_id
     2. LightRAG doc_status - storage-agnostic lookup by file_path
-       (works with PG, JSON, Redis, etc. — whatever backend is configured)
+    3. Metadata index - filename-based lookup (PGMetadataIndex)
     """
     ctx = DeletionContext(identifier=identifier)
     basename = Path(identifier).name
@@ -95,6 +96,17 @@ async def collect_deletion_context(
 
         except Exception as e:
             logger.warning(f"LightRAG doc_status lookup failed for {identifier}: {e}")
+
+    # Strategy 3: Metadata index lookup (PGMetadataIndex by filename)
+    if metadata_index and not ctx.doc_ids:
+        try:
+            doc_ids = await metadata_index.find_by_filename(basename)
+            for d_id in doc_ids:
+                ctx.doc_ids.add(d_id)
+            if doc_ids:
+                ctx.sources_used.append("metadata_index")
+        except Exception as e:
+            logger.warning(f"Metadata index lookup failed for {identifier}: {e}")
 
     logger.info(
         f"Deletion context for {identifier}: "

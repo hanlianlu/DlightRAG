@@ -878,6 +878,7 @@ class IngestionPipeline:
                 identifier=identifier,
                 hash_index=self._hash_index,
                 lightrag=lightrag,
+                metadata_index=self._metadata_index,
             )
 
             # Initialize result with context info
@@ -910,11 +911,19 @@ class IngestionPipeline:
                         logger.warning(f"LightRAG deletion failed for {doc_id}: {exc}")
                         deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = f"error: {exc}"
 
-            # Phase 3a: Remove from hash index
+            # Phase 3a: Remove from hash index and metadata index
             for content_hash in ctx.content_hashes:
                 if await self._hash_index.remove(content_hash):
                     deletion_result["cleanup_results"]["hash_index"] = "removed"
                     logger.info(f"Removed hash index entry: {content_hash[:30]}...")
+
+            if self._metadata_index is not None:
+                for doc_id in ctx.doc_ids:
+                    try:
+                        await self._metadata_index.delete(doc_id)
+                        deletion_result["cleanup_results"]["metadata_index"] = "removed"
+                    except Exception as exc:
+                        logger.warning("Metadata index delete failed for %s: %s", doc_id, exc)
 
             # Phase 3b: Delete artifacts (best-effort glob search by filename stem)
             if delete_source:
