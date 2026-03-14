@@ -316,30 +316,30 @@ wheels = [
 
 [[package]]
 name = "boto3"
-version = "1.42.67"
+version = "1.42.68"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore" },
     { name = "jmespath" },
     { name = "s3transfer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/b3/3b5c929df4e46572d2721f0cef7b9fc85fc9d68b659b46df2724ad2606f6/boto3-1.42.67.tar.gz", hash = "sha256:d4123ceb3be36c5cb7ddccc7a7c43701e1fb6af612ef46e3b5d667daf5447d4b", size = 112820, upload-time = "2026-03-12T19:43:40.444Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/06/ae/60c642aa5413e560b671da825329f510b29a77274ed0f580bde77562294d/boto3-1.42.68.tar.gz", hash = "sha256:3f349f967ab38c23425626d130962bcb363e75f042734fe856ea8c5a00eef03c", size = 112761, upload-time = "2026-03-13T19:32:17.137Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bc/d8/41d7657896de9fe3ef666221180dcbcdc9e3f418b88084aba0c9abf0bb0a/boto3-1.42.67-py3-none-any.whl", hash = "sha256:aa900216bdc48bbd0115ed7128a4baed5548c6a60673160a38df8a8566df57cd", size = 140557, upload-time = "2026-03-12T19:43:38.174Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/f6/dc6e993479dbb597d68223fbf61cb026511737696b15bd7d2a33e9b2c24f/boto3-1.42.68-py3-none-any.whl", hash = "sha256:dbff353eb7dc93cbddd7926ed24793e0174c04adbe88860dfa639568442e4962", size = 140556, upload-time = "2026-03-13T19:32:14.951Z" },
 ]
 
 [[package]]
 name = "botocore"
-version = "1.42.67"
+version = "1.42.68"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jmespath" },
     { name = "python-dateutil" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/34/6a/0326ea8a726e9061d0aff941bc89ff93a1e832f492e6b3d7419301a56c1e/botocore-1.42.67.tar.gz", hash = "sha256:ee307f30fcb798d244fb35a87847b274e1e1f72cd5f7f2e31bd1826df0c45295", size = 14983149, upload-time = "2026-03-12T19:43:27.244Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/22/87502d5fbbfa8189406a617b30b1e2a3dc0ab2669f7268e91b385c1c1c7a/botocore-1.42.68.tar.gz", hash = "sha256:3951c69e12ac871dda245f48dac5c7dd88ea1bfdd74a8879ec356cf2874b806a", size = 14994514, upload-time = "2026-03-13T19:32:03.577Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fd/0b/cfe18326230476a0b8e3529609190448f2b46453469b07ae95fc57f90fc6/botocore-1.42.67-py3-none-any.whl", hash = "sha256:a94317d2ce83deae230964beb2729639455de65595d0154f285b0ccfd29780cd", size = 14655819, upload-time = "2026-03-12T19:43:21.952Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/2a/1428f6594799780fe6ee845d8e6aeffafe026cd16a70c878684e2dcbbfc8/botocore-1.42.68-py3-none-any.whl", hash = "sha256:9df7da26374601f890e2f115bfa573d65bf15b25fe136bb3aac809f6145f52ab", size = 14668816, upload-time = "2026-03-13T19:31:58.572Z" },
 ]
 
 [[package]]
@@ -656,7 +656,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.1.6.4"
+version = "1.1.6.5"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -755,7 +755,7 @@ wheels = [
 
 [[package]]
 name = "docling"
-version = "2.79.0"
+version = "2.80.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "accelerate" },
@@ -790,9 +790,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/78/85/263ccbb2b448c56ddad4636d7432db6a4b9a94001aabb7aaac31654a5b02/docling-2.79.0.tar.gz", hash = "sha256:448015bfb5da535f9e21232a07d1ae28914ee2613614cf82d7a6a2161daf6fd6", size = 386508, upload-time = "2026-03-12T07:42:09.137Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/04/82/ee91dad467d1f6f39ff5b00df7adafac6fa2ce80b712a88fc72da8acac69/docling-2.80.0.tar.gz", hash = "sha256:9d94584f125942d98fbdbc5b9fc87ddfac307233ebf4c65bbd972cf9f5d4b5a2", size = 387396, upload-time = "2026-03-14T05:59:00.23Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/2b/d700d0489a594c65e4a03c290363a706d7ce660e16b511fb5e35790d5bc9/docling-2.79.0-py3-none-any.whl", hash = "sha256:bbca4bf7fc7b42ec5cab066db718ce8240a93eb4c16ad0233101d59ce7ef440d", size = 421713, upload-time = "2026-03-12T07:42:07.488Z" },
+    { url = "https://files.pythonhosted.org/packages/bf/4b/9368056fffa83256732f85e01ff52063eba091c97d1b591e85da38d8a270/docling-2.80.0-py3-none-any.whl", hash = "sha256:6c7bc26bcad9b06b63ce02b2c9dead53ec6514bb4a65ecd4bedbc73284c1fad2", size = 422566, upload-time = "2026-03-14T05:58:58.6Z" },
 ]
 
 [[package]]
@@ -1818,7 +1818,7 @@ wheels = [
 
 [[package]]
 name = "modelscope"
-version = "1.34.0"
+version = "1.35.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -1827,9 +1827,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f4/89/7a13bf70090e631f81a943797e875272d19d47e0a6984eda0a5a3f04e7e3/modelscope-1.34.0.tar.gz", hash = "sha256:c3041af301334aa9ca3f66f5b23e11ca33a2bdf28cc415dcceb75f68e4732aac", size = 4560273, upload-time = "2026-01-19T02:50:23.274Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/58/c8bf255dbf84d3cfcf7044a181ef6af82a1817c5ed9238da6159dad6ad31/modelscope-1.35.0.tar.gz", hash = "sha256:e2a8368e73d32ff2792873580a4993e6f8108cd11c5c2e2a3b3f072cdae18fa2", size = 4562044, upload-time = "2026-03-14T03:22:51.089Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/df/2c112a7c4160aa5e74dad87060019be5eca197d910af3f5b12e68ec090a9/modelscope-1.34.0-py3-none-any.whl", hash = "sha256:4629ace145972520b71b0ad02e4604282426c0cfae6a4b0922509898f3b269c8", size = 6050825, upload-time = "2026-01-19T02:50:20.018Z" },
+    { url = "https://files.pythonhosted.org/packages/2a/82/cfdc5d8a8b16900d5475d7c463f219392a826fe236da678ca1b2d3a768f3/modelscope-1.35.0-py3-none-any.whl", hash = "sha256:0c9e8e9d65df444aa6fdbfc32fb8759d3c46b9a54ab26062b77e96979e5a61e1", size = 6053785, upload-time = "2026-03-14T03:22:47.829Z" },
 ]
 
 [[package]]
@@ -2125,7 +2125,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "2.26.0"
+version = "2.28.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -2137,9 +2137,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d7/91/2a06c4e9597c338cac1e5e5a8dd6f29e1836fc229c4c523529dca387fda8/openai-2.26.0.tar.gz", hash = "sha256:b41f37c140ae0034a6e92b0c509376d907f3a66109935fba2c1b471a7c05a8fb", size = 666702, upload-time = "2026-03-05T23:17:35.874Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/56/87/eb0abb4ef88ddb95b3c13149384c4c288f584f3be17d6a4f63f8c3e3c226/openai-2.28.0.tar.gz", hash = "sha256:bb7fdff384d2a787fa82e8822d1dd3c02e8cf901d60f1df523b7da03cbb6d48d", size = 670334, upload-time = "2026-03-13T19:56:27.306Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/2e/3f73e8ca53718952222cacd0cf7eecc9db439d020f0c1fe7ae717e4e199a/openai-2.26.0-py3-none-any.whl", hash = "sha256:6151bf8f83802f036117f06cc8a57b3a4da60da9926826cc96747888b57f394f", size = 1136409, upload-time = "2026-03-05T23:17:34.072Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/5a/df122348638885526e53140e9c6b0d844af7312682b3bde9587eebc28b47/openai-2.28.0-py3-none-any.whl", hash = "sha256:79aa5c45dba7fef84085701c235cf13ba88485e1ef4f8dfcedc44fc2a698fc1d", size = 1141218, upload-time = "2026-03-13T19:56:25.46Z" },
 ]
 
 [[package]]
@@ -2679,11 +2679,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.12.0"
+version = "2.12.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a8/10/e8192be5f38f3e8e7e046716de4cae33d56fd5ae08927a823bb916be36c1/pyjwt-2.12.0.tar.gz", hash = "sha256:2f62390b667cd8257de560b850bb5a883102a388829274147f1d724453f8fb02", size = 102511, upload-time = "2026-03-12T17:15:30.831Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/27/a3b6e5bf6ff856d2509292e95c8f57f0df7017cf5394921fc4e4ef40308a/pyjwt-2.12.1.tar.gz", hash = "sha256:c74a7a2adf861c04d002db713dd85f84beb242228e671280bf709d765b03672b", size = 102564, upload-time = "2026-03-13T19:27:37.25Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/70/70f895f404d363d291dcf62c12c85fdd47619ad9674ac0f53364d035925a/pyjwt-2.12.0-py3-none-any.whl", hash = "sha256:9bb459d1bdd0387967d287f5656bf7ec2b9a26645d1961628cda1764e087fd6e", size = 29700, upload-time = "2026-03-12T17:15:29.257Z" },
+    { url = "https://files.pythonhosted.org/packages/e5/7a/8dd906bd22e79e47397a61742927f6747fe93242ef86645ee9092e610244/pyjwt-2.12.1-py3-none-any.whl", hash = "sha256:28ca37c070cad8ba8cd9790cd940535d40274d22f80ab87f3ac6a713e6e8454c", size = 29726, upload-time = "2026-03-13T19:27:35.677Z" },
 ]
 
 [package.optional-dependencies]

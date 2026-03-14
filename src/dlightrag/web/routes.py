@@ -160,8 +160,9 @@ async def answer_stream(
                     yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
 
             # Emit structured references if available (from AnswerStream)
-            if hasattr(token_iter, "references") and token_iter.references:
-                refs_data = [r.model_dump() for r in token_iter.references]
+            refs = getattr(token_iter, "references", None)
+            if refs:
+                refs_data = [r.model_dump() for r in refs]
                 yield f"event: references\ndata: {json.dumps(refs_data)}\n\n"
 
             # Build sources from contexts

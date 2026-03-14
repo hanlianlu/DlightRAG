@@ -255,8 +255,9 @@ async def answer(body: AnswerRequest, request: Request):
                 async for chunk in token_iter:
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
             # Emit structured references if available (from AnswerStream)
-            if hasattr(token_iter, "references") and token_iter.references:
-                refs_data = [r.model_dump() for r in token_iter.references]
+            refs = getattr(token_iter, "references", None)
+            if refs:
+                refs_data = [r.model_dump() for r in refs]
                 yield f"data: {json.dumps({'type': 'references', 'data': refs_data}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
         except Exception:

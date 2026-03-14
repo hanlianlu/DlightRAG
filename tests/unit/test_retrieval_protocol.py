@@ -19,8 +19,8 @@ class TestRetrievalResult:
         assert r.contexts == {"chunks": [], "entities": [], "relationships": []}
 
     def test_with_values(self) -> None:
-        ctx = RetrievalContexts(
-            chunks=[
+        ctx: RetrievalContexts = {
+            "chunks": [
                 {
                     "chunk_id": "c1",
                     "reference_id": "r1",
@@ -28,9 +28,9 @@ class TestRetrievalResult:
                     "content": "hello",
                 }
             ],
-            entities=[],
-            relationships=[],
-        )
+            "entities": [],
+            "relationships": [],
+        }
         r = RetrievalResult(answer="hello", contexts=ctx)
         assert r.answer == "hello"
         assert len(r.contexts["chunks"]) == 1

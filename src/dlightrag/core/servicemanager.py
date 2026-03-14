@@ -230,7 +230,7 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         **kwargs: Any,
-    ) -> tuple[RetrievalContexts, AsyncIterator[str]]:
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces: retrieve -> AnswerEngine."""
         ws_list = workspaces or [workspace or self._config.workspace]
         try:

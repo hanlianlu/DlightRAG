@@ -9,9 +9,9 @@ def log_answer_llm_output(
     structured: bool,
     provider: str,
     query: str,
-    raw: str = None,
-    answer_text: str = None,
-    parse_error: Exception = None,
+    raw: str | None = None,
+    answer_text: str | None = None,
+    parse_error: Exception | None = None,
 ):
     """
     统一记录LLM answer相关的原始输出、路径分支、异常等。

@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.1.6.4"
+version = "1.1.6.5"
 description = "DlightRAG - Dual-mode multi-modal RAG service based on LightRAG"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
