@@ -162,6 +162,51 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.adelete_files(**kwargs)
 
+    async def areset(
+        self,
+        *,
+        workspace: str | None = None,
+        keep_files: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Reset one or all workspaces.
+
+        Drops all storage backends, clears DlightRAG indexes, and optionally
+        removes local files. After reset, the service is closed and evicted
+        from cache.
+        """
+        if workspace is not None:
+            known = await self.list_workspaces()
+            if workspace not in known and workspace not in self._services:
+                return {"workspaces": {}, "total_errors": 0}
+            workspaces = [workspace]
+        else:
+            workspaces = await self.list_workspaces()
+
+        results: dict[str, Any] = {}
+        total_errors = 0
+
+        for ws in workspaces:
+            try:
+                svc = await self._get_service(ws)
+                ws_result = await svc.areset(keep_files=keep_files, dry_run=dry_run)
+                results[ws] = ws_result
+                total_errors += len(ws_result.get("errors", []))
+            except Exception as exc:
+                results[ws] = {"error": str(exc)}
+                total_errors += 1
+                logger.warning("Failed to reset workspace '%s': %s", ws, exc)
+
+            # Close and evict from cache (even on error — stale state)
+            if ws in self._services:
+                try:
+                    await self._services[ws].close()
+                except Exception:
+                    logger.warning("Failed to close service for '%s'", ws, exc_info=True)
+                del self._services[ws]
+
+        return {"workspaces": results, "total_errors": total_errors}
+
     def _get_answer_engine(self) -> AnswerEngine:
         """Lazy-create AnswerEngine from global config."""
         if self._answer_engine is None:
