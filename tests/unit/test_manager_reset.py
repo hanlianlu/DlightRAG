@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
@@ -33,14 +31,16 @@ def _make_manager() -> RAGServiceManager:
 
 def _make_mock_service(workspace: str = "default") -> MagicMock:
     svc = MagicMock()
-    svc.areset = AsyncMock(return_value={
-        "workspace": workspace,
-        "storages_dropped": 12,
-        "dlightrag_cleared": ["hash_index"],
-        "orphan_tables_cleaned": 0,
-        "local_files_removed": 5,
-        "errors": [],
-    })
+    svc.areset = AsyncMock(
+        return_value={
+            "workspace": workspace,
+            "storages_dropped": 12,
+            "dlightrag_cleared": ["hash_index"],
+            "orphan_tables_cleaned": 0,
+            "local_files_removed": 5,
+            "errors": [],
+        }
+    )
     svc.close = AsyncMock()
     return svc
 
@@ -81,9 +81,7 @@ class TestManagerAresetAllWorkspaces:
             patch.object(
                 manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1", "ws2"]
             ),
-            patch.object(
-                manager, "_get_service", new_callable=AsyncMock, side_effect=[svc1, svc2]
-            ),
+            patch.object(manager, "_get_service", new_callable=AsyncMock, side_effect=[svc1, svc2]),
         ):
             result = await manager.areset()
 
@@ -144,14 +142,16 @@ class TestManagerAresetErrorHandling:
     async def test_collects_errors_from_service(self) -> None:
         manager = _make_manager()
         svc = _make_mock_service()
-        svc.areset = AsyncMock(return_value={
-            "workspace": "ws1",
-            "storages_dropped": 0,
-            "dlightrag_cleared": [],
-            "orphan_tables_cleaned": 0,
-            "local_files_removed": 0,
-            "errors": ["Phase 1 (full_docs): boom"],
-        })
+        svc.areset = AsyncMock(
+            return_value={
+                "workspace": "ws1",
+                "storages_dropped": 0,
+                "dlightrag_cleared": [],
+                "orphan_tables_cleaned": 0,
+                "local_files_removed": 0,
+                "errors": ["Phase 1 (full_docs): boom"],
+            }
+        )
         manager._services["ws1"] = svc
 
         with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):
@@ -163,11 +163,10 @@ class TestManagerAresetErrorHandling:
         manager = _make_manager()
 
         with (
+            patch.object(manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1"]),
             patch.object(
-                manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1"]
-            ),
-            patch.object(
-                manager, "_get_service",
+                manager,
+                "_get_service",
                 new_callable=AsyncMock,
                 side_effect=RAGServiceUnavailableError("down"),
             ),

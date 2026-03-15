@@ -6,8 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from dlightrag.core.service import _STORAGE_ATTRS, RAGService
 
 
@@ -38,7 +36,9 @@ def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test-w
     service._metadata_index.clear = AsyncMock()
 
     service._visual_chunks = MagicMock()
-    service._visual_chunks.drop = AsyncMock(return_value={"status": "success", "message": "dropped"})
+    service._visual_chunks.drop = AsyncMock(
+        return_value={"status": "success", "message": "dropped"}
+    )
 
     return service
 
