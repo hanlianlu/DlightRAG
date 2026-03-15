@@ -38,8 +38,8 @@ class HashIndexProtocol(Protocol):
     async def clear(self) -> None: ...
     async def list_all(self) -> list[dict[str, Any]]: ...
     def invalidate(self) -> None: ...
-    def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]: ...
-    def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]: ...
+    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]: ...
+    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]: ...
 
     @staticmethod
     def generate_doc_id_from_path(file_path: Path) -> str: ...
@@ -294,14 +294,14 @@ class HashIndex:
     def generate_doc_id_from_path(file_path: Path) -> str:
         return file_path.stem
 
-    def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
+    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
         index = self._load()
         for h, info in index.items():
             if info.get("file_path") == file_path:
                 return (info.get("doc_id"), h, info.get("file_path"))
         return (None, None, None)
 
-    def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
+    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
         index = self._load()
         for h, info in index.items():
             stored_path = info.get("file_path", "")
@@ -448,32 +448,7 @@ class PGHashIndex:
     def generate_doc_id_from_path(file_path: Path) -> str:
         return file_path.stem
 
-    def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
-        """Synchronous find — delegates to async in current event loop.
-
-        For deletion context compatibility with HashIndex interface.
-        """
-        # Fallback: run async version synchronously if no event loop
-        import asyncio as _asyncio
-
-        try:
-            loop = _asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
-            # Can't await from sync context inside running loop — use blocking query
-            # This is acceptable for deletion (rare operation)
-
-            return self._sync_find_by_name(filename)
-        return _asyncio.run(self._async_find_by_name(filename))
-
-    def _sync_find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
-        """Blocking find for use from sync deletion context."""
-        # Return None — deletion will use other strategies (doc_status JSON fallback)
-        return (None, None, None)
-
-    async def _async_find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
+    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
         async with self._get_pool().acquire() as conn:
             row = await conn.fetchrow(
                 f"SELECT content_hash, doc_id, file_path FROM {self.TABLE} "
@@ -485,9 +460,17 @@ class PGHashIndex:
                 return (row["doc_id"], row["content_hash"], row["file_path"])
             return (None, None, None)
 
-    def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
-        """Synchronous find by path — similar to find_by_name."""
-        return self._sync_find_by_name(Path(file_path).name)
+    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
+        async with self._get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT content_hash, doc_id, file_path FROM {self.TABLE} "
+                f"WHERE file_path = $1 AND workspace = $2 LIMIT 1",
+                file_path,
+                self._workspace,
+            )
+            if row:
+                return (row["doc_id"], row["content_hash"], row["file_path"])
+            return (None, None, None)
 
     async def list_all(self) -> list[dict[str, Any]]:
         async with self._get_pool().acquire() as conn:
@@ -604,11 +587,21 @@ class RedisHashIndex:
     def invalidate(self) -> None:
         pass  # No local cache to invalidate
 
-    def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
-        return (None, None, None)  # Sync context fallback
+    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
+        all_entries = await self._get_redis().hgetall(self._key())
+        for content_hash, data in all_entries.items():
+            info = json.loads(data)
+            if Path(info.get("file_path", "")).name == filename:
+                return (info.get("doc_id"), content_hash, info.get("file_path"))
+        return (None, None, None)
 
-    def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
-        return (None, None, None)  # Sync context fallback
+    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
+        all_entries = await self._get_redis().hgetall(self._key())
+        for content_hash, data in all_entries.items():
+            info = json.loads(data)
+            if info.get("file_path") == file_path:
+                return (info.get("doc_id"), content_hash, info.get("file_path"))
+        return (None, None, None)
 
     async def list_all(self) -> list[dict[str, Any]]:
         all_entries = await self._get_redis().hgetall(self._key())
@@ -710,10 +703,24 @@ class MongoHashIndex:
     def invalidate(self) -> None:
         pass
 
-    def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
+    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
+        col = self._get_collection()
+        doc = await col.find_one({
+            "workspace": self._workspace,
+            "file_path": {"$regex": f"/{filename}$"},
+        })
+        if doc:
+            return (doc.get("doc_id"), doc.get("content_hash"), doc.get("file_path"))
         return (None, None, None)
 
-    def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
+    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
+        col = self._get_collection()
+        doc = await col.find_one({
+            "workspace": self._workspace,
+            "file_path": file_path,
+        })
+        if doc:
+            return (doc.get("doc_id"), doc.get("content_hash"), doc.get("file_path"))
         return (None, None, None)
 
     async def list_all(self) -> list[dict[str, Any]]:

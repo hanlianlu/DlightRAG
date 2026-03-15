@@ -212,7 +212,7 @@ class TestHashIndex:
         """find_by_name returns (doc_id, hash, path) for matching filename."""
         index = HashIndex(tmp_path)
         await index.register("sha256:abc", "doc-001", "/deep/path/report.pdf")
-        doc_id, h, path = index.find_by_name("report.pdf")
+        doc_id, h, path = await index.find_by_name("report.pdf")
         assert doc_id == "doc-001"
         assert h == "sha256:abc"
         assert path == "/deep/path/report.pdf"
@@ -221,13 +221,13 @@ class TestHashIndex:
         """find_by_name returns (None, None, None) when no match."""
         index = HashIndex(tmp_path)
         await index.register("sha256:abc", "doc-001", "/path/other.pdf")
-        assert index.find_by_name("missing.pdf") == (None, None, None)
+        assert await index.find_by_name("missing.pdf") == (None, None, None)
 
     async def test_find_by_path_found(self, tmp_path: Path) -> None:
         """find_by_path matches exact path string."""
         index = HashIndex(tmp_path)
         await index.register("sha256:abc", "doc-001", "/exact/path/file.pdf")
-        doc_id, h, path = index.find_by_path("/exact/path/file.pdf")
+        doc_id, h, path = await index.find_by_path("/exact/path/file.pdf")
         assert doc_id == "doc-001"
 
     async def test_register_overwrites_existing(self, tmp_path: Path) -> None:
