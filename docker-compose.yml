@@ -61,6 +61,31 @@ services:
       POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
     volumes:
       - pg_data:/var/lib/postgresql/data
+    command:
+      - "postgres"
+      # Memory
+      - "-c"
+      - "shared_buffers=6GB"
+      - "-c"
+      - "work_mem=256MB"
+      - "-c"
+      - "maintenance_work_mem=2GB"
+      - "-c"
+      - "effective_cache_size=16GB"
+      # SSD / IO
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      # WAL
+      - "-c"
+      - "wal_buffers=16MB"
+      # Parallelism
+      - "-c"
+      - "max_parallel_workers_per_gather=4"
+      # Docker
+      - "-c"
+      - "huge_pages=off"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DLIGHTRAG_POSTGRES_USER:-dlightrag} -d ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}"]
       interval: 5s
