@@ -548,6 +548,7 @@ class RAGService:
         )
         await lightrag.initialize_storages()
         self._lightrag = lightrag
+        logger.info("LightRAG storages initialized")
 
         # Create visual_chunks KV store.
         # LightRAG's PGKVStorage only supports 7 hardcoded namespaces; custom ones
@@ -569,6 +570,7 @@ class RAGService:
         visual_chunks = kv_cls(**kv_kwargs)
         await visual_chunks.initialize()
         self._visual_chunks = visual_chunks
+        logger.info("Visual chunks KV store initialized (%s)", kv_cls.__name__)
 
         # Create PathResolver for unified mode
         self._path_resolver = PathResolver(
@@ -592,7 +594,7 @@ class RAGService:
         # Initialize metadata index
         self._metadata_index = await self._create_metadata_index(config)
 
-        logger.info("Unified representational RAG mode initialized")
+        logger.info("Unified representational RAG mode ready")
 
     async def _create_hash_index(self, config: DlightragConfig) -> HashIndexProtocol:
         """Create the appropriate hash index backend based on KV storage config.
@@ -783,9 +785,7 @@ class RAGService:
         if not keep_files:
             try:
                 working_dir = Path(self.config.working_dir)
-                stats["local_files_removed"] = self._reset_local_files(
-                    working_dir, dry_run=dry_run
-                )
+                stats["local_files_removed"] = self._reset_local_files(working_dir, dry_run=dry_run)
             except Exception as exc:
                 errors.append(f"Phase 5 (local files): {exc}")
                 logger.warning("areset Phase 5 failed: %s", exc)
