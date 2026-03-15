@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from dlightrag.core.retrieval.fusion import reciprocal_rank_fusion
 from dlightrag.core.retrieval.metadata_index import PGMetadataIndex

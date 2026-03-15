@@ -31,9 +31,15 @@ class TestMetadataFilter:
 
     def test_all_none_is_empty(self) -> None:
         f = MetadataFilter(
-            filename=None, filename_pattern=None, file_extension=None,
-            doc_title=None, doc_author=None, date_from=None, date_to=None,
-            rag_mode=None, custom=None,
+            filename=None,
+            filename_pattern=None,
+            file_extension=None,
+            doc_title=None,
+            doc_author=None,
+            date_from=None,
+            date_to=None,
+            rag_mode=None,
+            custom=None,
         )
         assert f.is_empty()
 
@@ -46,7 +52,8 @@ class TestRetrievalPlan:
     def test_with_filters(self) -> None:
         f = MetadataFilter(filename="test.pdf")
         plan = RetrievalPlan(
-            semantic_query="test", metadata_filters=f,
+            semantic_query="test",
+            metadata_filters=f,
             paths=["metadata", "kg"],
         )
         assert "metadata" in plan.paths
@@ -54,7 +61,8 @@ class TestRetrievalPlan:
 
     def test_original_query_preserved(self) -> None:
         plan = RetrievalPlan(
-            semantic_query="cleaned", metadata_filters=None,
+            semantic_query="cleaned",
+            metadata_filters=None,
             original_query="original query with file.pdf",
         )
         assert plan.original_query == "original query with file.pdf"

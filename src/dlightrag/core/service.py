@@ -874,7 +874,9 @@ class RAGService:
         ):
             try:
                 supplementary = await self._run_multi_path_retrieval(
-                    query, filters, top_k=top_k or self.config.top_k,
+                    query,
+                    filters,
+                    top_k=top_k or self.config.top_k,
                 )
                 if supplementary:
                     self._merge_supplementary_chunks(kg_result, supplementary)
@@ -958,9 +960,7 @@ class RAGService:
         supplementary: list[dict[str, Any]],
     ) -> None:
         """Merge supplementary chunks into the result, avoiding duplicates."""
-        existing_ids = {
-            c.get("chunk_id") for c in result.contexts.get("chunks", [])
-        }
+        existing_ids = {c.get("chunk_id") for c in result.contexts.get("chunks", [])}
         for ctx in supplementary:
             if ctx.get("chunk_id") not in existing_ids:
                 result.contexts.setdefault("chunks", []).append(ctx)

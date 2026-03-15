@@ -73,9 +73,7 @@ class TestMetadataRetrieveUnified:
     @pytest.mark.asyncio
     async def test_resolves_unified_chunks(self, mock_metadata_index, mock_lightrag) -> None:
         mock_metadata_index.query.return_value = ["doc-1"]
-        mock_lightrag.full_docs.get_by_id = AsyncMock(
-            return_value={"page_count": 3}
-        )
+        mock_lightrag.full_docs.get_by_id = AsyncMock(return_value={"page_count": 3})
         with patch("lightrag.utils.compute_mdhash_id") as mock_hash:
             mock_hash.side_effect = lambda s, prefix="": f"{prefix}{s}"
             result = await metadata_retrieve(

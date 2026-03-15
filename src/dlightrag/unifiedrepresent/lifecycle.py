@@ -40,13 +40,19 @@ async def unified_ingest(
         user_metadata = kwargs.get("metadata")
 
         if path.is_file():
-            return await _ingest_single_local(engine, hash_index, path, replace, metadata_index, user_metadata)
+            return await _ingest_single_local(
+                engine, hash_index, path, replace, metadata_index, user_metadata
+            )
         if path.is_dir():
-            return await _ingest_local_dir(engine, config, hash_index, path, replace, metadata_index, user_metadata)
+            return await _ingest_local_dir(
+                engine, config, hash_index, path, replace, metadata_index, user_metadata
+            )
         raise FileNotFoundError(f"Path not found: {path}")
 
     if source_type == "azure_blob":
-        return await _ingest_azure_blob(engine, config, hash_index, metadata_index=metadata_index, **kwargs)
+        return await _ingest_azure_blob(
+            engine, config, hash_index, metadata_index=metadata_index, **kwargs
+        )
 
     # source_type == "snowflake"
     return await _ingest_snowflake(engine, config, **kwargs)
@@ -77,7 +83,8 @@ async def _ingest_single_local(
             from dlightrag.core.retrieval.metadata_index import extract_system_metadata
 
             meta = extract_system_metadata(
-                path, rag_mode="unified",
+                path,
+                rag_mode="unified",
                 page_count=result.get("page_count"),
             )
             if user_metadata:
@@ -121,7 +128,9 @@ async def _ingest_local_dir(
     results: list[dict[str, Any]] = []
     skipped = 0
     for file_path in files:
-        result = await _ingest_single_local(engine, hash_index, file_path, replace, metadata_index, user_metadata)
+        result = await _ingest_single_local(
+            engine, hash_index, file_path, replace, metadata_index, user_metadata
+        )
         if result.get("status") == "skipped":
             skipped += 1
         results.append(result)
@@ -171,12 +180,16 @@ async def _ingest_azure_blob(
 
     try:
         if blob_path:
-            return await _ingest_single_blob(engine, config, hash_index, source, blob_path, replace, metadata_index)
+            return await _ingest_single_blob(
+                engine, config, hash_index, source, blob_path, replace, metadata_index
+            )
 
         blob_ids = await source.alist_documents(prefix=prefix)
         results: list[dict[str, Any]] = []
         for bid in blob_ids:
-            result = await _ingest_single_blob(engine, config, hash_index, source, bid, replace, metadata_index)
+            result = await _ingest_single_blob(
+                engine, config, hash_index, source, bid, replace, metadata_index
+            )
             results.append(result)
 
         return {
@@ -226,7 +239,8 @@ async def _ingest_single_blob(
                 from dlightrag.core.retrieval.metadata_index import extract_system_metadata
 
                 meta = extract_system_metadata(
-                    target, rag_mode="unified",
+                    target,
+                    rag_mode="unified",
                     page_count=result.get("page_count"),
                 )
                 await metadata_index.upsert(result["doc_id"], meta)

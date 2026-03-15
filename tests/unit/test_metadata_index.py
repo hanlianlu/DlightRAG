@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.core.retrieval.metadata_index import PGMetadataIndex, _SYSTEM_FIELDS
+from dlightrag.core.retrieval.metadata_index import _SYSTEM_FIELDS, PGMetadataIndex
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
@@ -37,29 +37,36 @@ class TestPGMetadataIndexUpsert:
     @pytest.mark.asyncio
     async def test_upsert_system_fields(self, index, mock_pool) -> None:
         _, conn = mock_pool
-        await index.upsert("doc-1", {
-            "filename": "report.pdf",
-            "filename_stem": "report",
-            "file_extension": ".pdf",
-            "doc_title": "Annual Report",
-        })
+        await index.upsert(
+            "doc-1",
+            {
+                "filename": "report.pdf",
+                "filename_stem": "report",
+                "file_extension": ".pdf",
+                "doc_title": "Annual Report",
+            },
+        )
         conn.execute.assert_called_once()
         args = conn.execute.call_args[0]
         assert args[1] == "test_ws"  # workspace
-        assert args[2] == "doc-1"    # doc_id
+        assert args[2] == "doc-1"  # doc_id
         assert args[3] == "report.pdf"  # filename
 
     @pytest.mark.asyncio
     async def test_upsert_custom_fields_go_to_jsonb(self, index, mock_pool) -> None:
         _, conn = mock_pool
-        await index.upsert("doc-1", {
-            "filename": "test.pdf",
-            "department": "finance",
-            "tags": ["confidential"],
-        })
+        await index.upsert(
+            "doc-1",
+            {
+                "filename": "test.pdf",
+                "department": "finance",
+                "tags": ["confidential"],
+            },
+        )
         args = conn.execute.call_args[0]
         # Last arg is custom_metadata JSON
         import json
+
         custom = json.loads(args[-1])
         assert custom["department"] == "finance"
         assert custom["tags"] == ["confidential"]
@@ -79,10 +86,12 @@ class TestPGMetadataIndexQuery:
     async def test_query_multiple_filters(self, index, mock_pool) -> None:
         _, conn = mock_pool
         conn.fetch.return_value = [{"doc_id": "doc-1"}, {"doc_id": "doc-2"}]
-        result = await index.query(MetadataFilter(
-            doc_author="Zhang San",
-            date_from=datetime(2024, 1, 1),
-        ))
+        result = await index.query(
+            MetadataFilter(
+                doc_author="Zhang San",
+                date_from=datetime(2024, 1, 1),
+            )
+        )
         assert len(result) == 2
         sql = conn.fetch.call_args[0][0]
         assert "doc_author = $2" in sql
@@ -158,9 +167,16 @@ class TestPGMetadataIndexLifecycle:
 class TestSystemFieldsSeparation:
     def test_system_fields_complete(self) -> None:
         expected = {
-            "filename", "filename_stem", "file_path", "file_extension",
-            "doc_title", "doc_author", "creation_date", "original_format",
-            "page_count", "rag_mode",
+            "filename",
+            "filename_stem",
+            "file_path",
+            "file_extension",
+            "doc_title",
+            "doc_author",
+            "creation_date",
+            "original_format",
+            "page_count",
+            "rag_mode",
         }
         assert _SYSTEM_FIELDS == expected
 

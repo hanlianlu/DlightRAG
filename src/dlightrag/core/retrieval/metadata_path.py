@@ -76,10 +76,7 @@ async def _resolve_unified(doc_id: str, lightrag: Any) -> list[str]:
         if not doc_data:
             return []
         page_count = doc_data.get("page_count", 0)
-        return [
-            compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
-            for i in range(page_count)
-        ]
+        return [compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-") for i in range(page_count)]
     except Exception as exc:
         logger.warning("[MetadataPath] unified chunk resolution failed for %s: %s", doc_id, exc)
     return []
