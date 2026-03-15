@@ -349,26 +349,11 @@ async def unified_delete_files(
             continue
 
         for doc_id in ctx.doc_ids:
-            # Phase 1: Clean visual_chunks (unified-specific)
-            try:
-                vc_result = await engine.adelete_doc(doc_id)
-                deletion_result["cleanup_results"]["visual_chunks"] = vc_result
-            except Exception as exc:
-                logger.warning("visual_chunks cleanup failed for %s: %s", doc_id, exc)
-                deletion_result["cleanup_results"]["visual_chunks"] = f"error: {exc}"
+            # Direct SQL cleanup — doesn't depend on doc_status or page_count
+            cleanup = await _delete_doc_from_all_tables(doc_id, lightrag)
+            deletion_result["cleanup_results"]["tables"] = cleanup
 
-            # Phase 2: LightRAG cleanup (chunks_vdb, text_chunks, full_docs, KG)
-            if lightrag and hasattr(lightrag, "adelete_by_doc_id"):
-                try:
-                    result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-                    deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = (
-                        result.status if hasattr(result, "status") else "completed"
-                    )
-                except Exception as exc:
-                    logger.warning("LightRAG deletion failed for %s: %s", doc_id, exc)
-                    deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = f"error: {exc}"
-
-        # Phase 3: Remove from hash index and metadata index
+        # Remove from hash index and metadata index
         for content_hash in ctx.content_hashes:
             if await hash_index.remove(content_hash):
                 deletion_result["cleanup_results"]["hash_index"] = "removed"
@@ -386,6 +371,69 @@ async def unified_delete_files(
         results.append(deletion_result)
 
     return results
+
+
+async def _delete_doc_from_all_tables(doc_id: str, lightrag: Any) -> dict[str, str]:
+    """Delete a document from all LightRAG tables by doc_id/full_doc_id.
+
+    Direct SQL approach — doesn't depend on doc_status or page_count.
+    """
+    from lightrag.kg.postgres_impl import ClientManager
+
+    db = await ClientManager.get_client()
+    pool = db.pool
+
+    # Tables where doc is referenced by 'id'
+    id_tables = ["lightrag_doc_full", "lightrag_doc_status"]
+    # Tables where doc is referenced by 'full_doc_id'
+    full_doc_tables = ["lightrag_doc_chunks"]
+
+    result: dict[str, str] = {}
+
+    async with pool.acquire() as conn:
+        # Find VDB table names dynamically
+        vdb_tables = await conn.fetch(
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' "
+            "AND (tablename LIKE 'lightrag_vdb_chunks_%' "
+            "  OR tablename LIKE 'lightrag_vdb_entity_%' "
+            "  OR tablename LIKE 'lightrag_vdb_relation_%')"
+        )
+
+        for table in id_tables:
+            try:
+                r = await conn.execute(f"DELETE FROM {table} WHERE id=$1", doc_id)
+                result[table] = r
+            except Exception as exc:
+                result[table] = f"error: {exc}"
+
+        for table in full_doc_tables:
+            try:
+                r = await conn.execute(f"DELETE FROM {table} WHERE full_doc_id=$1", doc_id)
+                result[table] = r
+            except Exception as exc:
+                result[table] = f"error: {exc}"
+
+        for row in vdb_tables:
+            table = row["tablename"]
+            try:
+                r = await conn.execute(f"DELETE FROM {table} WHERE full_doc_id=$1", doc_id)
+                result[table] = r
+            except Exception as exc:
+                result[table] = f"error: {exc}"
+
+        # Also clean KG entities/relations that reference this doc
+        for kg_table in ["lightrag_full_entities", "lightrag_full_relations"]:
+            try:
+                r = await conn.execute(
+                    f"DELETE FROM {kg_table} WHERE source_id LIKE $1",
+                    f"%{doc_id}%",
+                )
+                result[kg_table] = r
+            except Exception as exc:
+                result[kg_table] = f"error: {exc}"
+
+    logger.info("[Delete] direct SQL cleanup for %s: %s", doc_id, result)
+    return result
 
 
 __all__ = ["unified_delete_files", "unified_ingest"]
