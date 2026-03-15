@@ -312,7 +312,17 @@ async def unified_delete_files(
     filenames: list[str] | None = None,
     metadata_index: Any = None,
 ) -> list[dict[str, Any]]:
-    """Delete files in unified mode: hash lookup -> adelete_by_doc_id -> visual_chunks."""
+    """Delete files in unified mode — 3-layer cross-backend design.
+
+    Layer 1: LightRAG ``adelete_by_doc_id`` — cleans full_docs, doc_status,
+             text_chunks, chunks_vdb, entity/relation VDBs, KG, LLM cache.
+             Works on all backends now that aingest writes doc_status.
+    Layer 2: Visual chunks cleanup — uses metadata_index page_count to
+             reconstruct chunk_ids and delete from visual_chunks store.
+    Layer 3: DlightRAG index cleanup — hash_index and metadata_index.
+    """
+    from lightrag.utils import compute_mdhash_id
+
     from dlightrag.core.ingestion.cleanup import collect_deletion_context
 
     if not file_paths and not filenames:
@@ -349,7 +359,7 @@ async def unified_delete_files(
             continue
 
         for doc_id in ctx.doc_ids:
-            # Phase 1: LightRAG cleanup (works when doc_status exists)
+            # Layer 1: LightRAG cross-backend cleanup
             if lightrag and hasattr(lightrag, "adelete_by_doc_id"):
                 try:
                     lr_result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
@@ -359,14 +369,27 @@ async def unified_delete_files(
                 except Exception as exc:
                     logger.warning("LightRAG deletion failed for %s: %s", doc_id, exc)
 
-            # Phase 2: Direct SQL sweep (PG only) — catches anything LightRAG missed
-            try:
-                cleanup = await _pg_cleanup_doc(doc_id)
-                deletion_result["cleanup_results"]["pg_cleanup"] = cleanup
-            except Exception:
-                pass  # Non-PG backend, skip
+            # Layer 2: Visual chunks cleanup (unified mode)
+            if metadata_index is not None:
+                try:
+                    doc_meta = await metadata_index.get(doc_id)
+                    page_count = (doc_meta or {}).get("page_count", 0)
+                    if isinstance(page_count, int) and page_count > 0:
+                        chunk_ids = [
+                            compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
+                            for i in range(page_count)
+                        ]
+                        await engine.visual_chunks.delete(chunk_ids)
+                        deletion_result["cleanup_results"]["visual_chunks"] = (
+                            f"deleted {len(chunk_ids)}"
+                        )
+                        logger.info(
+                            "Deleted %d visual_chunks for doc_id=%s", len(chunk_ids), doc_id
+                        )
+                except Exception as exc:
+                    logger.warning("Visual chunks cleanup failed for %s: %s", doc_id, exc)
 
-        # Remove from hash index and metadata index
+        # Layer 3: DlightRAG index cleanup
         for content_hash in ctx.content_hashes:
             if await hash_index.remove(content_hash):
                 deletion_result["cleanup_results"]["hash_index"] = "removed"
@@ -384,59 +407,6 @@ async def unified_delete_files(
         results.append(deletion_result)
 
     return results
-
-
-async def _pg_cleanup_doc(doc_id: str) -> dict[str, str]:
-    """Sweep remaining doc data from all PG tables.
-
-    Runs after LightRAG's adelete_by_doc_id as a safety net — catches
-    anything the upstream delete missed (e.g. when doc_status is absent).
-    Raises ImportError on non-PG backends (caller catches and skips).
-    """
-    from lightrag.kg.postgres_impl import ClientManager
-
-    db = await ClientManager.get_client()
-    pool = db.pool
-
-    result: dict[str, str] = {}
-
-    async with pool.acquire() as conn:
-        # Tables keyed by 'id'
-        for table in ("lightrag_doc_full", "lightrag_doc_status"):
-            try:
-                r = await conn.execute(f"DELETE FROM {table} WHERE id=$1", doc_id)
-                result[table] = r
-            except Exception as exc:
-                result[table] = f"error: {exc}"
-
-        # Tables keyed by 'full_doc_id' (static + dynamic VDB tables)
-        vdb_rows = await conn.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname='public' "
-            "AND (tablename LIKE 'lightrag_vdb_chunks_%' "
-            "  OR tablename LIKE 'lightrag_vdb_entity_%' "
-            "  OR tablename LIKE 'lightrag_vdb_relation_%')"
-        )
-        full_doc_tables = ["lightrag_doc_chunks"] + [r["tablename"] for r in vdb_rows]
-        for table in full_doc_tables:
-            try:
-                r = await conn.execute(f"DELETE FROM {table} WHERE full_doc_id=$1", doc_id)
-                result[table] = r
-            except Exception as exc:
-                result[table] = f"error: {exc}"
-
-        # KG entities/relations that reference this doc
-        for kg_table in ("lightrag_full_entities", "lightrag_full_relations"):
-            try:
-                r = await conn.execute(
-                    f"DELETE FROM {kg_table} WHERE source_id LIKE $1",
-                    f"%{doc_id}%",
-                )
-                result[kg_table] = r
-            except Exception as exc:
-                result[kg_table] = f"error: {exc}"
-
-    logger.info("[Delete] PG cleanup for %s: %s", doc_id, result)
-    return result
 
 
 __all__ = ["unified_delete_files", "unified_ingest"]

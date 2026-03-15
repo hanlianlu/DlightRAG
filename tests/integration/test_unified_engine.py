@@ -53,6 +53,8 @@ def _make_lightrag() -> MagicMock:
     lightrag.chunks_vdb = MagicMock()
     lightrag.chunks_vdb.upsert = AsyncMock()
     lightrag.chunks_vdb.embedding_func = MagicMock()
+    lightrag.doc_status = MagicMock()
+    lightrag.doc_status.upsert = AsyncMock()
     return lightrag
 
 
@@ -167,10 +169,11 @@ class TestAingestDataConsistency:
 
 
 class TestIngestDeleteRoundTrip:
-    """chunk_ids written by aingest must match those deleted by adelete_doc.
+    """chunk_ids written by aingest must match those deleted by unified_delete_files.
 
     Uses real extractor chunk_id formula and dict-backed visual_chunks +
-    full_docs stores to verify the ingest→delete invariant end-to-end.
+    doc_status stores to verify the ingest→delete invariant end-to-end
+    via the 3-layer cross-backend deletion architecture.
     """
 
     @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
@@ -182,34 +185,36 @@ class TestIngestDeleteRoundTrip:
         _embedder_cls: MagicMock,
         _retriever_cls: MagicMock,
     ) -> None:
+        from dlightrag.unifiedrepresent.lifecycle import unified_delete_files
+
         config = _make_config()
         lightrag = _make_lightrag()
 
         # Dict-backed visual_chunks: tracks upserted and deleted keys
-        store: dict[str, dict] = {}
+        vc_store: dict[str, dict] = {}
 
         async def vc_upsert(data: dict) -> None:
-            store.update(data)
+            vc_store.update(data)
 
         async def vc_delete(ids: list[str]) -> None:
             for k in ids:
-                store.pop(k, None)
+                vc_store.pop(k, None)
 
         visual_chunks = MagicMock()
         visual_chunks.upsert = AsyncMock(side_effect=vc_upsert)
         visual_chunks.delete = AsyncMock(side_effect=vc_delete)
 
-        # Dict-backed full_docs: aingest writes page_count, adelete_doc reads it
-        full_docs_store: dict[str, dict] = {}
+        # Dict-backed doc_status: aingest writes, adelete_by_doc_id reads
+        doc_status_store: dict[str, dict] = {}
 
-        async def fd_upsert(data: dict) -> None:
-            full_docs_store.update(data)
+        async def ds_upsert(data: dict) -> None:
+            doc_status_store.update(data)
 
-        async def fd_get_by_id(doc_id: str) -> dict | None:
-            return full_docs_store.get(doc_id)
-
-        lightrag.full_docs.upsert = AsyncMock(side_effect=fd_upsert)
-        lightrag.full_docs.get_by_id = AsyncMock(side_effect=fd_get_by_id)
+        lightrag.doc_status = MagicMock()
+        lightrag.doc_status.upsert = AsyncMock(side_effect=ds_upsert)
+        lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
+        lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
+        lightrag.adelete_by_doc_id = AsyncMock()
 
         engine = _make_engine_with_real_extractor(lightrag, visual_chunks, config)
 
@@ -239,11 +244,42 @@ class TestIngestDeleteRoundTrip:
             result = await engine.aingest("/fake/test.pdf", doc_id="doc-round")
 
         assert result["page_count"] == 3
-        assert len(store) == 3
+        assert len(vc_store) == 3
 
-        # --- Delete ---
-        delete_result = await engine.adelete_doc("doc-round")
+        # Verify doc_status was written
+        assert "doc-round" in doc_status_store
 
-        assert delete_result["visual_chunks_deleted"] == 3
-        # The store should be empty: every key written by aingest was deleted
-        assert store == {}, f"Orphaned visual_chunks after delete: {set(store.keys())}"
+        # --- Delete via unified_delete_files (3-layer architecture) ---
+        # Mock hash_index that finds our doc
+        hash_index = MagicMock()
+        hash_index.find_by_name = AsyncMock(
+            return_value=("doc-round", "sha256:abc", "/fake/test.pdf")
+        )
+        hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
+        hash_index.remove = AsyncMock(return_value=True)
+
+        # Mock metadata_index with page_count for visual_chunks cleanup
+        metadata_index = MagicMock()
+        metadata_index.get = AsyncMock(return_value={"page_count": 3})
+        metadata_index.delete = AsyncMock()
+
+        delete_results = await unified_delete_files(
+            engine=engine,
+            hash_index=hash_index,
+            lightrag=lightrag,
+            filenames=["test.pdf"],
+            metadata_index=metadata_index,
+        )
+
+        assert len(delete_results) == 1
+        assert delete_results[0]["status"] == "deleted"
+
+        # LightRAG adelete_by_doc_id was called (Layer 1)
+        lightrag.adelete_by_doc_id.assert_awaited_once_with("doc-round", delete_llm_cache=True)
+
+        # The visual_chunks store should be empty (Layer 2)
+        assert vc_store == {}, f"Orphaned visual_chunks after delete: {set(vc_store.keys())}"
+
+        # DlightRAG indexes cleaned (Layer 3)
+        hash_index.remove.assert_awaited_once_with("sha256:abc")
+        metadata_index.delete.assert_awaited_once_with("doc-round")

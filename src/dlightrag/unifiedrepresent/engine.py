@@ -33,7 +33,7 @@ class UnifiedRepresentEngine:
 
     Holds a LightRAG instance, a visual_chunks KV store, and all
     sub-components (renderer, embedder, extractor, retriever). Exposes
-    ``aingest()``, ``aretrieve()``, ``adelete_doc()``, ``aclose()``.
+    ``aingest()``, ``aretrieve()``, ``aclose()``.
     """
 
     def __init__(
@@ -194,6 +194,27 @@ class UnifiedRepresentEngine:
             }
         await self.visual_chunks.upsert(visual_data)
 
+        # Step 6: Write doc_status (makes adelete_by_doc_id work on all backends)
+        from datetime import UTC, datetime
+
+        from lightrag.base import DocStatus
+
+        chunk_ids = [info["chunk_id"] for info in page_infos]
+        await self.lightrag.doc_status.upsert(
+            {
+                doc_id: {
+                    "status": DocStatus.PROCESSED,
+                    "content_summary": f"[unified] {path.name} ({page_count} pages)",
+                    "content_length": 0,
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "updated_at": datetime.now(UTC).isoformat(),
+                    "file_path": str(path),
+                    "chunks_count": len(chunk_ids),
+                    "chunks_list": chunk_ids,
+                }
+            }
+        )
+
         logger.info("Ingested %s: %d pages, doc_id=%s", path.name, page_count, doc_id)
         return {
             "doc_id": doc_id,
@@ -241,39 +262,6 @@ class UnifiedRepresentEngine:
             answer=None,
             contexts=result.get("contexts", {}),
         )
-
-    async def adelete_doc(self, doc_id: str) -> dict[str, Any]:
-        """Delete unified-specific entries (visual_chunks) for a document.
-
-        chunks_vdb, text_chunks, full_docs, and KG are cleaned by
-        LightRAG.adelete_by_doc_id() — called by the service layer.
-        """
-        # Get page_count from full_docs to reconstruct chunk_ids
-        doc_data = await self.lightrag.full_docs.get_by_id(doc_id)
-        if not doc_data:
-            logger.warning("adelete_doc: doc_id=%s not found in full_docs", doc_id)
-            return {"doc_id": doc_id, "visual_chunks_deleted": 0}
-
-        page_count = doc_data.get("page_count", 0)
-        if not page_count:
-            logger.warning(
-                "adelete_doc: no page_count for doc_id=%s, visual_chunks may not be fully cleaned",
-                doc_id,
-            )
-            return {"doc_id": doc_id, "visual_chunks_deleted": 0}
-
-        # Reconstruct chunk_ids and delete from visual_chunks
-        deleted = 0
-        for i in range(page_count):
-            chunk_id = compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
-            try:
-                await self.visual_chunks.delete([chunk_id])
-                deleted += 1
-            except Exception as exc:
-                logger.warning("Failed to delete visual_chunk %s: %s", chunk_id, exc)
-
-        logger.info("Deleted %d visual_chunks for doc_id=%s", deleted, doc_id)
-        return {"doc_id": doc_id, "visual_chunks_deleted": deleted}
 
     async def aclose(self) -> None:
         """Release resources held by sub-components (HTTP clients, etc.)."""

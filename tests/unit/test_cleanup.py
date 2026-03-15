@@ -19,8 +19,8 @@ def _make_hash_index(
 ):
     """Create a mock hash index with configurable lookup results."""
     index = MagicMock()
-    index.find_by_name.return_value = find_by_name_result
-    index.find_by_path.return_value = find_by_path_result
+    index.find_by_name = AsyncMock(return_value=find_by_name_result)
+    index.find_by_path = AsyncMock(return_value=find_by_path_result)
     return index
 
 

@@ -43,6 +43,8 @@ def _make_lightrag() -> MagicMock:
     lightrag.chunks_vdb = MagicMock()
     lightrag.chunks_vdb.upsert = AsyncMock()
     lightrag.chunks_vdb.embedding_func = MagicMock()
+    lightrag.doc_status = MagicMock()
+    lightrag.doc_status.upsert = AsyncMock()
     return lightrag
 
 
@@ -303,33 +305,32 @@ class TestAretrieve:
 
 
 # ---------------------------------------------------------------------------
-# TestAdeleteDoc
+# TestAingestDocStatus
 # ---------------------------------------------------------------------------
 
 
-class TestAdeleteDoc:
-    """Test adelete_doc cleans visual_chunks by page_count."""
+class TestAingestDocStatus:
+    """Test aingest writes doc_status for cross-backend deletion support."""
 
     @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
     @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
     @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
     @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
-    async def test_deletes_visual_chunks_by_page_count(
+    async def test_aingest_writes_doc_status(
         self,
-        _renderer: MagicMock,
-        _embedder: MagicMock,
-        _extractor: MagicMock,
-        _retriever: MagicMock,
+        _renderer_cls: MagicMock,
+        _embedder_cls: MagicMock,
+        _extractor_cls: MagicMock,
+        _retriever_cls: MagicMock,
     ) -> None:
+        from lightrag.base import DocStatus
+
         config = _make_config()
         lightrag = _make_lightrag()
+        lightrag.doc_status = MagicMock()
+        lightrag.doc_status.upsert = AsyncMock()
         visual_chunks = MagicMock()
-        visual_chunks.delete = AsyncMock()
-
-        # full_docs returns doc data with page_count
-        lightrag.full_docs.get_by_id = AsyncMock(
-            return_value={"content": "", "file_path": "/f.pdf", "page_count": 3}
-        )
+        visual_chunks.upsert = AsyncMock()
 
         engine = UnifiedRepresentEngine(
             lightrag=lightrag,
@@ -337,21 +338,38 @@ class TestAdeleteDoc:
             config=config,
         )
 
-        result = await engine.adelete_doc("doc-abc")
+        # Mock renderer: returns 2 pages
+        img_0 = Image.new("RGB", (100, 100), "white")
+        img_1 = Image.new("RGB", (100, 100), "blue")
+        render_result = RenderResult(
+            pages=[(0, img_0), (1, img_1)],
+            metadata={"title": "Test", "page_count": 2},
+        )
+        engine.renderer.render_file = AsyncMock(return_value=render_result)
+        engine.embedder.embed_pages = AsyncMock(
+            return_value=np.zeros((2, 1024), dtype=np.float32)
+        )
+        engine.extractor.extract_from_pages = AsyncMock(
+            return_value=[
+                {"chunk_id": "chunk-aaa", "page_index": 0, "content": "Page one"},
+                {"chunk_id": "chunk-bbb", "page_index": 1, "content": "Page two"},
+            ]
+        )
+        engine._upsert_with_visual_vectors = AsyncMock()
 
-        assert result["visual_chunks_deleted"] == 3
-        assert visual_chunks.delete.await_count == 3
+        await engine.aingest("/fake/doc.pdf", doc_id="doc-test")
 
-        # Verify exact chunk_ids passed — the formula must match aingest
-        from lightrag.utils import compute_mdhash_id
-
-        expected_ids = [
-            compute_mdhash_id("doc-abc:page:0", prefix="chunk-"),
-            compute_mdhash_id("doc-abc:page:1", prefix="chunk-"),
-            compute_mdhash_id("doc-abc:page:2", prefix="chunk-"),
-        ]
-        actual_ids = [call.args[0][0] for call in visual_chunks.delete.call_args_list]
-        assert actual_ids == expected_ids
+        # Verify doc_status.upsert was called
+        lightrag.doc_status.upsert.assert_awaited_once()
+        ds_arg = lightrag.doc_status.upsert.call_args[0][0]
+        assert "doc-test" in ds_arg
+        entry = ds_arg["doc-test"]
+        assert entry["status"] == DocStatus.PROCESSED
+        assert entry["chunks_count"] == 2
+        assert entry["chunks_list"] == ["chunk-aaa", "chunk-bbb"]
+        assert entry["file_path"] == "/fake/doc.pdf"
+        assert "created_at" in entry
+        assert "updated_at" in entry
 
 
 # ---------------------------------------------------------------------------
