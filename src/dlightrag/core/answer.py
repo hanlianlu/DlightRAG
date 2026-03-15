@@ -174,14 +174,18 @@ class AnswerEngine:
         # output; StreamingAnswerParser handles incremental parsing.
         if has_images:
             messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-            logger.info("[AE] generate_stream: VLM %s path", "structured" if structured else "freetext")
+            logger.info(
+                "[AE] generate_stream: VLM %s path", "structured" if structured else "freetext"
+            )
             token_iterator = await model_func(
                 user_prompt,
                 messages=messages,
                 stream=True,
             )
         else:
-            logger.info("[AE] generate_stream: LLM text %s path", "structured" if structured else "freetext")
+            logger.info(
+                "[AE] generate_stream: LLM text %s path", "structured" if structured else "freetext"
+            )
             token_iterator = await model_func(
                 user_prompt,
                 system_prompt=system_prompt,

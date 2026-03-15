@@ -204,7 +204,8 @@ async def answer_stream(
             # Skip for image-only sources (unified mode) — no text to highlight.
             has_text_chunks = any(
                 chunk.content and not chunk.image_data
-                for src in result.sources if src.chunks
+                for src in result.sources
+                if src.chunks
                 for chunk in src.chunks
             )
             if has_text_chunks:
