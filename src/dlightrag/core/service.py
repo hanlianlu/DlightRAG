@@ -161,6 +161,8 @@ class RAGService:
         self._visual_chunks: Any = None  # Visual chunks KV store (unified mode)
         self._hash_index: Any = None  # Content-hash deduplication index
         self._metadata_index: Any = None  # Document metadata index
+        self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
+        self._table_schema_ttl: float = 0.0  # Cache expiry timestamp
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by _do_initialize / _do_initialize_unified;
@@ -902,7 +904,18 @@ class RAGService:
         lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
         llm_func = getattr(lr, "llm_model_func", None) if lr else None
 
-        analyzer = QueryAnalyzer(llm_func=llm_func)
+        # Refresh table schema (cached, 5-min TTL)
+        import time
+
+        now = time.monotonic()
+        if self._metadata_index and now > self._table_schema_ttl:
+            try:
+                self._table_schema = await self._metadata_index.get_table_schema()
+                self._table_schema_ttl = now + 300
+            except Exception as exc:
+                logger.debug("Table schema refresh failed: %s", exc)
+
+        analyzer = QueryAnalyzer(llm_func=llm_func, schema=self._table_schema)
         plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
 
         if not plan.metadata_filters and not plan.semantic_query:

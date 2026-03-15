@@ -201,6 +201,37 @@ class PGMetadataIndex:
             )
             logger.info("PGMetadataIndex cleared for workspace %s: %s", self._workspace, result)
 
+    # Internal columns excluded from schema hints — not user-filterable
+    _INTERNAL_COLS = frozenset({"workspace", "doc_id", "ingested_at"})
+
+    async def get_table_schema(self) -> dict[str, Any]:
+        """Read table structure dynamically.
+
+        - Column names/types from information_schema (table structure)
+        - JSONB keys from custom_metadata (JSONB-internal structure)
+
+        Used by QueryAnalyzer to build a context-aware LLM prompt.
+        """
+        async with self._pool.acquire() as conn:
+            col_rows = await conn.fetch(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name = 'dlightrag_doc_metadata' ORDER BY ordinal_position"
+            )
+            key_rows = await conn.fetch(
+                "SELECT DISTINCT jsonb_object_keys(custom_metadata) AS k "
+                "FROM dlightrag_doc_metadata "
+                "WHERE workspace=$1 AND custom_metadata != '{}'",
+                self._workspace,
+            )
+
+        columns = [
+            {"name": r["column_name"], "type": r["data_type"]}
+            for r in col_rows
+            if r["column_name"] not in self._INTERNAL_COLS
+        ]
+        custom_keys = [r["k"] for r in key_rows]
+        return {"columns": columns, "custom_keys": custom_keys}
+
     async def find_by_filename(self, name: str) -> list[str]:
         """Find doc_ids by case-insensitive filename match."""
         async with self._pool.acquire() as conn:
