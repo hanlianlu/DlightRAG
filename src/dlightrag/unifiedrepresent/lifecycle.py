@@ -349,9 +349,22 @@ async def unified_delete_files(
             continue
 
         for doc_id in ctx.doc_ids:
-            # Direct SQL cleanup — doesn't depend on doc_status or page_count
-            cleanup = await _delete_doc_from_all_tables(doc_id, lightrag)
-            deletion_result["cleanup_results"]["tables"] = cleanup
+            # Phase 1: LightRAG cleanup (works when doc_status exists)
+            if lightrag and hasattr(lightrag, "adelete_by_doc_id"):
+                try:
+                    lr_result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                    deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = (
+                        lr_result.status if hasattr(lr_result, "status") else "completed"
+                    )
+                except Exception as exc:
+                    logger.warning("LightRAG deletion failed for %s: %s", doc_id, exc)
+
+            # Phase 2: Direct SQL sweep (PG only) — catches anything LightRAG missed
+            try:
+                cleanup = await _pg_cleanup_doc(doc_id)
+                deletion_result["cleanup_results"]["pg_cleanup"] = cleanup
+            except Exception:
+                pass  # Non-PG backend, skip
 
         # Remove from hash index and metadata index
         for content_hash in ctx.content_hashes:
@@ -373,39 +386,37 @@ async def unified_delete_files(
     return results
 
 
-async def _delete_doc_from_all_tables(doc_id: str, lightrag: Any) -> dict[str, str]:
-    """Delete a document from all LightRAG tables by doc_id/full_doc_id.
+async def _pg_cleanup_doc(doc_id: str) -> dict[str, str]:
+    """Sweep remaining doc data from all PG tables.
 
-    Direct SQL approach — doesn't depend on doc_status or page_count.
+    Runs after LightRAG's adelete_by_doc_id as a safety net — catches
+    anything the upstream delete missed (e.g. when doc_status is absent).
+    Raises ImportError on non-PG backends (caller catches and skips).
     """
     from lightrag.kg.postgres_impl import ClientManager
 
     db = await ClientManager.get_client()
     pool = db.pool
 
-    # Tables where doc is referenced by 'id'
-    id_tables = ["lightrag_doc_full", "lightrag_doc_status"]
-    # Tables where doc is referenced by 'full_doc_id'
-    full_doc_tables = ["lightrag_doc_chunks"]
-
     result: dict[str, str] = {}
 
     async with pool.acquire() as conn:
-        # Find VDB table names dynamically
-        vdb_tables = await conn.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname='public' "
-            "AND (tablename LIKE 'lightrag_vdb_chunks_%' "
-            "  OR tablename LIKE 'lightrag_vdb_entity_%' "
-            "  OR tablename LIKE 'lightrag_vdb_relation_%')"
-        )
-
-        for table in id_tables:
+        # Tables keyed by 'id'
+        for table in ("lightrag_doc_full", "lightrag_doc_status"):
             try:
                 r = await conn.execute(f"DELETE FROM {table} WHERE id=$1", doc_id)
                 result[table] = r
             except Exception as exc:
                 result[table] = f"error: {exc}"
 
+        # Tables keyed by 'full_doc_id' (static + dynamic VDB tables)
+        vdb_rows = await conn.fetch(
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' "
+            "AND (tablename LIKE 'lightrag_vdb_chunks_%' "
+            "  OR tablename LIKE 'lightrag_vdb_entity_%' "
+            "  OR tablename LIKE 'lightrag_vdb_relation_%')"
+        )
+        full_doc_tables = ["lightrag_doc_chunks"] + [r["tablename"] for r in vdb_rows]
         for table in full_doc_tables:
             try:
                 r = await conn.execute(f"DELETE FROM {table} WHERE full_doc_id=$1", doc_id)
@@ -413,16 +424,8 @@ async def _delete_doc_from_all_tables(doc_id: str, lightrag: Any) -> dict[str, s
             except Exception as exc:
                 result[table] = f"error: {exc}"
 
-        for row in vdb_tables:
-            table = row["tablename"]
-            try:
-                r = await conn.execute(f"DELETE FROM {table} WHERE full_doc_id=$1", doc_id)
-                result[table] = r
-            except Exception as exc:
-                result[table] = f"error: {exc}"
-
-        # Also clean KG entities/relations that reference this doc
-        for kg_table in ["lightrag_full_entities", "lightrag_full_relations"]:
+        # KG entities/relations that reference this doc
+        for kg_table in ("lightrag_full_entities", "lightrag_full_relations"):
             try:
                 r = await conn.execute(
                     f"DELETE FROM {kg_table} WHERE source_id LIKE $1",
@@ -432,7 +435,7 @@ async def _delete_doc_from_all_tables(doc_id: str, lightrag: Any) -> dict[str, s
             except Exception as exc:
                 result[kg_table] = f"error: {exc}"
 
-    logger.info("[Delete] direct SQL cleanup for %s: %s", doc_id, result)
+    logger.info("[Delete] PG cleanup for %s: %s", doc_id, result)
     return result
 
 
