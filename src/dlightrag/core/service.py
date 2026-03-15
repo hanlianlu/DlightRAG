@@ -857,6 +857,9 @@ class RAGService:
         if not backend:
             raise RuntimeError("Retrieval backend not initialized")
 
+        if filters and self._metadata_index is None:
+            logger.warning("Metadata filters ignored: metadata index requires PostgreSQL backend")
+
         # Phase 1: KG retrieval (existing path)
         kg_result = await backend.aretrieve(
             query,
