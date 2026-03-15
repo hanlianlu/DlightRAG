@@ -137,6 +137,14 @@ class DeleteRequest(BaseModel):
     workspace: str | None = None
 
 
+class ResetRequest(BaseModel):
+    """Request to reset a workspace."""
+
+    workspace: str | None = None
+    keep_files: bool = False
+    dry_run: bool = False
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Endpoints
 # ═══════════════════════════════════════════════════════════════════
@@ -356,6 +364,19 @@ async def delete_files(body: DeleteRequest, request: Request) -> dict[str, Any]:
             detail="File deletion is not supported in unified RAG mode",
         ) from exc
     return {"results": results, "workspace": ws}
+
+
+@app.post("/reset", dependencies=[Depends(_verify_auth)])
+async def reset_workspace(body: ResetRequest, request: Request) -> dict[str, Any]:
+    """Reset all RAG data for a workspace."""
+    manager = _get_manager(request)
+    ws = body.workspace or get_config().workspace
+    result = await manager.areset(
+        workspace=ws,
+        keep_files=body.keep_files,
+        dry_run=body.dry_run,
+    )
+    return result
 
 
 # ── Metadata CRUD ─────────────────────────────────────────────────
