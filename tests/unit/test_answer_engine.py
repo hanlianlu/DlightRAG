@@ -334,7 +334,6 @@ class TestAnswerEngineGenerateStream:
             yield "plain answer text"
 
         llm_func = AsyncMock(return_value=mock_stream())
-        llm_func.supports_structured = False
         engine = AnswerEngine(llm_model_func=llm_func)
 
         contexts = _text_contexts()
@@ -561,7 +560,6 @@ class TestAnswerEngineStreamStructured:
             yield '{"answer": "test", "references": []}'
 
         llm_func = AsyncMock(return_value=mock_stream())
-        llm_func.supports_structured = True
         engine = AnswerEngine(llm_model_func=llm_func)
 
         await engine.generate_stream("query", _text_contexts())
@@ -577,7 +575,6 @@ class TestAnswerEngineStreamStructured:
             yield "plain text"
 
         llm_func = AsyncMock(return_value=mock_stream())
-        llm_func.supports_structured = False
         engine = AnswerEngine(llm_model_func=llm_func)
 
         await engine.generate_stream("query", _text_contexts())
