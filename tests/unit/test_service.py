@@ -420,32 +420,35 @@ class TestRAGServiceUnifiedMode:
     # -- File deletion --
 
     async def test_adelete_files_unified(self, test_config: DlightragConfig) -> None:
-        """Unified mode deletion cleans visual_chunks + LightRAG + hash index."""
+        """Unified mode deletion: Layer 1 (LightRAG) + Layer 2 (visual_chunks) + Layer 3 (indexes)."""
         service = RAGService(config=test_config)
         service._initialized = True
         service.unified = MagicMock()
-        service.unified.adelete_doc = AsyncMock(
-            return_value={"doc_id": "d1", "visual_chunks_deleted": 3}
-        )
+        service.unified.visual_chunks = MagicMock()
+        service.unified.visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
         service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
         service._hash_index = MagicMock()
-        service._hash_index.find_by_name = MagicMock(
+        service._hash_index.find_by_name = AsyncMock(
             return_value=("d1", "sha256:abc", "/tmp/a.pdf")
         )
-        service._hash_index.find_by_path = MagicMock(return_value=(None, None, None))
+        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
         service._hash_index.remove = AsyncMock(return_value=True)
+        service._metadata_index = MagicMock()
+        service._metadata_index.get = AsyncMock(return_value={"page_count": 3})
+        service._metadata_index.delete = AsyncMock()
 
         results = await service.adelete_files(filenames=["a.pdf"])
 
         assert len(results) == 1
         assert results[0]["status"] == "deleted"
-        service.unified.adelete_doc.assert_awaited_once_with("d1")
         service._lightrag.adelete_by_doc_id.assert_awaited_once()
         service._hash_index.remove.assert_awaited_once_with("sha256:abc")
+        service._metadata_index.delete.assert_awaited_once_with("d1")
+        service.unified.visual_chunks.delete.assert_awaited_once()
 
     async def test_adelete_files_unified_not_found(self, test_config: DlightragConfig) -> None:
         """Unified mode deletion returns not_found when doc not in hash index."""
@@ -457,39 +460,46 @@ class TestRAGServiceUnifiedMode:
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
         service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
         service._hash_index = MagicMock()
-        service._hash_index.find_by_name = MagicMock(return_value=(None, None, None))
-        service._hash_index.find_by_path = MagicMock(return_value=(None, None, None))
+        service._hash_index.find_by_name = AsyncMock(return_value=(None, None, None))
+        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
 
         results = await service.adelete_files(filenames=["nonexistent.pdf"])
 
         assert results[0]["status"] == "not_found"
 
-    async def test_adelete_files_unified_continues_after_phase1_failure(
+    async def test_adelete_files_unified_continues_after_layer1_failure(
         self, test_config: DlightragConfig
     ) -> None:
-        """Phases 2 (LightRAG) and 3 (hash index) still run when phase 1 (visual_chunks) fails."""
+        """Layers 2 (visual_chunks) and 3 (indexes) still run when Layer 1 (LightRAG) fails."""
         service = RAGService(config=test_config)
         service._initialized = True
         service.unified = MagicMock()
-        service.unified.adelete_doc = AsyncMock(side_effect=RuntimeError("visual_chunks DB down"))
+        service.unified.visual_chunks = MagicMock()
+        service.unified.visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
-        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock(
+            side_effect=RuntimeError("LightRAG down")
+        )
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
         service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
         service._hash_index = MagicMock()
-        service._hash_index.find_by_name = MagicMock(
+        service._hash_index.find_by_name = AsyncMock(
             return_value=("d1", "sha256:abc", "/tmp/a.pdf")
         )
-        service._hash_index.find_by_path = MagicMock(return_value=(None, None, None))
+        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
         service._hash_index.remove = AsyncMock(return_value=True)
+        service._metadata_index = MagicMock()
+        service._metadata_index.get = AsyncMock(return_value={"page_count": 2})
+        service._metadata_index.delete = AsyncMock()
 
         results = await service.adelete_files(filenames=["a.pdf"])
 
         assert results[0]["status"] == "deleted"
-        # Phase 2 and 3 ran despite phase 1 failure
-        service._lightrag.adelete_by_doc_id.assert_awaited_once()
+        # Layers 2 and 3 ran despite Layer 1 failure
+        service.unified.visual_chunks.delete.assert_awaited_once()
         service._hash_index.remove.assert_awaited_once_with("sha256:abc")
+        service._metadata_index.delete.assert_awaited_once_with("d1")
 
 
 # ---------------------------------------------------------------------------
