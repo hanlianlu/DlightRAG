@@ -83,7 +83,10 @@ async def list_tools() -> list[Tool]:
                         "description": "Metadata filters for structured queries (filename, doc_author, etc.)",
                         "properties": {
                             "filename": {"type": "string"},
-                            "filename_pattern": {"type": "string", "description": "SQL ILIKE pattern"},
+                            "filename_pattern": {
+                                "type": "string",
+                                "description": "SQL ILIKE pattern",
+                            },
                             "file_extension": {"type": "string"},
                             "doc_title": {"type": "string"},
                             "doc_author": {"type": "string"},

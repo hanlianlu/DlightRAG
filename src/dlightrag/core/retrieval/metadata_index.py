@@ -12,18 +12,20 @@ from dlightrag.core.retrieval.models import MetadataFilter
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_FIELDS = frozenset({
-    "filename",
-    "filename_stem",
-    "file_path",
-    "file_extension",
-    "doc_title",
-    "doc_author",
-    "creation_date",
-    "original_format",
-    "page_count",
-    "rag_mode",
-})
+_SYSTEM_FIELDS = frozenset(
+    {
+        "filename",
+        "filename_stem",
+        "file_path",
+        "file_extension",
+        "doc_title",
+        "doc_author",
+        "creation_date",
+        "original_format",
+        "page_count",
+        "rag_mode",
+    }
+)
 
 _CREATE_TABLE = """\
 CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (
@@ -91,12 +93,16 @@ class PGMetadataIndex:
                 try:
                     await conn.execute(idx_sql)
                 except Exception:
-                    logger.debug("Index creation skipped (pg_trgm may not be available): %s", idx_sql[:60])
+                    logger.debug(
+                        "Index creation skipped (pg_trgm may not be available): %s", idx_sql[:60]
+                    )
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
         system = {k: metadata.get(k) for k in _SYSTEM_FIELDS}
-        custom = {k: v for k, v in metadata.items() if k not in _SYSTEM_FIELDS and k != "ingested_at"}
+        custom = {
+            k: v for k, v in metadata.items() if k not in _SYSTEM_FIELDS and k != "ingested_at"
+        }
 
         async with self._pool.acquire() as conn:
             await conn.execute(

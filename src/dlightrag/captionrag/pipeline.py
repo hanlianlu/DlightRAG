@@ -301,7 +301,8 @@ class IngestionPipeline:
                         from dlightrag.core.retrieval.metadata_index import extract_system_metadata
 
                         meta = extract_system_metadata(
-                            file_path, rag_mode="caption",
+                            file_path,
+                            rag_mode="caption",
                             page_count=getattr(result, "page_count", None),
                         )
                         if user_metadata:
@@ -389,8 +390,11 @@ class IngestionPipeline:
                 )
 
                 result = await self._ingest_single_file_with_policy(
-                    working_path, artifacts_dir, content_hash=content_hash,
-                    source_uri=source_uri, user_metadata=user_metadata,
+                    working_path,
+                    artifacts_dir,
+                    content_hash=content_hash,
+                    source_uri=source_uri,
+                    user_metadata=user_metadata,
                 )
                 result.source_type = "local"
                 result.total_files = 1
@@ -462,8 +466,11 @@ class IngestionPipeline:
                 try:
                     working = await self._prepare_for_parsing(fp, tmpdir)
                     return await self._ingest_single_file_with_policy(
-                        working, artifacts_dir, content_hash=ch if ch else None,
-                        source_uri=uri, user_metadata=user_metadata,
+                        working,
+                        artifacts_dir,
+                        content_hash=ch if ch else None,
+                        source_uri=uri,
+                        user_metadata=user_metadata,
                     )
                 finally:
                     shutil.rmtree(tmpdir, ignore_errors=True)

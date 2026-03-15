@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -22,9 +22,7 @@ def mock_metadata_index():
 def mock_lightrag():
     lr = MagicMock()
     lr.doc_status = AsyncMock()
-    lr.doc_status.get_by_id = AsyncMock(
-        return_value={"chunks_list": ["chunk-a", "chunk-b"]}
-    )
+    lr.doc_status.get_by_id = AsyncMock(return_value={"chunks_list": ["chunk-a", "chunk-b"]})
     return lr
 
 
@@ -116,7 +114,7 @@ class TestOrchestratorVectorPath:
             metadata_filters=MetadataFilter(filename="test.pdf"),
             paths=["metadata"],
         )
-        result = await orch.orchestrate(plan)
+        await orch.orchestrate(plan)
         # No vector path since semantic_query is empty
         mock_vdb.query.assert_not_called()
 

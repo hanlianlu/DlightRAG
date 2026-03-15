@@ -12,18 +12,22 @@ class TestReciprocalRankFusion:
         assert result == ["a", "b", "c"]
 
     def test_two_paths_no_overlap(self) -> None:
-        result = reciprocal_rank_fusion({
-            "kg": ["a", "b"],
-            "metadata": ["c", "d"],
-        })
+        result = reciprocal_rank_fusion(
+            {
+                "kg": ["a", "b"],
+                "metadata": ["c", "d"],
+            }
+        )
         assert len(result) == 4
         assert set(result) == {"a", "b", "c", "d"}
 
     def test_overlap_boosts_rank(self) -> None:
-        result = reciprocal_rank_fusion({
-            "kg": ["a", "b", "c"],
-            "metadata": ["b", "d", "a"],
-        })
+        result = reciprocal_rank_fusion(
+            {
+                "kg": ["a", "b", "c"],
+                "metadata": ["b", "d", "a"],
+            }
+        )
         # "a" and "b" appear in both paths, should be ranked higher
         # "b" is rank 1 in kg and rank 0 in metadata → highest combined score
         assert result[0] in ("a", "b")
@@ -45,18 +49,22 @@ class TestReciprocalRankFusion:
         assert result_k1 == result_k100 == ["a", "b"]
 
     def test_three_paths_same_chunk(self) -> None:
-        result = reciprocal_rank_fusion({
-            "kg": ["a", "b"],
-            "metadata": ["a", "c"],
-            "vector": ["a", "d"],
-        })
+        result = reciprocal_rank_fusion(
+            {
+                "kg": ["a", "b"],
+                "metadata": ["a", "c"],
+                "vector": ["a", "d"],
+            }
+        )
         # "a" found by all three paths — should be first
         assert result[0] == "a"
 
     def test_dedup(self) -> None:
-        result = reciprocal_rank_fusion({
-            "p1": ["a", "b", "c"],
-            "p2": ["b", "c", "a"],
-        })
+        result = reciprocal_rank_fusion(
+            {
+                "p1": ["a", "b", "c"],
+                "p2": ["b", "c", "a"],
+            }
+        )
         # No duplicates
         assert len(result) == len(set(result))

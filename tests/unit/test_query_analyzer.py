@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.core.retrieval.models import MetadataFilter, RetrievalPlan
+from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer, fast_detect
 
 
@@ -102,11 +102,13 @@ class TestQueryAnalyzerFastDetect:
 class TestQueryAnalyzerLLM:
     @pytest.mark.asyncio
     async def test_llm_extraction(self) -> None:
-        llm_response = json.dumps({
-            "semantic_query": "revenue insights",
-            "filters": {"doc_author": "Zhang San", "date_from": "2024-01-01"},
-            "paths": ["metadata", "kg"],
-        })
+        llm_response = json.dumps(
+            {
+                "semantic_query": "revenue insights",
+                "filters": {"doc_author": "Zhang San", "date_from": "2024-01-01"},
+                "paths": ["metadata", "kg"],
+            }
+        )
         llm_func = AsyncMock(return_value=llm_response)
         analyzer = QueryAnalyzer(llm_func=llm_func)
         plan = await analyzer.analyze("revenue insights from Zhang San's docs in 2024")
@@ -125,11 +127,13 @@ class TestQueryAnalyzerLLM:
 
     @pytest.mark.asyncio
     async def test_llm_returns_empty_filters(self) -> None:
-        llm_response = json.dumps({
-            "semantic_query": "what is quantum computing",
-            "filters": {},
-            "paths": ["kg"],
-        })
+        llm_response = json.dumps(
+            {
+                "semantic_query": "what is quantum computing",
+                "filters": {},
+                "paths": ["kg"],
+            }
+        )
         llm_func = AsyncMock(return_value=llm_response)
         analyzer = QueryAnalyzer(llm_func=llm_func)
         plan = await analyzer.analyze("what is quantum computing")
