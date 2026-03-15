@@ -146,3 +146,100 @@ def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
         len(refs),
     )
     return answer_text, refs
+
+
+def extract_references(raw: str) -> tuple[str, list[Reference]]:
+    """Extract references from LLM output with 3-level fallback.
+
+    Returns (cleaned_answer_text, references).
+
+    Level 1 — JSON block: find and parse JSON containing "references" array,
+              strip JSON block from answer text.
+    Level 2 — ### References section: parse [n] Title lines,
+              strip references section from answer text.
+    Level 3 — Empty: return original text + empty list.
+    """
+    # Level 1: JSON block extraction
+    answer, refs, found = _try_json_extraction(raw)
+    if found:
+        return answer, refs
+
+    # Level 2: ### References section
+    answer, refs = parse_freetext_references(raw)
+    if refs:
+        return answer, refs
+
+    # Level 3: empty
+    return raw, []
+
+
+def _try_json_extraction(raw: str) -> tuple[str, list[Reference], bool]:
+    """Attempt to extract references from a JSON block in the text.
+
+    Returns (answer, refs, json_found). The ``json_found`` flag is True
+    when a JSON block was successfully parsed (even if refs is empty),
+    so callers can distinguish "no JSON" from "JSON with no refs".
+    """
+    import json
+
+    from dlightrag.utils.text import extract_json
+
+    json_str = extract_json(raw)
+    # If extract_json returned the original text unchanged, no JSON found
+    if json_str == raw and not raw.lstrip().startswith("{"):
+        return raw, [], False
+
+    try:
+        data = json.loads(json_str)
+    except (json.JSONDecodeError, ValueError):
+        return raw, [], False
+
+    # JSON parsed — determine answer text.
+    # If there is preamble text before the JSON block, that freetext IS the
+    # answer (the LLM wrote narrative first, then appended a JSON refs block).
+    # Only fall back to data["answer"] when the JSON is the entire input.
+    stripped = _strip_json_block(raw, json_str)
+    if stripped:
+        # Preamble exists — use it as the answer regardless of "answer" key
+        answer = stripped
+    elif "answer" in data:
+        answer = data["answer"]
+    else:
+        answer = ""
+
+    raw_refs = data.get("references")
+    if not isinstance(raw_refs, list):
+        return answer, [], True
+
+    refs: list[Reference] = []
+    for r in raw_refs:
+        try:
+            refs.append(Reference.model_validate(r))
+        except Exception:
+            pass
+
+    return answer, refs, True
+
+
+def _strip_json_block(raw: str, json_str: str) -> str:
+    """Strip a JSON block (and surrounding code fences) from raw text."""
+    import re
+
+    # Try to strip a fenced block first: ```json\n...\n```
+    fenced = re.compile(r"```(?:json)?\s*" + re.escape(json_str) + r"\s*```")
+    cleaned = fenced.sub("", raw).strip()
+    if cleaned != raw.strip():
+        return cleaned
+
+    # Try to find the exact JSON substring in raw
+    idx = raw.find(json_str)
+    if idx >= 0:
+        before = raw[:idx].rstrip()
+        after = raw[idx + len(json_str) :].lstrip()
+        parts = [p for p in (before, after) if p]
+        return "\n\n".join(parts) if parts else ""
+    # Fallback: strip from first { onward
+    start = raw.find("{")
+    if start > 0:
+        return raw[:start].rstrip()
+    return ""
