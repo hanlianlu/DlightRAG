@@ -115,20 +115,22 @@ class TestOrchestratorVectorPath:
 
 class TestOrchestratorMultiPath:
     @pytest.mark.asyncio
-    async def test_metadata_plus_vector_fusion(self, mock_metadata_index, mock_lightrag) -> None:
-        mock_vdb = AsyncMock()
-        mock_vdb.query = AsyncMock(return_value=[{"id": "chunk-a"}, {"id": "chunk-v1"}])
+    async def test_metadata_plus_vector_fusion(self, mock_metadata_index) -> None:
+        from lightrag.utils import compute_mdhash_id
 
-        # chunk-a appears in both metadata and vector results
+        # Unified mode: metadata_index.get() returns page_count
+        chunk_0 = compute_mdhash_id("doc-1:page:0", prefix="chunk-")
+        chunk_1 = compute_mdhash_id("doc-1:page:1", prefix="chunk-")
+        mock_metadata_index.get = AsyncMock(return_value={"page_count": 2})
+
+        # Vector returns one overlapping chunk (chunk_0) + one unique
+        mock_vdb = AsyncMock()
+        mock_vdb.query = AsyncMock(return_value=[{"id": chunk_0}, {"id": "chunk-v1"}])
+
         orch = RetrievalOrchestrator(
             metadata_index=mock_metadata_index,
-            lightrag=mock_lightrag,
             rag_mode="unified",
             chunks_vdb=mock_vdb,
-        )
-        # Need unified mode resolution for metadata path
-        mock_lightrag.doc_status.get_by_id = AsyncMock(
-            return_value={"chunks_list": ["chunk-a", "chunk-b"]}
         )
         plan = RetrievalPlan(
             semantic_query="visual content",
@@ -136,8 +138,8 @@ class TestOrchestratorMultiPath:
             paths=["metadata"],
         )
         result = await orch.orchestrate(plan)
-        # chunk-a should be boosted (found in both paths)
-        assert result[0] == "chunk-a"
+        # chunk_0 should be boosted (found in both paths)
+        assert result[0] == chunk_0
         assert len(set(result)) == len(result)  # no duplicates
 
 
