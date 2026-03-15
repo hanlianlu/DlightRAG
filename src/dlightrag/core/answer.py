@@ -13,10 +13,10 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.citations.parser import parse_freetext_references
+from dlightrag.citations.parser import extract_references, parse_freetext_references
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.schemas import StructuredAnswer
-from dlightrag.models.streaming import AnswerStream, StreamingAnswerParser
+from dlightrag.models.streaming import AnswerStream
 from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 from dlightrag.utils.logging import log_answer_llm_output, log_references
 
@@ -139,9 +139,9 @@ class AnswerEngine:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
 
-        Returns ``(contexts, async_iterator)`` where the iterator yields
-        answer text tokens. If no model funcs are available, returns
-        ``(contexts, None)``.
+        Always uses freetext prompt regardless of supports_structured,
+        since streaming cannot enforce response_format. Wraps the token
+        stream with AnswerStream for post-stream reference extraction.
         """
         has_images = self._has_images(contexts)
         model_func = self._select_model_func(has_images)
@@ -150,13 +150,12 @@ class AnswerEngine:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        structured = getattr(model_func, "supports_structured", False)
-        system_prompt = get_answer_system_prompt(structured=structured)
+        # Always freetext for streaming — structured prompt is wrong here
+        system_prompt = get_answer_system_prompt(structured=False)
         user_prompt = self._build_user_prompt(query, contexts)
 
         logger.info(
-            "[AE] generate_stream: structured=%s has_images=%s chunks=%d query=%s",
-            structured,
+            "[AE] generate_stream: has_images=%s chunks=%d query=%s",
             has_images,
             len(contexts.get("chunks", [])),
             query[:60],
@@ -164,28 +163,18 @@ class AnswerEngine:
 
         log_answer_llm_output(
             "answer_engine.generate_stream",
-            structured=structured,
+            structured=False,
             query=query,
         )
 
-        # NOTE: streaming never passes response_format because
-        # openai_complete_if_cache routes to .parse() which doesn't
-        # support stream=True.  The system_prompt already instructs JSON
-        # output; StreamingAnswerParser handles incremental parsing.
         if has_images:
             messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-            logger.info(
-                "[AE] generate_stream: VLM %s path", "structured" if structured else "freetext"
-            )
             token_iterator = await model_func(
                 user_prompt,
                 messages=messages,
                 stream=True,
             )
         else:
-            logger.info(
-                "[AE] generate_stream: LLM text %s path", "structured" if structured else "freetext"
-            )
             token_iterator = await model_func(
                 user_prompt,
                 system_prompt=system_prompt,
@@ -197,16 +186,10 @@ class AnswerEngine:
             type(token_iterator).__name__,
         )
 
-        if structured and hasattr(token_iterator, "__aiter__"):
-            logger.info("[AE] generate_stream: wrapping with AnswerStream (structured)")
-            parser = StreamingAnswerParser()
-            token_iterator = AnswerStream(token_iterator, parser)
-        else:
-            logger.info(
-                "[AE] generate_stream: NOT wrapping (structured=%s has_aiter=%s)",
-                structured,
-                hasattr(token_iterator, "__aiter__"),
-            )
+        # Always wrap with AnswerStream (passthrough + post-stream ref extraction)
+        if hasattr(token_iterator, "__aiter__"):
+            logger.info("[AE] generate_stream: wrapping with AnswerStream")
+            token_iterator = AnswerStream(token_iterator)
 
         return contexts, token_iterator
 
@@ -338,7 +321,7 @@ class AnswerEngine:
                     raw=raw,
                     parse_error=e,
                 )
-                answer_text, refs = parse_freetext_references(raw)
+                answer_text, refs = extract_references(raw)
                 logger.info(
                     "[AE] _parse_response: freetext fallback got refs=%d",
                     len(refs),
@@ -352,7 +335,7 @@ class AnswerEngine:
                 answer_text=raw,
             )
             logger.info("[AE] _parse_response: freetext mode, extracting refs from raw")
-            answer_text, refs = parse_freetext_references(raw)
+            answer_text, refs = extract_references(raw)
             logger.info(
                 "[AE] _parse_response: freetext extracted refs=%d",
                 len(refs),

@@ -291,34 +291,32 @@ class TestAnswerEngineGenerateStream:
         assert kwargs["stream"] is True
 
     async def test_stream_vlm_structured_wraps_with_answer_stream(self) -> None:
-        """VLM structured providers should wrap the iterator with AnswerStream."""
+        """VLM providers should wrap the iterator with AnswerStream."""
 
         async def mock_stream():
             for token in ['{"answer": "hello', " world", '", "references": []}']:
                 yield token
 
         vlm_func = AsyncMock(return_value=mock_stream())
-        vlm_func.supports_structured = True
         engine = AnswerEngine(vision_model_func=vlm_func)
 
         contexts = _image_contexts()
         _, token_iter = await engine.generate_stream("query", contexts)
 
         assert token_iter is not None
-        # For VLM structured providers, should be wrapped in AnswerStream
+        # Streaming always wraps with AnswerStream
         from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
 
         assert isinstance(token_iter, AnswerStreamCls)
 
     async def test_stream_text_structured_wraps_with_answer_stream(self) -> None:
-        """Text-only + structured provider should wrap with AnswerStream."""
+        """Text-only provider should wrap with AnswerStream."""
 
         async def mock_stream():
             for token in ['{"answer": "hello', '", "references": []}']:
                 yield token
 
         llm_func = AsyncMock(return_value=mock_stream())
-        llm_func.supports_structured = True
         engine = AnswerEngine(llm_model_func=llm_func)
 
         contexts = _text_contexts()
@@ -329,8 +327,8 @@ class TestAnswerEngineGenerateStream:
 
         assert isinstance(token_iter, AnswerStreamCls)
 
-    async def test_stream_text_freetext_not_wrapped(self) -> None:
-        """Text-only + non-structured provider should NOT wrap with AnswerStream."""
+    async def test_stream_text_freetext_also_wrapped(self) -> None:
+        """Text-only + non-structured provider should also wrap with AnswerStream."""
 
         async def mock_stream():
             yield "plain answer text"
@@ -345,7 +343,7 @@ class TestAnswerEngineGenerateStream:
         assert token_iter is not None
         from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
 
-        assert not isinstance(token_iter, AnswerStreamCls)
+        assert isinstance(token_iter, AnswerStreamCls)
 
 
 # ---------------------------------------------------------------------------
