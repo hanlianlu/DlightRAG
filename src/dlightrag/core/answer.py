@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.citations.parser import extract_references, parse_freetext_references
+from dlightrag.citations.parser import extract_references
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.schemas import StructuredAnswer
 from dlightrag.models.streaming import AnswerStream
