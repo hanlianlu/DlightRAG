@@ -48,9 +48,9 @@ async def collect_deletion_context(
 
     # Strategy 1: Hash index lookup (fastest, authoritative)
     if hash_index:
-        doc_id, content_hash, file_path = hash_index.find_by_name(basename)
+        doc_id, content_hash, file_path = await hash_index.find_by_name(basename)
         if not doc_id:
-            doc_id, content_hash, file_path = hash_index.find_by_path(identifier)
+            doc_id, content_hash, file_path = await hash_index.find_by_path(identifier)
 
         if doc_id:
             ctx.doc_ids.add(doc_id)
