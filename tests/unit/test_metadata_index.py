@@ -80,7 +80,7 @@ class TestPGMetadataIndexQuery:
         result = await index.query(MetadataFilter(filename="test.pdf"))
         assert result == ["doc-1"]
         sql = conn.fetch.call_args[0][0]
-        assert "filename = $2" in sql
+        assert "LOWER(filename) = LOWER($2)" in sql
 
     @pytest.mark.asyncio
     async def test_query_multiple_filters(self, index, mock_pool) -> None:
@@ -94,7 +94,7 @@ class TestPGMetadataIndexQuery:
         )
         assert len(result) == 2
         sql = conn.fetch.call_args[0][0]
-        assert "doc_author = $2" in sql
+        assert "LOWER(doc_author) = LOWER($2)" in sql
         assert "creation_date >= $3" in sql
 
     @pytest.mark.asyncio
@@ -119,7 +119,7 @@ class TestPGMetadataIndexQuery:
         conn.fetch.return_value = []
         await index.query(MetadataFilter(file_extension=".png"))
         sql = conn.fetch.call_args[0][0]
-        assert "file_extension = $2" in sql
+        assert "LOWER(file_extension) = LOWER($2)" in sql
 
 
 class TestPGMetadataIndexLifecycle:

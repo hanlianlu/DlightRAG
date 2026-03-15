@@ -129,7 +129,7 @@ class PGMetadataIndex:
         idx = 2
 
         if filters.filename:
-            conditions.append(f"filename = ${idx}")
+            conditions.append(f"LOWER(filename) = LOWER(${idx})")
             params.append(filters.filename)
             idx += 1
         if filters.filename_pattern:
@@ -137,7 +137,7 @@ class PGMetadataIndex:
             params.append(filters.filename_pattern)
             idx += 1
         if filters.file_extension:
-            conditions.append(f"file_extension = ${idx}")
+            conditions.append(f"LOWER(file_extension) = LOWER(${idx})")
             params.append(filters.file_extension)
             idx += 1
         if filters.doc_title:
@@ -145,7 +145,7 @@ class PGMetadataIndex:
             params.append(f"%{filters.doc_title}%")
             idx += 1
         if filters.doc_author:
-            conditions.append(f"doc_author = ${idx}")
+            conditions.append(f"LOWER(doc_author) = LOWER(${idx})")
             params.append(filters.doc_author)
             idx += 1
         if filters.date_from:
@@ -202,10 +202,10 @@ class PGMetadataIndex:
             logger.info("PGMetadataIndex cleared for workspace %s: %s", self._workspace, result)
 
     async def find_by_filename(self, name: str) -> list[str]:
-        """Find doc_ids by exact filename match."""
+        """Find doc_ids by case-insensitive filename match."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND filename=$2",
+                "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND LOWER(filename)=LOWER($2)",
                 self._workspace,
                 name,
             )
