@@ -109,7 +109,7 @@ Authorization: Bearer <token>
 Body: {"workspace": "default", "keep_files": false, "dry_run": false}
 ```
 
-Requires `DLIGHTRAG_API_AUTH_TOKEN` to be configured. If the token is not set, returns 403 — reset is too destructive to expose without auth, even when other endpoints allow anonymous access.
+Uses the same auth model as all other endpoints: if `DLIGHTRAG_API_AUTH_TOKEN` is configured, Bearer token is required; if not configured, the endpoint is open.
 
 ## What Gets Removed
 
@@ -138,5 +138,4 @@ Requires `DLIGHTRAG_API_AUTH_TOKEN` to be configured. If the token is not set, r
 - Unit test: `areset()` sets `_initialized = False`
 - Unit test: `manager.areset()` calls `close()` before cache eviction
 - Unit test: `_visual_chunks.drop()` called in unified mode, skipped in caption mode
-- Unit test: API `POST /reset` returns 403 when auth token is not configured
 - Unit test: `manager.areset(workspace="nonexistent")` is a no-op, not an error
