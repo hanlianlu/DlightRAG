@@ -303,7 +303,10 @@ async def delete_files(
     workspace: str = Depends(get_workspace),
 ):
     """Delete files from workspace."""
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
     file_paths = body.get("file_paths", [])
     manager = get_manager(request)
 
