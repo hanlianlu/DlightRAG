@@ -368,7 +368,11 @@ async def delete_files(body: DeleteRequest, request: Request) -> dict[str, Any]:
 
 @app.post("/reset", dependencies=[Depends(_verify_auth)])
 async def reset_workspace(body: ResetRequest, request: Request) -> dict[str, Any]:
-    """Reset all RAG data for a workspace."""
+    """Reset all RAG data for a workspace.
+
+    Always targets a single workspace (defaults to config workspace).
+    Use ``scripts/reset.py --all`` for multi-workspace reset.
+    """
     manager = _get_manager(request)
     ws = body.workspace or get_config().workspace
     result = await manager.areset(
