@@ -36,10 +36,7 @@ class TestLevel1JsonBlock:
 
     def test_json_no_answer_key(self) -> None:
         """JSON block has only references, no answer key — strip JSON from raw."""
-        raw = (
-            "The analysis shows growth.\n\n"
-            '{"references": [{"id": 1, "title": "report.pdf"}]}'
-        )
+        raw = 'The analysis shows growth.\n\n{"references": [{"id": 1, "title": "report.pdf"}]}'
         answer, refs = extract_references(raw)
         assert "The analysis shows growth." in answer
         assert '{"references"' not in answer
@@ -81,12 +78,7 @@ class TestLevel1JsonBlock:
 class TestLevel2ReferencesSection:
     def test_standard_references_section(self) -> None:
         """Standard ### References section at end of text."""
-        raw = (
-            "Growth is 15% [1].\n\n"
-            "### References\n"
-            "- [1] report.pdf\n"
-            "- [2] summary.docx"
-        )
+        raw = "Growth is 15% [1].\n\n### References\n- [1] report.pdf\n- [2] summary.docx"
         answer, refs = extract_references(raw)
         assert answer == "Growth is 15% [1]."
         assert len(refs) == 2
