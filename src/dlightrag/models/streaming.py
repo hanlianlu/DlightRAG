@@ -123,7 +123,7 @@ class StreamingAnswerParser:
         stripped = self._buffer.lstrip()
         fence_match = re.match(r"```\w*\s*\n?", stripped)
         if fence_match:
-            self._buffer = stripped[fence_match.end():]
+            self._buffer = stripped[fence_match.end() :]
             stripped = self._buffer.lstrip()
         elif stripped.startswith("```"):
             return ""  # incomplete fence line, wait for more data

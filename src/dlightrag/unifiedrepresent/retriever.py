@@ -367,7 +367,7 @@ class VisualRetriever:
         from dlightrag.models.schemas import VisualRerankScore
         from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
 
-        use_schema = getattr(self.vision_model_func, 'supports_structured', False)
+        use_schema = getattr(self.vision_model_func, "supports_structured", False)
 
         if not resolved or not self.vision_model_func:
             return dict(list(resolved.items())[:top_k])
