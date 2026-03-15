@@ -7,6 +7,7 @@ Supports two formats:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import TYPE_CHECKING
@@ -180,8 +181,6 @@ def _try_json_extraction(raw: str) -> tuple[str, list[Reference], bool]:
     when a JSON block was successfully parsed (even if refs is empty),
     so callers can distinguish "no JSON" from "JSON with no refs".
     """
-    import json
-
     from dlightrag.utils.text import extract_json
 
     json_str = extract_json(raw)
@@ -192,6 +191,9 @@ def _try_json_extraction(raw: str) -> tuple[str, list[Reference], bool]:
     try:
         data = json.loads(json_str)
     except (json.JSONDecodeError, ValueError):
+        return raw, [], False
+
+    if not isinstance(data, dict):
         return raw, [], False
 
     # JSON parsed — determine answer text.
@@ -223,8 +225,6 @@ def _try_json_extraction(raw: str) -> tuple[str, list[Reference], bool]:
 
 def _strip_json_block(raw: str, json_str: str) -> str:
     """Strip a JSON block (and surrounding code fences) from raw text."""
-    import re
-
     # Try to strip a fenced block first: ```json\n...\n```
     fenced = re.compile(r"```(?:json)?\s*" + re.escape(json_str) + r"\s*```")
     cleaned = fenced.sub("", raw).strip()
