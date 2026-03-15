@@ -29,9 +29,11 @@ async def vector_retrieve(
     try:
         query_embedding = await embedding_func([query])
         if isinstance(query_embedding, np.ndarray):
-            query_vec = query_embedding[0]
+            query_vec = query_embedding[0].tolist()
         elif isinstance(query_embedding, list):
             query_vec = query_embedding[0]
+            if isinstance(query_vec, np.ndarray):
+                query_vec = query_vec.tolist()
         else:
             logger.warning("[VectorPath] unexpected embedding type: %s", type(query_embedding))
             return []

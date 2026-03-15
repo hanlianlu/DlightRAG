@@ -74,8 +74,18 @@ async def _resolve_unified(doc_id: str, lightrag: Any) -> list[str]:
 
         doc_data = await lightrag.full_docs.get_by_id(doc_id)
         if not doc_data:
+            logger.warning("[MetadataPath] full_docs has no entry for %s", doc_id)
             return []
         page_count = doc_data.get("page_count", 0)
+        logger.info(
+            "[MetadataPath] doc %s: page_count=%r (type=%s)",
+            doc_id[:20],
+            page_count,
+            type(page_count).__name__,
+        )
+        if not isinstance(page_count, int) or page_count <= 0:
+            logger.warning("[MetadataPath] invalid page_count for %s: %r", doc_id, page_count)
+            return []
         return [compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-") for i in range(page_count)]
     except Exception as exc:
         logger.warning("[MetadataPath] unified chunk resolution failed for %s: %s", doc_id, exc)
