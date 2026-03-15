@@ -288,7 +288,7 @@ async def upload_files(
         await manager.aingest(
             workspace=workspace,
             source_type="local",
-            input_dir=str(tmp_dir),
+            path=str(tmp_dir),
         )
     except Exception as e:
         logger.exception("Upload/ingestion failed")
@@ -303,9 +303,8 @@ async def delete_files(
     workspace: str = Depends(get_workspace),
 ):
     """Delete files from workspace."""
-    # htmx hx-vals sends form-encoded data
-    form = await request.form()
-    file_path = form.get("file_path", "")
+    # htmx sends hx-vals as query params for DELETE requests
+    file_path = request.query_params.get("file_path", "")
     file_paths = [file_path] if file_path else []
     manager = get_manager(request)
 
