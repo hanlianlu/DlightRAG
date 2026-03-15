@@ -783,12 +783,14 @@ class RAGService:
         if source_type == "local":
             path = Path(kwargs["path"])
             replace = get_replace_value()
+            user_metadata = kwargs.get("metadata")
 
             logger.info(f"Ingesting from local path: {path}")
 
             result = await ingestion.aingest_from_local(
                 path=path,
                 replace=replace,
+                user_metadata=user_metadata,
             )
             return result.model_dump(exclude_none=True)
 
