@@ -895,7 +895,11 @@ class RAGService:
         from dlightrag.core.retrieval.orchestrator import RetrievalOrchestrator
         from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
 
-        analyzer = QueryAnalyzer()
+        # Get LLM func for QueryAnalyzer's NL extraction fallback
+        lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
+        llm_func = getattr(lr, "llm_model_func", None) if lr else None
+
+        analyzer = QueryAnalyzer(llm_func=llm_func)
         plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
 
         if not plan.metadata_filters and not plan.semantic_query:
