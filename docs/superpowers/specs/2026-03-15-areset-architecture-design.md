@@ -52,10 +52,12 @@ Phase 5: Local files              (skip if keep_files=True)
 ```
 
 **Constraints:**
-- Phase 3 only runs when `config.kv_storage.startswith("PG")`.
+- Phases 3 and 4 only run when `config.kv_storage.startswith("PG")`.
 - All PG operations use `WHERE workspace = $1` — never touch other workspaces.
+- Phase 3 overlaps with Phases 1–2 intentionally (idempotent DELETE catches orphans from old modes/models that standard drop() missed).
 - Each phase has independent error handling; one failure does not block the next.
 - `dry_run=True` collects stats without executing any deletions.
+- Concurrent ingestion during reset is unsupported — reset is a "stop the world" operation.
 
 ### RAGServiceManager.areset()
 
@@ -71,7 +73,7 @@ async def areset(
 
 - `workspace=None` → `list_workspaces()` → reset each.
 - `workspace="xxx"` → reset that one.
-- After each successful reset, evict from `self._services` cache (stale state).
+- After each successful reset, call `service.close()` then evict from `self._services` cache (stale state).
 - Returns `{"workspaces": {"ws1": {...stats...}}, "total_errors": 0}`.
 
 ### RAGService.areset()
@@ -84,6 +86,8 @@ async def areset(
     dry_run: bool = False,
 ) -> dict[str, Any]:
 ```
+
+- Sets `self._initialized = False` at the end (prevents stale references from passing `_ensure_initialized()`).
 
 Returns:
 ```python
@@ -105,7 +109,7 @@ Authorization: Bearer <token>
 Body: {"workspace": "default", "keep_files": false, "dry_run": false}
 ```
 
-Protected by existing Bearer auth. No additional confirmation field needed since the caller is programmatic and authenticated.
+Requires `DLIGHTRAG_API_AUTH_TOKEN` to be configured. If the token is not set, returns 403 — reset is too destructive to expose without auth, even when other endpoints allow anonymous access.
 
 ## What Gets Removed
 
@@ -131,3 +135,8 @@ Protected by existing Bearer auth. No additional confirmation field needed since
 - Unit test: `manager.areset(workspace=None)` iterates all workspaces
 - Unit test: manager evicts service from cache after reset
 - Unit test: errors in one phase do not block subsequent phases
+- Unit test: `areset()` sets `_initialized = False`
+- Unit test: `manager.areset()` calls `close()` before cache eviction
+- Unit test: `_visual_chunks.drop()` called in unified mode, skipped in caption mode
+- Unit test: API `POST /reset` returns 403 when auth token is not configured
+- Unit test: `manager.areset(workspace="nonexistent")` is a no-op, not an error
