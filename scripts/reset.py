@@ -278,8 +278,8 @@ async def reset_all(
             except Exception as exc:
                 print(f"\n  dlightrag_workspace_meta: ERROR — {exc}")
 
-        # Clean DlightRAG hash_index if present
-        hash_index = getattr(service.ingestion, "_hash_index", None)
+        # Clean DlightRAG hash_index
+        hash_index = getattr(service, "_hash_index", None)
         if hash_index is not None and hasattr(hash_index, "clear"):
             if dry_run:
                 print("\n  [DRY RUN] hash_index: would clear")
@@ -289,6 +289,18 @@ async def reset_all(
                     print("\n  hash_index: cleared")
                 except Exception as exc:
                     print(f"\n  hash_index: ERROR — {exc}")
+
+        # Clean DlightRAG metadata_index
+        metadata_index = getattr(service, "_metadata_index", None)
+        if metadata_index is not None and hasattr(metadata_index, "clear"):
+            if dry_run:
+                print("  [DRY RUN] metadata_index: would clear")
+            else:
+                try:
+                    await metadata_index.clear()
+                    print("  metadata_index: cleared")
+                except Exception as exc:
+                    print(f"  metadata_index: ERROR — {exc}")
 
         if do_local:
             print("\nLocal files:")
