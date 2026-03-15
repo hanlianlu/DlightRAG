@@ -477,9 +477,7 @@ class TestRAGServiceUnifiedMode:
         service.unified.visual_chunks = MagicMock()
         service.unified.visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
-        service._lightrag.adelete_by_doc_id = AsyncMock(
-            side_effect=RuntimeError("LightRAG down")
-        )
+        service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=RuntimeError("LightRAG down"))
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
         service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})

@@ -346,9 +346,7 @@ class TestAingestDocStatus:
             metadata={"title": "Test", "page_count": 2},
         )
         engine.renderer.render_file = AsyncMock(return_value=render_result)
-        engine.embedder.embed_pages = AsyncMock(
-            return_value=np.zeros((2, 1024), dtype=np.float32)
-        )
+        engine.embedder.embed_pages = AsyncMock(return_value=np.zeros((2, 1024), dtype=np.float32))
         engine.extractor.extract_from_pages = AsyncMock(
             return_value=[
                 {"chunk_id": "chunk-aaa", "page_index": 0, "content": "Page one"},
