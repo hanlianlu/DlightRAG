@@ -80,7 +80,7 @@ class TestPGMetadataIndexQuery:
         result = await index.query(MetadataFilter(filename="test.pdf"))
         assert result == ["doc-1"]
         sql = conn.fetch.call_args[0][0]
-        assert "LOWER(filename) = LOWER($2)" in sql
+        assert "LOWER(filename) LIKE LOWER($2)" in sql
 
     @pytest.mark.asyncio
     async def test_query_multiple_filters(self, index, mock_pool) -> None:
