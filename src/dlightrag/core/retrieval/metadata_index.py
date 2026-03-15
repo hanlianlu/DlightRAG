@@ -129,8 +129,8 @@ class PGMetadataIndex:
         idx = 2
 
         if filters.filename:
-            conditions.append(f"LOWER(filename) = LOWER(${idx})")
-            params.append(filters.filename)
+            conditions.append(f"LOWER(filename) LIKE LOWER(${idx})")
+            params.append(f"%{filters.filename}%")
             idx += 1
         if filters.filename_pattern:
             conditions.append(f"filename ILIKE ${idx}")
