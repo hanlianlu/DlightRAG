@@ -120,7 +120,6 @@ class TestOrchestratorMultiPath:
 
         # Unified mode: metadata_index.get() returns page_count
         chunk_0 = compute_mdhash_id("doc-1:page:0", prefix="chunk-")
-        chunk_1 = compute_mdhash_id("doc-1:page:1", prefix="chunk-")
         mock_metadata_index.get = AsyncMock(return_value={"page_count": 2})
 
         # Vector returns one overlapping chunk (chunk_0) + one unique

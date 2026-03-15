@@ -40,9 +40,7 @@ async def metadata_retrieve(
 
     chunk_ids: list[str] = []
     for doc_id in doc_ids:
-        resolved = await _resolve_chunks_for_doc(
-            doc_id, metadata_index, lightrag, rag_mode
-        )
+        resolved = await _resolve_chunks_for_doc(doc_id, metadata_index, lightrag, rag_mode)
         chunk_ids.extend(resolved)
 
     logger.info("[MetadataPath] resolved %d chunk(s) total", len(chunk_ids))
