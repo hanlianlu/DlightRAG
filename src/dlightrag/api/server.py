@@ -19,7 +19,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, field_validator
 from starlette.responses import RedirectResponse
 
-from dlightrag.citations.parser import parse_freetext_references
 from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config
@@ -288,19 +287,14 @@ async def answer(body: AnswerRequest, request: Request):
                     full_answer += chunk
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
 
-            # Extract references: structured (AnswerStream) or freetext (parse)
-            refs = getattr(token_iter, "references", None)
-            if not refs and full_answer:
-                full_answer, parsed_refs = parse_freetext_references(full_answer)
-                refs = parsed_refs or None
+            # References extracted by AnswerStream post-stream
+            refs = getattr(token_iter, "references", None) or []
+            # Use cleaned answer for downstream processing (JSON/ref sections stripped)
+            clean_answer = getattr(token_iter, "answer", None) or full_answer
 
-            logger.info(
-                "[API] SSE: token_iter type=%s refs_count=%s",
-                type(token_iter).__name__,
-                len(refs) if refs else 0,
-            )
+            logger.info("[API] SSE: refs_count=%d", len(refs))
 
-            refs_data = [r.model_dump() for r in refs] if refs else []
+            refs_data = [r.model_dump() for r in refs]
             yield f"data: {json.dumps({'type': 'references', 'data': refs_data}, ensure_ascii=False)}\n\n"
 
             # Build cited-only sources
@@ -309,9 +303,9 @@ async def answer(body: AnswerRequest, request: Request):
                 if isinstance(items, list):
                     flat_contexts.extend(items)
             all_sources = build_sources(contexts)
-            if full_answer and flat_contexts:
+            if clean_answer and flat_contexts:
                 processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
-                cited = processor.process(full_answer)
+                cited = processor.process(clean_answer)
                 sources = cited.sources
             else:
                 sources = []
