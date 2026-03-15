@@ -124,6 +124,10 @@ _REFERENCES_HEADING_RE = re.compile(r"(?m)^#{1,3}\s*references\s*$", re.IGNORECA
 def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
     """Extract references from freetext LLM output.
 
+    .. deprecated::
+        Use :func:`extract_references` instead, which provides 3-level
+        fallback (JSON block → ``### References`` → empty).
+
     Looks for a ``### References`` section at the end of the response
     with lines like ``[n] Document Title`` or ``- [n] Document Title``.
     Returns ``(answer_text, references)`` where *answer_text* has the
