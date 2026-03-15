@@ -922,19 +922,14 @@ class RAGService:
             return []
 
         chunks_vdb = None
-        embedding_func = None
         if self._lightrag and self.config.rag_mode == "unified":
             chunks_vdb = getattr(self._lightrag, "chunks_vdb", None)
-            ef = getattr(self._lightrag, "embedding_func", None)
-            if ef and hasattr(ef, "func"):
-                embedding_func = ef.func
 
         orchestrator = RetrievalOrchestrator(
             metadata_index=self._metadata_index,
             lightrag=self._lightrag or getattr(self.rag, "lightrag", None),
             rag_mode=self.config.rag_mode,
             chunks_vdb=chunks_vdb,
-            embedding_func=embedding_func,
             rrf_k=self.config.rrf_k,
         )
 

@@ -64,12 +64,10 @@ class TestOrchestratorVectorPath:
     async def test_vector_path_unified_mode(self) -> None:
         mock_vdb = AsyncMock()
         mock_vdb.query = AsyncMock(return_value=[{"id": "chunk-v1"}, {"id": "chunk-v2"}])
-        mock_embed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
 
         orch = RetrievalOrchestrator(
             rag_mode="unified",
             chunks_vdb=mock_vdb,
-            embedding_func=mock_embed,
         )
         plan = RetrievalPlan(
             semantic_query="visual content",
@@ -83,12 +81,10 @@ class TestOrchestratorVectorPath:
     @pytest.mark.asyncio
     async def test_vector_path_not_activated_caption_mode(self) -> None:
         mock_vdb = AsyncMock()
-        mock_embed = AsyncMock()
 
         orch = RetrievalOrchestrator(
             rag_mode="caption",
             chunks_vdb=mock_vdb,
-            embedding_func=mock_embed,
         )
         plan = RetrievalPlan(
             semantic_query="test query",
@@ -102,12 +98,10 @@ class TestOrchestratorVectorPath:
     @pytest.mark.asyncio
     async def test_vector_path_not_activated_without_semantic_query(self) -> None:
         mock_vdb = AsyncMock()
-        mock_embed = AsyncMock()
 
         orch = RetrievalOrchestrator(
             rag_mode="unified",
             chunks_vdb=mock_vdb,
-            embedding_func=mock_embed,
         )
         plan = RetrievalPlan(
             semantic_query="",
@@ -124,7 +118,6 @@ class TestOrchestratorMultiPath:
     async def test_metadata_plus_vector_fusion(self, mock_metadata_index, mock_lightrag) -> None:
         mock_vdb = AsyncMock()
         mock_vdb.query = AsyncMock(return_value=[{"id": "chunk-a"}, {"id": "chunk-v1"}])
-        mock_embed = AsyncMock(return_value=[[0.1, 0.2]])
 
         # chunk-a appears in both metadata and vector results
         orch = RetrievalOrchestrator(
@@ -132,7 +125,6 @@ class TestOrchestratorMultiPath:
             lightrag=mock_lightrag,
             rag_mode="unified",
             chunks_vdb=mock_vdb,
-            embedding_func=mock_embed,
         )
         # Need unified mode resolution for metadata path
         mock_lightrag.doc_status.get_by_id = AsyncMock(

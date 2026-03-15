@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
 from typing import Any
 
 from dlightrag.core.retrieval.fusion import reciprocal_rank_fusion
@@ -32,14 +31,12 @@ class RetrievalOrchestrator:
         lightrag: Any = None,
         rag_mode: str = "caption",
         chunks_vdb: Any = None,
-        embedding_func: Callable[..., Any] | None = None,
         rrf_k: int = 60,
     ) -> None:
         self._metadata_index = metadata_index
         self._lightrag = lightrag
         self._rag_mode = rag_mode
         self._chunks_vdb = chunks_vdb
-        self._embedding_func = embedding_func
         self._rrf_k = rrf_k
 
     async def orchestrate(
@@ -65,17 +62,11 @@ class RetrievalOrchestrator:
             )
 
         # VectorPath: unified mode only, and only when there's a semantic query
-        if (
-            self._rag_mode == "unified"
-            and plan.semantic_query
-            and self._chunks_vdb
-            and self._embedding_func
-        ):
+        if self._rag_mode == "unified" and plan.semantic_query and self._chunks_vdb:
             tasks["vector"] = asyncio.create_task(
                 vector_retrieve(
                     plan.semantic_query,
                     self._chunks_vdb,
-                    self._embedding_func,
                     top_k=top_k,
                 )
             )
