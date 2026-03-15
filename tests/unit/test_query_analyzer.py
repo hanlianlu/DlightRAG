@@ -141,11 +141,98 @@ class TestQueryAnalyzerLLM:
         assert plan.paths == ["kg"]
 
     @pytest.mark.asyncio
-    async def test_llm_not_called_when_fast_detect_matches(self) -> None:
-        llm_func = AsyncMock()
+    async def test_llm_called_even_when_fast_detect_matches(self) -> None:
+        """LLM runs alongside regex to extract fields regex can't detect."""
+        llm_response = json.dumps(
+            {
+                "semantic_query": "what's in the report",
+                "filters": {"filename": "report.pdf", "doc_author": "Zhang San"},
+                "paths": ["metadata", "kg"],
+            }
+        )
+        llm_func = AsyncMock(return_value=llm_response)
         analyzer = QueryAnalyzer(llm_func=llm_func)
-        await analyzer.analyze("What's in report.pdf?")
-        llm_func.assert_not_called()
+        plan = await analyzer.analyze("What's in Zhang San's report.pdf?")
+        llm_func.assert_called_once()
+        # Regex captures filename, LLM fills in author
+        assert plan.metadata_filters is not None
+        assert plan.metadata_filters.filename == "report.pdf"
+        assert plan.metadata_filters.doc_author == "Zhang San"
+
+    @pytest.mark.asyncio
+    async def test_regex_only_when_no_llm_func(self) -> None:
+        """Without llm_func, regex-only still works (no regression)."""
+        analyzer = QueryAnalyzer()  # no LLM
+        plan = await analyzer.analyze("What's in report.pdf?")
+        assert plan.metadata_filters is not None
+        assert plan.metadata_filters.filename == "report.pdf"
+        assert plan.metadata_filters.doc_author is None
+
+
+class TestQueryAnalyzerMerge:
+    """Tests for collaborative regex + LLM filter merging."""
+
+    @pytest.mark.asyncio
+    async def test_regex_filename_priority_over_llm(self) -> None:
+        """Regex-extracted filename takes priority over LLM's."""
+        llm_response = json.dumps(
+            {
+                "semantic_query": "key insights",
+                "filters": {"filename": "wrong-name.pdf", "doc_author": "Li Si"},
+                "paths": ["metadata", "kg"],
+            }
+        )
+        llm_func = AsyncMock(return_value=llm_response)
+        analyzer = QueryAnalyzer(llm_func=llm_func)
+        plan = await analyzer.analyze("key insights from report.pdf by Li Si")
+        assert plan.metadata_filters.filename == "report.pdf"  # regex wins
+        assert plan.metadata_filters.doc_author == "Li Si"  # LLM fills in
+
+    @pytest.mark.asyncio
+    async def test_merge_dates_from_llm(self) -> None:
+        """LLM-extracted date filters merge with regex filename."""
+        llm_response = json.dumps(
+            {
+                "semantic_query": "summary",
+                "filters": {
+                    "filename": "annual-report.pdf",
+                    "date_from": "2024-01-01",
+                    "date_to": "2024-12-31",
+                },
+                "paths": ["metadata", "kg"],
+            }
+        )
+        llm_func = AsyncMock(return_value=llm_response)
+        analyzer = QueryAnalyzer(llm_func=llm_func)
+        plan = await analyzer.analyze("summarize annual-report.pdf from 2024")
+        assert plan.metadata_filters.filename == "annual-report.pdf"
+        assert plan.metadata_filters.date_from is not None
+        assert plan.metadata_filters.date_to is not None
+
+    @pytest.mark.asyncio
+    async def test_llm_failure_falls_back_to_regex(self) -> None:
+        """If LLM fails, regex results still work."""
+        llm_func = AsyncMock(side_effect=RuntimeError("timeout"))
+        analyzer = QueryAnalyzer(llm_func=llm_func)
+        plan = await analyzer.analyze("insights from report.pdf")
+        assert plan.metadata_filters is not None
+        assert plan.metadata_filters.filename == "report.pdf"
+        assert plan.metadata_filters.doc_author is None  # no LLM fallback
+
+    @pytest.mark.asyncio
+    async def test_llm_empty_filters_uses_regex_only(self) -> None:
+        """If LLM returns empty filters, regex results are used alone."""
+        llm_response = json.dumps(
+            {
+                "semantic_query": "what's in the report",
+                "filters": {},
+                "paths": ["kg"],
+            }
+        )
+        llm_func = AsyncMock(return_value=llm_response)
+        analyzer = QueryAnalyzer(llm_func=llm_func)
+        plan = await analyzer.analyze("What's in report.pdf?")
+        assert plan.metadata_filters.filename == "report.pdf"
 
 
 class TestQueryAnalyzerFallback:

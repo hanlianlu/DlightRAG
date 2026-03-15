@@ -46,13 +46,46 @@ def fast_detect(query: str) -> MetadataFilter | None:
     return None
 
 
+def _merge_filters(regex: MetadataFilter, llm: MetadataFilter) -> MetadataFilter:
+    """Merge regex (high-confidence) and LLM (broad) extracted filters.
+
+    Regex results take priority for fields it can detect (filename).
+    LLM fills in fields regex cannot extract (author, dates, custom, etc.).
+    """
+    return MetadataFilter(
+        filename=regex.filename or llm.filename,
+        filename_pattern=regex.filename_pattern or llm.filename_pattern,
+        file_extension=regex.file_extension or llm.file_extension,
+        doc_title=llm.doc_title,
+        doc_author=llm.doc_author,
+        date_from=llm.date_from,
+        date_to=llm.date_to,
+        rag_mode=llm.rag_mode,
+        custom=llm.custom,
+    )
+
+
+def _resolve_paths(filters: MetadataFilter | None, semantic_query: str | None) -> list[str]:
+    """Determine which retrieval paths to activate."""
+    paths: list[str] = []
+    if filters and not filters.is_empty():
+        paths.append("metadata")
+    if semantic_query:
+        paths.append("kg")
+    return paths or ["kg"]
+
+
 class QueryAnalyzer:
     """Analyzes queries to produce a RetrievalPlan.
 
     Three-layer strategy:
-    1. Explicit API filters → direct construction
-    2. fast_detect regex → skip LLM for obvious filenames
-    3. LLM extraction → full intent analysis
+    1. Explicit API filters → direct construction (short-circuit)
+    2. fast_detect regex → high-confidence filename extraction (free)
+    3. LLM extraction → broad intent analysis (author, dates, custom)
+
+    Layers 2 and 3 run collaboratively: regex provides high-confidence
+    filename, LLM fills in fields regex cannot detect. Results are merged
+    with regex taking priority for overlapping fields.
     """
 
     def __init__(self, llm_func: Callable[..., Any] | None = None) -> None:
@@ -64,7 +97,7 @@ class QueryAnalyzer:
         explicit_filters: MetadataFilter | None = None,
     ) -> RetrievalPlan:
         """Analyze query and produce a retrieval plan."""
-        # Layer 1: explicit API filters
+        # Layer 1: explicit API filters (short-circuit — user intent is explicit)
         if explicit_filters and not explicit_filters.is_empty():
             paths = ["metadata"]
             if query.strip():
@@ -76,29 +109,46 @@ class QueryAnalyzer:
                 original_query=query,
             )
 
-        # Layer 2: fast regex detection
-        detected = fast_detect(query)
-        if detected:
-            semantic = _FILE_PATTERN.sub("", query).strip()
-            # Clean up leftover punctuation/whitespace
-            semantic = re.sub(r"\s{2,}", " ", semantic).strip()
+        # Layer 2: fast regex detection (free, instant)
+        regex_filters = fast_detect(query)
+        regex_semantic: str | None = None
+        if regex_filters:
+            regex_semantic = _FILE_PATTERN.sub("", query).strip()
+            regex_semantic = re.sub(r"\s{2,}", " ", regex_semantic).strip() or None
+
+        # Layer 3: LLM extraction (if available)
+        llm_plan: RetrievalPlan | None = None
+        if self._llm_func:
+            llm_plan = await self._llm_extract(query)
+
+        # Merge layers 2 + 3
+        if regex_filters and llm_plan and llm_plan.metadata_filters:
+            merged = _merge_filters(regex_filters, llm_plan.metadata_filters)
+            semantic = llm_plan.semantic_query or regex_semantic or query
+            return RetrievalPlan(
+                semantic_query=semantic,
+                metadata_filters=merged,
+                paths=_resolve_paths(merged, semantic),
+                original_query=query,
+            )
+
+        # Regex only (no LLM available, or LLM found nothing extra)
+        if regex_filters:
             paths = ["metadata"]
-            if semantic:
+            if regex_semantic:
                 paths.append("kg")
             return RetrievalPlan(
-                semantic_query=semantic or query,
-                metadata_filters=detected,
+                semantic_query=regex_semantic or query,
+                metadata_filters=regex_filters,
                 paths=paths,
                 original_query=query,
             )
 
-        # Layer 3: LLM extraction (if available)
-        if self._llm_func:
-            plan = await self._llm_extract(query)
-            if plan:
-                return plan
+        # LLM only (regex found nothing)
+        if llm_plan:
+            return llm_plan
 
-        # Fallback: pure KG search (current behavior)
+        # Fallback: pure KG search
         return RetrievalPlan(
             semantic_query=query,
             metadata_filters=None,
