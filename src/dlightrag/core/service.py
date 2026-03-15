@@ -14,6 +14,7 @@ import atexit
 import logging
 import os
 import platform
+import shutil
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -29,6 +30,22 @@ logger = logging.getLogger(__name__)
 
 # Init lock key for PostgreSQL advisory lock (arbitrary 64-bit int)
 _PG_INIT_LOCK_KEY = 0x436F727072616700  # "Dlightrag\0" as int
+
+# LightRAG storage attribute names — authoritative list for reset/drop.
+_STORAGE_ATTRS = (
+    "full_docs",
+    "text_chunks",
+    "full_entities",
+    "full_relations",
+    "entity_chunks",
+    "relation_chunks",
+    "entities_vdb",
+    "relationships_vdb",
+    "chunks_vdb",
+    "chunk_entity_relation_graph",
+    "llm_response_cache",
+    "doc_status",
+)
 
 
 def _detect_mineru_backend(manual_override: str | None = None) -> str:
@@ -687,6 +704,198 @@ class RAGService:
                 await self._lightrag.finalize_storages()
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize LightRAG storages", exc_info=True)
+
+    async def areset(
+        self,
+        *,
+        keep_files: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Reset all storage for this workspace.
+
+        5-phase reset:
+        1. LightRAG stores (drop)
+        2. DlightRAG stores (clear/drop)
+        3. PG orphan table cleanup (PG backend only)
+        4. Workspace metadata (PG backend only)
+        5. Local files (skip if keep_files=True)
+        """
+        workspace = self.config.workspace
+        errors: list[str] = []
+        stats: dict[str, Any] = {
+            "workspace": workspace,
+            "storages_dropped": 0,
+            "dlightrag_cleared": [],
+            "orphan_tables_cleaned": 0,
+            "local_files_removed": 0,
+            "errors": errors,
+        }
+
+        # Phase 1: LightRAG stores
+        lr = self.lightrag  # property handles both modes
+        if lr is not None:
+            for attr in _STORAGE_ATTRS:
+                storage = getattr(lr, attr, None)
+                if storage is None:
+                    continue
+                try:
+                    if not dry_run:
+                        await storage.drop()
+                    stats["storages_dropped"] += 1
+                except Exception as exc:
+                    errors.append(f"Phase 1 ({attr}): {exc}")
+                    logger.warning("areset Phase 1 failed for %s: %s", attr, exc)
+
+        # Phase 2: DlightRAG stores
+        for name, store, method in (
+            ("hash_index", self._hash_index, "clear"),
+            ("metadata_index", self._metadata_index, "clear"),
+            ("visual_chunks", self._visual_chunks, "drop"),
+        ):
+            if store is None:
+                continue
+            try:
+                if not dry_run:
+                    await getattr(store, method)()
+                stats["dlightrag_cleared"].append(name)
+            except Exception as exc:
+                errors.append(f"Phase 2 ({name}): {exc}")
+                logger.warning("areset Phase 2 failed for %s: %s", name, exc)
+
+        # Phase 3 & 4: PG-specific cleanup
+        is_pg = self.config.kv_storage.startswith("PG")
+        if is_pg:
+            try:
+                orphans = await self._clean_pg_orphan_tables(workspace, dry_run=dry_run)
+                stats["orphan_tables_cleaned"] = orphans
+            except Exception as exc:
+                errors.append(f"Phase 3 (orphan tables): {exc}")
+                logger.warning("areset Phase 3 failed: %s", exc)
+
+            try:
+                if not dry_run:
+                    await self._clean_workspace_meta(workspace)
+            except Exception as exc:
+                errors.append(f"Phase 4 (workspace meta): {exc}")
+                logger.warning("areset Phase 4 failed: %s", exc)
+
+        # Phase 5: Local files
+        if not keep_files:
+            try:
+                working_dir = Path(self.config.working_dir)
+                stats["local_files_removed"] = self._reset_local_files(
+                    working_dir, dry_run=dry_run
+                )
+            except Exception as exc:
+                errors.append(f"Phase 5 (local files): {exc}")
+                logger.warning("areset Phase 5 failed: %s", exc)
+
+        self._initialized = False
+        logger.info("areset complete for workspace=%s: %s", workspace, stats)
+        return stats
+
+    @staticmethod
+    async def _clean_pg_orphan_tables(workspace: str, *, dry_run: bool) -> int:
+        """Scan lightrag_*/dlightrag_* PG tables, delete rows for this workspace."""
+        try:
+            from lightrag.kg.postgres_impl import ClientManager
+
+            db = await ClientManager.get_client()
+            pool = db.pool
+            if pool is None:
+                return 0
+        except Exception:
+            return 0
+
+        try:
+            async with pool.acquire() as conn:
+                table_rows = await conn.fetch(
+                    "SELECT tablename FROM pg_tables "
+                    "WHERE schemaname = 'public' "
+                    "AND (tablename LIKE 'lightrag_%' OR tablename LIKE 'dlightrag_%') "
+                    "ORDER BY tablename"
+                )
+                if not table_rows:
+                    return 0
+
+                cleaned = 0
+                for row in table_rows:
+                    table = row["tablename"]
+                    col = await conn.fetchrow(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name = $1 AND column_name = 'workspace'",
+                        table,
+                    )
+                    if col is None:
+                        continue
+
+                    count_row = await conn.fetchrow(
+                        f'SELECT COUNT(*) as count FROM "{table}" WHERE workspace = $1',
+                        workspace,
+                    )
+                    count = count_row["count"] if count_row else 0
+
+                    if count > 0:
+                        if not dry_run:
+                            await conn.execute(
+                                f'DELETE FROM "{table}" WHERE workspace = $1',
+                                workspace,
+                            )
+                        cleaned += 1
+
+                    if not dry_run:
+                        remaining = await conn.fetchrow(
+                            f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
+                        )
+                        if not remaining["has_rows"]:
+                            await conn.execute(f'DROP TABLE "{table}"')
+
+                return cleaned
+        except Exception as exc:
+            logger.warning("PG orphan table cleanup failed: %s", exc)
+            return 0
+
+    @staticmethod
+    async def _clean_workspace_meta(workspace: str) -> None:
+        """Delete workspace record from dlightrag_workspace_meta."""
+        from lightrag.kg.postgres_impl import ClientManager
+
+        db = await ClientManager.get_client()
+        pool = db.pool
+        if pool is None:
+            return
+        async with pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'dlightrag_workspace_meta')"
+            )
+            if exists:
+                await conn.execute(
+                    "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
+                    workspace,
+                )
+
+    @staticmethod
+    def _reset_local_files(working_dir: Path, *, dry_run: bool) -> int:
+        """Remove working_dir/* except sources/. Returns file count."""
+        if not working_dir.exists():
+            return 0
+
+        file_count = 0
+        for item in sorted(working_dir.iterdir()):
+            if item.name == "sources":
+                continue
+            if item.is_file():
+                file_count += 1
+                if not dry_run:
+                    item.unlink()
+            elif item.is_dir():
+                for f in item.rglob("*"):
+                    if f.is_file():
+                        file_count += 1
+                if not dry_run:
+                    shutil.rmtree(item, ignore_errors=True)
+        return file_count
 
     async def _shutdown_worker_pools(self) -> None:
         """Shutdown LightRAG's EmbeddingFunc/LLM worker pools.
