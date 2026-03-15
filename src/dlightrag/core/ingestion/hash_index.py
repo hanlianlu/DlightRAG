@@ -420,16 +420,6 @@ class PGHashIndex:
             )
             return result != "DELETE 0"
 
-    async def remove_by_doc_id(self, doc_id: str) -> bool:
-        """Remove hash entry by doc_id (fallback when content_hash is unknown)."""
-        async with self._get_pool().acquire() as conn:
-            result = await conn.execute(
-                f"DELETE FROM {self.TABLE} WHERE doc_id = $1 AND workspace = $2",
-                doc_id,
-                self._workspace,
-            )
-            return result != "DELETE 0"
-
     async def should_skip_file(
         self,
         file_path: Path,

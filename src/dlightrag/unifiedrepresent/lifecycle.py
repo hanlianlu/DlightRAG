@@ -369,16 +369,9 @@ async def unified_delete_files(
                     deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = f"error: {exc}"
 
         # Phase 3: Remove from hash index and metadata index
-        if ctx.content_hashes:
-            for content_hash in ctx.content_hashes:
-                if await hash_index.remove(content_hash):
-                    deletion_result["cleanup_results"]["hash_index"] = "removed"
-        elif hasattr(hash_index, "remove_by_doc_id"):
-            # Fallback: PGHashIndex.find_by_name can't run async in sync context,
-            # so content_hashes may be empty even when hash_index has the record.
-            for doc_id in ctx.doc_ids:
-                if await hash_index.remove_by_doc_id(doc_id):
-                    deletion_result["cleanup_results"]["hash_index"] = "removed_by_doc_id"
+        for content_hash in ctx.content_hashes:
+            if await hash_index.remove(content_hash):
+                deletion_result["cleanup_results"]["hash_index"] = "removed"
 
         if metadata_index is not None:
             for doc_id in ctx.doc_ids:
