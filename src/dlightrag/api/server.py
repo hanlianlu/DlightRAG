@@ -183,6 +183,9 @@ async def ingest(body: IngestRequest, request: Request) -> dict[str, Any]:
         if body.table:
             kwargs["table"] = body.table
 
+    if body.metadata:
+        kwargs["metadata"] = body.metadata
+
     result = await manager.aingest(ws, source_type=body.source_type, **kwargs)
     return result
 

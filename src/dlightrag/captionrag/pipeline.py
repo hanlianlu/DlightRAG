@@ -212,6 +212,7 @@ class IngestionPipeline:
         artifacts_dir: Path,
         content_hash: str | None = None,
         source_uri: str | None = None,
+        user_metadata: dict[str, Any] | None = None,
     ) -> IngestionResult:
         """Ingest a single file with content filtering.
 
@@ -303,6 +304,8 @@ class IngestionPipeline:
                             file_path, rag_mode="caption",
                             page_count=getattr(result, "page_count", None),
                         )
+                        if user_metadata:
+                            meta.update(user_metadata)
                         await self._metadata_index.upsert(doc_id, meta)
                     except Exception as e:
                         logger.warning("Metadata upsert failed for %s: %s", file_path.name, e)
@@ -333,6 +336,7 @@ class IngestionPipeline:
         path: Path,
         replace: bool = False,
         recursive: bool = True,
+        user_metadata: dict[str, Any] | None = None,
     ) -> IngestionResult:
         """Ingest from local filesystem (file or directory).
 
@@ -385,7 +389,8 @@ class IngestionPipeline:
                 )
 
                 result = await self._ingest_single_file_with_policy(
-                    working_path, artifacts_dir, content_hash=content_hash, source_uri=source_uri
+                    working_path, artifacts_dir, content_hash=content_hash,
+                    source_uri=source_uri, user_metadata=user_metadata,
                 )
                 result.source_type = "local"
                 result.total_files = 1
@@ -457,7 +462,8 @@ class IngestionPipeline:
                 try:
                     working = await self._prepare_for_parsing(fp, tmpdir)
                     return await self._ingest_single_file_with_policy(
-                        working, artifacts_dir, content_hash=ch if ch else None, source_uri=uri
+                        working, artifacts_dir, content_hash=ch if ch else None,
+                        source_uri=uri, user_metadata=user_metadata,
                     )
                 finally:
                     shutil.rmtree(tmpdir, ignore_errors=True)

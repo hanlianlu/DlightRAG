@@ -37,11 +37,12 @@ async def unified_ingest(
     if source_type == "local":
         path = Path(kwargs["path"])
         replace = kwargs.get("replace", config.ingestion_replace_default)
+        user_metadata = kwargs.get("metadata")
 
         if path.is_file():
-            return await _ingest_single_local(engine, hash_index, path, replace, metadata_index)
+            return await _ingest_single_local(engine, hash_index, path, replace, metadata_index, user_metadata)
         if path.is_dir():
-            return await _ingest_local_dir(engine, config, hash_index, path, replace, metadata_index)
+            return await _ingest_local_dir(engine, config, hash_index, path, replace, metadata_index, user_metadata)
         raise FileNotFoundError(f"Path not found: {path}")
 
     if source_type == "azure_blob":
@@ -57,6 +58,7 @@ async def _ingest_single_local(
     path: Path,
     replace: bool,
     metadata_index: Any = None,
+    user_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Ingest a single local file with dedup."""
     should_skip, content_hash, reason = await hash_index.should_skip_file(path, replace)
@@ -78,6 +80,8 @@ async def _ingest_single_local(
                 path, rag_mode="unified",
                 page_count=result.get("page_count"),
             )
+            if user_metadata:
+                meta.update(user_metadata)
             await metadata_index.upsert(result["doc_id"], meta)
         except Exception as e:
             logger.warning("Metadata upsert failed for %s: %s", path.name, e)
@@ -92,6 +96,7 @@ async def _ingest_local_dir(
     path: Path,
     replace: bool,
     metadata_index: Any = None,
+    user_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Recursively ingest all supported files in a directory."""
     from dlightrag.unifiedrepresent.renderer import (
@@ -116,7 +121,7 @@ async def _ingest_local_dir(
     results: list[dict[str, Any]] = []
     skipped = 0
     for file_path in files:
-        result = await _ingest_single_local(engine, hash_index, file_path, replace, metadata_index)
+        result = await _ingest_single_local(engine, hash_index, file_path, replace, metadata_index, user_metadata)
         if result.get("status") == "skipped":
             skipped += 1
         results.append(result)
