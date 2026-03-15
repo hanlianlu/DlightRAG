@@ -695,20 +695,24 @@ class MongoHashIndex:
 
     async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
         col = self._get_collection()
-        doc = await col.find_one({
-            "workspace": self._workspace,
-            "file_path": {"$regex": f"/{filename}$"},
-        })
+        doc = await col.find_one(
+            {
+                "workspace": self._workspace,
+                "file_path": {"$regex": f"/{filename}$"},
+            }
+        )
         if doc:
             return (doc.get("doc_id"), doc.get("content_hash"), doc.get("file_path"))
         return (None, None, None)
 
     async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
         col = self._get_collection()
-        doc = await col.find_one({
-            "workspace": self._workspace,
-            "file_path": file_path,
-        })
+        doc = await col.find_one(
+            {
+                "workspace": self._workspace,
+                "file_path": file_path,
+            }
+        )
         if doc:
             return (doc.get("doc_id"), doc.get("content_hash"), doc.get("file_path"))
         return (None, None, None)
