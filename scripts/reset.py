@@ -2,12 +2,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Reset dlightrag RAG storage — drops all storage backends and local files.
 
-Works with any storage backend configured in DlightragConfig (PostgreSQL,
-NanoVector, Neo4J, Milvus, Redis, Mongo, JSON files, etc.).
+Thin CLI wrapper around RAGServiceManager.areset(). All reset logic
+lives in RAGService.areset() (5-phase reset).
 
 Usage:
     uv run scripts/reset.py                      # reset default workspace (with confirmation)
     uv run scripts/reset.py --workspace project-a # reset specific workspace
+    uv run scripts/reset.py --all                 # reset ALL workspaces
     uv run scripts/reset.py --dry-run             # preview what would be dropped
     uv run scripts/reset.py --keep-files          # drop storages, keep local files
     uv run scripts/reset.py -y                    # skip confirmation prompt
@@ -18,200 +19,45 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import shutil
 import sys
-from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# LightRAG storage attribute names (in initialization order)
-_STORAGE_ATTRS = (
-    "full_docs",
-    "text_chunks",
-    "full_entities",
-    "full_relations",
-    "entity_chunks",
-    "relation_chunks",
-    "entities_vdb",
-    "relationships_vdb",
-    "chunks_vdb",
-    "chunk_entity_relation_graph",
-    "llm_response_cache",
-    "doc_status",
-)
+
+def _print_workspace_result(ws: str, result: dict[str, Any]) -> None:
+    """Pretty-print reset results for one workspace."""
+    if "error" in result:
+        print(f"\n  [{ws}] ERROR: {result['error']}")
+        return
+
+    print(f"\n  [{ws}]")
+    print(f"    Storages dropped: {result.get('storages_dropped', 0)}")
+    cleared = result.get("dlightrag_cleared", [])
+    if cleared:
+        print(f"    DlightRAG cleared: {', '.join(cleared)}")
+    orphans = result.get("orphan_tables_cleaned", 0)
+    if orphans:
+        print(f"    Orphan tables cleaned: {orphans}")
+    files = result.get("local_files_removed", 0)
+    if files:
+        print(f"    Local files removed: {files}")
+    errors = result.get("errors", [])
+    if errors:
+        print(f"    Errors ({len(errors)}):")
+        for err in errors:
+            print(f"      - {err}")
 
 
-def _format_size(n: float) -> str:
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} TB"
-
-
-# ── storage drop ─────────────────────────────────────────────────
-
-
-async def _drop_storages(lightrag: object, *, dry_run: bool) -> int:
-    """Call drop() on each LightRAG storage instance.
-
-    Returns the number of storages successfully dropped.
-    """
-    dropped = 0
-    for attr in _STORAGE_ATTRS:
-        storage = getattr(lightrag, attr, None)
-        if storage is None:
-            continue
-        class_name = type(storage).__name__
-        if dry_run:
-            print(f"  [DRY RUN] {attr} ({class_name})")
-        else:
-            try:
-                result = await storage.drop()
-                status = result.get("status", "unknown")
-                msg = result.get("message", "")
-                print(f"  {attr} ({class_name}): {status} — {msg}")
-                if status == "success":
-                    dropped += 1
-            except Exception as exc:
-                print(f"  {attr} ({class_name}): ERROR — {exc}")
-    return dropped
-
-
-async def _clean_pg_orphan_tables(workspace: str, *, dry_run: bool) -> int:
-    """Clean orphaned PG vector tables from other modes or old embedding models.
-
-    LightRAG creates suffixed vector tables like ``lightrag_vdb_entity_<model>_<dim>d``
-    per embedding model. Switching modes or models leaves orphaned tables that the
-    normal ``storage.drop()`` path doesn't reach. This finds ALL ``lightrag_vdb_*``
-    and ``dlightrag_*`` tables, deletes workspace data from any not already handled,
-    and drops tables that become completely empty afterwards.
-
-    Uses the asyncpg pool directly (same pattern as PGHashIndex).
-    """
-    try:
-        from lightrag.kg.postgres_impl import ClientManager
-
-        db = await ClientManager.get_client()
-        pool = db.pool
-        if pool is None:
-            return 0
-    except Exception:
-        return 0
-
-    try:
-        async with pool.acquire() as conn:
-            table_rows = await conn.fetch(
-                "SELECT tablename FROM pg_tables "
-                "WHERE schemaname = 'public' "
-                "AND (tablename LIKE 'lightrag_%' OR tablename LIKE 'dlightrag_%') "
-                "ORDER BY tablename"
-            )
-            if not table_rows:
-                return 0
-
-            cleaned = 0
-            for row in table_rows:
-                table = row["tablename"]
-                # Check if table has a workspace column
-                col = await conn.fetchrow(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name = $1 AND column_name = 'workspace'",
-                    table,
-                )
-                if col is None:
-                    continue
-
-                # Check if table has any rows for this workspace
-                count_row = await conn.fetchrow(
-                    f'SELECT COUNT(*) as count FROM "{table}" WHERE workspace = $1',
-                    workspace,
-                )
-                count = count_row["count"] if count_row else 0
-
-                if count > 0:
-                    if dry_run:
-                        print(f"  [DRY RUN] orphan table {table}: {count} rows")
-                    else:
-                        await conn.execute(
-                            f'DELETE FROM "{table}" WHERE workspace = $1',
-                            workspace,
-                        )
-                        print(f"  orphan table {table}: deleted {count} rows")
-                    cleaned += 1
-
-                # Drop the table entirely if no rows remain (any workspace)
-                if not dry_run:
-                    remaining = await conn.fetchrow(
-                        f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
-                    )
-                    if not remaining["has_rows"]:
-                        await conn.execute(f'DROP TABLE "{table}"')
-                        print(f"  dropped empty table {table}")
-                        cleaned += 1
-                elif count == 0:
-                    # In dry-run, check if table is already empty
-                    total = await conn.fetchrow(
-                        f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
-                    )
-                    if not total["has_rows"]:
-                        print(f"  [DRY RUN] would drop empty table {table}")
-                        cleaned += 1
-
-            return cleaned
-    except Exception as exc:
-        print(f"  orphan table cleanup: ERROR — {exc}")
-        return 0
-
-
-# ── local files ──────────────────────────────────────────────────
-
-
-def _reset_local(working_dir: Path, *, dry_run: bool) -> tuple[int, int]:
-    """Remove artifacts and caches, but keep sources/. Returns (file_count, bytes)."""
-    if not working_dir.exists():
-        print(f"  working directory not found: {working_dir}")
-        return 0, 0
-
-    total_bytes = 0
-    file_count = 0
-
-    for item in sorted(working_dir.iterdir()):
-        if item.name == "sources":
-            continue
-        if item.is_file():
-            size = item.stat().st_size
-            total_bytes += size
-            file_count += 1
-            if not dry_run:
-                item.unlink()
-        elif item.is_dir():
-            for f in item.rglob("*"):
-                if f.is_file():
-                    total_bytes += f.stat().st_size
-                    file_count += 1
-            if not dry_run:
-                shutil.rmtree(item, ignore_errors=True)
-
-    label = "[DRY RUN] " if dry_run else ""
-    action = (
-        f"{working_dir}: {file_count} files ({_format_size(total_bytes)})"
-        if dry_run
-        else (f"removed {file_count} files ({_format_size(total_bytes)}) from {working_dir}")
-    )
-    print(f"  {label}{action} (sources/ preserved)")
-
-    return file_count, total_bytes
-
-
-# ── orchestrator ─────────────────────────────────────────────────
-
-
-async def reset_all(
-    *, workspace: str | None = None, do_local: bool = True, dry_run: bool = False
-) -> dict[str, int]:
+async def _run(
+    *,
+    workspace: str | None,
+    reset_all: bool,
+    keep_files: bool,
+    dry_run: bool,
+) -> dict[str, Any]:
     from dlightrag.config import get_config
-    from dlightrag.core.service import RAGService
+    from dlightrag.core.servicemanager import RAGServiceManager
 
     config = get_config()
     if workspace:
@@ -222,133 +68,44 @@ async def reset_all(
     print(f"  KV:         {config.kv_storage}")
     print(f"  Vector:     {config.vector_storage}")
     print(f"  Graph:      {config.graph_storage}")
-    print(f"  DocStatus:  {config.doc_status_storage}")
     print(f"  Workspace:  {config.workspace}")
 
-    stats: dict[str, int] = {"storages_dropped": 0, "local_files": 0}
-
-    # Initialize service to get LightRAG with correct backends
-    print("\nInitializing RAGService...")
-    service = await RAGService.create(config=config)
-
+    manager = await RAGServiceManager.create(config)
     try:
-        # Get the LightRAG instance (unified property handles both modes)
-        lightrag = service.lightrag
-        if lightrag is None:
-            print("\nERROR: Could not access LightRAG instance from RAGService")
-            return stats
-
-        print(f"\nStorages ({len(_STORAGE_ATTRS)}):")
-        stats["storages_dropped"] = await _drop_storages(lightrag, dry_run=dry_run)
-
-        # Clean orphaned PG tables (other modes / old embedding models)
-        if config.kv_storage.startswith("PG"):
-            print("\nOrphan PG tables:")
-            orphans = await _clean_pg_orphan_tables(config.workspace, dry_run=dry_run)
-            if orphans == 0:
-                print("  (none found)")
-
-        # Clean dlightrag_workspace_meta for this workspace
-        if config.kv_storage.startswith("PG"):
-            try:
-                from lightrag.kg.postgres_impl import ClientManager
-
-                db = await ClientManager.get_client()
-                pool = db.pool
-                if pool is not None:
-                    async with pool.acquire() as conn:
-                        # Check if table exists
-                        exists = await conn.fetchval(
-                            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-                            "WHERE table_name = 'dlightrag_workspace_meta')"
-                        )
-                        if exists:
-                            if dry_run:
-                                print(
-                                    f"\n  [DRY RUN] dlightrag_workspace_meta: would delete workspace={config.workspace}"
-                                )
-                            else:
-                                await conn.execute(
-                                    "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
-                                    config.workspace,
-                                )
-                                print(
-                                    f"\n  dlightrag_workspace_meta: deleted workspace={config.workspace}"
-                                )
-            except Exception as exc:
-                print(f"\n  dlightrag_workspace_meta: ERROR — {exc}")
-
-        # Clean DlightRAG hash_index
-        hash_index = getattr(service, "_hash_index", None)
-        if hash_index is not None and hasattr(hash_index, "clear"):
-            if dry_run:
-                print("\n  [DRY RUN] hash_index: would clear")
-            else:
-                try:
-                    await hash_index.clear()
-                    print("\n  hash_index: cleared")
-                except Exception as exc:
-                    print(f"\n  hash_index: ERROR — {exc}")
-
-        # Clean DlightRAG metadata_index
-        metadata_index = getattr(service, "_metadata_index", None)
-        if metadata_index is not None and hasattr(metadata_index, "clear"):
-            if dry_run:
-                print("  [DRY RUN] metadata_index: would clear")
-            else:
-                try:
-                    await metadata_index.clear()
-                    print("  metadata_index: cleared")
-                except Exception as exc:
-                    print(f"  metadata_index: ERROR — {exc}")
-
-        if do_local:
-            print("\nLocal files:")
-            working_dir = Path(config.working_dir)
-            files, _ = _reset_local(working_dir, dry_run=dry_run)
-            stats["local_files"] = files
-
+        target_ws = None if reset_all else (workspace or config.workspace)
+        result = await manager.areset(
+            workspace=target_ws,
+            keep_files=keep_files,
+            dry_run=dry_run,
+        )
+        return result
     finally:
-        await service.close()
-
-    return stats
-
-
-# ── CLI ──────────────────────────────────────────────────────────
+        await manager.close()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="dlightrag-reset",
         description="Reset dlightrag RAG storage (all configured backends)",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview without deleting")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging")
-    parser.add_argument(
-        "--keep-files",
-        action="store_true",
-        help="Drop storages but keep local files",
-    )
-    parser.add_argument(
-        "--workspace",
-        default=None,
-        help="Target workspace to reset (default: from config)",
-    )
+    parser.add_argument("--keep-files", action="store_true", help="Drop storages, keep local files")
+    parser.add_argument("--workspace", default=None, help="Target workspace (default: from config)")
+    parser.add_argument("--all", dest="reset_all", action="store_true", help="Reset ALL workspaces")
 
     args = parser.parse_args()
 
     if args.verbose:
         logging.basicConfig(level=logging.INFO)
 
-    do_local = not args.keep_files
-
     if args.dry_run:
         print("\n(dry run — nothing will be deleted)")
 
     if not args.dry_run and not args.yes:
-        print("\nWARNING: This will permanently delete ALL RAG data in the configured backends.")
+        scope = "ALL workspaces" if args.reset_all else (args.workspace or "default workspace")
+        print(f"\nWARNING: This will permanently delete ALL RAG data in {scope}.")
         print("Type 'yes' to proceed: ", end="")
         try:
             if input().strip().lower() != "yes":
@@ -358,19 +115,25 @@ def main() -> int:
             print("\nCancelled.")
             return 1
 
-    stats = asyncio.run(
-        reset_all(workspace=args.workspace, do_local=do_local, dry_run=args.dry_run)
+    result = asyncio.run(
+        _run(
+            workspace=args.workspace,
+            reset_all=args.reset_all,
+            keep_files=args.keep_files,
+            dry_run=args.dry_run,
+        )
     )
 
-    print("\nDone.")
-    print(f"  Storages dropped: {stats['storages_dropped']}")
-    if do_local:
-        print(f"  Local files removed: {stats['local_files']}")
+    for ws, ws_result in result.get("workspaces", {}).items():
+        _print_workspace_result(ws, ws_result)
+
+    total_errors = result.get("total_errors", 0)
+    print(f"\nDone. Total errors: {total_errors}")
 
     if args.dry_run:
-        print("\nRun without --dry-run to actually delete.")
+        print("Run without --dry-run to actually delete.")
 
-    return 0
+    return 0 if total_errors == 0 else 1
 
 
 if __name__ == "__main__":
