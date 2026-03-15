@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.core.servicemanager import RAGServiceManager
+from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
 def _make_manager() -> RAGServiceManager:
@@ -158,3 +158,32 @@ class TestManagerAresetErrorHandling:
             result = await manager.areset(workspace="ws1")
 
         assert result["total_errors"] == 1
+
+    async def test_get_service_failure_counts_error(self) -> None:
+        manager = _make_manager()
+
+        with (
+            patch.object(
+                manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1"]
+            ),
+            patch.object(
+                manager, "_get_service",
+                new_callable=AsyncMock,
+                side_effect=RAGServiceUnavailableError("down"),
+            ),
+        ):
+            result = await manager.areset()
+
+        assert result["total_errors"] == 1
+        assert "error" in result["workspaces"]["ws1"]
+
+    async def test_close_failure_still_evicts(self) -> None:
+        manager = _make_manager()
+        svc = _make_mock_service()
+        svc.close = AsyncMock(side_effect=RuntimeError("close boom"))
+        manager._services["ws1"] = svc
+
+        with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):
+            await manager.areset(workspace="ws1")
+
+        assert "ws1" not in manager._services
