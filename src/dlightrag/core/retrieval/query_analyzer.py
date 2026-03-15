@@ -18,11 +18,12 @@ _FILE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_ANALYSIS_PROMPT = """\
+_ANALYSIS_PROMPT_BASE = """\
 Analyze this search query. Extract metadata filters and a cleaned semantic query.
 
 Query: "{query}"
 
+{schema_section}
 Return JSON only:
 {{"semantic_query": "core question without file/author/date references",
   "filters": {{"filename": null, "filename_pattern": null, "file_extension": null,
@@ -32,10 +33,42 @@ Return JSON only:
 
 Rules:
 - semantic_query: remove filename/author/date references, keep the actual question
-- filters: extract any document identifiers mentioned. Use null for unmentioned fields.
+- filters: only use column names from the table schema above. Use null for unmentioned fields.
+- For timestamp columns, use date_from/date_to (ISO 8601 format) for range queries.
+- For "custom", use {{"key": "value"}} matching the custom_metadata keys above. Use null if none match.
 - paths: "metadata" if any filter extracted, "kg" if semantic question exists, both if mixed
 - If pure enumeration (no semantic question), paths=["metadata"] and semantic_query=""
 """
+
+# PG data_type → human-readable short form
+_TYPE_ALIASES: dict[str, str] = {
+    "character varying": "text",
+    "timestamp with time zone": "timestamp",
+    "jsonb": "json",
+    "integer": "int",
+}
+
+
+def _build_schema_section(schema: dict[str, Any] | None) -> str:
+    """Build schema context from live table structure (information_schema).
+
+    No hardcoded field lists — driven entirely by actual DB columns.
+    """
+    if not schema or not schema.get("columns"):
+        return ""
+
+    col_lines = [
+        f"  {col['name']} ({_TYPE_ALIASES.get(col['type'], col['type'])})"
+        for col in schema["columns"]
+    ]
+
+    parts = ["Table schema (filterable columns):", *col_lines]
+
+    custom_keys = schema.get("custom_keys")
+    if custom_keys:
+        parts.append(f"Custom metadata keys in JSONB: {', '.join(custom_keys)}")
+
+    return "\n".join(parts) + "\n\n"
 
 
 def fast_detect(query: str) -> MetadataFilter | None:
@@ -88,8 +121,13 @@ class QueryAnalyzer:
     with regex taking priority for overlapping fields.
     """
 
-    def __init__(self, llm_func: Callable[..., Any] | None = None) -> None:
+    def __init__(
+        self,
+        llm_func: Callable[..., Any] | None = None,
+        schema: dict[str, Any] | None = None,
+    ) -> None:
         self._llm_func = llm_func
+        self._schema = schema
 
     async def analyze(
         self,
@@ -159,7 +197,8 @@ class QueryAnalyzer:
     async def _llm_extract(self, query: str) -> RetrievalPlan | None:
         """Use LLM to extract structured filters from natural language."""
         try:
-            prompt = _ANALYSIS_PROMPT.format(query=query)
+            schema_section = _build_schema_section(self._schema)
+            prompt = _ANALYSIS_PROMPT_BASE.format(query=query, schema_section=schema_section)
             response = await self._llm_func(
                 prompt,
                 system_prompt="You are a query analyzer. Return JSON only.",
