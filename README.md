@@ -9,9 +9,9 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 ## Features
 
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
-- **Knowledge graph + vector + visual retrieval** — KG traversal and vector search via LightRAG, visual retrieval with VLM reranking (unified mode), and metadata-based supplementary retrieval
+- **Knowledge graph + vector + visual retrieval** — KG traversal and vector search via LightRAG, visual and filtering supplementary retrieval
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images from local filesystem, Azure Blob Storage, or Snowflake
-- **Reranking** — LLM-based pointwise scoring or API rerankers (Cohere, Jina, Aliyun, Azure Cohere, custom endpoint)
+- **Broad LLM support** — OpenAI, Azure OpenAI, Anthropic, Google Gemini, Ollama, Xinference, and any OpenAI-compatible or [LiteLLM-supported](https://docs.litellm.ai/docs/providers) provider
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with round-robin merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
 - **Four interfaces** — Web UI, REST API, MCP server, and Python SDK
