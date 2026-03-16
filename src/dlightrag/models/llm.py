@@ -23,6 +23,7 @@ from dlightrag.models.embedding import _litellm_embedding, _openai_embedding
 
 logger = logging.getLogger(__name__)
 
+
 def _adapt_for_lightrag(completion_func: Callable) -> Callable:
     """Wrap messages-first callable for LightRAG's (prompt, system_prompt, ...) signature.
 
