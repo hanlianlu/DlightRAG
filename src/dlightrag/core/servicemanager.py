@@ -218,10 +218,10 @@ class RAGServiceManager:
         return self._answer_engine
 
     def get_llm_func(self):
-        """Return the global LLM model function (for web UI query rewriting etc.)."""
-        from dlightrag.models.llm import get_llm_model_func
+        """Return the global chat model function (for web UI query rewriting etc.)."""
+        from dlightrag.models.llm import get_chat_model_func
 
-        return get_llm_model_func(self._config)
+        return get_chat_model_func(self._config)
 
     # --- Read operations (single or federated) ---
 
@@ -363,7 +363,7 @@ class RAGServiceManager:
                         "SELECT embedding_model FROM dlightrag_workspace_meta WHERE workspace = $1",
                         ws,
                     )
-                    if row is None or row["embedding_model"] == self._config.embedding_model:
+                    if row is None or row["embedding_model"] == self._config.embedding.model:
                         compatible.append(ws)
             finally:
                 await conn.close()
