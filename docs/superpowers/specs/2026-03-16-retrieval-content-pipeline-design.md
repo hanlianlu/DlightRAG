@@ -52,9 +52,9 @@ aretrieve()
     │       └── unified mode: visual_chunks → image_data
     │           → chunks fully enriched (same quality as Step 1)
     │
-    └── Step 3: Merge + Rank
-        ├── RRF(Step1_chunks, Step2_chunks) → unified ranking
-        ├── Dedup by chunk_id
+    └── Step 3: Merge
+        ├── Dedup by chunk_id (Step 1 wins on collision)
+        ├── Round-robin interleave (Step1[0], Step2[0], Step1[1], ...)
         └── top_k cutoff
             │
             ▼
@@ -76,7 +76,9 @@ aretrieve()
 
 **Each step enriches its own output:** No separate enrichment step at the end. Step 1 and Step 2 each produce fully-enriched ChunkContext with content + image_data (unified mode). This keeps the pipeline clean — merge only needs to combine and rank.
 
-**Dedup by chunk_id throughout:** LightRAG internally deduplicates its KG + vector dual paths. Step 2 produces its own chunk_ids. Step 3 merges via RRF which naturally deduplicates (same chunk_id from both steps gets boosted score).
+**Dedup by chunk_id throughout:** LightRAG internally deduplicates its KG + vector dual paths. Step 2 produces its own chunk_ids. Step 3 deduplicates and merges via round-robin interleaving (not RRF — see Change 6 rationale).
+
+**Round-robin merge, not RRF:** Step 2's value is document-level precision (finding the RIGHT file via metadata filter), not chunk-level semantic ranking. The semantic query extracted from a metadata-oriented question (e.g., "what is the key info" from "what is the key info from img 9551 png") is often vague and won't score well against the actual document content. RRF would unfairly penalize Step 2 chunks due to low semantic scores. Round-robin ensures both perspectives (KG/vector relevance from Step 1, document precision from Step 2) get equal representation for the LLM to judge.
 
 ### Change 1: Rename `_text_retrieve()` → `_retrieve()`
 
@@ -271,40 +273,40 @@ async def _resolve_chunk_contexts(self, chunk_ids: list[str]) -> list[dict[str, 
     return contexts
 ```
 
-### Change 6: Merge via RRF Instead of Append
+### Change 6: Merge via Round-Robin Instead of Append
 
 **File:** `src/dlightrag/core/service.py`
 
-Replace `_merge_supplementary_chunks()` (simple append) with RRF-based merge:
+Replace `_merge_supplementary_chunks()` (simple append) with round-robin interleaving:
+
+**Rationale:** Step 2's value is document-level precision (metadata filter found the right file). The semantic query is often vague ("what is the key info") and won't match document content well. RRF would penalize Step 2 chunks due to low semantic scores. Round-robin gives both paths equal representation and lets the LLM decide which content is relevant.
 
 ```python
-def _merge_with_rrf(
+@staticmethod
+def _merge_round_robin(
     primary: RetrievalResult,
     supplementary: list[dict[str, Any]],
-    rrf_k: int = 60,
     top_k: int = 20,
 ) -> None:
     primary_chunks = primary.contexts.get("chunks", [])
 
-    # Build ranked lists
-    path_results = {
-        "primary": [c["chunk_id"] for c in primary_chunks],
-        "supplementary": [c["chunk_id"] for c in supplementary],
-    }
+    # Dedup: collect Step 2 chunks not already in Step 1
+    existing_ids = {c.get("chunk_id") for c in primary_chunks}
+    new_supplementary = [c for c in supplementary if c.get("chunk_id") not in existing_ids]
 
-    # RRF fusion
-    fused_order = reciprocal_rank_fusion(path_results, k=rrf_k)
+    # Round-robin interleave
+    merged: list[dict[str, Any]] = []
+    max_len = max(len(primary_chunks), len(new_supplementary))
+    for i in range(max_len):
+        if i < len(primary_chunks):
+            merged.append(primary_chunks[i])
+        if i < len(new_supplementary):
+            merged.append(new_supplementary[i])
 
-    # Build chunk lookup (primary wins on duplicate)
-    chunk_lookup = {c["chunk_id"]: c for c in supplementary}
-    chunk_lookup.update({c["chunk_id"]: c for c in primary_chunks})
-
-    # Reorder by fused ranking, top_k cutoff
-    primary.contexts["chunks"] = [
-        chunk_lookup[cid] for cid in fused_order[:top_k]
-        if cid in chunk_lookup
-    ]
+    primary.contexts["chunks"] = merged[:top_k]
 ```
+
+Note: `_merge_supplementary_chunks` is deleted and replaced by `_merge_round_robin`. The call site in `aretrieve()` (currently line 1090) must be updated accordingly.
 
 ### Change 7: Include Chunk Text in Answer Prompt
 
@@ -378,7 +380,7 @@ Update instructions to reference both text excerpts and images as sources.
 | `core/retrieval/metadata_path.py` | Add query/chunks_vdb params; call scoped search | ~15 |
 | `core/retrieval/scoped_search.py` | **New file**: native filtered vector search per backend | ~120 |
 | `core/retrieval/orchestrator.py` | Remove VectorPath; pass query/vdb to MetadataPath | ~15 |
-| `core/service.py` | `_resolve_chunk_contexts` visual enrichment; replace `_merge_supplementary_chunks` with `_merge_with_rrf`; update `aretrieve()` call site | ~40 |
+| `core/service.py` | `_resolve_chunk_contexts` visual enrichment; replace `_merge_supplementary_chunks` with `_merge_round_robin`; update `aretrieve()` call site | ~40 |
 | `core/answer.py` | `_format_chunk_excerpts`; update `_build_user_prompt` | ~30 |
 | `unifiedrepresent/prompts.py` | Update system prompt | ~10 |
 | `core/retrieval/vector_path.py` | Delete | ~0 |
@@ -390,7 +392,7 @@ Deduplication by `chunk_id` occurs at three levels:
 
 1. **Within Step 1**: LightRAG internally deduplicates its KG + vector dual paths
 2. **Within Step 2**: MetadataPath produces unique chunk_ids per doc; scoped search preserves uniqueness
-3. **Step 3 merge**: RRF naturally handles duplicates — same chunk_id from both steps receives boosted score rather than appearing twice
+3. **Step 3 merge**: Round-robin deduplicates before interleaving — Step 2 chunks already present in Step 1 are excluded, then remaining chunks are interleaved. Chunks found by both paths appear once via Step 1's version (which has reranking scores from visual/LightRAG rerank)
 
 ## KG Entity Scoping (Out of Scope)
 
