@@ -113,7 +113,6 @@ from dlightrag.models.llm import (  # noqa: E402
     get_chat_model_func,
     get_chat_model_func_for_lightrag,
     get_embedding_func,
-    get_ingest_model_func_for_lightrag,
     get_rerank_func,
 )
 from dlightrag.unifiedrepresent.lifecycle import unified_delete_files, unified_ingest  # noqa: E402
