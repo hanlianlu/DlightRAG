@@ -34,50 +34,51 @@ class TestAdaptForLightrag:
         assert messages[0] == {"role": "user", "content": "Hello"}
 
     @pytest.mark.asyncio
-    async def test_strips_lightrag_kwargs(self):
-        """LightRAG-internal kwargs are stripped before forwarding."""
+    async def test_lightrag_kwargs_not_forwarded(self):
+        """LightRAG-internal kwargs are accepted explicitly and not forwarded."""
         inner = AsyncMock(return_value="ok")
         adapted = _adapt_for_lightrag(inner)
 
         await adapted(
             "test",
-            keyword_extraction="foo",
+            keyword_extraction=True,
             token_tracker=MagicMock(),
             use_azure=False,
+            enable_cot=True,
+            hashing_kv=MagicMock(),
+            azure_deployment="my-deploy",
+            api_version="2024-02",
             temperature=0.5,  # should be preserved
         )
         call_kwargs = inner.call_args.kwargs
         assert "keyword_extraction" not in call_kwargs
         assert "token_tracker" not in call_kwargs
         assert "use_azure" not in call_kwargs
+        assert "enable_cot" not in call_kwargs
+        assert "hashing_kv" not in call_kwargs
+        assert "azure_deployment" not in call_kwargs
+        assert "api_version" not in call_kwargs
         assert call_kwargs["temperature"] == 0.5
 
     @pytest.mark.asyncio
-    async def test_hashing_kv_cache_miss(self):
-        """hashing_kv: cache miss -> call inner -> store result."""
-        inner = AsyncMock(return_value="computed result")
+    async def test_history_messages_incorporated(self):
+        """history_messages are inserted between system prompt and user message."""
+        inner = AsyncMock(return_value="ok")
         adapted = _adapt_for_lightrag(inner)
 
-        mock_kv = AsyncMock()
-        mock_kv.get_by_id.return_value = None  # cache miss
+        history = [
+            {"role": "user", "content": "prior question"},
+            {"role": "assistant", "content": "prior answer"},
+        ]
+        await adapted("new question", system_prompt="Be helpful", history_messages=history)
 
-        result = await adapted("test", hashing_kv=mock_kv)
-        assert result == "computed result"
-        inner.assert_called_once()
-        mock_kv.upsert.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_hashing_kv_cache_hit(self):
-        """hashing_kv: cache hit -> return cached, don't call inner."""
-        inner = AsyncMock()
-        adapted = _adapt_for_lightrag(inner)
-
-        mock_kv = AsyncMock()
-        mock_kv.get_by_id.return_value = {"return": "cached result"}
-
-        result = await adapted("test", hashing_kv=mock_kv)
-        assert result == "cached result"
-        inner.assert_not_called()
+        messages = inner.call_args.kwargs["messages"]
+        assert len(messages) == 4
+        assert messages[0] == {"role": "system", "content": "Be helpful"}
+        assert messages[1] == {"role": "user", "content": "prior question"}
+        assert messages[2] == {"role": "assistant", "content": "prior answer"}
+        assert messages[3] == {"role": "user", "content": "new question"}
+        assert "history_messages" not in inner.call_args.kwargs
 
     @pytest.mark.asyncio
     async def test_forwards_stream_and_response_format(self):
