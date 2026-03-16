@@ -74,7 +74,7 @@ class TestDlightragConfigNested:
         cfg = DlightragConfig(
             embedding=EmbeddingConfig(api_key="sk-test"),
         )
-        assert cfg.chat.model == "gpt-4.1-mini"
+        assert cfg.chat.model == "gpt-4.1"
         assert cfg.chat.temperature == 0.5
 
     def test_ingest_fallback(self):

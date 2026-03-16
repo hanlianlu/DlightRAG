@@ -16,7 +16,7 @@ async def _openai_embedding(
     texts: list[str],
     *,
     model: str,
-    api_key: str,
+    api_key: str | None = None,
     base_url: str | None = None,
     _client: AsyncOpenAI | None = None,
     **kwargs: Any,
@@ -31,7 +31,7 @@ async def _litellm_embedding(
     texts: list[str],
     *,
     model: str,
-    api_key: str,
+    api_key: str | None = None,
     base_url: str | None = None,
     **kwargs: Any,
 ) -> list[list[float]]:

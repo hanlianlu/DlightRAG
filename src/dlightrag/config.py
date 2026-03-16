@@ -179,7 +179,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== New nested config =====
     chat: ModelConfig = Field(
-        default_factory=lambda: ModelConfig(model="gpt-4.1-mini", temperature=0.5)
+        default_factory=lambda: ModelConfig(model="gpt-4.1", temperature=0.5)
     )
     ingest: ModelConfig | None = None
     embedding: EmbeddingConfig  # required, no default

@@ -78,7 +78,7 @@ Two backends, configured via `rerank_backend`:
 
 | Backend | How it works |
 |---------|-------------|
-| `llm` | VLM pointwise scoring: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Supports structured output (`response_schema`) for providers in `_STRUCTURED_VISION_PROVIDERS`, falls back to freetext prompt. |
+| `llm` | VLM pointwise scoring: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Uses `response_format=json_object` for structured output. |
 | API (`rerank_base_url`) | Calls external OpenAI-compatible `/rerank` endpoint with query + page images. |
 
 Post-rerank filtering removes chunks below `rerank_score_threshold` (default
@@ -126,7 +126,7 @@ query ──> LightRAG.aquery_data() / aquery_llm()
             ├─ KG traversal (entities/relationships)
             └─ Chunk vector search (text embedding)
             │
-            Reranking: handled by LightRAG (if enable_rerank=True)
+            Reranking: handled by LightRAG (if rerank.enabled=true)
             │
             Answer: LightRAG's LLM generates text answer
 ```
