@@ -145,6 +145,7 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 | `GET` | `/files` | List ingested documents |
 | `DELETE` | `/files` | Delete documents |
 | `GET` | `/api/files/{path}` | Serve/download a file (local: stream, Azure: 302 SAS redirect) |
+| `POST` | `/reset` | Reset workspace(s) — drop storage, clear indexes |
 | `GET` | `/workspaces` | List available workspaces |
 | `GET` | `/health` | Health check with storage status |
 

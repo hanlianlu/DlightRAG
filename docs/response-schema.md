@@ -8,22 +8,23 @@ Request and response structures for `ingest`, `retrieve`, and `answer` — share
 ### Python SDK
 
 ```python
-from dlightrag import RAGService, DlightragConfig
+from dlightrag import RAGServiceManager, DlightragConfig
 
-service = await RAGService.create(config=DlightragConfig())
+manager = RAGServiceManager(DlightragConfig())
 
 # Local files or directory
-result = await service.aingest(source_type="local", path="./docs")
+result = await manager.aingest("default", source_type="local", path="./docs")
 
 # Azure Blob Storage
-result = await service.aingest(
+result = await manager.aingest(
+    "default",
     source_type="azure_blob",
     container_name="documents",
     prefix="reports/",       # or blob_path="reports/q1.pdf"
 )
 
 # Snowflake
-result = await service.aingest(source_type="snowflake", query="SELECT * FROM docs")
+result = await manager.aingest("default", source_type="snowflake", query="SELECT * FROM docs")
 ```
 
 ### REST API
@@ -90,18 +91,18 @@ Same parameters as REST API, passed as tool arguments.
 
 ```python
 # Retrieve: contexts only, no LLM answer
-result = await service.aretrieve(query="What are the key findings?")
+result = await manager.aretrieve(query="What are the key findings?")
 result.answer     # None
 result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
 
 # Answer: contexts + LLM-generated answer
-result = await service.aanswer(query="What are the key findings?")
+result = await manager.aanswer(query="What are the key findings?")
 result.answer      # "The key findings are... [1-1] [2-3]"
 result.contexts    # same structure as retrieve
 result.references  # [Reference(id=1, title="report.pdf"), ...] (unified mode with structured output)
 
 # Streaming answer
-contexts, token_iter = await service.aanswer_stream(query="What are the key findings?")
+contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
 # contexts (RetrievalContexts) available immediately
 async for token in token_iter:
     print(token, end="")
@@ -112,10 +113,13 @@ async for token in token_iter:
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `query` | `str` | required | Search query |
+| `workspace` | `str \| None` | config default | Target workspace |
+| `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
 | `mode` | `str` | `"mix"` | `local`, `global`, `hybrid`, `naive`, `mix` |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
 | `multimodal_content` | `list[dict]` | `None` | Up to 3 images (unified mode) |
+| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query) |
 
 ### REST API
 
