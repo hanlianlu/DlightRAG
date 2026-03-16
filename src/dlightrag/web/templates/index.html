@@ -51,11 +51,11 @@
     <!-- Hidden file input for image upload -->
     <input type="file" id="image-input" accept="image/*" multiple style="display:none">
 
-    <div class="panel-backdrop" id="panel-backdrop" onclick="closePanel()"></div>
+    <div class="panel-backdrop" id="panel-backdrop"></div>
     <aside class="panel" id="panel">
         <div class="panel-header">
             <span id="panel-title">SOURCES</span>
-            <button class="panel-close" onclick="closePanel()">&#10005;</button>
+            <button class="panel-close" id="panel-close-btn">&#10005;</button>
         </div>
         <div id="panel-content" class="panel-content"></div>
     </aside>

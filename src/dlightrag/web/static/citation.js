@@ -311,7 +311,11 @@ function activateChatMode() {
 
 // === Streaming Answer via SSE ===
 
+let _queryInFlight = false;
+
 async function submitQuery(query) {
+    if (_queryInFlight) return;
+    _queryInFlight = true;
     const chatMessages = document.getElementById('chat-messages');
     const chatArea = document.getElementById('chat-area');
 
@@ -445,6 +449,8 @@ async function submitQuery(query) {
         conversationHistory.push({role: 'user', content: query});
         conversationHistory.push({role: 'assistant', content: fullAnswer});
     }
+
+    _queryInFlight = false;
 }
 
 function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken) {
@@ -557,6 +563,10 @@ document.addEventListener('DOMContentLoaded', function () {
         submitQuery(query);
     });
 
+    // Panel close: backdrop + close button (no inline onclick)
+    document.getElementById('panel-backdrop').addEventListener('click', closePanel);
+    document.getElementById('panel-close-btn').addEventListener('click', closePanel);
+
     // Files button opens panel
     const filesBtn = document.getElementById('files-btn');
     if (filesBtn) {
@@ -564,6 +574,9 @@ document.addEventListener('DOMContentLoaded', function () {
             openPanel('FILES');
         });
     }
+
+    // Event delegation for panel content (dynamically loaded by htmx)
+    var panelContent = document.getElementById('panel-content');
 
     // Toast notifications for file operations
     document.body.addEventListener('htmx:afterRequest', function(e) {
@@ -649,14 +662,27 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Workspace toggle via event delegation (avoids inline onclick XSS)
-    var panelContent = document.getElementById('panel-content');
+    // Panel content event delegation (handles all dynamically-loaded elements)
     if (panelContent) {
         panelContent.addEventListener('click', function(e) {
+            // File upload zone
+            var uploadZone = e.target.closest('#upload-zone');
+            if (uploadZone) {
+                var fileInput = uploadZone.querySelector('#file-input');
+                if (fileInput) fileInput.click();
+                return;
+            }
+            // Workspace toggle
             var item = e.target.closest('.workspace-check-item');
-            if (!item) return;
-            var ws = item.getAttribute('data-ws');
-            if (ws) toggleWorkspace(ws);
+            if (item) {
+                var ws = item.getAttribute('data-ws');
+                if (ws) toggleWorkspace(ws);
+            }
+        });
+        panelContent.addEventListener('change', function(e) {
+            if (e.target.id === 'file-input') {
+                htmx.trigger(document.getElementById('upload-form'), 'submit');
+            }
         });
     }
 

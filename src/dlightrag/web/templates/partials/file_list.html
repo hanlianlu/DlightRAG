@@ -1,4 +1,4 @@
-<div class="upload-zone" onclick="document.getElementById('file-input').click()">
+<div class="upload-zone" id="upload-zone">
     Drop files here or click to upload
     <form id="upload-form"
           hx-post="/web/files/upload"
@@ -7,8 +7,7 @@
           hx-encoding="multipart/form-data"
           hx-indicator="#upload-spinner"
           style="display:none">
-        <input type="file" id="file-input" name="files" multiple
-               onchange="htmx.trigger('#upload-form', 'submit')">
+        <input type="file" id="file-input" name="files" multiple>
     </form>
 </div>
 <div id="upload-spinner" class="file-status htmx-indicator">Ingesting... will update when finished.</div>
