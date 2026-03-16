@@ -614,7 +614,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.2.0"
+version = "1.2.0.1"
 source = { editable = "." }
 dependencies = [
     { name = "asyncpg" },
