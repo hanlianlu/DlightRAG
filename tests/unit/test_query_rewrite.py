@@ -49,9 +49,11 @@ class TestRewriteQuery:
         history = [{"role": "user", "content": f"msg {i}"} for i in range(30)]
         await _rewrite_query("follow up", history, llm)
         call_args = llm.call_args
-        prompt = call_args[0][0]
-        assert "msg 10" in prompt
-        assert "msg 9" not in prompt  # trimmed
+        messages = call_args[1]["messages"]
+        # User message is the last message in the messages list
+        user_content = messages[-1]["content"]
+        assert "msg 10" in user_content
+        assert "msg 9" not in user_content  # trimmed
 
     async def test_llm_failure_propagates(self):
         """LLM failure raises (no fallback)."""

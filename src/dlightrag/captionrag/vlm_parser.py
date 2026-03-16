@@ -8,6 +8,7 @@ RAGAnything-compatible ``content_list``.
 
 from __future__ import annotations
 
+import base64
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -98,8 +99,7 @@ class VlmOcrParser:
     Parameters
     ----------
     vision_model_func:
-        Async callable with signature
-        ``async def(prompt, *, image_data, system_prompt=None, **kw) -> str``.
+        Async callable accepting ``messages=`` (OpenAI chat format).
     dpi:
         Rendering resolution passed to :class:`PageRenderer`.
     """
@@ -175,11 +175,15 @@ class VlmOcrParser:
         image_bytes = image_to_png_bytes(image)
 
         # Call vision model
-        raw = await self.vision_model_func(
-            OCR_USER_PROMPT,
-            image_data=image_bytes,
-            system_prompt=OCR_SYSTEM_PROMPT,
-        )
+        b64 = base64.b64encode(image_bytes).decode()
+        messages = [
+            {"role": "system", "content": OCR_SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {"type": "text", "text": OCR_USER_PROMPT},
+            ]},
+        ]
+        raw = await self.vision_model_func(messages=messages)
 
         # Parse and convert
         blocks = parse_vlm_response(raw)

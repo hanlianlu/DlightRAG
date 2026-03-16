@@ -61,14 +61,11 @@ class UnifiedRepresentEngine:
         if visual_embedder is not None:
             self.embedder = visual_embedder
         else:
-            emb_provider = config.effective_embedding_provider
-            emb_base_url = config._get_url(f"{emb_provider}_base_url") or ""
-            emb_api_key = config._get_provider_api_key(emb_provider) or ""
             self.embedder = VisualEmbedder(
-                model=config.embedding_model,
-                base_url=emb_base_url,
-                api_key=emb_api_key,
-                dim=config.embedding_dim,
+                model=config.embedding.model,
+                base_url=config.embedding.base_url or "",
+                api_key=config.embedding.api_key or "",
+                dim=config.embedding.dim,
                 batch_size=config.embedding_func_max_async,
             )
 
@@ -83,10 +80,10 @@ class UnifiedRepresentEngine:
             visual_chunks=visual_chunks,
             config=config,
             vision_model_func=vision_model_func,
-            rerank_model=(config.effective_rerank_model if config.enable_rerank else None),
-            rerank_base_url=(config.rerank_base_url if config.enable_rerank else None),
-            rerank_api_key=(config.effective_rerank_api_key if config.enable_rerank else None),
-            rerank_backend=(config.rerank_backend if config.enable_rerank else None),
+            rerank_model=(config.rerank.model if config.rerank.enabled else None),
+            rerank_base_url=(config.rerank.base_url if config.rerank.enabled else None),
+            rerank_api_key=(config.rerank.api_key if config.rerank.enabled else None),
+            rerank_backend=(config.rerank.backend if config.rerank.enabled else None),
             path_resolver=path_resolver,
             embedder=self.embedder,
         )
@@ -306,7 +303,7 @@ class UnifiedRepresentEngine:
         # Swap embedding func on chunks_vdb
         original_func = self.lightrag.chunks_vdb.embedding_func
         self.lightrag.chunks_vdb.embedding_func = EmbeddingFunc(
-            embedding_dim=self.config.embedding_dim,
+            embedding_dim=self.config.embedding.dim,
             max_token_size=8192,
             func=cached_embed,
         )

@@ -367,8 +367,6 @@ class VisualRetriever:
         from dlightrag.models.schemas import VisualRerankScore
         from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
 
-        use_schema = getattr(self.vision_model_func, "supports_structured", False)
-
         if not resolved or not self.vision_model_func:
             return dict(list(resolved.items())[:top_k])
 
@@ -386,31 +384,19 @@ class VisualRetriever:
                 return cid, 0.0
             async with sem:
                 try:
+                    content: list[dict] = []
                     if img_data:
-                        if use_schema:
-                            messages = self._build_vlm_messages(
-                                system_prompt="",
-                                user_prompt=prompt,
-                                chunks=[vd],
-                            )
-                            resp = await vision_model_func(
-                                "",
-                                messages=messages,
-                                response_format=VisualRerankScore,
-                            )
-                        else:
-                            img_bytes = base64.b64decode(img_data)
-                            resp = await vision_model_func(prompt, image_data=img_bytes)
-                    else:
-                        text_prompt = f"{prompt}\n\nDocument text:\n{text}"
-                        if use_schema:
-                            resp = await vision_model_func(
-                                "",
-                                messages=[{"role": "user", "content": text_prompt}],
-                                response_format=VisualRerankScore,
-                            )
-                        else:
-                            resp = await vision_model_func(text_prompt)
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_data}"},
+                        })
+                    text_content = prompt if img_data else f"{prompt}\n\nDocument text:\n{text}"
+                    content.append({"type": "text", "text": text_content})
+                    messages = [{"role": "user", "content": content}]
+                    resp = await vision_model_func(
+                        messages=messages,
+                        response_format=VisualRerankScore,
+                    )
                     score = self._parse_rerank_score(resp)
                     logger.debug("[Visual Rerank] chunk=%s score=%.2f", cid, score)
                     return cid, score
@@ -543,21 +529,3 @@ class VisualRetriever:
             )
             return dict(list(resolved.items())[:top_k])
 
-    @staticmethod
-    def _build_vlm_messages(system_prompt: str, user_prompt: str, chunks: list[dict]) -> list[dict]:
-        """Build OpenAI-format multimodal messages with inline base64 images from chunks."""
-        content: list[dict] = []
-        for item in chunks:
-            img_data = item.get("image_data")
-            if img_data:
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{img_data}"},
-                    }
-                )
-        content.append({"type": "text", "text": user_prompt})
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
-        ]
