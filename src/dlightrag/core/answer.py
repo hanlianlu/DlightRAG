@@ -81,7 +81,7 @@ class AnswerEngine:
 
         raw = await self.model_func(
             messages=messages,
-            response_format=StructuredAnswer,
+            response_format={"type": "json_object"},
         )
 
         logger.info(

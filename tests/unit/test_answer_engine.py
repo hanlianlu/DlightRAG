@@ -10,7 +10,6 @@ import pytest
 
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.retrieval.protocols import RetrievalContexts
-from dlightrag.models.schemas import StructuredAnswer
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -116,7 +115,7 @@ class TestAnswerEngineGenerate:
 
     @pytest.mark.asyncio
     async def test_generate_always_passes_response_format(self) -> None:
-        """generate() always passes response_format=StructuredAnswer."""
+        """generate() always passes response_format={"type": "json_object"}."""
         response_json = json.dumps(
             {"answer": "Revenue grew 15%.", "references": [{"id": 1, "title": "report.pdf"}]}
         )
@@ -126,7 +125,7 @@ class TestAnswerEngineGenerate:
         await engine.generate("query", _text_contexts())
 
         call_kwargs = model_func.call_args.kwargs
-        assert call_kwargs.get("response_format") is StructuredAnswer
+        assert call_kwargs.get("response_format") == {"type": "json_object"}
 
     @pytest.mark.asyncio
     async def test_contexts_passed_through_unchanged(self) -> None:
