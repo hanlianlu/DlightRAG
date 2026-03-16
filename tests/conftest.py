@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.config import DlightragConfig, reset_config, set_config
+from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, reset_config, set_config
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +36,8 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
     """
     cfg = DlightragConfig(  # type: ignore[call-arg]
         working_dir=str(tmp_working_dir),
-        openai_api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+        chat=ModelConfig(model="gpt-4.1-mini", api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests")),
+        embedding=EmbeddingConfig(api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests")),
         # Use JSON storage for unit tests (no PG dependency)
         kv_storage="JsonKVStorage",
         doc_status_storage="JsonDocStatusStorage",

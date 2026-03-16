@@ -15,22 +15,40 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import find_dotenv
-from pydantic import Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Supported LLM providers
-LLMProvider = Literal[
-    "openai",
-    "azure_openai",
-    "anthropic",
-    "google_gemini",
-    "qwen",
-    "minimax",
-    "ollama",
-    "xinference",
-    "openrouter",
-    "voyage",
-]
+
+class ModelConfig(BaseModel):
+    """Reusable model configuration block."""
+
+    provider: Literal["openai", "litellm"] = "openai"
+    model: str
+    api_key: str | None = None
+    base_url: str | None = None
+    temperature: float | None = None
+    timeout: float = 120.0
+    max_retries: int = 3
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
+class EmbeddingConfig(ModelConfig):
+    """Embedding-specific configuration."""
+
+    model: str = "text-embedding-3-large"
+    dim: int = 1024
+    max_token_size: int = 8192
+
+
+class RerankConfig(BaseModel):
+    """Reranking configuration (independent provider system)."""
+
+    enabled: bool = True
+    backend: Literal["llm", "cohere", "jina", "aliyun", "azure_cohere"] = "llm"
+    model: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+    score_threshold: float = 0.5
 
 
 class DlightragConfig(BaseSettings):
@@ -45,6 +63,7 @@ class DlightragConfig(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="DLIGHTRAG_",
+        env_nested_delimiter="__",
         env_file=find_dotenv(usecwd=True),
         env_file_encoding="utf-8",
         case_sensitive=False,
@@ -122,114 +141,13 @@ class DlightragConfig(BaseSettings):
         'Example: DLIGHTRAG_VECTOR_DB_KWARGS=\'{"index_type": "HNSW_SQ", "sq_type": "SQ8"}\'',
     )
 
-    # ===== LLM Provider Configuration =====
-    llm_provider: LLMProvider = Field(default="openai")
-
-    # Optional: separate providers for embedding and vision (default to llm_provider)
-    embedding_provider: LLMProvider | None = Field(
-        default=None,
-        description="Embedding provider. Defaults to llm_provider.",
+    # ===== New nested config =====
+    chat: ModelConfig = Field(
+        default_factory=lambda: ModelConfig(model="gpt-4.1-mini", temperature=0.5)
     )
-    vision_provider: LLMProvider | None = Field(
-        default=None,
-        description="Vision provider. Defaults to llm_provider.",
-    )
-
-    # ----- Unified Model Fields -----
-    chat_model: str = Field(default="gpt-4.1-mini")
-    # NOTE: ingestion_model is reserved for future use. LightRAG currently uses
-    # a single llm_model_func for both ingestion and query; switching at runtime
-    # would cause race conditions. Until LightRAG supports dual-LLM, this field
-    # has no effect — chat_model is used for all LLM operations.
-    ingestion_model: str = Field(default="gpt-4.1-mini")
-    vision_model: str | None = Field(default="gpt-4.1-mini")
-
-    # ----- Extra Model Parameters (passed through to provider API) -----
-    chat_model_kwargs: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Extra parameters forwarded to the chat model API call. "
-        "Example: DLIGHTRAG_CHAT_MODEL_KWARGS='{\"think\": false}'",
-    )
-    ingestion_model_kwargs: dict[str, Any] = Field(  # reserved, not yet active
-        default_factory=dict,
-        description="Extra parameters forwarded to the ingestion model API call. "
-        "Example: DLIGHTRAG_INGESTION_MODEL_KWARGS='{\"think\": false}'",
-    )
-    vision_model_kwargs: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Extra parameters forwarded to the vision model API call.",
-    )
-
-    # ----- Provider API Keys & Endpoints -----
-    openai_api_key: str | None = Field(default=None)
-    openai_base_url: str | None = Field(default=None)
-    azure_openai_base_url: str | None = Field(default=None)
-    azure_openai_api_key: str | None = Field(default=None)
-    anthropic_api_key: str | None = Field(default=None)
-    google_gemini_api_key: str | None = Field(default=None)
-    qwen_api_key: str | None = Field(default=None)
-    qwen_base_url: str = Field(
-        default="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    )
-    minimax_api_key: str | None = Field(default=None)
-    minimax_base_url: str = Field(
-        default="https://api.minimaxi.com/v1",
-        description="MiniMax API endpoint. Use https://api.minimax.io/v1 for international access.",
-    )
-    ollama_api_key: str | None = Field(default="ollama")  # dummy; Ollama ignores keys
-    ollama_base_url: str = Field(default="http://localhost:11434/v1")
-    xinference_api_key: str | None = Field(default="xinference")  # dummy; Xinference ignores keys
-    xinference_base_url: str = Field(default="http://localhost:9997/v1")
-    openrouter_api_key: str | None = Field(default=None)
-    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
-    voyage_api_key: str | None = Field(default=None)
-    voyage_base_url: str = Field(default="https://api.voyageai.com/v1")
-
-    # ===== Embedding =====
-    embedding_model: str = Field(default="text-embedding-3-large")
-    embedding_dim: int = Field(default=1024)
-
-    # ===== Temperatures =====
-    llm_temperature: float = Field(default=0.5)
-    vision_temperature: float = Field(default=0.1)
-    ingestion_temperature: float = Field(default=0.1)
-    rerank_temperature: float = Field(default=0.1)
-
-    # ===== LLM Request =====
-    llm_request_timeout: int = Field(default=120)
-    llm_max_retries: int = Field(default=2)
-
-    # ===== Reranking =====
-    enable_rerank: bool = Field(default=True)
-    rerank_backend: Literal["llm", "cohere", "jina", "aliyun", "azure_cohere"] = Field(
-        default="llm"
-    )
-    rerank_llm_provider: LLMProvider | None = Field(
-        default=None,
-        description="LLM provider for reranking when rerank_backend='llm'. "
-        "Defaults to llm_provider.",
-    )
-    rerank_model: str | None = Field(
-        default=None,
-        description="Model name for reranking. For 'llm' backend defaults to chat_model. "
-        "For API backends (cohere/jina/aliyun) this is the model identifier sent to the endpoint.",
-    )
-    rerank_base_url: str | None = Field(
-        default=None,
-        description="Custom base URL for the rerank API endpoint. "
-        "Overrides the provider default. Use this to point cohere/jina/aliyun "
-        "bindings at any compatible service (e.g. Xinference, LiteLLM proxy).",
-    )
-    rerank_api_key: str | None = Field(
-        default=None,
-        description="API key for the rerank endpoint. "
-        "Used by cohere/jina/aliyun backends. Falls back to provider-specific keys.",
-    )
-    rerank_score_threshold: float = Field(
-        default=0.5,
-        description="Minimum relevance score to keep a chunk after reranking. "
-        "Chunks scored below this are filtered out to save LLM tokens.",
-    )
+    ingest: ModelConfig | None = None
+    embedding: EmbeddingConfig  # required, no default
+    rerank: RerankConfig = Field(default_factory=RerankConfig)
 
     # ===== RAG Processing =====
     rag_mode: Literal["caption", "unified"] = Field(
@@ -344,6 +262,30 @@ class DlightragConfig(BaseSettings):
         description="Overall request timeout in seconds for ingest/retrieve/answer operations.",
     )
 
+    # ===== Validators =====
+
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_legacy_fields(cls, values):
+        if not isinstance(values, dict):
+            return values
+        legacy = {
+            "openai_api_key", "azure_openai_api_key", "anthropic_api_key",
+            "qwen_api_key", "minimax_api_key", "ollama_api_key",
+            "xinference_api_key", "openrouter_api_key", "voyage_api_key",
+            "llm_provider", "chat_model", "vision_model", "vision_provider",
+            "embedding_provider", "embedding_model", "embedding_dim",
+            "ingestion_model", "llm_temperature", "llm_request_timeout",
+        }
+        found = [k for k in values if k in legacy]
+        if found:
+            raise ValueError(
+                f"Legacy config fields detected: {found}. "
+                "Please migrate to the new nested format. "
+                "See .env.example for the new configuration format."
+            )
+        return values
+
     # ===== Computed Properties =====
 
     @property
@@ -357,65 +299,6 @@ class DlightragConfig(BaseSettings):
     @property
     def artifacts_dir(self) -> Path:
         return self.working_dir_path / "artifacts"
-
-    @property
-    def chat_model_name(self) -> str:
-        return self.chat_model
-
-    @property
-    def ingestion_model_name(self) -> str:
-        return self.ingestion_model
-
-    @property
-    def vision_model_name(self) -> str:
-        """Resolve vision model. Falls back to chat_model_name."""
-        return self.vision_model or self.chat_model_name
-
-    @property
-    def effective_embedding_provider(self) -> str:
-        """Resolve embedding provider. Defaults to llm_provider."""
-        return self.embedding_provider or self.llm_provider
-
-    @property
-    def effective_vision_provider(self) -> str:
-        """Resolve vision provider. Defaults to llm_provider (all providers support vision)."""
-        return self.vision_provider or self.llm_provider
-
-    @property
-    def effective_rerank_llm_provider(self) -> str:
-        """Resolve LLM provider for reranking. Falls back to llm_provider."""
-        return self.rerank_llm_provider or self.llm_provider
-
-    @property
-    def effective_rerank_model(self) -> str:
-        """Resolve rerank model based on backend.
-
-        For API backends, falls back to sensible defaults.
-        For LLM backend, falls back to chat_model.
-        """
-        if self.rerank_model:
-            return self.rerank_model
-        defaults = {
-            "cohere": "rerank-v4.0-pro",
-            "jina": "jina-reranker-v3",
-            "aliyun": "qwen3-rerank",
-            "azure_cohere": "Cohere-rerank-v4.0-pro",
-        }
-        return defaults.get(self.rerank_backend, self.chat_model)
-
-    @property
-    def effective_rerank_api_key(self) -> str | None:
-        """Rerank API key."""
-        return self.rerank_api_key
-
-    def _get_provider_api_key(self, provider: str) -> str:
-        """Get API key for a specific provider."""
-        return getattr(self, f"{provider}_api_key", "") or ""
-
-    def _get_url(self, field_name: str) -> str | None:
-        """Get a URL config field by name (trailing slash stripped)."""
-        url = getattr(self, field_name, None)
-        return url.rstrip("/") if url else None
 
     def model_post_init(self, __context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
@@ -505,40 +388,6 @@ class DlightragConfig(BaseSettings):
         path = Path(self.working_dir)
         if not path.is_absolute():
             self.working_dir = str(path.resolve())
-
-    def _check_provider_key(self, provider: str, context: str) -> None:
-        """Raise ValueError if the provider's API key is missing."""
-        field = f"{provider}_api_key"
-        if hasattr(self, field) and not getattr(self, field):
-            raise ValueError(f"{field} is required for {context}")
-
-    @model_validator(mode="after")
-    def _validate_provider_fields(self) -> DlightragConfig:
-        """Ensure provider-specific required fields are present."""
-        # Validate primary LLM provider
-        self._check_provider_key(self.llm_provider, f"{self.llm_provider} provider")
-
-        # Azure OpenAI also requires endpoint
-        if self.llm_provider == "azure_openai" and not self.azure_openai_base_url:
-            raise ValueError("azure_openai_base_url is required for azure_openai provider")
-
-        # Validate embedding provider if it differs from llm_provider
-        eff_emb = self.effective_embedding_provider
-        if eff_emb != self.llm_provider:
-            self._check_provider_key(eff_emb, f"embedding_provider={eff_emb}")
-
-        # Validate vision provider if it differs from llm_provider
-        eff_vis = self.effective_vision_provider
-        if eff_vis != self.llm_provider:
-            self._check_provider_key(eff_vis, f"vision_provider={eff_vis}")
-
-        # Validate rerank LLM provider if it differs from llm_provider
-        if self.rerank_backend == "llm":
-            eff_rerank = self.effective_rerank_llm_provider
-            if eff_rerank != self.llm_provider:
-                self._check_provider_key(eff_rerank, f"rerank_llm_provider={eff_rerank}")
-
-        return self
 
 
 # Singleton for standalone mode (MCP/API server)
