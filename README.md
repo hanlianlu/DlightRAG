@@ -11,10 +11,10 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
 - **Knowledge graph + vector + visual retrieval** — KG traversal and vector search via LightRAG, visual and filtering supplementary retrieval
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images from local filesystem, Azure Blob Storage, or Snowflake
-- **Broad LLM support** — Any OpenAI-compatible endpoint, plus [100+ providers](https://docs.litellm.ai/docs/providers) via LiteLLM
-- **Cross-workspace federation** — Query across embedding-compatible workspaces with round-robin merging
+- **Broad LLM support** — Any OpenAI-compatible LLM endpoint, plus [100+ providers](https://docs.litellm.ai/docs/providers) via LiteLLM
+- **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
-- **Four interfaces** — Web UI, REST API, MCP server, and Python SDK
+- **Four interfaces** — Web UI, REST API, Python SDK, and MCP server
 
 
 ## Architecture
@@ -78,27 +78,6 @@ curl -X POST http://localhost:8100/answer \
   -d '{"query": "What are the key findings?", "stream": true}'
 ```
 
-### MCP Server (for AI Agents)
-
-```bash
-uv tool install dlightrag   # or: pip install dlightrag
-cp .env.example .env        # set API keys in .env
-dlightrag-mcp
-```
-
-```json
-{
-  "mcpServers": {
-    "dlightrag": {
-      "command": "uvx",
-      "args": ["dlightrag-mcp", "--env-file", "/absolute/path/to/.env"]
-    }
-  }
-}
-```
-
-Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
-
 ### Python SDK
 
 ```bash
@@ -129,6 +108,27 @@ asyncio.run(main())
 ```
 
 > Requires PostgreSQL with pgvector + AGE, or JSON fallback for development (see [Configuration](#configuration)).
+
+### MCP Server (for AI Agents)
+
+```bash
+uv tool install dlightrag   # or: pip install dlightrag
+cp .env.example .env        # set API keys in .env
+dlightrag-mcp
+```
+
+```json
+{
+  "mcpServers": {
+    "dlightrag": {
+      "command": "uvx",
+      "args": ["dlightrag-mcp", "--env-file", "/absolute/path/to/.env"]
+    }
+  }
+}
+```
+
+Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
 
 
 ## API & Internals
