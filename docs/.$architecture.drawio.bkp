@@ -1,6 +1,6 @@
 <mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.6.1 Chrome/142.0.7444.265 Electron/39.8.0 Safari/537.36" version="29.6.1">
   <diagram name="DlightRAG Architecture" id="arch">
-    <mxGraphModel dx="851" dy="952" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+    <mxGraphModel dx="649" dy="822" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -22,7 +22,7 @@
         <mxCell id="rsm" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;fontColor=#333333;" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;&lt;i style=&#39;color:#6b7280&#39;&gt;federation · answer generation · workspace compatibility&lt;/i&gt;" vertex="1">
           <mxGeometry height="50" width="500" x="200" y="100" as="geometry" />
         </mxCell>
-        <mxCell id="ae" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=light-dark(#e8f5e9, #f7f6f2);strokeColor=none;strokeWidth=1.5;fontSize=11;fontFamily=Inter;fontColor=#333333;" value="&lt;b&gt;AnswerEngine&lt;/b&gt;&lt;br&gt;&lt;i style=&quot;color:#6b7280&quot;&gt;multimodal prompt · VLM · citation · streaming&lt;/i&gt;" vertex="1">
+        <mxCell id="ae" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=light-dark(#e8f5e9, #f7f6f2);strokeColor=#E6E6E6;strokeWidth=1.5;fontSize=11;fontFamily=Inter;fontColor=#333333;" value="&lt;b&gt;AnswerEngine&lt;/b&gt;&lt;br&gt;&lt;i style=&quot;color:#6b7280&quot;&gt;multimodal prompt · VLM · citation · streaming&lt;/i&gt;" vertex="1">
           <mxGeometry height="40" width="230" x="470" y="190" as="geometry" />
         </mxCell>
         <mxCell id="rs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f7f6f3;strokeColor=#9ca3af;fontSize=12;fontFamily=Inter;fontColor=#333333;" value="&lt;b&gt;RAGService&lt;/b&gt; &amp;ensp; &lt;i style=&#39;color:#6b7280&#39;&gt;ingestion · retrieval&lt;/i&gt;" vertex="1">
