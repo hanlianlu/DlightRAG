@@ -2,8 +2,14 @@
 """Centralized answer generation engine.
 
 Receives merged retrieval contexts from any backend and generates answers
-with proper citations. Lives at the RAGServiceManager level — shared across
+with proper citations.  Lives at the RAGServiceManager level -- shared across
 all workspaces.
+
+The engine accepts a single ``model_func`` callable that follows the
+messages-first interface: it receives ``messages=`` (OpenAI-format list)
+and optional ``response_format=`` / ``stream=`` keyword arguments.  Images
+are inlined as ``image_url`` content blocks so there is no separate VLM
+path -- the provider decides how to handle multimodal content.
 """
 
 from __future__ import annotations
@@ -26,19 +32,17 @@ logger = logging.getLogger(__name__)
 class AnswerEngine:
     """Mode-agnostic answer generator with citation support.
 
-    Inspects chunks for ``image_data`` to route between VLM (multimodal)
-    and LLM (text-only) paths. Both paths pass ``response_format`` for
-    structured JSON output when the provider supports it.
+    Accepts a single ``model_func`` that speaks the messages-first
+    interface.  Images found in chunks are inlined as ``image_url``
+    content blocks -- no separate VLM routing is needed.
     """
 
     def __init__(
         self,
         *,
-        llm_model_func: Callable[..., Any] | None = None,
-        vision_model_func: Callable[..., Any] | None = None,
+        model_func: Callable[..., Any] | None = None,
     ) -> None:
-        self.llm_model_func = llm_model_func
-        self.vision_model_func = vision_model_func
+        self.model_func = model_func
 
     # ------------------------------------------------------------------
     # Public API
@@ -52,56 +56,33 @@ class AnswerEngine:
         """Non-streaming answer generation.
 
         Returns a :class:`RetrievalResult` with ``answer``, ``contexts``,
-        and ``references`` populated.
+        and ``references`` populated.  Always requests structured JSON
+        output via ``response_format``.
         """
-        has_images = self._has_images(contexts)
-        model_func = self._select_model_func(has_images)
-
-        if model_func is None:
+        if self.model_func is None:
             logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
-        structured = getattr(model_func, "supports_structured", False)
-        system_prompt = get_answer_system_prompt(structured=structured)
+        system_prompt = get_answer_system_prompt(structured=True)
         user_prompt = self._build_user_prompt(query, contexts)
+        messages = self._build_messages(system_prompt, user_prompt, contexts)
 
         logger.info(
-            "[AE] generate: structured=%s has_images=%s chunks=%d query=%s",
-            structured,
-            has_images,
+            "[AE] generate: structured=True chunks=%d query=%s",
             len(contexts.get("chunks", [])),
             query[:60],
         )
 
         log_answer_llm_output(
             "answer_engine.generate",
-            structured=structured,
+            structured=True,
             query=query,
         )
 
-        if has_images:
-            messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-            if structured:
-                logger.info("[AE] generate: VLM structured path")
-                raw = await model_func(
-                    user_prompt,
-                    messages=messages,
-                    response_format=StructuredAnswer,
-                )
-            else:
-                logger.info("[AE] generate: VLM freetext path")
-                raw = await model_func(user_prompt, messages=messages)
-        else:
-            if structured:
-                logger.info("[AE] generate: LLM text structured path")
-                raw = await model_func(
-                    user_prompt,
-                    system_prompt=system_prompt,
-                    response_format=StructuredAnswer,
-                )
-            else:
-                logger.info("[AE] generate: LLM text freetext path")
-                raw = await model_func(user_prompt, system_prompt=system_prompt)
+        raw = await self.model_func(
+            messages=messages,
+            response_format=StructuredAnswer,
+        )
 
         logger.info(
             "[AE] generate: LLM returned type=%s len=%d first200=%s",
@@ -111,7 +92,7 @@ class AnswerEngine:
         )
 
         # Parse response
-        result = self._parse_response(raw, structured, query)
+        result = self._parse_response(raw, structured=True, query=query)
 
         logger.info(
             "[AE] generate: parsed refs=%d answer_len=%d",
@@ -123,7 +104,7 @@ class AnswerEngine:
             "answer_engine.generate",
             result.references,
             query=query,
-            structured=structured,
+            structured=True,
         )
 
         return RetrievalResult(
@@ -139,24 +120,21 @@ class AnswerEngine:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
 
-        Always uses freetext prompt regardless of supports_structured,
-        since streaming cannot enforce response_format. Wraps the token
-        stream with AnswerStream for post-stream reference extraction.
+        Always uses freetext prompt since streaming cannot enforce
+        ``response_format``.  Wraps the token stream with
+        :class:`AnswerStream` for post-stream reference extraction.
         """
-        has_images = self._has_images(contexts)
-        model_func = self._select_model_func(has_images)
-
-        if model_func is None:
+        if self.model_func is None:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        # Always freetext for streaming — structured prompt is wrong here
+        # Always freetext for streaming -- structured prompt is wrong here
         system_prompt = get_answer_system_prompt(structured=False)
         user_prompt = self._build_user_prompt(query, contexts)
+        messages = self._build_messages(system_prompt, user_prompt, contexts)
 
         logger.info(
-            "[AE] generate_stream: has_images=%s chunks=%d query=%s",
-            has_images,
+            "[AE] generate_stream: chunks=%d query=%s",
             len(contexts.get("chunks", [])),
             query[:60],
         )
@@ -167,19 +145,7 @@ class AnswerEngine:
             query=query,
         )
 
-        if has_images:
-            messages = self._build_vlm_messages(system_prompt, user_prompt, contexts["chunks"])
-            token_iterator = await model_func(
-                user_prompt,
-                messages=messages,
-                stream=True,
-            )
-        else:
-            token_iterator = await model_func(
-                user_prompt,
-                system_prompt=system_prompt,
-                stream=True,
-            )
+        token_iterator = await self.model_func(messages=messages, stream=True)
 
         logger.info(
             "[AE] generate_stream: model_func returned type=%s",
@@ -198,26 +164,17 @@ class AnswerEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _has_images(contexts: RetrievalContexts) -> bool:
-        """Check if any chunk contains image data."""
-        return any(chunk.get("image_data") for chunk in contexts.get("chunks", []))
-
-    def _select_model_func(self, has_images: bool) -> Callable[..., Any] | None:
-        """Select appropriate model function based on content type."""
-        if has_images:
-            return self.vision_model_func or self.llm_model_func
-        return self.llm_model_func
-
-    @staticmethod
-    def _build_vlm_messages(
+    def _build_messages(
         system_prompt: str,
         user_prompt: str,
-        chunks: list[dict[str, Any]],
+        contexts: RetrievalContexts,
     ) -> list[dict[str, Any]]:
-        """Build OpenAI-format multimodal messages with inline base64 images."""
+        """Build OpenAI-format messages array with inline images if present."""
         content: list[dict[str, Any]] = []
-        for item in chunks:
-            img_data = item.get("image_data")
+
+        # Add images from chunks
+        for chunk in contexts.get("chunks", []):
+            img_data = chunk.get("image_data")
             if img_data:
                 content.append(
                     {
@@ -225,7 +182,9 @@ class AnswerEngine:
                         "image_url": {"url": f"data:image/png;base64,{img_data}"},
                     }
                 )
+
         content.append({"type": "text", "text": user_prompt})
+
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
