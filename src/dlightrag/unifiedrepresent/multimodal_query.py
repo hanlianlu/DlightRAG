@@ -51,10 +51,16 @@ async def enhance_query_with_images(
         try:
             b64 = base64.b64encode(img_bytes).decode()
             messages = [
-                {"role": "user", "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    {"type": "text", "text": "Describe this image in detail for document retrieval."},
-                ]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                        {
+                            "type": "text",
+                            "text": "Describe this image in detail for document retrieval.",
+                        },
+                    ],
+                },
             ]
             desc = await vision_model_func(messages=messages)
             descriptions.append(str(desc))

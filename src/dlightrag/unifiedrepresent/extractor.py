@@ -131,10 +131,13 @@ class EntityExtractor:
         b64 = base64.b64encode(image_bytes).decode()
         messages = [
             {"role": "system", "content": OCR_SYSTEM_PROMPT},
-            {"role": "user", "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                {"type": "text", "text": OCR_USER_PROMPT},
-            ]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "text", "text": OCR_USER_PROMPT},
+                ],
+            },
         ]
         async with self._vlm_semaphore:
             raw = await self.vision_model_func(messages=messages)

@@ -28,8 +28,10 @@ async def _openai_completion(
 ) -> str | AsyncIterator[str]:
     """OpenAI SDK completion."""
     client = _client or AsyncOpenAI(
-        api_key=api_key, base_url=base_url,
-        timeout=timeout, max_retries=max_retries,
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout,
+        max_retries=max_retries,
     )
     call_kwargs: dict[str, Any] = {"model": model, "messages": messages}
     if response_format is not None:

@@ -113,7 +113,9 @@ class TestLiteLLMCompletion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock(message=MagicMock(content="ok"))]
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response) as mock:
+        with patch(
+            "litellm.acompletion", new_callable=AsyncMock, return_value=mock_response
+        ) as mock:
             await _litellm_completion(
                 messages=[{"role": "user", "content": "Hi"}],
                 model="ollama/qwen3:8b",

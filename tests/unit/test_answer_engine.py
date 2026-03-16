@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from dlightrag.core.answer import AnswerEngine
-from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.retrieval.protocols import RetrievalContexts
 from dlightrag.models.schemas import StructuredAnswer
 
 # ---------------------------------------------------------------------------

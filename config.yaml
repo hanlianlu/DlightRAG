@@ -1,0 +1,147 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+#
+# DlightRAG — default application configuration
+# Secrets (API keys, passwords) go in .env (see .env.example).
+#
+# Priority: env vars > .env > config.yaml > code defaults
+
+# ─────────────────────────────────────────────────────────────────
+# Models
+# ─────────────────────────────────────────────────────────────────
+# provider: "openai" (AsyncOpenAI SDK) or "litellm" (LiteLLM)
+#   openai  — OpenAI, Azure OpenAI, Qwen, MiniMax, Ollama, Xinference, OpenRouter
+#   litellm — Anthropic, Google Gemini, and everything else via litellm prefix
+#
+# IMPORTANT: chat model must support vision (multimodal/VLM).
+# It doubles as the vision model for: image captioning, VLM parser,
+# unified mode (page description, entity extraction, visual reranking),
+# and multimodal query enhancement. A text-only model will fail on these tasks.
+#
+# ingest model (if set) should also support vision — the LLM reranker uses it.
+# If unset, falls back to chat model.
+
+chat:
+  provider: openai
+  model: gpt-4.1-mini
+  # base_url:                         # only needed for proxies, Ollama, or local models
+  temperature: 0.5
+  timeout: 120.0
+
+# Ingest model (optional — falls back to chat if not set).
+# Use a cheaper/faster model for entity extraction and LLM reranking.
+
+# ingest:
+#   provider: openai
+#   model: gpt-4.1-mini
+
+embedding:
+  provider: openai
+  model: text-embedding-3-large
+  dim: 1024
+  max_token_size: 8192
+
+rerank:
+  enabled: true
+  backend: llm                        # llm (uses ingest/chat model), cohere, jina, aliyun, azure_cohere
+  # model:                            # defaults: cohere→rerank-v4.0-pro, jina→jina-reranker-v3
+  score_threshold: 0.5
+
+# Provider examples — uncomment one block to override chat above:
+
+# Ollama (local):
+
+#   chat:
+#     provider: openai
+#     model: qwen3:8b
+#     base_url: http://localhost:11434/v1
+
+# Anthropic (via LiteLLM):
+
+#   chat:
+#     provider: litellm
+#     model: anthropic/claude-sonnet-4-20250514
+
+# Azure OpenAI:
+
+#   chat:
+#     provider: openai
+#     model: gpt-4.1-mini
+#     base_url: https://your-resource.openai.azure.com/openai/v1
+
+# ─────────────────────────────────────────────────────────────────
+# RAG Pipeline
+# ─────────────────────────────────────────────────────────────────
+
+rag_mode: caption                     # caption or unified
+working_dir: ./dlightrag_storage
+parser: mineru                        # mineru, docling, vlm  (Unified mode doesn't use parser — the chat model handles everything)
+parse_method: auto                    # auto, ocr, txt
+# page_render_dpi: 250               # unified mode rendering DPI
+
+# Content processing
+enable_image_processing: true
+enable_table_processing: true
+enable_equation_processing: false
+
+# Chunking
+chunk_size: 512
+chunk_overlap: 52
+context_window: 2
+context_filter_types: text,table
+max_context_tokens: 3000
+
+# ─────────────────────────────────────────────────────────────────
+# Storage Backends
+# ─────────────────────────────────────────────────────────────────
+
+workspace: default
+
+vector_storage: PGVectorStorage       # PGVectorStorage, MilvusVectorDBStorage, NanoVectorDBStorage, etc.
+graph_storage: PGGraphStorage         # PGGraphStorage, Neo4JStorage, NetworkXStorage, etc.
+kv_storage: PGKVStorage               # PGKVStorage, JsonKVStorage, RedisKVStorage, etc.
+doc_status_storage: PGDocStatusStorage # PGDocStatusStorage, JsonDocStatusStorage, etc.
+
+# pgvector HNSW tuning
+pg_vector_index_type: HNSW            # HNSW, IVFFLAT, VCHORDRQ
+pg_hnsw_m: 32
+pg_hnsw_ef_construction: 256
+pg_hnsw_ef_search: 256
+
+# ─────────────────────────────────────────────────────────────────
+# Ingestion Performance
+# ─────────────────────────────────────────────────────────────────
+# For local models (Ollama, Xinference) set all to 1.
+
+max_concurrent_ingestion: 4           # files processed simultaneously
+max_parallel_insert: 2                # parallel document inserts
+max_async: 4                          # concurrent LLM calls
+embedding_func_max_async: 8           # concurrent embedding calls
+embedding_batch_num: 10               # texts per embedding batch
+embedding_request_timeout: 120        # seconds per embedding request
+
+# ─────────────────────────────────────────────────────────────────
+# Query
+# ─────────────────────────────────────────────────────────────────
+
+top_k: 60
+chunk_top_k: 30
+default_mode: mix                     # local, global, hybrid, naive, mix
+rrf_k: 60
+max_conversation_turns: 25
+max_conversation_tokens: 65536
+
+# ─────────────────────────────────────────────────────────────────
+# Knowledge Graph
+# ─────────────────────────────────────────────────────────────────
+
+kg_entity_types:
+  - Product
+  - Component
+  - Technology
+  - Design
+  - Genre
+  - Organization
+  - Standard
+  - Biography
+  - Location
+  - Event
