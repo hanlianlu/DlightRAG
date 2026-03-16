@@ -13,7 +13,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 ## Features
 
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
-- **Knowledge graph + vector + visual retrieval** — KG traversal and vector search via LightRAG, with visual retrieval and metadata filtering on top
+- **Knowledge graph + vector + visual retrieval** — KG traversal and vector search via LightRAG, visual retrieval and metadata filtering via DlightRAG
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images from local filesystem, Azure Blob Storage, or Snowflake
 - **Broad LLM support** — Any OpenAI-compatible LLM endpoint, plus [100+ providers](https://docs.litellm.ai/docs/providers) via LiteLLM
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
