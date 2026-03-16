@@ -86,7 +86,7 @@ class VisualRetriever:
                 logger.warning("No vision_model_func; using original query for text path")
 
             # Text path: standard retrieval with enhanced query
-            text_result = await self._text_retrieve(
+            text_result = await self._retrieve(
                 enhanced_query,
                 mode,
                 top_k,
@@ -112,11 +112,11 @@ class VisualRetriever:
             return text_result
 
         # Text-only: unchanged existing path
-        result = await self._text_retrieve(query, mode, top_k, chunk_top_k)
+        result = await self._retrieve(query, mode, top_k, chunk_top_k)
         result["enhanced_query"] = query
         return result
 
-    async def _text_retrieve(
+    async def _retrieve(
         self,
         query: str,
         mode: str = "mix",
@@ -263,7 +263,26 @@ class VisualRetriever:
                 threshold,
             )
 
-        # Build return dict — all data lives in contexts, no separate "raw"
+        # Build unified candidate set: visual + text-only
+        all_candidates: dict[str, dict] = {}
+        for cid, vd in resolved.items():
+            all_candidates[cid] = vd
+        # Add text-only chunks (not in visual_chunks but have content)
+        for cid in chunk_ids:
+            if cid not in all_candidates and cid in chunk_text:
+                all_candidates[cid] = {}  # No visual data
+
+        # Cap total candidates
+        if len(all_candidates) > chunk_top_k:
+            # Visual-resolved chunks first (already reranked), then text-only
+            ordered_ids: list[str] = list(resolved.keys())
+            for cid in chunk_ids:
+                if cid not in resolved and cid in all_candidates:
+                    ordered_ids.append(cid)
+            ordered_ids = ordered_ids[:chunk_top_k]
+            all_candidates = {cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates}
+
+        # Build return dict
         return {
             "contexts": {
                 "entities": data.get("entities", []),
@@ -277,10 +296,10 @@ class VisualRetriever:
                         ),
                         "content": chunk_text.get(cid, ""),
                         "image_data": vd.get("image_data"),
-                        "page_idx": (vd.get("page_index", 0) or 0) + 1,  # 0-based -> 1-based
+                        "page_idx": (vd.get("page_index", 0) or 0) + 1,
                         "relevance_score": vd.get("relevance_score"),
                     }
-                    for cid, vd in resolved.items()
+                    for cid, vd in all_candidates.items()
                 ],
             },
         }

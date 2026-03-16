@@ -22,7 +22,7 @@ def _make_retriever() -> VisualRetriever:
 
 
 class TestTextRetrieveOutputSchema:
-    """Test that _text_retrieve preserves reference_id, chunk_id, file_path."""
+    """Test that _retrieve preserves reference_id, chunk_id, file_path."""
 
     async def test_chunks_have_required_fields(self):
         retriever = _make_retriever()
@@ -82,7 +82,7 @@ class TestTextRetrieveOutputSchema:
             ]
         )
 
-        result = await retriever._text_retrieve("test query", top_k=60, chunk_top_k=10)
+        result = await retriever._retrieve("test query", top_k=60, chunk_top_k=10)
 
         chunks = result["contexts"]["chunks"]
         assert len(chunks) == 3
@@ -133,7 +133,7 @@ class TestTextRetrieveOutputSchema:
             ]
         )
 
-        result = await retriever._text_retrieve("query", top_k=60, chunk_top_k=10)
+        result = await retriever._retrieve("query", top_k=60, chunk_top_k=10)
         chunk = result["contexts"]["chunks"][0]
         assert chunk["page_idx"] == 1, "page_idx should be 1-based"
 
