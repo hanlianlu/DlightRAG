@@ -12,8 +12,8 @@ async def test_single_image():
     """Single image query produces enhanced text with description."""
     calls = []
 
-    async def mock_vlm(prompt, *, image_data=None):
-        calls.append({"prompt": prompt, "image_data": image_data})
+    async def mock_vlm(*, messages=None, **kwargs):
+        calls.append({"messages": messages})
         return "A bar chart showing Q3 revenue"
 
     result = await enhance_query_with_images(
@@ -24,7 +24,11 @@ async def test_single_image():
     assert "Analyze this chart" in result
     assert "A bar chart showing Q3 revenue" in result
     assert len(calls) == 1
-    assert calls[0]["image_data"] == b"fake_png_bytes"
+    # Image should be embedded as base64 in messages
+    user_msg = calls[0]["messages"][0]
+    assert user_msg["role"] == "user"
+    image_parts = [p for p in user_msg["content"] if p.get("type") == "image_url"]
+    assert len(image_parts) == 1
 
 
 @pytest.mark.asyncio
@@ -32,7 +36,7 @@ async def test_multiple_images():
     """Multiple images each get VLM descriptions, all combined."""
     call_count = 0
 
-    async def mock_vlm(prompt, *, image_data=None):
+    async def mock_vlm(*, messages=None, **kwargs):
         nonlocal call_count
         call_count += 1
         return f"Description for image {call_count}"
@@ -52,7 +56,7 @@ async def test_multiple_images():
 async def test_with_conversation_context():
     """Conversation context is included in enhanced query."""
 
-    async def mock_vlm(prompt, *, image_data=None):
+    async def mock_vlm(*, messages=None, **kwargs):
         return "Chart description"
 
     result = await enhance_query_with_images(
@@ -70,7 +74,7 @@ async def test_with_conversation_context():
 async def test_empty_images_returns_query():
     """Empty images list returns original query unchanged."""
 
-    async def mock_vlm(prompt, *, image_data=None):
+    async def mock_vlm(*, messages=None, **kwargs):
         raise AssertionError("Should not be called")
 
     result = await enhance_query_with_images(
