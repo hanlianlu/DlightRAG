@@ -174,6 +174,73 @@ class TestResolveChunkContextsVisualEnrichment:
         assert "image_data" not in contexts[0]
 
 
+class TestMergeRoundRobin:
+    """_merge_round_robin interleaves Step 1 and Step 2 chunks."""
+
+    def test_round_robin_interleaving(self) -> None:
+        from dlightrag.core.service import RAGService
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        primary = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {"chunk_id": "p1", "content": "primary1"},
+                    {"chunk_id": "p2", "content": "primary2"},
+                    {"chunk_id": "p3", "content": "primary3"},
+                ],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+        supplementary = [
+            {"chunk_id": "s1", "content": "supp1"},
+            {"chunk_id": "s2", "content": "supp2"},
+        ]
+        RAGService._merge_round_robin(primary, supplementary, top_k=10)
+
+        ids = [c["chunk_id"] for c in primary.contexts["chunks"]]
+        assert ids == ["p1", "s1", "p2", "s2", "p3"]
+
+    def test_dedup_step1_wins(self) -> None:
+        """Duplicate chunk_ids in supplementary are excluded."""
+        from dlightrag.core.service import RAGService
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        primary = RetrievalResult(
+            contexts={
+                "chunks": [{"chunk_id": "c1", "content": "original"}],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+        supplementary = [
+            {"chunk_id": "c1", "content": "duplicate"},
+            {"chunk_id": "c2", "content": "new"},
+        ]
+        RAGService._merge_round_robin(primary, supplementary, top_k=10)
+
+        ids = [c["chunk_id"] for c in primary.contexts["chunks"]]
+        assert ids == ["c1", "c2"]
+        # Step 1 version kept
+        assert primary.contexts["chunks"][0]["content"] == "original"
+
+    def test_top_k_cutoff(self) -> None:
+        from dlightrag.core.service import RAGService
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        primary = RetrievalResult(
+            contexts={
+                "chunks": [{"chunk_id": f"p{i}"} for i in range(5)],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+        supplementary = [{"chunk_id": f"s{i}"} for i in range(5)]
+        RAGService._merge_round_robin(primary, supplementary, top_k=4)
+
+        assert len(primary.contexts["chunks"]) == 4
+
+
 class TestSystemPromptUpdated:
     """System prompt must mention text excerpts alongside images."""
 

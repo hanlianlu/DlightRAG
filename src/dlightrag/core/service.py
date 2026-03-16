@@ -1087,7 +1087,11 @@ class RAGService:
                     top_k=top_k or self.config.top_k,
                 )
                 if supplementary:
-                    self._merge_supplementary_chunks(kg_result, supplementary)
+                    self._merge_round_robin(
+                        kg_result,
+                        supplementary,
+                        top_k=chunk_top_k or self.config.chunk_top_k,
+                    )
             except Exception as exc:
                 logger.warning("Multi-path retrieval failed (non-fatal): %s", exc)
 
@@ -1190,16 +1194,32 @@ class RAGService:
         return contexts
 
     @staticmethod
-    def _merge_supplementary_chunks(
+    def _merge_round_robin(
         result: RetrievalResult,
         supplementary: list[dict[str, Any]],
+        top_k: int = 20,
     ) -> None:
-        """Merge supplementary chunks into the result, avoiding duplicates."""
-        existing_ids = {c.get("chunk_id") for c in result.contexts.get("chunks", [])}
-        for ctx in supplementary:
-            if ctx.get("chunk_id") not in existing_ids:
-                result.contexts.setdefault("chunks", []).append(ctx)
-                existing_ids.add(ctx.get("chunk_id"))
+        """Merge Step 2 chunks into Step 1 via round-robin interleaving.
+
+        Deduplicates by chunk_id (Step 1 wins). Interleaves Step 1 and
+        Step 2 chunks alternately, then caps at top_k.
+        """
+        primary_chunks = result.contexts.get("chunks", [])
+
+        # Dedup: exclude supplementary chunks already in primary
+        existing_ids = {c.get("chunk_id") for c in primary_chunks}
+        new_supplementary = [c for c in supplementary if c.get("chunk_id") not in existing_ids]
+
+        # Round-robin interleave
+        merged: list[dict[str, Any]] = []
+        max_len = max(len(primary_chunks), len(new_supplementary))
+        for i in range(max_len):
+            if i < len(primary_chunks):
+                merged.append(primary_chunks[i])
+            if i < len(new_supplementary):
+                merged.append(new_supplementary[i])
+
+        result.contexts["chunks"] = merged[:top_k]
 
     # === FILE MANAGEMENT API ===
 

@@ -10,7 +10,7 @@ import pytest
 from dlightrag.core.retrieval.protocols import RetrievalResult
 
 
-class TestMergeSupplementaryChunks:
+class TestMergeRoundRobin:
     def test_merge_no_duplicates(self) -> None:
         from dlightrag.core.service import RAGService
 
@@ -25,8 +25,10 @@ class TestMergeSupplementaryChunks:
             {"chunk_id": "c2", "content": "b"},
             {"chunk_id": "c3", "content": "c"},
         ]
-        RAGService._merge_supplementary_chunks(result, supplementary)
-        assert len(result.contexts["chunks"]) == 3
+        RAGService._merge_round_robin(result, supplementary)
+        ids = [c["chunk_id"] for c in result.contexts["chunks"]]
+        # Round-robin: c1, c2, c3
+        assert ids == ["c1", "c2", "c3"]
 
     def test_merge_skips_duplicates(self) -> None:
         from dlightrag.core.service import RAGService
@@ -42,11 +44,9 @@ class TestMergeSupplementaryChunks:
             {"chunk_id": "c1", "content": "duplicate"},
             {"chunk_id": "c2", "content": "new"},
         ]
-        RAGService._merge_supplementary_chunks(result, supplementary)
-        assert len(result.contexts["chunks"]) == 2
-        chunk_ids = [c["chunk_id"] for c in result.contexts["chunks"]]
-        assert "c1" in chunk_ids
-        assert "c2" in chunk_ids
+        RAGService._merge_round_robin(result, supplementary)
+        ids = [c["chunk_id"] for c in result.contexts["chunks"]]
+        assert ids == ["c1", "c2"]
 
     def test_merge_empty_supplementary(self) -> None:
         from dlightrag.core.service import RAGService
@@ -58,7 +58,7 @@ class TestMergeSupplementaryChunks:
                 "relationships": [],
             }
         )
-        RAGService._merge_supplementary_chunks(result, [])
+        RAGService._merge_round_robin(result, [])
         assert len(result.contexts["chunks"]) == 1
 
 
