@@ -43,7 +43,6 @@ docs/
 .worktrees/
 .superpowers/
 # Storage
-corprag_storage/
 dlightrag_storage/
 *.db
 *.log
