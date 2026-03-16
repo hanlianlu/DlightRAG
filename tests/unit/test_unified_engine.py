@@ -21,13 +21,15 @@ from dlightrag.unifiedrepresent.renderer import RenderResult
 def _make_config() -> MagicMock:
     config = MagicMock()
     config.page_render_dpi = 250
-    config.embedding_model = "test-model"
-    config.embedding_dim = 1024
-    config.effective_embedding_provider = "openai"
-    config._get_url = MagicMock(return_value="http://localhost:8000/v1")
-    config._get_provider_api_key = MagicMock(return_value="test-key")
+    # Nested embedding config
+    config.embedding.model = "test-model"
+    config.embedding.dim = 1024
+    config.embedding.base_url = "http://localhost:8000/v1"
+    config.embedding.api_key = "test-key"
+    config.embedding_func_max_async = 8
     config.kg_entity_types = ["Person", "Organization"]
-    config.enable_rerank = False
+    # Nested rerank config
+    config.rerank.enabled = False
     config.default_mode = "mix"
     config.top_k = 60
     config.chunk_top_k = 10

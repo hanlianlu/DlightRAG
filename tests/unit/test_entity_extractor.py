@@ -75,10 +75,12 @@ class TestDescribePage:
 
         await ext._describe_page(MagicMock(), page_index=0)
 
-        prompt = vision_fn.call_args[0][0]
-        kwargs = vision_fn.call_args[1]
-        assert "structured JSON" in prompt
-        assert "system_prompt" in kwargs
+        messages = vision_fn.call_args[1]["messages"]
+        # System message should contain OCR system prompt
+        assert any(m["role"] == "system" for m in messages)
+        # User message should contain OCR user prompt with image
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert isinstance(user_msg["content"], list)  # multimodal content
 
     async def test_empty_response_returns_fallback(self) -> None:
         vision_fn = AsyncMock(return_value="")
@@ -112,9 +114,12 @@ class TestDescribePage:
 
         await ext._describe_page(mock_image, page_index=0)
 
-        _, kwargs = vision_fn.call_args
-        assert "image_data" in kwargs
-        assert isinstance(kwargs["image_data"], bytes)
+        messages = vision_fn.call_args[1]["messages"]
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        # Image should be embedded as base64 in the multimodal content
+        image_parts = [p for p in user_msg["content"] if p.get("type") == "image_url"]
+        assert len(image_parts) == 1
+        assert image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 # ---------------------------------------------------------------------------

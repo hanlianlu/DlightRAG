@@ -48,7 +48,7 @@ def test_highlight_phrases_defaults():
 class TestHighlightExtractor:
     @pytest.fixture()
     def mock_llm(self):
-        async def llm_func(prompt: str, **kwargs) -> str:
+        async def llm_func(*, messages, **kwargs) -> str:
             return '{"phrases": ["market growth"], "confidence": 0.9}'
 
         return llm_func
@@ -75,7 +75,7 @@ class TestHighlightExtractor:
 
     @pytest.mark.asyncio
     async def test_invalid_phrases_filtered(self):
-        async def bad_llm(prompt: str, **kwargs) -> str:
+        async def bad_llm(*, messages, **kwargs) -> str:
             return '{"phrases": ["hallucinated phrase", "actual text"], "confidence": 0.8}'
 
         ext = HighlightExtractor(llm_func=bad_llm, cache_size=10)

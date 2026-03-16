@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dlightrag.api.server import app
-from dlightrag.config import DlightragConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
 
 
 @pytest.fixture()
@@ -23,7 +23,11 @@ def tmp_working_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def client(tmp_working_dir: Path) -> TestClient:
-    config = DlightragConfig(openai_api_key="test", working_dir=str(tmp_working_dir))
+    config = DlightragConfig(  # type: ignore[call-arg]
+        working_dir=str(tmp_working_dir),
+        chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+        embedding=EmbeddingConfig(api_key="test"),
+    )
     with (
         patch("dlightrag.api.server.get_config", return_value=config),
         patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
@@ -63,9 +67,10 @@ class TestFileEndpointAzureRedirect:
     )
     def test_azure_302_redirect(self, mock_sas, tmp_working_dir: Path) -> None:
         """Azure blobs get 302 redirect to SAS URL — no data proxied."""
-        config = DlightragConfig(
-            openai_api_key="test",
+        config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_working_dir),
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+            embedding=EmbeddingConfig(api_key="test"),
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
         with (

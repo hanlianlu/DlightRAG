@@ -157,7 +157,7 @@ class TestPGWorkspaceDiscovery:
         """list_workspaces() returns workspaces found in dlightrag_file_hashes."""
         import asyncpg
 
-        from dlightrag.config import DlightragConfig, set_config
+        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
 
         conn = await asyncpg.connect(**_PG_CONN_KWARGS)
@@ -191,7 +191,8 @@ class TestPGWorkspaceDiscovery:
 
             cfg = DlightragConfig(  # type: ignore[call-arg]
                 kv_storage="PGKVStorage",
-                openai_api_key="test",
+                chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+                embedding=EmbeddingConfig(api_key="test"),
             )
             set_config(cfg)
 
@@ -213,7 +214,7 @@ class TestPGWorkspaceDiscovery:
         """Empty hash table falls back to config.workspace."""
         import asyncpg
 
-        from dlightrag.config import DlightragConfig, set_config
+        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
 
         conn = await asyncpg.connect(**_PG_CONN_KWARGS)
@@ -232,7 +233,8 @@ class TestPGWorkspaceDiscovery:
             cfg = DlightragConfig(  # type: ignore[call-arg]
                 kv_storage="PGKVStorage",
                 workspace="test-fallback-ws",
-                openai_api_key="test",
+                chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+                embedding=EmbeddingConfig(api_key="test"),
             )
             set_config(cfg)
 

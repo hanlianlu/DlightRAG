@@ -70,13 +70,20 @@ class TestRetrievalPlan:
 
 class TestRrfKConfig:
     def test_rrf_k_default(self) -> None:
-        from dlightrag.config import DlightragConfig
+        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
 
-        config = DlightragConfig(openai_api_key="test-key")  # type: ignore[call-arg]
+        config = DlightragConfig(  # type: ignore[call-arg]
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
+            embedding=EmbeddingConfig(api_key="test-key"),
+        )
         assert config.rrf_k == 60
 
     def test_rrf_k_custom(self) -> None:
-        from dlightrag.config import DlightragConfig
+        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
 
-        config = DlightragConfig(openai_api_key="test-key", rrf_k=100)  # type: ignore[call-arg]
+        config = DlightragConfig(  # type: ignore[call-arg]
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
+            embedding=EmbeddingConfig(api_key="test-key"),
+            rrf_k=100,
+        )
         assert config.rrf_k == 100
