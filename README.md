@@ -8,14 +8,13 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ## Features
 
-- **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
-- **Knowledge graph + vector retrieval** — Fusional search based on LightRAG's foundation
-- **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images, etc.
-- **Reranking** — Generic LLM-based list/point-wise; Specialized rerankers support from Cohere, Jina, Aliyun, Azure Cohere; Support any additional backend via custom endpoint
+- **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
+- **Knowledge graph + vector retrieval** — KG traversal and vector search via LightRAG, with metadata-based supplementary retrieval and round-robin merge
+- **Dual-channel answer generation** — LLM receives both document text excerpts and page images (unified mode) for grounded, visually-aware answers
+- **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images from local filesystem, Azure Blob Storage, or Snowflake
+- **Reranking** — LLM-based pointwise scoring or API rerankers (Cohere, Jina, Aliyun, Azure Cohere, custom endpoint)
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with round-robin merging
-- **Conversational query rewriting** — Web UI rewrites follow-up messages into standalone queries via LLM
-- **Citation and highlighter** — Answer / Retrieved contexts with source, page, citation, highlighting attribution.
-- **Flexible sourcing** — Local filesystem, Azure Blob Storage, Snowflake
+- **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
 - **Four interfaces** — Web UI, REST API, MCP server, and Python SDK
 
 
@@ -28,7 +27,9 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 <sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a></sub>
 
 
-## Quick Start with Four Interfaces
+## Quick Start
+
+> **Defaults:** `gpt-4.1` (chat) + `text-embedding-3-large` (embedding) via OpenAI. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
 
 ### Web UI
 ##### Click the image to watch demo (YouTube)
@@ -49,8 +50,6 @@ uv add dlightrag        # or: pip install dlightrag
 cp .env.example .env    # set API keys in .env
 dlightrag-api
 ```
-
-> **Defaults:** `gpt-4.1` (chat) + `text-embedding-3-large` (embedding) via OpenAI. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
 
 ### Docker (Self-Hosted)
 
@@ -133,11 +132,23 @@ asyncio.run(main())
 > Requires PostgreSQL with pgvector + AGE, or JSON fallback for development (see [Configuration](#configuration)).
 
 
-## API Reference
+## API & Internals
 
-Request and response structures for `ingest`, `retrieve`, and `answer` across all interfaces. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/ingest` | Ingest from local, Azure Blob, or Snowflake |
+| `POST` | `/retrieve` | Contexts + sources (no LLM answer) |
+| `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
+| `GET` | `/files` | List ingested documents |
+| `DELETE` | `/files` | Delete documents |
+| `GET` | `/api/files/{path}` | Serve/download a file (local: stream, Azure: 302 SAS redirect) |
+| `GET` | `/workspaces` | List available workspaces |
+| `GET` | `/health` | Health check with storage status |
 
-For the internal retrieval and answer generation pipeline (unified vs caption mode, visual resolution, reranking, Step 1+2 merge), see [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md).
+All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` in `.env` to enable bearer auth.
+
+- **Request/response schema** — [`docs/response-schema.md`](docs/response-schema.md) for ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
+- **Retrieval & answer pipeline** — [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md) for unified vs caption mode, visual resolution, reranking, Step 1+2 merge.
 
 
 ## Configuration
@@ -179,7 +190,7 @@ All caption mode parsers use Docling's HybridChunker for structure-aware chunkin
 | Embedding | embedding model | embedding model (multimodal) |
 | Rerank (llm backend) | ingest/chat model | chat model (VLM, pointwise scoring) |
 | Rerank (API backend) | cohere/jina/aliyun API | cohere/jina/aliyun API |
-| Answer generation | chat model | chat model (VLM, sees page images) |
+| Answer generation | chat model | chat model (VLM, sees text excerpts + page images) |
 
 > **Important:** The chat model must support vision (multimodal/VLM). It doubles as the vision model for image captioning, VLM parser, unified mode, and multimodal queries. A text-only chat model will fail on these tasks.
 
@@ -272,22 +283,6 @@ Set in `config.yaml` under the `rerank:` block:
 | `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
 
 Point any backend at a local reranker (Xinference, etc.) via `rerank.base_url` + `rerank.model` in config.yaml.
-
-
-## REST API
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/ingest` | Ingest from local, Azure Blob, or Snowflake |
-| `POST` | `/retrieve` | Contexts + sources (no LLM answer) |
-| `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
-| `GET` | `/files` | List ingested documents |
-| `DELETE` | `/files` | Delete documents |
-| `GET` | `/api/files/{path}` | Serve/download a file (local: stream, Azure: 302 SAS redirect) |
-| `GET` | `/workspaces` | List available workspaces |
-| `GET` | `/health` | Health check with storage status |
-
-All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` in `.env` to enable bearer auth.
 
 
 ## Development
