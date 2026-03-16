@@ -1169,6 +1169,24 @@ class RAGService:
             if cdata.get("page_idx") is not None:
                 ctx["page_idx"] = cdata["page_idx"] + 1  # 0-based to 1-based
             contexts.append(ctx)
+
+        # Unified mode: enrich with visual data (image_data, page_index)
+        if self.config.rag_mode == "unified":
+            visual_store = getattr(self.unified, "visual_chunks", None) if self.unified else None
+            if visual_store:
+                try:
+                    resolved_cids = [ctx["chunk_id"] for ctx in contexts]
+                    visual_data = await visual_store.get_by_ids(resolved_cids)
+                    for ctx, vd in zip(contexts, visual_data, strict=False):
+                        if not vd or not isinstance(vd, dict):
+                            continue
+                        if vd.get("image_data"):
+                            ctx["image_data"] = vd["image_data"]
+                        if vd.get("page_index") is not None:
+                            ctx["page_idx"] = vd["page_index"] + 1
+                except Exception as exc:
+                    logger.warning("Visual enrichment failed (non-fatal): %s", exc)
+
         return contexts
 
     @staticmethod
