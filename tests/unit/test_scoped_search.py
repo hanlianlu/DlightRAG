@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -24,9 +24,7 @@ class TestScopedVectorSearch:
     async def test_few_chunks_returns_all_without_search(self) -> None:
         """When chunk_ids <= top_k, return all without vector search."""
         chunks_vdb = MagicMock()
-        result = await scoped_vector_search(
-            "query", ["c1", "c2", "c3"], chunks_vdb, top_k=10
-        )
+        result = await scoped_vector_search("query", ["c1", "c2", "c3"], chunks_vdb, top_k=10)
         assert set(result) == {"c1", "c2", "c3"}
 
     @pytest.mark.asyncio
@@ -37,20 +35,21 @@ class TestScopedVectorSearch:
 
         # Mock embedding func
         import numpy as np
+
         query_vec = np.array([1.0, 0.0, 0.0])
         chunks_vdb.embedding_func = MagicMock()
         chunks_vdb.embedding_func.func = AsyncMock(return_value=[query_vec])
 
         # Mock get_vectors_by_ids: c1 is most similar, c2 is least
-        chunks_vdb.get_vectors_by_ids = AsyncMock(return_value={
-            "c1": np.array([0.9, 0.1, 0.0]),
-            "c2": np.array([0.0, 0.0, 1.0]),
-            "c3": np.array([0.5, 0.5, 0.0]),
-        })
-
-        result = await scoped_vector_search(
-            "query", ["c1", "c2", "c3"], chunks_vdb, top_k=2
+        chunks_vdb.get_vectors_by_ids = AsyncMock(
+            return_value={
+                "c1": np.array([0.9, 0.1, 0.0]),
+                "c2": np.array([0.0, 0.0, 1.0]),
+                "c3": np.array([0.5, 0.5, 0.0]),
+            }
         )
+
+        result = await scoped_vector_search("query", ["c1", "c2", "c3"], chunks_vdb, top_k=2)
         assert len(result) == 2
         assert result[0] == "c1"  # highest cosine similarity
 
@@ -61,16 +60,15 @@ class TestScopedVectorSearch:
         chunks_vdb.__class__.__name__ = "UnknownVDB"
 
         import numpy as np
-        chunks_vdb.embedding_func = MagicMock()
-        chunks_vdb.embedding_func.func = AsyncMock(
-            return_value=[np.array([1.0, 0.0])]
-        )
-        # Only c1 has a vector; c2 is stale
-        chunks_vdb.get_vectors_by_ids = AsyncMock(return_value={
-            "c1": np.array([1.0, 0.0]),
-        })
 
-        result = await scoped_vector_search(
-            "query", ["c1", "c2"], chunks_vdb, top_k=1
+        chunks_vdb.embedding_func = MagicMock()
+        chunks_vdb.embedding_func.func = AsyncMock(return_value=[np.array([1.0, 0.0])])
+        # Only c1 has a vector; c2 is stale
+        chunks_vdb.get_vectors_by_ids = AsyncMock(
+            return_value={
+                "c1": np.array([1.0, 0.0]),
+            }
         )
+
+        result = await scoped_vector_search("query", ["c1", "c2"], chunks_vdb, top_k=1)
         assert result == ["c1"]

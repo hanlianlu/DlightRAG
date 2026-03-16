@@ -280,7 +280,9 @@ class VisualRetriever:
                 if cid not in resolved and cid in all_candidates:
                     ordered_ids.append(cid)
             ordered_ids = ordered_ids[:chunk_top_k]
-            all_candidates = {cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates}
+            all_candidates = {
+                cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates
+            }
 
         # Build return dict
         return {
