@@ -110,10 +110,11 @@ from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
 from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
+    get_chat_model_func,
+    get_chat_model_func_for_lightrag,
     get_embedding_func,
-    get_llm_model_func,
+    get_ingest_model_func_for_lightrag,
     get_rerank_func,
-    get_vision_model_func,
 )
 from dlightrag.unifiedrepresent.lifecycle import unified_delete_files, unified_ingest  # noqa: E402
 
@@ -362,23 +363,18 @@ class RAGService:
         )
 
         # Get model functions
-        llm_func = get_llm_model_func(config)
-        vision_func = get_vision_model_func(config) if self.enable_vlm else None
+        chat_func_lr = get_chat_model_func_for_lightrag(config)
+        chat_func = get_chat_model_func(config)
         embedding_func = get_embedding_func(config)
         rerank_func = get_rerank_func(config)
 
         # Create VLM OCR parser if configured
         vlm_parser = None
         if config.parser == "vlm":
-            if vision_func is None:
-                raise ValueError(
-                    "parser='vlm' requires a vision model. "
-                    "Set vision_model and vision_provider in config."
-                )
             from dlightrag.captionrag.vlm_parser import VlmOcrParser
 
             vlm_parser = VlmOcrParser(
-                vision_model_func=vision_func,
+                vision_model_func=chat_func,
                 dpi=config.page_render_dpi,
             )
 
@@ -409,12 +405,12 @@ class RAGService:
         if config.parser in ("docling", "vlm"):
             lightrag_kwargs["chunking_func"] = docling_hybrid_chunking_func
 
-        # ONE RAGAnything with unified llm_func (chat model)
+        # ONE RAGAnything with unified chat model (LightRAG-adapted)
         logger.info("Creating RAGAnything instance...")
         self.rag = RAGAnything(
             None,
-            llm_func,
-            vision_func,
+            chat_func_lr,
+            chat_func_lr,
             embedding_func,
             rag_config,
             lightrag_kwargs,
@@ -472,8 +468,8 @@ class RAGService:
         logger.info("Initializing unified representational RAG mode...")
 
         # Get model functions
-        llm_func = get_llm_model_func(config)
-        vision_func = get_vision_model_func(config) if self.enable_vlm else None
+        chat_func_lr = get_chat_model_func_for_lightrag(config)
+        chat_func = get_chat_model_func(config)
 
         # Use httpx_text_embed instead of LightRAG's openai_embed for text
         # embedding.  openai_embed uses encoding_format:"base64" and the openai
@@ -489,34 +485,33 @@ class RAGService:
             httpx_text_embed,
         )
 
-        emb_provider = config.effective_embedding_provider
-        emb_base_url = config._get_url(f"{emb_provider}_base_url") or ""
-        emb_api_key = config._get_provider_api_key(emb_provider) or ""
+        emb_base_url = config.embedding.base_url or ""
+        emb_api_key = config.embedding.api_key or ""
 
-        if emb_provider == "voyage":
+        if "voyage" in config.embedding.model.lower():
             embed_provider = VoyageProvider()
         else:
             embed_provider = OpenAICompatProvider()
 
         embedding_func = EmbeddingFunc(
-            embedding_dim=config.embedding_dim,
+            embedding_dim=config.embedding.dim,
             max_token_size=8192,
             func=partial(
                 httpx_text_embed,
-                model=config.embedding_model,
+                model=config.embedding.model,
                 base_url=emb_base_url,
                 api_key=emb_api_key,
                 provider=embed_provider,
             ),
-            model_name=config.embedding_model,
+            model_name=config.embedding.model,
         )
 
         # VisualEmbedder for image embedding (reuses persistent httpx client)
         visual_embedder = VisualEmbedder(
-            model=config.embedding_model,
+            model=config.embedding.model,
             base_url=emb_base_url,
             api_key=emb_api_key,
-            dim=config.embedding_dim,
+            dim=config.embedding.dim,
             batch_size=config.embedding_func_max_async,
             provider=embed_provider,
         )
@@ -525,7 +520,7 @@ class RAGService:
         # Do NOT pass rerank_model_func — we handle reranking ourselves
         lightrag = LightRAG(
             working_dir=str(config.working_dir_path),
-            llm_model_func=llm_func,
+            llm_model_func=chat_func_lr,
             embedding_func=embedding_func,
             workspace=config.workspace,
             default_llm_timeout=config.llm_request_timeout,
@@ -582,7 +577,7 @@ class RAGService:
             lightrag=lightrag,
             visual_chunks=visual_chunks,
             config=config,
-            vision_model_func=vision_func,
+            vision_model_func=chat_func,
             visual_embedder=visual_embedder,
             path_resolver=self._path_resolver,
         )
@@ -942,7 +937,7 @@ class RAGService:
                        ON CONFLICT (workspace)
                        DO UPDATE SET embedding_model = $2, updated_at = NOW()""",
                     self.config.workspace,
-                    self.config.embedding_model,
+                    self.config.embedding.model,
                 )
             finally:
                 await conn.close()
