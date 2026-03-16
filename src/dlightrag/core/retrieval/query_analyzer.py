@@ -148,6 +148,7 @@ class QueryAnalyzer:
 
     async def _llm_extract(self, query: str) -> RetrievalPlan | None:
         """Use LLM to extract structured filters from natural language."""
+        assert self._llm_func is not None  # guarded by caller
         try:
             schema_section = _build_schema_section(self._schema)
             custom_keys_hint = _build_custom_keys_hint(self._schema)

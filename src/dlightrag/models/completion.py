@@ -17,7 +17,7 @@ async def _openai_completion(
     *,
     messages: list[dict[str, Any]],
     model: str,
-    api_key: str,
+    api_key: str | None = None,
     base_url: str | None = None,
     stream: bool = False,
     response_format: Any = None,
@@ -57,7 +57,7 @@ async def _litellm_completion(
     *,
     messages: list[dict[str, Any]],
     model: str,
-    api_key: str,
+    api_key: str | None = None,
     base_url: str | None = None,
     stream: bool = False,
     response_format: Any = None,
@@ -83,7 +83,7 @@ async def _litellm_completion(
         response = await litellm.acompletion(**call_kwargs, stream=True)
 
         async def _stream() -> AsyncIterator[str]:
-            async for chunk in response:
+            async for chunk in response:  # type: ignore[union-attr]
                 delta = chunk.choices[0].delta
                 if delta.content is not None:
                     yield delta.content
@@ -91,7 +91,7 @@ async def _litellm_completion(
         return _stream()
     else:
         response = await litellm.acompletion(**call_kwargs)
-        return response.choices[0].message.content or ""
+        return response.choices[0].message.content or ""  # type: ignore[union-attr]
 
 
 __all__ = ["_openai_completion", "_litellm_completion"]

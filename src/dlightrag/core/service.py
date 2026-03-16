@@ -380,7 +380,7 @@ class RAGService:
         # LightRAG configuration
         lightrag_kwargs: dict[str, Any] = {
             "workspace": config.workspace,
-            "default_llm_timeout": config.chat.timeout,
+            "default_llm_timeout": int(config.chat.timeout),
             "default_embedding_timeout": config.embedding_request_timeout,
             "chunk_token_size": config.chunk_size,
             "chunk_overlap_token_size": config.chunk_overlap,
@@ -522,7 +522,7 @@ class RAGService:
             llm_model_func=chat_func_lr,
             embedding_func=embedding_func,
             workspace=config.workspace,
-            default_llm_timeout=config.chat.timeout,
+            default_llm_timeout=int(config.chat.timeout),
             default_embedding_timeout=config.embedding_request_timeout,
             chunk_token_size=config.chunk_size,
             chunk_overlap_token_size=config.chunk_overlap,

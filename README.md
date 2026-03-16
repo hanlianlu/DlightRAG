@@ -30,7 +30,7 @@ Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) 
 
 ## Quick Start with Four Interfaces
 
-### Web UI 
+### Web UI
 ##### Click the image to watch demo (YouTube)
 <a href="https://www.youtube.com/watch?v=F1RXUW4Xfuc">
   <img src="docs/DlightRAG_GUI_img.png" alt="Watch Demo on YouTube" width="1440" />
@@ -46,21 +46,23 @@ Without Docker:
 
 ```bash
 uv add dlightrag        # or: pip install dlightrag
-cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
-dlightrag-api --env-file .env
+cp .env.example .env    # set API keys in .env
+dlightrag-api
 ```
+
+> **Defaults:** `gpt-4.1` (chat) + `text-embedding-3-large` (embedding) via OpenAI. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
 
 ### Docker (Self-Hosted)
 
 ```bash
 git clone https://github.com/hanlianlu/dlightrag.git && cd dlightrag
-cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+cp .env.example .env    # set API keys in .env; edit config.yaml for models/providers
 docker compose up
 ```
 
 Includes PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`).
 
-> **Local models (Ollama, Xinference, etc.):** use `host.docker.internal` instead of `localhost` in base URL settings.
+> **Local models (Ollama, Xinference, etc.):** use `host.docker.internal` instead of `localhost` in `base_url` settings.
 
 ```bash
 curl http://localhost:8100/health
@@ -82,8 +84,8 @@ curl -X POST http://localhost:8100/answer \
 
 ```bash
 uv tool install dlightrag   # or: pip install dlightrag
-cp .env.example .env        # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
-dlightrag-mcp --env-file .env
+cp .env.example .env        # set API keys in .env
+dlightrag-mcp
 ```
 
 ```json
@@ -103,7 +105,7 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 
 ```bash
 uv add dlightrag        # or: pip install dlightrag
-cp .env.example .env    # edit .env — at minimum set DLIGHTRAG_OPENAI_API_KEY
+cp .env.example .env    # set API keys in .env
 ```
 
 ```python
@@ -138,9 +140,13 @@ Request and response structures for `ingest`, `retrieve`, and `answer` across al
 
 ## Configuration
 
-All settings via `DLIGHTRAG_` env vars, `.env` file, or constructor args. See [`.env.example`](.env.example) for the full reference.
+Configuration uses a hybrid system — structured app settings in [`config.yaml`](config.yaml), secrets and deployment in `.env`.
 
-**Priority:** constructor args > env vars > `.env` file > defaults
+**Priority:** constructor args > env vars > `.env` > `config.yaml` > defaults
+
+See [`config.yaml`](config.yaml) for all application settings and [`.env.example`](.env.example) for secrets/deployment reference.
+
+> **Env var naming:** all variables use the `DLIGHTRAG_` prefix. Single underscore (`_`) is part of the field name (e.g. `DLIGHTRAG_POSTGRES_HOST` → `postgres_host`). Double underscore (`__`) means nested object (e.g. `DLIGHTRAG_CHAT__MODEL` → `chat.model`). See `.env.example` for details.
 
 ### RAG Mode
 
@@ -151,13 +157,13 @@ The first decision — determines your ingestion pipeline, model requirements, a
 | `caption` (default) | Document parsing → VLM captioning → text embedding → KG | Text-heavy documents, structured elements |
 | `unified` | Page rendering → multimodal embedding → VLM entity extraction → KG | Visually rich documents (charts, diagrams, complex layouts) |
 
-**Caption mode parsers** (`DLIGHTRAG_PARSER`):
+**Caption mode parsers** (`parser` in config.yaml):
 
 | Parser | Description |
 |--------|-------------|
 | `mineru` (default) | MinerU PDF parser — fast, good for text-heavy documents |
 | `docling` | Docling parser — alternative structure-aware parser |
-| `vlm` | VLM-based OCR — renders pages and uses vision model to extract structured content; no external parser dependency, requires `VISION_MODEL` |
+| `vlm` | VLM-based OCR — renders pages and uses chat model (must be VLM) to extract structured content; no external parser dependency |
 
 All caption mode parsers use Docling's HybridChunker for structure-aware chunking.
 
@@ -165,52 +171,76 @@ All caption mode parsers use Docling's HybridChunker for structure-aware chunkin
 
 | Stage | Caption | Unified |
 |-------|---------|---------|
-| Image captioning | `VISION_MODEL` ¹ | `VISION_MODEL` |
-| Table / equation captioning | `CHAT_MODEL` | — |
-| Entity extraction | `CHAT_MODEL` | `CHAT_MODEL` |
-| Embedding | `EMBEDDING_MODEL` | `EMBEDDING_MODEL` (multimodal) |
-| Rerank | `RERANK_*` via LightRAG | `VISION_MODEL` ² or `RERANK_*` API |
-| Answer generation | `CHAT_MODEL` via AnswerEngine | `VISION_MODEL` via AnswerEngine (sees page images) |
+| Image captioning | chat model (VLM) | chat model (VLM) |
+| Table / equation captioning | chat model | — |
+| Entity extraction | chat model | chat model (VLM) |
+| Embedding | embedding model | embedding model (multimodal) |
+| Rerank (llm backend) | ingest/chat model | chat model (VLM, pointwise scoring) |
+| Rerank (API backend) | cohere/jina/aliyun API | cohere/jina/aliyun API |
+| Answer generation | chat model | chat model (VLM, sees page images) |
 
-¹ Falls back to `CHAT_MODEL` if vision model not configured.
-² When `RERANK_BACKEND=llm` (pointwise VLM scoring).
+> **Important:** The chat model must support vision (multimodal/VLM). It doubles as the vision model for image captioning, VLM parser, unified mode, and multimodal queries. A text-only chat model will fail on these tasks.
 
-For unified mode, set `DLIGHTRAG_RAG_MODE=unified` and point embedding/vision at multimodal models:
+For unified mode, set `rag_mode: unified` in `config.yaml` and use multimodal models:
 
-```bash
-DLIGHTRAG_RAG_MODE=unified
-DLIGHTRAG_EMBEDDING_MODEL=Qwen3-VL-Embedding    # must be multimodal
-DLIGHTRAG_EMBEDDING_DIM=4096
-DLIGHTRAG_VISION_MODEL=qwen3-vl-32b
+```yaml
+# config.yaml
+rag_mode: unified
+
+chat:
+  model: qwen3-vl-32b          # must support vision
+
+embedding:
+  model: Qwen3-VL-Embedding    # must be multimodal
+  dim: 4096
 ```
 
 > **Limitations:** Snowflake is text-only (no visual embedding). A workspace is locked to one mode after first ingestion. Page images ~3-7 MB/page at 250 DPI.
 
 ### Providers
 
-| Variable | Default | Description |
-|---|---|---|
-| `DLIGHTRAG_LLM_PROVIDER` | `openai` | `openai`, `azure_openai`, `anthropic`, `google_gemini`, `qwen`, `minimax`, `xinference`, `openrouter`, `ollama`, `voyage` |
-| `DLIGHTRAG_EMBEDDING_PROVIDER` | (follows `llm_provider`) | Override embedding provider |
-| `DLIGHTRAG_VISION_PROVIDER` | (follows `llm_provider`) | Override vision provider |
-| `DLIGHTRAG_EMBEDDING_MODEL` | `text-embedding-3-large` | Embedding model |
+Two-track dispatch — choose per model block in `config.yaml`:
 
-Each provider uses its own API key. For **Ollama**, use `openai` provider with `DLIGHTRAG_OPENAI_BASE_URL` pointing to Ollama.
+| Provider | SDK | Use for |
+|----------|-----|---------|
+| `openai` (default) | AsyncOpenAI | OpenAI, Azure OpenAI, Qwen/DashScope, MiniMax, Ollama, Xinference, OpenRouter, any OpenAI-compatible endpoint |
+| `litellm` | LiteLLM | Anthropic, Google Gemini, and everything else via [LiteLLM model prefixes](https://docs.litellm.ai/docs/providers) |
+
+```yaml
+# config.yaml — OpenAI-compatible (Ollama example)
+chat:
+  provider: openai
+  model: qwen3:8b
+  base_url: http://localhost:11434/v1
+
+# config.yaml — LiteLLM (Anthropic example)
+chat:
+  provider: litellm
+  model: anthropic/claude-sonnet-4-20250514
+```
+
+API keys go in `.env`:
+```bash
+DLIGHTRAG_CHAT__API_KEY=sk-...
+DLIGHTRAG_EMBEDDING__API_KEY=sk-...
+```
 
 ### Storage Backends
 
-| Variable | Default | Options |
-|---|---|---|
-| `DLIGHTRAG_VECTOR_STORAGE` | `PGVectorStorage` | PGVectorStorage, MilvusVectorDBStorage, NanoVectorDBStorage, ... |
-| `DLIGHTRAG_GRAPH_STORAGE` | `PGGraphStorage` | PGGraphStorage, Neo4JStorage, NetworkXStorage, ... |
-| `DLIGHTRAG_KV_STORAGE` | `PGKVStorage` | PGKVStorage, JsonKVStorage, RedisKVStorage, ... |
-| `DLIGHTRAG_DOC_STATUS_STORAGE` | `PGDocStatusStorage` | PGDocStatusStorage, JsonDocStatusStorage, ... |
+Set in `config.yaml`:
+
+| Setting | Default | Options |
+|---------|---------|---------|
+| `vector_storage` | `PGVectorStorage` | PGVectorStorage, MilvusVectorDBStorage, NanoVectorDBStorage, ... |
+| `graph_storage` | `PGGraphStorage` | PGGraphStorage, Neo4JStorage, NetworkXStorage, ... |
+| `kv_storage` | `PGKVStorage` | PGKVStorage, JsonKVStorage, RedisKVStorage, ... |
+| `doc_status_storage` | `PGDocStatusStorage` | PGDocStatusStorage, JsonDocStatusStorage, ... |
 
 > **Note:** When using PostgreSQL backends, LightRAG maps its internal namespace names to different table names (e.g. `text_chunks` → `LIGHTRAG_DOC_CHUNKS`, `full_docs` → `LIGHTRAG_DOC_FULL`). DlightRAG's unified mode adds a `visual_chunks` table via its own KV storage.
 
 ### Workspaces
 
-Each workspace has its own knowledge graph, vector store, and document index. `DLIGHTRAG_WORKSPACE` (default: `default`) is automatically bridged to backend-specific env vars — no manual setup needed.
+Each workspace has its own knowledge graph, vector store, and document index. `workspace` in config.yaml (default: `default`) is automatically bridged to backend-specific env vars — no manual setup needed.
 
 | Backend type | Isolation mechanism |
 |---|---|
@@ -222,22 +252,24 @@ Each workspace has its own knowledge graph, vector store, and document index. `D
 
 ### Reranking
 
-| Variable | Default | Description |
-|---|---|---|
-| `DLIGHTRAG_RERANK_BACKEND` | `llm` | `llm`, `cohere`, `jina`, `aliyun`, `azure_cohere` |
-| `DLIGHTRAG_RERANK_MODEL` | (backend default) | Model name sent to the endpoint |
-| `DLIGHTRAG_RERANK_BASE_URL` | (provider default) | Custom endpoint URL for any compatible service |
-| `DLIGHTRAG_RERANK_API_KEY` | — | API key (falls back to provider-specific keys) |
+Set in `config.yaml` under the `rerank:` block:
 
-| Backend | Default model | Key |
-|---|---|---|
-| `llm` | (follows `CHAT_MODEL`) | (follows `LLM_PROVIDER`) |
-| `cohere` | `rerank-v4.0-pro` | `DLIGHTRAG_COHERE_API_KEY` |
-| `jina` | `jina-reranker-v3` | `DLIGHTRAG_JINA_API_KEY` |
-| `aliyun` | `qwen3-rerank` | `DLIGHTRAG_ALIYUN_RERANK_API_KEY` |
-| `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_AZURE_COHERE_API_KEY` |
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `rerank.backend` | `llm` | `llm`, `cohere`, `jina`, `aliyun`, `azure_cohere` |
+| `rerank.model` | (backend default) | Model name sent to the endpoint |
+| `rerank.base_url` | (provider default) | Custom endpoint URL for any compatible service |
+| `rerank.api_key` | — | Set in `.env` as `DLIGHTRAG_RERANK__API_KEY` |
 
-Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BASE_URL` + `RERANK_MODEL`.
+| Backend | Default model | API key |
+|---------|---------------|---------|
+| `llm` | (uses ingest/chat model) | (reuses chat/ingest key) |
+| `cohere` | `rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
+| `jina` | `jina-reranker-v3` | `DLIGHTRAG_RERANK__API_KEY` |
+| `aliyun` | `qwen3-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
+| `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
+
+Point any backend at a local reranker (Xinference, etc.) via `rerank.base_url` + `rerank.model` in config.yaml.
 
 
 ## REST API
@@ -253,7 +285,7 @@ Point any backend at a local reranker (Xinference, LiteLLM, etc.) via `RERANK_BA
 | `GET` | `/workspaces` | List available workspaces |
 | `GET` | `/health` | Health check with storage status |
 
-All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` to enable bearer auth.
+All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` in `.env` to enable bearer auth.
 
 
 ## Development
