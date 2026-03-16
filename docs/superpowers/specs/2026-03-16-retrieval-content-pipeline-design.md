@@ -108,7 +108,7 @@ for cid in chunk_ids:
 # - Chunks without image_data → VLM scores the text (existing fallback)
 ```
 
-The existing `_llm_visual_rerank()` already handles text-only fallback (line 393): `text_content = prompt if img_data else f"{prompt}\n\nDocument text:\n{text}"`. No reranker changes needed.
+The existing `_llm_visual_rerank()` already handles text-only fallback: when `img_data` is None, it sends the chunk text content in the prompt instead of an image. No reranker changes needed.
 
 Final chunks list includes both visual and text-only chunks:
 
@@ -177,13 +177,17 @@ async def scoped_vector_search(
     """
 ```
 
+**Cross-modal embedding assumption:** In unified mode, `chunks_vdb` stores visual embeddings (page images embedded via `VisualEmbedder`). The scoped search embeds the text query and compares against these visual vectors. This relies on the multimodal embedding model (e.g., `jina-clip-v2`) producing aligned text/image embeddings in the same vector space. This is the same assumption LightRAG's internal vector search already makes — `_get_vector_context()` in `operate.py` queries `chunks_vdb` with a text query against visual embeddings. If the embedding model lacks cross-modal alignment, scoped search quality degrades but does not break (it falls back to effectively random ranking within the scoped set, which is still better than returning all chunks unranked).
+
 **PostgreSQL implementation** (primary — we already have asyncpg pool):
+
+The vector column name must be read from the PGVectorStorage instance's configuration at runtime rather than hardcoded. LightRAG's PG implementation uses SQL templates with a vector column — the implementation should query the table schema or reference the known attribute from the storage instance.
 
 ```sql
 SELECT id
 FROM {table_name}
 WHERE workspace = $1 AND id = ANY($2)
-ORDER BY content_vector <=> $3::vector
+ORDER BY {vector_column} <=> $3::vector
 LIMIT $4
 ```
 
@@ -214,12 +218,17 @@ results = client.query_points(
 
 **Fallback (unknown backend):**
 
+Uses `get_vectors_by_ids()` (available on all three LightRAG VDB backends: PGVectorStorage, MilvusVectorDBStorage, QdrantVectorDBStorage) and manual cosine similarity:
+
 ```python
 vectors = await chunks_vdb.get_vectors_by_ids(chunk_ids)
-query_vec = await chunks_vdb.embedding_func([query])
-scores = {cid: cosine_similarity(query_vec, vec) for cid, vec in vectors.items()}
+# Embed query via the VDB's embedding function (EmbeddingFunc wrapper)
+query_vec = await chunks_vdb.embedding_func.func([query])
+scores = {cid: cosine_similarity(query_vec[0], vec) for cid, vec in vectors.items()}
 return sorted(scores, key=scores.get, reverse=True)[:top_k]
 ```
+
+Note: `chunks_vdb.embedding_func` is a LightRAG `EmbeddingFunc` wrapper — call `.func()` to access the underlying async callable.
 
 ### Change 4: Remove Redundant VectorPath from Orchestrator
 
@@ -229,7 +238,7 @@ Remove the independent VectorPath dispatch (lines 64-72). Step 1's LightRAG alre
 
 The orchestrator simplifies to: run MetadataPath only → return ranked chunk_ids.
 
-`vector_path.py` can be retained as an internal utility or deleted.
+Delete `vector_path.py` and remove its import from `orchestrator.py`.
 
 ### Change 5: Resolve Visual Chunks in `_resolve_chunk_contexts()`
 
@@ -246,8 +255,15 @@ async def _resolve_chunk_contexts(self, chunk_ids: list[str]) -> list[dict[str, 
         visual_store = getattr(self.unified, "visual_chunks", None)
         if visual_store:
             visual_data = await visual_store.get_by_ids(chunk_ids)
-            for ctx, vd in zip(contexts, visual_data):
+            # Build lookup dict to avoid zip misalignment
+            # (contexts may have fewer entries than chunk_ids if some had no text_chunks data)
+            visual_lookup: dict[str, dict] = {}
+            for cid, vd in zip(chunk_ids, visual_data):
                 if vd and isinstance(vd, dict):
+                    visual_lookup[cid] = vd
+            for ctx in contexts:
+                vd = visual_lookup.get(ctx["chunk_id"])
+                if vd:
                     ctx["image_data"] = vd.get("image_data")
                     if vd.get("page_index") is not None:
                         ctx["page_idx"] = vd["page_index"] + 1
@@ -362,10 +378,10 @@ Update instructions to reference both text excerpts and images as sources.
 | `core/retrieval/metadata_path.py` | Add query/chunks_vdb params; call scoped search | ~15 |
 | `core/retrieval/scoped_search.py` | **New file**: native filtered vector search per backend | ~120 |
 | `core/retrieval/orchestrator.py` | Remove VectorPath; pass query/vdb to MetadataPath | ~15 |
-| `core/service.py` | `_resolve_chunk_contexts` visual enrichment; RRF merge | ~40 |
+| `core/service.py` | `_resolve_chunk_contexts` visual enrichment; replace `_merge_supplementary_chunks` with `_merge_with_rrf`; update `aretrieve()` call site | ~40 |
 | `core/answer.py` | `_format_chunk_excerpts`; update `_build_user_prompt` | ~30 |
 | `unifiedrepresent/prompts.py` | Update system prompt | ~10 |
-| `core/retrieval/vector_path.py` | Delete or mark deprecated | ~0 |
+| `core/retrieval/vector_path.py` | Delete | ~0 |
 | Tests | Update existing + new tests for scoped search, enrichment, prompt | ~150 |
 
 ## Dedup Strategy
@@ -380,10 +396,19 @@ Deduplication by `chunk_id` occurs at three levels:
 
 KG entities/relationships are globally scoped by LightRAG's design. A query about "img 9551 png" may return entities from unrelated documents matching keywords "img" or "png". This is a LightRAG framework limitation. With chunk text content now included in the prompt, the LLM has correct grounding data to override misleading KG entities. A proper fix would require LightRAG-level changes (entity provenance filtering) and is deferred.
 
+## Caption Mode Impact
+
+Caption mode also benefits from Change 7 (chunk text in prompt). Caption mode's `RetrievalEngine.aretrieve()` already populates `chunk.content` via LightRAG's `aquery_data()`. Since both modes flow through the same `AnswerEngine._build_user_prompt()`, caption mode answers will now include document text excerpts — a significant improvement since caption mode has no `image_data` to inline. Chunk ID formats differ between modes (caption: LightRAG's variable-length text chunks; unified: one chunk per page computed from `doc_id:page:N`) but dedup by `chunk_id` works identically for both.
+
 ## Testing Strategy
 
-1. **Unit tests for scoped_search.py**: Mock each backend, verify filtered search is called correctly
-2. **Unit tests for _format_chunk_excerpts**: Verify prompt includes chunk content
+1. **Unit tests for scoped_search.py**: Mock each backend, verify filtered search is called correctly. Edge cases:
+   - Empty `chunk_ids` list → return empty
+   - `chunk_ids` fewer than `top_k` → return all without search
+   - Backend returns fewer results than `top_k`
+   - Stale chunk_ids (deleted from VDB) → gracefully skip
+   - Large chunk_ids list (10,000+) → verify query batching if needed
+2. **Unit tests for _format_chunk_excerpts**: Verify prompt includes chunk content; deduplicate by `(file_path, page_idx)` to avoid repeating same page content
 3. **Update test_answer_engine.py**: Verify prompt contains "Document Excerpts" section
-4. **Update test for _retrieve rename**: Verify non-visual chunks are included
+4. **Update test for _retrieve rename**: Verify non-visual chunks are included in output
 5. **Integration test**: End-to-end query with known document, verify answer uses correct content
