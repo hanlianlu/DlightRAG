@@ -633,10 +633,11 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Panel auto-close on chat area click (skip citation badge clicks)
-    var chatArea = document.getElementById('chat-area');
-    if (chatArea) {
-        chatArea.addEventListener('click', function(e) {
+    // Panel auto-close on click outside panel (skip citation badge clicks)
+    var app = document.querySelector('.app');
+    if (app) {
+        app.addEventListener('click', function(e) {
+            if (e.target.closest('.panel')) return;
             if (e.target.closest('.citation-badge')) return;
             closePanel();
         });
