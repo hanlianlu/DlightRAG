@@ -70,6 +70,9 @@ class TestResolveChunkContexts:
         svc = RAGService.__new__(RAGService)
         svc._lightrag = MagicMock()
         svc.rag = None
+        svc.config = MagicMock()
+        svc.config.rag_mode = "caption"
+        svc.unified = None
         svc._lightrag.text_chunks = AsyncMock()
         svc._lightrag.text_chunks.get_by_ids = AsyncMock(
             return_value=[
@@ -93,6 +96,9 @@ class TestResolveChunkContexts:
         svc = RAGService.__new__(RAGService)
         svc._lightrag = None
         svc.rag = None
+        svc.config = MagicMock()
+        svc.config.rag_mode = "caption"
+        svc.unified = None
 
         contexts = await svc._resolve_chunk_contexts(["c1"])
         assert contexts == []

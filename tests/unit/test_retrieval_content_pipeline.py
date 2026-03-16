@@ -113,6 +113,67 @@ class TestOrchestratorSimplified:
 # ---------------------------------------------------------------------------
 
 
+class TestResolveChunkContextsVisualEnrichment:
+    """_resolve_chunk_contexts() must enrich with visual data in unified mode."""
+
+    @pytest.mark.asyncio
+    async def test_unified_mode_adds_image_data(self) -> None:
+        from dlightrag.core.service import RAGService
+
+        svc = RAGService.__new__(RAGService)
+        svc.rag = None
+
+        # Mock config
+        mock_config = MagicMock()
+        mock_config.rag_mode = "unified"
+        svc.config = mock_config
+
+        # Mock LightRAG text_chunks
+        mock_lr = MagicMock()
+        mock_lr.text_chunks.get_by_ids = AsyncMock(return_value=[
+            {"content": "Revenue grew", "file_path": "/report.pdf", "full_doc_id": "doc1"},
+        ])
+        svc._lightrag = mock_lr
+
+        # Mock unified engine with visual_chunks
+        mock_unified = MagicMock()
+        mock_visual_store = AsyncMock()
+        mock_visual_store.get_by_ids = AsyncMock(return_value=[
+            {"image_data": "base64img", "page_index": 2},
+        ])
+        mock_unified.visual_chunks = mock_visual_store
+        svc.unified = mock_unified
+
+        contexts = await svc._resolve_chunk_contexts(["chunk-1"])
+
+        assert len(contexts) == 1
+        assert contexts[0]["image_data"] == "base64img"
+        assert contexts[0]["page_idx"] == 3  # 0-based → 1-based
+
+    @pytest.mark.asyncio
+    async def test_caption_mode_no_visual_enrichment(self) -> None:
+        from dlightrag.core.service import RAGService
+
+        svc = RAGService.__new__(RAGService)
+        svc.rag = None
+
+        mock_config = MagicMock()
+        mock_config.rag_mode = "caption"
+        svc.config = mock_config
+
+        mock_lr = MagicMock()
+        mock_lr.text_chunks.get_by_ids = AsyncMock(return_value=[
+            {"content": "text", "file_path": "/doc.pdf", "full_doc_id": "doc1"},
+        ])
+        svc._lightrag = mock_lr
+        svc.unified = None
+
+        contexts = await svc._resolve_chunk_contexts(["chunk-1"])
+
+        assert len(contexts) == 1
+        assert "image_data" not in contexts[0]
+
+
 class TestSystemPromptUpdated:
     """System prompt must mention text excerpts alongside images."""
 
