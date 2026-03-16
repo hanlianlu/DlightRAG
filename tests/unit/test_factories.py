@@ -1,9 +1,5 @@
 """Tests for model factory functions."""
 
-from unittest.mock import AsyncMock, patch
-
-import pytest
-
 from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
 
 

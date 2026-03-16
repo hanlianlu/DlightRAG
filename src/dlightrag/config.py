@@ -1,8 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Self-contained configuration for dlightrag.
 
-Uses pydantic-settings with DLIGHTRAG_ env prefix. Works standalone (MCP/API server)
-and as library (imported by other projects which construct DlightragConfig explicitly).
+Configuration sources (highest → lowest precedence):
+    1. Constructor arguments (when used as library)
+    2. Environment variables (DLIGHTRAG_ prefix)
+    3. .env file (secrets + deployment)
+    4. config.yaml (structured app settings)
+    5. Default values
 
 LightRAG reads backend-specific env vars directly — model_post_init bridges
 DLIGHTRAG_* → backend env vars so both modes work seamlessly.
@@ -17,6 +21,21 @@ from typing import Any, Literal
 from dotenv import find_dotenv
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_YAML_FILE = "config.yaml"
+
+
+def _find_yaml_config() -> Path | None:
+    """Locate config.yaml: cwd first, then next to .env, then None."""
+    cwd = Path(_YAML_FILE)
+    if cwd.is_file():
+        return cwd
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        candidate = Path(dotenv_path).parent / _YAML_FILE
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 class ModelConfig(BaseModel):
@@ -54,11 +73,14 @@ class RerankConfig(BaseModel):
 class DlightragConfig(BaseSettings):
     """DlightRAG configuration.
 
-    Configuration sources (in order of precedence):
+    Configuration sources (highest → lowest precedence):
         1. Constructor arguments (when used as library)
         2. Environment variables (DLIGHTRAG_ prefix)
-        3. .env file (development)
-        4. Default values
+        3. .env file (secrets + deployment)
+        4. config.yaml (structured app settings)
+        5. Default values
+
+    Supports both pure-.env and hybrid config.yaml + .env setups.
     """
 
     model_config = SettingsConfigDict(
@@ -69,6 +91,20 @@ class DlightragConfig(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls, settings_cls, init_settings, env_settings, dotenv_settings, file_secret_settings
+    ):
+        """Priority: init > env > .env > config.yaml > defaults."""
+        from pydantic_settings import YamlConfigSettingsSource
+
+        yaml_path = _find_yaml_config()
+        sources = [init_settings, env_settings, dotenv_settings]
+        if yaml_path is not None:
+            sources.append(YamlConfigSettingsSource(settings_cls, yaml_file=yaml_path))
+        sources.append(file_secret_settings)
+        return tuple(sources)
 
     # ===== PostgreSQL (Default Storage Backend) =====
     postgres_host: str = Field(default="localhost")
@@ -270,12 +306,25 @@ class DlightragConfig(BaseSettings):
         if not isinstance(values, dict):
             return values
         legacy = {
-            "openai_api_key", "azure_openai_api_key", "anthropic_api_key",
-            "qwen_api_key", "minimax_api_key", "ollama_api_key",
-            "xinference_api_key", "openrouter_api_key", "voyage_api_key",
-            "llm_provider", "chat_model", "vision_model", "vision_provider",
-            "embedding_provider", "embedding_model", "embedding_dim",
-            "ingestion_model", "llm_temperature", "llm_request_timeout",
+            "openai_api_key",
+            "azure_openai_api_key",
+            "anthropic_api_key",
+            "qwen_api_key",
+            "minimax_api_key",
+            "ollama_api_key",
+            "xinference_api_key",
+            "openrouter_api_key",
+            "voyage_api_key",
+            "llm_provider",
+            "chat_model",
+            "vision_model",
+            "vision_provider",
+            "embedding_provider",
+            "embedding_model",
+            "embedding_dim",
+            "ingestion_model",
+            "llm_temperature",
+            "llm_request_timeout",
         }
         found = [k for k in values if k in legacy]
         if found:

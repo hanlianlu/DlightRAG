@@ -7,7 +7,6 @@ visual reranking.
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import logging
@@ -386,10 +385,12 @@ class VisualRetriever:
                 try:
                     content: list[dict] = []
                     if img_data:
-                        content.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_data}"},
-                        })
+                        content.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{img_data}"},
+                            }
+                        )
                     text_content = prompt if img_data else f"{prompt}\n\nDocument text:\n{text}"
                     content.append({"type": "text", "text": text_content})
                     messages = [{"role": "user", "content": content}]
@@ -528,4 +529,3 @@ class VisualRetriever:
                 exc_info=True,
             )
             return dict(list(resolved.items())[:top_k])
-

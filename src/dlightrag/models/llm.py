@@ -25,8 +25,11 @@ logger = logging.getLogger(__name__)
 
 # LightRAG-internal kwargs that must not leak to API calls
 _LIGHTRAG_STRIP_KWARGS = {
-    "keyword_extraction", "token_tracker",
-    "use_azure", "azure_deployment", "api_version",
+    "keyword_extraction",
+    "token_tracker",
+    "use_azure",
+    "azure_deployment",
+    "api_version",
 }
 
 
@@ -50,9 +53,7 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
 
         # Check LightRAG cache
         if hashing_kv is not None:
-            args_hash = compute_args_hash(
-                "", prompt, system_prompt or "", str(clean_kwargs)
-            )
+            args_hash = compute_args_hash("", prompt, system_prompt or "", str(clean_kwargs))
             cached = await hashing_kv.get_by_id(args_hash)
             if cached:
                 return cached["return"]
@@ -61,9 +62,7 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
 
         # Store in LightRAG cache
         if hashing_kv is not None and isinstance(result, str):
-            await hashing_kv.upsert(
-                {args_hash: {"return": result, "model": "", "prompt": prompt}}
-            )
+            await hashing_kv.upsert({args_hash: {"return": result, "model": "", "prompt": prompt}})
 
         return result
 
@@ -80,16 +79,20 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
     api_key = cfg.api_key or fallback_api_key
     if cfg.provider == "openai":
         client = AsyncOpenAI(
-            api_key=api_key, base_url=cfg.base_url,
-            timeout=cfg.timeout, max_retries=cfg.max_retries,
+            api_key=api_key,
+            base_url=cfg.base_url,
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
         )
         extra: dict[str, Any] = {**cfg.model_kwargs}
         if cfg.temperature is not None:
             extra["temperature"] = cfg.temperature
         return partial(
             _openai_completion,
-            model=cfg.model, api_key=api_key,
-            base_url=cfg.base_url, _client=client,
+            model=cfg.model,
+            api_key=api_key,
+            base_url=cfg.base_url,
+            _client=client,
             **extra,
         )
     else:  # litellm
@@ -98,8 +101,10 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
             extra["temperature"] = cfg.temperature
         return partial(
             _litellm_completion,
-            model=cfg.model, api_key=api_key,
-            base_url=cfg.base_url, timeout=cfg.timeout,
+            model=cfg.model,
+            api_key=api_key,
+            base_url=cfg.base_url,
+            timeout=cfg.timeout,
             **extra,
         )
 
@@ -138,18 +143,23 @@ def get_embedding_func(config: DlightragConfig) -> Any:
     cfg = config.embedding
     if cfg.provider == "openai":
         client = AsyncOpenAI(
-            api_key=cfg.api_key, base_url=cfg.base_url,
-            timeout=cfg.timeout, max_retries=cfg.max_retries,
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            timeout=cfg.timeout,
+            max_retries=cfg.max_retries,
         )
         func = partial(
             _openai_embedding,
-            model=cfg.model, api_key=cfg.api_key,
-            base_url=cfg.base_url, _client=client,
+            model=cfg.model,
+            api_key=cfg.api_key,
+            base_url=cfg.base_url,
+            _client=client,
         )
     else:
         func = partial(
             _litellm_embedding,
-            model=cfg.model, api_key=cfg.api_key,
+            model=cfg.model,
+            api_key=cfg.api_key,
             base_url=cfg.base_url,
         )
     return EmbeddingFunc(

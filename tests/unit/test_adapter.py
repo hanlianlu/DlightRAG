@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dlightrag.models.llm import _adapt_for_lightrag, _LIGHTRAG_STRIP_KWARGS
+from dlightrag.models.llm import _adapt_for_lightrag
 
 
 class TestAdaptForLightrag:
