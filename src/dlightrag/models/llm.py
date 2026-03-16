@@ -1,717 +1,193 @@
-# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""LLM, embedding, vision, and rerank model factories for RAGAnything integration.
+"""Model factory functions.
 
-Self-contained — all models are constructed from DlightragConfig without
-external dependencies on backend.llm or backend.agents.
+Builds messages-first callables from config with 2-track dispatch:
+- provider=openai  -> AsyncOpenAI SDK
+- provider=litellm -> LiteLLM
 
-Supports multiple LLM providers:
-- Category A (OpenAI-compatible): openai, azure_openai, qwen, minimax, ollama, xinference, openrouter
-- Category B (Dedicated class): anthropic, google_gemini
+Provides _adapt_for_lightrag() to bridge to LightRAG's (prompt, system_prompt) signature.
 """
-# pyright: reportCallIssue=false, reportArgumentType=false, reportAttributeAccessIssue=false
 
 from __future__ import annotations
 
-import base64
 import logging
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Callable
 from functools import partial
 from typing import Any
 
-from lightrag.utils import EmbeddingFunc
+from openai import AsyncOpenAI
 
-from dlightrag.config import DlightragConfig
-from dlightrag.utils.text import extract_json
+from dlightrag.config import DlightragConfig, ModelConfig
+from dlightrag.models.completion import _litellm_completion, _openai_completion
+from dlightrag.models.embedding import _litellm_embedding, _openai_embedding
 
 logger = logging.getLogger(__name__)
 
-LLMFunc = Callable[..., Any]
-
-# OpenAI-compatible providers that use openai_complete_if_cache with custom base_url
-_OPENAI_COMPATIBLE_PROVIDERS = {
-    "openai",
-    "azure_openai",
-    "qwen",
-    "minimax",
-    "ollama",
-    "xinference",
-    "openrouter",
+# LightRAG-internal kwargs that must not leak to API calls
+_LIGHTRAG_STRIP_KWARGS = {
+    "keyword_extraction", "token_tracker",
+    "use_azure", "azure_deployment", "api_version",
 }
 
 
-def _ensure_bytes(data: bytes | bytearray | str) -> bytes | None:
-    """Normalize image data to bytes from various input formats."""
-    if isinstance(data, bytes | bytearray):
-        return bytes(data)
-    if isinstance(data, str):
-        s = data.strip()
-        if s.startswith("data:image"):
-            try:
-                _, b64data = s.split(",", 1)
-                return base64.b64decode(b64data)
-            except Exception:
-                logger.warning("Failed to decode image data URI")
-                return None
-        try:
-            return base64.b64decode(s, validate=True)
-        except Exception:
-            logger.debug("String image_data is not valid base64; ignoring")
-            return None
-    return None
+def _adapt_for_lightrag(completion_func: Callable) -> Callable:
+    """Wrap messages-first callable for LightRAG compatibility.
 
-
-# ═══════════════════════════════════════════════════════════════════
-# Chat Model Factory
-# ═══════════════════════════════════════════════════════════════════
-
-
-def get_llm_model_func(
-    config: DlightragConfig | None = None,
-    model_name: str | None = None,
-    provider: str | None = None,
-) -> LLMFunc:
-    """Build a LightRAG-compatible LLM function using native _if_cache functions.
-
-    Returns a partial() with model/api_key/base_url bound. Works both when
-    called directly (RAGAnything modal processing) and when called through
-    LightRAG's pipeline (which injects hashing_kv).
+    - Converts (prompt, system_prompt=...) to messages array
+    - Strips LightRAG-internal kwargs that would cause API errors
+    - Handles ``hashing_kv`` for LightRAG's response caching
     """
-    from dlightrag.config import get_config
+    from lightrag.utils import compute_args_hash
 
-    cfg = config or get_config()
-    prov = provider or cfg.llm_provider
-    model = model_name or cfg.chat_model_name
-    api_key = cfg._get_provider_api_key(prov)
-    base_url = cfg._get_url(f"{prov}_base_url")
+    async def wrapper(prompt: str, *, system_prompt: str | None = None, **kwargs: Any) -> Any:
+        hashing_kv = kwargs.pop("hashing_kv", None)
+        clean_kwargs = {k: v for k, v in kwargs.items() if k not in _LIGHTRAG_STRIP_KWARGS}
 
-    if prov in ("openai", "qwen", "minimax", "openrouter", "xinference"):
-        from lightrag.llm.openai import openai_complete_if_cache
-
-        # model must be positional (1st arg) so that callers passing
-        # prompt as 1st positional arg (e.g. RAGAnything modal processors)
-        # don't collide with a keyword `model`.
-        base = partial(openai_complete_if_cache, model, api_key=api_key, base_url=base_url)
-
-        async def llm_func(prompt, **kwargs):
-            return await base(prompt, **kwargs)
-
-        llm_func.supports_structured = True
-        return llm_func
-
-    if prov == "azure_openai":
-        from lightrag.llm.azure_openai import azure_openai_complete_if_cache
-
-        base = partial(
-            azure_openai_complete_if_cache,
-            model,
-            api_key=api_key,
-            base_url=base_url,
-        )
-
-        async def llm_func_azure(prompt, **kwargs):
-            return await base(prompt, **kwargs)
-
-        llm_func_azure.supports_structured = True
-        return llm_func_azure
-
-    if prov == "anthropic":
-        from lightrag.llm.anthropic import anthropic_complete_if_cache
-
-        return partial(anthropic_complete_if_cache, model, api_key=api_key)
-
-    if prov == "google_gemini":
-        from lightrag.llm.gemini import gemini_complete_if_cache
-
-        return partial(gemini_complete_if_cache, model, api_key=api_key)
-
-    if prov == "ollama":
-        from lightrag.llm.ollama import _ollama_model_if_cache
-
-        host = (cfg.ollama_base_url or "http://localhost:11434").removesuffix("/v1")
-
-        # Ollama's native client doesn't accept LightRAG-internal kwargs
-        # (keyword_extraction, token_tracker, etc.) that openai_complete_if_cache
-        # handles. Strip them before forwarding to avoid TypeError.
-        _OLLAMA_STRIP_KWARGS = {
-            "keyword_extraction",
-            "token_tracker",
-            "use_azure",
-            "azure_deployment",
-            "api_version",
-        }
-
-        async def _ollama_wrapper(prompt, **kwargs):
-            for k in _OLLAMA_STRIP_KWARGS:
-                kwargs.pop(k, None)
-            return await _ollama_model_if_cache(model, prompt, host=host, **kwargs)
-
-        _ollama_wrapper.supports_structured = False
-        return _ollama_wrapper
-
-    raise ValueError(f"Unsupported LLM provider: {prov}")
-
-
-def get_ingestion_llm_model_func(config: DlightragConfig | None = None) -> LLMFunc:
-    """Dedicated ingestion LLM — uses ingestion_model_name.
-
-    NOTE: Currently unused. LightRAG uses a single llm_model_func for both
-    ingestion and query; switching at runtime would cause race conditions.
-    Reserved for future dual-LLM support.
-    """
-    from dlightrag.config import get_config
-
-    cfg = config or get_config()
-    return get_llm_model_func(cfg, model_name=cfg.ingestion_model_name)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Vision Model
-# ═══════════════════════════════════════════════════════════════════
-
-
-def get_vision_model_func(
-    config: DlightragConfig | None = None,
-) -> Callable[..., Awaitable[str | AsyncIterator[str]]] | None:
-    """Vision-language model func for RAGAnything / LightRAG.
-
-    Dispatches to provider-specific builders based on effective_vision_provider.
-    """
-    from dlightrag.config import get_config
-
-    cfg = config or get_config()
-    vision_provider = cfg.effective_vision_provider
-    vision_deployment = cfg.vision_model_name  # falls back to chat_model
-
-    extra = cfg.vision_model_kwargs
-
-    if vision_provider in _OPENAI_COMPATIBLE_PROVIDERS:
-        return _build_openai_vision_func(cfg, vision_deployment, vision_provider, extra)
-    if vision_provider == "anthropic":
-        return _build_anthropic_vision_func(cfg, vision_deployment, extra)
-    if vision_provider == "google_gemini":
-        return _build_google_vision_func(cfg, vision_deployment, extra)
-
-    logger.warning("Vision not supported for provider: %s", vision_provider)
-    return None
-
-
-def _build_openai_vision_func(
-    cfg: DlightragConfig,
-    vision_deployment: str,
-    provider: str,
-    model_kwargs: dict[str, Any] | None = None,
-) -> Callable[..., Awaitable[str | AsyncIterator[str]]]:
-    """OpenAI-compatible vision func (covers all providers in _OPENAI_COMPATIBLE_PROVIDERS)."""
-    from openai import AsyncOpenAI
-
-    api_key = cfg._get_provider_api_key(provider)
-    base_url = cfg._get_url(f"{provider}_base_url")
-
-    client = AsyncOpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        timeout=cfg.llm_request_timeout,
-        max_retries=cfg.llm_max_retries,
-    )
-    vision_temp = cfg.vision_temperature
-    extra = model_kwargs or {}
-
-    async def vision_model_func(
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        history_messages: list | None = None,
-        image_data: bytes | bytearray | str | None = None,
-        messages: list | None = None,
-        stream: bool = False,
-        response_format: type | None = None,
-        **_kwargs: object,
-    ) -> str | AsyncIterator[str]:
-        """Vision model function compatible with RAG-Anything."""
-        # Pattern 1: Pre-formatted messages from RAG-Anything
-        if messages is not None:
-            t0 = time.perf_counter()
-            try:
-                kwargs: dict[str, Any] = {
-                    "model": vision_deployment,
-                    "messages": messages,
-                    "temperature": vision_temp,
-                    "extra_body": extra,
-                }
-                if response_format is not None:
-                    kwargs["response_format"] = {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": response_format.__name__,
-                            "schema": response_format.model_json_schema(),
-                        },
-                    }
-                if stream:
-                    kwargs["stream"] = True
-                    resp = await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
-
-                    async def _stream_tokens() -> AsyncIterator[str]:
-                        async for chunk in resp:
-                            content = chunk.choices[0].delta.content if chunk.choices else None
-                            if content:
-                                yield content
-
-                    return _stream_tokens()
-
-                resp = await client.chat.completions.create(**kwargs)  # type: ignore[arg-type]
-                result = resp.choices[0].message.content or "" if resp.choices else ""
-                elapsed = time.perf_counter() - t0
-                preview = result[:120].replace("\n", " ")
-                logger.info("Vision %.1fs %dc [%s]", elapsed, len(result), preview)
-                return result
-            except Exception:
-                logger.exception("Vision failed %.1fs", time.perf_counter() - t0)
-                return ""
-
-        # Pattern 2: Individual image_data parameter
-        if image_data is None:
-            logger.warning("vision_model_func called without image_data or messages")
-            return ""
-
-        raw_bytes = _ensure_bytes(image_data)
-        if raw_bytes is None:
-            return ""
-
-        b64 = base64.b64encode(raw_bytes).decode("utf-8")
-        image_url = f"data:image/png;base64,{b64}"
-
-        msg_list: list[dict[str, Any]] = []
+        messages: list[dict[str, Any]] = []
         if system_prompt:
-            msg_list.append({"role": "system", "content": system_prompt})
-        if history_messages:
-            msg_list.extend(history_messages)
-        msg_list.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
-            }
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        # Check LightRAG cache
+        if hashing_kv is not None:
+            args_hash = compute_args_hash(
+                "", prompt, system_prompt or "", str(clean_kwargs)
+            )
+            cached = await hashing_kv.get_by_id(args_hash)
+            if cached:
+                return cached["return"]
+
+        result = await completion_func(messages=messages, **clean_kwargs)
+
+        # Store in LightRAG cache
+        if hashing_kv is not None and isinstance(result, str):
+            await hashing_kv.upsert(
+                {args_hash: {"return": result, "model": "", "prompt": prompt}}
+            )
+
+        return result
+
+    return wrapper
+
+
+# ------------------------------------------------------------------ #
+# Factory helpers                                                      #
+# ------------------------------------------------------------------ #
+
+
+def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None) -> partial:
+    """Build a messages-first completion callable from config."""
+    api_key = cfg.api_key or fallback_api_key
+    if cfg.provider == "openai":
+        client = AsyncOpenAI(
+            api_key=api_key, base_url=cfg.base_url,
+            timeout=cfg.timeout, max_retries=cfg.max_retries,
+        )
+        extra: dict[str, Any] = {**cfg.model_kwargs}
+        if cfg.temperature is not None:
+            extra["temperature"] = cfg.temperature
+        return partial(
+            _openai_completion,
+            model=cfg.model, api_key=api_key,
+            base_url=cfg.base_url, _client=client,
+            **extra,
+        )
+    else:  # litellm
+        extra = {**cfg.model_kwargs, "num_retries": cfg.max_retries}
+        if cfg.temperature is not None:
+            extra["temperature"] = cfg.temperature
+        return partial(
+            _litellm_completion,
+            model=cfg.model, api_key=api_key,
+            base_url=cfg.base_url, timeout=cfg.timeout,
+            **extra,
         )
 
-        t0 = time.perf_counter()
-        try:
-            resp = await client.chat.completions.create(
-                model=vision_deployment,
-                messages=msg_list,  # type: ignore[arg-type]
-                temperature=vision_temp,
-                extra_body=extra,
-            )
-            result = resp.choices[0].message.content or "" if resp.choices else ""
-            elapsed = time.perf_counter() - t0
-            preview = result[:120].replace("\n", " ")
-            logger.info("Vision %.1fs %dc [%s]", elapsed, len(result), preview)
-            return result
-        except Exception:
-            logger.exception("Vision failed %.1fs", time.perf_counter() - t0)
-            return ""
 
-    vision_model_func.supports_structured = provider not in ("ollama", "xinference")
-    return vision_model_func
+# ------------------------------------------------------------------ #
+# Public factory functions                                             #
+# ------------------------------------------------------------------ #
 
 
-def _convert_openai_to_anthropic_messages(
-    openai_messages: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], str]:
-    """Convert OpenAI-format messages to Anthropic format.
-
-    Returns (messages, system_prompt) since Anthropic separates system messages.
-    """
-    system_parts: list[str] = []
-    anthropic_messages: list[dict[str, Any]] = []
-
-    for msg in openai_messages:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        if role == "system":
-            system_parts.append(content if isinstance(content, str) else str(content))
-            continue
-
-        if isinstance(content, str):
-            anthropic_messages.append({"role": role, "content": content})
-        elif isinstance(content, list):
-            blocks: list[dict[str, Any]] = []
-            for block in content:
-                if block.get("type") == "text":
-                    blocks.append({"type": "text", "text": block["text"]})
-                elif block.get("type") == "image_url":
-                    url = block["image_url"]["url"]
-                    if url.startswith("data:"):
-                        media_type, _, b64data = url.partition(";base64,")
-                        media_type = media_type.replace("data:", "")
-                        blocks.append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": b64data,
-                                },
-                            }
-                        )
-            if blocks:
-                anthropic_messages.append({"role": role, "content": blocks})
-
-    return anthropic_messages, "\n".join(system_parts)
+def get_chat_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first chat callable (for DlightRAG direct use)."""
+    return _make_completion_func(config.chat)
 
 
-def _build_anthropic_vision_func(
-    cfg: DlightragConfig,
-    vision_deployment: str,
-    model_kwargs: dict[str, Any] | None = None,
-) -> Callable[..., Awaitable[str | AsyncIterator[str]]]:
-    """Anthropic vision func using AsyncAnthropic client."""
-    from anthropic import AsyncAnthropic
+def get_chat_model_func_for_lightrag(config: DlightragConfig) -> Callable:
+    """LightRAG-compatible chat callable with adapter."""
+    return _adapt_for_lightrag(get_chat_model_func(config))
 
-    client = AsyncAnthropic(
-        api_key=cfg.anthropic_api_key,
-        timeout=float(cfg.llm_request_timeout),
-        max_retries=cfg.llm_max_retries,
-    )
-    vision_temp = cfg.vision_temperature
 
-    async def vision_model_func(
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        history_messages: list | None = None,
-        image_data: bytes | bytearray | str | None = None,
-        messages: list | None = None,
-        stream: bool = False,
-        response_format: type | None = None,
-        **_kwargs: object,
-    ) -> str | AsyncIterator[str]:
-        # Pattern 1: Pre-formatted messages from RAG-Anything
-        if messages is not None:
-            try:
-                ant_msgs, sys = _convert_openai_to_anthropic_messages(messages)
-                kwargs: dict[str, Any] = {
-                    "model": vision_deployment,
-                    "messages": ant_msgs,
-                    "system": sys or (system_prompt or ""),
-                    "max_tokens": 4096,
-                    "temperature": vision_temp,
-                }
-                if response_format is not None:
-                    kwargs["metadata"] = kwargs.get("metadata", {})
-                    # Use Anthropic's structured output via JSON mode prompt
-                    # (output_schema support varies by SDK version)
+def get_ingest_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first ingest callable, fallback to chat."""
+    cfg = config.ingest or config.chat
+    fallback_key = config.chat.api_key
+    return _make_completion_func(cfg, fallback_api_key=fallback_key)
 
-                if stream:
 
-                    async def _stream_tokens() -> AsyncIterator[str]:
-                        async with client.messages.stream(**kwargs) as stream_resp:  # type: ignore[arg-type]
-                            async for text in stream_resp.text_stream:
-                                yield text
+def get_ingest_model_func_for_lightrag(config: DlightragConfig) -> Callable:
+    """LightRAG-compatible ingest callable with adapter."""
+    return _adapt_for_lightrag(get_ingest_model_func(config))
 
-                    return _stream_tokens()
 
-                resp = await client.messages.create(**kwargs)  # type: ignore[arg-type]
-                return resp.content[0].text if resp.content else ""
-            except Exception:
-                logger.exception("Anthropic vision call failed (messages mode)")
-                return ""
+def get_embedding_func(config: DlightragConfig) -> Any:
+    """Build LightRAG EmbeddingFunc from config."""
+    from lightrag.utils import EmbeddingFunc
 
-        # Pattern 2: Individual image_data
-        if image_data is None:
-            logger.warning("vision_model_func called without image_data or messages")
-            return ""
-
-        raw_bytes = _ensure_bytes(image_data)
-        if raw_bytes is None:
-            return ""
-
-        b64 = base64.b64encode(raw_bytes).decode("utf-8")
-        ant_msgs_list: list[dict[str, Any]] = []
-        if history_messages:
-            for hm in history_messages:
-                ant_msgs_list.append(
-                    {
-                        "role": hm.get("role", "user"),
-                        "content": str(hm.get("content", "")),
-                    }
-                )
-        ant_msgs_list.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": "image/png",
-                            "data": b64,
-                        },
-                    },
-                ],
-            }
+    cfg = config.embedding
+    if cfg.provider == "openai":
+        client = AsyncOpenAI(
+            api_key=cfg.api_key, base_url=cfg.base_url,
+            timeout=cfg.timeout, max_retries=cfg.max_retries,
         )
-
-        try:
-            resp = await client.messages.create(
-                model=vision_deployment,
-                messages=ant_msgs_list,  # type: ignore[arg-type]
-                system=system_prompt or "",
-                max_tokens=4096,
-                temperature=vision_temp,
-            )
-            return resp.content[0].text if resp.content else ""
-        except Exception:
-            logger.exception("Anthropic vision call failed (image_data mode)")
-            return ""
-
-    vision_model_func.supports_structured = True
-    return vision_model_func
-
-
-def _build_google_vision_func(
-    cfg: DlightragConfig,
-    vision_deployment: str,
-    model_kwargs: dict[str, Any] | None = None,
-) -> Callable[..., Awaitable[str | AsyncIterator[str]]]:
-    """Google Gemini vision func using google-genai client."""
-    from google import genai
-    from google.genai.types import Content, Part
-
-    client = genai.Client(api_key=cfg.google_gemini_api_key)
-    vision_temp = cfg.vision_temperature
-
-    async def vision_model_func(
-        prompt: str,
-        *,
-        system_prompt: str | None = None,
-        history_messages: list | None = None,
-        image_data: bytes | bytearray | str | None = None,
-        messages: list | None = None,
-        stream: bool = False,
-        response_format: type | None = None,
-        **_kwargs: object,
-    ) -> str | AsyncIterator[str]:
-        # Pattern 1: Pre-formatted messages from RAG-Anything
-        if messages is not None:
-            try:
-                contents: list[Content] = []
-                for msg in messages:
-                    role = "user" if msg.get("role") in ("user", "system") else "model"
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        contents.append(Content(role=role, parts=[Part.from_text(text=content)]))
-                    elif isinstance(content, list):
-                        parts: list[Part] = []
-                        for block in content:
-                            if block.get("type") == "text":
-                                parts.append(Part.from_text(text=block["text"]))
-                            elif block.get("type") == "image_url":
-                                url = block["image_url"]["url"]
-                                if url.startswith("data:"):
-                                    _, _, b64data = url.partition(";base64,")
-                                    img_bytes = base64.b64decode(b64data)
-                                    parts.append(
-                                        Part.from_bytes(data=img_bytes, mime_type="image/png")
-                                    )
-                        if parts:
-                            contents.append(Content(role=role, parts=parts))
-
-                config_dict: dict[str, Any] = {"temperature": vision_temp}
-                if response_format is not None:
-                    config_dict["response_mime_type"] = "application/json"
-                    config_dict["response_schema"] = response_format.model_json_schema()
-
-                if stream:
-
-                    async def _stream_tokens() -> AsyncIterator[str]:
-                        async for chunk in await client.aio.models.generate_content_stream(
-                            model=vision_deployment,
-                            contents=contents,
-                            config=config_dict,
-                        ):
-                            if chunk.text:
-                                yield chunk.text
-
-                    return _stream_tokens()
-
-                resp = await client.aio.models.generate_content(
-                    model=vision_deployment,
-                    contents=contents,
-                    config=config_dict,
-                )
-                return resp.text or ""
-            except Exception:
-                logger.exception("Google vision call failed (messages mode)")
-                return ""
-
-        # Pattern 2: Individual image_data
-        if image_data is None:
-            logger.warning("vision_model_func called without image_data or messages")
-            return ""
-
-        raw_bytes = _ensure_bytes(image_data)
-        if raw_bytes is None:
-            return ""
-
-        parts_list: list[Part] = []
-        if system_prompt:
-            parts_list.append(Part.from_text(text=system_prompt))
-        parts_list.append(Part.from_text(text=prompt))
-        parts_list.append(Part.from_bytes(data=raw_bytes, mime_type="image/png"))
-
-        try:
-            resp = await client.aio.models.generate_content(
-                model=vision_deployment,
-                contents=Content(parts=parts_list),
-                config={"temperature": vision_temp},
-            )
-            return resp.text or ""
-        except Exception:
-            logger.exception("Google vision call failed (image_data mode)")
-            return ""
-
-    vision_model_func.supports_structured = True
-    return vision_model_func
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Embedding
-# ═══════════════════════════════════════════════════════════════════
-
-
-def get_embedding_func(config: DlightragConfig | None = None) -> EmbeddingFunc:
-    """Get embedding function using LightRAG native embed functions.
-
-    Dispatches based on effective_embedding_provider.
-    """
-    from dlightrag.config import get_config
-
-    cfg = config or get_config()
-    emb_provider = cfg.effective_embedding_provider
-    api_key = cfg._get_provider_api_key(emb_provider)
-    base_url = cfg._get_url(f"{emb_provider}_base_url")
-
-    if emb_provider == "google_gemini":
-        from lightrag.llm.gemini import gemini_embed
-
-        raw_fn = partial(gemini_embed.func, model=cfg.embedding_model, api_key=api_key)
-    elif emb_provider == "ollama":
-        from lightrag.llm.ollama import ollama_embed
-
-        host = (cfg.ollama_base_url or "http://localhost:11434").removesuffix("/v1")
-        raw_fn = partial(ollama_embed.func, embed_model=cfg.embedding_model, host=host)
+        func = partial(
+            _openai_embedding,
+            model=cfg.model, api_key=cfg.api_key,
+            base_url=cfg.base_url, _client=client,
+        )
     else:
-        # OpenAI-compatible: openai, qwen, minimax, xinference, openrouter, azure_openai
-        from lightrag.llm.openai import openai_embed
-
-        raw_fn = partial(
-            openai_embed.func,
-            model=cfg.embedding_model,
-            api_key=api_key,
-            base_url=base_url,
+        func = partial(
+            _litellm_embedding,
+            model=cfg.model, api_key=cfg.api_key,
+            base_url=cfg.base_url,
         )
-
     return EmbeddingFunc(
-        embedding_dim=cfg.embedding_dim,
-        max_token_size=8192,
-        func=raw_fn,
-        model_name=cfg.embedding_model,
+        embedding_dim=cfg.dim,
+        max_token_size=cfg.max_token_size,
+        func=func,
+        model_name=cfg.model,
     )
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Reranking
-# ═══════════════════════════════════════════════════════════════════
+def get_rerank_func(config: DlightragConfig) -> Callable | None:
+    """Build rerank callable.
 
-
-def get_rerank_func(config: DlightragConfig | None = None) -> Callable:
-    """Return rerank function based on configured backend.
-
-    Backends:
-    - "llm": LLM-based listwise reranker (uses current llm_provider)
-    - "cohere": Cohere-compatible API (works with Cohere, Xinference, LiteLLM, etc.)
-    - "jina": Jina-compatible API
-    - "aliyun": Aliyun DashScope API
-    - "azure_cohere": Azure AI Foundry Cohere deployment (custom auth header)
-
-    The cohere/jina/aliyun backends can target any compatible endpoint via
-    DLIGHTRAG_RERANK_BASE_URL, following the same pattern as LightRAG's
-    --rerank-binding + --rerank-binding-host.
+    LLM backend uses ingest model (cheaper). API-based backends
+    (cohere, jina, aliyun, azure_cohere) use their dedicated clients.
     """
-    from dlightrag.config import get_config
+    rc = config.rerank
+    if not rc.enabled:
+        return None
 
-    cfg = config or get_config()
+    if rc.backend == "llm":
+        # LLM-based reranking uses the ingest model
+        ingest_func = get_ingest_model_func_for_lightrag(config)
+        return _build_llm_rerank_func(ingest_func, config)
 
-    if cfg.rerank_backend in ("cohere", "jina", "aliyun"):
-        from lightrag.rerank import ali_rerank, cohere_rerank, jina_rerank
-
-        rerank_functions = {
-            "cohere": cohere_rerank,
-            "jina": jina_rerank,
-            "aliyun": ali_rerank,
-        }
-        selected_func = rerank_functions[cfg.rerank_backend]
-        model = cfg.effective_rerank_model
-        api_key = cfg.effective_rerank_api_key
-
-        kwargs: dict[str, Any] = {"api_key": api_key, "model": model}
-        if cfg.rerank_base_url:
-            kwargs["base_url"] = cfg.rerank_base_url
-
-        logger.info(
-            "Reranker: backend=%s, model=%s, base_url=%s",
-            cfg.rerank_backend,
-            model,
-            cfg.rerank_base_url or "(provider default)",
-        )
-        return partial(selected_func, **kwargs)
-
-    if cfg.rerank_backend == "azure_cohere":
-        logger.info("Reranker: backend=azure_cohere, model=%s", cfg.effective_rerank_model)
-        return _build_azure_cohere_rerank_func(cfg)
-
-    logger.info(
-        "Reranker: backend=llm (%s), model=%s",
-        cfg.effective_rerank_llm_provider,
-        cfg.effective_rerank_model,
-    )
-    return _build_llm_rerank_func(cfg)
+    # API-based rerankers
+    return _build_api_rerank_func(rc)
 
 
-def _json_kwargs_for_provider(provider: str) -> dict[str, Any]:
-    """Return provider-specific kwargs for JSON output mode."""
-    if provider in ("openai", "azure_openai", "qwen", "minimax", "openrouter", "xinference"):
-        return {"response_format": {"type": "json_object"}}
-    if provider == "ollama":
-        return {"format": "json"}
-    if provider == "google_gemini":
-        return {"generation_config": {"response_mime_type": "application/json"}}
-    return {}  # anthropic: prompt-only
-
-
-def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
-    """LLM-based listwise reranker using native LLM function + Pydantic parsing.
+def _build_llm_rerank_func(ingest_func: Callable, config: DlightragConfig) -> Callable:
+    """LLM-based listwise reranker.
 
     3-layer defense:
-    1. Native JSON mode where available (via provider-specific kwargs)
-    2. Prompt always instructs JSON format (universal fallback)
+    1. response_format=json_object (universal, replaces per-provider kwargs)
+    2. Prompt always instructs JSON format
     3. Pydantic model_validate_json() as safety net
     """
     from dlightrag.models.schemas import RerankResult
-
-    provider = config.effective_rerank_llm_provider
-    json_kwargs = _json_kwargs_for_provider(provider)
-
-    llm_func = get_llm_model_func(
-        config,
-        model_name=config.effective_rerank_model,
-        provider=provider,
-    )
+    from dlightrag.utils.text import extract_json
 
     default_domain_knowledge = config.domain_knowledge_hints
 
@@ -737,10 +213,10 @@ def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
         user_content = f"Query: {query}\n\nChunks:\n{doc_lines}"
 
         try:
-            result_str = await llm_func(
+            result_str = await ingest_func(
                 user_content,
                 system_prompt="".join(system_parts),
-                **json_kwargs,
+                response_format={"type": "json_object"},
             )
 
             parsed = RerankResult.model_validate_json(extract_json(result_str))
@@ -752,7 +228,7 @@ def _build_llm_rerank_func(config: DlightragConfig) -> Callable:
                     seen.add(chunk.index)
                     results.append({"index": chunk.index, "relevance_score": chunk.relevance_score})
 
-            # Append any chunks LLM didn't return (preserves all chunks, just sorted)
+            # Append any chunks LLM didn't return
             if len(results) < len(documents):
                 min_score = results[-1]["relevance_score"] if results else 0.5
                 for idx in range(len(documents)):
@@ -774,16 +250,42 @@ def _fallback_ranking(n: int) -> list[dict[str, float]]:
     return [{"index": i, "relevance_score": 1.0 - i * 0.01} for i in range(n)]
 
 
-def _build_azure_cohere_rerank_func(config: DlightragConfig) -> Callable:
+def _build_api_rerank_func(rc: Any) -> Callable:
+    """Build API-based rerank function (cohere, jina, aliyun, azure_cohere)."""
+    if rc.backend == "azure_cohere":
+        return _build_azure_cohere_rerank_func(rc)
+
+    from lightrag.rerank import ali_rerank, cohere_rerank, jina_rerank
+
+    rerank_functions = {
+        "cohere": cohere_rerank,
+        "jina": jina_rerank,
+        "aliyun": ali_rerank,
+    }
+    selected_func = rerank_functions[rc.backend]
+    kwargs: dict[str, Any] = {"api_key": rc.api_key, "model": rc.model}
+    if rc.base_url:
+        kwargs["base_url"] = rc.base_url
+
+    logger.info(
+        "Reranker: backend=%s, model=%s, base_url=%s",
+        rc.backend,
+        rc.model,
+        rc.base_url or "(provider default)",
+    )
+    return partial(selected_func, **kwargs)
+
+
+def _build_azure_cohere_rerank_func(rc: Any) -> Callable:
     """Azure AI Services Cohere reranker via REST API."""
     import httpx
 
-    endpoint = config._get_url("rerank_base_url")
-    api_key = config.rerank_api_key
-    deployment = config.effective_rerank_model
+    endpoint = rc.base_url
+    api_key = rc.api_key
+    deployment = rc.model
 
     if not endpoint or not api_key:
-        raise ValueError("rerank_base_url and rerank_api_key required for azure_cohere backend")
+        raise ValueError("base_url and api_key required for azure_cohere backend")
     rerank_url = (
         endpoint
         if "/providers/cohere/" in endpoint or endpoint.endswith("/rerank")
@@ -818,10 +320,10 @@ def _build_azure_cohere_rerank_func(config: DlightragConfig) -> Callable:
 
 
 __all__ = [
-    "LLMFunc",
+    "get_chat_model_func",
+    "get_chat_model_func_for_lightrag",
     "get_embedding_func",
-    "get_ingestion_llm_model_func",
-    "get_llm_model_func",
+    "get_ingest_model_func",
+    "get_ingest_model_func_for_lightrag",
     "get_rerank_func",
-    "get_vision_model_func",
 ]
