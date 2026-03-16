@@ -95,3 +95,56 @@ class TestMetadataRetrieveUnified:
             rag_mode="unified",
         )
         assert result == []
+
+
+class TestMetadataRetrieveWithScopedSearch:
+    """Test that large result sets trigger scoped vector search."""
+
+    @pytest.mark.asyncio
+    async def test_small_result_returns_all(self, mock_metadata_index, mock_lightrag) -> None:
+        """When chunk_ids <= top_k, return all without scoped search."""
+        mock_metadata_index.query.return_value = ["doc-1"]
+        mock_lightrag.doc_status.get_by_id = AsyncMock(
+            return_value={"chunks_list": ["c1", "c2"]}
+        )
+        result = await metadata_retrieve(
+            mock_metadata_index,
+            MetadataFilter(filename="test.pdf"),
+            mock_lightrag,
+            rag_mode="caption",
+            query="test query",
+            chunks_vdb=MagicMock(),
+            top_k=10,
+        )
+        assert result == ["c1", "c2"]
+
+    @pytest.mark.asyncio
+    async def test_large_result_calls_scoped_search(
+        self, mock_metadata_index, mock_lightrag
+    ) -> None:
+        """When chunk_ids > top_k, scoped_vector_search is called."""
+        mock_metadata_index.query.return_value = ["doc-1"]
+        many_chunks = [f"c{i}" for i in range(50)]
+        mock_lightrag.doc_status.get_by_id = AsyncMock(
+            return_value={"chunks_list": many_chunks}
+        )
+        mock_vdb = MagicMock()
+
+        with patch(
+            "dlightrag.core.retrieval.metadata_path.scoped_vector_search",
+            new_callable=AsyncMock,
+            return_value=["c0", "c1", "c2"],
+        ) as mock_scoped:
+            result = await metadata_retrieve(
+                mock_metadata_index,
+                MetadataFilter(filename="big.pdf"),
+                mock_lightrag,
+                rag_mode="caption",
+                query="important query",
+                chunks_vdb=mock_vdb,
+                top_k=3,
+            )
+            mock_scoped.assert_called_once_with(
+                "important query", many_chunks, mock_vdb, 3
+            )
+            assert result == ["c0", "c1", "c2"]
