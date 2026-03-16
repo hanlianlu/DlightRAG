@@ -43,6 +43,7 @@ dependencies = [
     # LLM providers (Anthropic, Google Gemini)
     "anthropic>=0.84.0",
     "google-genai>=1.65.0",
+    "litellm>=1.82.2",
 ]
 
 [dependency-groups]
