@@ -463,3 +463,76 @@ class TestAnswerEngineFreetextReferences:
         answer, refs = parse_freetext_references(raw)
         assert len(refs) == 1
         assert refs[0].title == "doc.pdf"
+
+
+# ---------------------------------------------------------------------------
+# TestFormatChunkExcerpts
+# ---------------------------------------------------------------------------
+
+
+class TestFormatChunkExcerpts:
+    """Test _format_chunk_excerpts static method."""
+
+    def test_excerpts_include_content(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/docs/report.pdf",
+                    "content": "Revenue grew 15%.",
+                    "page_idx": 3,
+                },
+            ],
+        }
+        result = AnswerEngine._format_chunk_excerpts(contexts)
+        assert "Revenue grew 15%." in result
+        assert "report.pdf" in result
+        assert "Page 3" in result
+
+    def test_empty_chunks(self) -> None:
+        contexts: RetrievalContexts = {"chunks": []}
+        result = AnswerEngine._format_chunk_excerpts(contexts)
+        assert result == "No document excerpts available."
+
+    def test_chunks_without_content_skipped(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {"chunk_id": "c1", "content": ""},
+                {"chunk_id": "c2", "content": "  "},
+                {"chunk_id": "c3", "content": "actual text", "file_path": "/doc.pdf"},
+            ],
+        }
+        result = AnswerEngine._format_chunk_excerpts(contexts)
+        assert "actual text" in result
+        assert result.count("[") == 1  # Only one label
+
+    def test_chunk_without_page_idx(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {"chunk_id": "c1", "content": "text", "file_path": "/doc.pdf"},
+            ],
+        }
+        result = AnswerEngine._format_chunk_excerpts(contexts)
+        assert "[doc.pdf]" in result
+        assert "Page" not in result
+
+
+# ---------------------------------------------------------------------------
+# TestBuildUserPromptIncludesExcerpts
+# ---------------------------------------------------------------------------
+
+
+class TestBuildUserPromptIncludesExcerpts:
+    """_build_user_prompt() must include Document Excerpts section."""
+
+    def test_prompt_contains_excerpts_section(self) -> None:
+        engine = AnswerEngine()
+        contexts = _text_contexts()
+        prompt = engine._build_user_prompt("What is revenue?", contexts)
+
+        assert "Document Excerpts:" in prompt
+        assert "Revenue grew 15%." in prompt
+        assert "Knowledge Graph Context:" in prompt
+        assert "Reference Document List:" in prompt
+        assert "Question: What is revenue?" in prompt
