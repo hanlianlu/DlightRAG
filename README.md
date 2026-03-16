@@ -6,6 +6,8 @@
 
 Multimodal RAG with knowledge graph intelligence. Understands what your documents say, how concepts connect, and what the pages look like. Production-ready.
 
+DlightRAG goes beyond text-only vector search by combining knowledge graph understanding with multimodal retrieval. Two ingestion modes let you match the pipeline to your documents — text-heavy or visually rich. Answers come with inline citations grounded in actual document content.
+
 ## Features
 
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
