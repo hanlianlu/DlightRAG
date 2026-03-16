@@ -8,6 +8,7 @@ them into LightRAG's entity extraction pipeline to build the knowledge graph.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -127,12 +128,16 @@ class EntityExtractor:
 
         image_bytes = image_to_png_bytes(image)
 
+        b64 = base64.b64encode(image_bytes).decode()
+        messages = [
+            {"role": "system", "content": OCR_SYSTEM_PROMPT},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                {"type": "text", "text": OCR_USER_PROMPT},
+            ]},
+        ]
         async with self._vlm_semaphore:
-            raw = await self.vision_model_func(
-                OCR_USER_PROMPT,
-                image_data=image_bytes,
-                system_prompt=OCR_SYSTEM_PROMPT,
-            )
+            raw = await self.vision_model_func(messages=messages)
 
         if not raw or not raw.strip():
             logger.warning("VLM returned empty response for page %d", page_index)

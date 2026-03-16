@@ -501,7 +501,7 @@ class TestLlmVisualRerank:
     async def test_sorts_by_score_descending(self) -> None:
         call_count = 0
 
-        async def mock_vision(prompt, **kwargs):
+        async def mock_vision(*, messages=None, **kwargs):
             nonlocal call_count
             scores = ["0.3", "0.9", "0.6"]
             result = scores[call_count]

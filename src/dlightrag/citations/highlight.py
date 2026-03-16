@@ -110,13 +110,17 @@ class HighlightExtractor:
         citing_sentence = citing_sentence[:_MAX_INPUT_CHARS]
         chunk_content = chunk_content[:_MAX_INPUT_CHARS]
 
-        prompt = f"System: {_HIGHLIGHT_SYSTEM_PROMPT}\n\n" + _HIGHLIGHT_USER_PROMPT.format(
+        user_prompt = _HIGHLIGHT_USER_PROMPT.format(
             citing_sentence=citing_sentence,
             chunk_content=chunk_content,
         )
+        messages = [
+            {"role": "system", "content": _HIGHLIGHT_SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
 
         try:
-            raw_response = await self._llm_func(prompt)
+            raw_response = await self._llm_func(messages=messages)
             text = raw_response.strip()
             if text.startswith("```"):
                 text = re.sub(r"^```\w*\n?", "", text)

@@ -7,6 +7,7 @@ the original text query for enhanced text-path retrieval.
 
 from __future__ import annotations
 
+import base64
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -36,7 +37,7 @@ async def enhance_query_with_images(
     Args:
         query: Original text query from user.
         images: List of raw image bytes (max 3).
-        vision_model_func: Async VLM callable accepting (prompt, image_data=bytes).
+        vision_model_func: Async VLM callable accepting ``messages=`` (OpenAI chat format).
         conversation_context: Optional pre-truncated conversation history string.
 
     Returns:
@@ -48,10 +49,14 @@ async def enhance_query_with_images(
     descriptions: list[str] = []
     for img_bytes in images:
         try:
-            desc = await vision_model_func(
-                "Describe this image in detail for document retrieval.",
-                image_data=img_bytes,
-            )
+            b64 = base64.b64encode(img_bytes).decode()
+            messages = [
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                    {"type": "text", "text": "Describe this image in detail for document retrieval."},
+                ]},
+            ]
+            desc = await vision_model_func(messages=messages)
             descriptions.append(str(desc))
         except Exception:
             logger.warning("VLM image description failed", exc_info=True)

@@ -66,7 +66,11 @@ async def _rewrite_query(
         f"Standalone query:"
     )
 
-    return await llm_func(user_prompt, system_prompt=system)
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_prompt},
+    ]
+    return await llm_func(messages=messages)
 
 
 # ---------------------------------------------------------------------------
@@ -203,9 +207,9 @@ async def answer_stream(
             if has_text_chunks:
                 try:
                     from dlightrag.config import get_config
-                    from dlightrag.models.llm import get_llm_model_func
+                    from dlightrag.models.llm import get_chat_model_func
 
-                    llm_func = get_llm_model_func(get_config())
+                    llm_func = get_chat_model_func(get_config())
                     highlighted_sources = await asyncio.wait_for(
                         extract_highlights_for_sources(
                             sources=result.sources,
