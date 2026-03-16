@@ -9,15 +9,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.config import DlightragConfig, set_config
+from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
 @pytest.fixture()
 def test_cfg(tmp_path) -> DlightragConfig:
     cfg = DlightragConfig(
-        openai_api_key="test",
         working_dir=str(tmp_path / "dlightrag_storage"),
+        chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+        embedding=EmbeddingConfig(api_key="test"),
         kv_storage="JsonKVStorage",
         doc_status_storage="JsonDocStatusStorage",
         vector_storage="NanoVectorDBStorage",
@@ -395,11 +396,12 @@ class TestWorkspaceDiscovery:
 
         cfg = DlightragConfig(
             working_dir=str(working_dir),
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+            embedding=EmbeddingConfig(api_key="test"),
             kv_storage="JsonKVStorage",
             doc_status_storage="JsonDocStatusStorage",
             vector_storage="NanoVectorDBStorage",
             graph_storage="NetworkXStorage",
-            openai_api_key="test",
         )  # type: ignore[call-arg]
         manager = RAGServiceManager(config=cfg)
         result = await manager.list_workspaces()

@@ -6,6 +6,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from dlightrag.captionrag.retrieval import RetrievalEngine
+from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
 
 # ---------------------------------------------------------------------------
@@ -17,9 +18,10 @@ class TestRetrievalEngineAretrieve:
     """Test data-only retrieval via composition."""
 
     def _make_engine(self, config=None) -> tuple[RetrievalEngine, MagicMock]:
-        from dlightrag.config import DlightragConfig
-
-        cfg = config or DlightragConfig(openai_api_key="test")  # type: ignore[call-arg]
+        cfg = config or DlightragConfig(  # type: ignore[call-arg]
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+            embedding=EmbeddingConfig(api_key="test"),
+        )
         mock_rag = MagicMock()
         mock_rag.lightrag = MagicMock()
         mock_rag.lightrag.aquery_data = AsyncMock(
@@ -46,9 +48,10 @@ class TestRetrievalEngineAretrieve:
         mock_rag._process_multimodal_query_content.assert_not_awaited()
 
     async def test_aretrieve_no_lightrag_returns_empty(self) -> None:
-        from dlightrag.config import DlightragConfig
-
-        cfg = DlightragConfig(openai_api_key="test")  # type: ignore[call-arg]
+        cfg = DlightragConfig(  # type: ignore[call-arg]
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+            embedding=EmbeddingConfig(api_key="test"),
+        )
         mock_rag = MagicMock()
         mock_rag.lightrag = None
         engine = RetrievalEngine(rag=mock_rag, config=cfg)
@@ -58,9 +61,10 @@ class TestRetrievalEngineAretrieve:
 
     async def test_aretrieve_page_idx_injected(self) -> None:
         """page_idx from text_chunks KV store is attached to chunk contexts (0->1-based)."""
-        from dlightrag.config import DlightragConfig
-
-        cfg = DlightragConfig(openai_api_key="test")  # type: ignore[call-arg]
+        cfg = DlightragConfig(  # type: ignore[call-arg]
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
+            embedding=EmbeddingConfig(api_key="test"),
+        )
         mock_rag = MagicMock()
         mock_rag.lightrag = MagicMock()
         mock_rag.lightrag.aquery_data = AsyncMock(

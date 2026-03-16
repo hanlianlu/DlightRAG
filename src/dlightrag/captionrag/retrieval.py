@@ -60,7 +60,7 @@ class RetrievalEngine:
         if is_reretrieve:
             enable_rerank = False
         else:
-            enable_rerank = kwargs.pop("enable_rerank", self.config.enable_rerank)
+            enable_rerank = kwargs.pop("enable_rerank", self.config.rerank.enabled)
 
         query_kwargs = {
             "top_k": adjusted_top_k,

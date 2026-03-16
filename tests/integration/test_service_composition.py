@@ -20,7 +20,7 @@ import pytest
 
 from dlightrag.captionrag.pipeline import IngestionPipeline
 from dlightrag.captionrag.retrieval import RetrievalEngine
-from dlightrag.config import DlightragConfig, set_config
+from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
 from dlightrag.core.service import RAGService
 from dlightrag.core.servicemanager import RAGServiceManager
 
@@ -58,11 +58,6 @@ def _dummy_rerank_func(config):
     return None
 
 
-def _dummy_vision_func(config):
-    """Return None — no vision model in tests."""
-    return None
-
-
 @pytest.fixture
 def fs_config(tmp_path: Path) -> DlightragConfig:
     """Config with filesystem backends and dummy models."""
@@ -71,7 +66,8 @@ def fs_config(tmp_path: Path) -> DlightragConfig:
     cfg = DlightragConfig(  # type: ignore[call-arg]
         working_dir=str(working_dir),
         workspace="test-ws",
-        openai_api_key="test-key",
+        chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
+        embedding=EmbeddingConfig(api_key="test-key"),
         rag_mode="caption",
         kv_storage="JsonKVStorage",
         doc_status_storage="JsonDocStatusStorage",
@@ -92,11 +88,11 @@ class TestServiceComposition:
     """Verify single-RAGAnything composition through real initialization."""
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
-    @patch("dlightrag.core.service.get_vision_model_func", side_effect=_dummy_vision_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_llm_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_create_initializes_all_components(
-        self, _llm, _embed, _vision, _rerank, fs_config
+        self, _llm_lr, _llm, _embed, _rerank, fs_config
     ) -> None:
         """RAGService.create() produces rag + ingestion + retrieval."""
         service = await RAGService.create(config=fs_config, enable_vlm=False)
@@ -112,10 +108,10 @@ class TestServiceComposition:
             await service.close()
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
-    @patch("dlightrag.core.service.get_vision_model_func", side_effect=_dummy_vision_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_llm_model_func", side_effect=_dummy_llm_func)
-    async def test_single_rag_shared(self, _llm, _embed, _vision, _rerank, fs_config) -> None:
+    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
+    async def test_single_rag_shared(self, _llm_lr, _llm, _embed, _rerank, fs_config) -> None:
         """Ingestion and retrieval share the same RAGAnything instance."""
         service = await RAGService.create(config=fs_config, enable_vlm=False)
         try:
@@ -127,11 +123,11 @@ class TestServiceComposition:
             await service.close()
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
-    @patch("dlightrag.core.service.get_vision_model_func", side_effect=_dummy_vision_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_llm_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_workspace_in_working_dir(
-        self, _llm, _embed, _vision, _rerank, fs_config
+        self, _llm_lr, _llm, _embed, _rerank, fs_config
     ) -> None:
         """LightRAG working_dir should include the workspace subdirectory."""
         service = await RAGService.create(config=fs_config, enable_vlm=False)
@@ -151,11 +147,11 @@ class TestManagerWorkspaceIsolation:
     """Verify RAGServiceManager creates isolated services per workspace."""
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
-    @patch("dlightrag.core.service.get_vision_model_func", side_effect=_dummy_vision_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_llm_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_different_workspaces_get_different_services(
-        self, _llm, _embed, _vision, _rerank, fs_config
+        self, _llm_lr, _llm, _embed, _rerank, fs_config
     ) -> None:
         """Two workspaces must produce two separate RAGService instances."""
         manager = RAGServiceManager(config=fs_config)
@@ -171,11 +167,11 @@ class TestManagerWorkspaceIsolation:
             await manager.close()
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
-    @patch("dlightrag.core.service.get_vision_model_func", side_effect=_dummy_vision_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_llm_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_same_workspace_returns_cached(
-        self, _llm, _embed, _vision, _rerank, fs_config
+        self, _llm_lr, _llm, _embed, _rerank, fs_config
     ) -> None:
         """Same workspace returns the same cached RAGService instance."""
         manager = RAGServiceManager(config=fs_config)

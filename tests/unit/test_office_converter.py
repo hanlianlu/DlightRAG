@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import openpyxl
 import pytest
 
-from dlightrag.config import DlightragConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
 from dlightrag.converters.office import LibreOfficeConverter, OfficeConverterError, PageSetup
 
 
@@ -43,7 +43,8 @@ class TestLibreOfficeConverter:
         """Test that excel_auto_convert_to_pdf=False disables conversion."""
         config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_path),
-            openai_api_key="test-key",
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
+            embedding=EmbeddingConfig(api_key="test-key"),
             excel_auto_convert_to_pdf=False,
             kv_storage="JsonKVStorage",
             doc_status_storage="JsonDocStatusStorage",
@@ -57,7 +58,8 @@ class TestLibreOfficeConverter:
         """Test that docling parser disables Excel conversion."""
         config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_path),
-            openai_api_key="test-key",
+            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
+            embedding=EmbeddingConfig(api_key="test-key"),
             parser="docling",
             kv_storage="JsonKVStorage",
             doc_status_storage="JsonDocStatusStorage",
