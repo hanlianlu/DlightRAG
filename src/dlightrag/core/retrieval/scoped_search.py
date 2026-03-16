@@ -138,9 +138,7 @@ async def _qdrant_scoped_search(
         results = client.query_points(
             collection_name=collection,
             query=query_vec,
-            query_filter=models.Filter(
-                must=[models.HasIdCondition(has_id=chunk_ids)]
-            ),
+            query_filter=models.Filter(must=[models.HasIdCondition(has_id=chunk_ids)]),
             limit=top_k,
         )
         if hasattr(results, "points"):

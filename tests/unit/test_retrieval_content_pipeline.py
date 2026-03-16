@@ -6,10 +6,10 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from dlightrag.core.retrieval.models import MetadataFilter, RetrievalPlan
 from dlightrag.core.retrieval.orchestrator import RetrievalOrchestrator
-
-import pytest
 
 
 class TestVisualRetrieverIncludesTextOnlyChunks:
@@ -26,17 +26,34 @@ class TestVisualRetrieverIncludesTextOnlyChunks:
         mock_config.rerank_score_threshold = 0.5
 
         # LightRAG returns 3 chunks
-        mock_lightrag.aquery_data = AsyncMock(return_value={
-            "data": {
-                "chunks": [
-                    {"chunk_id": "c1", "content": "text A", "reference_id": "1", "file_path": "/a.pdf"},
-                    {"chunk_id": "c2", "content": "text B", "reference_id": "2", "file_path": "/b.pdf"},
-                    {"chunk_id": "c3", "content": "text C", "reference_id": "3", "file_path": "/c.pdf"},
-                ],
-                "entities": [],
-                "relationships": [],
+        mock_lightrag.aquery_data = AsyncMock(
+            return_value={
+                "data": {
+                    "chunks": [
+                        {
+                            "chunk_id": "c1",
+                            "content": "text A",
+                            "reference_id": "1",
+                            "file_path": "/a.pdf",
+                        },
+                        {
+                            "chunk_id": "c2",
+                            "content": "text B",
+                            "reference_id": "2",
+                            "file_path": "/b.pdf",
+                        },
+                        {
+                            "chunk_id": "c3",
+                            "content": "text C",
+                            "reference_id": "3",
+                            "file_path": "/c.pdf",
+                        },
+                    ],
+                    "entities": [],
+                    "relationships": [],
+                }
             }
-        })
+        )
         mock_lightrag.text_chunks = AsyncMock()
 
         # visual_chunks only has c1 (c2, c3 are text-only)
@@ -132,17 +149,21 @@ class TestResolveChunkContextsVisualEnrichment:
 
         # Mock LightRAG text_chunks
         mock_lr = MagicMock()
-        mock_lr.text_chunks.get_by_ids = AsyncMock(return_value=[
-            {"content": "Revenue grew", "file_path": "/report.pdf", "full_doc_id": "doc1"},
-        ])
+        mock_lr.text_chunks.get_by_ids = AsyncMock(
+            return_value=[
+                {"content": "Revenue grew", "file_path": "/report.pdf", "full_doc_id": "doc1"},
+            ]
+        )
         svc._lightrag = mock_lr
 
         # Mock unified engine with visual_chunks
         mock_unified = MagicMock()
         mock_visual_store = AsyncMock()
-        mock_visual_store.get_by_ids = AsyncMock(return_value=[
-            {"image_data": "base64img", "page_index": 2},
-        ])
+        mock_visual_store.get_by_ids = AsyncMock(
+            return_value=[
+                {"image_data": "base64img", "page_index": 2},
+            ]
+        )
         mock_unified.visual_chunks = mock_visual_store
         svc.unified = mock_unified
 
@@ -164,9 +185,11 @@ class TestResolveChunkContextsVisualEnrichment:
         svc.config = mock_config
 
         mock_lr = MagicMock()
-        mock_lr.text_chunks.get_by_ids = AsyncMock(return_value=[
-            {"content": "text", "file_path": "/doc.pdf", "full_doc_id": "doc1"},
-        ])
+        mock_lr.text_chunks.get_by_ids = AsyncMock(
+            return_value=[
+                {"content": "text", "file_path": "/doc.pdf", "full_doc_id": "doc1"},
+            ]
+        )
         svc._lightrag = mock_lr
         svc.unified = None
 
@@ -180,8 +203,8 @@ class TestMergeRoundRobin:
     """_merge_round_robin interleaves Step 1 and Step 2 chunks."""
 
     def test_round_robin_interleaving(self) -> None:
-        from dlightrag.core.service import RAGService
         from dlightrag.core.retrieval.protocols import RetrievalResult
+        from dlightrag.core.service import RAGService
 
         primary = RetrievalResult(
             contexts={
@@ -205,8 +228,8 @@ class TestMergeRoundRobin:
 
     def test_dedup_step1_wins(self) -> None:
         """Duplicate chunk_ids in supplementary are excluded."""
-        from dlightrag.core.service import RAGService
         from dlightrag.core.retrieval.protocols import RetrievalResult
+        from dlightrag.core.service import RAGService
 
         primary = RetrievalResult(
             contexts={
@@ -227,8 +250,8 @@ class TestMergeRoundRobin:
         assert primary.contexts["chunks"][0]["content"] == "original"
 
     def test_top_k_cutoff(self) -> None:
-        from dlightrag.core.service import RAGService
         from dlightrag.core.retrieval.protocols import RetrievalResult
+        from dlightrag.core.service import RAGService
 
         primary = RetrievalResult(
             contexts={
