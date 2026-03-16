@@ -14,8 +14,9 @@ but their internal pipelines differ significantly.
 VisualRetriever (retriever.py)
   Phase 1  LightRAG retrieval (KG + text vector search)
   Phase 2  Visual resolution (chunk_id -> page image via visual_chunks KV)
+           Text-only chunks (no visual data) are kept with their text content
   Phase 3  Visual reranking (VLM pointwise or API reranker)
-  Phase 4  VLM answer generation (multimodal prompt with page images)
+  Phase 4  VLM answer generation (text excerpts + page images + KG context)
 ```
 
 ### Query Types
@@ -34,7 +35,7 @@ query ─────> LightRAG (KG + chunk embedding search)
                         │
                    Reranker: VLM scores "text query vs page image"
                         │
-                   Answer: VLM sees page images + KG context + query
+                   Answer: VLM sees text excerpts + page images + KG context + query
 ```
 
 - No visual embedding search — text embedding already covers chunk retrieval.
@@ -93,11 +94,15 @@ Score parsing (`_parse_rerank_score`) handles three formats:
 
 - **System prompt**: `_ANSWER_CORE` + structured suffix (JSON output for
   providers supporting `response_schema`) or core-only (freetext providers).
-- **User prompt**: KG context + reference list + conversation history +
-  question + `FREETEXT_REMINDER` (appended at end of user message for
-  freetext providers to maximize instruction adherence).
+  Instructs the LLM to answer based on document text excerpts, page images
+  (when available), and knowledge graph context.
+- **User prompt**: KG context + document text excerpts + reference list +
+  question. `FREETEXT_REMINDER` is appended at end for freetext providers
+  to maximize instruction adherence.
 - **Messages**: OpenAI multimodal format with inline base64 page images from
-  retrieved chunks.
+  retrieved chunks. The LLM receives both chunk text content (in the user
+  prompt as "Document Excerpts") and page images (as `image_url` content
+  blocks), providing dual-channel context.
 
 Structured providers return `StructuredAnswer` (JSON with `answer` +
 `references` array). Freetext providers return markdown with a
@@ -158,9 +163,9 @@ query + multimodal_content
 |--------|---------|---------|
 | Page representation | Original page images (base64) | OCR text captions |
 | Visual vector search | Yes (multimodal embedding) | No |
-| Visual resolution | chunk_id -> page image via KV | N/A |
+| Visual resolution | chunk_id -> page image via KV (text-only chunks kept) | N/A |
 | Reranking | VLM pointwise or external API | LightRAG built-in (text) |
-| Answer model | VLM (sees page images) | LLM (text-only) |
+| Answer model | VLM (sees text excerpts + page images) | LLM (text-only) |
 | Dual-path retrieval | Yes (text + visual embedding) | No (text only) |
 | Structured output | Provider-dependent JSON schema | N/A (LightRAG controls) |
 | Citation format | `[n-m]` page-level inline | LightRAG default |
@@ -175,9 +180,9 @@ RAGService.aanswer(query, multimodal_content)
     ├─ unified mode ─> UnifiedRepresentEngine.aanswer()
     │                      └─> VisualRetriever.answer()
     │                            Phase 1: LightRAG retrieval
-    │                            Phase 2: Visual resolve
+    │                            Phase 2: Visual resolve (text-only chunks kept)
     │                            Phase 3: VLM/API rerank
-    │                            Phase 4: VLM answer
+    │                            Phase 4: VLM answer (text excerpts + images)
     │
     └─ caption mode ──> RetrievalEngine.aanswer()
                            └─> LightRAG.aquery_llm()
