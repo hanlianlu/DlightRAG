@@ -363,7 +363,6 @@ class VisualRetriever:
         """
         import asyncio
 
-        from dlightrag.models.schemas import VisualRerankScore
         from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
 
         if not resolved or not self.vision_model_func:
@@ -396,7 +395,7 @@ class VisualRetriever:
                     messages = [{"role": "user", "content": content}]
                     resp = await vision_model_func(
                         messages=messages,
-                        response_format=VisualRerankScore,
+                        response_format={"type": "json_object"},
                     )
                     score = self._parse_rerank_score(resp)
                     logger.debug("[Visual Rerank] chunk=%s score=%.2f", cid, score)
