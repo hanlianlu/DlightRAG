@@ -40,11 +40,13 @@ class TestVisualRetrieverIncludesTextOnlyChunks:
         mock_lightrag.text_chunks = AsyncMock()
 
         # visual_chunks only has c1 (c2, c3 are text-only)
-        mock_visual_chunks.get_by_ids = AsyncMock(return_value=[
-            {"image_data": "base64data", "page_index": 0, "file_path": "/a.pdf"},
-            None,
-            None,
-        ])
+        # Use side_effect to return correct data regardless of set ordering
+        visual_map = {
+            "c1": {"image_data": "base64data", "page_index": 0, "file_path": "/a.pdf"},
+        }
+        mock_visual_chunks.get_by_ids = AsyncMock(
+            side_effect=lambda ids: [visual_map.get(cid) for cid in ids]
+        )
 
         retriever = VisualRetriever(
             lightrag=mock_lightrag,
