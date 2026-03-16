@@ -137,6 +137,8 @@ asyncio.run(main())
 
 Request and response structures for `ingest`, `retrieve`, and `answer` across all interfaces. See [`docs/response-schema.md`](docs/response-schema.md) for the full reference — ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
 
+For the internal retrieval and answer generation pipeline (unified vs caption mode, visual resolution, reranking, Step 1+2 merge), see [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md).
+
 
 ## Configuration
 
