@@ -4,16 +4,16 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-Multimodal RAG with knowledge graph intelligence. Understands what your documents say, how concepts connect, and what the pages look like. Production-ready.
+Multimodal RAG with knowledge graph and contextual intelligence. Understands what your documents say, how concepts connect, and what the pages look like. Production-ready.
 
-Most RAG systems treat documents as flat text and search by similarity alone — visual context is lost, entity relationships are missed, context filtering is limited. DlightRAG combines knowledge graph understanding with dynamic multimodal retrieval to close these gaps.
+Most RAG systems treat documents as hierarchical text and search by similarity agentically — visual context is lost, entity relationships are missed, context filtering is limited. DlightRAG combines knowledge graph understanding with dynamic multimodal retrieval to close these gaps.
 
 From text-heavy reports to chart-filled presentations — it adapts to your documents without information compromise. Inquiry answers come with inline citations grounded in actual document content. Flexibly ship it as a ready-to-run service, integrate into your backend, or expose as a tool for AI agents.
 
 ## Features
 
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
-- **Knowledge graph + vector + visual retrieval** — KG traversal and vector search via LightRAG, visual and filtering supplementary retrieval
+- **Knowledge graph + vector + visual retrieval** — KG traversal and vector search at the core, with visual retrieval and metadata filtering on top
 - **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images from local filesystem, Azure Blob Storage, or Snowflake
 - **Broad LLM support** — Any OpenAI-compatible LLM endpoint, plus [100+ providers](https://docs.litellm.ai/docs/providers) via LiteLLM
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
