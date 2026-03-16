@@ -172,14 +172,27 @@ function getHistoryWindow() {
 // === Panel Management ===
 
 function openPanel(title) {
-    const panel = document.getElementById('panel');
-    const panelTitle = document.getElementById('panel-title');
-    panel.classList.add('open');
-    if (title) panelTitle.textContent = title;
+    document.getElementById('panel').classList.add('open');
+    document.getElementById('panel-backdrop').classList.add('open');
+    if (title) document.getElementById('panel-title').textContent = title;
 }
 
 function closePanel() {
     document.getElementById('panel').classList.remove('open');
+    document.getElementById('panel-backdrop').classList.remove('open');
+}
+
+// === Toast Notifications ===
+
+var _toastTimer = null;
+function showToast(msg, duration) {
+    duration = duration || 3000;
+    var el = document.getElementById('toast');
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.add('visible');
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(function() { el.classList.remove('visible'); }, duration);
 }
 
 // === Citation Filter-Focus ===
@@ -552,6 +565,20 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    // Toast notifications for file operations
+    document.body.addEventListener('htmx:afterRequest', function(e) {
+        var el = e.detail.elt;
+        if (!el) return;
+        if (el.id === 'upload-form' || el.closest && el.closest('#upload-form')) {
+            var ok = e.detail.successful;
+            showToast(ok ? 'Ingestion complete.' : 'Ingestion failed.', ok ? 3000 : 5000);
+        }
+        if (el.classList && el.classList.contains('file-delete')) {
+            var ok2 = e.detail.successful;
+            showToast(ok2 ? 'File deleted.' : 'Deletion failed.', ok2 ? 3000 : 5000);
+        }
+    });
+
     // Image upload: + button
     var plusBtn = document.getElementById('composer-plus');
     var imageInput = document.getElementById('image-input');
@@ -630,16 +657,6 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!item) return;
             var ws = item.getAttribute('data-ws');
             if (ws) toggleWorkspace(ws);
-        });
-    }
-
-    // Panel auto-close on click outside panel (skip citation badge clicks)
-    var app = document.querySelector('.app');
-    if (app) {
-        app.addEventListener('click', function(e) {
-            if (e.target.closest('.panel')) return;
-            if (e.target.closest('.citation-badge')) return;
-            closePanel();
         });
     }
 

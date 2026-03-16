@@ -5,11 +5,13 @@
           hx-target="#panel-content"
           hx-swap="innerHTML"
           hx-encoding="multipart/form-data"
+          hx-indicator="#upload-spinner"
           style="display:none">
         <input type="file" id="file-input" name="files" multiple
                onchange="htmx.trigger('#upload-form', 'submit')">
     </form>
 </div>
+<div id="upload-spinner" class="file-status htmx-indicator">Ingesting... will update when finished.</div>
 
 {% if files %}
 {% for file in files %}

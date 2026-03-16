@@ -258,6 +258,16 @@ body {
 
 /* === Slide-Out Panel === */
 
+.panel-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 99;
+}
+
+.panel-backdrop.open { display: block; }
+
 .panel {
     position: fixed;
     top: 0;
@@ -619,6 +629,19 @@ body {
 }
 
 .toast.visible { opacity: 1; }
+
+/* === File Status Indicator === */
+
+.file-status {
+    padding: 12px 16px;
+    font-size: 12px;
+    color: var(--text-500);
+    text-align: center;
+}
+
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator,
+.htmx-request.htmx-indicator { display: block; }
 
 /* === Composer + Button === */
 

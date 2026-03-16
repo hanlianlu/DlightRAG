@@ -51,6 +51,7 @@
     <!-- Hidden file input for image upload -->
     <input type="file" id="image-input" accept="image/*" multiple style="display:none">
 
+    <div class="panel-backdrop" id="panel-backdrop" onclick="closePanel()"></div>
     <aside class="panel" id="panel">
         <div class="panel-header">
             <span id="panel-title">SOURCES</span>
@@ -58,5 +59,7 @@
         </div>
         <div id="panel-content" class="panel-content"></div>
     </aside>
+
+    <div class="toast" id="toast"></div>
 </div>
 {% endblock %}
