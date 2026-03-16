@@ -13,8 +13,8 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 ## Features
 
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
-- **Knowledge graph + vector + visual retrieval** — Multi-strategy retrieval across knowledge graph and vector similarity ([LightRAG](https://github.com/HKUDS/LightRAG)), visual content, and metadata
-- **Multimodal ingestion** — PDF, Word, Excel, PowerPoint, images from local filesystem, Azure Blob Storage, or Snowflake
+- **Knowledge graph + vector + visual retrieval** — Multi-strategy retrieval across knowledge graph and vector similarity [LightRAG](https://github.com/HKUDS/LightRAG), visual content, and dynamic metadata filters
+- **Multimodal ingestion** — PDF, Images, Office Documents from local filesystem, Azure Blob Storage etc.
 - **Broad LLM support** — Any OpenAI-compatible LLM endpoint, plus [100+ providers](https://docs.litellm.ai/docs/providers) via LiteLLM
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
