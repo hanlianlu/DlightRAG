@@ -4,7 +4,7 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-Dual-mode multimodal RAG built on [LightRAG](https://github.com/HKUDS/LightRAG) — knowledge graph + vector retrieval as a modern and unified production-ready service.
+Multimodal RAG with knowledge graph intelligence. Understands what your documents say, how concepts connect, and what the pages look like. Production-ready.
 
 ## Features
 
