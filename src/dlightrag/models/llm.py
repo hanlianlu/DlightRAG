@@ -1,3 +1,4 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Model factory functions.
 
 Builds messages-first callables from config with 2-track dispatch:
@@ -310,10 +311,10 @@ def _build_azure_cohere_rerank_func(rc: Any) -> Callable:
                 response.raise_for_status()
                 return response.json().get("results", [])
             except httpx.HTTPStatusError as e:
-                logger.error(f"Azure Cohere rerank error: {e.response.status_code}")
+                logger.error("Azure Cohere rerank error: %s", e.response.status_code)
                 raise
             except Exception as e:
-                logger.exception(f"Azure Cohere rerank failed: {e}")
+                logger.exception("Azure Cohere rerank failed: %s", e)
                 raise
 
     return azure_cohere_rerank
