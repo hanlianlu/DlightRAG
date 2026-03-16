@@ -1133,7 +1133,6 @@ class RAGService:
             lightrag=self._lightrag or getattr(self.rag, "lightrag", None),
             rag_mode=self.config.rag_mode,
             chunks_vdb=chunks_vdb,
-            rrf_k=self.config.rrf_k,
         )
 
         chunk_ids = await orchestrator.orchestrate(plan, top_k=top_k)

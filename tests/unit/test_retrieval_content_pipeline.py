@@ -6,6 +6,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dlightrag.core.retrieval.models import MetadataFilter, RetrievalPlan
+from dlightrag.core.retrieval.orchestrator import RetrievalOrchestrator
+
 import pytest
 
 
@@ -61,3 +64,66 @@ class TestVisualRetrieverIncludesTextOnlyChunks:
             if chunk["chunk_id"] in ("c2", "c3"):
                 assert chunk["content"] != ""
                 assert chunk.get("image_data") is None
+
+
+class TestOrchestratorSimplified:
+    """Orchestrator runs only MetadataPath (no VectorPath)."""
+
+    @pytest.mark.asyncio
+    async def test_orchestrate_metadata_only(self) -> None:
+        """Orchestrator dispatches metadata path only, returns chunk_ids directly."""
+        mock_index = AsyncMock()
+        plan = RetrievalPlan(
+            semantic_query="key info",
+            metadata_filters=MetadataFilter(filename="test.pdf"),
+            paths=["metadata"],
+            original_query="what is key info from test.pdf",
+        )
+
+        with patch(
+            "dlightrag.core.retrieval.orchestrator.metadata_retrieve",
+            new_callable=AsyncMock,
+            return_value=["c1", "c2", "c3"],
+        ):
+            orch = RetrievalOrchestrator(
+                metadata_index=mock_index,
+                lightrag=MagicMock(),
+                rag_mode="unified",
+                chunks_vdb=MagicMock(),
+            )
+            result = await orch.orchestrate(plan, top_k=20)
+            assert result == ["c1", "c2", "c3"]
+
+    @pytest.mark.asyncio
+    async def test_orchestrate_no_metadata_returns_empty(self) -> None:
+        """No metadata filters -> empty result."""
+        plan = RetrievalPlan(
+            semantic_query="query",
+            metadata_filters=None,
+            paths=[],
+            original_query="query",
+        )
+        orch = RetrievalOrchestrator()
+        result = await orch.orchestrate(plan, top_k=20)
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# TestSystemPromptUpdated
+# ---------------------------------------------------------------------------
+
+
+class TestSystemPromptUpdated:
+    """System prompt must mention text excerpts alongside images."""
+
+    def test_prompt_mentions_text_excerpts(self) -> None:
+        from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+
+        prompt = get_answer_system_prompt(structured=True)
+        assert "text excerpts" in prompt.lower() or "document text" in prompt.lower()
+
+    def test_prompt_mentions_images_when_available(self) -> None:
+        from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+
+        prompt = get_answer_system_prompt(structured=False)
+        assert "when available" in prompt.lower() or "if available" in prompt.lower()
