@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable
+from pathlib import Path
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
@@ -226,14 +227,41 @@ class AnswerEngine:
 
         return "\n".join(parts) if parts else "No knowledge graph context available."
 
+    @staticmethod
+    def _format_chunk_excerpts(contexts: RetrievalContexts) -> str:
+        """Format chunk text content for the LLM prompt."""
+        chunks = contexts.get("chunks", [])
+        if not chunks:
+            return "No document excerpts available."
+
+        parts: list[str] = []
+        for chunk in chunks:
+            content = chunk.get("content", "").strip()
+            if not content:
+                continue
+            ref_id = chunk.get("reference_id", "")
+            page_idx = chunk.get("page_idx")
+            file_path = chunk.get("file_path", "")
+            filename = Path(file_path).name if file_path else f"Source {ref_id}"
+
+            if page_idx:
+                label = f"[{filename}, Page {page_idx}]"
+            else:
+                label = f"[{filename}]"
+            parts.append(f"{label}\n{content}")
+
+        return "\n\n".join(parts) if parts else "No document excerpts available."
+
     def _build_user_prompt(self, query: str, contexts: RetrievalContexts) -> str:
-        """Combine KG context + reference list + question."""
+        """Combine KG context + chunk excerpts + reference list + question."""
         kg_context = self._format_kg_context(contexts)
+        excerpts = self._format_chunk_excerpts(contexts)
         indexer = self._build_citation_indexer(contexts)
         ref_list = indexer.format_reference_list()
 
         prompt_parts = [
             f"Knowledge Graph Context:\n{kg_context}",
+            f"Document Excerpts:\n{excerpts}",
             f"Reference Document List:\n{ref_list}",
             f"Question: {query}",
         ]
