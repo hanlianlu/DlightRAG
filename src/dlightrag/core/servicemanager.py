@@ -210,11 +210,10 @@ class RAGServiceManager:
     def _get_answer_engine(self) -> AnswerEngine:
         """Lazy-create AnswerEngine from global config."""
         if self._answer_engine is None:
-            from dlightrag.models.llm import get_llm_model_func, get_vision_model_func
+            from dlightrag.models.llm import get_chat_model_func
 
             self._answer_engine = AnswerEngine(
-                llm_model_func=get_llm_model_func(self._config),
-                vision_model_func=get_vision_model_func(self._config),
+                model_func=get_chat_model_func(self._config),
             )
         return self._answer_engine
 

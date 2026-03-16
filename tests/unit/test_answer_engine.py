@@ -1,10 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for AnswerEngine centralized answer generation."""
+"""Tests for AnswerEngine messages-first interface."""
 
 from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
@@ -58,38 +60,80 @@ def _image_contexts() -> RetrievalContexts:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngineGenerate — LLM text path
+# TestAnswerEngineGenerate
 # ---------------------------------------------------------------------------
 
 
-class TestAnswerEngineGenerateLLM:
-    """Test text-only LLM path (no images in chunks)."""
+class TestAnswerEngineGenerate:
+    """Test non-streaming generate() with messages-first interface."""
 
-    async def test_llm_text_path_calls_llm_model_func(self) -> None:
-        llm_func = AsyncMock(return_value="The answer is 42.")
-        engine = AnswerEngine(
-            llm_model_func=llm_func,
+    @pytest.mark.asyncio
+    async def test_generate_with_structured_response(self) -> None:
+        """generate() parses JSON response into StructuredAnswer."""
+        response_json = json.dumps(
+            {
+                "answer": "AI is artificial intelligence.",
+                "references": [{"id": 1, "title": "AI Overview"}],
+            }
         )
-        result = await engine.generate("What is revenue?", _text_contexts())
+        model_func = AsyncMock(return_value=response_json)
+        engine = AnswerEngine(model_func=model_func)
 
-        llm_func.assert_awaited_once()
-        assert isinstance(result, RetrievalResult)
-        assert result.answer == "The answer is 42."
-        assert result.references == []
+        contexts = _text_contexts()
+        result = await engine.generate("What is AI?", contexts)
 
-    async def test_llm_text_path_passes_system_prompt(self) -> None:
-        llm_func = AsyncMock(return_value="Answer.")
-        engine = AnswerEngine(llm_model_func=llm_func)
+        assert result.answer == "AI is artificial intelligence."
+        assert len(result.references) == 1
+        model_func.assert_called_once()
+        call_kwargs = model_func.call_args.kwargs
+        assert "messages" in call_kwargs
+        assert "response_format" in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_generate_no_model_func(self) -> None:
+        """generate() returns None answer when model_func is None."""
+        engine = AnswerEngine(model_func=None)
+        contexts = {"chunks": []}
+        result = await engine.generate("test", contexts)
+        assert result.answer is None
+        assert result.contexts is contexts
+
+    @pytest.mark.asyncio
+    async def test_generate_with_images(self) -> None:
+        """generate() includes images in messages content array."""
+        response_json = json.dumps({"answer": "ok", "references": []})
+        model_func = AsyncMock(return_value=response_json)
+        engine = AnswerEngine(model_func=model_func)
+
+        contexts = _image_contexts()
+        await engine.generate("describe", contexts)
+
+        messages = model_func.call_args.kwargs["messages"]
+        user_content = messages[1]["content"]
+        # Should have image_url entry + text entry
+        assert any(item.get("type") == "image_url" for item in user_content)
+        assert any(item.get("type") == "text" for item in user_content)
+
+    @pytest.mark.asyncio
+    async def test_generate_always_passes_response_format(self) -> None:
+        """generate() always passes response_format=StructuredAnswer."""
+        response_json = json.dumps(
+            {"answer": "Revenue grew 15%.", "references": [{"id": 1, "title": "report.pdf"}]}
+        )
+        model_func = AsyncMock(return_value=response_json)
+        engine = AnswerEngine(model_func=model_func)
+
         await engine.generate("query", _text_contexts())
 
-        _, kwargs = llm_func.call_args
-        assert "system_prompt" in kwargs
-        assert len(kwargs["system_prompt"]) > 0
+        call_kwargs = model_func.call_args.kwargs
+        assert call_kwargs.get("response_format") is StructuredAnswer
 
+    @pytest.mark.asyncio
     async def test_contexts_passed_through_unchanged(self) -> None:
         """The original contexts dict should be returned as-is."""
-        llm_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(llm_model_func=llm_func)
+        response_json = json.dumps({"answer": "answer", "references": []})
+        model_func = AsyncMock(return_value=response_json)
+        engine = AnswerEngine(model_func=model_func)
         contexts = _text_contexts()
         result = await engine.generate("q", contexts)
 
@@ -97,163 +141,65 @@ class TestAnswerEngineGenerateLLM:
         assert result.contexts["chunks"] == contexts["chunks"]
         assert result.contexts["entities"] == contexts["entities"]
 
-
-# ---------------------------------------------------------------------------
-# TestAnswerEngineGenerate — VLM multimodal path
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerEngineGenerateVLM:
-    """Test VLM path (chunks contain image_data)."""
-
-    async def test_vlm_path_with_images(self) -> None:
-        vlm_func = AsyncMock(return_value="Image analysis result.")
-        engine = AnswerEngine(
-            vision_model_func=vlm_func,
-        )
-        result = await engine.generate("Describe the chart", _image_contexts())
-
-        vlm_func.assert_awaited_once()
-        assert result.answer == "Image analysis result."
-
-    async def test_vlm_path_uses_messages_with_images(self) -> None:
-        vlm_func = AsyncMock(return_value="result")
-        engine = AnswerEngine(vision_model_func=vlm_func)
-        await engine.generate("query", _image_contexts())
-
-        _, kwargs = vlm_func.call_args
-        assert "messages" in kwargs
-        messages = kwargs["messages"]
-        # System message + user message with image content
-        assert len(messages) == 2
-        assert messages[0]["role"] == "system"
-        assert messages[1]["role"] == "user"
-        # User content includes image_url block
-        user_content = messages[1]["content"]
-        assert any(block.get("type") == "image_url" for block in user_content)
-
-    async def test_vlm_fallback_to_llm_when_no_vision_func(self) -> None:
-        """If no vision_model_func, fall back to llm_model_func for images."""
-        llm_func = AsyncMock(return_value="fallback answer")
-        engine = AnswerEngine(llm_model_func=llm_func)
-        result = await engine.generate("query", _image_contexts())
-
-        # Should use llm_func since vision_model_func is None
-        llm_func.assert_awaited_once()
-        assert result.answer == "fallback answer"
-
-
-# ---------------------------------------------------------------------------
-# TestAnswerEngineGenerate — Structured JSON parsing
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerEngineGenerateStructured:
-    """Test structured JSON parsing with providers that support it."""
-
-    async def test_structured_vlm_json_parsing(self) -> None:
-        """VLM structured path parses JSON with references."""
-        structured_json = json.dumps(
-            {
-                "answer": "Revenue grew 15% [1-1].",
-                "references": [{"id": 1, "title": "report.pdf"}],
-            }
-        )
-        vlm_func = AsyncMock(return_value=structured_json)
-        vlm_func.supports_structured = True
-        engine = AnswerEngine(vision_model_func=vlm_func)
-
-        result = await engine.generate("What is revenue?", _image_contexts())
-
-        assert result.answer == "Revenue grew 15% [1-1]."
-        assert len(result.references) == 1
-        assert result.references[0].id == 1
-        assert result.references[0].title == "report.pdf"
-
-    async def test_text_structured_passes_response_format(self) -> None:
-        """Text-only + structured provider passes response_format."""
-        structured_json = json.dumps(
-            {"answer": "Revenue grew 15%.", "references": [{"id": 1, "title": "report.pdf"}]}
-        )
-        llm_func = AsyncMock(return_value=structured_json)
-        llm_func.supports_structured = True
-        engine = AnswerEngine(llm_model_func=llm_func)
+    @pytest.mark.asyncio
+    async def test_generate_freetext_fallback(self) -> None:
+        """generate() falls back to freetext parsing when JSON parse fails."""
+        raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
+        model_func = AsyncMock(return_value=raw)
+        engine = AnswerEngine(model_func=model_func)
 
         result = await engine.generate("query", _text_contexts())
 
-        _, kwargs = llm_func.call_args
-        assert kwargs.get("response_format") is StructuredAnswer
-        assert result.answer == "Revenue grew 15%."
-        assert len(result.references) == 1
-
-    async def test_text_freetext_provider_no_response_format(self) -> None:
-        """Text-only + non-structured provider (ollama) uses freetext."""
-        raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
-        llm_func = AsyncMock(return_value=raw)
-        llm_func.supports_structured = False
-        engine = AnswerEngine(llm_model_func=llm_func)
-
-        result = await engine.generate("query", _text_contexts())
-
-        _, kwargs = llm_func.call_args
-        assert "response_format" not in kwargs
-        assert "Revenue grew 15%" in result.answer
+        assert "Growth is 15%" in result.answer
         assert len(result.references) == 1
         assert result.references[0].title == "report.pdf"
 
-    async def test_structured_vlm_sends_response_format(self) -> None:
-        structured_json = json.dumps({"answer": "Chart shows growth [1-1].", "references": []})
-        vlm_func = AsyncMock(return_value=structured_json)
-        vlm_func.supports_structured = True
-        engine = AnswerEngine(vision_model_func=vlm_func)
-
-        await engine.generate("describe chart", _image_contexts())
-
-        _, kwargs = vlm_func.call_args
-        assert kwargs.get("response_format") is StructuredAnswer
-
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngineGenerate — No model funcs
+# TestAnswerEngineStream
 # ---------------------------------------------------------------------------
 
 
-class TestAnswerEngineGenerateNoModel:
-    """Test behavior when no model functions are provided."""
+class TestAnswerEngineStream:
+    """Test streaming generate_stream() with messages-first interface."""
 
-    async def test_no_model_funcs_returns_none_answer(self) -> None:
-        engine = AnswerEngine()
-        contexts = _text_contexts()
-        result = await engine.generate("query", contexts)
+    @pytest.mark.asyncio
+    async def test_generate_stream_wraps_with_answer_stream(self) -> None:
+        """generate_stream() wraps async iterator with AnswerStream."""
 
-        assert result.answer is None
-        assert result.contexts is contexts
-        assert result.references == []
+        async def mock_tokens():
+            for token in ["Hello", " world"]:
+                yield token
 
-    async def test_no_model_funcs_with_images(self) -> None:
-        engine = AnswerEngine()
-        contexts = _image_contexts()
-        result = await engine.generate("query", contexts)
+        model_func = AsyncMock(return_value=mock_tokens())
+        engine = AnswerEngine(model_func=model_func)
 
-        assert result.answer is None
-        assert result.contexts is contexts
+        contexts = {"chunks": []}
+        ctx, token_iter = await engine.generate_stream("test", contexts)
 
+        from dlightrag.models.streaming import AnswerStream
 
-# ---------------------------------------------------------------------------
-# TestAnswerEngineGenerateStream
-# ---------------------------------------------------------------------------
+        assert isinstance(token_iter, AnswerStream)
 
+    @pytest.mark.asyncio
+    async def test_generate_stream_no_model_func(self) -> None:
+        """generate_stream() returns None when no model_func."""
+        engine = AnswerEngine(model_func=None)
+        contexts = {"chunks": []}
+        ctx, token_iter = await engine.generate_stream("test", contexts)
+        assert token_iter is None
+        assert ctx is contexts
 
-class TestAnswerEngineGenerateStream:
-    """Test streaming answer generation."""
+    @pytest.mark.asyncio
+    async def test_generate_stream_returns_contexts_and_tokens(self) -> None:
+        """generate_stream() returns original contexts and consumable tokens."""
 
-    async def test_stream_returns_contexts_and_iterator(self) -> None:
         async def mock_stream():
             for token in ["Hello", " ", "world"]:
                 yield token
 
-        llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func)
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
 
         contexts = _text_contexts()
         result_contexts, token_iter = await engine.generate_stream("query", contexts)
@@ -263,122 +209,112 @@ class TestAnswerEngineGenerateStream:
         tokens = [t async for t in token_iter]
         assert tokens == ["Hello", " ", "world"]
 
-    async def test_stream_no_model_funcs_returns_none_iterator(self) -> None:
-        engine = AnswerEngine()
-        contexts = _text_contexts()
-        result_contexts, token_iter = await engine.generate_stream("query", contexts)
-
-        assert result_contexts is contexts
-        assert token_iter is None
-
-    async def test_stream_vlm_path_with_images(self) -> None:
-        async def mock_stream():
-            for token in ["Image", " analysis"]:
-                yield token
-
-        vlm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(vision_model_func=vlm_func)
-
-        contexts = _image_contexts()
-        result_contexts, token_iter = await engine.generate_stream("describe", contexts)
-
-        assert result_contexts is contexts
-        assert token_iter is not None
-        vlm_func.assert_awaited_once()
-        # Verify messages were sent with images
-        _, kwargs = vlm_func.call_args
-        assert "messages" in kwargs
-        assert kwargs["stream"] is True
-
-    async def test_stream_vlm_structured_wraps_with_answer_stream(self) -> None:
-        """VLM providers should wrap the iterator with AnswerStream."""
+    @pytest.mark.asyncio
+    async def test_generate_stream_no_response_format(self) -> None:
+        """generate_stream() must NOT pass response_format."""
 
         async def mock_stream():
-            for token in ['{"answer": "hello', " world", '", "references": []}']:
-                yield token
+            yield "text"
 
-        vlm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(vision_model_func=vlm_func)
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
 
-        contexts = _image_contexts()
-        _, token_iter = await engine.generate_stream("query", contexts)
+        await engine.generate_stream("query", _text_contexts())
 
-        assert token_iter is not None
-        # Streaming always wraps with AnswerStream
-        from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
+        call_kwargs = model_func.call_args.kwargs
+        assert "response_format" not in call_kwargs
+        assert call_kwargs.get("stream") is True
 
-        assert isinstance(token_iter, AnswerStreamCls)
-
-    async def test_stream_text_structured_wraps_with_answer_stream(self) -> None:
-        """Text-only provider should wrap with AnswerStream."""
+    @pytest.mark.asyncio
+    async def test_generate_stream_passes_messages(self) -> None:
+        """generate_stream() passes messages kwarg."""
 
         async def mock_stream():
-            for token in ['{"answer": "hello', '", "references": []}']:
-                yield token
+            yield "token"
 
-        llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func)
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
 
-        contexts = _text_contexts()
-        _, token_iter = await engine.generate_stream("query", contexts)
+        await engine.generate_stream("query", _text_contexts())
 
-        assert token_iter is not None
-        from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
-
-        assert isinstance(token_iter, AnswerStreamCls)
-
-    async def test_stream_text_freetext_also_wrapped(self) -> None:
-        """Text-only + non-structured provider should also wrap with AnswerStream."""
-
-        async def mock_stream():
-            yield "plain answer text"
-
-        llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func)
-
-        contexts = _text_contexts()
-        _, token_iter = await engine.generate_stream("query", contexts)
-
-        assert token_iter is not None
-        from dlightrag.models.streaming import AnswerStream as AnswerStreamCls
-
-        assert isinstance(token_iter, AnswerStreamCls)
+        call_kwargs = model_func.call_args.kwargs
+        assert "messages" in call_kwargs
+        messages = call_kwargs["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[1]["role"] == "user"
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngine — Internal helpers
+# TestBuildMessages
+# ---------------------------------------------------------------------------
+
+
+class TestBuildMessages:
+    """Test _build_messages static method."""
+
+    def test_text_only(self) -> None:
+        """_build_messages without images returns text content."""
+        contexts: RetrievalContexts = {"chunks": [{"content": "text chunk"}]}
+        messages = AnswerEngine._build_messages("system", "user prompt", contexts)
+
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "system"
+        assert messages[1]["role"] == "user"
+        # user content should be a list with text entry
+        user_content = messages[1]["content"]
+        assert len(user_content) == 1
+        assert user_content[0]["type"] == "text"
+        assert user_content[0]["text"] == "user prompt"
+
+    def test_with_images(self) -> None:
+        """_build_messages with images includes image_url entries."""
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {"content": "text", "image_data": "abc123"},
+                {"content": "more text"},
+            ],
+        }
+        messages = AnswerEngine._build_messages("system", "user prompt", contexts)
+
+        user_content = messages[1]["content"]
+        image_entries = [e for e in user_content if e.get("type") == "image_url"]
+        text_entries = [e for e in user_content if e.get("type") == "text"]
+        assert len(image_entries) == 1
+        assert len(text_entries) == 1
+        assert "base64" in image_entries[0]["image_url"]["url"]
+
+    def test_multiple_images(self) -> None:
+        """_build_messages with multiple images includes all image_url entries."""
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {"content": "a", "image_data": "img1"},
+                {"content": "b", "image_data": "img2"},
+                {"content": "c"},
+            ],
+        }
+        messages = AnswerEngine._build_messages("sys", "prompt", contexts)
+        user_content = messages[1]["content"]
+        image_entries = [e for e in user_content if e.get("type") == "image_url"]
+        assert len(image_entries) == 2
+
+    def test_empty_chunks(self) -> None:
+        """_build_messages with empty chunks returns text-only content."""
+        contexts: RetrievalContexts = {"chunks": []}
+        messages = AnswerEngine._build_messages("sys", "prompt", contexts)
+        user_content = messages[1]["content"]
+        assert len(user_content) == 1
+        assert user_content[0]["type"] == "text"
+
+
+# ---------------------------------------------------------------------------
+# TestAnswerEngine -- Internal helpers (preserved)
 # ---------------------------------------------------------------------------
 
 
 class TestAnswerEngineHelpers:
     """Test static/internal helper methods."""
-
-    def test_has_images_true(self) -> None:
-        assert AnswerEngine._has_images(_image_contexts()) is True
-
-    def test_has_images_false(self) -> None:
-        assert AnswerEngine._has_images(_text_contexts()) is False
-
-    def test_has_images_empty(self) -> None:
-        empty: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
-        assert AnswerEngine._has_images(empty) is False
-
-    def test_build_vlm_messages_structure(self) -> None:
-        chunks = [
-            {"image_data": "abc123", "content": "text"},
-            {"content": "no image"},
-        ]
-        messages = AnswerEngine._build_vlm_messages("sys", "user prompt", chunks)
-
-        assert len(messages) == 2
-        assert messages[0] == {"role": "system", "content": "sys"}
-        user_content = messages[1]["content"]
-        # One image_url + one text
-        types = [block["type"] for block in user_content]
-        assert "image_url" in types
-        assert "text" in types
-        # Only 1 image (second chunk has no image_data)
-        assert types.count("image_url") == 1
 
     def test_format_kg_context_with_entities_and_rels(self) -> None:
         contexts: RetrievalContexts = {
@@ -423,7 +359,6 @@ class TestAnswerEngineHelpers:
         ]
         contexts: RetrievalContexts = {"chunks": [], "entities": entities, "relationships": []}
         result = AnswerEngine._format_kg_context(contexts)
-        # Should have header + 20 entities = 21 lines in entity section
         lines = [line for line in result.split("\n") if line.strip()]
         entity_lines = [line for line in lines if line.startswith("- **")]
         assert len(entity_lines) == 20
@@ -436,8 +371,6 @@ class TestAnswerEngineHelpers:
         assert "Knowledge Graph Context:" in prompt
         assert "Reference Document List:" in prompt
         assert "Question: What is revenue?" in prompt
-        # Should NOT contain conversation_history or FREETEXT_REMINDER
-        assert "Conversation History" not in prompt
 
     def test_build_citation_indexer(self) -> None:
         contexts = _text_contexts()
@@ -447,38 +380,42 @@ class TestAnswerEngineHelpers:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngine — Logging
+# TestAnswerEngine -- Logging
 # ---------------------------------------------------------------------------
 
 
 class TestAnswerEngineLogging:
     """Test that logging functions are called correctly."""
 
+    @pytest.mark.asyncio
     async def test_generate_calls_log_answer_llm_output(self) -> None:
-        llm_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(llm_model_func=llm_func)
+        response_json = json.dumps({"answer": "answer", "references": []})
+        model_func = AsyncMock(return_value=response_json)
+        engine = AnswerEngine(model_func=model_func)
 
         with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
             await engine.generate("query", _text_contexts())
-            # Should be called at least twice: path branch + output
+            # Should be called at least twice: pre-call + parse
             assert mock_log.call_count >= 2
 
+    @pytest.mark.asyncio
     async def test_generate_calls_log_references(self) -> None:
-        llm_func = AsyncMock(return_value="answer")
-        engine = AnswerEngine(llm_model_func=llm_func)
+        response_json = json.dumps({"answer": "answer", "references": []})
+        model_func = AsyncMock(return_value=response_json)
+        engine = AnswerEngine(model_func=model_func)
 
         with patch("dlightrag.core.answer.log_references") as mock_log:
             await engine.generate("query", _text_contexts())
             mock_log.assert_called_once()
-            call_kwargs = mock_log.call_args
-            assert call_kwargs[0][0] == "answer_engine.generate"
+            assert mock_log.call_args[0][0] == "answer_engine.generate"
 
+    @pytest.mark.asyncio
     async def test_generate_stream_calls_log_answer_llm_output(self) -> None:
         async def mock_stream():
             yield "token"
 
-        llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func)
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
 
         with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
             await engine.generate_stream("query", _text_contexts())
@@ -487,7 +424,7 @@ class TestAnswerEngineLogging:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngine — Freetext reference parsing
+# TestAnswerEngine -- Freetext reference parsing
 # ---------------------------------------------------------------------------
 
 
@@ -527,57 +464,3 @@ class TestAnswerEngineFreetextReferences:
         answer, refs = parse_freetext_references(raw)
         assert len(refs) == 1
         assert refs[0].title == "doc.pdf"
-
-    def test_freetext_generate_extracts_references(self) -> None:
-        """End-to-end: freetext provider generates references section, engine parses it."""
-        import asyncio
-
-        raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
-        llm_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(llm_model_func=llm_func)
-
-        result = asyncio.get_event_loop().run_until_complete(
-            engine.generate("query", _text_contexts())
-        )
-
-        assert "Growth is 15%" in result.answer
-        assert len(result.references) == 1
-        assert result.references[0].title == "report.pdf"
-
-
-# ---------------------------------------------------------------------------
-# TestAnswerEngine — Structured streaming params
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerEngineStreamStructured:
-    """Test streaming never passes response_format (incompatible with .parse())."""
-
-    async def test_stream_text_structured_no_response_format(self) -> None:
-        """Structured streaming must NOT pass response_format (would hit .parse())."""
-
-        async def mock_stream():
-            yield '{"answer": "test", "references": []}'
-
-        llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func)
-
-        await engine.generate_stream("query", _text_contexts())
-
-        _, kwargs = llm_func.call_args
-        assert "response_format" not in kwargs
-        assert kwargs.get("stream") is True
-
-    async def test_stream_text_freetext_no_response_format(self) -> None:
-        """Non-structured provider passes no response_format."""
-
-        async def mock_stream():
-            yield "plain text"
-
-        llm_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(llm_model_func=llm_func)
-
-        await engine.generate_stream("query", _text_contexts())
-
-        _, kwargs = llm_func.call_args
-        assert "response_format" not in kwargs
