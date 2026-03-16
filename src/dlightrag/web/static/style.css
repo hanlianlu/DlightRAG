@@ -258,16 +258,6 @@ body {
 
 /* === Slide-Out Panel === */
 
-.panel-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.3);
-    z-index: 99;
-}
-
-.panel-backdrop.open { display: block; }
-
 .panel {
     position: fixed;
     top: 0;

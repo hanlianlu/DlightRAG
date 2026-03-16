@@ -173,13 +173,11 @@ function getHistoryWindow() {
 
 function openPanel(title) {
     document.getElementById('panel').classList.add('open');
-    document.getElementById('panel-backdrop').classList.add('open');
     if (title) document.getElementById('panel-title').textContent = title;
 }
 
 function closePanel() {
     document.getElementById('panel').classList.remove('open');
-    document.getElementById('panel-backdrop').classList.remove('open');
 }
 
 // === Toast Notifications ===
@@ -563,9 +561,17 @@ document.addEventListener('DOMContentLoaded', function () {
         submitQuery(query);
     });
 
-    // Panel close: backdrop + close button (no inline onclick)
-    document.getElementById('panel-backdrop').addEventListener('click', closePanel);
+    // Panel close button
     document.getElementById('panel-close-btn').addEventListener('click', closePanel);
+
+    // Click outside panel to close (document-level, no backdrop needed)
+    document.addEventListener('click', function(e) {
+        var panel = document.getElementById('panel');
+        if (!panel.classList.contains('open')) return;
+        if (e.target.closest('.panel')) return;
+        if (e.target.closest('.citation-badge')) return;
+        closePanel();
+    });
 
     // Files button opens panel
     const filesBtn = document.getElementById('files-btn');
