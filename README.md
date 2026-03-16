@@ -6,7 +6,7 @@
 
 Multimodal RAG with knowledge graph intelligence. Understands what your documents say, how concepts connect, and what the pages look like. Production-ready.
 
-DlightRAG goes beyond text-only vector search by combining knowledge graph understanding with multimodal retrieval. From text-heavy reports to chart-filled presentations — it adapts to your documents. Answers come with inline citations grounded in actual document content. Ship it as a ready-to-run service, integrate into your backend, or expose as a tool for AI agents.
+DlightRAG goes beyond text-only vector search by combining knowledge graph understanding with multimodal retrieval. From text-heavy reports to chart-filled presentations — it adapts to your documents without information compromise. Inquiry answers come with inline citations grounded in actual document content. Flexibly ship it as a ready-to-run service, integrate into your backend, or expose as a tool for AI agents.
 
 ## Features
 
