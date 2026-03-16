@@ -23,48 +23,41 @@ from dlightrag.models.embedding import _litellm_embedding, _openai_embedding
 
 logger = logging.getLogger(__name__)
 
-# LightRAG-internal kwargs that must not leak to API calls
-_LIGHTRAG_STRIP_KWARGS = {
-    "keyword_extraction",
-    "token_tracker",
-    "use_azure",
-    "azure_deployment",
-    "api_version",
-}
-
-
 def _adapt_for_lightrag(completion_func: Callable) -> Callable:
-    """Wrap messages-first callable for LightRAG compatibility.
+    """Wrap messages-first callable for LightRAG's (prompt, system_prompt, ...) signature.
 
-    - Converts (prompt, system_prompt=...) to messages array
-    - Strips LightRAG-internal kwargs that would cause API errors
-    - Handles ``hashing_kv`` for LightRAG's response caching
+    Mirrors LightRAG's own ``openai_complete_if_cache`` signature: all LightRAG-internal
+    kwargs are received as explicit parameters (not blacklist-filtered), so new upstream
+    kwargs never leak to the API accidentally.
+
+    Caching is NOT handled here — LightRAG's operate.py layer manages it via
+    ``handle_cache`` / ``save_to_cache``.  The ``hashing_kv`` kwarg is bound by
+    LightRAG at init time via ``partial``; we accept and discard it.
     """
-    from lightrag.utils import compute_args_hash
 
-    async def wrapper(prompt: str, *, system_prompt: str | None = None, **kwargs: Any) -> Any:
-        hashing_kv = kwargs.pop("hashing_kv", None)
-        clean_kwargs = {k: v for k, v in kwargs.items() if k not in _LIGHTRAG_STRIP_KWARGS}
-
+    async def wrapper(
+        prompt: str,
+        *,
+        system_prompt: str | None = None,
+        # -- LightRAG-internal params (accepted explicitly, not forwarded) --
+        hashing_kv: Any = None,  # noqa: ARG001 — bound via partial at LightRAG init
+        history_messages: list[dict[str, Any]] | None = None,
+        keyword_extraction: bool = False,  # noqa: ARG001
+        enable_cot: bool = False,  # noqa: ARG001
+        token_tracker: Any = None,  # noqa: ARG001
+        use_azure: bool = False,  # noqa: ARG001
+        azure_deployment: str | None = None,  # noqa: ARG001
+        api_version: str | None = None,  # noqa: ARG001
+        **kwargs: Any,
+    ) -> Any:
         messages: list[dict[str, Any]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
+        if history_messages:
+            messages.extend(history_messages)
         messages.append({"role": "user", "content": prompt})
 
-        # Check LightRAG cache
-        if hashing_kv is not None:
-            args_hash = compute_args_hash("", prompt, system_prompt or "", str(clean_kwargs))
-            cached = await hashing_kv.get_by_id(args_hash)
-            if cached:
-                return cached["return"]
-
-        result = await completion_func(messages=messages, **clean_kwargs)
-
-        # Store in LightRAG cache
-        if hashing_kv is not None and isinstance(result, str):
-            await hashing_kv.upsert({args_hash: {"return": result, "model": "", "prompt": prompt}})
-
-        return result
+        return await completion_func(messages=messages, **kwargs)
 
     return wrapper
 
