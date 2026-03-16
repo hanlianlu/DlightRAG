@@ -11,12 +11,16 @@ but their internal pipelines differ significantly.
 ### Architecture
 
 ```
-VisualRetriever (retriever.py)
-  Phase 1  LightRAG retrieval (KG + text vector search)
-  Phase 2  Visual resolution (chunk_id -> page image via visual_chunks KV)
-           Text-only chunks (no visual data) are kept with their text content
-  Phase 3  Visual reranking (VLM pointwise or API reranker)
-  Phase 4  VLM answer generation (text excerpts + page images + KG context)
+RAGService (service.py)
+  Step 1  VisualRetriever — primary retrieval
+            Phase 1  LightRAG mix mode (KG traversal + vector search, internal round-robin)
+            Phase 2  Visual resolution (chunk_id -> page image via visual_chunks KV)
+                     Text-only chunks (no visual data) are kept with their text content
+            Phase 3  Visual reranking (VLM pointwise or API reranker)
+  Step 2  MetadataPath — supplementary retrieval (filename filter -> scoped vector search)
+            _resolve_chunk_contexts (text lookup + visual enrichment)
+  Merge   _merge_round_robin(Step 1, Step 2) -> top_k
+  Answer  AnswerEngine (text excerpts + page images + KG context -> VLM)
 ```
 
 ### Query Types
@@ -24,7 +28,7 @@ VisualRetriever (retriever.py)
 #### Pure Text Query
 
 ```
-query ─────> LightRAG (KG + chunk embedding search)
+query ─────> Step 1: LightRAG mix mode (KG + vector search)
                 │
                 ├─ entities/relationships (source_id -> chunk_ids)
                 └─ chunks (text vector match)
@@ -35,11 +39,17 @@ query ─────> LightRAG (KG + chunk embedding search)
                         │
                    Reranker: VLM scores "text query vs page image"
                         │
-                   Answer: VLM sees text excerpts + page images + KG context + query
+             Step 2: MetadataPath (filename filter -> scoped vector search)
+                        │
+             Round-robin merge (Step 1 + Step 2, dedup, top_k)
+                        │
+             Answer: VLM sees text excerpts + page images + KG context + query
 ```
 
 - No visual embedding search — text embedding already covers chunk retrieval.
 - Visual resolve maps chunk_ids to page images for VLM consumption.
+- Step 2 supplements Step 1 with document-level precision when metadata
+  filters are available.
 
 #### Image + Text Query (Dual-Path)
 
@@ -175,18 +185,15 @@ query + multimodal_content
 ## Data Flow Summary
 
 ```
-RAGService.aanswer(query, multimodal_content)
+RAGService.aretrieve / aanswer(query, multimodal_content)
     │
-    ├─ unified mode ─> UnifiedRepresentEngine.aanswer()
-    │                      └─> VisualRetriever.answer()
-    │                            Phase 1: LightRAG retrieval
-    │                            Phase 2: Visual resolve (text-only chunks kept)
-    │                            Phase 3: VLM/API rerank
-    │                            Phase 4: VLM answer (text excerpts + images)
+    ├─ unified mode
+    │     Step 1: VisualRetriever (LightRAG mix → visual resolve → rerank)
+    │     Step 2: MetadataPath (filter → scoped vector search → visual enrichment)
+    │     _merge_round_robin(Step 1, Step 2) → top_k
+    │     AnswerEngine (text excerpts + page images → VLM)
     │
-    └─ caption mode ──> RetrievalEngine.aanswer()
-                           └─> LightRAG.aquery_llm()
-                                 KG + vector retrieval
-                                 Built-in rerank
-                                 LLM answer
+    └─ caption mode
+          RetrievalEngine → LightRAG.aquery_llm()
+          KG + vector retrieval → built-in rerank → LLM answer
 ```
