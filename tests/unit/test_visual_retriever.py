@@ -188,8 +188,8 @@ class TestRetrieve:
         assert len(chunks) == 2
         assert all(c["image_data"] is not None for c in chunks)
 
-    async def test_none_visual_data_filtered(self) -> None:
-        """Visual chunks returning None for some IDs should be filtered out."""
+    async def test_none_visual_data_includes_text_only(self) -> None:
+        """Chunks without visual data are included as text-only (not dropped)."""
         retriever = _make_retriever(
             visual_data=[
                 {
@@ -199,12 +199,17 @@ class TestRetrieve:
                     "file_path": "/test/doc.pdf",
                     "doc_title": "Test",
                 },
-                None,  # chunk-def not found
+                None,  # chunk-def has no visual data but has text content
             ]
         )
         result = await retriever.retrieve("query")
         chunks = result["contexts"]["chunks"]
-        assert len(chunks) == 1
+        # Both chunks included: one visual, one text-only
+        assert len(chunks) == 2
+        visual_chunks = [c for c in chunks if c.get("image_data")]
+        text_only_chunks = [c for c in chunks if not c.get("image_data")]
+        assert len(visual_chunks) == 1
+        assert len(text_only_chunks) == 1
 
 
 # ---------------------------------------------------------------------------
