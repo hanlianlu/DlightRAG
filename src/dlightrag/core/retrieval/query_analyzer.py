@@ -125,6 +125,9 @@ class QueryAnalyzer:
             paths = ["metadata"]
             if query.strip():
                 paths.append("kg")
+            logger.info(
+                "[QueryAnalyzer] Explicit filters provided, paths=%s", paths
+            )
             return RetrievalPlan(
                 semantic_query=query,
                 metadata_filters=explicit_filters,
@@ -134,11 +137,19 @@ class QueryAnalyzer:
 
         # Layer 2: LLM extraction
         if self._llm_func:
+            logger.info("[QueryAnalyzer] Running LLM extraction for: %.120s", query)
             llm_plan = await self._llm_extract(query)
             if llm_plan:
+                logger.info(
+                    "[QueryAnalyzer] LLM result: paths=%s, has_filters=%s, semantic_query=%.80s",
+                    llm_plan.paths,
+                    llm_plan.metadata_filters is not None,
+                    llm_plan.semantic_query,
+                )
                 return llm_plan
 
         # Fallback: pure KG search
+        logger.info("[QueryAnalyzer] No LLM or extraction failed, fallback to pure KG")
         return RetrievalPlan(
             semantic_query=query,
             metadata_filters=None,
