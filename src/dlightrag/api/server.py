@@ -255,10 +255,12 @@ async def answer(body: AnswerRequest, request: Request):
             sources = cited.sources
         else:
             sources = []
+        # Derive references from cited-only sources (not LLM raw output)
+        cited_refs = [{"id": s.id, "title": s.title} for s in sources]
         return {
             "answer": result.answer,
             "contexts": result.contexts,
-            "references": [r.model_dump() for r in result.references] if result.references else [],
+            "references": cited_refs,
             "sources": [s.model_dump() for s in sources],
         }
 

@@ -47,17 +47,17 @@ class TestMetadataFilter:
 class TestRetrievalPlan:
     def test_default_paths(self) -> None:
         plan = RetrievalPlan(semantic_query="test", metadata_filters=None)
-        assert plan.paths == ["kg"]
+        assert plan.paths == ["kgvector"]
 
     def test_with_filters(self) -> None:
         f = MetadataFilter(filename="test.pdf")
         plan = RetrievalPlan(
             semantic_query="test",
             metadata_filters=f,
-            paths=["metadata", "kg"],
+            paths=["metafilters", "kgvector"],
         )
-        assert "metadata" in plan.paths
-        assert "kg" in plan.paths
+        assert "metafilters" in plan.paths
+        assert "kgvector" in plan.paths
 
     def test_original_query_preserved(self) -> None:
         plan = RetrievalPlan(

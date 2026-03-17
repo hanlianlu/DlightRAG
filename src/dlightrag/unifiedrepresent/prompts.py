@@ -47,7 +47,7 @@ Output your response as a JSON object with exactly two keys:
 - "answer": your full markdown answer with inline [n-m] citations
 - "references": an array of objects, each with "id" (int) and "title" (string)
 
-The references array must include **all and only** documents cited in your \
+The references array must include **all those and only those** documents cited in your \
 answer. **Example**: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
 """
 

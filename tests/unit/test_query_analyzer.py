@@ -20,16 +20,16 @@ class TestQueryAnalyzerExplicitFilters:
         plan = await analyzer.analyze("revenue insights", explicit_filters=filters)
         assert plan.metadata_filters is not None
         assert plan.metadata_filters.doc_author == "Zhang San"
-        assert "metadata" in plan.paths
-        assert "kg" in plan.paths
+        assert "metafilters" in plan.paths
+        assert "kgvector" in plan.paths
 
     @pytest.mark.asyncio
     async def test_explicit_filters_with_empty_query(self) -> None:
         analyzer = QueryAnalyzer()
         filters = MetadataFilter(doc_author="Zhang San")
         plan = await analyzer.analyze("", explicit_filters=filters)
-        assert plan.paths == ["metadata"]
-        assert "kg" not in plan.paths
+        assert plan.paths == ["metafilters"]
+        assert "kgvector" not in plan.paths
 
     @pytest.mark.asyncio
     async def test_empty_explicit_filters_ignored(self) -> None:
@@ -37,7 +37,7 @@ class TestQueryAnalyzerExplicitFilters:
         filters = MetadataFilter()  # all None
         plan = await analyzer.analyze("revenue insights", explicit_filters=filters)
         # Should fall through to next layer
-        assert plan.paths == ["kg"]
+        assert plan.paths == ["kgvector"]
 
 
 class TestQueryAnalyzerLLM:
@@ -47,7 +47,7 @@ class TestQueryAnalyzerLLM:
             {
                 "semantic_query": "revenue insights",
                 "filters": {"doc_author": "Zhang San", "date_from": "2024-01-01"},
-                "paths": ["metadata", "kg"],
+                "paths": ["metafilters", "kgvector"],
             }
         )
         llm_func = AsyncMock(return_value=llm_response)
@@ -64,7 +64,7 @@ class TestQueryAnalyzerLLM:
             {
                 "semantic_query": "what is this about",
                 "filters": {"filename": "IMG_9551.PNG"},
-                "paths": ["metadata", "kg"],
+                "paths": ["metafilters", "kgvector"],
             }
         )
         llm_func = AsyncMock(return_value=llm_response)
@@ -80,7 +80,7 @@ class TestQueryAnalyzerLLM:
             {
                 "semantic_query": "what is this about",
                 "filters": {"filename_pattern": "%IMG%9551%"},
-                "paths": ["metadata", "kg"],
+                "paths": ["metafilters", "kgvector"],
             }
         )
         llm_func = AsyncMock(return_value=llm_response)
@@ -95,7 +95,7 @@ class TestQueryAnalyzerLLM:
         analyzer = QueryAnalyzer(llm_func=llm_func)
         plan = await analyzer.analyze("some complex query")
         # Should fall back to pure KG
-        assert plan.paths == ["kg"]
+        assert plan.paths == ["kgvector"]
         assert plan.metadata_filters is None
 
     @pytest.mark.asyncio
@@ -104,14 +104,14 @@ class TestQueryAnalyzerLLM:
             {
                 "semantic_query": "what is quantum computing",
                 "filters": {},
-                "paths": ["kg"],
+                "paths": ["kgvector"],
             }
         )
         llm_func = AsyncMock(return_value=llm_response)
         analyzer = QueryAnalyzer(llm_func=llm_func)
         plan = await analyzer.analyze("what is quantum computing")
         assert plan.metadata_filters is None
-        assert plan.paths == ["kg"]
+        assert plan.paths == ["kgvector"]
 
     @pytest.mark.asyncio
     async def test_llm_extracts_dates(self) -> None:
@@ -123,7 +123,7 @@ class TestQueryAnalyzerLLM:
                     "date_from": "2024-01-01",
                     "date_to": "2024-12-31",
                 },
-                "paths": ["metadata", "kg"],
+                "paths": ["metafilters", "kgvector"],
             }
         )
         llm_func = AsyncMock(return_value=llm_response)
@@ -139,7 +139,7 @@ class TestQueryAnalyzerFallback:
     async def test_no_llm_pure_semantic(self) -> None:
         analyzer = QueryAnalyzer()  # no LLM
         plan = await analyzer.analyze("explain quantum entanglement")
-        assert plan.paths == ["kg"]
+        assert plan.paths == ["kgvector"]
         assert plan.semantic_query == "explain quantum entanglement"
         assert plan.original_query == "explain quantum entanglement"
 
@@ -148,5 +148,5 @@ class TestQueryAnalyzerFallback:
         """Without LLM, even filename queries fall to pure KG."""
         analyzer = QueryAnalyzer()  # no LLM
         plan = await analyzer.analyze("What's in report.pdf?")
-        assert plan.paths == ["kg"]
+        assert plan.paths == ["kgvector"]
         assert plan.metadata_filters is None
