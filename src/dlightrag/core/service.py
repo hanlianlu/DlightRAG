@@ -1126,12 +1126,15 @@ class RAGService:
         plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
 
         if not plan.metadata_filters and not plan.semantic_query:
-            logger.info("[MultiPath] No filters and no semantic query, skipping multi-path retrieval")
+            logger.info(
+                "[MultiPath] No filters and no semantic query, skipping multi-path retrieval"
+            )
             return []
 
         logger.info(
             "[MultiPath] Plan: paths=%s, has_filters=%s",
-            plan.paths, plan.metadata_filters is not None,
+            plan.paths,
+            plan.metadata_filters is not None,
         )
 
         chunks_vdb = None

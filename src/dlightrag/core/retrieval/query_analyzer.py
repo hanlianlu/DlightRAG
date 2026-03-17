@@ -125,9 +125,7 @@ class QueryAnalyzer:
             paths = ["metadata"]
             if query.strip():
                 paths.append("kg")
-            logger.info(
-                "[QueryAnalyzer] Explicit filters provided, paths=%s", paths
-            )
+            logger.info("[QueryAnalyzer] Explicit filters provided, paths=%s", paths)
             return RetrievalPlan(
                 semantic_query=query,
                 metadata_filters=explicit_filters,
