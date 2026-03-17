@@ -8,14 +8,43 @@ from pathlib import Path
 from fastapi import Cookie, Request
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
+import nh3
 
 from dlightrag.citations.parser import CITATION_PATTERN
-from dlightrag.web.markdown import render_markdown
+from dlightrag.web.markdown import render_chunk_content, render_markdown
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
 
 DEFAULT_WORKSPACE = "default"
+
+# Allowlist for nh3 sanitisation of source chunk content.
+_CHUNK_ALLOWED_TAGS = {
+    # table
+    "table", "thead", "tbody", "tfoot", "tr", "th", "td",
+    "caption", "colgroup", "col",
+    # text formatting
+    "p", "br", "hr", "b", "i", "em", "strong", "u", "s",
+    "del", "sub", "sup", "mark",
+    # structure
+    "h1", "h2", "h3", "h4", "h5", "h6", "div", "span",
+    # lists
+    "ul", "ol", "li", "dl", "dt", "dd",
+    # code
+    "pre", "code",
+    # links
+    "a",
+    # misc
+    "blockquote", "abbr", "details", "summary",
+}
+_CHUNK_ALLOWED_ATTRS: dict[str, set[str]] = {
+    "*": {"class"},
+    "a": {"href", "title"},
+    "td": {"colspan", "rowspan"},
+    "th": {"colspan", "rowspan", "scope"},
+    "col": {"span"},
+    "colgroup": {"span"},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -96,20 +125,24 @@ def _citation_badges(text: str) -> Markup:
 
 
 def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
-    """Escape content then inject <span class="highlight"> for each phrase."""
-    safe = str(Markup.escape(text))
+    """Render chunk content as HTML, sanitize, then inject highlight spans."""
+    html = render_chunk_content(text)
+    html = nh3.clean(html, tags=_CHUNK_ALLOWED_TAGS, attributes=_CHUNK_ALLOWED_ATTRS)
+
     if phrases:
         for phrase in phrases:
-            safe_phrase = str(Markup.escape(phrase))
-            pattern = re.escape(safe_phrase)
-            safe = re.sub(
-                f"({pattern})",
-                r'<span class="highlight">\1</span>',
-                safe,
+            # HTML-escape the phrase to match entity-encoded text in rendered output
+            # (e.g., "&" in phrase matches "&amp;" in HTML)
+            safe_phrase = re.escape(str(Markup.escape(phrase)))
+            html = re.sub(
+                f"(?<=>)([^<]*?)({safe_phrase})",
+                r'\1<span class="highlight">\2</span>',
+                html,
                 flags=re.IGNORECASE,
                 count=1,
             )
-    return Markup(safe)
+
+    return Markup(html)
 
 
 def _basename(path: str) -> str:

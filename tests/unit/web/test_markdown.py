@@ -191,3 +191,59 @@ def test_render_markdown_still_escapes_html():
     result = render_markdown("<table><tr><td>test</td></tr></table>")
     assert "<table>" not in result
     assert "&lt;table&gt;" in result
+
+
+def test_highlight_content_renders_html_table():
+    """HTML table in chunk content should render, not show raw tags."""
+    from dlightrag.web.deps import _highlight_content
+
+    html = "<table><tr><td>Support</td><td>Zoe</td></tr></table>"
+    result = str(_highlight_content(html))
+    assert "<table>" in result
+    assert "<td>Support</td>" in result
+    assert "&lt;table&gt;" not in result
+
+
+def test_highlight_content_xss_stripped():
+    """Script tags must be stripped by nh3 sanitization."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content('<script>alert("xss")</script>Normal text'))
+    assert "<script>" not in result
+    assert "Normal text" in result
+
+
+def test_highlight_content_phrase_in_table():
+    """Highlight phrase inside a table cell should work."""
+    from dlightrag.web.deps import _highlight_content
+
+    html = "<table><tr><td>Revenue grew 15%</td></tr></table>"
+    result = str(_highlight_content(html, ["Revenue grew 15%"]))
+    assert '<span class="highlight">' in result
+    assert "Revenue grew 15%" in result
+
+
+def test_highlight_content_phrase_skips_tag_attrs():
+    """Highlight should not match text inside HTML tag attributes."""
+    from dlightrag.web.deps import _highlight_content
+
+    html = '<a href="class-info">class info link</a>'
+    result = str(_highlight_content(html, ["class info"]))
+    assert 'href="class-info"' in result
+    assert '<span class="highlight">class info</span>' in result
+
+
+def test_highlight_content_plain_text():
+    """Plain text (no HTML, no markdown) still renders correctly."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("Just a simple text chunk."))
+    assert "Just a simple text chunk." in result
+
+
+def test_highlight_content_markdown_formatting():
+    """Markdown in chunk content should be rendered."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("**bold** text"))
+    assert "<strong>bold</strong>" in result
