@@ -450,6 +450,27 @@ body {
     font-size: 12.5px;
     margin-top: 8px;
     line-height: 1.65;
+    overflow-x: auto;
+}
+.source-chunk-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 12px;
+}
+.source-chunk-content th,
+.source-chunk-content td {
+    border: 1px solid rgba(120, 113, 108, 0.2);
+    padding: 6px 10px;
+    text-align: left;
+}
+.source-chunk-content th {
+    background: rgba(210, 182, 97, 0.08);
+    color: var(--text-200);
+    font-weight: 600;
+}
+.source-chunk-content tr:hover {
+    background: rgba(255, 255, 255, 0.02);
 }
 
 /* === Semantic Highlight === */
