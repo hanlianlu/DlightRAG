@@ -404,8 +404,8 @@ class TestAnswerEngineHelpers:
         assert "[1-1]" in result
         # Both entity and relationship should have the tag
         lines = result.split("\n")
-        entity_line = [l for l in lines if "Revenue" in l and "Metric" in l][0]
-        rel_line = [l for l in lines if "Acme -> Revenue" in l][0]
+        entity_line = [ln for ln in lines if "Revenue" in ln and "Metric" in ln][0]
+        rel_line = [ln for ln in lines if "Acme -> Revenue" in ln][0]
         assert "[1-1]" in entity_line
         assert "[1-1]" in rel_line
 
