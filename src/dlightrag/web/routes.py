@@ -161,7 +161,9 @@ async def answer_stream(
             #  20 messages ≈ 10 turns is sufficient and avoids wasting tokens)
             llm_func = manager.get_llm_func()
             standalone_query = await _rewrite_query(
-                query, conversation_history, llm_func,
+                query,
+                conversation_history,
+                llm_func,
                 max_rewrite_messages=20,
             )
 
