@@ -14,7 +14,6 @@ class ChunkSnippet(BaseModel):
     content: str
     image_data: str | None = None  # base64-encoded page image (unified mode)
     highlight_phrases: list[str] | None = None
-    highlight_phrases_map: dict[str, list[str]] | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -27,8 +26,6 @@ class SourceReference(BaseModel):
     path: str
     type: str | None = None
     url: str | None = None
-    snippet: str | None = None
-    chunk_ids: list[str] | None = None
     cited_chunk_ids: list[str] | None = None
     chunks: list[ChunkSnippet] | None = None
 

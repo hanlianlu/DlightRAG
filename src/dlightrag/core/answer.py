@@ -228,8 +228,17 @@ class AnswerEngine:
         return "\n".join(parts) if parts else "No knowledge graph context available."
 
     @staticmethod
-    def _format_chunk_excerpts(contexts: RetrievalContexts) -> str:
-        """Format chunk text content for the LLM prompt."""
+    def _format_chunk_excerpts(
+        contexts: RetrievalContexts,
+        indexer: CitationIndexer | None = None,
+    ) -> str:
+        """Format chunk text content for the LLM prompt.
+
+        When *indexer* is provided, each excerpt is labelled with its
+        ``[ref_id-chunk_idx]`` citation marker so the LLM can directly
+        see which marker corresponds to which content — eliminating the
+        need to cross-reference filenames against the reference list.
+        """
         chunks = contexts.get("chunks", [])
         if not chunks:
             return "No document excerpts available."
@@ -239,15 +248,31 @@ class AnswerEngine:
             content = chunk.get("content", "").strip()
             if not content:
                 continue
-            ref_id = chunk.get("reference_id", "")
+            ref_id = str(chunk.get("reference_id", ""))
+            chunk_id = chunk.get("chunk_id", "")
             page_idx = chunk.get("page_idx")
             file_path = chunk.get("file_path", "")
             filename = Path(file_path).name if file_path else f"Source {ref_id}"
 
-            if page_idx:
-                label = f"[{filename}, Page {page_idx}]"
+            # Build citation tag from indexer when available
+            cite_tag = ""
+            if indexer and ref_id and chunk_id:
+                cidx = indexer.get_chunk_idx(ref_id, chunk_id)
+                if cidx is not None:
+                    cite_tag = f"[{ref_id}-{cidx}] "
+
+            if cite_tag:
+                # Citation marker present — append filename as context
+                if page_idx:
+                    label = f"{cite_tag}{filename}, Page {page_idx}"
+                else:
+                    label = f"{cite_tag}{filename}"
             else:
-                label = f"[{filename}]"
+                # No indexer — preserve original bracket format
+                if page_idx:
+                    label = f"[{filename}, Page {page_idx}]"
+                else:
+                    label = f"[{filename}]"
             parts.append(f"{label}\n{content}")
 
         return "\n\n".join(parts) if parts else "No document excerpts available."
@@ -255,9 +280,10 @@ class AnswerEngine:
     def _build_user_prompt(self, query: str, contexts: RetrievalContexts) -> str:
         """Combine KG context + chunk excerpts + reference list + question."""
         kg_context = self._format_kg_context(contexts)
-        excerpts = self._format_chunk_excerpts(contexts)
+        # Build indexer first so excerpt labels include [ref_id-chunk_idx]
         indexer = self._build_citation_indexer(contexts)
         ref_list = indexer.format_reference_list()
+        excerpts = self._format_chunk_excerpts(contexts, indexer=indexer)
 
         prompt_parts = [
             f"Knowledge Graph Context:\n{kg_context}",
