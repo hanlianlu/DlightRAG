@@ -203,8 +203,16 @@ class AnswerEngine:
         return indexer
 
     @staticmethod
-    def _format_kg_context(contexts: RetrievalContexts) -> str:
-        """Format entities/relationships as markdown text (max 20 each)."""
+    def _format_kg_context(
+        contexts: RetrievalContexts,
+        indexer: CitationIndexer | None = None,
+    ) -> str:
+        """Format entities/relationships as markdown text (max 20 each).
+
+        When *indexer* is provided, each entity/relationship is annotated
+        with citation tags derived from its ``source_id``, so the LLM
+        knows which document each KG fact originated from.
+        """
         parts: list[str] = []
 
         entities = contexts.get("entities", [])
@@ -214,7 +222,12 @@ class AnswerEngine:
                 name = e.get("entity_name", "")
                 etype = e.get("entity_type", "")
                 desc = e.get("description", "")
-                parts.append(f"- **{name}** ({etype}): {desc}")
+                cite = ""
+                if indexer:
+                    tags = indexer.get_citation_tags(e.get("source_id"))
+                    if tags:
+                        cite = " " + "".join(tags)
+                parts.append(f"- **{name}** ({etype}): {desc}{cite}")
 
         rels = contexts.get("relationships", [])
         if rels:
@@ -223,7 +236,12 @@ class AnswerEngine:
                 src = r.get("src_id", "")
                 tgt = r.get("tgt_id", "")
                 desc = r.get("description", "")
-                parts.append(f"- {src} -> {tgt}: {desc}")
+                cite = ""
+                if indexer:
+                    tags = indexer.get_citation_tags(r.get("source_id"))
+                    if tags:
+                        cite = " " + "".join(tags)
+                parts.append(f"- {src} -> {tgt}: {desc}{cite}")
 
         return "\n".join(parts) if parts else "No knowledge graph context available."
 
@@ -279,9 +297,9 @@ class AnswerEngine:
 
     def _build_user_prompt(self, query: str, contexts: RetrievalContexts) -> str:
         """Combine KG context + chunk excerpts + reference list + question."""
-        kg_context = self._format_kg_context(contexts)
-        # Build indexer first so excerpt labels include [ref_id-chunk_idx]
+        # Build indexer first so KG context and excerpts include citation tags
         indexer = self._build_citation_indexer(contexts)
+        kg_context = self._format_kg_context(contexts, indexer=indexer)
         ref_list = indexer.format_reference_list()
         excerpts = self._format_chunk_excerpts(contexts, indexer=indexer)
 

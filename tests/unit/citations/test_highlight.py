@@ -29,6 +29,21 @@ def test_extract_citing_sentences_multiple_citations_one_sentence():
     assert "2-1" in result
 
 
+def test_extract_citing_sentences_doc_level():
+    text = "Revenue grew 15% [1]. Tech improved [2]."
+    result = extract_all_citing_sentences(text)
+    assert "1" in result
+    assert "2" in result
+    assert any("15%" in s for s in result["1"])
+
+
+def test_extract_citing_sentences_mixed_levels():
+    text = "Revenue grew 15% [1-1]. Overall the report [1] is positive."
+    result = extract_all_citing_sentences(text)
+    assert "1-1" in result
+    assert "1" in result
+
+
 def test_extract_citing_sentences_empty():
     assert extract_all_citing_sentences("no citations here") == {}
 
@@ -72,6 +87,32 @@ class TestHighlightExtractor:
         r1 = await extractor.extract_highlights("sentence", "chunk content with data", "c1")
         r2 = await extractor.extract_highlights("sentence", "chunk content with data", "c1")
         assert r1.phrases == r2.phrases
+
+    @pytest.mark.asyncio
+    async def test_doc_level_citation_triggers_highlights(self, mock_llm):
+        """Doc-level [n] citations should trigger highlights for all chunks of that source."""
+        from dlightrag.citations.highlight import extract_highlights_for_sources
+        from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+
+        sources = [
+            SourceReference(
+                id="1",
+                path="/docs/report.pdf",
+                title="report.pdf",
+                chunks=[
+                    ChunkSnippet(
+                        chunk_id="c1",
+                        chunk_idx=1,
+                        content="Reports show market growth reached 15% in 2025.",
+                    ),
+                ],
+            ),
+        ]
+        answer_text = "The market growth was impressive [1]."
+        result = await extract_highlights_for_sources(sources, answer_text, mock_llm)
+        # Doc-level [1] should match source id="1" and trigger highlights
+        assert result[0].chunks[0].highlight_phrases is not None
+        assert len(result[0].chunks[0].highlight_phrases) > 0
 
     @pytest.mark.asyncio
     async def test_invalid_phrases_filtered(self):

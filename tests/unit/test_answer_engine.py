@@ -362,6 +362,53 @@ class TestAnswerEngineHelpers:
         entity_lines = [line for line in lines if line.startswith("- **")]
         assert len(entity_lines) == 20
 
+    def test_format_kg_context_includes_citation_tags(self) -> None:
+        """KG entities/relationships should include citation tags when indexer is provided."""
+        from dlightrag.citations.indexer import CitationIndexer
+
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/docs/report.pdf",
+                    "content": "Revenue data.",
+                    "page_idx": 1,
+                },
+            ],
+            "entities": [
+                {
+                    "entity_name": "Revenue",
+                    "entity_type": "Metric",
+                    "description": "Total revenue grew 15%",
+                    "source_id": "c1",
+                },
+            ],
+            "relationships": [
+                {
+                    "src_id": "Acme",
+                    "tgt_id": "Revenue",
+                    "description": "reports",
+                    "source_id": "c1",
+                },
+            ],
+        }
+        flat = []
+        for items in contexts.values():
+            if isinstance(items, list):
+                flat.extend(items)
+        indexer = CitationIndexer()
+        indexer.build_index(flat)
+
+        result = AnswerEngine._format_kg_context(contexts, indexer=indexer)
+        assert "[1-1]" in result
+        # Both entity and relationship should have the tag
+        lines = result.split("\n")
+        entity_line = [l for l in lines if "Revenue" in l and "Metric" in l][0]
+        rel_line = [l for l in lines if "Acme -> Revenue" in l][0]
+        assert "[1-1]" in entity_line
+        assert "[1-1]" in rel_line
+
     def test_build_user_prompt_contains_all_parts(self) -> None:
         engine = AnswerEngine()
         contexts = _text_contexts()

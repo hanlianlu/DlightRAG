@@ -47,7 +47,8 @@ class HighlightPhrases(BaseModel):
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<=[.!?\u3002\uff01\uff1f])\s+|(?<=[.!?\u3002\uff01\uff1f])(?=\S)"
 )
-_CITATION_RE = re.compile(r"\[\w+-\d+\]")
+# Matches both chunk-level [n-m] and doc-level [n] citations
+_CITATION_RE = re.compile(r"\[\w+-\d+\]|\[\d+\](?![\w-])")
 
 
 def extract_all_citing_sentences(answer_text: str) -> dict[str, list[str]]:
@@ -169,8 +170,15 @@ async def extract_highlights_for_sources(
         if not src.chunks:
             continue
         for chunk in src.chunks:
-            key = f"{src.id}-{chunk.chunk_idx}"
-            for sentence in citing_sentences.get(key, []):
+            if not chunk.content:
+                continue
+            # Collect sentences from chunk-level [n-m] and doc-level [n] citations
+            chunk_key = f"{src.id}-{chunk.chunk_idx}"
+            sentences = list(citing_sentences.get(chunk_key, []))
+            for s in citing_sentences.get(src.id, []):
+                if s not in sentences:
+                    sentences.append(s)
+            for sentence in sentences:
                 tasks.append(_extract_one(chunk.chunk_id, chunk.content, sentence))
 
     if not tasks:
