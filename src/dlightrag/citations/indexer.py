@@ -23,6 +23,8 @@ class CitationIndexer:
     def __init__(self) -> None:
         self._index: dict[str, dict[str, int]] = {}
         self._reverse: dict[str, dict[int, str]] = {}
+        # chunk_id -> (ref_id, chunk_idx) for source_id lookups
+        self._chunk_to_ref: dict[str, tuple[str, int]] = {}
         # Per-ref doc metadata: ref_id -> file_name
         self._doc_names: dict[str, str] = {}
         # Per-chunk metadata: chunk_id -> {"page_idx": int, ...}
@@ -68,6 +70,7 @@ class CitationIndexer:
             for idx, cid in enumerate(chunk_ids, start=1):
                 self._index[ref_id][cid] = idx
                 self._reverse[ref_id][idx] = cid
+                self._chunk_to_ref[cid] = (ref_id, idx)
 
     def get_chunk_idx(self, ref_id: str | int, chunk_id: str) -> int | None:
         return self._index.get(str(ref_id), {}).get(chunk_id)
@@ -78,6 +81,24 @@ class CitationIndexer:
     def get_max_chunk_idx(self, ref_id: str | int) -> int:
         reverse = self._reverse.get(str(ref_id), {})
         return max(reverse.keys()) if reverse else 0
+
+    def get_citation_tags(self, source_id: str | None) -> list[str]:
+        """Return citation tags for a source_id (single or comma-separated chunk_ids).
+
+        Example: source_id="c1,c2" → ["[1-1]", "[1-2]"]
+        """
+        if not source_id:
+            return []
+        tags: list[str] = []
+        seen: set[str] = set()
+        for cid in split_source_ids(source_id):
+            ref_info = self._chunk_to_ref.get(cid)
+            if ref_info:
+                tag = f"[{ref_info[0]}-{ref_info[1]}]"
+                if tag not in seen:
+                    seen.add(tag)
+                    tags.append(tag)
+        return tags
 
     def inject_chunk_idx(self, contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         enriched = []

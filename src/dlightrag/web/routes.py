@@ -227,9 +227,9 @@ async def answer_stream(
             yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
 
             # Highlight extraction (best-effort, async follow-up)
-            # Skip for image-only sources (unified mode) — no text to highlight.
+            # Skip only when no chunk has text content at all.
             has_text_chunks = any(
-                chunk.content and not chunk.image_data
+                chunk.content
                 for src in result.sources
                 if src.chunks
                 for chunk in src.chunks
