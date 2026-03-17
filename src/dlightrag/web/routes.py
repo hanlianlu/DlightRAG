@@ -20,6 +20,8 @@ from dlightrag.citations import (
     extract_highlights_for_sources,
 )
 from dlightrag.citations.source_builder import build_sources
+from dlightrag.config import get_config
+from dlightrag.utils.tokens import truncate_conversation_history
 
 from .deps import get_manager, get_workspace, templates
 
@@ -41,11 +43,13 @@ async def _rewrite_query(
     user_message: str,
     conversation_history: list[dict[str, str]] | None,
     llm_func,
+    *,
+    max_rewrite_messages: int = 20,
 ) -> str:
     """Rewrite user message into standalone query using conversation context.
 
     Skips LLM call if no conversation history (first turn).
-    Uses last 10 turns (20 messages) for context.
+    Uses last *max_rewrite_messages* messages for context.
     Raises on LLM failure (no fallback).
     """
     if not conversation_history:
@@ -58,7 +62,9 @@ async def _rewrite_query(
         "If the message is already self-contained, return it unchanged."
     )
 
-    history_text = "\n".join(f"{m['role']}: {m['content']}" for m in conversation_history[-20:])
+    history_text = "\n".join(
+        f"{m['role']}: {m['content']}" for m in conversation_history[-max_rewrite_messages:]
+    )
 
     user_prompt = (
         f"Conversation history:\n{history_text}\n\n"
@@ -105,6 +111,17 @@ async def answer_stream(
 
     conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
 
+    # Truncate conversation history using config limits
+    cfg = get_config()
+    max_messages = cfg.max_conversation_turns * 2  # turns → messages (user + assistant)
+    max_tokens = cfg.max_conversation_tokens
+    if conversation_history:
+        conversation_history = truncate_conversation_history(
+            conversation_history,
+            max_messages=max_messages,
+            max_tokens=max_tokens,
+        )
+
     # Extract images (base64 from frontend)
     images_b64: list[str] = body.get("images", [])
     multimodal_content: list[dict[str, Any]] | None = None
@@ -135,9 +152,18 @@ async def answer_stream(
     async def event_generator() -> AsyncIterator[str]:
         full_answer = ""
         try:
-            # Rewrite query using conversation context
+            # Tell frontend how many history messages are in context
+            history_kept = len(conversation_history) if conversation_history else 0
+            yield f"event: meta\ndata: {json.dumps({'history_kept': history_kept})}\n\n"
+
+            # Rewrite query using recent conversation context
+            # (rewrite only needs enough to resolve references like "it", "that";
+            #  20 messages ≈ 10 turns is sufficient and avoids wasting tokens)
             llm_func = manager.get_llm_func()
-            standalone_query = await _rewrite_query(query, conversation_history, llm_func)
+            standalone_query = await _rewrite_query(
+                query, conversation_history, llm_func,
+                max_rewrite_messages=20,
+            )
 
             contexts, token_iter = await manager.aanswer_stream(
                 query=standalone_query,
@@ -206,10 +232,9 @@ async def answer_stream(
             )
             if has_text_chunks:
                 try:
-                    from dlightrag.config import get_config
                     from dlightrag.models.llm import get_chat_model_func
 
-                    llm_func = get_chat_model_func(get_config())
+                    llm_func = get_chat_model_func(cfg)
                     highlighted_sources = await asyncio.wait_for(
                         extract_highlights_for_sources(
                             sources=result.sources,

@@ -11,10 +11,10 @@
 // Format: [{role: "user", content: "..."}, {role: "assistant", content: "..."}, ...]
 const conversationHistory = [];
 
-// Server-driven budget — updated from SSE `meta` event each response.
-// Defaults are generous fallbacks used before the first server response.
-let historyCharBudget = 300000;  // chars (~150K tokens mixed scripts)
-let historyMaxMessages = 100;    // message count cap (50 turns × 2)
+// Conversation history sent to backend for multi-turn context.
+// Capped locally to avoid sending unbounded payloads; the backend
+// further truncates to its own config limits (turns + tokens).
+const HISTORY_SEND_CAP = 100;  // messages (generous; backend trims to ~50)
 
 // === Image Upload State ===
 
@@ -147,26 +147,65 @@ function updateWorkspacePanelCheckboxes() {
  * The backend still does authoritative token-level truncation.
  */
 function getHistoryWindow() {
-    if (conversationHistory.length === 0) return [];
+    // Send full history — backend truncates via config limits.
+    return conversationHistory;
+}
 
-    // Step 1: cap by message count
-    let window = conversationHistory.slice(-historyMaxMessages);
+// === Context Window Indicator ===
 
-    // Step 2: cap by char budget (walk backwards)
-    let totalChars = 0;
-    let cutoff = window.length;
-    for (let i = window.length - 1; i >= 0; i--) {
-        totalChars += (window[i].content || '').length;
-        if (totalChars > historyCharBudget) {
-            cutoff = i + 1;
-            break;
+/**
+ * Mark DOM messages that are outside the AI's context window.
+ * @param {number} historyKept - number of history messages the backend kept
+ */
+function _markOutOfContext(historyKept) {
+    const chatMessages = document.getElementById('chat-messages');
+    if (!chatMessages) return;
+
+    // Collect all message nodes (user wrappers + ai messages)
+    // Each exchange = 1 user wrapper + 1 ai-message div = 2 DOM nodes
+    const nodes = chatMessages.children;
+    // Total history messages in DOM (excluding current exchange being streamed)
+    // conversationHistory hasn't been pushed yet at this point, so its length
+    // equals the number of *previous* messages = DOM pairs - 1 current pair.
+    const totalHistoryMessages = conversationHistory.length;  // before current push
+    const outOfContextCount = totalHistoryMessages - historyKept;
+
+    if (outOfContextCount <= 0) {
+        // Everything is in context — remove any existing indicators
+        chatMessages.querySelectorAll('.out-of-context').forEach(
+            el => el.classList.remove('out-of-context')
+        );
+        const old = chatMessages.querySelector('.context-divider');
+        if (old) old.remove();
+        return;
+    }
+
+    // Each history message corresponds to 1 DOM node:
+    //   user wrapper (contains .user-message) or .ai-message
+    // Walk through DOM children and mark the first `outOfContextCount` messages
+    let msgIndex = 0;
+    let dividerInsertBefore = null;
+    for (let i = 0; i < nodes.length; i++) {
+        const node = nodes[i];
+        if (node.classList.contains('context-divider')) continue;
+        if (msgIndex < outOfContextCount) {
+            node.classList.add('out-of-context');
+        } else {
+            node.classList.remove('out-of-context');
+            if (dividerInsertBefore === null) dividerInsertBefore = node;
         }
-    }
-    if (cutoff > 0 && cutoff < window.length) {
-        window = window.slice(cutoff);
+        msgIndex++;
     }
 
-    return window;
+    // Insert divider if not already present
+    const existing = chatMessages.querySelector('.context-divider');
+    if (existing) existing.remove();
+    if (dividerInsertBefore) {
+        const divider = document.createElement('div');
+        divider.className = 'context-divider';
+        divider.textContent = 'Above messages are outside AI memory';
+        chatMessages.insertBefore(divider, dividerInsertBefore);
+    }
 }
 
 // === Panel Management ===
@@ -446,6 +485,10 @@ async function submitQuery(query) {
     if (success && fullAnswer) {
         conversationHistory.push({role: 'user', content: query});
         conversationHistory.push({role: 'assistant', content: fullAnswer});
+        // Keep array bounded — backend truncates further via config.
+        if (conversationHistory.length > HISTORY_SEND_CAP) {
+            conversationHistory.splice(0, conversationHistory.length - HISTORY_SEND_CAP);
+        }
     }
 
     _queryInFlight = false;
@@ -511,14 +554,12 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
             sourceData.innerHTML = highlightsHtml;  // eslint-disable-line -- trusted server content
         }
     } else if (eventType === 'meta') {
-        // Server-driven budget update
         try {
             const meta = JSON.parse(data);
-            if (meta.history_char_budget) historyCharBudget = meta.history_char_budget;
-            if (meta.history_max_messages) historyMaxMessages = meta.history_max_messages;
-        } catch (e) {
-            // Ignore parse errors; keep existing budget
-        }
+            if (typeof meta.history_kept === 'number') {
+                _markOutOfContext(meta.history_kept);
+            }
+        } catch (e) { /* ignore */ }
     } else if (eventType === 'error') {
         contentDiv.textContent = data;
         contentDiv.style.color = '#c44';
