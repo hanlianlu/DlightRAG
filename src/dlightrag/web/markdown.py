@@ -49,9 +49,7 @@ def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
 
 _md = MarkdownIt("gfm-like", {"html": False, "highlight": _highlight_fn}).disable("linkify")
 
-_md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).disable(
-    "linkify"
-)
+_md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).disable("linkify")
 
 
 def render_markdown(text: str) -> str:
