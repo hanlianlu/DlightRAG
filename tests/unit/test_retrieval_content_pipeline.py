@@ -95,7 +95,7 @@ class TestOrchestratorSimplified:
         plan = RetrievalPlan(
             semantic_query="key info",
             metadata_filters=MetadataFilter(filename="test.pdf"),
-            paths=["metadata"],
+            paths=["metafilters"],
             original_query="what is key info from test.pdf",
         )
 

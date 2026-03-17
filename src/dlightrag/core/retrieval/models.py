@@ -46,5 +46,5 @@ class RetrievalPlan:
 
     semantic_query: str
     metadata_filters: MetadataFilter | None
-    paths: list[str] = field(default_factory=lambda: ["kg"])
+    paths: list[str] = field(default_factory=lambda: ["kgvector"])
     original_query: str = ""

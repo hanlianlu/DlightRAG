@@ -198,11 +198,8 @@ async def answer_stream(
             if refs:
                 refs_data = [r.model_dump() for r in refs]
                 yield f"event: references\ndata: {json.dumps(refs_data)}\n\n"
-                # Reconstruct references section for display rendering.
-                ref_lines = [f"[{r.id}] {r.title}" for r in refs]
-                clean_answer += "\n\n### References\n" + "\n".join(ref_lines)
 
-            # Build cited-only sources
+            # Build cited-only sources (clean_answer has refs section stripped)
             flat_contexts = []
             for items in contexts.values():
                 if isinstance(items, list):
@@ -215,6 +212,11 @@ async def answer_stream(
                 available_sources=sources,
             )
             result = processor.process(clean_answer)
+
+            # Rebuild references section from cited-only sources
+            if result.sources:
+                ref_lines = [f"[{s.id}] {s.title}" for s in result.sources]
+                result.answer += "\n\n### References\n" + "\n".join(ref_lines)
 
             # Send done event immediately (sources without highlights)
             done_html = _render_partial(

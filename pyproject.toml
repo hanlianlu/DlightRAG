@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.2.0.1"
+version = "1.2.1"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -13,7 +13,7 @@ dependencies = [
     "lightrag-hku>=1.4.11rc2",
     "raganything[all]>=1.2.9",
     # LLM
-    "openai>=2.24.0",
+    "openai>=2.29.0",
     # PostgreSQL
     "asyncpg>=0.31.0",
     "pgvector>=0.4.2",
@@ -29,7 +29,7 @@ dependencies = [
     "azure-storage-blob>=12.28.0",
     "snowflake-connector-python>=4.3.0",
     # Document parsing
-    "docling>=2.76.0",
+    "docling>=2.80.0",
     "pypdfium2>=4.30.0",
     "openpyxl>=3.1",
     # MCP server
@@ -43,7 +43,7 @@ dependencies = [
     "markdown-it-py[plugins]>=3.0",
     "pygments>=2.17",
     # LLM providers (LiteLLM for non-OpenAI providers)
-    "litellm>=1.82.2",
+    "litellm>=1.82.3",
 ]
 
 [dependency-groups]

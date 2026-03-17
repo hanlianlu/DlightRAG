@@ -37,7 +37,7 @@ class TestOrchestratorMetadataOnly:
         plan = RetrievalPlan(
             semantic_query="",
             metadata_filters=MetadataFilter(filename="test.pdf"),
-            paths=["metadata"],
+            paths=["metafilters"],
         )
         result = await orch.orchestrate(plan)
         assert "chunk-a" in result
@@ -53,7 +53,7 @@ class TestOrchestratorMetadataOnly:
         plan = RetrievalPlan(
             semantic_query="test",
             metadata_filters=MetadataFilter(filename="test.pdf"),
-            paths=["metadata"],
+            paths=["metafilters"],
         )
         result = await orch.orchestrate(plan)
         assert result == []
@@ -66,7 +66,7 @@ class TestOrchestratorEmptyPlan:
         plan = RetrievalPlan(
             semantic_query="test",
             metadata_filters=None,
-            paths=["kg"],  # kg is not handled by orchestrator
+            paths=["kgvector"],  # kg is not handled by orchestrator
         )
         result = await orch.orchestrate(plan)
         assert result == []
@@ -82,7 +82,7 @@ class TestOrchestratorEmptyPlan:
         plan = RetrievalPlan(
             semantic_query="",
             metadata_filters=MetadataFilter(filename="test.pdf"),
-            paths=["metadata"],
+            paths=["metafilters"],
         )
         result = await orch.orchestrate(plan)
         assert result == []

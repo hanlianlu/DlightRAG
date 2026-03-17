@@ -90,10 +90,10 @@ def _resolve_paths(filters: MetadataFilter | None, semantic_query: str | None) -
     """Determine which retrieval paths to activate."""
     paths: list[str] = []
     if filters and not filters.is_empty():
-        paths.append("metadata")
+        paths.append("metafilters")
     if semantic_query:
-        paths.append("kg")
-    return paths or ["kg"]
+        paths.append("kgvector")
+    return paths or ["kgvector"]
 
 
 class QueryAnalyzer:
@@ -122,9 +122,9 @@ class QueryAnalyzer:
         """Analyze query and produce a retrieval plan."""
         # Layer 1: explicit API filters (short-circuit — user intent is explicit)
         if explicit_filters and not explicit_filters.is_empty():
-            paths = ["metadata"]
+            paths = ["metafilters"]
             if query.strip():
-                paths.append("kg")
+                paths.append("kgvector")
             logger.info("[QueryAnalyzer] Explicit filters provided, paths=%s", paths)
             return RetrievalPlan(
                 semantic_query=query,
@@ -147,11 +147,11 @@ class QueryAnalyzer:
                 return llm_plan
 
         # Fallback: pure KG search
-        logger.info("[QueryAnalyzer] No LLM or extraction failed, fallback to pure KG")
+        logger.info("[QueryAnalyzer] No LLM or extraction failed, fallback to pure KG+Vector")
         return RetrievalPlan(
             semantic_query=query,
             metadata_filters=None,
-            paths=["kg"],
+            paths=["kgvector"],
             original_query=query,
         )
 
