@@ -5,10 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import nh3
 from fastapi import Cookie, Request
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
-import nh3
 
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.web.markdown import render_chunk_content, render_markdown
