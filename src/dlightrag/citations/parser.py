@@ -118,7 +118,15 @@ def clean_invalid_citations(indexer: CitationIndexer, answer_text: str) -> str:
 
 
 # Heading regex used by parse_freetext_references
-_REFERENCES_HEADING_RE = re.compile(r"(?m)^#{1,3}\s*references\s*$", re.IGNORECASE)
+# Matches: # References, ## References, …, ###### References,
+#           **References**, References:, References (bare)
+_REFERENCES_HEADING_RE = re.compile(
+    r"(?m)^(?:#{1,6}\s*|\*{2})?references(?:\*{2})?[:\s]*$",
+    re.IGNORECASE,
+)
+
+# Ref line: [1] title, [1]: title, 【1】title
+_REF_LINE_RE = re.compile(r"(?:\[(\d+)\]|【(\d+)】):?\s*(.+)")
 
 
 def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
@@ -128,8 +136,8 @@ def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
         Use :func:`extract_references` instead, which provides 3-level
         fallback (JSON block → ``### References`` → empty).
 
-    Looks for a ``### References`` section at the end of the response
-    with lines like ``[n] Document Title`` or ``- [n] Document Title``.
+    Looks for a references section at the end of the response with lines
+    like ``[n] Title``, ``[n]: Title``, or ``【n】Title``.
     Returns ``(answer_text, references)`` where *answer_text* has the
     references section stripped.
     """
@@ -141,9 +149,9 @@ def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
     ref_section = parts[-1]
 
     refs: list[Reference] = []
-    for match in re.finditer(r"\[(\d+)\]\s*(.+)", ref_section):
-        ref_id = int(match.group(1))
-        title = match.group(2).strip().rstrip(".")
+    for match in _REF_LINE_RE.finditer(ref_section):
+        ref_id = int(match.group(1) or match.group(2))
+        title = match.group(3).strip().rstrip(".")
         refs.append(Reference(id=ref_id, title=title))
 
     logger.info(
@@ -167,14 +175,17 @@ def extract_references(raw: str) -> tuple[str, list[Reference]]:
     # Level 1: JSON block extraction
     answer, refs, found = _try_json_extraction(raw)
     if found:
+        logger.info("[RefExtract] Level 1 (JSON block): refs=%d", len(refs))
         return answer, refs
 
     # Level 2: ### References section
     answer, refs = parse_freetext_references(raw)
     if refs:
+        logger.info("[RefExtract] Level 2 (### References): refs=%d", len(refs))
         return answer, refs
 
     # Level 3: empty
+    logger.info("[RefExtract] Level 3: no references found in LLM output")
     return raw, []
 
 

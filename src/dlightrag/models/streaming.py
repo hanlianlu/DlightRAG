@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from dlightrag.citations.parser import extract_references
 from dlightrag.models.schemas import Reference
+
+logger = logging.getLogger(__name__)
 
 
 class AnswerStream(AsyncIterator[str]):
@@ -39,6 +42,11 @@ class AnswerStream(AsyncIterator[str]):
             yield chunk
         full = "".join(self._parts)
         self.answer, self.references = extract_references(full)
+        logger.info(
+            "[AnswerStream] Post-stream extraction: refs=%d, answer_len=%d",
+            len(self.references),
+            len(self.answer),
+        )
 
 
 __all__ = ["AnswerStream"]
