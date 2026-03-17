@@ -152,3 +152,98 @@ def test_citation_badges_markdown_rendering():
     result = str(_citation_badges("**bold** text [1-1]"))
     assert "<strong>bold</strong>" in result
     assert 'class="citation-badge"' in result
+
+
+def test_render_chunk_content_html_table_passthrough():
+    """HTML tables in chunk content should pass through (not be escaped)."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    html = "<table><tr><th>Name</th></tr><tr><td>Alice</td></tr></table>"
+    result = render_chunk_content(html)
+    assert "<table>" in result
+    assert "<td>Alice</td>" in result
+
+
+def test_render_chunk_content_markdown_formatting():
+    """Markdown formatting in chunk content should be rendered."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    result = render_chunk_content("**bold** and *italic*")
+    assert "<strong>bold</strong>" in result
+    assert "<em>italic</em>" in result
+
+
+def test_render_chunk_content_mixed_html_and_markdown():
+    """Chunk with both markdown text and HTML table."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    content = "## Summary\n\nKey findings:\n\n<table><tr><td>Revenue</td><td>$1M</td></tr></table>"
+    result = render_chunk_content(content)
+    assert "<h2>" in result
+    assert "<table>" in result
+    assert "<td>Revenue</td>" in result
+
+
+def test_render_markdown_still_escapes_html():
+    """Existing render_markdown must still escape HTML (answer safety)."""
+    from dlightrag.web.markdown import render_markdown
+
+    result = render_markdown("<table><tr><td>test</td></tr></table>")
+    assert "<table>" not in result
+    assert "&lt;table&gt;" in result
+
+
+def test_highlight_content_renders_html_table():
+    """HTML table in chunk content should render, not show raw tags."""
+    from dlightrag.web.deps import _highlight_content
+
+    html = "<table><tr><td>Support</td><td>Zoe</td></tr></table>"
+    result = str(_highlight_content(html))
+    assert "<table>" in result
+    assert "<td>Support</td>" in result
+    assert "&lt;table&gt;" not in result
+
+
+def test_highlight_content_xss_stripped():
+    """Script tags must be stripped by nh3 sanitization."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content('<script>alert("xss")</script>Normal text'))
+    assert "<script>" not in result
+    assert "Normal text" in result
+
+
+def test_highlight_content_phrase_in_table():
+    """Highlight phrase inside a table cell should work."""
+    from dlightrag.web.deps import _highlight_content
+
+    html = "<table><tr><td>Revenue grew 15%</td></tr></table>"
+    result = str(_highlight_content(html, ["Revenue grew 15%"]))
+    assert '<span class="highlight">' in result
+    assert "Revenue grew 15%" in result
+
+
+def test_highlight_content_phrase_skips_tag_attrs():
+    """Highlight should not match text inside HTML tag attributes."""
+    from dlightrag.web.deps import _highlight_content
+
+    html = '<a href="class-info">class info link</a>'
+    result = str(_highlight_content(html, ["class info"]))
+    assert 'href="class-info"' in result
+    assert '<span class="highlight">class info</span>' in result
+
+
+def test_highlight_content_plain_text():
+    """Plain text (no HTML, no markdown) still renders correctly."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("Just a simple text chunk."))
+    assert "Just a simple text chunk." in result
+
+
+def test_highlight_content_markdown_formatting():
+    """Markdown in chunk content should be rendered."""
+    from dlightrag.web.deps import _highlight_content
+
+    result = str(_highlight_content("**bold** text"))
+    assert "<strong>bold</strong>" in result
