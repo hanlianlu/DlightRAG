@@ -7,7 +7,6 @@ def test_chunk_snippet_minimal():
     assert cs.chunk_idx is None
     assert cs.page_idx is None
     assert cs.highlight_phrases is None
-    assert cs.highlight_phrases_map is None
 
 
 def test_chunk_snippet_full():
@@ -17,7 +16,6 @@ def test_chunk_snippet_full():
         page_idx=3,
         content="market growth reached 15%",
         highlight_phrases=["15%"],
-        highlight_phrases_map={"the growth was 15%": ["15%"]},
     )
     assert cs.chunk_idx == 2
     assert cs.highlight_phrases == ["15%"]

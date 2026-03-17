@@ -517,6 +517,82 @@ class TestFormatChunkExcerpts:
         assert "[doc.pdf]" in result
         assert "Page" not in result
 
+    def test_excerpts_include_citation_tags_with_indexer(self) -> None:
+        """When indexer is provided, excerpt labels include [ref_id-chunk_idx]."""
+        from dlightrag.citations.indexer import CitationIndexer
+
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/docs/report.pdf",
+                    "content": "Revenue grew 15%.",
+                    "page_idx": 3,
+                },
+                {
+                    "chunk_id": "c2",
+                    "reference_id": "2",
+                    "file_path": "/docs/whitepaper.pdf",
+                    "content": "Parser benchmarks.",
+                    "page_idx": 1,
+                },
+            ],
+        }
+        indexer = CitationIndexer()
+        flat = list(contexts["chunks"])
+        indexer.build_index(flat)
+
+        result = AnswerEngine._format_chunk_excerpts(contexts, indexer=indexer)
+
+        # Citation markers should appear before filenames
+        assert "[1-1] report.pdf, Page 3" in result
+        assert "[2-1] whitepaper.pdf, Page 1" in result
+        # Content still present
+        assert "Revenue grew 15%." in result
+        assert "Parser benchmarks." in result
+
+    def test_citation_tags_match_reference_list(self) -> None:
+        """Citation tags in excerpts must match the reference list numbering."""
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/docs/report.pdf",
+                    "content": "First doc content.",
+                    "page_idx": 1,
+                },
+                {
+                    "chunk_id": "c2",
+                    "reference_id": "1",
+                    "file_path": "/docs/report.pdf",
+                    "content": "Second page content.",
+                    "page_idx": 5,
+                },
+                {
+                    "chunk_id": "c3",
+                    "reference_id": "2",
+                    "file_path": "/docs/other.pdf",
+                    "content": "Other doc content.",
+                    "page_idx": 2,
+                },
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+        engine = AnswerEngine()
+        prompt = engine._build_user_prompt("test query", contexts)
+
+        # Excerpts should have citation tags
+        assert "[1-1] report.pdf" in prompt
+        assert "[1-2] report.pdf" in prompt
+        assert "[2-1] other.pdf" in prompt
+
+        # Reference list should have matching entries
+        assert "[1] report.pdf" in prompt
+        assert "[2] other.pdf" in prompt
+
 
 # ---------------------------------------------------------------------------
 # TestBuildUserPromptIncludesExcerpts
