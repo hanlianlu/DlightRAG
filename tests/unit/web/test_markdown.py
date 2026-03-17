@@ -152,3 +152,42 @@ def test_citation_badges_markdown_rendering():
     result = str(_citation_badges("**bold** text [1-1]"))
     assert "<strong>bold</strong>" in result
     assert 'class="citation-badge"' in result
+
+
+def test_render_chunk_content_html_table_passthrough():
+    """HTML tables in chunk content should pass through (not be escaped)."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    html = "<table><tr><th>Name</th></tr><tr><td>Alice</td></tr></table>"
+    result = render_chunk_content(html)
+    assert "<table>" in result
+    assert "<td>Alice</td>" in result
+
+
+def test_render_chunk_content_markdown_formatting():
+    """Markdown formatting in chunk content should be rendered."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    result = render_chunk_content("**bold** and *italic*")
+    assert "<strong>bold</strong>" in result
+    assert "<em>italic</em>" in result
+
+
+def test_render_chunk_content_mixed_html_and_markdown():
+    """Chunk with both markdown text and HTML table."""
+    from dlightrag.web.markdown import render_chunk_content
+
+    content = "## Summary\n\nKey findings:\n\n<table><tr><td>Revenue</td><td>$1M</td></tr></table>"
+    result = render_chunk_content(content)
+    assert "<h2>" in result
+    assert "<table>" in result
+    assert "<td>Revenue</td>" in result
+
+
+def test_render_markdown_still_escapes_html():
+    """Existing render_markdown must still escape HTML (answer safety)."""
+    from dlightrag.web.markdown import render_markdown
+
+    result = render_markdown("<table><tr><td>test</td></tr></table>")
+    assert "<table>" not in result
+    assert "&lt;table&gt;" in result

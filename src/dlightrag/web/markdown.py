@@ -1,8 +1,13 @@
-"""Markdown-to-HTML renderer for Web UI answers.
+"""Markdown-to-HTML renderers for Web UI.
 
 Uses markdown-it-py (GFM-like preset) for Markdown/tables/lists and
 Pygments for fenced code block syntax highlighting. LaTeX $...$ passes
 through as literal text for client-side KaTeX rendering.
+
+Two renderers are provided:
+- ``render_markdown``: For answer content (``html: False`` — escapes raw HTML).
+- ``render_chunk_content``: For source chunks (``html: True`` — allows HTML
+  passthrough for tables from RAGAnything).
 """
 
 from __future__ import annotations
@@ -44,7 +49,16 @@ def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
 
 _md = MarkdownIt("gfm-like", {"html": False, "highlight": _highlight_fn}).disable("linkify")
 
+_md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).disable(
+    "linkify"
+)
+
 
 def render_markdown(text: str) -> str:
     """Convert Markdown text to HTML with syntax-highlighted code blocks."""
     return _md.render(text)
+
+
+def render_chunk_content(text: str) -> str:
+    """Render chunk content to HTML, allowing HTML passthrough for tables etc."""
+    return _md_chunk.render(text)
