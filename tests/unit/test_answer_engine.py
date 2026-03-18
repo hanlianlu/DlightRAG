@@ -362,8 +362,8 @@ class TestAnswerEngineHelpers:
         entity_lines = [line for line in lines if line.startswith("- **")]
         assert len(entity_lines) == 20
 
-    def test_format_kg_context_includes_citation_tags(self) -> None:
-        """KG entities/relationships should include citation tags when indexer is provided."""
+    def test_format_kg_context_includes_doc_level_tags(self) -> None:
+        """KG entities/relationships should include doc-level citation tags when indexer is provided."""
         from dlightrag.citations.indexer import CitationIndexer
 
         contexts: RetrievalContexts = {
@@ -401,13 +401,13 @@ class TestAnswerEngineHelpers:
         indexer.build_index(flat)
 
         result = AnswerEngine._format_kg_context(contexts, indexer=indexer)
-        assert "[1-1]" in result
-        # Both entity and relationship should have the tag
+        assert "(from [1])" in result
+        # Both entity and relationship should have doc-level tag
         lines = result.split("\n")
         entity_line = [ln for ln in lines if "Revenue" in ln and "Metric" in ln][0]
         rel_line = [ln for ln in lines if "Acme -> Revenue" in ln][0]
-        assert "[1-1]" in entity_line
-        assert "[1-1]" in rel_line
+        assert "(from [1])" in entity_line
+        assert "(from [1])" in rel_line
 
     def test_build_user_prompt_contains_all_parts(self) -> None:
         engine = AnswerEngine()

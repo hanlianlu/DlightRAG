@@ -100,6 +100,30 @@ class CitationIndexer:
                     tags.append(tag)
         return tags
 
+    def get_doc_tags(self, source_id: str | None) -> list[str]:
+        """Return unique doc-level tags for a source_id.
+
+        Unlike :meth:`get_citation_tags` which returns chunk-level ``[n-m]``
+        tags, this returns doc-level ``[n]`` tags — suitable for KG context
+        where the LLM should know the source documents but cite specific
+        chunks from the Document Excerpts section instead.
+
+        Example: source_id="c1,c2,c5" (c1,c2 from doc 1, c5 from doc 2)
+                 → ["[1]", "[2]"]
+        """
+        if not source_id:
+            return []
+        tags: list[str] = []
+        seen: set[str] = set()
+        for cid in split_source_ids(source_id):
+            ref_info = self._chunk_to_ref.get(cid)
+            if ref_info:
+                ref_id = ref_info[0]
+                if ref_id not in seen:
+                    seen.add(ref_id)
+                    tags.append(f"[{ref_id}]")
+        return tags
+
     def inject_chunk_idx(self, contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         enriched = []
         for ctx in contexts:
