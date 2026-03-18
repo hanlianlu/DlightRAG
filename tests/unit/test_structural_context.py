@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
 
 
@@ -246,9 +247,6 @@ class TestExtractFromPagesSequential:
 
         assert len(result) == 2
         assert vision_fn.call_count == 2
-
-
-from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 
 
 class TestEngineWiring:
