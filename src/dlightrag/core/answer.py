@@ -65,8 +65,8 @@ class AnswerEngine:
             return RetrievalResult(answer=None, contexts=contexts)
 
         system_prompt = get_answer_system_prompt(structured=True)
-        user_prompt = self._build_user_prompt(query, contexts)
-        messages = self._build_messages(system_prompt, user_prompt, contexts)
+        user_prompt, indexer = self._build_user_prompt(query, contexts)
+        messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
         logger.info(
             "[AE] generate: structured=True chunks=%d query=%s",
@@ -131,8 +131,8 @@ class AnswerEngine:
 
         # Always freetext for streaming -- structured prompt is wrong here
         system_prompt = get_answer_system_prompt(structured=False)
-        user_prompt = self._build_user_prompt(query, contexts)
-        messages = self._build_messages(system_prompt, user_prompt, contexts)
+        user_prompt, indexer = self._build_user_prompt(query, contexts)
+        messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
         logger.info(
             "[AE] generate_stream: chunks=%d query=%s",
@@ -169,14 +169,26 @@ class AnswerEngine:
         system_prompt: str,
         user_prompt: str,
         contexts: RetrievalContexts,
+        indexer: CitationIndexer | None = None,
     ) -> list[dict[str, Any]]:
         """Build OpenAI-format messages array with inline images if present."""
         content: list[dict[str, Any]] = []
 
-        # Add images from chunks
+        # Add images from chunks, labelled with their [n-m] citation marker
         for chunk in contexts.get("chunks", []):
             img_data = chunk.get("image_data")
             if img_data:
+                # Build a citation label so the LLM knows which [n-m] tag
+                # corresponds to this image (prevents invented [Image] tags)
+                label = "Page image"
+                if indexer:
+                    ref_id = str(chunk.get("reference_id", ""))
+                    chunk_id = chunk.get("chunk_id", "")
+                    if ref_id and chunk_id:
+                        cidx = indexer.get_chunk_idx(ref_id, chunk_id)
+                        if cidx is not None:
+                            label = f"[{ref_id}-{cidx}] Page image"
+                content.append({"type": "text", "text": label})
                 content.append(
                     {
                         "type": "image_url",
@@ -295,8 +307,15 @@ class AnswerEngine:
 
         return "\n\n".join(parts) if parts else "No document excerpts available."
 
-    def _build_user_prompt(self, query: str, contexts: RetrievalContexts) -> str:
-        """Combine KG context + chunk excerpts + reference list + question."""
+    def _build_user_prompt(
+        self, query: str, contexts: RetrievalContexts
+    ) -> tuple[str, CitationIndexer]:
+        """Combine KG context + chunk excerpts + reference list + question.
+
+        Returns the prompt string **and** the indexer so that
+        :meth:`_build_messages` can label inline images with their
+        ``[n-m]`` citation markers.
+        """
         # Build indexer first so KG context and excerpts include citation tags
         indexer = self._build_citation_indexer(contexts)
         kg_context = self._format_kg_context(contexts, indexer=indexer)
@@ -309,7 +328,7 @@ class AnswerEngine:
             f"Reference Document List:\n{ref_list}",
             f"Question: {query}",
         ]
-        return "\n\n".join(prompt_parts)
+        return "\n\n".join(prompt_parts), indexer
 
     def _parse_response(
         self,
