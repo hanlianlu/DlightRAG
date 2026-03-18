@@ -113,6 +113,7 @@ from dlightrag.models.llm import (  # noqa: E402
     get_chat_model_func,
     get_chat_model_func_for_lightrag,
     get_embedding_func,
+    get_ingest_model_func,
     get_rerank_func,
 )
 from dlightrag.unifiedrepresent.lifecycle import unified_delete_files, unified_ingest  # noqa: E402
@@ -469,6 +470,7 @@ class RAGService:
         # Get model functions
         chat_func_lr = get_chat_model_func_for_lightrag(config)
         chat_func = get_chat_model_func(config)
+        ingest_func = get_ingest_model_func(config)
 
         # Use httpx_text_embed instead of LightRAG's openai_embed for text
         # embedding.  openai_embed uses encoding_format:"base64" and the openai
@@ -579,6 +581,7 @@ class RAGService:
             vision_model_func=chat_func,
             visual_embedder=visual_embedder,
             path_resolver=self._path_resolver,
+            context_model_func=ingest_func,
         )
         self._backend = self.unified
 
