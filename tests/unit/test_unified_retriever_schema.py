@@ -10,6 +10,7 @@ from dlightrag.unifiedrepresent.retriever import VisualRetriever
 def _make_retriever() -> VisualRetriever:
     lightrag = MagicMock()
     visual_chunks = MagicMock()
+    visual_chunks.get_by_ids = AsyncMock(return_value=[])
     config = MagicMock()
     config.default_mode = "mix"
     config.top_k = 60
@@ -163,6 +164,11 @@ class TestQueryByVisualEmbedding:
             ]
         )
 
+        # visual_chunks returns image_data for the matched chunk
+        retriever.visual_chunks.get_by_ids = AsyncMock(
+            return_value=[{"image_data": "base64data", "page_index": 2, "file_path": "/data/doc.pdf"}]
+        )
+
         img_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         with patch("dlightrag.unifiedrepresent.retriever.Image") as mock_image:
             mock_pil = MagicMock()
@@ -175,5 +181,7 @@ class TestQueryByVisualEmbedding:
         assert "chunk_id" in chunk
         assert "page_idx" in chunk
         assert "content" in chunk
+        assert "image_data" in chunk
         assert chunk["chunk_id"] == "chunk-xyz"
         assert chunk["page_idx"] == 3  # 0-based 2 -> 1-based 3
+        assert chunk["image_data"] == "base64data"
