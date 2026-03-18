@@ -48,12 +48,12 @@ rerank:
 
 # Provider examples — uncomment one block to override chat above:
 
-# Ollama (local):
+# Ollama (local — use host.docker.internal inside Docker):
 
 #   chat:
 #     provider: openai
 #     model: qwen3:8b
-#     base_url: http://localhost:11434/v1
+#     base_url: http://host.docker.internal:11434/v1
 
 # Anthropic (via LiteLLM):
 
