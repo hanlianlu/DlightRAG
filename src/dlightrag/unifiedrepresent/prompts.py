@@ -86,8 +86,38 @@ Query: {query}
 Respond **ONLY** with a decimal number ranging from 0.00 to 1.00 (0.00 = completely irrelevant, 1.00 = fully relevant).
 """
 
+STRUCTURAL_CONTEXT_PROMPT = """\
+You are a document structure analyst. You maintain a running structural \
+context that helps OCR extraction of subsequent pages understand where \
+they are in the document.
+
+You will receive:
+1. The current structural context (may be empty for the first page)
+2. The extracted text content of the current page
+
+Decide whether the structural context needs updating:
+- UPDATE when you see: new section headings, new table headers, \
+new document structure, or a transition to different content
+- KEEP when the page is a continuation of existing content \
+(more data rows, same section text continuing)
+
+When updating, write a concise structural context that captures ONLY \
+information needed for understanding subsequent pages:
+- Active section/document headings
+- Active table column headers
+- Any persistent structural landmarks
+
+Do NOT include actual data values, row content, or page-specific details.
+
+Output JSON only:
+{"action": "update", "context": "..."}
+or
+{"action": "keep"}
+"""
+
 __all__ = [
     "FREETEXT_REMINDER",
+    "STRUCTURAL_CONTEXT_PROMPT",
     "VISUAL_RERANK_PROMPT",
     "get_answer_system_prompt",
 ]
