@@ -4,9 +4,14 @@
 
 # Python
 .venv
+venv/
+ENV/
 __pycache__
-*.pyc
+*.py[cod]
+*$py.class
 *.egg-info
+*.egg
+.eggs/
 dist/
 build/
 htmlcov/
@@ -23,6 +28,8 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+*.swo
+*~
 .claude/
 
 # OS
@@ -50,6 +57,3 @@ dlightrag_storage/
 # Test coverage
 .coverage
 coverage.xml
-
-# Python extras
-*.egg
