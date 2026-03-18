@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
 
@@ -143,3 +143,106 @@ class TestDescribePageWithContext:
 
         # First part should be the image (no context text block)
         assert content_parts[0]["type"] == "image_url"
+
+
+class TestExtractFromPagesSequential:
+    """Test that extract_from_pages processes pages sequentially with context."""
+
+    async def test_multi_page_processes_sequentially_with_context(self) -> None:
+        """Multi-page doc: pages are processed sequentially, context propagates."""
+        vision_fn = AsyncMock(side_effect=["# Title\nHeader row", "data row 1", "data row 2"])
+        context_fn = AsyncMock(side_effect=[
+            json.dumps({"action": "update", "context": "Doc: Report\nTable: A, B"}),
+            json.dumps({"action": "keep"}),
+            json.dumps({"action": "keep"}),
+        ])
+        ext = EntityExtractor(
+            _make_lightrag(), ["person"], vision_fn,
+            context_model_func=context_fn,
+        )
+        images = [MagicMock(), MagicMock(), MagicMock()]
+
+        with (
+            patch(
+                "dlightrag.unifiedrepresent.extractor.extract_entities",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "dlightrag.unifiedrepresent.extractor.merge_nodes_and_edges",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await ext.extract_from_pages(images, "doc-1", "/f.pdf")
+
+        assert len(result) == 3
+        assert vision_fn.call_count == 3
+        assert context_fn.call_count == 3
+
+        # Page 0: no structural_ctx (first page)
+        first_vlm_call = vision_fn.call_args_list[0]
+        first_messages = first_vlm_call[1]["messages"]
+        first_user = [m for m in first_messages if m["role"] == "user"][0]
+        assert first_user["content"][0]["type"] == "image_url"
+
+        # Page 1: should have structural_ctx from page 0's update
+        second_vlm_call = vision_fn.call_args_list[1]
+        second_messages = second_vlm_call[1]["messages"]
+        second_user = [m for m in second_messages if m["role"] == "user"][0]
+        assert second_user["content"][0]["type"] == "text"
+        assert "Doc: Report" in second_user["content"][0]["text"]
+
+    async def test_single_page_skips_context_machinery(self) -> None:
+        """Single-page doc: no context LLM calls made."""
+        vision_fn = AsyncMock(return_value="page content")
+        context_fn = AsyncMock()
+        ext = EntityExtractor(
+            _make_lightrag(), ["person"], vision_fn,
+            context_model_func=context_fn,
+        )
+        images = [MagicMock()]
+
+        with (
+            patch(
+                "dlightrag.unifiedrepresent.extractor.extract_entities",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "dlightrag.unifiedrepresent.extractor.merge_nodes_and_edges",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await ext.extract_from_pages(images, "doc-1", "/f.pdf")
+
+        assert len(result) == 1
+        assert vision_fn.call_count == 1
+        context_fn.assert_not_called()
+
+    async def test_no_context_model_func_still_works(self) -> None:
+        """Without context_model_func, multi-page still works (parallel, no context)."""
+        vision_fn = AsyncMock(return_value="desc")
+        ext = EntityExtractor(
+            _make_lightrag(), ["person"], vision_fn,
+            context_model_func=None,
+        )
+        images = [MagicMock(), MagicMock()]
+
+        with (
+            patch(
+                "dlightrag.unifiedrepresent.extractor.extract_entities",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+            patch(
+                "dlightrag.unifiedrepresent.extractor.merge_nodes_and_edges",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+        ):
+            result = await ext.extract_from_pages(images, "doc-1", "/f.pdf")
+
+        assert len(result) == 2
+        assert vision_fn.call_count == 2

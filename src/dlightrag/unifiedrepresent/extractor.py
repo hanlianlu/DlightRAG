@@ -55,15 +55,35 @@ class EntityExtractor:
         Returns list of dicts with keys: chunk_id, page_index, content
         (VLM description). These are used to populate text_chunks and
         visual_chunks.
+
+        When context_model_func is set and there are multiple pages,
+        pages are processed sequentially with structural context
+        carry-forward. Otherwise, pages are processed in parallel.
+        Single-page documents skip context machinery entirely.
         """
         if self.vision_model_func is None:
             raise ValueError("vision_model_func is required for entity extraction")
 
-        # 1. Generate VLM descriptions for all pages (semaphore-controlled)
-        description_tasks = [
-            self._describe_page(image, page_index) for page_index, image in enumerate(images)
-        ]
-        descriptions = await asyncio.gather(*description_tasks)
+        # 1. Generate VLM descriptions
+        if len(images) <= 1 or self.context_model_func is None:
+            # Single page or no context model: parallel (original behavior)
+            description_tasks = [
+                self._describe_page(image, page_index)
+                for page_index, image in enumerate(images)
+            ]
+            descriptions = await asyncio.gather(*description_tasks)
+        else:
+            # Multi-page with context model: sequential with carry-forward
+            descriptions = []
+            structural_ctx: str | None = None
+            for page_index, image in enumerate(images):
+                desc = await self._describe_page(
+                    image, page_index, structural_ctx=structural_ctx
+                )
+                structural_ctx = await self._update_structural_context(
+                    structural_ctx, desc
+                )
+                descriptions.append(desc)
 
         # 2. Build chunks dict for LightRAG
         chunk_ids: list[str] = []
