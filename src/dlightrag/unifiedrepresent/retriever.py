@@ -172,65 +172,9 @@ class VisualRetriever:
                     if cid:
                         chunk_ids.add(cid)
 
-        # Backfill content and metadata for chunks discovered via entities/relationships.
-        # These chunk_ids came from source_id fields and lack text/reference metadata.
-        missing_cids = chunk_ids - set(chunk_text.keys())
-        if missing_cids:
-            # Build reverse map: file_path -> reference_id from known chunks
-            path_to_ref: dict[str, str] = {}
-            for meta in chunk_meta.values():
-                fp = meta.get("file_path", "")
-                rid = meta.get("reference_id", "")
-                if fp and rid:
-                    path_to_ref[fp] = rid
-
-            missing_list = list(missing_cids)
-            text_data = await self.lightrag.text_chunks.get_by_ids(missing_list)
-            recovered = 0
-            for cid, td in zip(missing_list, text_data, strict=False):
-                if td is None:
-                    continue
-                if isinstance(td, str):
-                    try:
-                        td = json.loads(td)
-                    except (json.JSONDecodeError, TypeError):
-                        continue
-                if isinstance(td, dict):
-                    content = td.get("content", "")
-                    file_path = td.get("file_path", "")
-                    if content:
-                        chunk_text[cid] = content
-                        recovered += 1
-                    if cid not in chunk_meta:
-                        chunk_meta[cid] = {
-                            "reference_id": path_to_ref.get(file_path, ""),
-                            "file_path": file_path,
-                        }
-            logger.info(
-                "[Backfill] Recovered text for %d/%d entity/relationship chunks",
-                recovered,
-                len(missing_cids),
-            )
-
         # Phase 2: Visual resolution
         chunk_id_list = list(chunk_ids)
-        logger.info("[Visual Resolve] Looking up %d chunk_ids in visual_chunks", len(chunk_id_list))
-        visual_data = await self.visual_chunks.get_by_ids(chunk_id_list)
-        # visual_data is a list (same order as input); filter out None/missing.
-        # Some KV backends (e.g., PG) may return JSONB as raw strings — parse them.
-        resolved: dict[str, dict] = {}
-        for cid, vd in zip(chunk_id_list, visual_data, strict=False):
-            if vd is None:
-                continue
-            if isinstance(vd, str):
-                try:
-                    vd = json.loads(vd)
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning("Skipping unparseable visual_chunk %s", cid)
-                    continue
-            if isinstance(vd, dict):
-                resolved[cid] = vd
-        logger.info("[Visual Resolve] Resolved %d/%d chunks", len(resolved), len(chunk_id_list))
+        resolved = await self._resolve_visual_chunks(chunk_id_list)
 
         # Phase 3: Visual reranking (optional)
         if self.rerank_backend == "llm" and self.vision_model_func and resolved:
@@ -339,6 +283,10 @@ class VisualRetriever:
                     top_k=top_k,
                     query_embedding=embedding,
                 )
+                # Resolve visual_chunks to get image_data
+                raw_ids = [c.get("id", "") for c in (raw_chunks or []) if c.get("id")]
+                visual_data = await self._resolve_visual_chunks(raw_ids)
+
                 # Normalize VDB results to match text chunk schema
                 normalized = [
                     {
@@ -346,6 +294,7 @@ class VisualRetriever:
                         "reference_id": "",  # Not available from VDB; set by merge
                         "file_path": c.get("file_path", ""),
                         "content": c.get("content", ""),
+                        "image_data": visual_data.get(c.get("id", ""), {}).get("image_data"),
                         "page_idx": (c.get("chunk_order_index") or 0) + 1,  # 0→1-based
                         "relevance_score": c.get("distance", 0.0),
                     }
@@ -368,6 +317,29 @@ class VisualRetriever:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _resolve_visual_chunks(self, chunk_ids: list[str]) -> dict[str, dict]:
+        """Look up chunk_ids in visual_chunks KV store, return resolved dict.
+
+        Handles None results, JSONB-as-string parsing, and logs progress.
+        """
+        if not chunk_ids:
+            return {}
+        raw = await self.visual_chunks.get_by_ids(chunk_ids)
+        resolved: dict[str, dict] = {}
+        for cid, vd in zip(chunk_ids, raw, strict=False):
+            if vd is None:
+                continue
+            if isinstance(vd, str):
+                try:
+                    vd = json.loads(vd)
+                except (json.JSONDecodeError, TypeError):
+                    logger.warning("Skipping unparseable visual_chunk %s", cid)
+                    continue
+            if isinstance(vd, dict):
+                resolved[cid] = vd
+        logger.info("[Visual Resolve] Resolved %d/%d chunks", len(resolved), len(chunk_ids))
+        return resolved
 
     async def _llm_visual_rerank(
         self,
