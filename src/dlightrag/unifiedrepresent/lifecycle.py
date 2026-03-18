@@ -125,17 +125,31 @@ async def _ingest_local_dir(
             "total_files": 0,
         }
 
-    results: list[dict[str, Any]] = []
-    skipped = 0
-    for file_path in files:
-        result = await _ingest_single_local(
+    from dlightrag.utils.concurrency import bounded_gather
+
+    coros = [
+        _ingest_single_local(
             engine, hash_index, file_path, replace, metadata_index, user_metadata
         )
-        if result.get("status") == "skipped":
-            skipped += 1
-        results.append(result)
+        for file_path in files
+    ]
+    results = await bounded_gather(
+        coros,
+        max_concurrent=config.max_concurrent_ingestion,
+        task_name="unified-ingestion",
+    )
 
-    processed = len(results) - skipped
+    # Separate successes from failures
+    completed: list[dict[str, Any]] = []
+    skipped = 0
+    for r in results:
+        if isinstance(r, Exception):
+            continue  # already logged by bounded_gather
+        completed.append(r)
+        if r.get("status") == "skipped":
+            skipped += 1
+
+    processed = len(completed) - skipped
     logger.info(
         "Directory ingestion complete: %s (%d processed, %d skipped)",
         path,
@@ -146,7 +160,7 @@ async def _ingest_local_dir(
         "status": "success",
         "source_type": "local",
         "folder": str(path),
-        "results": results,
+        "results": completed,
         "processed": processed,
         "skipped": skipped,
         "total_files": len(files),
@@ -184,21 +198,29 @@ async def _ingest_azure_blob(
                 engine, config, hash_index, source, blob_path, replace, metadata_index
             )
 
+        from dlightrag.utils.concurrency import bounded_gather
+
         blob_ids = await source.alist_documents(prefix=prefix)
-        results: list[dict[str, Any]] = []
-        for bid in blob_ids:
-            result = await _ingest_single_blob(
+        coros = [
+            _ingest_single_blob(
                 engine, config, hash_index, source, bid, replace, metadata_index
             )
-            results.append(result)
+            for bid in blob_ids
+        ]
+        raw_results = await bounded_gather(
+            coros,
+            max_concurrent=config.max_concurrent_ingestion,
+            task_name="unified-blob-ingestion",
+        )
+        completed = [r for r in raw_results if not isinstance(r, Exception)]
 
         return {
             "status": "success",
             "source_type": "azure_blob",
             "container": container_name,
             "prefix": prefix,
-            "results": results,
-            "processed": len(results),
+            "results": completed,
+            "processed": len(completed),
         }
     finally:
         if hasattr(source, "aclose"):

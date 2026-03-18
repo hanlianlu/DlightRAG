@@ -16,6 +16,7 @@ def _make_config() -> MagicMock:
     config.ingestion_replace_default = False
     config.blob_connection_string = "fake-conn-str"
     config.temp_dir = Path("/tmp/dlightrag_test")
+    config.max_concurrent_ingestion = 4
     return config
 
 
