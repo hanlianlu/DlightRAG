@@ -117,7 +117,12 @@ class EntityExtractor:
             )
         ]
 
-    async def _describe_page(self, image: Any, page_index: int) -> str:
+    async def _describe_page(
+        self,
+        image: Any,
+        page_index: int,
+        structural_ctx: str | None = None,
+    ) -> str:
         """Call VLM to extract structured content and convert to text."""
         from dlightrag.core.vlm_ocr import (
             OCR_SYSTEM_PROMPT,
@@ -133,15 +138,24 @@ class EntityExtractor:
         image_bytes = image_to_png_bytes(image)
 
         b64 = base64.b64encode(image_bytes).decode()
+
+        # Build user content parts
+        user_content: list[dict[str, Any]] = []
+
+        # Inject structural context before image if available
+        if structural_ctx:
+            user_content.append(
+                {"type": "text", "text": f"Context from previous pages:\n{structural_ctx}"}
+            )
+
+        user_content.append(
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+        )
+        user_content.append({"type": "text", "text": OCR_USER_PROMPT})
+
         messages = [
             {"role": "system", "content": OCR_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    {"type": "text", "text": OCR_USER_PROMPT},
-                ],
-            },
+            {"role": "user", "content": user_content},
         ]
         async with self._vlm_semaphore:
             raw = await self.vision_model_func(messages=messages)
