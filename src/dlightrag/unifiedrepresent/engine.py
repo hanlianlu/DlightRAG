@@ -44,6 +44,7 @@ class UnifiedRepresentEngine:
         vision_model_func: Callable | None = None,
         visual_embedder: VisualEmbedder | None = None,
         path_resolver: PathResolver | None = None,
+        context_model_func: Callable | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -73,6 +74,7 @@ class UnifiedRepresentEngine:
             lightrag=lightrag,
             entity_types=config.kg_entity_types,
             vision_model_func=vision_model_func,
+            context_model_func=context_model_func,
         )
 
         self.retriever = VisualRetriever(

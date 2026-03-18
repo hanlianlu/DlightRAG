@@ -246,3 +246,52 @@ class TestExtractFromPagesSequential:
 
         assert len(result) == 2
         assert vision_fn.call_count == 2
+
+
+from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
+
+
+class TestEngineWiring:
+    """Test that UnifiedRepresentEngine passes context_model_func to EntityExtractor."""
+
+    def test_context_model_func_reaches_extractor(self) -> None:
+        mock_context_fn = AsyncMock()
+        mock_config = MagicMock()
+        mock_config.kg_entity_types = ["person"]
+        mock_config.page_render_dpi = 200
+        mock_config.embedding.model = "test"
+        mock_config.embedding.base_url = ""
+        mock_config.embedding.api_key = ""
+        mock_config.embedding.dim = 768
+        mock_config.embedding_func_max_async = 4
+        mock_config.rerank.enabled = False
+
+        engine = UnifiedRepresentEngine(
+            lightrag=MagicMock(),
+            visual_chunks=MagicMock(),
+            config=mock_config,
+            vision_model_func=AsyncMock(),
+            context_model_func=mock_context_fn,
+        )
+
+        assert engine.extractor.context_model_func is mock_context_fn
+
+    def test_context_model_func_defaults_to_none(self) -> None:
+        mock_config = MagicMock()
+        mock_config.kg_entity_types = ["person"]
+        mock_config.page_render_dpi = 200
+        mock_config.embedding.model = "test"
+        mock_config.embedding.base_url = ""
+        mock_config.embedding.api_key = ""
+        mock_config.embedding.dim = 768
+        mock_config.embedding_func_max_async = 4
+        mock_config.rerank.enabled = False
+
+        engine = UnifiedRepresentEngine(
+            lightrag=MagicMock(),
+            visual_chunks=MagicMock(),
+            config=mock_config,
+            vision_model_func=AsyncMock(),
+        )
+
+        assert engine.extractor.context_model_func is None
