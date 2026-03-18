@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.2.1"
+version = "1.2.1.1"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -44,7 +44,7 @@ dependencies = [
     "nh3>=0.2",
     "pygments>=2.17",
     # LLM providers (LiteLLM for non-OpenAI providers)
-    "litellm>=1.82.3",
+    "litellm>=1.82.4",
 ]
 
 [dependency-groups]
