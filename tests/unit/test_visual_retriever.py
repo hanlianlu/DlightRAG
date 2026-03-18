@@ -190,21 +190,28 @@ class TestRetrieve:
 
     async def test_none_visual_data_includes_text_only(self) -> None:
         """Chunks without visual data are included as text-only (not dropped)."""
-        retriever = _make_retriever(
-            visual_data=[
-                {
+
+        # Map visual data by chunk_id so result is independent of set iteration order.
+        # chunk-abc has text content (from chunks section) but no visual data → text-only.
+        # chunk-def has visual data (from relationships source_id) but no text.
+        async def _get_by_ids(ids: list[str]) -> list[dict | None]:
+            mapping: dict[str, dict | None] = {
+                "chunk-def": {
                     "image_data": _TINY_PNG_B64,
                     "page_index": 0,
                     "full_doc_id": "doc-1",
                     "file_path": "/test/doc.pdf",
                     "doc_title": "Test",
                 },
-                None,  # chunk-def has no visual data but has text content
-            ]
-        )
+            }
+            return [mapping.get(cid) for cid in ids]
+
+        retriever = _make_retriever()
+        retriever.visual_chunks.get_by_ids = AsyncMock(side_effect=_get_by_ids)
+
         result = await retriever.retrieve("query")
         chunks = result["contexts"]["chunks"]
-        # Both chunks included: one visual, one text-only
+        # Both chunks included: chunk-def (visual), chunk-abc (text-only)
         assert len(chunks) == 2
         visual_chunks = [c for c in chunks if c.get("image_data")]
         text_only_chunks = [c for c in chunks if not c.get("image_data")]
