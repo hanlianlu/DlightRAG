@@ -229,10 +229,7 @@ async def answer_stream(
             # Highlight extraction (best-effort, async follow-up)
             # Skip only when no chunk has text content at all.
             has_text_chunks = any(
-                chunk.content
-                for src in result.sources
-                if src.chunks
-                for chunk in src.chunks
+                chunk.content for src in result.sources if src.chunks for chunk in src.chunks
             )
             if has_text_chunks:
                 try:
