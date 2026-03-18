@@ -166,7 +166,9 @@ class TestQueryByVisualEmbedding:
 
         # visual_chunks returns image_data for the matched chunk
         retriever.visual_chunks.get_by_ids = AsyncMock(
-            return_value=[{"image_data": "base64data", "page_index": 2, "file_path": "/data/doc.pdf"}]
+            return_value=[
+                {"image_data": "base64data", "page_index": 2, "file_path": "/data/doc.pdf"}
+            ]
         )
 
         img_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
