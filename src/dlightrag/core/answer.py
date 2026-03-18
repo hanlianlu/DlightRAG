@@ -224,9 +224,9 @@ class AnswerEngine:
                 desc = e.get("description", "")
                 cite = ""
                 if indexer:
-                    tags = indexer.get_citation_tags(e.get("source_id"))
+                    tags = indexer.get_doc_tags(e.get("source_id"))
                     if tags:
-                        cite = " " + "".join(tags)
+                        cite = f" (from {', '.join(tags)})"
                 parts.append(f"- **{name}** ({etype}): {desc}{cite}")
 
         rels = contexts.get("relationships", [])
@@ -238,9 +238,9 @@ class AnswerEngine:
                 desc = r.get("description", "")
                 cite = ""
                 if indexer:
-                    tags = indexer.get_citation_tags(r.get("source_id"))
+                    tags = indexer.get_doc_tags(r.get("source_id"))
                     if tags:
-                        cite = " " + "".join(tags)
+                        cite = f" (from {', '.join(tags)})"
                 parts.append(f"- {src} -> {tgt}: {desc}{cite}")
 
         return "\n".join(parts) if parts else "No knowledge graph context available."
