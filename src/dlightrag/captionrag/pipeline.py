@@ -460,7 +460,9 @@ class IngestionPipeline:
                 self.max_concurrent,
             )
 
-            # Process files concurrently with semaphore control
+            # Process files concurrently with bounded worker pool
+            from dlightrag.utils.concurrency import bounded_gather
+
             async def _ingest_local_single(fp: Path, ch: str, uri: str) -> IngestionResult:
                 tmpdir = self._create_temp_dir()
                 try:
@@ -475,8 +477,10 @@ class IngestionPipeline:
                 finally:
                     shutil.rmtree(tmpdir, ignore_errors=True)
 
-            tasks = [_ingest_local_single(fp, ch, uri) for fp, ch, uri in files_to_process]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            coros = [_ingest_local_single(fp, ch, uri) for fp, ch, uri in files_to_process]
+            results = await bounded_gather(
+                coros, max_concurrent=self.max_concurrent, task_name="ingestion"
+            )
 
             # Count successes
             success_count = sum(
@@ -592,20 +596,23 @@ class IngestionPipeline:
             )
 
             # Phase 1: Download all blobs to temp dirs concurrently
+            from dlightrag.utils.concurrency import bounded_gather as _bounded_gather
+
             async def download_one(blob_id: str) -> tuple[Path, Path] | None:
                 """Download blob to temp, return (temp_file, tmpdir) or None."""
                 tmpdir = self._create_temp_dir()
-                async with self._semaphore:
-                    try:
-                        temp_file = await self._download_blob_to_temp(source, blob_id, tmpdir)
-                        return (temp_file, tmpdir)
-                    except Exception as exc:
-                        logger.error("Failed to download blob %s: %s", blob_id, exc)
-                        shutil.rmtree(tmpdir, ignore_errors=True)
-                        return None
+                try:
+                    temp_file = await self._download_blob_to_temp(source, blob_id, tmpdir)
+                    return (temp_file, tmpdir)
+                except Exception as exc:
+                    logger.error("Failed to download blob %s: %s", blob_id, exc)
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                    return None
 
-            download_tasks = [download_one(bid) for bid in blob_ids]
-            downloaded = await asyncio.gather(*download_tasks)
+            download_coros = [download_one(bid) for bid in blob_ids]
+            downloaded = await _bounded_gather(
+                download_coros, max_concurrent=self.max_concurrent, task_name="blob-download"
+            )
             # Pair each result with its blob_id for source_uri construction
             valid_downloads: list[tuple[str, Path, Path]] = []
             for blob_id, dl in zip(blob_ids, downloaded, strict=True):
@@ -686,6 +693,8 @@ class IngestionPipeline:
                 skipped_count,
             )
 
+            from dlightrag.utils.concurrency import bounded_gather
+
             async def ingest_one(fp: Path, ch: str, uri: str, tmpdir: Path) -> IngestionResult:
                 try:
                     return await self._ingest_single_file_with_policy(
@@ -694,8 +703,10 @@ class IngestionPipeline:
                 finally:
                     shutil.rmtree(tmpdir, ignore_errors=True)
 
-            ingest_tasks = [ingest_one(fp, ch, uri, td) for fp, ch, uri, td in files_to_process]
-            results = await asyncio.gather(*ingest_tasks, return_exceptions=True)
+            coros = [ingest_one(fp, ch, uri, td) for fp, ch, uri, td in files_to_process]
+            results = await bounded_gather(
+                coros, max_concurrent=self.max_concurrent, task_name="blob-ingestion"
+            )
 
             success_count = sum(
                 1 for r in results if isinstance(r, IngestionResult) and r.status == "success"
