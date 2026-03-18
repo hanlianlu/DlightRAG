@@ -12,6 +12,7 @@ x-common-env: &common-env
 
 services:
   dlightrag-api:
+    restart: unless-stopped
     build: .
     ports:
       - "8100:8100"
@@ -31,6 +32,7 @@ services:
     command: ["dlightrag-api"]
 
   dlightrag-mcp:
+    restart: unless-stopped
     build: .
     ports:
       - "8101:8101"
@@ -51,6 +53,7 @@ services:
     command: ["dlightrag-mcp"]
 
   postgres:
+    restart: unless-stopped
     image: ghcr.io/hanlianlu/dlightrag-postgres:latest
     # build: postgres/  # uncomment to build the image locally
     ports:
