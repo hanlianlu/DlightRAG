@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -34,10 +36,12 @@ class EntityExtractor:
         entity_types: list[str],
         vision_model_func: Callable | None = None,
         max_concurrent_vlm: int = 4,
+        context_model_func: Callable | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.entity_types = entity_types
         self.vision_model_func = vision_model_func
+        self.context_model_func = context_model_func
         self._vlm_semaphore = asyncio.Semaphore(max_concurrent_vlm)
 
     async def extract_from_pages(
@@ -153,3 +157,75 @@ class EntityExtractor:
 
         text = blocks_to_text(blocks)
         return text or f"[Page {page_index + 1}: no content extracted]"
+
+    async def _update_structural_context(
+        self,
+        structural_ctx: str | None,
+        page_text: str,
+    ) -> str | None:
+        """Decide whether to update the running structural context.
+
+        Uses a lightweight text-only LLM call to analyze the current page's
+        VLM output and decide if the structural context needs updating.
+
+        Returns the (possibly updated) structural context string, or None.
+        """
+        if self.context_model_func is None:
+            return structural_ctx
+
+        from dlightrag.unifiedrepresent.prompts import STRUCTURAL_CONTEXT_PROMPT
+
+        ctx_display = structural_ctx if structural_ctx else "(empty — first page)"
+        user_content = (
+            f"Current structural context:\n{ctx_display}\n\n"
+            f"Current page content:\n{page_text}"
+        )
+        messages = [
+            {"role": "system", "content": STRUCTURAL_CONTEXT_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+
+        try:
+            raw = await self.context_model_func(messages=messages)
+        except Exception:
+            logger.warning("Structural context LLM call failed, keeping existing context")
+            return structural_ctx
+
+        # Defensive JSON parsing: try direct, then regex extraction
+        parsed = self._parse_context_response(raw)
+        if parsed is None:
+            return structural_ctx
+
+        action = parsed.get("action", "").lower()
+        if action == "update":
+            new_ctx = parsed.get("context")
+            if new_ctx and isinstance(new_ctx, str):
+                return new_ctx
+        # "keep" or unrecognized action → return existing
+        return structural_ctx
+
+    @staticmethod
+    def _parse_context_response(raw: str | None) -> dict | None:
+        """Parse JSON from LLM response with fallback to regex extraction."""
+        if not raw or not raw.strip():
+            return None
+
+        # Attempt 1: direct json.loads
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        # Attempt 2: regex extract first {...} blob
+        match = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+        if match:
+            try:
+                data = json.loads(match.group())
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return None
