@@ -128,9 +128,7 @@ async def _ingest_local_dir(
     from dlightrag.utils.concurrency import bounded_gather
 
     coros = [
-        _ingest_single_local(
-            engine, hash_index, file_path, replace, metadata_index, user_metadata
-        )
+        _ingest_single_local(engine, hash_index, file_path, replace, metadata_index, user_metadata)
         for file_path in files
     ]
     results = await bounded_gather(
@@ -202,9 +200,7 @@ async def _ingest_azure_blob(
 
         blob_ids = await source.alist_documents(prefix=prefix)
         coros = [
-            _ingest_single_blob(
-                engine, config, hash_index, source, bid, replace, metadata_index
-            )
+            _ingest_single_blob(engine, config, hash_index, source, bid, replace, metadata_index)
             for bid in blob_ids
         ]
         raw_results = await bounded_gather(

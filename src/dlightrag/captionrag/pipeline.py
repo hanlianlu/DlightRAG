@@ -252,9 +252,7 @@ class IngestionPipeline:
             # Step 2.5: Docling JSON post-processing
             # Rebuild text items with heading markers and correct page_idx
             if self.config.parser == "docling" and result.index_stream:
-                json_path = (
-                    artifacts_dir / file_path.stem / "docling" / f"{file_path.stem}.json"
-                )
+                json_path = artifacts_dir / file_path.stem / "docling" / f"{file_path.stem}.json"
                 improved_texts = rebuild_text_items_from_docling_json(json_path)
                 if improved_texts is not None:
                     non_text = [i for i in result.index_stream if i.get("type") != "text"]
@@ -281,17 +279,13 @@ class IngestionPipeline:
                         result.index_stream,
                     )
                     if updated:
-                        logger.info(
-                            f"Injected page_idx for {updated} chunks [{file_path.name}]"
-                        )
+                        logger.info(f"Injected page_idx for {updated} chunks [{file_path.name}]")
                 except Exception as e:
                     logger.warning(f"Page metadata injection failed for {file_path.name}: {e}")
 
             # Step 4: Register hash for deduplication (if hash was provided)
             if content_hash and doc_id:
-                await self._hash_index.register(
-                    content_hash, doc_id, source_uri or str(file_path)
-                )
+                await self._hash_index.register(content_hash, doc_id, source_uri or str(file_path))
 
             # Step 5: Upsert document metadata (best-effort)
             if doc_id and self._metadata_index is not None:
