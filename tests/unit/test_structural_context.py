@@ -108,3 +108,38 @@ class TestUpdateStructuralContext:
         )
         result = await ext._update_structural_context("existing", "page text")
         assert result == "existing"
+
+
+class TestDescribePageWithContext:
+    """Test that _describe_page injects structural_ctx into VLM prompt."""
+
+    async def test_structural_ctx_injected_before_image(self) -> None:
+        """When structural_ctx is provided, it appears as a text block before the image."""
+        vision_fn = AsyncMock(return_value="extracted content")
+        ext = EntityExtractor(_make_lightrag(), ["person"], vision_fn)
+
+        await ext._describe_page(MagicMock(), page_index=1, structural_ctx="Table: Name, Role")
+
+        messages = vision_fn.call_args[1]["messages"]
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        content_parts = user_msg["content"]
+
+        # First part should be text with structural context
+        assert content_parts[0]["type"] == "text"
+        assert "Table: Name, Role" in content_parts[0]["text"]
+        # Second part should be the image
+        assert content_parts[1]["type"] == "image_url"
+
+    async def test_no_structural_ctx_no_extra_text_block(self) -> None:
+        """When structural_ctx is None, no extra text block is added."""
+        vision_fn = AsyncMock(return_value="extracted content")
+        ext = EntityExtractor(_make_lightrag(), ["person"], vision_fn)
+
+        await ext._describe_page(MagicMock(), page_index=0, structural_ctx=None)
+
+        messages = vision_fn.call_args[1]["messages"]
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        content_parts = user_msg["content"]
+
+        # First part should be the image (no context text block)
+        assert content_parts[0]["type"] == "image_url"
