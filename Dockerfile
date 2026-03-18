@@ -2,17 +2,15 @@
 # DlightRAG - multimodal RAG
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
-LABEL maintainer="HanlianLyu"
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential python3-dev git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-install-project 2>/dev/null || \
-    UV_HTTP_TIMEOUT=300 uv sync --no-dev --no-install-project
+    UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-install-project
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 LABEL maintainer="HanlianLyu"
@@ -30,20 +28,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/.venv /app/.venv
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ src/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev 2>/dev/null || \
-    UV_HTTP_TIMEOUT=300 uv sync --no-dev
+    UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev
+
+# Non-root user for runtime security
+RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
+    && mkdir -p /app/dlightrag_storage && chown -R app:app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Default storage directory
-RUN mkdir -p /app/dlightrag_storage
 VOLUME /app/dlightrag_storage
 
 EXPOSE 8100 8101
+
+USER app
 
 # Default: start the REST API server
 CMD ["dlightrag-api"]
