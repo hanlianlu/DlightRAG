@@ -40,10 +40,14 @@ class TestUpdateStructuralContext:
     """Test _update_structural_context LLM call and JSON parsing."""
 
     async def test_update_action_returns_new_context(self) -> None:
-        llm_response = json.dumps({"action": "update", "context": "Section: Finance\nTable: Q, Rev"})
+        llm_response = json.dumps(
+            {"action": "update", "context": "Section: Finance\nTable: Q, Rev"}
+        )
         context_fn = AsyncMock(return_value=llm_response)
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=context_fn,
         )
         result = await ext._update_structural_context("old ctx", "page text with new headers")
@@ -54,7 +58,9 @@ class TestUpdateStructuralContext:
         llm_response = json.dumps({"action": "keep"})
         context_fn = AsyncMock(return_value=llm_response)
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=context_fn,
         )
         result = await ext._update_structural_context("existing ctx", "more data rows")
@@ -63,7 +69,9 @@ class TestUpdateStructuralContext:
     async def test_llm_failure_returns_existing_context(self) -> None:
         context_fn = AsyncMock(side_effect=Exception("API error"))
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=context_fn,
         )
         result = await ext._update_structural_context("safe ctx", "page text")
@@ -72,7 +80,9 @@ class TestUpdateStructuralContext:
     async def test_malformed_json_returns_existing_context(self) -> None:
         context_fn = AsyncMock(return_value="I don't understand the request")
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=context_fn,
         )
         result = await ext._update_structural_context("prev ctx", "page text")
@@ -82,7 +92,9 @@ class TestUpdateStructuralContext:
         llm_response = '```json\n{"action": "update", "context": "New heading"}\n```'
         context_fn = AsyncMock(return_value=llm_response)
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=context_fn,
         )
         result = await ext._update_structural_context(None, "# New heading\nsome text")
@@ -92,7 +104,9 @@ class TestUpdateStructuralContext:
         llm_response = json.dumps({"action": "update", "context": "First page ctx"})
         context_fn = AsyncMock(return_value=llm_response)
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=context_fn,
         )
         result = await ext._update_structural_context(None, "# Title\nContent")
@@ -104,7 +118,9 @@ class TestUpdateStructuralContext:
 
     async def test_no_context_model_func_returns_existing(self) -> None:
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], AsyncMock(),
+            _make_lightrag(),
+            ["person"],
+            AsyncMock(),
             context_model_func=None,
         )
         result = await ext._update_structural_context("existing", "page text")
@@ -152,13 +168,17 @@ class TestExtractFromPagesSequential:
     async def test_multi_page_processes_sequentially_with_context(self) -> None:
         """Multi-page doc: pages are processed sequentially, context propagates."""
         vision_fn = AsyncMock(side_effect=["# Title\nHeader row", "data row 1", "data row 2"])
-        context_fn = AsyncMock(side_effect=[
-            json.dumps({"action": "update", "context": "Doc: Report\nTable: A, B"}),
-            json.dumps({"action": "keep"}),
-            json.dumps({"action": "keep"}),
-        ])
+        context_fn = AsyncMock(
+            side_effect=[
+                json.dumps({"action": "update", "context": "Doc: Report\nTable: A, B"}),
+                json.dumps({"action": "keep"}),
+                json.dumps({"action": "keep"}),
+            ]
+        )
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], vision_fn,
+            _make_lightrag(),
+            ["person"],
+            vision_fn,
             context_model_func=context_fn,
         )
         images = [MagicMock(), MagicMock(), MagicMock()]
@@ -199,7 +219,9 @@ class TestExtractFromPagesSequential:
         vision_fn = AsyncMock(return_value="page content")
         context_fn = AsyncMock()
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], vision_fn,
+            _make_lightrag(),
+            ["person"],
+            vision_fn,
             context_model_func=context_fn,
         )
         images = [MagicMock()]
@@ -226,7 +248,9 @@ class TestExtractFromPagesSequential:
         """Without context_model_func, multi-page still works (parallel, no context)."""
         vision_fn = AsyncMock(return_value="desc")
         ext = EntityExtractor(
-            _make_lightrag(), ["person"], vision_fn,
+            _make_lightrag(),
+            ["person"],
+            vision_fn,
             context_model_func=None,
         )
         images = [MagicMock(), MagicMock()]

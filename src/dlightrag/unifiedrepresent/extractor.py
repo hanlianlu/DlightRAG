@@ -68,8 +68,7 @@ class EntityExtractor:
         if len(images) <= 1 or self.context_model_func is None:
             # Single page or no context model: parallel (original behavior)
             description_tasks = [
-                self._describe_page(image, page_index)
-                for page_index, image in enumerate(images)
+                self._describe_page(image, page_index) for page_index, image in enumerate(images)
             ]
             descriptions = await asyncio.gather(*description_tasks)
         else:
@@ -77,12 +76,8 @@ class EntityExtractor:
             descriptions = []
             structural_ctx: str | None = None
             for page_index, image in enumerate(images):
-                desc = await self._describe_page(
-                    image, page_index, structural_ctx=structural_ctx
-                )
-                structural_ctx = await self._update_structural_context(
-                    structural_ctx, desc
-                )
+                desc = await self._describe_page(image, page_index, structural_ctx=structural_ctx)
+                structural_ctx = await self._update_structural_context(structural_ctx, desc)
                 descriptions.append(desc)
 
         # 2. Build chunks dict for LightRAG
@@ -211,8 +206,7 @@ class EntityExtractor:
 
         ctx_display = structural_ctx if structural_ctx else "(empty — first page)"
         user_content = (
-            f"Current structural context:\n{ctx_display}\n\n"
-            f"Current page content:\n{page_text}"
+            f"Current structural context:\n{ctx_display}\n\nCurrent page content:\n{page_text}"
         )
         messages = [
             {"role": "system", "content": STRUCTURAL_CONTEXT_PROMPT},
