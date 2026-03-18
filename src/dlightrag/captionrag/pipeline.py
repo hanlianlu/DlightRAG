@@ -87,7 +87,6 @@ class IngestionPipeline:
         self.rag = rag_instance
         self.config = config
         self.max_concurrent = max_concurrent
-        self._semaphore = asyncio.Semaphore(max_concurrent)
 
         # MinerU backend for parse_document kwargs (None if using docling)
         self.mineru_backend = mineru_backend
@@ -218,115 +217,114 @@ class IngestionPipeline:
 
         Flow: parse_document() -> policy.apply() -> insert_content_list()
         """
-        async with self._semaphore:
-            try:
-                # Check for cancellation before heavy processing
-                await self._check_cancelled()
+        try:
+            # Check for cancellation before heavy processing
+            await self._check_cancelled()
 
-                # Step 1: Parse document (returns raw content_list)
-                if self.vlm_parser:
-                    content_list, doc_id = await self.vlm_parser.parse(
-                        file_path=str(file_path),
-                        output_dir=str(artifacts_dir),
-                    )
-                else:
-                    parse_method = self.config.parse_method
-                    parse_kwargs: dict[str, Any] = {}
-                    if self.mineru_backend:
-                        parse_kwargs["backend"] = self.mineru_backend
-                    content_list, doc_id = await self.rag.parse_document(
-                        file_path=str(file_path),
-                        output_dir=str(artifacts_dir),
-                        parse_method=parse_method,
-                        **parse_kwargs,
-                    )
-
-                # Step 2: Apply policy to filter discarded/noise content
-                result = self.policy.apply(content_list)
-
-                # Log stats with drop rate
-                logger.info(
-                    f"Policy filter [{file_path.name}]: "
-                    f"total={result.stats.total}, indexed={result.stats.indexed}, "
-                    f"dropped={result.stats.dropped_by_type} ({result.stats.drop_rate:.1f}%)"
+            # Step 1: Parse document (returns raw content_list)
+            if self.vlm_parser:
+                content_list, doc_id = await self.vlm_parser.parse(
+                    file_path=str(file_path),
+                    output_dir=str(artifacts_dir),
+                )
+            else:
+                parse_method = self.config.parse_method
+                parse_kwargs: dict[str, Any] = {}
+                if self.mineru_backend:
+                    parse_kwargs["backend"] = self.mineru_backend
+                content_list, doc_id = await self.rag.parse_document(
+                    file_path=str(file_path),
+                    output_dir=str(artifacts_dir),
+                    parse_method=parse_method,
+                    **parse_kwargs,
                 )
 
-                # Step 2.5: Docling JSON post-processing
-                # Rebuild text items with heading markers and correct page_idx
-                if self.config.parser == "docling" and result.index_stream:
-                    json_path = (
-                        artifacts_dir / file_path.stem / "docling" / f"{file_path.stem}.json"
-                    )
-                    improved_texts = rebuild_text_items_from_docling_json(json_path)
-                    if improved_texts is not None:
-                        non_text = [i for i in result.index_stream if i.get("type") != "text"]
-                        result.index_stream = improved_texts + non_text
+            # Step 2: Apply policy to filter discarded/noise content
+            result = self.policy.apply(content_list)
 
-                # Step 3: Insert filtered content
-                if result.index_stream:
-                    await self.rag.insert_content_list(  # type: ignore[misc]
-                        content_list=result.index_stream,
-                        file_path=source_uri or str(file_path),
-                        doc_id=doc_id,
-                    )
+            # Log stats with drop rate
+            logger.info(
+                f"Policy filter [{file_path.name}]: "
+                f"total={result.stats.total}, indexed={result.stats.indexed}, "
+                f"dropped={result.stats.dropped_by_type} ({result.stats.drop_rate:.1f}%)"
+            )
 
-                # Step 3.5: Inject page metadata into chunks
-                if result.index_stream and doc_id:
-                    try:
-                        from dlightrag.core.ingestion.page_metadata import (
-                            inject_page_idx_to_chunks,
-                        )
+            # Step 2.5: Docling JSON post-processing
+            # Rebuild text items with heading markers and correct page_idx
+            if self.config.parser == "docling" and result.index_stream:
+                json_path = (
+                    artifacts_dir / file_path.stem / "docling" / f"{file_path.stem}.json"
+                )
+                improved_texts = rebuild_text_items_from_docling_json(json_path)
+                if improved_texts is not None:
+                    non_text = [i for i in result.index_stream if i.get("type") != "text"]
+                    result.index_stream = improved_texts + non_text
 
-                        updated = await inject_page_idx_to_chunks(
-                            self.rag.lightrag,
-                            doc_id,
-                            result.index_stream,
-                        )
-                        if updated:
-                            logger.info(
-                                f"Injected page_idx for {updated} chunks [{file_path.name}]"
-                            )
-                    except Exception as e:
-                        logger.warning(f"Page metadata injection failed for {file_path.name}: {e}")
-
-                # Step 4: Register hash for deduplication (if hash was provided)
-                if content_hash and doc_id:
-                    await self._hash_index.register(
-                        content_hash, doc_id, source_uri or str(file_path)
-                    )
-
-                # Step 5: Upsert document metadata (best-effort)
-                if doc_id and self._metadata_index is not None:
-                    try:
-                        from dlightrag.core.retrieval.metadata_index import extract_system_metadata
-
-                        meta = extract_system_metadata(
-                            file_path,
-                            rag_mode="caption",
-                            page_count=getattr(result, "page_count", None),
-                        )
-                        if user_metadata:
-                            meta.update(user_metadata)
-                        await self._metadata_index.upsert(doc_id, meta)
-                    except Exception as e:
-                        logger.warning("Metadata upsert failed for %s: %s", file_path.name, e)
-
-                return IngestionResult(
-                    status="success",
-                    processed=1,
+            # Step 3: Insert filtered content
+            if result.index_stream:
+                await self.rag.insert_content_list(  # type: ignore[misc]
+                    content_list=result.index_stream,
+                    file_path=source_uri or str(file_path),
                     doc_id=doc_id,
-                    source_path=source_uri or str(file_path),
-                    stats=result.stats,
                 )
 
-            except Exception as e:
-                logger.error(f"Failed to ingest {file_path}: {e}")
-                return IngestionResult(
-                    status="error",
-                    processed=0,
-                    source_path=str(file_path),
-                    error=str(e),
+            # Step 3.5: Inject page metadata into chunks
+            if result.index_stream and doc_id:
+                try:
+                    from dlightrag.core.ingestion.page_metadata import (
+                        inject_page_idx_to_chunks,
+                    )
+
+                    updated = await inject_page_idx_to_chunks(
+                        self.rag.lightrag,
+                        doc_id,
+                        result.index_stream,
+                    )
+                    if updated:
+                        logger.info(
+                            f"Injected page_idx for {updated} chunks [{file_path.name}]"
+                        )
+                except Exception as e:
+                    logger.warning(f"Page metadata injection failed for {file_path.name}: {e}")
+
+            # Step 4: Register hash for deduplication (if hash was provided)
+            if content_hash and doc_id:
+                await self._hash_index.register(
+                    content_hash, doc_id, source_uri or str(file_path)
                 )
+
+            # Step 5: Upsert document metadata (best-effort)
+            if doc_id and self._metadata_index is not None:
+                try:
+                    from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+                    meta = extract_system_metadata(
+                        file_path,
+                        rag_mode="caption",
+                        page_count=getattr(result, "page_count", None),
+                    )
+                    if user_metadata:
+                        meta.update(user_metadata)
+                    await self._metadata_index.upsert(doc_id, meta)
+                except Exception as e:
+                    logger.warning("Metadata upsert failed for %s: %s", file_path.name, e)
+
+            return IngestionResult(
+                status="success",
+                processed=1,
+                doc_id=doc_id,
+                source_path=source_uri or str(file_path),
+                stats=result.stats,
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to ingest {file_path}: {e}")
+            return IngestionResult(
+                status="error",
+                processed=0,
+                source_path=str(file_path),
+                error=str(e),
+            )
 
     # ─────────────────────────────────────────────────────────────────
     # Public API: Local ingestion
