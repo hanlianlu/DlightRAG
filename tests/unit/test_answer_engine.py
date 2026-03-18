@@ -268,7 +268,7 @@ class TestBuildMessages:
         assert user_content[0]["text"] == "user prompt"
 
     def test_with_images(self) -> None:
-        """_build_messages with images includes image_url entries."""
+        """_build_messages with images includes label + image_url entries."""
         contexts: RetrievalContexts = {
             "chunks": [
                 {"content": "text", "image_data": "abc123"},
@@ -281,8 +281,37 @@ class TestBuildMessages:
         image_entries = [e for e in user_content if e.get("type") == "image_url"]
         text_entries = [e for e in user_content if e.get("type") == "text"]
         assert len(image_entries) == 1
-        assert len(text_entries) == 1
+        # 1 label for the image + 1 user prompt text block
+        assert len(text_entries) == 2
+        assert text_entries[0]["text"] == "Page image"
         assert "base64" in image_entries[0]["image_url"]["url"]
+
+    def test_with_images_labelled_by_indexer(self) -> None:
+        """_build_messages with indexer labels images with [n-m] citation tags."""
+        from dlightrag.citations.indexer import CitationIndexer
+
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "2",
+                    "content": "chart data",
+                    "image_data": "abc123",
+                    "file_path": "/docs/report.pdf",
+                },
+            ],
+        }
+        flat = [c for c in contexts["chunks"]]
+        indexer = CitationIndexer()
+        indexer.build_index(flat)
+
+        messages = AnswerEngine._build_messages("sys", "prompt", contexts, indexer=indexer)
+        user_content = messages[1]["content"]
+        label_entries = [
+            e for e in user_content if e.get("type") == "text" and "Page image" in e.get("text", "")
+        ]
+        assert len(label_entries) == 1
+        assert "[2-1] Page image" == label_entries[0]["text"]
 
     def test_multiple_images(self) -> None:
         """_build_messages with multiple images includes all image_url entries."""
@@ -412,7 +441,7 @@ class TestAnswerEngineHelpers:
     def test_build_user_prompt_contains_all_parts(self) -> None:
         engine = AnswerEngine()
         contexts = _text_contexts()
-        prompt = engine._build_user_prompt("What is revenue?", contexts)
+        prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
         assert "Knowledge Graph Context:" in prompt
         assert "Reference Document List:" in prompt
@@ -629,7 +658,7 @@ class TestFormatChunkExcerpts:
             "relationships": [],
         }
         engine = AnswerEngine()
-        prompt = engine._build_user_prompt("test query", contexts)
+        prompt, _indexer = engine._build_user_prompt("test query", contexts)
 
         # Excerpts should have citation tags
         assert "[1-1] report.pdf" in prompt
@@ -652,7 +681,7 @@ class TestBuildUserPromptIncludesExcerpts:
     def test_prompt_contains_excerpts_section(self) -> None:
         engine = AnswerEngine()
         contexts = _text_contexts()
-        prompt = engine._build_user_prompt("What is revenue?", contexts)
+        prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
         assert "Document Excerpts:" in prompt
         assert "Revenue grew 15%." in prompt
