@@ -52,9 +52,10 @@ class RAGServiceManager:
         self._ready: bool = False
         self._degraded: bool = False
         self._startup_warnings: list[str] = []
-        self._last_error: str | None = None
-        self._last_error_ts: float | None = None
-        self._retry_after: float = 30.0
+
+        # Per-workspace backoff: workspace -> (last_error_ts, retry_interval)
+        self._backoff: dict[str, tuple[float, float]] = {}
+
         self._answer_engine: AnswerEngine | None = None
 
     @classmethod
@@ -94,43 +95,48 @@ class RAGServiceManager:
         if workspace in self._services:
             return self._services[workspace]
 
-        # Check backoff
-        if self._last_error_ts is not None:
-            if time.time() - self._last_error_ts < self._retry_after:
-                raise RAGServiceUnavailableError(detail=self._last_error)
+        # Check per-workspace backoff
+        if workspace in self._backoff:
+            last_ts, interval = self._backoff[workspace]
+            if time.time() - last_ts < interval:
+                raise RAGServiceUnavailableError(
+                    detail=f"Workspace '{workspace}' in backoff (retry in {interval:.0f}s)"
+                )
 
         lock = self._get_lock()
         async with lock:
-            # Double-check
+            # Double-check after acquiring lock
             if workspace in self._services:
                 return self._services[workspace]
 
-            if self._last_error_ts is not None:
-                if time.time() - self._last_error_ts < self._retry_after:
-                    raise RAGServiceUnavailableError(detail=self._last_error)
+            if workspace in self._backoff:
+                last_ts, interval = self._backoff[workspace]
+                if time.time() - last_ts < interval:
+                    raise RAGServiceUnavailableError(
+                        detail=f"Workspace '{workspace}' in backoff (retry in {interval:.0f}s)"
+                    )
 
             try:
                 ws_config = self._config.model_copy(update={"workspace": workspace})
                 svc = await RAGService.create(config=ws_config)
                 self._services[workspace] = svc
 
-                # Reset error state on success
-                self._last_error = None
-                self._last_error_ts = None
-                self._retry_after = 30.0
+                # Clear backoff on success
+                self._backoff.pop(workspace, None)
 
                 logger.info("Created RAGService for workspace '%s'", workspace)
                 return svc
             except Exception as e:
                 error_msg = self._actionable_error(e)
-                self._last_error = error_msg
-                self._last_error_ts = time.time()
-                self._retry_after = min(self._retry_after * 2, _MAX_RETRY_INTERVAL)
+                # Per-workspace exponential backoff
+                _, prev_interval = self._backoff.get(workspace, (0, 7.5))
+                new_interval = min(prev_interval * 2, _MAX_RETRY_INTERVAL)
+                self._backoff[workspace] = (time.time(), new_interval)
                 logger.error(
                     "RAGService creation failed for '%s': %s. Retry in %ss",
                     workspace,
                     error_msg,
-                    self._retry_after,
+                    new_interval,
                 )
                 raise RAGServiceUnavailableError(detail=error_msg) from e
 
@@ -427,12 +433,13 @@ class RAGServiceManager:
     def get_warnings(self) -> list[str]:
         return list(self._startup_warnings)
 
-    def get_error_info(self) -> dict[str, str | float | None]:
-        """Get error state for health checks."""
+    def get_error_info(self) -> dict[str, Any]:
+        """Get per-workspace backoff state for health checks."""
         return {
-            "last_error": self._last_error,
-            "timestamp": self._last_error_ts,
-            "retry_after": self._retry_after,
+            "backoff_workspaces": {
+                ws: {"retry_after": interval, "since": ts}
+                for ws, (ts, interval) in self._backoff.items()
+            },
         }
 
 
