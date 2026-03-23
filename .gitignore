@@ -40,6 +40,10 @@ Thumbs.db
 dlightrag_storage/
 *.db
 
+# Linting/typing caches
+.ruff_cache/
+.mypy_cache/
+
 # Testing
 .pytest_cache/
 htmlcov/

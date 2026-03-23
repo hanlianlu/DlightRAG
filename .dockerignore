@@ -40,6 +40,10 @@ docker-compose.yml
 Dockerfile
 postgres/
 
+# Editor backups
+*.bkp
+.$*.drawio.bkp
+
 # Dev/test files
 tests/
 docs/
