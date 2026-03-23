@@ -12,13 +12,20 @@ import mimetypes
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, field_validator
 from starlette.responses import RedirectResponse
 
+from dlightrag.api.models import (
+    AnswerRequest,
+    DeleteRequest,
+    IngestRequest,
+    MetadataFilterRequest,
+    ResetRequest,
+    RetrieveRequest,
+)
 from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config
@@ -72,79 +79,6 @@ async def _verify_auth(request: Request, config: DlightragConfig = Depends(_get_
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Request/Response Models
-# ═══════════════════════════════════════════════════════════════════
-
-
-class MetadataFilterRequest(BaseModel):
-    """Structured metadata filter for retrieval queries."""
-
-    filename: str | None = None
-    filename_pattern: str | None = None
-    file_extension: str | None = None
-    doc_title: str | None = None
-    doc_author: str | None = None
-    date_from: str | None = None
-    date_to: str | None = None
-    rag_mode: str | None = None
-    custom: dict[str, Any] | None = None
-
-
-class IngestRequest(BaseModel):
-    source_type: Literal["local", "azure_blob", "snowflake"]
-    path: str | None = None
-    container_name: str | None = None
-    blob_path: str | None = None
-    prefix: str | None = None
-    query: str | None = None
-    table: str | None = None
-    replace: bool | None = None
-    workspace: str | None = None
-    metadata: dict[str, Any] | None = None
-
-
-class RetrieveRequest(BaseModel):
-    query: str
-    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix"
-    top_k: int | None = None
-    chunk_top_k: int | None = None
-    workspaces: list[str] | None = None
-    filters: MetadataFilterRequest | None = None
-
-
-class AnswerRequest(BaseModel):
-    query: str
-    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix"
-    stream: bool = False
-    top_k: int | None = None
-    chunk_top_k: int | None = None
-    workspaces: list[str] | None = None
-    multimodal_content: list[dict[str, Any]] | None = None
-
-    @field_validator("multimodal_content")
-    @classmethod
-    def validate_image_count(cls, v: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
-        if v and len(v) > 3:
-            raise ValueError("Maximum 3 multimodal items per query")
-        return v
-
-
-class DeleteRequest(BaseModel):
-    file_paths: list[str] | None = None
-    filenames: list[str] | None = None
-    delete_source: bool = True
-    workspace: str | None = None
-
-
-class ResetRequest(BaseModel):
-    """Request to reset a workspace."""
-
-    workspace: str | None = None
-    keep_files: bool = False
-    dry_run: bool = False
-
-
-# ═══════════════════════════════════════════════════════════════════
 # Endpoints
 # ═══════════════════════════════════════════════════════════════════
 
@@ -164,15 +98,9 @@ async def ingest(body: IngestRequest, request: Request) -> dict[str, Any]:
         kwargs["replace"] = body.replace
 
     if body.source_type == "local":
-        if not body.path:
-            raise HTTPException(status_code=400, detail="'path' is required for local ingestion")
         kwargs["path"] = body.path
 
     elif body.source_type == "azure_blob":
-        if not body.container_name:
-            raise HTTPException(
-                status_code=400, detail="'container_name' is required for azure_blob"
-            )
         if body.blob_path and body.prefix is not None:
             raise HTTPException(
                 status_code=400, detail="'blob_path' and 'prefix' are mutually exclusive"
@@ -183,12 +111,9 @@ async def ingest(body: IngestRequest, request: Request) -> dict[str, Any]:
         if body.prefix is not None:
             kwargs["prefix"] = body.prefix
 
-    elif body.source_type == "snowflake":
-        if not body.query:
-            raise HTTPException(status_code=400, detail="'query' is required for snowflake")
-        kwargs["query"] = body.query
-        if body.table:
-            kwargs["table"] = body.table
+    elif body.source_type == "s3":
+        kwargs["bucket"] = body.bucket
+        kwargs["key"] = body.key
 
     if body.metadata:
         kwargs["metadata"] = body.metadata
