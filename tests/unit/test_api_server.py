@@ -163,21 +163,21 @@ class TestIngestEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         resp = await client.post("/ingest", json={"source_type": "local"})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_azure_blob_requires_container(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         resp = await client.post("/ingest", json={"source_type": "azure_blob"})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_snowflake_requires_query(
+    async def test_s3_requires_bucket_and_key(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
-        resp = await client.post("/ingest", json={"source_type": "snowflake"})
-        assert resp.status_code == 400
+        resp = await client.post("/ingest", json={"source_type": "s3"})
+        assert resp.status_code == 422
 
     async def test_local_success(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

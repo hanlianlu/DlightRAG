@@ -1,0 +1,148 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Request and response models for the DlightRAG REST API."""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from pydantic import BaseModel, field_validator, model_validator
+
+# ═══════════════════════════════════════════════════════════════════
+# Request Models
+# ═══════════════════════════════════════════════════════════════════
+
+
+class MetadataFilterRequest(BaseModel):
+    """Structured metadata filter for retrieval queries."""
+
+    filename: str | None = None
+    filename_pattern: str | None = None
+    file_extension: str | None = None
+    doc_title: str | None = None
+    doc_author: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    rag_mode: str | None = None
+    custom: dict[str, Any] | None = None
+
+
+class IngestRequest(BaseModel):
+    source_type: Literal["local", "azure_blob", "s3"]
+    path: str | None = None
+    container_name: str | None = None
+    blob_path: str | None = None
+    prefix: str | None = None
+    query: str | None = None
+    table: str | None = None
+    bucket: str | None = None
+    key: str | None = None
+    replace: bool | None = None
+    workspace: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_source_fields(self) -> IngestRequest:
+        if self.source_type == "local":
+            if not self.path:
+                raise ValueError("'path' is required for local ingestion")
+        elif self.source_type == "azure_blob":
+            if not self.container_name:
+                raise ValueError("'container_name' is required for azure_blob")
+        elif self.source_type == "s3":
+            if not self.bucket:
+                raise ValueError("'bucket' is required for s3")
+            if not self.key:
+                raise ValueError("'key' is required for s3")
+        return self
+
+
+class RetrieveRequest(BaseModel):
+    query: str
+    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix"
+    top_k: int | None = None
+    chunk_top_k: int | None = None
+    workspaces: list[str] | None = None
+    filters: MetadataFilterRequest | None = None
+
+
+class AnswerRequest(BaseModel):
+    query: str
+    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix"
+    stream: bool = False
+    top_k: int | None = None
+    chunk_top_k: int | None = None
+    workspaces: list[str] | None = None
+    multimodal_content: list[dict[str, Any]] | None = None
+
+    @field_validator("multimodal_content")
+    @classmethod
+    def validate_image_count(cls, v: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+        if v and len(v) > 3:
+            raise ValueError("Maximum 3 multimodal items per query")
+        return v
+
+
+class DeleteRequest(BaseModel):
+    file_paths: list[str] | None = None
+    filenames: list[str] | None = None
+    delete_source: bool = True
+    workspace: str | None = None
+
+
+class ResetRequest(BaseModel):
+    """Request to reset a workspace."""
+
+    workspace: str | None = None
+    keep_files: bool = False
+    dry_run: bool = False
+
+
+class MetadataUpdateRequest(BaseModel):
+    metadata: dict[str, Any]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Response Models
+# ═══════════════════════════════════════════════════════════════════
+
+
+class ErrorDetail(BaseModel):
+    detail: str
+    error_type: str  # "unavailable", "validation", "auth", "internal"
+
+
+class HealthResponse(BaseModel):
+    status: Literal["healthy", "degraded", "unavailable"]
+    ready: bool
+    degraded: bool
+    warnings: list[str]
+    version: str
+
+
+class IngestResponse(BaseModel):
+    doc_id: str
+    status: str
+    page_count: int | None = None
+
+
+class RetrieveResponse(BaseModel):
+    chunks: list[dict[str, Any]]
+    mode: str
+
+
+class FilesResponse(BaseModel):
+    files: list[dict[str, Any]]
+    count: int
+
+
+class WorkspacesResponse(BaseModel):
+    workspaces: list[str]
+
+
+class ResetResponse(BaseModel):
+    workspaces: dict[str, Any]
+    total_errors: int
+
+
+class StatusResponse(BaseModel):
+    status: str
