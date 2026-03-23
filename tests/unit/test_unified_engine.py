@@ -359,11 +359,17 @@ class TestAingestDocStatus:
 
         await engine.aingest("/fake/doc.pdf", doc_id="doc-test")
 
-        # Verify doc_status.upsert was called
-        lightrag.doc_status.upsert.assert_awaited_once()
-        ds_arg = lightrag.doc_status.upsert.call_args[0][0]
-        assert "doc-test" in ds_arg
-        entry = ds_arg["doc-test"]
+        # Verify doc_status.upsert called twice: PROCESSING then PROCESSED
+        assert lightrag.doc_status.upsert.await_count == 2
+
+        # First call: PROCESSING checkpoint
+        first_arg = lightrag.doc_status.upsert.call_args_list[0][0][0]
+        assert first_arg["doc-test"]["status"] == DocStatus.PROCESSING
+        assert first_arg["doc-test"]["chunks_list"] == []
+
+        # Second call: PROCESSED with chunk list
+        final_arg = lightrag.doc_status.upsert.call_args_list[1][0][0]
+        entry = final_arg["doc-test"]
         assert entry["status"] == DocStatus.PROCESSED
         assert entry["chunks_count"] == 2
         assert entry["chunks_list"] == ["chunk-aaa", "chunk-bbb"]
