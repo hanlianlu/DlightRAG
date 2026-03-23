@@ -1026,17 +1026,17 @@ class RAGService:
 
     async def aingest(
         self,
-        source_type: Literal["local", "azure_blob", "snowflake"],
+        source_type: Literal["local", "azure_blob", "s3"],
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Unified ingestion API.
 
         Args:
-            source_type: "local", "azure_blob", or "snowflake"
+            source_type: "local", "azure_blob", or "s3"
             kwargs:
                 local: path, replace
                 azure_blob: source, container_name, blob_path, prefix, replace
-                snowflake: query, table
+                s3: bucket, key, prefix, replace
         """
         self._ensure_initialized()
         await self._upsert_workspace_meta()
@@ -1110,12 +1110,27 @@ class RAGService:
                 if hasattr(source, "aclose"):
                     await source.aclose()
 
-        # source_type == "snowflake"
-        ingestion_result = await ingestion.aingest_from_snowflake(
-            query=kwargs["query"],
-            table=kwargs.get("table"),
-        )
-        return ingestion_result.model_dump(exclude_none=True)
+        # source_type == "s3"
+        bucket = kwargs.get("bucket")
+        key = kwargs.get("key")
+        if not bucket or not key:
+            raise ValueError("S3 ingestion requires 'bucket' and 'key'")
+        from dlightrag.sourcing.aws_s3 import S3DataSource
+
+        source = S3DataSource(bucket=bucket)
+        try:
+            content = await source.aload_document(key)
+            # Write to temp file and ingest
+            tmp_dir = self.config.temp_dir / "s3"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            local_path = tmp_dir / Path(key).name
+            local_path.write_bytes(content)
+
+            replace = kwargs.get("replace", self.config.ingestion_replace_default)
+            result = await ingestion.aingest_from_local(path=local_path, replace=replace)
+            return result.model_dump(exclude_none=True)
+        finally:
+            await source.aclose()
 
     # === RETRIEVAL API ===
 

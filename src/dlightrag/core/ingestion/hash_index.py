@@ -48,15 +48,15 @@ class HashIndexProtocol(Protocol):
 def derive_source_type(file_path: str) -> str:
     """Derive source type from a file path or URI.
 
-    Returns "azure_blobs", "snowflake", "local", or "unknown".
+    Returns "azure_blobs", "s3", "local", or "unknown".
     Handles both new-style URIs (azure://...) and legacy sources/ paths.
     """
     if not file_path:
         return "unknown"
     if file_path.startswith("azure://"):
         return "azure_blobs"
-    if file_path.startswith("snowflake://"):
-        return "snowflake"
+    if file_path.startswith("s3://"):
+        return "s3"
     # Legacy: /abs/path/sources/{source_type}/file.pdf
     parts = Path(file_path).parts
     idx = next((i for i, p in enumerate(parts) if p == "sources"), -1)

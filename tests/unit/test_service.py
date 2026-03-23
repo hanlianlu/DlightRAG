@@ -272,28 +272,25 @@ class TestRAGServiceUnifiedMode:
         assert service.unified.aingest.await_count == 2
         assert result["processed"] == 2
 
-    async def test_aingest_unified_snowflake(self, test_config: DlightragConfig) -> None:
-        """Unified mode Snowflake inserts text via engine.lightrag.ainsert."""
+    async def test_aingest_unified_s3(self, test_config: DlightragConfig) -> None:
+        """Unified mode S3 downloads object and ingests via engine.aingest."""
         service = RAGService(config=test_config)
         service._initialized = True
+        service._hash_index = self._mock_hash_index()
         service.unified = MagicMock()
-        service.unified.lightrag = MagicMock()
-        service.unified.lightrag.ainsert = AsyncMock()
+        service.unified.aingest = AsyncMock(return_value={"doc_id": "d1", "status": "success"})
 
-        with patch("dlightrag.unifiedrepresent.lifecycle.asyncio.to_thread") as mock_to_thread:
-            mock_source = MagicMock()
-            mock_source.list_documents.return_value = ["row-1", "row-2"]
-            mock_source.load_document.side_effect = [b"text one", b"text two"]
-            mock_source.close = MagicMock()
+        mock_source = AsyncMock()
+        mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
+        mock_source.aclose = AsyncMock()
 
-            # to_thread: 1st call returns SnowflakeDataSource, 2nd executes query, 3rd closes
-            mock_to_thread.side_effect = [mock_source, None, None]
+        with patch("dlightrag.sourcing.aws_s3.S3DataSource", return_value=mock_source):
+            result = await service.aingest(
+                source_type="s3", bucket="my-bucket", key="docs/report.pdf"
+            )
 
-            result = await service.aingest(source_type="snowflake", query="SELECT * FROM t")
-
-        service.unified.lightrag.ainsert.assert_awaited_once()
-        assert result["processed"] == 2
-        assert result["source_type"] == "snowflake"
+        service.unified.aingest.assert_awaited_once()
+        assert result["status"] == "success"
 
     async def test_aingest_unified_blob_temp_cleanup(self, test_config: DlightragConfig) -> None:
         """Temp directory is cleaned up even if unified.aingest fails."""

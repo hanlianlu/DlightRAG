@@ -139,7 +139,7 @@ class RAGServiceManager:
     async def aingest(
         self,
         workspace: str,
-        source_type: Literal["local", "azure_blob", "snowflake"],
+        source_type: Literal["local", "azure_blob", "s3"],
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Ingest documents into a specific workspace."""

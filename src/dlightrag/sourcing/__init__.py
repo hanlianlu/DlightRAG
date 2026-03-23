@@ -12,10 +12,10 @@ def __getattr__(name: str):
         from dlightrag.sourcing.azure_blob import AzureBlobDataSource
 
         return AzureBlobDataSource
-    if name == "SnowflakeDataSource":
-        from dlightrag.sourcing.snowflake import SnowflakeDataSource
+    if name == "S3DataSource":
+        from dlightrag.sourcing.aws_s3 import S3DataSource
 
-        return SnowflakeDataSource
+        return S3DataSource
     if name == "LocalDataSource":
         from dlightrag.sourcing.local import LocalDataSource
 

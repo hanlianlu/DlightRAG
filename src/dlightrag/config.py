@@ -263,12 +263,6 @@ class DlightragConfig(BaseSettings):
     # ===== Sourcing (Optional) =====
     blob_connection_string: str | None = Field(default=None)
     azure_sas_expiry: int = Field(default=3600, description="Azure SAS URL expiry in seconds")
-    snowflake_account: str | None = Field(default=None)
-    snowflake_user: str | None = Field(default=None)
-    snowflake_password: str | None = Field(default=None)
-    snowflake_database: str | None = Field(default=None)
-    snowflake_schema: str | None = Field(default=None)
-    snowflake_warehouse: str | None = Field(default=None)
 
     # ===== Domain Knowledge (injected by caller) =====
     domain_knowledge_hints: str = Field(

@@ -49,8 +49,8 @@ class TestValidateLocal:
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 
-    def test_local_rejects_query(self) -> None:
-        args = _parse_ingest(["./docs", "--query", "SELECT 1"])
+    def test_local_rejects_bucket(self) -> None:
+        args = _parse_ingest(["./docs", "--bucket", "b"])
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 
@@ -101,15 +101,15 @@ class TestValidateAzureBlob:
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 
-    def test_azure_rejects_query(self) -> None:
+    def test_azure_rejects_bucket(self) -> None:
         args = _parse_ingest(
             [
                 "--source",
                 "azure_blob",
                 "--container",
                 "c",
-                "--query",
-                "SELECT 1",
+                "--bucket",
+                "b",
             ]
         )
         with pytest.raises(SystemExit):
@@ -117,47 +117,56 @@ class TestValidateAzureBlob:
 
 
 # ---------------------------------------------------------------------------
-# TestValidateIngestArgs — snowflake source
+# TestValidateIngestArgs — s3 source
 # ---------------------------------------------------------------------------
 
 
-class TestValidateSnowflake:
-    """Validation for snowflake source."""
+class TestValidateS3:
+    """Validation for s3 source."""
 
-    def test_valid_snowflake(self) -> None:
-        args = _parse_ingest(["--source", "snowflake", "--query", "SELECT 1"])
+    def test_valid_s3_with_key(self) -> None:
+        args = _parse_ingest(["--source", "s3", "--bucket", "my-bucket", "--key", "doc.pdf"])
         _validate_ingest_args(args)
 
-    def test_valid_snowflake_with_table(self) -> None:
+    def test_valid_s3_with_prefix(self) -> None:
+        args = _parse_ingest(["--source", "s3", "--bucket", "my-bucket", "--prefix", "docs/"])
+        _validate_ingest_args(args)
+
+    def test_s3_requires_bucket(self) -> None:
+        args = _parse_ingest(["--source", "s3"])
+        with pytest.raises(SystemExit):
+            _validate_ingest_args(args)
+
+    def test_s3_rejects_positional_path(self) -> None:
+        args = _parse_ingest(["./docs", "--source", "s3", "--bucket", "b"])
+        with pytest.raises(SystemExit):
+            _validate_ingest_args(args)
+
+    def test_s3_key_and_prefix_mutually_exclusive(self) -> None:
         args = _parse_ingest(
             [
                 "--source",
-                "snowflake",
-                "--query",
-                "SELECT 1",
-                "--table",
-                "reports",
+                "s3",
+                "--bucket",
+                "b",
+                "--key",
+                "doc.pdf",
+                "--prefix",
+                "docs/",
             ]
         )
-        _validate_ingest_args(args)
-
-    def test_snowflake_requires_query(self) -> None:
-        args = _parse_ingest(["--source", "snowflake"])
         with pytest.raises(SystemExit):
             _validate_ingest_args(args)
 
-    def test_snowflake_rejects_replace(self) -> None:
-        args = _parse_ingest(["--source", "snowflake", "--query", "SELECT 1", "--replace"])
-        with pytest.raises(SystemExit):
-            _validate_ingest_args(args)
-
-    def test_snowflake_rejects_container(self) -> None:
+    def test_s3_rejects_container(self) -> None:
         args = _parse_ingest(
             [
                 "--source",
-                "snowflake",
-                "--query",
-                "SELECT 1",
+                "s3",
+                "--bucket",
+                "b",
+                "--key",
+                "doc.pdf",
                 "--container",
                 "c",
             ]
