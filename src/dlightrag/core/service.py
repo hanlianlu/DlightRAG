@@ -351,7 +351,7 @@ class RAGService:
             logger.info(f"Using {config.parser} parser, MinerU backend detection skipped")
 
         # Configure RAGAnything
-        rag_config = RAGAnythingConfig(
+        rag_config = RAGAnythingConfig(  # type: ignore[possibly-undefined]
             working_dir=str(config.working_dir_path),
             max_concurrent_files=config.max_concurrent_ingestion,
             parser=config.parser,
@@ -411,7 +411,7 @@ class RAGService:
 
         # ONE RAGAnything with unified chat model (LightRAG-adapted)
         logger.info("Creating RAGAnything instance...")
-        self.rag = RAGAnything(
+        self.rag = RAGAnything(  # type: ignore[possibly-undefined]
             None,
             chat_func_lr,
             chat_func_lr,
@@ -559,10 +559,10 @@ class RAGService:
         # LightRAG's PGKVStorage only supports 7 hardcoded namespaces; custom ones
         # (like "visual_chunks") cause KeyError / silent no-op / SQL errors.
         # See pg_jsonb_kv.py module docstring for details.
+        from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
+
         kv_cls = lightrag.key_string_value_json_storage_cls
         if config.kv_storage.startswith("PG"):
-            from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
-
             kv_cls = PGJsonbKVStorage
         kv_kwargs: dict[str, Any] = {
             "namespace": "visual_chunks",

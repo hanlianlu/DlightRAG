@@ -177,12 +177,14 @@ class PGJsonbKVStorage(BaseKVStorage):
             data = self._parse_data(row["data"])
             return self._merge_blob(data, row["blob_data"])
 
-    async def get_by_ids(self, ids: list[str]) -> list[dict[str, Any] | None]:
+    async def get_by_ids(  # type: ignore[override]
+        self, ids: list[str]
+    ) -> list[dict[str, Any] | None]:
         if not ids:
             return []
         async with self._get_pool().acquire() as conn:
             rows = await conn.fetch(_GET_BY_IDS, self.workspace, self.namespace, ids)
-        lookup = {}
+        lookup: dict[str, dict[str, Any]] = {}
         for row in rows:
             data = self._parse_data(row["data"])
             lookup[row["id"]] = self._merge_blob(data, row["blob_data"])
