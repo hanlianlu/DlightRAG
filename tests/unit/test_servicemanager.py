@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -88,7 +87,7 @@ class TestBackoff:
             await manager._get_service("ws-a")
         assert not manager.is_ready()
         error_info = manager.get_error_info()
-        assert "RuntimeError" in error_info["last_error"]
+        assert "ws-a" in error_info["backoff_workspaces"]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_backoff_blocks_retry(self, mock_create, test_cfg) -> None:
@@ -106,7 +105,9 @@ class TestBackoff:
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
             await manager._get_service("ws-a")
-        manager._last_error_ts = time.time() - 60
+        # Expire the backoff by backdating the timestamp
+        ts, interval = manager._backoff["ws-a"]
+        manager._backoff["ws-a"] = (ts - interval - 1, interval)
         mock_create.side_effect = None
         mock_create.return_value = AsyncMock()
         svc = await manager._get_service("ws-a")
@@ -118,12 +119,48 @@ class TestBackoff:
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
             await manager._get_service("ws-a")
-        manager._last_error_ts = time.time() - 60
+        # Expire the backoff by backdating the timestamp
+        ts, interval = manager._backoff["ws-a"]
+        manager._backoff["ws-a"] = (ts - interval - 1, interval)
         mock_create.side_effect = None
         mock_create.return_value = AsyncMock()
         await manager._get_service("ws-a")
-        assert manager._last_error is None
-        assert manager._retry_after == 30.0
+        assert "ws-a" not in manager._backoff
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_per_workspace_backoff_isolation(self, mock_create, test_cfg) -> None:
+        """Workspace A in backoff does not block workspace B."""
+
+        async def fail_only_a(**kwargs):
+            if kwargs["config"].workspace == "ws-a":
+                raise RuntimeError("ws-a is down")
+            return AsyncMock()
+
+        mock_create.side_effect = fail_only_a
+        manager = RAGServiceManager(config=test_cfg)
+        with pytest.raises(RAGServiceUnavailableError):
+            await manager._get_service("ws-a")
+        # ws-a is now in backoff; ws-b should still succeed
+        svc_b = await manager._get_service("ws-b")
+        assert svc_b is not None
+        assert "ws-a" in manager._backoff
+        assert "ws-b" not in manager._backoff
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_backoff_clears_on_success(self, mock_create, test_cfg) -> None:
+        """Backoff entry for a workspace is removed after a successful creation."""
+        mock_create.side_effect = RuntimeError("fail")
+        manager = RAGServiceManager(config=test_cfg)
+        with pytest.raises(RAGServiceUnavailableError):
+            await manager._get_service("ws-a")
+        assert "ws-a" in manager._backoff
+        # Expire backoff and let next attempt succeed
+        ts, interval = manager._backoff["ws-a"]
+        manager._backoff["ws-a"] = (ts - interval - 1, interval)
+        mock_create.side_effect = None
+        mock_create.return_value = AsyncMock()
+        await manager._get_service("ws-a")
+        assert "ws-a" not in manager._backoff
 
 
 class TestRouting:
