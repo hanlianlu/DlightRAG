@@ -162,6 +162,21 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.adelete_files(**kwargs)
 
+    async def aget_metadata(self, workspace: str, doc_id: str) -> dict[str, Any]:
+        """Get document metadata by ID."""
+        svc = await self._get_service(workspace)
+        return await svc.aget_metadata(doc_id)
+
+    async def aupdate_metadata(self, workspace: str, doc_id: str, data: dict[str, Any]) -> None:
+        """Update (merge) document metadata."""
+        svc = await self._get_service(workspace)
+        await svc.aupdate_metadata(doc_id, data)
+
+    async def asearch_metadata(self, workspace: str, filters: dict[str, Any]) -> list[str]:
+        """Search metadata by filters, return matching doc_ids."""
+        svc = await self._get_service(workspace)
+        return await svc.asearch_metadata(filters)
+
     async def areset(
         self,
         *,
