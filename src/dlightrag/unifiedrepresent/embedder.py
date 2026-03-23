@@ -113,6 +113,7 @@ async def httpx_text_embed(
         headers={"Authorization": f"Bearer {api_key}"},
         transport=httpx.AsyncHTTPTransport(retries=2),
     ) as client:
+        resp: httpx.Response | None = None
         for attempt in range(4):  # 1 initial + 3 retries
             resp = await client.post(
                 f"{base_url.rstrip('/')}{prov.endpoint}",
@@ -127,6 +128,7 @@ async def httpx_text_embed(
                 continue
             resp.raise_for_status()
             break
+        assert resp is not None  # loop always executes at least once
         return np.array(
             prov.parse_response(resp.json()),
             dtype=np.float32,
@@ -188,6 +190,7 @@ class VisualEmbedder:
             async with sem:
                 image_b64 = self._image_to_b64(img)
                 payload = self.provider.build_image_payload(self.model, image_b64)
+                resp: httpx.Response | None = None
                 for attempt in range(4):  # 1 initial + 3 retries
                     resp = await self._client.post(
                         f"{self.base_url}{self.provider.endpoint}",
@@ -204,6 +207,7 @@ class VisualEmbedder:
                         continue
                     resp.raise_for_status()
                     break
+                assert resp is not None
                 embeddings = self.provider.parse_response(resp.json())
                 vec = embeddings[0]
                 if len(vec) != self.dim:
@@ -229,6 +233,7 @@ class VisualEmbedder:
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
         payload = self.provider.build_text_payload(self.model, texts)
+        resp: httpx.Response | None = None
         for attempt in range(4):  # 1 initial + 3 retries
             resp = await self._client.post(
                 f"{self.base_url}{self.provider.endpoint}",
@@ -243,6 +248,7 @@ class VisualEmbedder:
                 continue
             resp.raise_for_status()
             break
+        assert resp is not None
         embeddings = self.provider.parse_response(resp.json())
         if len(embeddings) > 0 and len(embeddings[0]) != self.dim:
             raise ValueError(f"Expected embedding dim {self.dim}, got {len(embeddings[0])}")

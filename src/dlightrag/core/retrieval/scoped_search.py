@@ -129,7 +129,7 @@ async def _qdrant_scoped_search(
 ) -> list[str]:
     """Qdrant native filtered vector search."""
     try:
-        from qdrant_client import models
+        from qdrant_client import models  # type: ignore[import-not-found]
 
         query_vec = await _embed_query(chunks_vdb, query)
         client = chunks_vdb._client

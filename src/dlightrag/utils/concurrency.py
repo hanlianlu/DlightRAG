@@ -20,14 +20,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Sequence
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 async def bounded_gather(
-    coros: list[Coroutine[Any, Any, Any]],
+    coros: Sequence[Coroutine[Any, Any, Any]],
     *,
     max_concurrent: int = 4,
     task_name: str = "task",
