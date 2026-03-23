@@ -288,6 +288,12 @@ class DlightragConfig(BaseSettings):
         default=None,
         description="Bearer token for REST API authentication. If not set, no auth required.",
     )
+    auth_mode: str = Field(
+        default="none",
+        description="API auth strategy: 'none', 'simple' (bearer token), 'jwt'.",
+    )
+    jwt_secret: str | None = Field(default=None)
+    jwt_algorithm: str = Field(default="HS256")
 
     # ===== Operational =====
     log_level: str = Field(default="info")
@@ -297,6 +303,13 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== Validators =====
+
+    @model_validator(mode="after")
+    def _infer_auth_mode(self):
+        """Auto-upgrade: if api_auth_token is set but auth_mode is default, use 'simple'."""
+        if self.auth_mode == "none" and self.api_auth_token:
+            self.auth_mode = "simple"
+        return self
 
     @model_validator(mode="before")
     @classmethod

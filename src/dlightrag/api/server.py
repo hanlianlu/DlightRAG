@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.responses import RedirectResponse
 
+from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
     AnswerRequest,
     DeleteRequest,
@@ -28,7 +29,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
-from dlightrag.config import DlightragConfig, get_config
+from dlightrag.config import get_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
 
@@ -55,30 +56,6 @@ app = FastAPI(
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Auth middleware
-# ═══════════════════════════════════════════════════════════════════
-
-
-def _get_config() -> DlightragConfig:
-    return get_config()
-
-
-async def _verify_auth(request: Request, config: DlightragConfig = Depends(_get_config)) -> None:
-    """Verify bearer token if DLIGHTRAG_API_AUTH_TOKEN is set."""
-    token = config.api_auth_token
-    if not token:
-        return  # No auth required
-
-    auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-    provided_token = auth_header[7:]
-    if provided_token != token:
-        raise HTTPException(status_code=403, detail="Invalid token")
-
-
-# ═══════════════════════════════════════════════════════════════════
 # Endpoints
 # ═══════════════════════════════════════════════════════════════════
 
@@ -87,8 +64,10 @@ def _get_manager(request: Request) -> RAGServiceManager:
     return request.app.state.manager
 
 
-@app.post("/ingest", dependencies=[Depends(_verify_auth)])
-async def ingest(body: IngestRequest, request: Request) -> dict[str, Any]:
+@app.post("/ingest")
+async def ingest(
+    body: IngestRequest, request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
     """Bulk document ingestion."""
     manager = _get_manager(request)
     ws = body.workspace or get_config().workspace
@@ -122,8 +101,10 @@ async def ingest(body: IngestRequest, request: Request) -> dict[str, Any]:
     return result
 
 
-@app.post("/retrieve", dependencies=[Depends(_verify_auth)])
-async def retrieve(body: RetrieveRequest, request: Request) -> dict[str, Any]:
+@app.post("/retrieve")
+async def retrieve(
+    body: RetrieveRequest, request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
     manager = _get_manager(request)
 
@@ -149,8 +130,10 @@ async def retrieve(body: RetrieveRequest, request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/answer", dependencies=[Depends(_verify_auth)], response_model=None)
-async def answer(body: AnswerRequest, request: Request):
+@app.post("/answer", response_model=None)
+async def answer(
+    body: AnswerRequest, request: Request, user: UserContext = Depends(get_current_user)
+):
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     import json
 
@@ -250,9 +233,11 @@ async def answer(body: AnswerRequest, request: Request):
     )
 
 
-@app.get("/files", dependencies=[Depends(_verify_auth)])
+@app.get("/files")
 async def list_files(
-    request: Request, workspace: str | None = Query(default=None)
+    request: Request,
+    workspace: str | None = Query(default=None),
+    user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """List all ingested documents."""
     manager = _get_manager(request)
@@ -267,8 +252,10 @@ async def list_files(
     return {"files": files, "count": len(files), "workspace": ws}
 
 
-@app.delete("/files", dependencies=[Depends(_verify_auth)])
-async def delete_files(body: DeleteRequest, request: Request) -> dict[str, Any]:
+@app.delete("/files")
+async def delete_files(
+    body: DeleteRequest, request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
     """Delete documents from knowledge base."""
     manager = _get_manager(request)
     ws = body.workspace or get_config().workspace
@@ -287,8 +274,10 @@ async def delete_files(body: DeleteRequest, request: Request) -> dict[str, Any]:
     return {"results": results, "workspace": ws}
 
 
-@app.post("/reset", dependencies=[Depends(_verify_auth)])
-async def reset_workspace(body: ResetRequest, request: Request) -> dict[str, Any]:
+@app.post("/reset")
+async def reset_workspace(
+    body: ResetRequest, request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
     """Reset all RAG data for a workspace.
 
     Always targets a single workspace (defaults to config workspace).
@@ -307,9 +296,12 @@ async def reset_workspace(body: ResetRequest, request: Request) -> dict[str, Any
 # ── Metadata CRUD ─────────────────────────────────────────────────
 
 
-@app.get("/metadata/{doc_id}", dependencies=[Depends(_verify_auth)])
+@app.get("/metadata/{doc_id}")
 async def get_metadata(
-    doc_id: str, request: Request, workspace: str | None = Query(default=None)
+    doc_id: str,
+    request: Request,
+    workspace: str | None = Query(default=None),
+    user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Get document metadata by doc_id."""
     manager = _get_manager(request)
@@ -330,9 +322,12 @@ async def get_metadata(
     return {"doc_id": doc_id, "metadata": result}
 
 
-@app.put("/metadata/{doc_id}", dependencies=[Depends(_verify_auth)])
+@app.put("/metadata/{doc_id}")
 async def update_metadata(
-    doc_id: str, request: Request, workspace: str | None = Query(default=None)
+    doc_id: str,
+    request: Request,
+    workspace: str | None = Query(default=None),
+    user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Update document metadata (merge with existing)."""
     manager = _get_manager(request)
@@ -345,9 +340,12 @@ async def update_metadata(
     return {"doc_id": doc_id, "status": "updated"}
 
 
-@app.post("/metadata/search", dependencies=[Depends(_verify_auth)])
+@app.post("/metadata/search")
 async def search_metadata(
-    body: MetadataFilterRequest, request: Request, workspace: str | None = Query(default=None)
+    body: MetadataFilterRequest,
+    request: Request,
+    workspace: str | None = Query(default=None),
+    user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Search documents by metadata filters."""
     manager = _get_manager(request)
@@ -408,16 +406,20 @@ async def health(request: Request) -> dict[str, Any]:
     return status
 
 
-@app.get("/workspaces", dependencies=[Depends(_verify_auth)])
-async def workspaces(request: Request) -> dict[str, Any]:
+@app.get("/workspaces")
+async def workspaces(
+    request: Request, user: UserContext = Depends(get_current_user)
+) -> dict[str, Any]:
     """List all available workspaces."""
     manager = _get_manager(request)
     ws_list = await manager.list_workspaces()
     return {"workspaces": ws_list}
 
 
-@app.get("/api/files/{file_path:path}", response_model=None, dependencies=[Depends(_verify_auth)])
-async def serve_file(file_path: str) -> StreamingResponse | RedirectResponse:
+@app.get("/api/files/{file_path:path}", response_model=None)
+async def serve_file(
+    file_path: str, user: UserContext = Depends(get_current_user)
+) -> StreamingResponse | RedirectResponse:
     """Serve a file by relative path.
 
     - Local paths: 200 + StreamingResponse

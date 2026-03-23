@@ -3,12 +3,15 @@
 
 from __future__ import annotations
 
+import datetime
 from unittest.mock import AsyncMock
 
+import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.server import _get_config, app
+from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.api.server import app
 from dlightrag.config import DlightragConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
@@ -17,13 +20,21 @@ from dlightrag.core.servicemanager import RAGServiceUnavailableError
 # Fixtures
 # ---------------------------------------------------------------------------
 
+_ANON = UserContext(user_id="anonymous", auth_mode="none")
+
 
 @pytest.fixture
 def mock_config(test_config: DlightragConfig):
-    """Override FastAPI config dependency."""
-    app.dependency_overrides[_get_config] = lambda: test_config
+    """Override auth dependency to allow all requests (auth_mode=none)."""
+    app.dependency_overrides[get_current_user] = lambda: _ANON
     yield test_config
-    app.dependency_overrides.pop(_get_config, None)
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture
+def mock_config_no_auth_override(test_config: DlightragConfig):
+    """Provide config WITHOUT overriding auth — real auth logic runs."""
+    yield test_config
 
 
 @pytest.fixture
@@ -83,7 +94,7 @@ async def client():
 
 
 class TestAuthMiddleware:
-    """Test _verify_auth bearer token validation."""
+    """Test pluggable auth (none / simple / jwt)."""
 
     async def test_no_token_configured_passes(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -93,10 +104,12 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_valid_token_passes(
-        self, client: AsyncClient, mock_config: DlightragConfig
+    async def test_simple_valid_token_passes(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
-        mock_config.api_auth_token = "secret-token"
+        cfg = mock_config_no_auth_override
+        cfg.api_auth_token = "secret-token"
+        cfg.auth_mode = "simple"
         resp = await client.get(
             "/files",
             headers={"Authorization": "Bearer secret-token"},
@@ -104,18 +117,22 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_missing_auth_header_401(
-        self, client: AsyncClient, mock_config: DlightragConfig
+    async def test_simple_missing_auth_header_401(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
-        mock_config.api_auth_token = "secret-token"
+        cfg = mock_config_no_auth_override
+        cfg.api_auth_token = "secret-token"
+        cfg.auth_mode = "simple"
         resp = await client.get("/files")
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_wrong_scheme_401(
-        self, client: AsyncClient, mock_config: DlightragConfig
+    async def test_simple_wrong_scheme_401(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
-        mock_config.api_auth_token = "secret-token"
+        cfg = mock_config_no_auth_override
+        cfg.api_auth_token = "secret-token"
+        cfg.auth_mode = "simple"
         resp = await client.get(
             "/files",
             headers={"Authorization": "Basic abc123"},
@@ -123,10 +140,12 @@ class TestAuthMiddleware:
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_invalid_token_403(
-        self, client: AsyncClient, mock_config: DlightragConfig
+    async def test_simple_invalid_token_403(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
-        mock_config.api_auth_token = "secret-token"
+        cfg = mock_config_no_auth_override
+        cfg.api_auth_token = "secret-token"
+        cfg.auth_mode = "simple"
         resp = await client.get(
             "/files",
             headers={"Authorization": "Bearer wrong-token"},
@@ -143,10 +162,90 @@ class TestAuthMiddleware:
         ],
     )
     async def test_endpoint_requires_auth(
-        self, method: str, path: str, body: dict, client: AsyncClient, mock_config: DlightragConfig
+        self,
+        method: str,
+        path: str,
+        body: dict,
+        client: AsyncClient,
+        mock_config_no_auth_override: DlightragConfig,
     ) -> None:
-        mock_config.api_auth_token = "secret-token"
+        cfg = mock_config_no_auth_override
+        cfg.api_auth_token = "secret-token"
+        cfg.auth_mode = "simple"
         resp = await client.request(method, path, json=body)
+        assert resp.status_code == 401
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_auth_mode_none_allows_all(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
+    ) -> None:
+        cfg = mock_config_no_auth_override
+        cfg.auth_mode = "none"
+        resp = await client.get("/files")
+        assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_backward_compat_token_auto_sets_simple(
+        self, test_config: DlightragConfig
+    ) -> None:
+        """Setting api_auth_token without auth_mode auto-upgrades to simple."""
+        test_config.api_auth_token = "my-token"
+        test_config.auth_mode = "none"
+        # Trigger the validator manually (simulating fresh construction)
+        result = test_config._infer_auth_mode()
+        assert result.auth_mode == "simple"
+
+
+# ---------------------------------------------------------------------------
+# TestJWTAuth
+# ---------------------------------------------------------------------------
+
+_JWT_SECRET = "test-jwt-secret-key-for-unit-tests"
+
+
+class TestJWTAuth:
+    """Test JWT authentication strategy."""
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_jwt_valid_token(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
+    ) -> None:
+        cfg = mock_config_no_auth_override
+        cfg.auth_mode = "jwt"
+        cfg.jwt_secret = _JWT_SECRET
+        cfg.jwt_algorithm = "HS256"
+
+        payload = {
+            "sub": "user-42",
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        }
+        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+
+        resp = await client.get(
+            "/files",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_jwt_expired_token(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
+    ) -> None:
+        cfg = mock_config_no_auth_override
+        cfg.auth_mode = "jwt"
+        cfg.jwt_secret = _JWT_SECRET
+        cfg.jwt_algorithm = "HS256"
+
+        payload = {
+            "sub": "user-42",
+            "exp": datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1),
+        }
+        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+
+        resp = await client.get(
+            "/files",
+            headers={"Authorization": f"Bearer {token}"},
+        )
         assert resp.status_code == 401
 
 
