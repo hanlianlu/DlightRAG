@@ -1309,6 +1309,27 @@ class RAGService:
 
         result.contexts["chunks"] = merged[:top_k]
 
+    # === METADATA API ===
+
+    async def aget_metadata(self, doc_id: str) -> dict[str, Any]:
+        """Get document metadata by ID."""
+        if self._metadata_index is None:
+            raise ValueError("Metadata index not available for this workspace")
+        result = await self._metadata_index.get(doc_id)
+        return result if result else {}
+
+    async def aupdate_metadata(self, doc_id: str, data: dict[str, Any]) -> None:
+        """Update (merge) document metadata."""
+        if self._metadata_index is None:
+            raise ValueError("Metadata index not available for this workspace")
+        await self._metadata_index.upsert(doc_id, data)
+
+    async def asearch_metadata(self, filters: dict[str, Any]) -> list[str]:
+        """Search metadata by filters, return matching doc_ids."""
+        if self._metadata_index is None:
+            raise ValueError("Metadata index not available for this workspace")
+        return await self._metadata_index.query(filters)
+
     # === FILE MANAGEMENT API ===
 
     async def alist_ingested_files(self) -> list[dict[str, Any]]:
