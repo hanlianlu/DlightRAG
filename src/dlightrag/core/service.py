@@ -736,8 +736,11 @@ class RAGService:
                     "Dropping and rebuilding.",
                     graph_name,
                 )
+                import re
+
+                safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", graph_name)
                 await conn.execute('SET search_path = ag_catalog, "$user", public')
-                await conn.execute(f"SELECT drop_graph('{graph_name}', true)")
+                await conn.execute(f"SELECT drop_graph('{safe_name}', true)")
 
         except Exception:
             logger.warning(

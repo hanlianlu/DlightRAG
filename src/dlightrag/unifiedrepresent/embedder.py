@@ -250,7 +250,8 @@ class VisualEmbedder:
                 continue
             resp.raise_for_status()
             break
-        assert resp is not None
+        if resp is None:
+            raise RuntimeError("Embedding API: no response after retries")
         embeddings = self.provider.parse_response(resp.json())
         if len(embeddings) > 0 and len(embeddings[0]) != self.dim:
             raise ValueError(f"Expected embedding dim {self.dim}, got {len(embeddings[0])}")
