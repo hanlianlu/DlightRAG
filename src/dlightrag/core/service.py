@@ -783,6 +783,10 @@ class RAGService:
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize LightRAG storages", exc_info=True)
 
+        from dlightrag.storage.pool import pg_pool
+
+        await pg_pool.close()
+
     async def areset(
         self,
         *,

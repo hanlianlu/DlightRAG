@@ -82,8 +82,8 @@ class PGJsonbKVStorage(BaseKVStorage):
     """Generic JSONB KV storage for PostgreSQL.
 
     Uses a single ``dlightrag_kv_store`` table with (workspace, namespace, id)
-    composite primary key. Reuses LightRAG's shared asyncpg pool via
-    ``ClientManager`` (same pattern as ``PGHashIndex``).
+    composite primary key. Uses DlightRAG's own dedicated asyncpg pool via
+    ``pg_pool`` (independent of LightRAG's ClientManager pool).
 
     Parameters
     ----------
@@ -105,10 +105,9 @@ class PGJsonbKVStorage(BaseKVStorage):
 
     async def initialize(self) -> None:
         if self._pool is None:
-            from lightrag.kg.postgres_impl import ClientManager
+            from dlightrag.storage.pool import pg_pool
 
-            db = await ClientManager.get_client()
-            self._pool = db.pool
+            self._pool = await pg_pool.get()
         await self._ensure_table()
 
     async def _ensure_table(self) -> None:
@@ -126,8 +125,8 @@ class PGJsonbKVStorage(BaseKVStorage):
                     )
 
     async def finalize(self) -> None:
-        # Pool is borrowed from ClientManager — don't close it.
-        # LightRAG's own storages manage the pool lifecycle.
+        # Pool is owned by pg_pool singleton — don't close it here.
+        # RAGService.close() calls pg_pool.close() after all stores finalize.
         self._pool = None
 
     async def index_done_callback(self) -> None:
