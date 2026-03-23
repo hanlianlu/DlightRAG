@@ -57,7 +57,9 @@ class TestRenderPdf:
         assert result.metadata["author"] == "Tester"
         assert result.metadata["creation_date"] == "D:20250101"
 
-        mock_doc.close.assert_called_once()
+        # _render_pdfium_doc now delegates: _get_page_count (open+close) then
+        # _render_pdfium_doc_range (open+close), so close is called twice.
+        assert mock_doc.close.call_count == 2
 
     def test_render_pdf_sync_uses_correct_scale(self) -> None:
         """Verify that page.render() is called with scale = dpi / 72."""
@@ -322,11 +324,14 @@ class TestRenderPdfFromBytes:
         ) as mock_cls:
             result = renderer._render_pdf_from_bytes(b"%PDF-fake")
 
-        # Verify PdfDocument was called with bytes, not a path
-        mock_cls.assert_called_once_with(b"%PDF-fake")
+        # PdfDocument called twice: _get_page_count_from_bytes + _render_pdfium_doc_range
+        assert mock_cls.call_count == 2
+        # Both calls should use bytes, not a path
+        for call_args in mock_cls.call_args_list:
+            assert call_args[0][0] == b"%PDF-fake"
         assert len(result.pages) == 1
         assert result.pages[0][1] is mock_pil_img
-        mock_doc.close.assert_called_once()
+        assert mock_doc.close.call_count == 2
 
 
 class TestOfficeExtensionsExpanded:
@@ -348,3 +353,133 @@ class TestOfficeExtensionsExpanded:
 
         mock.assert_called_once_with(xls_path)
         assert result.metadata["original_format"] == "xls"
+
+
+# ---------------------------------------------------------------------------
+# TestRenderFileBatched
+# ---------------------------------------------------------------------------
+
+
+class TestRenderFileBatched:
+    """Test render_file_batched() streaming batch rendering."""
+
+    async def test_pdf_batched_yields_batches(self, tmp_path: Path) -> None:
+        """Render a 5-page PDF with batch_size=2 -> 3 batches (2+2+1)."""
+        renderer = PageRenderer(dpi=72)
+        fake_pdf = tmp_path / "doc.pdf"
+        fake_pdf.touch()
+
+        # Mock _get_page_count and _render_pdfium_doc_range
+        with (
+            patch.object(renderer, "_get_page_count", return_value=5),
+            patch.object(
+                renderer,
+                "_render_pdfium_doc_range",
+                side_effect=lambda src, start, end, total: RenderResult(
+                    pages=[(idx, Image.new("RGB", (10, 10))) for idx in range(start, end)],
+                    metadata={"original_format": "pdf", "page_count": total},
+                ),
+            ),
+        ):
+            batches = []
+            async for batch in renderer.render_file_batched(str(fake_pdf), batch_size=2):
+                batches.append(batch)
+
+        assert len(batches) == 3
+
+        # Batch 0: pages 0,1
+        assert [idx for idx, _ in batches[0].pages] == [0, 1]
+        assert batches[0].metadata["page_count"] == 5
+
+        # Batch 1: pages 2,3
+        assert [idx for idx, _ in batches[1].pages] == [2, 3]
+
+        # Batch 2: page 4
+        assert [idx for idx, _ in batches[2].pages] == [4]
+
+    async def test_image_batched_yields_single_batch(self, tmp_path: Path) -> None:
+        """Image files yield exactly one batch with one page."""
+        img = Image.new("RGB", (10, 10), "red")
+        img_path = tmp_path / "test.png"
+        img.save(img_path)
+
+        renderer = PageRenderer()
+        batches = []
+        async for batch in renderer.render_file_batched(str(img_path), batch_size=5):
+            batches.append(batch)
+
+        assert len(batches) == 1
+        assert len(batches[0].pages) == 1
+        assert batches[0].pages[0][0] == 0
+        assert batches[0].metadata["original_format"] == "png"
+
+    async def test_batched_global_indices_preserved(self, tmp_path: Path) -> None:
+        """Global page indices are correct across batches."""
+        renderer = PageRenderer(dpi=72)
+        fake_pdf = tmp_path / "doc.pdf"
+        fake_pdf.touch()
+
+        with (
+            patch.object(renderer, "_get_page_count", return_value=3),
+            patch.object(
+                renderer,
+                "_render_pdfium_doc_range",
+                side_effect=lambda src, start, end, total: RenderResult(
+                    pages=[(idx, Image.new("RGB", (10, 10))) for idx in range(start, end)],
+                    metadata={"original_format": "pdf", "page_count": total},
+                ),
+            ),
+        ):
+            all_indices = []
+            async for batch in renderer.render_file_batched(str(fake_pdf), batch_size=1):
+                for idx, _ in batch.pages:
+                    all_indices.append(idx)
+
+        assert all_indices == [0, 1, 2]
+
+    async def test_batched_nonexistent_file_raises(self) -> None:
+        """Nonexistent file raises FileNotFoundError."""
+        renderer = PageRenderer()
+        with pytest.raises(FileNotFoundError, match="File not found"):
+            async for _ in renderer.render_file_batched("/does/not/exist.pdf"):
+                pass
+
+    async def test_batched_unsupported_extension_raises(self, tmp_path: Path) -> None:
+        """Unsupported extensions raise ValueError."""
+        txt_path = tmp_path / "notes.txt"
+        txt_path.touch()
+
+        renderer = PageRenderer()
+        with pytest.raises(ValueError, match="Unsupported file extension '.txt'"):
+            async for _ in renderer.render_file_batched(str(txt_path)):
+                pass
+
+    async def test_batched_metadata_consistent(self, tmp_path: Path) -> None:
+        """All batches carry the same metadata (page_count=total)."""
+        renderer = PageRenderer(dpi=72)
+        fake_pdf = tmp_path / "doc.pdf"
+        fake_pdf.touch()
+
+        with (
+            patch.object(renderer, "_get_page_count", return_value=4),
+            patch.object(
+                renderer,
+                "_render_pdfium_doc_range",
+                side_effect=lambda src, start, end, total: RenderResult(
+                    pages=[(idx, Image.new("RGB", (10, 10))) for idx in range(start, end)],
+                    metadata={
+                        "original_format": "pdf",
+                        "page_count": total,
+                        "title": "Test Doc",
+                    },
+                ),
+            ),
+        ):
+            batches = []
+            async for batch in renderer.render_file_batched(str(fake_pdf), batch_size=3):
+                batches.append(batch)
+
+        assert len(batches) == 2
+        for batch in batches:
+            assert batch.metadata["page_count"] == 4
+            assert batch.metadata["title"] == "Test Doc"

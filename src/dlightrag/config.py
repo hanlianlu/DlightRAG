@@ -226,6 +226,12 @@ class DlightragConfig(BaseSettings):
         "Increase for slow local models (CPU inference).",
     )
     ingestion_replace_default: bool = Field(default=False)
+    ingestion_batch_pages: int = Field(
+        default=20, description="Pages per batch during streaming ingestion."
+    )
+    api_image_quality: int = Field(
+        default=95, description="JPEG quality for VLM/embedding API calls."
+    )
 
     # ===== Query Configuration =====
     top_k: int = Field(default=60)

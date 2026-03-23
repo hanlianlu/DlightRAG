@@ -8,6 +8,7 @@ dict-backed stores to verify cross-store consistency and ingest→delete invaria
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -16,6 +17,13 @@ from PIL import Image
 
 from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 from dlightrag.unifiedrepresent.renderer import RenderResult
+
+
+async def _async_gen_from_list(items: list) -> AsyncIterator:
+    """Create an async generator that yields items from a list."""
+    for item in items:
+        yield item
+
 
 pytestmark = [
     pytest.mark.integration,
@@ -43,6 +51,8 @@ def _make_config() -> MagicMock:
     config.default_mode = "mix"
     config.top_k = 60
     config.chunk_top_k = 10
+    # Batch ingestion config
+    config.ingestion_batch_pages = 20
     return config
 
 
@@ -120,13 +130,14 @@ class TestAingestDataConsistency:
                 "dlightrag.unifiedrepresent.extractor.merge_nodes_and_edges", new_callable=AsyncMock
             ),
         ):
-            # Renderer: 3 pages
+            # Renderer: 3 pages in one batch
             images = [Image.new("RGB", (50, 50), c) for c in ("white", "blue", "red")]
-            engine.renderer.render_file = AsyncMock(
-                return_value=RenderResult(
-                    pages=list(enumerate(images)),
-                    metadata={"title": "T", "page_count": 3},
-                )
+            render_result = RenderResult(
+                pages=list(enumerate(images)),
+                metadata={"title": "T", "page_count": 3},
+            )
+            engine.renderer.render_file_batched = MagicMock(
+                return_value=_async_gen_from_list([render_result])
             )
             engine.embedder.embed_pages = AsyncMock(
                 return_value=np.zeros((3, 1024), dtype=np.float32)
@@ -230,13 +241,14 @@ class TestIngestDeleteRoundTrip:
                 "dlightrag.unifiedrepresent.extractor.merge_nodes_and_edges", new_callable=AsyncMock
             ),
         ):
-            # Mock renderer: 3 pages
+            # Mock renderer: 3 pages in one batch
             images = [Image.new("RGB", (100, 100), c) for c in ("white", "blue", "red")]
-            engine.renderer.render_file = AsyncMock(
-                return_value=RenderResult(
-                    pages=list(enumerate(images)),
-                    metadata={"title": "Test", "page_count": 3},
-                )
+            render_result = RenderResult(
+                pages=list(enumerate(images)),
+                metadata={"title": "Test", "page_count": 3},
+            )
+            engine.renderer.render_file_batched = MagicMock(
+                return_value=_async_gen_from_list([render_result])
             )
             engine.embedder.embed_pages = AsyncMock(
                 return_value=np.zeros((3, 1024), dtype=np.float32)
