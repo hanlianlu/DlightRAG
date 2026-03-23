@@ -29,7 +29,7 @@ def client(tmp_working_dir: Path) -> TestClient:
         embedding=EmbeddingConfig(api_key="test"),
     )
     with (
-        patch("dlightrag.api.server.get_config", return_value=config),
+        patch("dlightrag.api.routes.get_config", return_value=config),
         patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
     ):
         with TestClient(app) as c:
@@ -54,15 +54,15 @@ class TestFileEndpoint:
         resp = client.get("/api/files/azure://container/blob.pdf")
         assert resp.status_code == 503
 
-    def test_snowflake_returns_400(self, client: TestClient) -> None:
-        """Snowflake has no downloadable file — explicit 400."""
-        resp = client.get("/api/files/snowflake://my_table")
-        assert resp.status_code == 400
+    def test_s3_returns_501(self, client: TestClient) -> None:
+        """S3 presigned URL support not yet implemented — explicit 501."""
+        resp = client.get("/api/files/s3://my-bucket/key.pdf")
+        assert resp.status_code == 501
 
 
 class TestFileEndpointAzureRedirect:
     @patch(
-        "dlightrag.api.server.generate_azure_sas_url",
+        "dlightrag.api.routes.generate_azure_sas_url",
         return_value="https://acct.blob.core.windows.net/c/b?sig=x",
     )
     def test_azure_302_redirect(self, mock_sas, tmp_working_dir: Path) -> None:
@@ -74,7 +74,7 @@ class TestFileEndpointAzureRedirect:
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
         with (
-            patch("dlightrag.api.server.get_config", return_value=config),
+            patch("dlightrag.api.routes.get_config", return_value=config),
             patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
         ):
             with TestClient(app, follow_redirects=False) as c:
