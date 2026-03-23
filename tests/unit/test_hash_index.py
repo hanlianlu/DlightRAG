@@ -562,10 +562,10 @@ class TestDeriveSourceType:
 
         assert derive_source_type("azure://container/path/file.pdf") == "azure_blobs"
 
-    def test_snowflake_uri(self):
+    def test_s3_uri(self):
         from dlightrag.core.ingestion.hash_index import derive_source_type
 
-        assert derive_source_type("snowflake://source_label") == "snowflake"
+        assert derive_source_type("s3://my-bucket/doc.pdf") == "s3"
 
     def test_local_absolute_path(self):
         from dlightrag.core.ingestion.hash_index import derive_source_type
@@ -591,7 +591,7 @@ class TestDeriveSourceType:
     def test_unknown_uri_scheme(self):
         from dlightrag.core.ingestion.hash_index import derive_source_type
 
-        assert derive_source_type("s3://bucket/file.pdf") == "unknown"
+        assert derive_source_type("ftp://server/file.pdf") == "unknown"
 
     def test_dot_relative_path(self):
         from dlightrag.core.ingestion.hash_index import derive_source_type

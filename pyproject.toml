@@ -27,7 +27,7 @@ dependencies = [
     "numpy>=2.4.2",
     # Data sourcing
     "azure-storage-blob>=12.28.0",
-    "snowflake-connector-python>=4.3.0",
+    "aiobotocore>=2.13.0",
     # Document parsing
     "docling>=2.80.0",
     "pypdfium2>=4.30.0",

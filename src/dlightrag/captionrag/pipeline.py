@@ -68,7 +68,6 @@ class IngestionPipeline:
     Public API:
       - aingest_from_local(...)
       - aingest_from_azure_blob(...)
-      - aingest_from_snowflake(...)
       - aingest_content_list(...)
     """
 
@@ -765,79 +764,6 @@ class IngestionPipeline:
             source_path=file_path,
             stats=result.stats,
         )
-
-    # ─────────────────────────────────────────────────────────────────
-    # Public API: Snowflake ingestion
-    # ─────────────────────────────────────────────────────────────────
-
-    async def aingest_from_snowflake(
-        self,
-        query: str,
-        table: str | None = None,
-        **snowflake_kwargs: Any,
-    ) -> IngestionResult:
-        """Ingest structured data from Snowflake into RAG via content_list.
-
-        Executes raw SQL via the Snowflake connector (sync, offloaded to thread)
-        and ingests the results. The first column of the query result is treated
-        as text content; remaining columns become metadata.
-
-        Args:
-            query: Raw SQL query to execute
-            table: Optional label for source tracking (defaults to "query")
-        """
-        from dlightrag.sourcing.snowflake import SnowflakeDataSource
-
-        config = self.config
-        source_label = table or "query"
-
-        # Connection + query are sync I/O; offload to thread
-        source = await asyncio.to_thread(
-            SnowflakeDataSource,
-            account=snowflake_kwargs.get("account") or config.snowflake_account or "",
-            user=snowflake_kwargs.get("user") or config.snowflake_user or "",
-            password=snowflake_kwargs.get("password") or config.snowflake_password or "",
-            warehouse=snowflake_kwargs.get("warehouse") or config.snowflake_warehouse,
-            database=snowflake_kwargs.get("database") or config.snowflake_database,
-            schema=snowflake_kwargs.get("schema") or config.snowflake_schema,
-        )
-
-        try:
-            await asyncio.to_thread(source.execute_query, query, source_label)
-
-            # Cache reads are pure in-memory, no need for to_thread
-            content_list: list[dict[str, Any]] = []
-            for doc_id in source.list_documents():
-                raw = source.load_document(doc_id)
-                content = raw.decode("utf-8", errors="ignore")
-
-                content_list.append(
-                    {
-                        "type": "text",
-                        "text": content,
-                        "metadata": {
-                            "doc_id": doc_id,
-                            "table": source_label,
-                        },
-                    }
-                )
-
-            if content_list:
-                result = await self.aingest_content_list(
-                    content_list=content_list,
-                    file_path=f"snowflake://{source_label}",
-                    display_stats=True,
-                )
-                result.source_type = "snowflake"
-                return result
-
-            return IngestionResult(
-                status="success",
-                processed=0,
-                source_type="snowflake",
-            )
-        finally:
-            await asyncio.to_thread(source.close)
 
     # ─────────────────────────────────────────────────────────────────
     # Public API: File management

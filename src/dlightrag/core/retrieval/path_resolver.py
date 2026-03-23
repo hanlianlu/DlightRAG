@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unified path resolution for retrieval source/media URLs.
 
-Normalizes raw storage paths (local, azure://, snowflake://) into
+Normalizes raw storage paths (local, azure://, s3://) into
 /api/files/{path} URLs. The file-serving endpoint handles dispatch:
 local → stream, azure → 302 redirect to SAS URL.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 class PathResolver:
     """Normalize raw storage paths into unified /api/files/ URLs.
 
-    All paths — local, azure://, snowflake:// — are mapped to the
+    All paths — local, azure://, s3:// — are mapped to the
     file-serving endpoint. The endpoint handles source-type dispatch
     internally (local → stream, azure → 302 redirect to SAS URL).
 
@@ -56,7 +56,7 @@ class PathResolver:
         if raw_path.startswith("file://"):
             raw_path = raw_path[7:]
 
-        # Remote schemes (azure://, snowflake://) — wrap as-is
+        # Remote schemes (azure://, s3://) — wrap as-is
         if "://" in raw_path:
             return f"{self._base_url}/{raw_path}"
 

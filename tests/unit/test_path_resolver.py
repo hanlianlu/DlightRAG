@@ -29,9 +29,9 @@ class TestResolve:
             == "/api/files/azure://mycontainer/doc.pdf"
         )
 
-    def test_snowflake_scheme_wrapped_into_endpoint(self) -> None:
+    def test_s3_scheme_wrapped_into_endpoint(self) -> None:
         resolver = PathResolver(working_dir="/data/rag_storage")
-        assert resolver.resolve("snowflake://my_table") == "/api/files/snowflake://my_table"
+        assert resolver.resolve("s3://my-bucket/doc.pdf") == "/api/files/s3://my-bucket/doc.pdf"
 
     def test_fallback_marker_when_no_working_dir(self) -> None:
         """Without working_dir, falls back to sources/artifacts marker."""

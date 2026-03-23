@@ -13,9 +13,9 @@ Usage:
     uv run scripts/cli.py ingest --source azure_blob --container c --blob-path docs/report.pdf
     uv run scripts/cli.py ingest --source azure_blob --container c --prefix reports/
 
-    # Snowflake ingestion
-    uv run scripts/cli.py ingest --source snowflake --query "SELECT * FROM reports"
-    uv run scripts/cli.py ingest --source snowflake --query "SELECT * FROM t" --table reports
+    # S3 ingestion
+    uv run scripts/cli.py ingest --source s3 --bucket my-bucket --key docs/report.pdf
+    uv run scripts/cli.py ingest --source s3 --bucket my-bucket --prefix docs/
 
     # Query & answer (requires API server: docker compose up dlightrag-api)
     uv run scripts/cli.py query "What are the key findings?"
@@ -97,9 +97,8 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             )
         if args.container_name or args.blob_path or args.prefix:
             _die("--container, --blob-path, --prefix are only for azure_blob source")
-        if args.query or args.table:
-            _die("--query, --table are only for snowflake source")
-
+        if args.bucket or args.key:
+            _die("--bucket, --key are only for s3 source")
     elif source == "azure_blob":
         if args.path:
             _die(
@@ -114,21 +113,22 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             )
         if args.blob_path and args.prefix:
             _die("--blob-path and --prefix are mutually exclusive")
-        if args.query or args.table:
-            _die("--query, --table are only for snowflake source")
+        if args.bucket or args.key:
+            _die("--bucket, --key are only for s3 source")
 
-    elif source == "snowflake":
+    elif source == "s3":
         if args.path:
-            _die("positional path is not used with snowflake source")
-        if not args.query:
+            _die("positional path is not used with s3 source")
+        if not args.bucket:
             _die(
-                "snowflake source requires --query.\n"
-                "Usage: dlightrag-cli ingest --source snowflake --query '<SQL>'"
+                "s3 source requires --bucket.\n"
+                "Usage: dlightrag-cli ingest --source s3 --bucket <name> "
+                "[--key <path> | --prefix <pfx>]"
             )
-        if args.container_name or args.blob_path or args.prefix:
-            _die("--container, --blob-path, --prefix are only for azure_blob source")
-        if args.replace:
-            _die("--replace is not supported for snowflake source")
+        if args.key and args.prefix:
+            _die("--key and --prefix are mutually exclusive for s3 source")
+        if args.container_name or args.blob_path:
+            _die("--container, --blob-path are only for azure_blob source")
 
 
 # ── subcommands ──────────────────────────────────────────────────
@@ -160,13 +160,15 @@ async def _run_ingest(args: argparse.Namespace) -> None:
             f"(replace={args.replace})"
         )
 
-    elif source == "snowflake":
-        kwargs["query"] = args.query
-        if args.table:
-            kwargs["table"] = args.table
-        print(f"Ingesting from Snowflake: query={args.query!r}")
-        if args.table:
-            print(f"  table metadata: {args.table}")
+    elif source == "s3":
+        kwargs["bucket"] = args.bucket
+        if args.key:
+            kwargs["key"] = args.key
+        if args.prefix is not None:
+            kwargs["prefix"] = args.prefix
+        kwargs["replace"] = args.replace
+        target = args.key or (f"prefix={args.prefix}" if args.prefix else "entire bucket")
+        print(f"Ingesting from S3: bucket={args.bucket}, target={target} (replace={args.replace})")
 
     config = get_config()
     workspace = args.workspace or config.workspace
@@ -350,20 +352,21 @@ def build_parser() -> argparse.ArgumentParser:
     # ingest
     p_ingest = sub.add_parser(
         "ingest",
-        help="Ingest documents from local, Azure Blob, or Snowflake sources",
+        help="Ingest documents from local, Azure Blob, or S3 sources",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Ingest documents into the RAG knowledge base.\n\n"
             "Source types:\n"
             "  local (default)  Ingest from local filesystem (file or directory)\n"
             "  azure_blob       Ingest from Azure Blob Storage container\n"
-            "  snowflake        Ingest from Snowflake via SQL query\n\n"
+            "  s3               Ingest from AWS S3 bucket\n\n"
             "Examples:\n"
             "  %(prog)s ./docs                                          # local file/dir\n"
             "  %(prog)s ./docs --replace                                # local with replace\n"
             "  %(prog)s --source azure_blob --container my-container    # entire container\n"
             "  %(prog)s --source azure_blob --container c --prefix rpt/ # by prefix\n"
-            '  %(prog)s --source snowflake --query "SELECT * FROM t"    # snowflake query'
+            "  %(prog)s --source s3 --bucket my-bucket --key doc.pdf    # S3 single object\n"
+            "  %(prog)s --source s3 --bucket my-bucket --prefix docs/   # S3 by prefix"
         ),
     )
     p_ingest.add_argument(
@@ -371,7 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_ingest.add_argument(
         "--source",
-        choices=["local", "azure_blob", "snowflake"],
+        choices=["local", "azure_blob", "s3"],
         default="local",
         dest="source_type",
         help="Data source type (default: local)",
@@ -387,8 +390,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument(
         "--prefix", help="Blob prefix filter (azure_blob, mutually exclusive with --blob-path)"
     )
-    p_ingest.add_argument("--query", help="SQL query (snowflake source)")
-    p_ingest.add_argument("--table", help="Table name metadata (snowflake source, optional)")
+    p_ingest.add_argument("--bucket", help="S3 bucket name (s3 source)")
+    p_ingest.add_argument(
+        "--key", help="S3 object key (s3 source, mutually exclusive with --prefix)"
+    )
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
     p_ingest.add_argument(
         "--workspace", default=None, help="Target workspace (default: from config)"

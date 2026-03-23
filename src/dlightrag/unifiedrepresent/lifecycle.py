@@ -29,7 +29,7 @@ async def unified_ingest(
     engine: UnifiedRepresentEngine,
     config: DlightragConfig,
     hash_index: HashIndexProtocol,
-    source_type: Literal["local", "azure_blob", "snowflake"],
+    source_type: Literal["local", "azure_blob", "s3"],
     metadata_index: Any = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
@@ -54,8 +54,8 @@ async def unified_ingest(
             engine, config, hash_index, metadata_index=metadata_index, **kwargs
         )
 
-    # source_type == "snowflake"
-    return await _ingest_snowflake(engine, config, **kwargs)
+    # source_type == "s3"
+    return await _ingest_s3(engine, config, hash_index, metadata_index=metadata_index, **kwargs)
 
 
 async def _ingest_single_local(
@@ -270,52 +270,102 @@ async def _ingest_single_blob(
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-async def _ingest_snowflake(
+async def _ingest_s3(
     engine: UnifiedRepresentEngine,
     config: DlightragConfig,
+    hash_index: HashIndexProtocol,
+    metadata_index: Any = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Snowflake text -> LightRAG ainsert (no visual pipeline)."""
-    from dlightrag.sourcing.snowflake import SnowflakeDataSource
+    """Download S3 object(s) to temp -> unified visual pipeline."""
+    from dlightrag.sourcing.aws_s3 import S3DataSource
 
-    query: str = kwargs["query"]
-    table: str | None = kwargs.get("table")
-    source_label = table or "query"
+    bucket: str = kwargs["bucket"]
+    key: str | None = kwargs.get("key")
+    prefix: str | None = kwargs.get("prefix")
+    replace: bool = kwargs.get("replace", config.ingestion_replace_default)
 
-    source = await asyncio.to_thread(
-        SnowflakeDataSource,
-        account=config.snowflake_account or "",
-        user=config.snowflake_user or "",
-        password=config.snowflake_password or "",
-        warehouse=config.snowflake_warehouse,
-        database=config.snowflake_database,
-        schema=config.snowflake_schema,
-    )
-
+    source = S3DataSource(bucket=bucket)
     try:
-        await asyncio.to_thread(source.execute_query, query, source_label)
+        if key:
+            return await _ingest_single_s3(
+                engine, config, hash_index, source, bucket, key, replace, metadata_index
+            )
 
-        texts: list[str] = []
-        for doc_id in source.list_documents():
-            raw = source.load_document(doc_id)
-            texts.append(raw.decode("utf-8", errors="ignore"))
+        from dlightrag.utils.concurrency import bounded_gather
 
-        if not texts:
-            logger.warning("Snowflake query returned no results")
-            return {"status": "success", "source_type": "snowflake", "processed": 0}
-
-        combined = "\n\n".join(texts)
-        await engine.lightrag.ainsert(combined)
-        logger.info("Inserted %d Snowflake rows via LightRAG ainsert", len(texts))
+        keys = await source.alist_documents(prefix=prefix or "")
+        coros = [
+            _ingest_single_s3(
+                engine, config, hash_index, source, bucket, k, replace, metadata_index
+            )
+            for k in keys
+        ]
+        raw_results = await bounded_gather(
+            coros,
+            max_concurrent=config.max_concurrent_ingestion,
+            task_name="unified-s3-ingestion",
+        )
+        completed = [r for r in raw_results if not isinstance(r, Exception)]
 
         return {
             "status": "success",
-            "source_type": "snowflake",
-            "processed": len(texts),
-            "source_label": source_label,
+            "source_type": "s3",
+            "bucket": bucket,
+            "prefix": prefix,
+            "results": completed,
+            "processed": len(completed),
         }
     finally:
-        await asyncio.to_thread(source.close)
+        await source.aclose()
+
+
+async def _ingest_single_s3(
+    engine: UnifiedRepresentEngine,
+    config: DlightragConfig,
+    hash_index: HashIndexProtocol,
+    source: Any,
+    bucket: str,
+    key: str,
+    replace: bool = False,
+    metadata_index: Any = None,
+) -> dict[str, Any]:
+    """Download one S3 object to temp dir, ingest via unified engine, cleanup."""
+    tmpdir = config.temp_dir / uuid.uuid4().hex[:12]
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    try:
+        target = tmpdir / Path(key).name
+        content = await source.aload_document(key)
+        await asyncio.to_thread(target.write_bytes, content)
+
+        should_skip, content_hash, reason = await hash_index.should_skip_file(target, replace)
+        if should_skip:
+            logger.info("Skipped (dedup): %s - %s", key, reason)
+            return {"status": "skipped", "reason": reason, "key": key}
+
+        logger.info("Downloaded S3 object to temp: %s", target)
+        result = await engine.aingest(file_path=str(target))
+
+        if content_hash and result.get("doc_id"):
+            await hash_index.register(content_hash, result["doc_id"], f"s3://{bucket}/{key}")
+
+        # Upsert document metadata (best-effort)
+        if result.get("doc_id") and metadata_index is not None:
+            try:
+                from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+
+                meta = extract_system_metadata(
+                    target,
+                    rag_mode="unified",
+                    page_count=result.get("page_count"),
+                )
+                await metadata_index.upsert(result["doc_id"], meta)
+            except Exception as e:
+                logger.warning("Metadata upsert failed for %s: %s", target.name, e)
+
+        return result
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ── Deletion ───────────────────────────────────────────────────────
