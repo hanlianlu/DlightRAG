@@ -326,6 +326,10 @@ class RAGService:
 
     async def _do_initialize(self) -> None:
         """Create RAG backend and compose pipelines based on rag_mode."""
+        from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
+
+        apply_lightrag_patches()
+
         config = self.config
         logger.info("RAG mode: %s", config.rag_mode)
 
@@ -546,6 +550,11 @@ class RAGService:
         self._lightrag = lightrag
         logger.info("LightRAG storages initialized")
 
+        # Post-init verification: ensure AGE graph labels actually exist.
+        # Catches stale/corrupted graphs left by previous failed inits
+        # (e.g., schema created but vlabels missing due to uncaught errors).
+        await self._verify_graph_labels(lightrag)
+
         # Create visual_chunks KV store.
         # LightRAG's PGKVStorage only supports 7 hardcoded namespaces; custom ones
         # (like "visual_chunks") cause KeyError / silent no-op / SQL errors.
@@ -674,6 +683,73 @@ class RAGService:
             raise RuntimeError(
                 "RAGService not initialized. Use 'await RAGService.create()' instead."
             )
+
+    # -- Graph verification ----------------------------------------------------
+
+    @staticmethod
+    async def _verify_graph_labels(lightrag: Any) -> None:
+        """Verify AGE graph labels exist after initialize_storages().
+
+        If the graph schema exists but required labels (``base``, ``DIRECTED``)
+        are missing — typically from a previous failed init before the
+        DuplicateSchemaError patch — drop the corrupted graph and re-run
+        initialization to rebuild it cleanly.
+        """
+        graph_storage = getattr(lightrag, "chunk_entity_relation_graph", None)
+        if graph_storage is None:
+            return
+
+        graph_name = getattr(graph_storage, "graph_name", None)
+        db = getattr(graph_storage, "db", None)
+        if not graph_name or db is None:
+            return
+
+        pool = getattr(db, "pool", None)
+        if pool is None:
+            return
+
+        try:
+            async with pool.acquire() as conn:
+                # Check if the graph schema exists at all
+                schema_exists = await conn.fetchval(
+                    "SELECT EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = $1)",
+                    graph_name,
+                )
+                if not schema_exists:
+                    return  # No schema → init will create everything fresh
+
+                # Check if the 'base' label table exists within the schema
+                base_exists = await conn.fetchval(
+                    "SELECT EXISTS("
+                    "  SELECT 1 FROM pg_tables"
+                    "  WHERE schemaname = $1 AND tablename = 'base'"
+                    ")",
+                    graph_name,
+                )
+                if base_exists:
+                    return  # Healthy graph
+
+                # Corrupted: schema exists but 'base' label missing.
+                # Drop the graph and let initialize() rebuild it.
+                logger.warning(
+                    "Corrupted AGE graph '%s': schema exists but 'base' label missing. "
+                    "Dropping and rebuilding.",
+                    graph_name,
+                )
+                await conn.execute('SET search_path = ag_catalog, "$user", public')
+                await conn.execute(f"SELECT drop_graph('{graph_name}', true)")
+
+        except Exception:
+            logger.warning(
+                "Graph verification failed for '%s', proceeding anyway",
+                graph_name,
+                exc_info=True,
+            )
+            return
+
+        # Re-run graph initialization after dropping corrupted graph
+        logger.info("Re-initializing graph storage for '%s'", graph_name)
+        await graph_storage.initialize()
 
     async def close(self) -> None:
         """Clean up storages and worker pools (best-effort)."""
