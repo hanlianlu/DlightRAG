@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
+from PIL import Image
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -26,6 +27,31 @@ from dlightrag.unifiedrepresent.renderer import PageRenderer
 from dlightrag.unifiedrepresent.retriever import VisualRetriever
 
 logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# Encoding utilities
+# ------------------------------------------------------------------
+
+
+def encode_png_b64(image: Image.Image) -> str:
+    """Encode PIL Image to raw PNG base64 (no data URI prefix) for visual_chunks."""
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+# ------------------------------------------------------------------
+# Prefetch helper
+# ------------------------------------------------------------------
+
+
+async def _safe_anext(aiter: Any) -> Any:
+    """Return next item from async iterator, or None if exhausted."""
+    try:
+        return await aiter.__anext__()
+    except StopAsyncIteration:
+        return None
 
 
 class UnifiedRepresentEngine:
@@ -101,12 +127,16 @@ class UnifiedRepresentEngine:
     ) -> dict:
         """Ingest a document into the unified representational pipeline.
 
-        Steps:
-            1. Render pages to images.
-            2. Generate ``doc_id``.
-            3. Write ``full_docs`` entry (LightRAG compat).
-            4. Run visual embedding and VLM entity extraction in parallel.
-            5. Write to ``chunks_vdb``, ``text_chunks``, and ``visual_chunks``.
+        Processes pages in streaming batches to bound peak memory. Each batch:
+            1. Render a batch of pages via ``render_file_batched``.
+            2. Run visual embedding + VLM entity extraction in parallel.
+            3. Encode PNG per page for visual_chunks, release PIL images.
+            4. Batch-upsert visual_chunks, chunks_vdb, text_chunks.
+            5. Accumulate page_infos across batches.
+            6. Prefetch next batch (after PIL release).
+
+        After all batches:
+            7. Write full_docs, doc_status (PROCESSED).
 
         Returns
         -------
@@ -119,33 +149,27 @@ class UnifiedRepresentEngine:
 
         path = Path(file_path)
 
-        # Step 1: Render pages
-        render_result = await self.renderer.render_file(path)
-        images = [img for _, img in render_result.pages]
-        page_count = len(images)
-        logger.info("Rendered %d pages from %s", page_count, path.name)
-
-        if not images:
-            raise ValueError(f"No pages rendered from {file_path}")
-
-        # Step 2: Generate doc_id
+        # Generate doc_id up front
         if doc_id is None:
             doc_id = compute_mdhash_id(file_path, prefix="doc-")
 
+        batch_size = getattr(self.config, "ingestion_batch_pages", 20)
+
+        # Accumulators across batches
+        all_page_infos: list[dict] = []
+        total_page_count = 0
+        last_metadata: dict[str, str | int] = {}
+
         # Early checkpoint: mark PROCESSING so crashes leave a recoverable state.
-        # LightRAG's _validate_and_fix_document_consistency() will find this on
-        # restart and reset to PENDING. The hash index won't have this file
-        # registered (registration happens in lifecycle AFTER aingest succeeds),
-        # so re-ingestion will proceed naturally.
-        now = datetime.now(UTC).isoformat()
+        created_at = datetime.now(UTC).isoformat()
         await self.lightrag.doc_status.upsert(
             {
                 doc_id: {
                     "status": DocStatus.PROCESSING,
-                    "content_summary": f"[unified] {path.name} ({page_count} pages)",
+                    "content_summary": f"[unified] {path.name}",
                     "content_length": 0,
-                    "created_at": now,
-                    "updated_at": now,
+                    "created_at": created_at,
+                    "updated_at": created_at,
                     "file_path": str(path),
                     "chunks_count": 0,
                     "chunks_list": [],
@@ -153,79 +177,127 @@ class UnifiedRepresentEngine:
             }
         )
 
+        # Set up double-buffered prefetch
+        batch_aiter = self.renderer.render_file_batched(path, batch_size=batch_size).__aiter__()
+        current_batch = await _safe_anext(batch_aiter)
+        prefetch_task: asyncio.Task[Any] | None = None
+
         try:
-            # Step 3: Write full_docs entry (minimal, for LightRAG compat)
+            while current_batch is not None:
+                render_result = current_batch
+                pages = render_result.pages  # list[(page_index, PIL.Image)]
+                images = [img for _, img in pages]
+                batch_page_count = len(images)
+
+                if batch_page_count == 0:
+                    # Empty batch (defensive)
+                    prefetch_task = asyncio.create_task(_safe_anext(batch_aiter))
+                    current_batch = await prefetch_task
+                    prefetch_task = None
+                    continue
+
+                # Accumulate metadata from first non-empty batch
+                if not last_metadata:
+                    last_metadata = dict(render_result.metadata)
+
+                logger.info("Processing batch of %d pages from %s", batch_page_count, path.name)
+
+                # Step 2: Parallel embedding + extraction
+                # DlightRAG's embedder and extractor accept PIL Images directly
+                embed_task = self.embedder.embed_pages(images)
+                extract_task = self.extractor.extract_from_pages(
+                    images=images, doc_id=doc_id, file_path=str(path)
+                )
+                visual_vectors, page_infos = await asyncio.gather(embed_task, extract_task)
+
+                # Step 3: Encode PNG per page using chunk_ids from page_infos,
+                # release PIL images eagerly
+                visual_data: dict[str, dict] = {}
+                for info, img in zip(page_infos, images, strict=True):
+                    chunk_id = info["chunk_id"]
+                    page_idx = info["page_index"]
+                    png_b64 = encode_png_b64(img)
+                    img.close()
+                    visual_data[chunk_id] = {
+                        "image_data": png_b64,
+                        "page_index": page_idx,
+                        "full_doc_id": doc_id,
+                        "file_path": str(path),
+                        "doc_title": render_result.metadata.get("title", ""),
+                        "doc_author": render_result.metadata.get("author", ""),
+                        "creation_date": render_result.metadata.get("creation_date", ""),
+                        "page_count": render_result.metadata.get("page_count", 0),
+                        "original_format": render_result.metadata.get("original_format", ""),
+                    }
+                del images  # all PIL images closed
+
+                # Start prefetch of next batch after PIL release
+                prefetch_task = asyncio.create_task(_safe_anext(batch_aiter))
+
+                # Step 4a: Upsert visual_chunks
+                await self.visual_chunks.upsert(visual_data)
+
+                # Step 4b: Write chunks_vdb (visual vectors via cache-swap)
+                chunks_data: dict[str, dict] = {}
+                for info in page_infos:
+                    chunk_id = info["chunk_id"]
+                    chunks_data[chunk_id] = {
+                        "content": info["content"],
+                        "full_doc_id": doc_id,
+                        "file_path": str(path),
+                        "tokens": len(info["content"].split()),
+                        "chunk_order_index": info["page_index"],
+                    }
+                await self._upsert_with_visual_vectors(chunks_data, visual_vectors)
+
+                # Step 4c: Write text_chunks (page summaries)
+                text_chunks_data: dict[str, dict] = {}
+                for info in page_infos:
+                    chunk_id = info["chunk_id"]
+                    text_chunks_data[chunk_id] = {
+                        "content": info["content"],
+                        "full_doc_id": doc_id,
+                        "file_path": str(path),
+                        "tokens": len(info["content"].split()),
+                        "chunk_order_index": info["page_index"],
+                        "page_idx": info["page_index"],
+                        "source_type": "unified_represent",
+                    }
+                await self.lightrag.text_chunks.upsert(text_chunks_data)
+
+                # Step 5: Accumulate metadata across batches
+                all_page_infos.extend(page_infos)
+                total_page_count += batch_page_count
+
+                # Get next batch (overlaps with stores writes via prefetch)
+                current_batch = await prefetch_task
+                prefetch_task = None
+
+            # -- After all batches --
+
+            if total_page_count == 0:
+                raise ValueError(f"No pages rendered from {file_path}")
+
+            # Step 7a: Write full_docs
             await self.lightrag.full_docs.upsert(
-                {doc_id: {"content": "", "file_path": str(path), "page_count": page_count}}
+                {
+                    doc_id: {
+                        "content": "",
+                        "file_path": str(path),
+                        "page_count": total_page_count,
+                    }
+                }
             )
 
-            # Step 4: Parallel embedding + entity extraction
-            embed_task = self.embedder.embed_pages(images)
-            extract_task = self.extractor.extract_from_pages(
-                images=images, doc_id=doc_id, file_path=str(path)
-            )
-            visual_vectors, page_infos = await asyncio.gather(embed_task, extract_task)
-
-            # Step 5a: Write to chunks_vdb (visual vectors via embedding func swap)
-            chunks_data: dict[str, dict] = {}
-            for info in page_infos:
-                chunk_id = info["chunk_id"]
-                chunks_data[chunk_id] = {
-                    "content": info["content"],  # VLM text description
-                    "full_doc_id": doc_id,
-                    "file_path": str(path),
-                    "tokens": len(info["content"].split()),
-                    "chunk_order_index": info["page_index"],
-                }
-            await self._upsert_with_visual_vectors(chunks_data, visual_vectors)
-
-            # Step 5b: Write to text_chunks (page summaries)
-            text_chunks_data: dict[str, dict] = {}
-            for info in page_infos:
-                chunk_id = info["chunk_id"]
-                text_chunks_data[chunk_id] = {
-                    "content": info["content"],
-                    "full_doc_id": doc_id,
-                    "file_path": str(path),
-                    "tokens": len(info["content"].split()),
-                    "chunk_order_index": info["page_index"],
-                    "page_idx": info["page_index"],
-                    "source_type": "unified_represent",
-                }
-            await self.lightrag.text_chunks.upsert(text_chunks_data)
-
-            # Step 5c: Write to visual_chunks (page images + metadata)
-            visual_data: dict[str, dict] = {}
-            for info in page_infos:
-                chunk_id = info["chunk_id"]
-                page_idx = info["page_index"]
-                img = images[page_idx]
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                image_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-
-                visual_data[chunk_id] = {
-                    "image_data": image_b64,
-                    "page_index": page_idx,
-                    "full_doc_id": doc_id,
-                    "file_path": str(path),
-                    "doc_title": render_result.metadata.get("title", ""),
-                    "doc_author": render_result.metadata.get("author", ""),
-                    "creation_date": render_result.metadata.get("creation_date", ""),
-                    "page_count": render_result.metadata.get("page_count", page_count),
-                    "original_format": render_result.metadata.get("original_format", ""),
-                }
-            await self.visual_chunks.upsert(visual_data)
-
-            # Final checkpoint: mark PROCESSED with full chunk list
-            chunk_ids = [info["chunk_id"] for info in page_infos]
+            # Step 7b: Final checkpoint — mark PROCESSED with full chunk list
+            chunk_ids = [info["chunk_id"] for info in all_page_infos]
             await self.lightrag.doc_status.upsert(
                 {
                     doc_id: {
                         "status": DocStatus.PROCESSED,
-                        "content_summary": f"[unified] {path.name} ({page_count} pages)",
+                        "content_summary": (f"[unified] {path.name} ({total_page_count} pages)"),
                         "content_length": 0,
-                        "created_at": now,
+                        "created_at": created_at,
                         "updated_at": datetime.now(UTC).isoformat(),
                         "file_path": str(path),
                         "chunks_count": len(chunk_ids),
@@ -242,7 +314,13 @@ class UnifiedRepresentEngine:
                     {
                         doc_id: {
                             "status": DocStatus.FAILED,
+                            "content_summary": f"[unified] {path.name} (FAILED)",
+                            "content_length": 0,
                             "error_msg": str(exc),
+                            "chunks_list": [info["chunk_id"] for info in all_page_infos],
+                            "chunks_count": total_page_count,
+                            "file_path": str(path),
+                            "created_at": created_at,
                             "updated_at": datetime.now(UTC).isoformat(),
                         }
                     }
@@ -251,10 +329,10 @@ class UnifiedRepresentEngine:
                 logger.warning("Failed to write FAILED doc_status for %s", doc_id)
             raise
 
-        logger.info("Ingested %s: %d pages, doc_id=%s", path.name, page_count, doc_id)
+        logger.info("Ingested %s: %d pages, doc_id=%s", path.name, total_page_count, doc_id)
         return {
             "doc_id": doc_id,
-            "page_count": page_count,
+            "page_count": total_page_count,
             "file_path": str(path),
         }
 

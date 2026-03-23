@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -12,6 +13,17 @@ from PIL import Image
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 from dlightrag.unifiedrepresent.renderer import RenderResult
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _async_gen_from_list(items: list) -> AsyncIterator:
+    """Create an async generator that yields items from a list."""
+    for item in items:
+        yield item
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -33,6 +45,8 @@ def _make_config() -> MagicMock:
     config.default_mode = "mix"
     config.top_k = 60
     config.chunk_top_k = 10
+    # Batch ingestion config
+    config.ingestion_batch_pages = 20
     return config
 
 
@@ -129,7 +143,7 @@ class TestUpsertWithVisualVectors:
 
 
 class TestAingest:
-    """Test aingest() pipeline end-to-end with mocked sub-components."""
+    """Test aingest() batch pipeline end-to-end with mocked sub-components."""
 
     @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
     @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
@@ -153,7 +167,7 @@ class TestAingest:
             config=config,
         )
 
-        # Mock renderer: returns 2 pages
+        # Mock renderer: render_file_batched yields one batch with 2 pages
         img_0 = Image.new("RGB", (100, 100), "white")
         img_1 = Image.new("RGB", (100, 100), "blue")
         render_result = RenderResult(
@@ -166,7 +180,9 @@ class TestAingest:
                 "original_format": "pdf",
             },
         )
-        engine.renderer.render_file = AsyncMock(return_value=render_result)
+        engine.renderer.render_file_batched = MagicMock(
+            return_value=_async_gen_from_list([render_result])
+        )
 
         # Mock embedder: returns (2, 1024) vectors
         vectors = np.zeros((2, 1024), dtype=np.float32)
@@ -225,12 +241,97 @@ class TestAingest:
 
 
 # ---------------------------------------------------------------------------
+# TestAingestMultipleBatches
+# ---------------------------------------------------------------------------
+
+
+class TestAingestMultipleBatches:
+    """Test aingest() with multiple batches from render_file_batched."""
+
+    @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
+    @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
+    @patch("dlightrag.unifiedrepresent.engine.VisualEmbedder")
+    @patch("dlightrag.unifiedrepresent.engine.PageRenderer")
+    async def test_aingest_two_batches(
+        self,
+        _renderer_cls: MagicMock,
+        _embedder_cls: MagicMock,
+        _extractor_cls: MagicMock,
+        _retriever_cls: MagicMock,
+    ) -> None:
+        config = _make_config()
+        lightrag = _make_lightrag()
+        visual_chunks = MagicMock()
+        visual_chunks.upsert = AsyncMock()
+
+        engine = UnifiedRepresentEngine(
+            lightrag=lightrag,
+            visual_chunks=visual_chunks,
+            config=config,
+        )
+
+        # Two batches: batch 1 has pages 0,1; batch 2 has page 2
+        batch_1 = RenderResult(
+            pages=[(0, Image.new("RGB", (10, 10), "white")), (1, Image.new("RGB", (10, 10)))],
+            metadata={"title": "Doc", "page_count": 3, "original_format": "pdf"},
+        )
+        batch_2 = RenderResult(
+            pages=[(2, Image.new("RGB", (10, 10), "blue"))],
+            metadata={"title": "Doc", "page_count": 3, "original_format": "pdf"},
+        )
+        engine.renderer.render_file_batched = MagicMock(
+            return_value=_async_gen_from_list([batch_1, batch_2])
+        )
+
+        # Embedder: returns correct-sized vectors per batch
+        engine.embedder.embed_pages = AsyncMock(
+            side_effect=[
+                np.zeros((2, 1024), dtype=np.float32),
+                np.zeros((1, 1024), dtype=np.float32),
+            ]
+        )
+
+        # Extractor: returns page_infos per batch
+        engine.extractor.extract_from_pages = AsyncMock(
+            side_effect=[
+                [
+                    {"chunk_id": "chunk-aaa", "page_index": 0, "content": "Page one"},
+                    {"chunk_id": "chunk-bbb", "page_index": 1, "content": "Page two"},
+                ],
+                [
+                    {"chunk_id": "chunk-ccc", "page_index": 2, "content": "Page three"},
+                ],
+            ]
+        )
+        engine._upsert_with_visual_vectors = AsyncMock()
+
+        result = await engine.aingest("/fake/doc.pdf", doc_id="doc-test")
+
+        # Total page count accumulates across batches
+        assert result["page_count"] == 3
+
+        # text_chunks.upsert called twice (once per batch)
+        assert lightrag.text_chunks.upsert.await_count == 2
+
+        # visual_chunks.upsert called twice (once per batch)
+        assert visual_chunks.upsert.await_count == 2
+
+        # _upsert_with_visual_vectors called twice (once per batch)
+        assert engine._upsert_with_visual_vectors.await_count == 2
+
+        # full_docs written once at the end
+        lightrag.full_docs.upsert.assert_awaited_once()
+        fd_arg = lightrag.full_docs.upsert.call_args[0][0]
+        assert fd_arg["doc-test"]["page_count"] == 3
+
+
+# ---------------------------------------------------------------------------
 # TestAingestEmptyFile
 # ---------------------------------------------------------------------------
 
 
 class TestAingestEmptyFile:
-    """Test aingest raises ValueError when renderer returns 0 pages."""
+    """Test aingest raises ValueError when renderer yields 0 pages."""
 
     @patch("dlightrag.unifiedrepresent.engine.VisualRetriever")
     @patch("dlightrag.unifiedrepresent.engine.EntityExtractor")
@@ -252,8 +353,8 @@ class TestAingestEmptyFile:
             config=config,
         )
 
-        # Empty render result
-        engine.renderer.render_file = AsyncMock(return_value=RenderResult(pages=[], metadata={}))
+        # Empty render: async generator that yields nothing
+        engine.renderer.render_file_batched = MagicMock(return_value=_async_gen_from_list([]))
 
         with pytest.raises(ValueError, match="No pages rendered"):
             await engine.aingest("/fake/empty.pdf")
@@ -340,14 +441,16 @@ class TestAingestDocStatus:
             config=config,
         )
 
-        # Mock renderer: returns 2 pages
+        # Mock renderer: yields one batch with 2 pages
         img_0 = Image.new("RGB", (100, 100), "white")
         img_1 = Image.new("RGB", (100, 100), "blue")
         render_result = RenderResult(
             pages=[(0, img_0), (1, img_1)],
             metadata={"title": "Test", "page_count": 2},
         )
-        engine.renderer.render_file = AsyncMock(return_value=render_result)
+        engine.renderer.render_file_batched = MagicMock(
+            return_value=_async_gen_from_list([render_result])
+        )
         engine.embedder.embed_pages = AsyncMock(return_value=np.zeros((2, 1024), dtype=np.float32))
         engine.extractor.extract_from_pages = AsyncMock(
             return_value=[
