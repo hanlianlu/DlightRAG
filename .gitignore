@@ -7,6 +7,10 @@ dist/
 build/
 .eggs/
 
+# Editor backups
+*.bkp
+.$*.drawio.bkp
+
 # Virtual environments
 .venv/
 venv/
