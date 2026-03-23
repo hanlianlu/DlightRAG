@@ -128,7 +128,8 @@ async def httpx_text_embed(
                 continue
             resp.raise_for_status()
             break
-        assert resp is not None  # loop always executes at least once
+        if resp is None:
+            raise RuntimeError("Embedding API: no response after retries")
         return np.array(
             prov.parse_response(resp.json()),
             dtype=np.float32,
@@ -207,7 +208,8 @@ class VisualEmbedder:
                         continue
                     resp.raise_for_status()
                     break
-                assert resp is not None
+                if resp is None:
+                    raise RuntimeError("Embedding API: no response after retries")
                 embeddings = self.provider.parse_response(resp.json())
                 vec = embeddings[0]
                 if len(vec) != self.dim:
