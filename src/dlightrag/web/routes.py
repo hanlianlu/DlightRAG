@@ -8,6 +8,7 @@ import json
 import logging
 import shutil
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from dlightrag.config import get_config
 from dlightrag.utils.tokens import truncate_conversation_history
 
 from .deps import get_manager, get_workspace, templates
+from .markdown import render_markdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/web", tags=["web"])
@@ -179,15 +181,25 @@ async def answer_stream(
             #
             # Tokens are JSON-encoded so newlines and special chars are
             # properly escaped within the SSE data line.
+            accumulated_text = ""
+            last_preview_ts = 0.0
+
             if token_iter is None:
                 pass
             elif isinstance(token_iter, str):
                 full_answer = token_iter
+                accumulated_text = token_iter
                 yield f"event: token\ndata: {json.dumps(token_iter)}\n\n"
             else:
                 async for chunk in token_iter:
                     full_answer += chunk
+                    accumulated_text += chunk
                     yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
+                    now = time.monotonic()
+                    if now - last_preview_ts > 0.3:
+                        preview_html = render_markdown(accumulated_text)
+                        yield f"event: preview\ndata: {json.dumps(preview_html)}\n\n"
+                        last_preview_ts = now
 
             # References extracted by AnswerStream post-stream
             refs = getattr(token_iter, "references", None) or []

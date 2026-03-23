@@ -506,6 +506,14 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
         span.textContent = text;
         contentDiv.appendChild(span);
         chatArea.scrollTop = chatArea.scrollHeight;
+    } else if (eventType === 'preview') {
+        // Progressive markdown preview: server-rendered HTML of accumulated tokens.
+        // Sanitized server-side (nh3 via render_markdown pipeline).
+        // Data is JSON-encoded HTML string.
+        let previewHtml;
+        try { previewHtml = JSON.parse(data); } catch (_) { previewHtml = data; }
+        contentDiv.innerHTML = previewHtml;  // eslint-disable-line -- trusted server content
+        chatArea.scrollTop = chatArea.scrollHeight;
     } else if (eventType === 'done') {
         // Trusted server-rendered enriched HTML with citation badges + source data.
         // Data is JSON-encoded; decode to get raw HTML.
