@@ -2,25 +2,21 @@
 # Copyright 2025-2026 Hanlian Lu. All rights reserved.
 """Monkey-patches for LightRAG upstream bugs.
 
-Bug: LightRAG's PostgreSQLDB.configure_age() only catches
-InvalidSchemaNameError and UniqueViolationError when create_graph()
-fails on an already-existing graph. But Apache AGE raises
-DuplicateSchemaError (a SyntaxOrAccessError subclass, *not* related
-to InvalidSchemaNameError). This causes init to crash after the first
-graph-creation call succeeds — subsequent configure_age() calls in
-_run_with_retry() hit the uncaught exception, aborting label/index
-creation (create_vlabel, create_elabel) and leaving the graph in a
-half-initialized state. Ingestion then fails with:
-    UndefinedTableError: relation "<workspace>.base" does not exist
+Bug: LightRAG's PostgreSQLDB.configure_age() calls create_graph() unconditionally,
+which causes Apache AGE (and PG) to log an ERROR on every startup when the graph
+already exists — even though the error is caught. This pollutes PG logs.
+Additionally, Apache AGE raises DuplicateSchemaError (a SyntaxOrAccessError
+subclass, *not* related to InvalidSchemaNameError), which the original code does
+not catch, causing init to crash after the first graph-creation call succeeds.
 
-Fix: Wrap (not replace) configure_age() and execute() to also catch
-asyncpg.exceptions.DuplicateSchemaError. The original methods are
-called first; we only intercept the missing exception.
+Fix: Replace configure_age() with a pre-check version that queries
+ag_catalog.ag_graph before calling create_graph(), skipping creation entirely
+when the graph already exists.  Wrap execute() to also catch DuplicateSchemaError
+as defence-in-depth.
 
 Patches are:
 - Idempotent (safe to call multiple times)
-- Wrap-based (delegate to original, only add missing exception handling)
-- Source-inspected (skip automatically if upstream fixes the bug)
+- Source-inspected (skip automatically if upstream adds the pre-check)
 - Forward-compatible (unknown kwargs passed through via **kwargs)
 """
 
@@ -51,32 +47,50 @@ def apply() -> None:
 
 
 def _needs_patch(method: Callable[..., Any]) -> bool:
-    """Return True if the method's source still lacks DuplicateSchemaError handling."""
+    """Return True if the method's source still lacks the ag_catalog pre-check."""
     try:
         source = inspect.getsource(method)
-        return "DuplicateSchemaError" not in source
+        return "ag_catalog.ag_graph" not in source
     except (OSError, TypeError):
         return True
 
 
 def _patch_configure_age() -> None:
-    """Wrap PostgreSQLDB.configure_age to also catch DuplicateSchemaError."""
+    """Replace PostgreSQLDB.configure_age with a pre-check version.
+
+    The original calls ``create_graph()`` unconditionally, causing PG to log
+    ERROR for every "already exists" case.  Even though these are caught, they
+    pollute PG logs on every startup.
+
+    This patch checks ``ag_catalog.ag_graph`` first and skips creation if
+    the graph already exists — no ERROR logged at all.
+    """
     from lightrag.kg.postgres_impl import PostgreSQLDB
 
     original = PostgreSQLDB.configure_age
 
     if not _needs_patch(original):
-        logger.debug("configure_age already handles DuplicateSchemaError, skipping patch")
+        logger.debug("configure_age already has pre-check, skipping patch")
         return
 
     @staticmethod  # type: ignore[misc]
-    async def wrapped_configure_age(connection: asyncpg.Connection, graph_name: str) -> None:
-        try:
-            await original(connection, graph_name)
-        except asyncpg.exceptions.DuplicateSchemaError:
-            pass
+    async def patched_configure_age(connection: asyncpg.Connection, graph_name: str) -> None:
+        await connection.execute('SET search_path = ag_catalog, "$user", public')
+        exists = await connection.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)",
+            graph_name,
+        )
+        if not exists:
+            try:
+                await connection.execute(f"select create_graph('{graph_name}')")
+            except (
+                asyncpg.exceptions.InvalidSchemaNameError,
+                asyncpg.exceptions.UniqueViolationError,
+                asyncpg.exceptions.DuplicateSchemaError,
+            ):
+                pass  # race condition
 
-    PostgreSQLDB.configure_age = wrapped_configure_age  # type: ignore[assignment]
+    PostgreSQLDB.configure_age = patched_configure_age  # type: ignore[assignment]
 
 
 def _patch_execute() -> None:
