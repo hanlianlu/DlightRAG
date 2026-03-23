@@ -113,6 +113,10 @@ class UnifiedRepresentEngine:
         dict
             Keys: ``doc_id``, ``page_count``, ``file_path``.
         """
+        from datetime import UTC, datetime
+
+        from lightrag.base import DocStatus
+
         path = Path(file_path)
 
         # Step 1: Render pages
@@ -128,91 +132,124 @@ class UnifiedRepresentEngine:
         if doc_id is None:
             doc_id = compute_mdhash_id(file_path, prefix="doc-")
 
-        # Step 3: Write full_docs entry (minimal, for LightRAG compat)
-        await self.lightrag.full_docs.upsert(
-            {doc_id: {"content": "", "file_path": str(path), "page_count": page_count}}
-        )
-
-        # Step 4: Parallel embedding + entity extraction
-        embed_task = self.embedder.embed_pages(images)
-        extract_task = self.extractor.extract_from_pages(
-            images=images, doc_id=doc_id, file_path=str(path)
-        )
-        visual_vectors, page_infos = await asyncio.gather(embed_task, extract_task)
-
-        # Step 5a: Write to chunks_vdb (visual vectors via embedding func swap)
-        chunks_data: dict[str, dict] = {}
-        for info in page_infos:
-            chunk_id = info["chunk_id"]
-            chunks_data[chunk_id] = {
-                "content": info["content"],  # VLM text description
-                "full_doc_id": doc_id,
-                "file_path": str(path),
-                "tokens": len(info["content"].split()),
-                "chunk_order_index": info["page_index"],
-            }
-        await self._upsert_with_visual_vectors(chunks_data, visual_vectors)
-
-        # Step 5b: Write to text_chunks (page summaries)
-        text_chunks_data: dict[str, dict] = {}
-        for info in page_infos:
-            chunk_id = info["chunk_id"]
-            text_chunks_data[chunk_id] = {
-                "content": info["content"],
-                "full_doc_id": doc_id,
-                "file_path": str(path),
-                "tokens": len(info["content"].split()),
-                "chunk_order_index": info["page_index"],
-                "page_idx": info["page_index"],
-                "source_type": "unified_represent",
-            }
-        await self.lightrag.text_chunks.upsert(text_chunks_data)
-
-        # Step 5c: Write to visual_chunks (page images + metadata)
-        visual_data: dict[str, dict] = {}
-        for info in page_infos:
-            chunk_id = info["chunk_id"]
-            page_idx = info["page_index"]
-            # Encode image to base64
-            img = images[page_idx]
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            image_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-
-            visual_data[chunk_id] = {
-                "image_data": image_b64,
-                "page_index": page_idx,
-                "full_doc_id": doc_id,
-                "file_path": str(path),
-                # Document metadata from render
-                "doc_title": render_result.metadata.get("title", ""),
-                "doc_author": render_result.metadata.get("author", ""),
-                "creation_date": render_result.metadata.get("creation_date", ""),
-                "page_count": render_result.metadata.get("page_count", page_count),
-                "original_format": render_result.metadata.get("original_format", ""),
-            }
-        await self.visual_chunks.upsert(visual_data)
-
-        # Step 6: Write doc_status (makes adelete_by_doc_id work on all backends)
-        from datetime import UTC, datetime
-
-        from lightrag.base import DocStatus
-
-        chunk_ids = [info["chunk_id"] for info in page_infos]
+        # Early checkpoint: mark PROCESSING so crashes leave a recoverable state.
+        # LightRAG's _validate_and_fix_document_consistency() will find this on
+        # restart and reset to PENDING. The hash index won't have this file
+        # registered (registration happens in lifecycle AFTER aingest succeeds),
+        # so re-ingestion will proceed naturally.
+        now = datetime.now(UTC).isoformat()
         await self.lightrag.doc_status.upsert(
             {
                 doc_id: {
-                    "status": DocStatus.PROCESSED,
+                    "status": DocStatus.PROCESSING,
                     "content_summary": f"[unified] {path.name} ({page_count} pages)",
                     "content_length": 0,
-                    "created_at": datetime.now(UTC).isoformat(),
-                    "updated_at": datetime.now(UTC).isoformat(),
+                    "created_at": now,
+                    "updated_at": now,
                     "file_path": str(path),
-                    "chunks_count": len(chunk_ids),
-                    "chunks_list": chunk_ids,
+                    "chunks_count": 0,
+                    "chunks_list": [],
                 }
             }
         )
+
+        try:
+            # Step 3: Write full_docs entry (minimal, for LightRAG compat)
+            await self.lightrag.full_docs.upsert(
+                {doc_id: {"content": "", "file_path": str(path), "page_count": page_count}}
+            )
+
+            # Step 4: Parallel embedding + entity extraction
+            embed_task = self.embedder.embed_pages(images)
+            extract_task = self.extractor.extract_from_pages(
+                images=images, doc_id=doc_id, file_path=str(path)
+            )
+            visual_vectors, page_infos = await asyncio.gather(embed_task, extract_task)
+
+            # Step 5a: Write to chunks_vdb (visual vectors via embedding func swap)
+            chunks_data: dict[str, dict] = {}
+            for info in page_infos:
+                chunk_id = info["chunk_id"]
+                chunks_data[chunk_id] = {
+                    "content": info["content"],  # VLM text description
+                    "full_doc_id": doc_id,
+                    "file_path": str(path),
+                    "tokens": len(info["content"].split()),
+                    "chunk_order_index": info["page_index"],
+                }
+            await self._upsert_with_visual_vectors(chunks_data, visual_vectors)
+
+            # Step 5b: Write to text_chunks (page summaries)
+            text_chunks_data: dict[str, dict] = {}
+            for info in page_infos:
+                chunk_id = info["chunk_id"]
+                text_chunks_data[chunk_id] = {
+                    "content": info["content"],
+                    "full_doc_id": doc_id,
+                    "file_path": str(path),
+                    "tokens": len(info["content"].split()),
+                    "chunk_order_index": info["page_index"],
+                    "page_idx": info["page_index"],
+                    "source_type": "unified_represent",
+                }
+            await self.lightrag.text_chunks.upsert(text_chunks_data)
+
+            # Step 5c: Write to visual_chunks (page images + metadata)
+            visual_data: dict[str, dict] = {}
+            for info in page_infos:
+                chunk_id = info["chunk_id"]
+                page_idx = info["page_index"]
+                img = images[page_idx]
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                image_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+
+                visual_data[chunk_id] = {
+                    "image_data": image_b64,
+                    "page_index": page_idx,
+                    "full_doc_id": doc_id,
+                    "file_path": str(path),
+                    "doc_title": render_result.metadata.get("title", ""),
+                    "doc_author": render_result.metadata.get("author", ""),
+                    "creation_date": render_result.metadata.get("creation_date", ""),
+                    "page_count": render_result.metadata.get("page_count", page_count),
+                    "original_format": render_result.metadata.get("original_format", ""),
+                }
+            await self.visual_chunks.upsert(visual_data)
+
+            # Final checkpoint: mark PROCESSED with full chunk list
+            chunk_ids = [info["chunk_id"] for info in page_infos]
+            await self.lightrag.doc_status.upsert(
+                {
+                    doc_id: {
+                        "status": DocStatus.PROCESSED,
+                        "content_summary": f"[unified] {path.name} ({page_count} pages)",
+                        "content_length": 0,
+                        "created_at": now,
+                        "updated_at": datetime.now(UTC).isoformat(),
+                        "file_path": str(path),
+                        "chunks_count": len(chunk_ids),
+                        "chunks_list": chunk_ids,
+                    }
+                }
+            )
+
+        except Exception as exc:
+            # Mark FAILED so the document is visible in health/status and
+            # LightRAG's consistency checker can clean up on restart.
+            try:
+                await self.lightrag.doc_status.upsert(
+                    {
+                        doc_id: {
+                            "status": DocStatus.FAILED,
+                            "error_msg": str(exc),
+                            "updated_at": datetime.now(UTC).isoformat(),
+                        }
+                    }
+                )
+            except Exception:
+                logger.warning("Failed to write FAILED doc_status for %s", doc_id)
+            raise
 
         logger.info("Ingested %s: %d pages, doc_id=%s", path.name, page_count, doc_id)
         return {
