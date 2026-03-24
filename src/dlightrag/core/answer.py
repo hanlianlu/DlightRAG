@@ -266,8 +266,12 @@ class AnswerEngine:
 
         When *indexer* is provided, each excerpt is labelled with its
         ``[ref_id-chunk_idx]`` citation marker so the LLM can directly
-        see which marker corresponds to which content — eliminating the
-        need to cross-reference filenames against the reference list.
+        see which marker corresponds to which content.
+
+        When chunks carry ``metadata`` (injected by _enrich_chunks_with_metadata),
+        non-empty fields are appended to the label so the LLM knows the
+        document title, author, etc. Fields are dynamic — any key present
+        in metadata is rendered.
         """
         chunks = contexts.get("chunks", [])
         if not chunks:
@@ -291,18 +295,26 @@ class AnswerEngine:
                 if cidx is not None:
                     cite_tag = f"[{ref_id}-{cidx}] "
 
+            # Build metadata suffix from dynamic fields
+            meta = chunk.get("metadata") or {}
+            meta_parts: list[str] = []
+            for k, v in meta.items():
+                if v is not None and str(v).strip():
+                    # Render key as human-readable: doc_title → "title", doc_author → "author"
+                    display_key = k.removeprefix("doc_").replace("_", " ")
+                    meta_parts.append(f"{display_key}: {v}")
+            meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
+
             if cite_tag:
-                # Citation marker present — append filename as context
                 if page_idx:
-                    label = f"{cite_tag}{filename}, Page {page_idx}"
+                    label = f"{cite_tag}{filename}, Page {page_idx}{meta_suffix}"
                 else:
-                    label = f"{cite_tag}{filename}"
+                    label = f"{cite_tag}{filename}{meta_suffix}"
             else:
-                # No indexer — preserve original bracket format
                 if page_idx:
-                    label = f"[{filename}, Page {page_idx}]"
+                    label = f"[{filename}, Page {page_idx}{meta_suffix}]"
                 else:
-                    label = f"[{filename}]"
+                    label = f"[{filename}{meta_suffix}]"
             parts.append(f"{label}\n{content}")
 
         return "\n\n".join(parts) if parts else "No document excerpts available."

@@ -1196,7 +1196,72 @@ class RAGService:
             except Exception as exc:
                 logger.warning("Multi-path retrieval failed (non-fatal): %s", exc)
 
+        # Phase 3: Enrich chunks with document metadata (doc_title, doc_author, etc.)
+        # so the AnswerEngine can produce better-grounded responses.
+        if self._metadata_index is not None:
+            await self._enrich_chunks_with_metadata(kg_result)
+
         return kg_result
+
+    async def _enrich_chunks_with_metadata(self, result: RetrievalResult) -> None:
+        """Inject document metadata into chunk contexts for LLM consumption.
+
+        Looks up each chunk's file_path in the metadata index and merges
+        any non-empty fields into the chunk's metadata dict. Fields are
+        dynamic: whatever the metadata index returns is included, minus
+        internal/system fields that add no value to the LLM context.
+        """
+        _SKIP = frozenset(
+            {
+                "workspace",
+                "doc_id",
+                "file_path",
+                "file_extension",
+                "filename",
+                "filename_stem",
+                "ingested_at",
+                "custom_metadata",
+                "rag_mode",
+            }
+        )
+
+        chunks = result.contexts.get("chunks", [])
+        if not chunks:
+            return
+
+        # Collect unique file_paths for batch lookup
+        path_meta: dict[str, dict[str, Any]] = {}
+        for chunk in chunks:
+            fp = chunk.get("file_path", "")
+            if fp and fp not in path_meta:
+                path_meta[fp] = {}
+
+        # Lookup metadata by filename (best-effort)
+        from pathlib import Path as _Path
+
+        for fp in path_meta:
+            try:
+                filename = _Path(fp).name
+                doc_ids = await self._metadata_index.find_by_filename(filename)
+                if doc_ids:
+                    meta = await self._metadata_index.get(doc_ids[0])
+                    if meta:
+                        path_meta[fp] = {
+                            k: v
+                            for k, v in meta.items()
+                            if k not in _SKIP and v is not None and v != ""
+                        }
+            except Exception:
+                pass  # enrichment is best-effort
+
+        # Inject into each chunk's metadata field
+        for chunk in chunks:
+            fp = chunk.get("file_path", "")
+            doc_meta = path_meta.get(fp)
+            if doc_meta:
+                existing = chunk.get("metadata") or {}
+                existing.update(doc_meta)
+                chunk["metadata"] = existing
 
     async def _run_multi_path_retrieval(
         self,
