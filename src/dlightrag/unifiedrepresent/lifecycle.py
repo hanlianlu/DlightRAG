@@ -380,18 +380,13 @@ async def unified_delete_files(
     filenames: list[str] | None = None,
     metadata_index: Any = None,
 ) -> list[dict[str, Any]]:
-    """Delete files in unified mode — 3-layer cross-backend design.
+    """Delete files in unified mode — delegates to cascade_delete.
 
-    Layer 1: LightRAG ``adelete_by_doc_id`` — cleans full_docs, doc_status,
-             text_chunks, chunks_vdb, entity/relation VDBs, KG, LLM cache.
-             Works on all backends now that aingest writes doc_status.
-    Layer 2: Visual chunks cleanup — uses metadata_index page_count to
-             reconstruct chunk_ids and delete from visual_chunks store.
-    Layer 3: DlightRAG index cleanup — hash_index and metadata_index.
+    Collects deletion context per identifier, then calls
+    ``cascade_delete()`` which handles all 5 layers with per-layer fault
+    isolation.
     """
-    from lightrag.utils import compute_mdhash_id
-
-    from dlightrag.core.ingestion.cleanup import collect_deletion_context
+    from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
 
     if not file_paths and not filenames:
         return []
@@ -426,50 +421,15 @@ async def unified_delete_files(
             results.append(deletion_result)
             continue
 
-        for doc_id in ctx.doc_ids:
-            # Layer 1: LightRAG cross-backend cleanup
-            if lightrag and hasattr(lightrag, "adelete_by_doc_id"):
-                try:
-                    lr_result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-                    deletion_result["cleanup_results"][f"lightrag_{doc_id}"] = (
-                        lr_result.status if hasattr(lr_result, "status") else "completed"
-                    )
-                except Exception as exc:
-                    logger.warning("LightRAG deletion failed for %s: %s", doc_id, exc)
+        stats = await cascade_delete(
+            ctx=ctx,
+            lightrag=lightrag,
+            visual_chunks=engine.visual_chunks,
+            hash_index=hash_index,
+            metadata_index=metadata_index,
+        )
 
-            # Layer 2: Visual chunks cleanup (unified mode)
-            if metadata_index is not None:
-                try:
-                    doc_meta = await metadata_index.get(doc_id)
-                    page_count = (doc_meta or {}).get("page_count", 0)
-                    if isinstance(page_count, int) and page_count > 0:
-                        chunk_ids = [
-                            compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
-                            for i in range(page_count)
-                        ]
-                        await engine.visual_chunks.delete(chunk_ids)
-                        deletion_result["cleanup_results"]["visual_chunks"] = (
-                            f"deleted {len(chunk_ids)}"
-                        )
-                        logger.info(
-                            "Deleted %d visual_chunks for doc_id=%s", len(chunk_ids), doc_id
-                        )
-                except Exception as exc:
-                    logger.warning("Visual chunks cleanup failed for %s: %s", doc_id, exc)
-
-        # Layer 3: DlightRAG index cleanup
-        for content_hash in ctx.content_hashes:
-            if await hash_index.remove(content_hash):
-                deletion_result["cleanup_results"]["hash_index"] = "removed"
-
-        if metadata_index is not None:
-            for doc_id in ctx.doc_ids:
-                try:
-                    await metadata_index.delete(doc_id)
-                    deletion_result["cleanup_results"]["metadata_index"] = "removed"
-                except Exception as exc:
-                    logger.warning("Metadata index delete failed for %s: %s", doc_id, exc)
-
+        deletion_result["cleanup_results"] = stats
         deletion_result["file_path"] = list(ctx.file_paths)[0] if ctx.file_paths else identifier
         deletion_result["doc_id"] = list(ctx.doc_ids)[0] if ctx.doc_ids else None
         results.append(deletion_result)
