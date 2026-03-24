@@ -236,8 +236,8 @@ class DlightragConfig(BaseSettings):
     # ===== Query Configuration =====
     top_k: int = Field(default=60)
     chunk_top_k: int = Field(default=30)
-    max_entity_tokens: int = Field(default=8000)
-    max_relation_tokens: int = Field(default=10000)
+    max_entity_tokens: int = Field(default=6000)
+    max_relation_tokens: int = Field(default=8000)
     max_total_tokens: int = Field(default=40000)
     default_mode: Literal["local", "global", "hybrid", "naive", "mix"] = Field(default="mix")
     rrf_k: int = Field(default=60, description="RRF fusion parameter k for multi-path retrieval")
