@@ -45,7 +45,7 @@ dependencies = [
     "nh3>=0.2",
     "pygments>=2.17",
     # LLM providers (LiteLLM for non-OpenAI providers)
-    "litellm>=1.82.4",
+    "litellm>=1.82.6",
 ]
 
 [dependency-groups]
