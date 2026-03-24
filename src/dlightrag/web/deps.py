@@ -197,8 +197,10 @@ templates.env.filters["basename"] = _basename
 
 
 def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) -> str:
-    """Read current workspace from cookie."""
-    return dlightrag_workspace
+    """Read current workspace from cookie, normalized to safe PG identifier."""
+    from dlightrag.utils import normalize_workspace
+
+    return normalize_workspace(dlightrag_workspace)
 
 
 def get_manager(request: Request):

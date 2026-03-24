@@ -47,7 +47,9 @@ def _get_manager(request: Request) -> RAGServiceManager:
 
 
 def _resolve_workspace(ws: str | None) -> str:
-    return ws or get_config().workspace
+    from dlightrag.utils import normalize_workspace
+
+    return normalize_workspace(ws or get_config().workspace)
 
 
 # ═══════════════════════════════════════════════════════════════════
