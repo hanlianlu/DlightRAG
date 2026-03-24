@@ -91,7 +91,15 @@ class RAGServiceManager:
         return msg
 
     async def _get_service(self, workspace: str) -> RAGService:
-        """Get or create a RAGService for a specific workspace. Async-safe."""
+        """Get or create a RAGService for a specific workspace. Async-safe.
+
+        Normalizes the workspace name to a safe PG identifier (lowercase,
+        alphanumeric + underscore only) before lookup or creation.
+        """
+        from dlightrag.utils import normalize_workspace
+
+        workspace = normalize_workspace(workspace)
+
         if workspace in self._services:
             return self._services[workspace]
 

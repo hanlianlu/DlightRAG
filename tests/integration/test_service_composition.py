@@ -161,8 +161,9 @@ class TestManagerWorkspaceIsolation:
 
             assert svc_a is not svc_b
             assert svc_a.rag is not svc_b.rag
-            assert svc_a.config.workspace == "ws-a"
-            assert svc_b.config.workspace == "ws-b"
+            # Workspace names are normalized: hyphens → underscores
+            assert svc_a.config.workspace == "ws_a"
+            assert svc_b.config.workspace == "ws_b"
         finally:
             await manager.close()
 

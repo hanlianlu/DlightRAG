@@ -328,7 +328,7 @@ class TestIngestEndpoint:
         )
         assert resp.status_code == 200
         call_kwargs = mock_manager.aingest.call_args
-        assert call_kwargs[0][0] == "project-x"  # first positional arg is workspace
+        assert call_kwargs[0][0] == "project_x"  # normalized: hyphens → underscores
 
     async def test_ingest_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -467,7 +467,7 @@ class TestDeleteEndpoint:
         )
         assert resp.status_code == 200
         call_kwargs = mock_manager.delete_files.call_args
-        assert call_kwargs[0][0] == "project-y"  # first positional arg is workspace
+        assert call_kwargs[0][0] == "project_y"  # normalized: hyphens → underscores
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +535,7 @@ class TestFilesEndpoint:
         resp = await client.get("/files?workspace=project-z")
         assert resp.status_code == 200
         call_kwargs = mock_manager.list_ingested_files.call_args
-        assert call_kwargs[0][0] == "project-z"  # first positional arg is workspace
+        assert call_kwargs[0][0] == "project_z"  # normalized: hyphens → underscores
 
 
 # ---------------------------------------------------------------------------

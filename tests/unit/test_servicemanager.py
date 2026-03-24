@@ -37,14 +37,14 @@ class TestGetService:
         svc = await manager._get_service("project-a")
         assert svc is mock_create.return_value
         call_kwargs = mock_create.call_args[1]
-        assert call_kwargs["config"].workspace == "project-a"
+        assert call_kwargs["config"].workspace == "project_a"  # normalized
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_caches_per_workspace(self, mock_create, test_cfg) -> None:
         mock_create.return_value = AsyncMock()
         manager = RAGServiceManager(config=test_cfg)
-        svc1 = await manager._get_service("ws-1")
-        svc2 = await manager._get_service("ws-1")
+        svc1 = await manager._get_service("ws_1")
+        svc2 = await manager._get_service("ws_1")
         assert svc1 is svc2
         assert mock_create.await_count == 1
 
@@ -52,8 +52,8 @@ class TestGetService:
     async def test_different_workspaces_different_services(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = [AsyncMock(), AsyncMock()]
         manager = RAGServiceManager(config=test_cfg)
-        svc1 = await manager._get_service("ws-a")
-        svc2 = await manager._get_service("ws-b")
+        svc1 = await manager._get_service("ws_a")
+        svc2 = await manager._get_service("ws_b")
         assert svc1 is not svc2
         assert mock_create.await_count == 2
 
@@ -84,19 +84,19 @@ class TestBackoff:
         mock_create.side_effect = RuntimeError("DB down")
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
+            await manager._get_service("ws_a")
         assert not manager.is_ready()
         error_info = manager.get_error_info()
-        assert "ws-a" in error_info["backoff_workspaces"]
+        assert "ws_a" in error_info["backoff_workspaces"]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_backoff_blocks_retry(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
+            await manager._get_service("ws_a")
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
+            await manager._get_service("ws_a")
         assert mock_create.await_count == 1
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -104,13 +104,13 @@ class TestBackoff:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
+            await manager._get_service("ws_a")
         # Expire the backoff by backdating the timestamp
-        ts, interval = manager._backoff["ws-a"]
-        manager._backoff["ws-a"] = (ts - interval - 1, interval)
+        ts, interval = manager._backoff["ws_a"]
+        manager._backoff["ws_a"] = (ts - interval - 1, interval)
         mock_create.side_effect = None
         mock_create.return_value = AsyncMock()
-        svc = await manager._get_service("ws-a")
+        svc = await manager._get_service("ws_a")
         assert svc is mock_create.return_value
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -118,33 +118,33 @@ class TestBackoff:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
+            await manager._get_service("ws_a")
         # Expire the backoff by backdating the timestamp
-        ts, interval = manager._backoff["ws-a"]
-        manager._backoff["ws-a"] = (ts - interval - 1, interval)
+        ts, interval = manager._backoff["ws_a"]
+        manager._backoff["ws_a"] = (ts - interval - 1, interval)
         mock_create.side_effect = None
         mock_create.return_value = AsyncMock()
-        await manager._get_service("ws-a")
-        assert "ws-a" not in manager._backoff
+        await manager._get_service("ws_a")
+        assert "ws_a" not in manager._backoff
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_per_workspace_backoff_isolation(self, mock_create, test_cfg) -> None:
         """Workspace A in backoff does not block workspace B."""
 
         async def fail_only_a(**kwargs):
-            if kwargs["config"].workspace == "ws-a":
-                raise RuntimeError("ws-a is down")
+            if kwargs["config"].workspace == "ws_a":
+                raise RuntimeError("ws_a is down")
             return AsyncMock()
 
         mock_create.side_effect = fail_only_a
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
-        # ws-a is now in backoff; ws-b should still succeed
-        svc_b = await manager._get_service("ws-b")
+            await manager._get_service("ws_a")
+        # ws_a is now in backoff; ws_b should still succeed
+        svc_b = await manager._get_service("ws_b")
         assert svc_b is not None
-        assert "ws-a" in manager._backoff
-        assert "ws-b" not in manager._backoff
+        assert "ws_a" in manager._backoff
+        assert "ws_b" not in manager._backoff
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_backoff_clears_on_success(self, mock_create, test_cfg) -> None:
@@ -152,15 +152,15 @@ class TestBackoff:
         mock_create.side_effect = RuntimeError("fail")
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError):
-            await manager._get_service("ws-a")
-        assert "ws-a" in manager._backoff
+            await manager._get_service("ws_a")
+        assert "ws_a" in manager._backoff
         # Expire backoff and let next attempt succeed
-        ts, interval = manager._backoff["ws-a"]
-        manager._backoff["ws-a"] = (ts - interval - 1, interval)
+        ts, interval = manager._backoff["ws_a"]
+        manager._backoff["ws_a"] = (ts - interval - 1, interval)
         mock_create.side_effect = None
         mock_create.return_value = AsyncMock()
-        await manager._get_service("ws-a")
-        assert "ws-a" not in manager._backoff
+        await manager._get_service("ws_a")
+        assert "ws_a" not in manager._backoff
 
 
 class TestRouting:
@@ -172,7 +172,7 @@ class TestRouting:
         mock_svc.aretrieve.return_value = MagicMock()
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        await manager.aretrieve("query", workspace="ws-a")
+        await manager.aretrieve("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
@@ -182,7 +182,7 @@ class TestRouting:
     ) -> None:
         mock_fed.return_value = MagicMock()
         manager = RAGServiceManager(config=test_cfg)
-        await manager.aretrieve("query", workspaces=["ws-a", "ws-b"])
+        await manager.aretrieve("query", workspaces=["ws_a", "ws_b"])
         mock_fed.assert_awaited_once()
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -209,7 +209,7 @@ class TestRouting:
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
 
-        await manager.aanswer("query", workspace="ws-a")
+        await manager.aanswer("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with("query", mock_contexts)
 
@@ -233,7 +233,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
 
-        result = await manager.aanswer("what is X?", workspace="ws-a")
+        result = await manager.aanswer("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with("what is X?", mock_contexts)
         assert result is expected_result
@@ -254,7 +254,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
 
-        contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws-a")
+        contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate_stream.assert_awaited_once_with("what is X?", mock_contexts)
         assert contexts is mock_contexts
@@ -276,7 +276,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
 
-        result = await manager.aanswer("query", workspaces=["ws-a", "ws-b"])
+        result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with("query", mock_contexts)
         assert result is expected_result
@@ -297,7 +297,7 @@ class TestAnswerViaEngine:
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
 
-        contexts, stream = await manager.aanswer_stream("query", workspaces=["ws-a", "ws-b"])
+        contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
         mock_engine.generate_stream.assert_awaited_once_with("query", mock_contexts)
         assert contexts is mock_contexts
@@ -324,7 +324,7 @@ class TestDelegation:
         mock_svc.aingest.return_value = {"status": "ok"}
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        result = await manager.aingest("ws-a", source_type="local", path="/tmp/f.pdf")
+        result = await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
         mock_svc.aingest.assert_awaited_once()
         assert result == {"status": "ok"}
 
@@ -334,7 +334,7 @@ class TestDelegation:
         mock_svc.alist_ingested_files.return_value = [{"doc": "d1"}]
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        result = await manager.list_ingested_files("ws-a")
+        result = await manager.list_ingested_files("ws_a")
         assert result == [{"doc": "d1"}]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -343,7 +343,7 @@ class TestDelegation:
         mock_svc.adelete_files.return_value = [{"status": "deleted"}]
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        result = await manager.delete_files("ws-a", filenames=["a.pdf"])
+        result = await manager.delete_files("ws_a", filenames=["a.pdf"])
         assert result == [{"status": "deleted"}]
 
 
@@ -371,7 +371,7 @@ class TestActionableErrors:
         mock_create.side_effect = ConnectionRefusedError("Connection refused")
         manager = RAGServiceManager(config=test_cfg)
         with pytest.raises(RAGServiceUnavailableError, match="Check.*DLIGHTRAG_POSTGRES"):
-            await manager._get_service("ws-a")
+            await manager._get_service("ws_a")
 
     def test_actionable_error_default(self) -> None:
         exc = ValueError("something broke")
