@@ -1222,6 +1222,8 @@ class RAGService:
                 "ingested_at",
                 "custom_metadata",
                 "rag_mode",
+                "page_count",
+                "original_format",
             }
         )
 
