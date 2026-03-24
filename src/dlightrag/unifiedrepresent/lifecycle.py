@@ -87,6 +87,14 @@ async def _ingest_single_local(
                 rag_mode="unified",
                 page_count=result.get("page_count"),
             )
+            # Enrich with PDF-extracted title/author/date from renderer
+            render_meta = result.get("render_metadata") or {}
+            if render_meta.get("title"):
+                meta["doc_title"] = render_meta["title"]
+            if render_meta.get("author"):
+                meta["doc_author"] = render_meta["author"]
+            if render_meta.get("creation_date"):
+                meta["creation_date"] = render_meta["creation_date"]
             if user_metadata:
                 meta.update(user_metadata)
             await metadata_index.upsert(result["doc_id"], meta)
@@ -261,6 +269,13 @@ async def _ingest_single_blob(
                     rag_mode="unified",
                     page_count=result.get("page_count"),
                 )
+                render_meta = result.get("render_metadata") or {}
+                if render_meta.get("title"):
+                    meta["doc_title"] = render_meta["title"]
+                if render_meta.get("author"):
+                    meta["doc_author"] = render_meta["author"]
+                if render_meta.get("creation_date"):
+                    meta["creation_date"] = render_meta["creation_date"]
                 await metadata_index.upsert(result["doc_id"], meta)
             except Exception as e:
                 logger.warning("Metadata upsert failed for %s: %s", target.name, e)
@@ -359,6 +374,13 @@ async def _ingest_single_s3(
                     rag_mode="unified",
                     page_count=result.get("page_count"),
                 )
+                render_meta = result.get("render_metadata") or {}
+                if render_meta.get("title"):
+                    meta["doc_title"] = render_meta["title"]
+                if render_meta.get("author"):
+                    meta["doc_author"] = render_meta["author"]
+                if render_meta.get("creation_date"):
+                    meta["creation_date"] = render_meta["creation_date"]
                 await metadata_index.upsert(result["doc_id"], meta)
             except Exception as e:
                 logger.warning("Metadata upsert failed for %s: %s", target.name, e)

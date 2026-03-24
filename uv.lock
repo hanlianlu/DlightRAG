@@ -726,7 +726,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.0" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "lightrag-hku", specifier = ">=1.4.11rc2" },
-    { name = "litellm", specifier = "==1.82.6" },
+    { name = "litellm", specifier = ">=1.82.6" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
     { name = "nh3", specifier = ">=0.2" },
