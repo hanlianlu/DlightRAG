@@ -296,6 +296,24 @@ class IngestionPipeline:
                         rag_mode="caption",
                         page_count=getattr(result, "page_count", None),
                     )
+                    # Extract PDF title/author if available
+                    if file_path.suffix.lower() == ".pdf":
+                        try:
+                            import pypdfium2 as pdfium
+
+                            doc = pdfium.PdfDocument(str(file_path))
+                            try:
+                                pdf_meta = doc.get_metadata_dict()
+                                if pdf_meta.get("Title"):
+                                    meta["doc_title"] = pdf_meta["Title"]
+                                if pdf_meta.get("Author"):
+                                    meta["doc_author"] = pdf_meta["Author"]
+                                if pdf_meta.get("CreationDate"):
+                                    meta["creation_date"] = pdf_meta["CreationDate"]
+                            finally:
+                                doc.close()
+                        except Exception:
+                            pass  # PDF metadata extraction is best-effort
                     if user_metadata:
                         meta.update(user_metadata)
                     await self._metadata_index.upsert(doc_id, meta)

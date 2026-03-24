@@ -334,6 +334,7 @@ class UnifiedRepresentEngine:
             "doc_id": doc_id,
             "page_count": total_page_count,
             "file_path": str(path),
+            "render_metadata": last_metadata,
         }
 
     @staticmethod
