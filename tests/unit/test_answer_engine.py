@@ -568,8 +568,8 @@ class TestAnswerEngineLogging:
 
         with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
             await engine.generate("query", _text_contexts())
-            # Should be called at least twice: pre-call + parse
-            assert mock_log.call_count >= 2
+            # Called once before LLM call (refs now via CitationProcessor, not parse)
+            assert mock_log.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_generate_calls_log_references(self) -> None:
