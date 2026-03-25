@@ -66,6 +66,9 @@ services:
       - pg_data:/var/lib/postgresql/data
     command:
       - "postgres"
+      # AGE extension requires preloading
+      - "-c"
+      - "shared_preload_libraries=age"
       # Memory
       - "-c"
       - "shared_buffers=6GB"
