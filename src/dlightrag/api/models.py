@@ -73,6 +73,7 @@ class AnswerRequest(BaseModel):
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     multimodal_content: list[dict[str, Any]] | None = None
+    conversation_history: list[dict[str, str]] | None = None
 
     @field_validator("multimodal_content")
     @classmethod

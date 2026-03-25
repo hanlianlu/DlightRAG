@@ -23,7 +23,6 @@ from dlightrag.citations import (
 )
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import get_config
-from dlightrag.utils.tokens import truncate_conversation_history
 
 from .deps import get_manager, get_workspace, templates
 from .markdown import render_markdown
@@ -40,46 +39,6 @@ router = APIRouter(prefix="/web", tags=["web"])
 def _render_partial(name: str, **ctx: Any) -> str:
     """Render a Jinja2 partial template to string."""
     return templates.env.get_template(name).render(**ctx)
-
-
-async def _rewrite_query(
-    user_message: str,
-    conversation_history: list[dict[str, str]] | None,
-    llm_func,
-    *,
-    max_rewrite_messages: int = 20,
-) -> str:
-    """Rewrite user message into standalone query using conversation context.
-
-    Skips LLM call if no conversation history (first turn).
-    Uses last *max_rewrite_messages* messages for context.
-    Raises on LLM failure (no fallback).
-    """
-    if not conversation_history:
-        return user_message
-
-    system = (
-        "You are a query rewriter. Given a conversation history and a follow-up "
-        "message, rewrite the follow-up into a standalone search query that "
-        "captures the full intent. Output ONLY the rewritten query, nothing else. "
-        "If the message is already self-contained, return it unchanged."
-    )
-
-    history_text = "\n".join(
-        f"{m['role']}: {m['content']}" for m in conversation_history[-max_rewrite_messages:]
-    )
-
-    user_prompt = (
-        f"Conversation history:\n{history_text}\n\n"
-        f"Follow-up message: {user_message}\n\n"
-        f"Standalone query:"
-    )
-
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user_prompt},
-    ]
-    return await llm_func(messages=messages)
 
 
 # ---------------------------------------------------------------------------
@@ -114,16 +73,7 @@ async def answer_stream(
 
     conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
 
-    # Truncate conversation history using config limits
     cfg = get_config()
-    max_messages = cfg.max_conversation_turns * 2  # turns → messages (user + assistant)
-    max_tokens = cfg.max_conversation_tokens
-    if conversation_history:
-        conversation_history = truncate_conversation_history(
-            conversation_history,
-            max_messages=max_messages,
-            max_tokens=max_tokens,
-        )
 
     # Extract images (base64 from frontend)
     images_b64: list[str] = body.get("images", [])
@@ -159,19 +109,10 @@ async def answer_stream(
             history_kept = len(conversation_history) if conversation_history else 0
             yield f"event: meta\ndata: {json.dumps({'history_kept': history_kept})}\n\n"
 
-            # Rewrite query using recent conversation context
-            # (rewrite only needs enough to resolve references like "it", "that";
-            #  20 messages ≈ 10 turns is sufficient and avoids wasting tokens)
-            llm_func = manager.get_llm_func()
-            standalone_query = await _rewrite_query(
-                query,
-                conversation_history,
-                llm_func,
-                max_rewrite_messages=20,
-            )
-
+            # QueryPlanner handles rewriting + filter extraction in one LLM call
             contexts, token_iter = await manager.aanswer_stream(
-                query=standalone_query,
+                query=query,
+                conversation_history=conversation_history,
                 workspace=workspace,
                 workspaces=workspaces,
                 multimodal_content=multimodal_content,

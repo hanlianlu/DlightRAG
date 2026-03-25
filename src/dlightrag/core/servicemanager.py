@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
+from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
 
@@ -57,6 +58,7 @@ class RAGServiceManager:
         self._backoff: dict[str, tuple[float, float]] = {}
 
         self._answer_engine: AnswerEngine | None = None
+        self._query_planner: QueryPlanner | None = None
 
     @classmethod
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
@@ -246,8 +248,29 @@ class RAGServiceManager:
             )
         return self._answer_engine
 
+    def _get_query_planner(self) -> QueryPlanner:
+        """Lazy-create QueryPlanner with schema TTL refresh."""
+        if self._query_planner is None:
+            from dlightrag.models.llm import get_chat_model_func
+
+            self._query_planner = QueryPlanner(
+                llm_func=get_chat_model_func(self._config),
+                schema_provider=self._get_schema,
+                schema_ttl=300.0,
+            )
+        return self._query_planner
+
+    async def _get_schema(self) -> dict[str, Any]:
+        """Fetch metadata schema from first available workspace."""
+        workspaces = await self.list_workspaces()
+        if workspaces:
+            svc = await self._get_service(workspaces[0])
+            if svc._metadata_index is not None:
+                return await svc._metadata_index.get_table_schema()
+        return {}
+
     def get_llm_func(self):
-        """Return the global chat model function (for web UI query rewriting etc.)."""
+        """Return the global chat model function (for web UI etc.)."""
         from dlightrag.models.llm import get_chat_model_func
 
         return get_chat_model_func(self._config)
@@ -260,16 +283,28 @@ class RAGServiceManager:
         *,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        plan: QueryPlan | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Retrieve from one or more workspaces (federated if multiple)."""
+        """Retrieve from one or more workspaces (federated if multiple).
+
+        Args:
+            plan: Pre-computed QueryPlan from QueryPlanner. When provided,
+                uses plan.standalone_query for search and plan.metadata_filter
+                for structured filtering.
+        """
+        effective_query = plan.standalone_query if plan else query
+        if plan and plan.metadata_filter is not None:
+            kwargs.setdefault("filters", plan.metadata_filter)
         ws_list = workspaces or [workspace or self._config.workspace]
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 if len(ws_list) == 1:
                     svc = await self._get_service(ws_list[0])
-                    return await svc.aretrieve(query, **kwargs)
-                return await federated_retrieve(query, ws_list, self._get_service, **kwargs)
+                    return await svc.aretrieve(effective_query, **kwargs)
+                return await federated_retrieve(
+                    effective_query, ws_list, self._get_service, **kwargs
+                )
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -279,17 +314,26 @@ class RAGServiceManager:
         self,
         query: str,
         *,
+        conversation_history: list[dict[str, str]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Answer from one or more workspaces: retrieve -> AnswerEngine."""
+        """Answer from one or more workspaces: plan -> retrieve -> generate."""
         ws_list = workspaces or [workspace or self._config.workspace]
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                retrieval = await self.aretrieve(query, workspaces=ws_list, **kwargs)
+                planner = self._get_query_planner()
+                plan = await planner.plan(
+                    query,
+                    conversation_history=conversation_history,
+                    max_turns=self._config.max_conversation_turns,
+                    max_tokens=self._config.max_conversation_tokens,
+                )
+
+                retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
                 engine = self._get_answer_engine()
-                return await engine.generate(query, retrieval.contexts)
+                return await engine.generate(plan.standalone_query, retrieval.contexts)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -299,17 +343,31 @@ class RAGServiceManager:
         self,
         query: str,
         *,
+        conversation_history: list[dict[str, str]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         **kwargs: Any,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Streaming answer from one or more workspaces: retrieve -> AnswerEngine."""
+        """Streaming answer from one or more workspaces: plan -> retrieve -> stream."""
         ws_list = workspaces or [workspace or self._config.workspace]
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                retrieval = await self.aretrieve(query, workspaces=ws_list, **kwargs)
+                planner = self._get_query_planner()
+                plan = await planner.plan(
+                    query,
+                    conversation_history=conversation_history,
+                    max_turns=self._config.max_conversation_turns,
+                    max_tokens=self._config.max_conversation_tokens,
+                )
+                logger.info(
+                    "Query plan: original=%r, standalone=%r",
+                    plan.original_query[:60],
+                    plan.standalone_query[:60],
+                )
+
+                retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
                 engine = self._get_answer_engine()
-                return await engine.generate_stream(query, retrieval.contexts)
+                return await engine.generate_stream(plan.standalone_query, retrieval.contexts)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"

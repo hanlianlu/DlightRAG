@@ -136,6 +136,7 @@ async def answer(
     if not body.stream:
         result = await manager.aanswer(
             body.query,
+            conversation_history=body.conversation_history,
             workspaces=body.workspaces,
             mode=body.mode,
             top_k=body.top_k,
@@ -166,6 +167,7 @@ async def answer(
     # Streaming mode
     contexts, token_iter = await manager.aanswer_stream(
         body.query,
+        conversation_history=body.conversation_history,
         workspaces=body.workspaces,
         mode=body.mode,
         top_k=body.top_k,

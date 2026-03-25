@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
+from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
@@ -208,6 +209,7 @@ class TestRouting:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
 
         await manager.aanswer("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -232,6 +234,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -253,6 +256,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
 
         contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
@@ -275,6 +279,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
@@ -296,6 +301,7 @@ class TestAnswerViaEngine:
 
         manager = RAGServiceManager(config=test_cfg)
         manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
 
         contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
