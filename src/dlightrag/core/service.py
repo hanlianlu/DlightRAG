@@ -233,7 +233,13 @@ class RAGService:
         logger.debug("RAGService initialized")
 
     async def _initialize_with_pg_lock(self) -> None:
-        """Initialize with PostgreSQL advisory lock for multi-worker safety."""
+        """Initialize with PostgreSQL advisory lock for multi-worker safety.
+
+        The lock only coordinates ``_do_initialize()`` — LightRAG storage
+        creation and domain store setup. All DDL is idempotent (CREATE TABLE
+        IF NOT EXISTS), so stores self-initialize without needing the lock.
+        PG extension management is delegated entirely to LightRAG.
+        """
         try:
             import asyncpg
         except ImportError:
@@ -260,7 +266,6 @@ class RAGService:
             if acquired:
                 logger.info("Acquired PG advisory lock, initializing RAG pipelines...")
                 try:
-                    await self._ensure_pg_schema(conn)
                     await self._do_initialize()
                     logger.info("RAG pipelines initialized successfully")
                 finally:
@@ -276,52 +281,6 @@ class RAGService:
                 await self._do_initialize()
         finally:
             await conn.close()
-
-    async def _ensure_pg_schema(self, conn) -> None:
-        """Ensure required PostgreSQL extensions and DlightRAG tables exist.
-
-        Extension creation is delegated to LightRAG (``configure_vector_extension``,
-        ``configure_age_extension``). We only verify they are available (fail-fast)
-        and create DlightRAG's own tables.
-        """
-        # Fail-fast: verify extensions are available (LightRAG creates them but
-        # only warns on failure — we want a hard error before wasting time).
-        installed = {r["extname"] for r in await conn.fetch("SELECT extname FROM pg_extension")}
-        missing = {"vector", "age"} - installed
-        if missing:
-            raise RuntimeError(
-                f"Required PostgreSQL extensions not installed: {missing}. "
-                "Ask your DBA to run: "
-                + "; ".join(f"CREATE EXTENSION {ext}" for ext in sorted(missing))
-            )
-
-        # DlightRAG's own table for content-hash deduplication
-        await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_file_hashes (
-            content_hash TEXT PRIMARY KEY,
-            doc_id TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            workspace TEXT NOT NULL DEFAULT 'default',
-            created_at TIMESTAMPTZ DEFAULT NOW()
-        )""")
-        await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_file_hashes_doc_id ON dlightrag_file_hashes(doc_id)"
-        )
-        await conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_file_hashes_workspace ON dlightrag_file_hashes(workspace)"
-        )
-        # Workspace metadata for compatibility filtering (federated queries)
-        await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
-            workspace TEXT PRIMARY KEY,
-            embedding_model TEXT NOT NULL,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        )""")
-        # pg_trgm for fuzzy metadata search (best-effort, not required)
-        try:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-        except Exception:
-            logger.info("pg_trgm extension not available — fuzzy metadata search disabled")
-        logger.info("PostgreSQL schema ensured")
 
     async def _do_initialize(self) -> None:
         """Create RAG backend and compose pipelines based on rag_mode."""
@@ -825,20 +784,27 @@ class RAGService:
                 logger.debug("Failed to shutdown %s worker pool", attr, exc_info=True)
 
     async def _upsert_workspace_meta(self) -> None:
-        """Record embedding model for this workspace (PG-only, best-effort)."""
+        """Record embedding model for this workspace (PG-only, best-effort).
+
+        Self-initializing: creates the table idempotently if it doesn't exist.
+        No advisory lock needed — all DDL is IF NOT EXISTS.
+        """
         if not self.config.kv_storage.startswith("PG"):
             return
         try:
-            import asyncpg
+            from dlightrag.storage.pool import pg_pool
 
-            conn = await asyncpg.connect(
-                host=self.config.postgres_host,
-                port=self.config.postgres_port,
-                user=self.config.postgres_user,
-                password=self.config.postgres_password,
-                database=self.config.postgres_database,
-            )
-            try:
+            pool = await pg_pool.get()
+            async with pool.acquire() as conn:
+                # Idempotent DDL — safe to call from multiple workers
+                await conn.execute(
+                    """CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
+                        workspace TEXT PRIMARY KEY,
+                        embedding_model TEXT NOT NULL,
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    )"""
+                )
                 await conn.execute(
                     """INSERT INTO dlightrag_workspace_meta (workspace, embedding_model)
                        VALUES ($1, $2)
@@ -847,8 +813,6 @@ class RAGService:
                     self.config.workspace,
                     self.config.embedding.model,
                 )
-            finally:
-                await conn.close()
         except Exception:
             logger.debug("workspace meta upsert failed", exc_info=True)
 

@@ -96,53 +96,9 @@ _PG_CONN_KWARGS = dict(
 )
 
 
-class TestEnsurePgSchema:
-    """Test _ensure_pg_schema against real PostgreSQL (requires pgvector + AGE)."""
-
-    async def test_schema_creates_table_and_indexes(self, pg_check) -> None:
-        """_ensure_pg_schema creates the hash table and indexes."""
-        import asyncpg
-
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
-        try:
-            from dlightrag.core.service import RAGService
-
-            service = RAGService.__new__(RAGService)
-            await service._ensure_pg_schema(conn)
-
-            # Table must exist
-            exists = await conn.fetchval(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-                "WHERE table_name = 'dlightrag_file_hashes')"
-            )
-            assert exists, "dlightrag_file_hashes table should exist"
-
-            # Indexes must exist
-            indexes = {
-                r["indexname"]
-                for r in await conn.fetch(
-                    "SELECT indexname FROM pg_indexes WHERE tablename = 'dlightrag_file_hashes'"
-                )
-            }
-            assert "idx_file_hashes_doc_id" in indexes
-            assert "idx_file_hashes_workspace" in indexes
-        finally:
-            await conn.close()
-
-    async def test_schema_is_idempotent(self, pg_check) -> None:
-        """Running _ensure_pg_schema twice should not error."""
-        import asyncpg
-
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
-        try:
-            from dlightrag.core.service import RAGService
-
-            service = RAGService.__new__(RAGService)
-            # Run twice — second call must not raise
-            await service._ensure_pg_schema(conn)
-            await service._ensure_pg_schema(conn)
-        finally:
-            await conn.close()
+# TestEnsurePgSchema removed: _ensure_pg_schema() was eliminated in favor of
+# idempotent DDL in each store's initialize() method (ArtRAG parity).
+# Hash table creation is tested via PGHashIndex.initialize() tests.
 
 
 # ---------------------------------------------------------------------------
