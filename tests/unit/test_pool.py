@@ -25,6 +25,8 @@ class TestPGPoolGet:
         mock_config.postgres_user = "testuser"
         mock_config.postgres_password = "testpass"
         mock_config.postgres_database = "testdb"
+        mock_config.postgres_pool_min_size = 2
+        mock_config.postgres_pool_max_size = 10
 
         with (
             patch(
