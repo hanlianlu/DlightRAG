@@ -1106,7 +1106,7 @@ class RAGService:
             analyzer = QueryAnalyzer(llm_func=llm_func, schema=self._table_schema)
             plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
 
-        if not plan.metadata_filters and not plan.semantic_query:
+        if not plan.metadata_filters and not plan.query:
             logger.info(
                 "[MultiPath] No filters and no semantic query, skipping multi-path retrieval"
             )

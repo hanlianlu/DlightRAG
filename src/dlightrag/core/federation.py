@@ -160,8 +160,8 @@ async def federated_retrieve(
             analyzer = QueryAnalyzer(llm_func=llm_func, schema=schema)
             shared_plan = await analyzer.analyze(query, explicit_filters=kwargs.get("filters"))
             logger.info(
-                "Federation: shared plan computed, semantic=%r",
-                (shared_plan.semantic_query or "")[:60],
+                "Federation: shared plan computed, query=%r",
+                (shared_plan.query or "")[:60],
             )
         except Exception as exc:
             logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)

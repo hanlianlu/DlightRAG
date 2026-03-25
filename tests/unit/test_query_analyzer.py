@@ -45,7 +45,7 @@ class TestQueryAnalyzerLLM:
     async def test_llm_extraction(self) -> None:
         llm_response = json.dumps(
             {
-                "semantic_query": "revenue insights",
+                "query": "revenue insights",
                 "filters": {"doc_author": "Zhang San", "date_from": "2024-01-01"},
                 "paths": ["metafilters", "kgvector"],
             }
@@ -55,14 +55,14 @@ class TestQueryAnalyzerLLM:
         plan = await analyzer.analyze("revenue insights from Zhang San's docs in 2024")
         assert plan.metadata_filters is not None
         assert plan.metadata_filters.doc_author == "Zhang San"
-        assert plan.semantic_query == "revenue insights"
+        assert plan.query == "revenue insights from Zhang San's docs in 2024"
 
     @pytest.mark.asyncio
     async def test_llm_extracts_filename(self) -> None:
         """LLM handles filenames with spaces, wrong case, etc."""
         llm_response = json.dumps(
             {
-                "semantic_query": "what is this about",
+                "query": "what is this about",
                 "filters": {"filename": "IMG_9551.PNG"},
                 "paths": ["metafilters", "kgvector"],
             }
@@ -78,7 +78,7 @@ class TestQueryAnalyzerLLM:
         """LLM can use filename_pattern with ILIKE wildcards."""
         llm_response = json.dumps(
             {
-                "semantic_query": "what is this about",
+                "query": "what is this about",
                 "filters": {"filename_pattern": "%IMG%9551%"},
                 "paths": ["metafilters", "kgvector"],
             }
@@ -102,7 +102,7 @@ class TestQueryAnalyzerLLM:
     async def test_llm_returns_empty_filters(self) -> None:
         llm_response = json.dumps(
             {
-                "semantic_query": "what is quantum computing",
+                "query": "what is quantum computing",
                 "filters": {},
                 "paths": ["kgvector"],
             }
@@ -117,7 +117,7 @@ class TestQueryAnalyzerLLM:
     async def test_llm_extracts_dates(self) -> None:
         llm_response = json.dumps(
             {
-                "semantic_query": "summary",
+                "query": "summary",
                 "filters": {
                     "filename": "annual-report.pdf",
                     "date_from": "2024-01-01",
@@ -140,8 +140,7 @@ class TestQueryAnalyzerFallback:
         analyzer = QueryAnalyzer()  # no LLM
         plan = await analyzer.analyze("explain quantum entanglement")
         assert plan.paths == ["kgvector"]
-        assert plan.semantic_query == "explain quantum entanglement"
-        assert plan.original_query == "explain quantum entanglement"
+        assert plan.query == "explain quantum entanglement"
 
     @pytest.mark.asyncio
     async def test_no_llm_with_filename_in_query(self) -> None:

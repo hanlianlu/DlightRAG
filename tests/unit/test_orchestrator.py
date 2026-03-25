@@ -35,7 +35,7 @@ class TestOrchestratorMetadataOnly:
             rag_mode="caption",
         )
         plan = RetrievalPlan(
-            semantic_query="",
+            query="",
             metadata_filters=MetadataFilter(filename="test.pdf"),
             paths=["metafilters"],
         )
@@ -51,7 +51,7 @@ class TestOrchestratorMetadataOnly:
             rag_mode="caption",
         )
         plan = RetrievalPlan(
-            semantic_query="test",
+            query="test",
             metadata_filters=MetadataFilter(filename="test.pdf"),
             paths=["metafilters"],
         )
@@ -64,7 +64,7 @@ class TestOrchestratorEmptyPlan:
     async def test_no_paths_returns_empty(self) -> None:
         orch = RetrievalOrchestrator(rag_mode="caption")
         plan = RetrievalPlan(
-            semantic_query="test",
+            query="test",
             metadata_filters=None,
             paths=["kgvector"],  # kg is not handled by orchestrator
         )
@@ -80,7 +80,7 @@ class TestOrchestratorEmptyPlan:
             rag_mode="caption",
         )
         plan = RetrievalPlan(
-            semantic_query="",
+            query="",
             metadata_filters=MetadataFilter(filename="test.pdf"),
             paths=["metafilters"],
         )
