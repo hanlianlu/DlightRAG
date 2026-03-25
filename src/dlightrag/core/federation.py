@@ -144,12 +144,38 @@ async def federated_retrieve(
             chunk["_workspace"] = workspaces[0]
         return result
 
-    # Parallel queries
+    # Pre-compute query analysis ONCE to avoid redundant LLM calls per workspace.
+    # Uses the first workspace's service for schema access.
+    shared_plan = None
+    first_svc = await get_service(workspaces[0])
+    if first_svc._metadata_index is not None:
+        try:
+            from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
+
+            lr = first_svc._lightrag or (
+                getattr(first_svc.rag, "lightrag", None) if first_svc.rag else None
+            )
+            llm_func = getattr(lr, "llm_model_func", None) if lr else None
+            schema = getattr(first_svc, "_table_schema", None)
+            analyzer = QueryAnalyzer(llm_func=llm_func, schema=schema)
+            shared_plan = await analyzer.analyze(query, explicit_filters=kwargs.get("filters"))
+            logger.info(
+                "Federation: shared plan computed, semantic=%r",
+                (shared_plan.semantic_query or "")[:60],
+            )
+        except Exception as exc:
+            logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)
+
+    # Parallel queries — pass shared plan to skip per-workspace re-analysis
+    query_kwargs = {**kwargs}
+    if shared_plan is not None:
+        query_kwargs["_plan"] = shared_plan
+
     async def _query_workspace(ws: str) -> RetrievalResult | Exception:
         try:
             svc = await get_service(ws)
             return await svc.aretrieve(
-                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs
+                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k, **query_kwargs
             )
         except Exception as exc:
             logger.warning("Federated query failed for workspace '%s': %s", ws, exc)

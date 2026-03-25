@@ -1001,6 +1001,8 @@ class RAGService:
         )
 
         # Phase 2: Multi-path retrieval (metadata + vector, supplementary)
+        # Accept pre-computed plan from federation to avoid redundant LLM calls
+        shared_plan = kwargs.pop("_plan", None)
         if self._metadata_index is not None or (
             self.config.rag_mode == "unified" and self._lightrag
         ):
@@ -1009,6 +1011,7 @@ class RAGService:
                     query,
                     filters,
                     top_k=top_k or self.config.top_k,
+                    plan=shared_plan,
                 )
                 if supplementary:
                     self._merge_round_robin(
@@ -1093,28 +1096,39 @@ class RAGService:
         query: str,
         explicit_filters: Any,
         top_k: int = 60,
+        plan: Any = None,
     ) -> list[dict[str, Any]]:
-        """Run QueryAnalyzer + Orchestrator for supplementary chunk retrieval."""
+        """Run QueryAnalyzer + Orchestrator for supplementary chunk retrieval.
+
+        Parameters
+        ----------
+        plan:
+            Pre-computed ``RetrievalPlan`` from federation. When provided,
+            skips QueryAnalyzer LLM call (avoids redundant analysis in
+            multi-workspace federation).
+        """
         from dlightrag.core.retrieval.orchestrator import RetrievalOrchestrator
-        from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
 
-        # Get LLM func for QueryAnalyzer's NL extraction fallback
-        lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
-        llm_func = getattr(lr, "llm_model_func", None) if lr else None
+        if plan is None:
+            from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
 
-        # Refresh table schema (cached, 5-min TTL)
-        import time
+            # Get LLM func for QueryAnalyzer's NL extraction fallback
+            lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
+            llm_func = getattr(lr, "llm_model_func", None) if lr else None
 
-        now = time.monotonic()
-        if self._metadata_index and now > self._table_schema_ttl:
-            try:
-                self._table_schema = await self._metadata_index.get_table_schema()
-                self._table_schema_ttl = now + 300
-            except Exception as exc:
-                logger.debug("Table schema refresh failed: %s", exc)
+            # Refresh table schema (cached, 5-min TTL)
+            import time
 
-        analyzer = QueryAnalyzer(llm_func=llm_func, schema=self._table_schema)
-        plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
+            now = time.monotonic()
+            if self._metadata_index and now > self._table_schema_ttl:
+                try:
+                    self._table_schema = await self._metadata_index.get_table_schema()
+                    self._table_schema_ttl = now + 300
+                except Exception as exc:
+                    logger.debug("Table schema refresh failed: %s", exc)
+
+            analyzer = QueryAnalyzer(llm_func=llm_func, schema=self._table_schema)
+            plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
 
         if not plan.metadata_filters and not plan.semantic_query:
             logger.info(
