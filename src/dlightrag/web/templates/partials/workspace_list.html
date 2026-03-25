@@ -1,6 +1,41 @@
+<!-- Workspace create form -->
+<form hx-post="/web/workspaces/create"
+      hx-target="#panel-content"
+      hx-swap="innerHTML"
+      style="display:flex;gap:6px;margin-bottom:12px;">
+    <input type="text" name="workspace_name" placeholder="New workspace name"
+           style="flex:1;padding:6px 8px;border:1px solid #444;border-radius:4px;background:#2a2a2a;color:#eee;font-size:13px;">
+    <button type="submit" style="padding:6px 12px;border:none;border-radius:4px;background:#4a9;color:#fff;cursor:pointer;font-size:13px;">Create</button>
+</form>
+
+<!-- Workspace list -->
 {% for ws in workspaces %}
-<div class="workspace-check-item" data-ws="{{ ws }}">
+<div class="workspace-check-item" data-ws="{{ ws }}" style="display:flex;align-items:center;gap:8px;">
     <div class="ws-checkbox"></div>
-    <span class="ws-check-name">{{ ws }}</span>
+    <span class="ws-check-name" style="flex:1;">{{ ws }}</span>
+    {% if ws != current_workspace %}
+    <button class="file-delete"
+            onclick="this.closest('.workspace-check-item').querySelector('.ws-delete-confirm').style.display='flex'"
+            title="Delete workspace"
+            style="background:none;border:none;color:#c44;cursor:pointer;font-size:14px;">&#10005;</button>
+    <div class="ws-delete-confirm" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:1000;align-items:center;justify-content:center;">
+        <form hx-post="/web/workspaces/delete"
+              hx-target="#panel-content"
+              hx-swap="innerHTML"
+              style="background:#2a2a2a;padding:20px;border-radius:8px;max-width:360px;width:90%;">
+            <input type="hidden" name="workspace_name" value="{{ ws }}">
+            <p style="margin:0 0 12px;color:#eee;font-size:14px;">Type <strong>{{ ws }}</strong> to confirm deletion:</p>
+            <input type="text" name="confirm_name" placeholder="{{ ws }}"
+                   style="width:100%;padding:6px 8px;border:1px solid #444;border-radius:4px;background:#1a1a1a;color:#eee;font-size:13px;box-sizing:border-box;margin-bottom:12px;">
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button type="button"
+                        onclick="this.closest('.ws-delete-confirm').style.display='none'"
+                        style="padding:6px 12px;border:1px solid #555;border-radius:4px;background:transparent;color:#eee;cursor:pointer;">Cancel</button>
+                <button type="submit"
+                        style="padding:6px 12px;border:none;border-radius:4px;background:#c44;color:#fff;cursor:pointer;">Delete</button>
+            </div>
+        </form>
+    </div>
+    {% endif %}
 </div>
 {% endfor %}

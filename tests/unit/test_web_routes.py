@@ -123,3 +123,99 @@ class TestWebWorkspaces:
         )
         assert resp.status_code in {302, 303, 307}
         assert resp.headers.get("location", "").endswith("/web/")
+
+
+# ---------------------------------------------------------------------------
+# TestWebWorkspaceCreateDelete
+# ---------------------------------------------------------------------------
+
+
+class TestWebWorkspaceCreate:
+    """Tests for POST /web/workspaces/create."""
+
+    async def test_create_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager._get_service = AsyncMock()
+        # First call (duplicate check): workspace does not exist yet
+        # Second call (post-create list): includes the new workspace
+        mock_manager.list_workspaces = AsyncMock(
+            side_effect=[["default", "test_ws"], ["default", "test_ws", "new_workspace"]]
+        )
+        resp = await client.post(
+            "/web/workspaces/create",
+            data={"workspace_name": "new workspace"},
+        )
+        assert resp.status_code == 200
+        assert "text/html" in resp.headers["content-type"]
+        mock_manager._get_service.assert_awaited_once_with("new_workspace")
+
+    async def test_create_workspace_empty_name(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/create",
+            data={"workspace_name": ""},
+        )
+        assert resp.status_code == 400
+
+    async def test_create_workspace_duplicate(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/create",
+            data={"workspace_name": "default"},
+        )
+        assert resp.status_code == 409
+
+    async def test_create_workspace_forbidden_chars(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/create",
+            data={"workspace_name": "bad/name"},
+        )
+        assert resp.status_code == 400
+
+    async def test_create_workspace_too_long(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/create",
+            data={"workspace_name": "a" * 65},
+        )
+        assert resp.status_code == 400
+
+
+class TestWebWorkspaceDelete:
+    """Tests for POST /web/workspaces/delete."""
+
+    async def test_delete_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+        resp = await client.post(
+            "/web/workspaces/delete",
+            data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
+        )
+        assert resp.status_code == 200
+        mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
+
+    async def test_delete_workspace_confirm_mismatch(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/delete",
+            data={"workspace_name": "test-ws", "confirm_name": "wrong"},
+        )
+        assert resp.status_code == 400
+
+    async def test_delete_workspace_empty_name(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/delete",
+            data={"workspace_name": "", "confirm_name": ""},
+        )
+        assert resp.status_code == 400
