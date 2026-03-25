@@ -88,6 +88,7 @@ async def httpx_text_embed(
     base_url: str = "",
     api_key: str = "",
     provider: MultimodalEmbedProvider | None = None,
+    timeout: float = 120.0,
 ) -> np.ndarray:
     """Embed texts via httpx POST to an embedding endpoint.
 
@@ -109,7 +110,7 @@ async def httpx_text_embed(
     payload = prov.build_text_payload(model, texts)
 
     async with httpx.AsyncClient(
-        timeout=120.0,
+        timeout=timeout,
         headers={"Authorization": f"Bearer {api_key}"},
         transport=httpx.AsyncHTTPTransport(retries=2),
     ) as client:
