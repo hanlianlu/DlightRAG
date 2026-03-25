@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for RAGService.areset() — 5-phase workspace reset."""
+"""Tests for RAGService.areset() — 6-phase workspace reset via dlightrag.core.reset."""
 
 from __future__ import annotations
 
@@ -9,18 +9,38 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from dlightrag.core.service import _STORAGE_ATTRS, RAGService
 
 
-def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test-ws") -> RAGService:
+class _FakeLightRAG:
+    """Lightweight fake LightRAG for reset tests.
+
+    Uses a plain object so ``vars()`` returns exactly the storage attributes
+    we set, avoiding MagicMock internals leaking into dynamic discovery.
+    """
+
+    pass
+
+
+def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test_ws") -> RAGService:
     """Create a RAGService with mocked config and storages."""
     config = MagicMock()
     config.kv_storage = kv_storage
     config.workspace = workspace
     config.working_dir = f"/tmp/dlightrag-test/{workspace}"
 
-    service = RAGService(config=config)
+    service = RAGService.__new__(RAGService)
+    service.config = config
     service._initialized = True
+    service.rag = None
+    service.unified = None
+    service.ingestion = None
+    service.retrieval = None
+    service._backend = None
+    service._cancel_checker = None
+    service.enable_vlm = False
+    service._table_schema = None
+    service._table_schema_ttl = 0.0
 
-    # Mock LightRAG with all storage attrs
-    lightrag = MagicMock()
+    # Create fake LightRAG with all storage attrs (dynamic-discovery friendly)
+    lightrag = _FakeLightRAG()
     for attr in _STORAGE_ATTRS:
         storage = MagicMock()
         storage.drop = AsyncMock(return_value={"status": "success", "message": "dropped"})
@@ -43,8 +63,33 @@ def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test-w
     return service
 
 
+class TestAresetPhase0:
+    """Phase 0: Cancel pending tasks."""
+
+    async def test_cancels_worker_pools(self) -> None:
+        service = _make_service()
+        # Create a separate lightrag mock with worker pool shutdown
+        lr = MagicMock()
+        shutdown_mock = AsyncMock()
+        inner_func = MagicMock()
+        inner_func.shutdown = shutdown_mock
+        embedding_func = MagicMock()
+        embedding_func.func = inner_func
+        lr.embedding_func = embedding_func
+        lr.llm_model_func = MagicMock(spec=[])  # no shutdown
+        # Give it a droppable storage so Phase 1 works
+        storage = MagicMock()
+        storage.drop = AsyncMock()
+        lr.__dict__["chunks_vdb"] = storage
+        service._lightrag = lr
+
+        result = await service.areset()
+        assert result["pending_tasks_cancelled"] >= 1
+        shutdown_mock.assert_awaited_once()
+
+
 class TestAresetPhase1:
-    """Phase 1: LightRAG stores."""
+    """Phase 1: LightRAG stores (dynamic discovery)."""
 
     async def test_drops_all_lightrag_stores(self) -> None:
         service = _make_service()
@@ -53,11 +98,11 @@ class TestAresetPhase1:
         for attr in _STORAGE_ATTRS:
             getattr(service._lightrag, attr).drop.assert_awaited_once()
 
-        assert result["storages_dropped"] == len(_STORAGE_ATTRS)
+        assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
 
 
 class TestAresetPhase2:
-    """Phase 2: DlightRAG stores."""
+    """Phase 2: DlightRAG domain stores."""
 
     async def test_clears_hash_index(self) -> None:
         service = _make_service()
@@ -78,13 +123,13 @@ class TestAresetPhase2:
         service = _make_service()
         service._metadata_index = None
         result = await service.areset()
-        assert "metadata_index" not in result["dlightrag_cleared"]
+        assert "metadata_index" not in result["domain_stores_dropped"]
 
     async def test_skips_none_visual_chunks(self) -> None:
         service = _make_service()
         service._visual_chunks = None
         result = await service.areset()
-        assert "visual_chunks" not in result["dlightrag_cleared"]
+        assert "visual_chunks" not in result["domain_stores_dropped"]
 
 
 class TestAresetPhase3:
@@ -97,42 +142,54 @@ class TestAresetPhase3:
 
     async def test_runs_on_pg_backend(self) -> None:
         service = _make_service(kv_storage="PGKVStorage")
-        with patch(
-            "dlightrag.core.service.RAGService._clean_pg_orphan_tables",
-            new_callable=AsyncMock,
-            return_value=3,
+        with (
+            patch(
+                "dlightrag.core.reset._clean_orphan_tables",
+                new_callable=AsyncMock,
+                return_value=3,
+            ),
+            patch(
+                "dlightrag.core.reset._clean_workspace_meta",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "dlightrag.core.reset._drop_age_graphs",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
         ):
             result = await service.areset()
         assert result["orphan_tables_cleaned"] == 3
 
 
 class TestAresetPhase4:
-    """Phase 4: Workspace metadata cleanup."""
+    """Phase 4: AGE graph schema drop."""
 
-    async def test_calls_clean_workspace_meta_on_pg(self) -> None:
+    async def test_runs_on_pg_backend(self) -> None:
         service = _make_service(kv_storage="PGKVStorage")
         with (
             patch(
-                "dlightrag.core.service.RAGService._clean_pg_orphan_tables",
+                "dlightrag.core.reset._clean_orphan_tables",
                 new_callable=AsyncMock,
                 return_value=0,
             ),
             patch(
-                "dlightrag.core.service.RAGService._clean_workspace_meta",
+                "dlightrag.core.reset._clean_workspace_meta",
                 new_callable=AsyncMock,
-            ) as mock_meta,
+            ),
+            patch(
+                "dlightrag.core.reset._drop_age_graphs",
+                new_callable=AsyncMock,
+                return_value=["test_ws_chunk_entity_relation"],
+            ),
         ):
-            await service.areset()
-        mock_meta.assert_awaited_once_with("test-ws")
+            result = await service.areset()
+        assert result["graphs_dropped"] == ["test_ws_chunk_entity_relation"]
 
     async def test_skips_on_non_pg_backend(self) -> None:
         service = _make_service(kv_storage="JsonKVStorage")
-        with patch(
-            "dlightrag.core.service.RAGService._clean_workspace_meta",
-            new_callable=AsyncMock,
-        ) as mock_meta:
-            await service.areset()
-        mock_meta.assert_not_awaited()
+        result = await service.areset()
+        assert result["graphs_dropped"] == []
 
 
 class TestAresetPhase5:
@@ -170,7 +227,7 @@ class TestAresetDryRun:
         result = await service.areset(dry_run=True)
 
         # Stats reported but no actual drops
-        assert result["storages_dropped"] == len(_STORAGE_ATTRS)
+        assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
         for attr in ("full_docs", "text_chunks"):
             getattr(service._lightrag, attr).drop.assert_not_awaited()
         service._hash_index.clear.assert_not_awaited()
