@@ -499,7 +499,8 @@ class VisualRetriever:
             headers["Authorization"] = f"Bearer {self.rerank_api_key}"
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            rerank_timeout = getattr(self.config, "embedding_request_timeout", 120)
+            async with httpx.AsyncClient(timeout=float(rerank_timeout)) as client:
                 resp = await client.post(url, json=payload, headers=headers)
                 resp.raise_for_status()
             results = resp.json().get("results", [])

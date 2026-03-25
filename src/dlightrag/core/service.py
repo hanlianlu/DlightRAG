@@ -466,6 +466,7 @@ class RAGService:
                 base_url=emb_base_url,
                 api_key=emb_api_key,
                 provider=embed_provider,
+                timeout=float(config.embedding_request_timeout),
             ),
             model_name=config.embedding.model,
         )
@@ -477,6 +478,7 @@ class RAGService:
             api_key=emb_api_key,
             dim=config.embedding.dim,
             batch_size=config.embedding_func_max_async,
+            timeout=float(config.embedding_request_timeout),
             provider=embed_provider,
         )
 
