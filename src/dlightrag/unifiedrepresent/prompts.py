@@ -42,15 +42,6 @@ The project has 46 tasks with an average progress of 36.89% [1-1]. \
 The critical path tasks show higher completion rates [1-1][1-2].
 """
 
-_ANSWER_STRUCTURED_SUFFIX = """
-Output your response as a JSON object with exactly two keys:
-- "answer": your full markdown answer with inline [n-m] citations
-- "references": an array of objects, each with "id" (int) and "title" (string)
-
-The references array must include **all those and only those** documents cited in your \
-answer. **Example**: {"answer": "...", "references": [{"id": 1, "title": "report.pdf"}]}
-"""
-
 FREETEXT_REMINDER = """\n\n
 **IMPORTANT — Additional Output**:
 - Generate a References section at the end of your response, the References must cover **all those and only those** documents cited in your answer.
@@ -67,16 +58,13 @@ FREETEXT_REMINDER = """\n\n
 """
 
 
-def get_answer_system_prompt(structured: bool = False) -> str:
-    """Return the system prompt for unified mode answer generation.
+def get_answer_system_prompt() -> str:
+    """Return the single unified system prompt for answer generation.
 
-    Args:
-        structured: If True, append JSON output instructions to the
-            system prompt. If False, return the core prompt only
-            (freetext references reminder is appended to user prompt).
+    Both streaming and non-streaming paths use the same freetext prompt
+    with ``### References`` output format.  There is no structured JSON
+    variant.
     """
-    if structured:
-        return _ANSWER_CORE + _ANSWER_STRUCTURED_SUFFIX
     return _ANSWER_CORE + FREETEXT_REMINDER
 
 

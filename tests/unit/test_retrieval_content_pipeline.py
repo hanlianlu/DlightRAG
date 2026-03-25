@@ -272,11 +272,11 @@ class TestSystemPromptUpdated:
     def test_prompt_mentions_text_excerpts(self) -> None:
         from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 
-        prompt = get_answer_system_prompt(structured=True)
+        prompt = get_answer_system_prompt()
         assert "text excerpts" in prompt.lower() or "document text" in prompt.lower()
 
     def test_prompt_mentions_images_when_available(self) -> None:
         from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 
-        prompt = get_answer_system_prompt(structured=False)
+        prompt = get_answer_system_prompt()
         assert "when available" in prompt.lower() or "if available" in prompt.lower()

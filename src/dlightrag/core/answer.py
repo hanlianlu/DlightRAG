@@ -7,9 +7,13 @@ all workspaces.
 
 The engine accepts a single ``model_func`` callable that follows the
 messages-first interface: it receives ``messages=`` (OpenAI-format list)
-and optional ``response_format=`` / ``stream=`` keyword arguments.  Images
-are inlined as ``image_url`` content blocks so there is no separate VLM
-path -- the provider decides how to handle multimodal content.
+and optional ``stream=`` keyword arguments.  Images are inlined as
+``image_url`` content blocks so there is no separate VLM path -- the
+provider decides how to handle multimodal content.
+
+Both streaming and non-streaming paths use the same freetext system prompt.
+References are extracted from the ``### References`` section in the LLM
+output.
 """
 
 from __future__ import annotations
@@ -36,6 +40,10 @@ class AnswerEngine:
     Accepts a single ``model_func`` that speaks the messages-first
     interface.  Images found in chunks are inlined as ``image_url``
     content blocks -- no separate VLM routing is needed.
+
+    Both ``generate()`` and ``generate_stream()`` use the same unified
+    freetext system prompt.  References are always extracted from the
+    ``### References`` markdown section.
     """
 
     def __init__(
@@ -57,33 +65,30 @@ class AnswerEngine:
         """Non-streaming answer generation.
 
         Returns a :class:`RetrievalResult` with ``answer``, ``contexts``,
-        and ``references`` populated.  Always requests structured JSON
-        output via ``response_format``.
+        and ``references`` populated.  Uses the same freetext prompt as
+        streaming; references are extracted from ``### References``.
         """
         if self.model_func is None:
             logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
-        system_prompt = get_answer_system_prompt(structured=True)
+        system_prompt = get_answer_system_prompt()
         user_prompt, indexer = self._build_user_prompt(query, contexts)
         messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
         logger.info(
-            "[AE] generate: structured=True chunks=%d query=%s",
+            "[AE] generate: chunks=%d query=%s",
             len(contexts.get("chunks", [])),
             query[:60],
         )
 
         log_answer_llm_output(
             "answer_engine.generate",
-            structured=True,
+            structured=False,
             query=query,
         )
 
-        raw = await self.model_func(
-            messages=messages,
-            response_format={"type": "json_object"},
-        )
+        raw = await self.model_func(messages=messages)
 
         logger.info(
             "[AE] generate: LLM returned type=%s len=%d first200=%s",
@@ -92,8 +97,8 @@ class AnswerEngine:
             repr(raw[:200]) if isinstance(raw, str) else repr(raw),
         )
 
-        # Parse response
-        result = self._parse_response(raw, structured=True, query=query)
+        # Parse response — always freetext
+        result = self._parse_response(raw, query=query)
 
         logger.info(
             "[AE] generate: parsed refs=%d answer_len=%d",
@@ -105,7 +110,6 @@ class AnswerEngine:
             "answer_engine.generate",
             result.references,
             query=query,
-            structured=True,
         )
 
         return RetrievalResult(
@@ -121,16 +125,15 @@ class AnswerEngine:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
 
-        Always uses freetext prompt since streaming cannot enforce
-        ``response_format``.  Wraps the token stream with
-        :class:`AnswerStream` for post-stream reference extraction.
+        Uses the same freetext prompt as ``generate()``.  Wraps the
+        token stream with :class:`AnswerStream` for post-stream citation
+        validation via :class:`CitationProcessor`.
         """
         if self.model_func is None:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        # Always freetext for streaming -- structured prompt is wrong here
-        system_prompt = get_answer_system_prompt(structured=False)
+        system_prompt = get_answer_system_prompt()
         user_prompt, indexer = self._build_user_prompt(query, contexts)
         messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
@@ -153,10 +156,10 @@ class AnswerEngine:
             type(token_iterator).__name__,
         )
 
-        # Always wrap with AnswerStream (passthrough + post-stream ref extraction)
+        # Always wrap with AnswerStream (passthrough + post-stream citation validation)
         if hasattr(token_iterator, "__aiter__"):
             logger.info("[AE] generate_stream: wrapping with AnswerStream")
-            token_iterator = AnswerStream(token_iterator)
+            token_iterator = AnswerStream(token_iterator, indexer=indexer)
 
         return contexts, token_iterator
 
@@ -164,37 +167,20 @@ class AnswerEngine:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
     def _build_messages(
+        self,
         system_prompt: str,
         user_prompt: str,
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
     ) -> list[dict[str, Any]]:
-        """Build OpenAI-format messages array with inline images if present."""
-        content: list[dict[str, Any]] = []
+        """Build OpenAI-format messages with per-document grouped images.
 
-        # Add images from chunks, labelled with their [n-m] citation marker
-        for chunk in contexts.get("chunks", []):
-            img_data = chunk.get("image_data")
-            if img_data:
-                # Build a citation label so the LLM knows which [n-m] tag
-                # corresponds to this image (prevents invented [Image] tags)
-                label = "Page image"
-                if indexer:
-                    ref_id = str(chunk.get("reference_id", ""))
-                    chunk_id = chunk.get("chunk_id", "")
-                    if ref_id and chunk_id:
-                        cidx = indexer.get_chunk_idx(ref_id, chunk_id)
-                        if cidx is not None:
-                            label = f"[{ref_id}-{cidx}] Page image"
-                content.append({"type": "text", "text": label})
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{img_data}"},
-                    }
-                )
+        Instead of flat-listing all images at the start, images are
+        interleaved with their document's text excerpts so the LLM can
+        associate each image with its source context.
+        """
+        content: list[dict[str, Any]] = self._build_excerpt_blocks(contexts, indexer)
 
         content.append({"type": "text", "text": user_prompt})
 
@@ -258,6 +244,101 @@ class AnswerEngine:
         return "\n".join(parts) if parts else "No knowledge graph context available."
 
     @staticmethod
+    def _build_excerpt_blocks(
+        contexts: RetrievalContexts,
+        indexer: CitationIndexer | None = None,
+    ) -> list[dict[str, Any]]:
+        """Build per-document content blocks with interleaved images.
+
+        Groups chunks by ``reference_id`` (document), then for each
+        document renders a section header followed by its images and
+        text excerpts.  This lets the LLM associate each image with
+        its source document rather than seeing a flat image list.
+
+        Returns a list of OpenAI-format content blocks (text + image_url dicts).
+        """
+        chunks = contexts.get("chunks", [])
+        if not chunks:
+            return []
+
+        # Group chunks by reference_id, preserving first-seen order
+        doc_groups: dict[str, list[dict[str, Any]]] = {}
+        doc_order: list[str] = []
+        for chunk in chunks:
+            ref_id = str(chunk.get("reference_id", ""))
+            if ref_id not in doc_groups:
+                doc_order.append(ref_id)
+            doc_groups.setdefault(ref_id, []).append(chunk)
+
+        blocks: list[dict[str, Any]] = []
+        blocks.append({"type": "text", "text": "## Document Excerpts"})
+
+        for ref_id in doc_order:
+            doc_chunks = doc_groups[ref_id]
+
+            # Document section header
+            first = doc_chunks[0]
+            file_path = first.get("file_path", "")
+            filename = Path(file_path).name if file_path else f"Source {ref_id}"
+
+            # Collect document-level metadata from first chunk
+            meta = first.get("metadata") or {}
+            meta_parts: list[str] = []
+            for k, v in meta.items():
+                if v is not None and str(v).strip():
+                    display_key = k.removeprefix("doc_").replace("_", " ")
+                    meta_parts.append(f"{display_key}: {v}")
+            meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
+
+            header = f"### Document [{ref_id}]: {filename}{meta_suffix}"
+            blocks.append({"type": "text", "text": header})
+
+            # Per-chunk: image label + image + text content
+            for chunk in doc_chunks:
+                content = chunk.get("content", "").strip()
+                chunk_id = chunk.get("chunk_id", "")
+                page_idx = chunk.get("page_idx")
+                img_data = chunk.get("image_data")
+
+                # Build citation tag
+                cite_tag = ""
+                if indexer and ref_id and chunk_id:
+                    cidx = indexer.get_chunk_idx(ref_id, chunk_id)
+                    if cidx is not None:
+                        cite_tag = f"[{ref_id}-{cidx}]"
+
+                # Image with enriched label
+                if img_data:
+                    label = _build_image_label(
+                        cite_tag=cite_tag,
+                        chunk=chunk,
+                        filename=filename,
+                    )
+                    blocks.append({"type": "text", "text": label})
+                    blocks.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_data}"},
+                        }
+                    )
+
+                # Text excerpt
+                if content:
+                    if cite_tag:
+                        if page_idx:
+                            label_line = f"{cite_tag} {filename}, Page {page_idx}"
+                        else:
+                            label_line = f"{cite_tag} {filename}"
+                    else:
+                        if page_idx:
+                            label_line = f"[{filename}, Page {page_idx}]"
+                        else:
+                            label_line = f"[{filename}]"
+                    blocks.append({"type": "text", "text": f"{label_line}\n{content}"})
+
+        return blocks
+
+    @staticmethod
     def _format_chunk_excerpts(
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
@@ -270,7 +351,7 @@ class AnswerEngine:
 
         When chunks carry ``metadata`` (injected by _enrich_chunks_with_metadata),
         non-empty fields are appended to the label so the LLM knows the
-        document title, author, etc. Fields are dynamic — any key present
+        document title, author, etc. Fields are dynamic -- any key present
         in metadata is rendered.
         """
         chunks = contexts.get("chunks", [])
@@ -300,7 +381,7 @@ class AnswerEngine:
             meta_parts: list[str] = []
             for k, v in meta.items():
                 if v is not None and str(v).strip():
-                    # Render key as human-readable: doc_title → "title", doc_author → "author"
+                    # Render key as human-readable: doc_title -> "title", doc_author -> "author"
                     display_key = k.removeprefix("doc_").replace("_", " ")
                     meta_parts.append(f"{display_key}: {v}")
             meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
@@ -322,87 +403,84 @@ class AnswerEngine:
     def _build_user_prompt(
         self, query: str, contexts: RetrievalContexts
     ) -> tuple[str, CitationIndexer]:
-        """Combine KG context + chunk excerpts + reference list + question.
+        """Combine KG context + reference list + question.
+
+        Document excerpts are NOT included in the text prompt because
+        they are now rendered as interleaved content blocks (with images)
+        by :meth:`_build_excerpt_blocks`.
 
         Returns the prompt string **and** the indexer so that
         :meth:`_build_messages` can label inline images with their
         ``[n-m]`` citation markers.
         """
-        # Build indexer first so KG context and excerpts include citation tags
+        # Build indexer first so KG context includes citation tags
         indexer = self._build_citation_indexer(contexts)
         kg_context = self._format_kg_context(contexts, indexer=indexer)
         ref_list = indexer.format_reference_list()
-        excerpts = self._format_chunk_excerpts(contexts, indexer=indexer)
 
         prompt_parts = [
-            f"Knowledge Graph Context:\n{kg_context}",
-            f"Document Excerpts:\n{excerpts}",
-            f"Reference Document List:\n{ref_list}",
-            f"Question: {query}",
+            f"## Knowledge Graph Context\n{kg_context}",
+            f"## Reference List\n{ref_list}",
+            f"## Question\n{query}",
         ]
         return "\n\n".join(prompt_parts), indexer
 
     def _parse_response(
         self,
         raw: str,
-        structured: bool,
         query: str,
     ) -> StructuredAnswer:
         """Parse LLM response into a StructuredAnswer.
 
-        Structured mode: parse JSON. On failure, degrade to freetext parsing.
-        Freetext mode: extract references from ``### References`` section.
+        Always uses freetext parsing: extract answer text and references
+        from ``### References`` section.
         """
-        if structured:
-            log_answer_llm_output(
-                "answer_engine.generate",
-                structured=structured,
-                query=query,
-                raw=raw,
-            )
-            try:
-                result = StructuredAnswer.model_validate_json(raw)
-                logger.info(
-                    "[AE] _parse_response: JSON parse OK, refs=%d answer_len=%d",
-                    len(result.references),
-                    len(result.answer),
-                )
-                return result
-            except Exception as e:
-                logger.warning(
-                    "[AE] _parse_response: JSON parse FAILED (%s: %s), "
-                    "raw_first200=%s — falling back to freetext parsing",
-                    type(e).__name__,
-                    e,
-                    repr(raw[:200]),
-                )
-                log_answer_llm_output(
-                    "answer_engine.generate",
-                    structured=structured,
-                    query=query,
-                    raw=raw,
-                    parse_error=e,
-                )
-                answer_text, refs = extract_references(raw)
-                logger.info(
-                    "[AE] _parse_response: freetext fallback got refs=%d",
-                    len(refs),
-                )
-                return StructuredAnswer(answer=answer_text, references=refs)
-        else:
-            log_answer_llm_output(
-                "answer_engine.generate",
-                structured=structured,
-                query=query,
-                answer_text=raw,
-            )
-            logger.info("[AE] _parse_response: freetext mode, extracting refs from raw")
-            answer_text, refs = extract_references(raw)
-            logger.info(
-                "[AE] _parse_response: freetext extracted refs=%d",
-                len(refs),
-            )
-            return StructuredAnswer(answer=answer_text, references=refs)
+        log_answer_llm_output(
+            "answer_engine.generate",
+            structured=False,
+            query=query,
+            answer_text=raw,
+        )
+        logger.info("[AE] _parse_response: extracting refs from raw")
+        answer_text, refs = extract_references(raw)
+        logger.info(
+            "[AE] _parse_response: extracted refs=%d",
+            len(refs),
+        )
+        return StructuredAnswer(answer=answer_text, references=refs)
+
+
+def _build_image_label(
+    *,
+    cite_tag: str,
+    chunk: dict[str, Any],
+    filename: str,
+) -> str:
+    """Build an enriched image label with metadata.
+
+    Uses chunk metadata (doc_title, page_idx) to produce labels like::
+
+        [1-2] "2025 Annual Report" Page 7
+
+    instead of bare ``[1-2] Page image``.
+    """
+    meta = chunk.get("metadata") or {}
+    title = meta.get("doc_title", "")
+    page_idx = chunk.get("page_idx")
+
+    label_parts: list[str] = []
+    if cite_tag:
+        label_parts.append(cite_tag)
+    if title:
+        label_parts.append(f'"{title}"')
+    if page_idx:
+        label_parts.append(f"Page {page_idx}")
+    elif filename:
+        label_parts.append(filename)
+    else:
+        label_parts.append("Page image")
+
+    return " ".join(label_parts)
 
 
 __all__ = ["AnswerEngine"]

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -58,41 +57,71 @@ def _image_contexts() -> RetrievalContexts:
     }
 
 
+def _multi_doc_contexts() -> RetrievalContexts:
+    """Contexts with chunks from multiple documents."""
+    return {
+        "chunks": [
+            {
+                "chunk_id": "c1",
+                "reference_id": "1",
+                "file_path": "/docs/report.pdf",
+                "content": "Revenue data.",
+                "page_idx": 3,
+                "image_data": "img_report_p3",
+                "metadata": {"doc_title": "2025 Annual Report"},
+            },
+            {
+                "chunk_id": "c2",
+                "reference_id": "1",
+                "file_path": "/docs/report.pdf",
+                "content": "Expenses data.",
+                "page_idx": 7,
+                "image_data": "img_report_p7",
+            },
+            {
+                "chunk_id": "c3",
+                "reference_id": "2",
+                "file_path": "/docs/other.pdf",
+                "content": "Other info.",
+                "page_idx": 1,
+            },
+        ],
+        "entities": [],
+        "relationships": [],
+    }
+
+
 # ---------------------------------------------------------------------------
 # TestAnswerEngineGenerate
 # ---------------------------------------------------------------------------
 
 
 class TestAnswerEngineGenerate:
-    """Test non-streaming generate() with messages-first interface."""
+    """Test non-streaming generate() with unified freetext prompt."""
 
     @pytest.mark.asyncio
-    async def test_generate_with_structured_response(self) -> None:
-        """generate() parses JSON response into StructuredAnswer."""
-        response_json = json.dumps(
-            {
-                "answer": "AI is artificial intelligence.",
-                "references": [{"id": 1, "title": "AI Overview"}],
-            }
-        )
-        model_func = AsyncMock(return_value=response_json)
+    async def test_generate_with_freetext_response(self) -> None:
+        """generate() parses freetext response with ### References."""
+        raw = "AI is artificial intelligence [1-1].\n\n### References\n- [1] AI Overview"
+        model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
 
         contexts = _text_contexts()
         result = await engine.generate("What is AI?", contexts)
 
-        assert result.answer == "AI is artificial intelligence."
+        assert "AI is artificial intelligence" in result.answer
         assert len(result.references) == 1
         model_func.assert_called_once()
         call_kwargs = model_func.call_args.kwargs
         assert "messages" in call_kwargs
-        assert "response_format" in call_kwargs
+        # Must NOT pass response_format (unified freetext prompt)
+        assert "response_format" not in call_kwargs
 
     @pytest.mark.asyncio
     async def test_generate_no_model_func(self) -> None:
         """generate() returns None answer when model_func is None."""
         engine = AnswerEngine(model_func=None)
-        contexts = {"chunks": []}
+        contexts: RetrievalContexts = {"chunks": []}
         result = await engine.generate("test", contexts)
         assert result.answer is None
         assert result.contexts is contexts
@@ -100,8 +129,8 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_with_images(self) -> None:
         """generate() includes images in messages content array."""
-        response_json = json.dumps({"answer": "ok", "references": []})
-        model_func = AsyncMock(return_value=response_json)
+        raw = "ok\n\n### References\n- [1] chart.pdf"
+        model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
 
         contexts = _image_contexts()
@@ -109,29 +138,27 @@ class TestAnswerEngineGenerate:
 
         messages = model_func.call_args.kwargs["messages"]
         user_content = messages[1]["content"]
-        # Should have image_url entry + text entry
+        # Should have image_url entry + text entries
         assert any(item.get("type") == "image_url" for item in user_content)
         assert any(item.get("type") == "text" for item in user_content)
 
     @pytest.mark.asyncio
-    async def test_generate_always_passes_response_format(self) -> None:
-        """generate() always passes response_format={"type": "json_object"}."""
-        response_json = json.dumps(
-            {"answer": "Revenue grew 15%.", "references": [{"id": 1, "title": "report.pdf"}]}
-        )
-        model_func = AsyncMock(return_value=response_json)
+    async def test_generate_no_response_format(self) -> None:
+        """generate() must NOT pass response_format (unified freetext prompt)."""
+        raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
+        model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
 
         await engine.generate("query", _text_contexts())
 
         call_kwargs = model_func.call_args.kwargs
-        assert call_kwargs.get("response_format") == {"type": "json_object"}
+        assert "response_format" not in call_kwargs
 
     @pytest.mark.asyncio
     async def test_contexts_passed_through_unchanged(self) -> None:
         """The original contexts dict should be returned as-is."""
-        response_json = json.dumps({"answer": "answer", "references": []})
-        model_func = AsyncMock(return_value=response_json)
+        raw = "answer\n\n### References\n- [1] report.pdf"
+        model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
         contexts = _text_contexts()
         result = await engine.generate("q", contexts)
@@ -141,8 +168,8 @@ class TestAnswerEngineGenerate:
         assert result.contexts["entities"] == contexts["entities"]
 
     @pytest.mark.asyncio
-    async def test_generate_freetext_fallback(self) -> None:
-        """generate() falls back to freetext parsing when JSON parse fails."""
+    async def test_generate_freetext_references(self) -> None:
+        """generate() extracts references from ### References section."""
         raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
@@ -173,7 +200,7 @@ class TestAnswerEngineStream:
         model_func = AsyncMock(return_value=mock_tokens())
         engine = AnswerEngine(model_func=model_func)
 
-        contexts = {"chunks": []}
+        contexts: RetrievalContexts = {"chunks": []}
         ctx, token_iter = await engine.generate_stream("test", contexts)
 
         from dlightrag.models.streaming import AnswerStream
@@ -184,7 +211,7 @@ class TestAnswerEngineStream:
     async def test_generate_stream_no_model_func(self) -> None:
         """generate_stream() returns None when no model_func."""
         engine = AnswerEngine(model_func=None)
-        contexts = {"chunks": []}
+        contexts: RetrievalContexts = {"chunks": []}
         ctx, token_iter = await engine.generate_stream("test", contexts)
         assert token_iter is None
         assert ctx is contexts
@@ -243,6 +270,23 @@ class TestAnswerEngineStream:
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
 
+    @pytest.mark.asyncio
+    async def test_generate_stream_passes_indexer_to_answer_stream(self) -> None:
+        """generate_stream() passes indexer to AnswerStream for citation validation."""
+
+        async def mock_stream():
+            yield "text"
+
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
+
+        _, token_iter = await engine.generate_stream("query", _text_contexts())
+
+        from dlightrag.models.streaming import AnswerStream
+
+        assert isinstance(token_iter, AnswerStream)
+        assert token_iter._indexer is not None
+
 
 # ---------------------------------------------------------------------------
 # TestBuildMessages
@@ -250,44 +294,64 @@ class TestAnswerEngineStream:
 
 
 class TestBuildMessages:
-    """Test _build_messages static method."""
+    """Test _build_messages method."""
 
     def test_text_only(self) -> None:
         """_build_messages without images returns text content."""
         contexts: RetrievalContexts = {"chunks": [{"content": "text chunk"}]}
-        messages = AnswerEngine._build_messages("system", "user prompt", contexts)
+        engine = AnswerEngine()
+        messages = engine._build_messages("system", "user prompt", contexts)
 
         assert len(messages) == 2
         assert messages[0]["role"] == "system"
         assert messages[0]["content"] == "system"
         assert messages[1]["role"] == "user"
-        # user content should be a list with text entry
+        # user content should be a list with text entries
         user_content = messages[1]["content"]
-        assert len(user_content) == 1
-        assert user_content[0]["type"] == "text"
-        assert user_content[0]["text"] == "user prompt"
+        # Should contain at least the user prompt text block
+        text_blocks = [e for e in user_content if e.get("type") == "text"]
+        assert any("user prompt" in e["text"] for e in text_blocks)
 
-    def test_with_images(self) -> None:
-        """_build_messages with images includes label + image_url entries."""
+    def test_with_images_grouped_by_document(self) -> None:
+        """_build_messages groups images by document with section headers."""
         contexts: RetrievalContexts = {
             "chunks": [
-                {"content": "text", "image_data": "abc123"},
-                {"content": "more text"},
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "content": "text",
+                    "image_data": "abc123",
+                    "file_path": "/docs/report.pdf",
+                    "page_idx": 3,
+                },
+                {
+                    "chunk_id": "c2",
+                    "reference_id": "1",
+                    "content": "more text",
+                    "file_path": "/docs/report.pdf",
+                    "page_idx": 5,
+                },
             ],
         }
-        messages = AnswerEngine._build_messages("system", "user prompt", contexts)
+        engine = AnswerEngine()
+        messages = engine._build_messages("system", "user prompt", contexts)
 
         user_content = messages[1]["content"]
         image_entries = [e for e in user_content if e.get("type") == "image_url"]
         text_entries = [e for e in user_content if e.get("type") == "text"]
+
+        # One image from chunk c1
         assert len(image_entries) == 1
-        # 1 label for the image + 1 user prompt text block
-        assert len(text_entries) == 2
-        assert text_entries[0]["text"] == "Page image"
         assert "base64" in image_entries[0]["image_url"]["url"]
 
+        # Should have Document Excerpts header and document section header
+        all_text = " ".join(e["text"] for e in text_entries)
+        assert "Document Excerpts" in all_text
+        assert "Document [1]" in all_text
+        assert "report.pdf" in all_text
+
     def test_with_images_labelled_by_indexer(self) -> None:
-        """_build_messages with indexer labels images with [n-m] citation tags."""
+        """_build_messages with indexer labels images with enriched metadata."""
         from dlightrag.citations.indexer import CitationIndexer
 
         contexts: RetrievalContexts = {
@@ -298,42 +362,75 @@ class TestBuildMessages:
                     "content": "chart data",
                     "image_data": "abc123",
                     "file_path": "/docs/report.pdf",
+                    "page_idx": 7,
+                    "metadata": {"doc_title": "2025 Annual Report"},
                 },
             ],
         }
-        flat = [c for c in contexts["chunks"]]
+        flat = list(contexts["chunks"])
         indexer = CitationIndexer()
         indexer.build_index(flat)
 
-        messages = AnswerEngine._build_messages("sys", "prompt", contexts, indexer=indexer)
+        engine = AnswerEngine()
+        messages = engine._build_messages("sys", "prompt", contexts, indexer=indexer)
         user_content = messages[1]["content"]
-        label_entries = [
-            e for e in user_content if e.get("type") == "text" and "Page image" in e.get("text", "")
-        ]
-        assert len(label_entries) == 1
-        assert "[2-1] Page image" == label_entries[0]["text"]
 
-    def test_multiple_images(self) -> None:
-        """_build_messages with multiple images includes all image_url entries."""
+        # Find image label text
+        label_entries = [
+            e for e in user_content if e.get("type") == "text" and "[2-1]" in e.get("text", "")
+        ]
+        assert len(label_entries) >= 1
+        # Should have enriched label with metadata
+        label_text = label_entries[0]["text"]
+        assert '"2025 Annual Report"' in label_text
+        assert "Page 7" in label_text
+
+    def test_multiple_images_from_different_docs(self) -> None:
+        """_build_messages with images from multiple documents groups them correctly."""
         contexts: RetrievalContexts = {
             "chunks": [
-                {"content": "a", "image_data": "img1"},
-                {"content": "b", "image_data": "img2"},
-                {"content": "c"},
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "content": "a",
+                    "image_data": "img1",
+                    "file_path": "/docs/doc1.pdf",
+                },
+                {
+                    "chunk_id": "c2",
+                    "reference_id": "2",
+                    "content": "b",
+                    "image_data": "img2",
+                    "file_path": "/docs/doc2.pdf",
+                },
+                {
+                    "chunk_id": "c3",
+                    "reference_id": "2",
+                    "content": "c",
+                    "file_path": "/docs/doc2.pdf",
+                },
             ],
         }
-        messages = AnswerEngine._build_messages("sys", "prompt", contexts)
+        engine = AnswerEngine()
+        messages = engine._build_messages("sys", "prompt", contexts)
         user_content = messages[1]["content"]
+
         image_entries = [e for e in user_content if e.get("type") == "image_url"]
         assert len(image_entries) == 2
+
+        # Check document grouping headers exist
+        all_text = " ".join(e["text"] for e in user_content if e.get("type") == "text")
+        assert "Document [1]" in all_text
+        assert "Document [2]" in all_text
 
     def test_empty_chunks(self) -> None:
         """_build_messages with empty chunks returns text-only content."""
         contexts: RetrievalContexts = {"chunks": []}
-        messages = AnswerEngine._build_messages("sys", "prompt", contexts)
+        engine = AnswerEngine()
+        messages = engine._build_messages("sys", "prompt", contexts)
         user_content = messages[1]["content"]
-        assert len(user_content) == 1
-        assert user_content[0]["type"] == "text"
+        # Should have at least the user prompt text block
+        assert any(e.get("type") == "text" for e in user_content)
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +519,7 @@ class TestAnswerEngineHelpers:
                 },
             ],
         }
-        flat = []
+        flat: list = []
         for items in contexts.values():
             if isinstance(items, list):
                 flat.extend(items)
@@ -443,9 +540,10 @@ class TestAnswerEngineHelpers:
         contexts = _text_contexts()
         prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
-        assert "Knowledge Graph Context:" in prompt
-        assert "Reference Document List:" in prompt
-        assert "Question: What is revenue?" in prompt
+        assert "Knowledge Graph Context" in prompt
+        assert "Reference List" in prompt
+        assert "Question" in prompt
+        assert "What is revenue?" in prompt
 
     def test_build_citation_indexer(self) -> None:
         contexts = _text_contexts()
@@ -464,8 +562,8 @@ class TestAnswerEngineLogging:
 
     @pytest.mark.asyncio
     async def test_generate_calls_log_answer_llm_output(self) -> None:
-        response_json = json.dumps({"answer": "answer", "references": []})
-        model_func = AsyncMock(return_value=response_json)
+        raw = "answer\n\n### References\n- [1] report.pdf"
+        model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
 
         with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
@@ -475,8 +573,8 @@ class TestAnswerEngineLogging:
 
     @pytest.mark.asyncio
     async def test_generate_calls_log_references(self) -> None:
-        response_json = json.dumps({"answer": "answer", "references": []})
-        model_func = AsyncMock(return_value=response_json)
+        raw = "answer\n\n### References\n- [1] report.pdf"
+        model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
 
         with patch("dlightrag.core.answer.log_references") as mock_log:
@@ -660,31 +758,108 @@ class TestFormatChunkExcerpts:
         engine = AnswerEngine()
         prompt, _indexer = engine._build_user_prompt("test query", contexts)
 
-        # Excerpts should have citation tags
-        assert "[1-1] report.pdf" in prompt
-        assert "[1-2] report.pdf" in prompt
-        assert "[2-1] other.pdf" in prompt
-
         # Reference list should have matching entries
         assert "[1] report.pdf" in prompt
         assert "[2] other.pdf" in prompt
 
 
 # ---------------------------------------------------------------------------
-# TestBuildUserPromptIncludesExcerpts
+# TestBuildExcerptBlocks
 # ---------------------------------------------------------------------------
 
 
-class TestBuildUserPromptIncludesExcerpts:
-    """_build_user_prompt() must include Document Excerpts section."""
+class TestBuildExcerptBlocks:
+    """Test _build_excerpt_blocks for document-grouped image interleaving."""
 
-    def test_prompt_contains_excerpts_section(self) -> None:
+    def test_groups_chunks_by_document(self) -> None:
+        """Chunks from the same document appear under the same header."""
+        contexts = _multi_doc_contexts()
+        from dlightrag.citations.indexer import CitationIndexer
+
+        indexer = CitationIndexer()
+        flat = list(contexts["chunks"])
+        indexer.build_index(flat)
+
+        blocks = AnswerEngine._build_excerpt_blocks(contexts, indexer=indexer)
+
+        text_blocks = [b for b in blocks if b.get("type") == "text"]
+        all_text = "\n".join(b["text"] for b in text_blocks)
+
+        # Should have document grouping headers
+        assert "Document [1]" in all_text
+        assert "Document [2]" in all_text
+        assert "report.pdf" in all_text
+        assert "other.pdf" in all_text
+
+    def test_images_interleaved_with_document(self) -> None:
+        """Images appear within their document group, not flat at the start."""
+        contexts = _multi_doc_contexts()
+        blocks = AnswerEngine._build_excerpt_blocks(contexts)
+
+        image_blocks = [b for b in blocks if b.get("type") == "image_url"]
+        # c1 and c2 have image_data, c3 does not
+        assert len(image_blocks) == 2
+
+        # Verify images appear after their document header
+        doc1_header_idx = None
+        first_image_idx = None
+        for i, b in enumerate(blocks):
+            if b.get("type") == "text" and "Document [1]" in b.get("text", ""):
+                doc1_header_idx = i
+            if b.get("type") == "image_url" and first_image_idx is None:
+                first_image_idx = i
+        assert doc1_header_idx is not None
+        assert first_image_idx is not None
+        assert first_image_idx > doc1_header_idx
+
+    def test_enriched_image_labels(self) -> None:
+        """Image labels include metadata like doc_title and page number."""
+        contexts = _multi_doc_contexts()
+        from dlightrag.citations.indexer import CitationIndexer
+
+        indexer = CitationIndexer()
+        flat = list(contexts["chunks"])
+        indexer.build_index(flat)
+
+        blocks = AnswerEngine._build_excerpt_blocks(contexts, indexer=indexer)
+
+        text_blocks = [b for b in blocks if b.get("type") == "text"]
+        all_text = "\n".join(b["text"] for b in text_blocks)
+
+        # c1 has metadata doc_title="2025 Annual Report" and page_idx=3
+        assert '"2025 Annual Report"' in all_text
+        assert "Page 3" in all_text
+
+    def test_empty_chunks_returns_empty_blocks(self) -> None:
+        contexts: RetrievalContexts = {"chunks": []}
+        blocks = AnswerEngine._build_excerpt_blocks(contexts)
+        assert blocks == []
+
+
+# ---------------------------------------------------------------------------
+# TestBuildUserPromptExcludedExcerpts
+# ---------------------------------------------------------------------------
+
+
+class TestBuildUserPrompt:
+    """_build_user_prompt() excludes Document Excerpts (now in content blocks)."""
+
+    def test_prompt_excludes_excerpts_section(self) -> None:
+        """Excerpts are rendered as content blocks, not in the text prompt."""
         engine = AnswerEngine()
         contexts = _text_contexts()
         prompt, _indexer = engine._build_user_prompt("What is revenue?", contexts)
 
-        assert "Document Excerpts:" in prompt
-        assert "Revenue grew 15%." in prompt
-        assert "Knowledge Graph Context:" in prompt
-        assert "Reference Document List:" in prompt
-        assert "Question: What is revenue?" in prompt
+        # Excerpts should NOT be in the text prompt (they are in content blocks now)
+        assert "Document Excerpts:" not in prompt
+        # But KG context and reference list should be present
+        assert "Knowledge Graph Context" in prompt
+        assert "Reference List" in prompt
+        assert "Question" in prompt
+        assert "What is revenue?" in prompt
+
+    def test_prompt_contains_reference_list(self) -> None:
+        engine = AnswerEngine()
+        contexts = _text_contexts()
+        prompt, _indexer = engine._build_user_prompt("query", contexts)
+        assert "report.pdf" in prompt
