@@ -353,12 +353,11 @@ class PGHashIndex:
         return self._pool
 
     async def initialize(self) -> None:
-        """Get shared pool from LightRAG ClientManager and create table."""
+        """Create table using DlightRAG's dedicated pool (idempotent DDL)."""
         if self._pool is None:
-            from lightrag.kg.postgres_impl import ClientManager
+            from dlightrag.storage.pool import pg_pool
 
-            db = await ClientManager.get_client()
-            self._pool = db.pool
+            self._pool = await pg_pool.get()
 
         async with self._get_pool().acquire() as conn:
             await conn.execute(f"""
