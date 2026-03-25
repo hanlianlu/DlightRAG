@@ -46,26 +46,26 @@ class TestMetadataFilter:
 
 class TestRetrievalPlan:
     def test_default_paths(self) -> None:
-        plan = RetrievalPlan(semantic_query="test", metadata_filters=None)
+        plan = RetrievalPlan(query="test", metadata_filters=None)
         assert plan.paths == ["kgvector"]
 
     def test_with_filters(self) -> None:
         f = MetadataFilter(filename="test.pdf")
         plan = RetrievalPlan(
-            semantic_query="test",
+            query="test",
             metadata_filters=f,
             paths=["metafilters", "kgvector"],
         )
         assert "metafilters" in plan.paths
         assert "kgvector" in plan.paths
 
-    def test_original_query_preserved(self) -> None:
+    def test_query_preserved_unchanged(self) -> None:
+        """Query is always stored unchanged (no rewriting by analyzer)."""
         plan = RetrievalPlan(
-            semantic_query="cleaned",
+            query="original query with file.pdf",
             metadata_filters=None,
-            original_query="original query with file.pdf",
         )
-        assert plan.original_query == "original query with file.pdf"
+        assert plan.query == "original query with file.pdf"
 
 
 class TestRrfKConfig:

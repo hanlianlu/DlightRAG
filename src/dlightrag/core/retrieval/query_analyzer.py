@@ -16,7 +16,7 @@ _ANALYSIS_PROMPT = """\
 Extract metadata filters and a cleaned semantic query from the user's search query.
 
 {schema_section}Output format (JSON only, no markdown):
-{{"semantic_query": "...", "filters": {{...}}}}
+{{"query": "...", "filters": {{...}}}}
 
 Filter fields (use null for unmentioned):
 - filename: best-guess normalized filename (underscores, correct extension case)
@@ -28,7 +28,7 @@ Filter fields (use null for unmentioned):
 - custom: {{"key": "value"}} for custom metadata{custom_keys_hint}
 
 Guidelines:
-- semantic_query: the core question with file/author/date references removed. Empty string if pure enumeration.
+- query: ALWAYS return the ORIGINAL query unchanged. Do not remove, rephrase, or simplify any part of it. The downstream search engine needs the full query for keyword extraction.
 - Filename normalization: users often use spaces instead of underscores, wrong case, or abbreviations. Normalize to the most likely actual filename. When uncertain, use filename_pattern instead.
 - Dates: convert relative references ("last month", "去年") to absolute ISO 8601 ranges.
 - The query may be in any language; extract filters regardless of language.
@@ -36,19 +36,19 @@ Guidelines:
 Examples:
 
 Query: "what is IMG 9551.png about"
-{{"semantic_query": "what is this about", "filters": {{"filename_pattern": "%IMG_9551%", "file_extension": "png"}}}}
+{{"query": "what is IMG 9551.png about", "filters": {{"filename_pattern": "%IMG_9551%", "file_extension": "png"}}}}
 
 Query: "张三写的2024年财报分析"
-{{"semantic_query": "财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}}}
+{{"query": "张三写的2024年财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}}}
 
 Query: "summarize the key findings in annual-report.pdf"
-{{"semantic_query": "summarize the key findings", "filters": {{"filename": "annual-report.pdf"}}}}
+{{"query": "summarize the key findings in annual-report.pdf", "filters": {{"filename": "annual-report.pdf"}}}}
 
 Query: "what are the main revenue trends"
-{{"semantic_query": "what are the main revenue trends", "filters": {{}}}}
+{{"query": "what are the main revenue trends", "filters": {{}}}}
 
 Query: "list all PDF files from Dr. Wang"
-{{"semantic_query": "", "filters": {{"file_extension": "pdf", "doc_author": "Dr. Wang"}}}}
+{{"query": "list all PDF files from Dr. Wang", "filters": {{"file_extension": "pdf", "doc_author": "Dr. Wang"}}}}
 
 Now extract from this query:
 Query: "{query}"
@@ -86,12 +86,12 @@ def _build_custom_keys_hint(schema: dict[str, Any] | None) -> str:
     return f" (known keys: {', '.join(custom_keys)})"
 
 
-def _resolve_paths(filters: MetadataFilter | None, semantic_query: str | None) -> list[str]:
+def _resolve_paths(filters: MetadataFilter | None, query: str | None) -> list[str]:
     """Determine which retrieval paths to activate."""
     paths: list[str] = []
     if filters and not filters.is_empty():
         paths.append("metafilters")
-    if semantic_query:
+    if query:
         paths.append("kgvector")
     return paths or ["kgvector"]
 
@@ -127,10 +127,9 @@ class QueryAnalyzer:
                 paths.append("kgvector")
             logger.info("[QueryAnalyzer] Explicit filters provided, paths=%s", paths)
             return RetrievalPlan(
-                semantic_query=query,
+                query=query,
                 metadata_filters=explicit_filters,
                 paths=paths,
-                original_query=query,
             )
 
         # Layer 2: LLM extraction
@@ -139,20 +138,19 @@ class QueryAnalyzer:
             llm_plan = await self._llm_extract(query)
             if llm_plan:
                 logger.info(
-                    "[QueryAnalyzer] LLM result: paths=%s, has_filters=%s, semantic_query=%.80s",
+                    "[QueryAnalyzer] LLM result: paths=%s, has_filters=%s, query=%.80s",
                     llm_plan.paths,
                     llm_plan.metadata_filters is not None,
-                    llm_plan.semantic_query,
+                    llm_plan.query,
                 )
                 return llm_plan
 
         # Fallback: pure KG search
         logger.info("[QueryAnalyzer] No LLM or extraction failed, fallback to pure KG+Vector")
         return RetrievalPlan(
-            semantic_query=query,
+            query=query,
             metadata_filters=None,
             paths=["kgvector"],
-            original_query=query,
         )
 
     async def _llm_extract(self, query: str) -> RetrievalPlan | None:
@@ -198,13 +196,12 @@ class QueryAnalyzer:
             if mf.is_empty():
                 mf = None
 
-            semantic = data.get("semantic_query", query)
-            paths = _resolve_paths(mf, semantic)
+            # Always use the original query — LLM is instructed not to modify it
+            paths = _resolve_paths(mf, query)
             return RetrievalPlan(
-                semantic_query=semantic,
+                query=query,
                 metadata_filters=mf,
                 paths=paths,
-                original_query=query,
             )
         except Exception as exc:
             logger.warning("QueryAnalyzer LLM extraction failed: %s", exc)

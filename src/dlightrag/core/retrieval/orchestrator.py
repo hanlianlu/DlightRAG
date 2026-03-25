@@ -50,7 +50,7 @@ class RetrievalOrchestrator:
                 plan.metadata_filters,
                 self._lightrag,
                 self._rag_mode,
-                query=plan.semantic_query or plan.original_query,
+                query=plan.query,
                 chunks_vdb=self._chunks_vdb,
                 top_k=top_k,
             )

@@ -93,10 +93,9 @@ class TestOrchestratorSimplified:
         """Orchestrator dispatches metadata path only, returns chunk_ids directly."""
         mock_index = AsyncMock()
         plan = RetrievalPlan(
-            semantic_query="key info",
+            query="key info",
             metadata_filters=MetadataFilter(filename="test.pdf"),
             paths=["metafilters"],
-            original_query="what is key info from test.pdf",
         )
 
         with patch(
@@ -117,10 +116,9 @@ class TestOrchestratorSimplified:
     async def test_orchestrate_no_metadata_returns_empty(self) -> None:
         """No metadata filters -> empty result."""
         plan = RetrievalPlan(
-            semantic_query="query",
+            query="query",
             metadata_filters=None,
             paths=[],
-            original_query="query",
         )
         orch = RetrievalOrchestrator()
         result = await orch.orchestrate(plan, top_k=20)

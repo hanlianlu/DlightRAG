@@ -42,9 +42,13 @@ class MetadataFilter:
 
 @dataclass
 class RetrievalPlan:
-    """Output of QueryAnalyzer — describes which retrieval paths to activate."""
+    """Output of QueryAnalyzer — describes which retrieval paths to activate.
 
-    semantic_query: str
+    The ``query`` field is always the original user query, unchanged.
+    QueryAnalyzer only extracts metadata filters — it never rewrites
+    or decomposes the query itself (that's LightRAG's job).
+    """
+
+    query: str
     metadata_filters: MetadataFilter | None
     paths: list[str] = field(default_factory=lambda: ["kgvector"])
-    original_query: str = ""
