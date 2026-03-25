@@ -167,15 +167,16 @@ async def federated_retrieve(
             logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)
 
     # Parallel queries — pass shared plan to skip per-workspace re-analysis
-    query_kwargs = {**kwargs}
-    if shared_plan is not None:
-        query_kwargs["_plan"] = shared_plan
-
     async def _query_workspace(ws: str) -> RetrievalResult | Exception:
         try:
             svc = await get_service(ws)
             return await svc.aretrieve(
-                query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k, **query_kwargs
+                query=query,
+                mode=mode,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                _plan=shared_plan,
+                **kwargs,
             )
         except Exception as exc:
             logger.warning("Federated query failed for workspace '%s': %s", ws, exc)

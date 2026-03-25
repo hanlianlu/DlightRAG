@@ -22,6 +22,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _normalize_ingest_result(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize engine result to match caption-mode IngestionResult shape.
+
+    Ensures unified mode returns the same top-level keys as caption mode:
+    ``status``, ``doc_id``, ``page_count``, ``file_path``, plus any extras
+    the engine already provides (e.g. ``render_metadata``).
+    """
+    result = dict(raw)
+    result.setdefault("status", "success")
+    return result
+
+
 # ── Ingestion ──────────────────────────────────────────────────────
 
 
@@ -35,7 +47,10 @@ async def unified_ingest(
 ) -> dict[str, Any]:
     """Unified ingestion entry point — dispatches by source_type."""
     if source_type == "local":
-        path = Path(kwargs["path"])
+        path_str = kwargs.get("path")
+        if not path_str:
+            raise ValueError("'path' is required for local source_type")
+        path = Path(path_str)
         replace = kwargs.get("replace", config.ingestion_replace_default)
         user_metadata = kwargs.get("metadata")
 
@@ -72,7 +87,8 @@ async def _ingest_single_local(
         logger.info("Skipped (dedup): %s - %s", path.name, reason)
         return {"status": "skipped", "reason": reason, "file_path": str(path)}
 
-    result = await engine.aingest(file_path=str(path))
+    raw = await engine.aingest(file_path=str(path))
+    result = _normalize_ingest_result(raw)
 
     if content_hash and result.get("doc_id"):
         await hash_index.register(content_hash, result["doc_id"], str(path))
@@ -183,7 +199,9 @@ async def _ingest_azure_blob(
     """Download blob(s) to temp -> visual pipeline."""
     from dlightrag.sourcing.azure_blob import AzureBlobDataSource
 
-    container_name: str = kwargs["container_name"]
+    container_name = kwargs.get("container_name")
+    if not container_name:
+        raise ValueError("'container_name' is required for azure_blob source_type")
     blob_path: str | None = kwargs.get("blob_path")
     prefix: str | None = kwargs.get("prefix")
     source = kwargs.get("source")
@@ -254,7 +272,8 @@ async def _ingest_single_blob(
             return {"status": "skipped", "reason": reason, "blob_path": blob_path}
 
         logger.info("Downloaded blob to temp: %s", target)
-        result = await engine.aingest(file_path=str(target))
+        raw = await engine.aingest(file_path=str(target))
+        result = _normalize_ingest_result(raw)
 
         if content_hash and result.get("doc_id"):
             await hash_index.register(content_hash, result["doc_id"], f"azure://{blob_path}")
@@ -295,7 +314,9 @@ async def _ingest_s3(
     """Download S3 object(s) to temp -> unified visual pipeline."""
     from dlightrag.sourcing.aws_s3 import S3DataSource
 
-    bucket: str = kwargs["bucket"]
+    bucket = kwargs.get("bucket")
+    if not bucket:
+        raise ValueError("'bucket' is required for s3 source_type")
     key: str | None = kwargs.get("key")
     prefix: str | None = kwargs.get("prefix")
     replace: bool = kwargs.get("replace", config.ingestion_replace_default)
@@ -359,7 +380,8 @@ async def _ingest_single_s3(
             return {"status": "skipped", "reason": reason, "key": key}
 
         logger.info("Downloaded S3 object to temp: %s", target)
-        result = await engine.aingest(file_path=str(target))
+        raw = await engine.aingest(file_path=str(target))
+        result = _normalize_ingest_result(raw)
 
         if content_hash and result.get("doc_id"):
             await hash_index.register(content_hash, result["doc_id"], f"s3://{bucket}/{key}")

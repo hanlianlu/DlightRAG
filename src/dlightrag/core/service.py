@@ -106,6 +106,7 @@ from lightrag.utils import EmbeddingFunc  # noqa: E402
 
 from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
 from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
+from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
 from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
@@ -859,7 +860,10 @@ class RAGService:
             return bool(replace_arg)
 
         if source_type == "local":
-            path = Path(kwargs["path"])
+            path_str = kwargs.get("path")
+            if not path_str:
+                raise ValueError("'path' is required for local source_type")
+            path = Path(path_str)
             replace = get_replace_value()
             user_metadata = kwargs.get("metadata")
 
@@ -873,7 +877,9 @@ class RAGService:
             return result.model_dump(exclude_none=True)
 
         if source_type == "azure_blob":
-            container_name = kwargs["container_name"]
+            container_name = kwargs.get("container_name")
+            if not container_name:
+                raise ValueError("'container_name' is required for azure_blob source_type")
             blob_path = kwargs.get("blob_path")
             prefix = kwargs.get("prefix")
             replace = get_replace_value()
@@ -936,7 +942,9 @@ class RAGService:
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         is_reretrieve: bool = False,
-        filters: Any = None,
+        filters: MetadataFilter | None = None,
+        *,
+        _plan: Any = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve structured data without generating answer.
@@ -944,6 +952,8 @@ class RAGService:
         Args:
             filters: Optional MetadataFilter for structured metadata queries.
                      Also auto-detected from query text via QueryAnalyzer.
+            _plan: Pre-computed RetrievalPlan from federation (avoids
+                   redundant LLM calls in multi-workspace retrieval).
         """
         self._ensure_initialized()
         backend = self._effective_backend
@@ -966,7 +976,7 @@ class RAGService:
 
         # Phase 2: Multi-path retrieval (metadata + vector, supplementary)
         # Accept pre-computed plan from federation to avoid redundant LLM calls
-        shared_plan = kwargs.pop("_plan", None)
+        shared_plan = _plan
         if self._metadata_index is not None or (
             self.config.rag_mode == "unified" and self._lightrag
         ):
@@ -1058,7 +1068,7 @@ class RAGService:
     async def _run_multi_path_retrieval(
         self,
         query: str,
-        explicit_filters: Any,
+        explicit_filters: MetadataFilter | None,
         top_k: int = 60,
         plan: Any = None,
     ) -> list[dict[str, Any]]:
