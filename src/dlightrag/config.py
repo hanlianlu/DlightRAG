@@ -112,6 +112,12 @@ class DlightragConfig(BaseSettings):
     postgres_user: str = Field(default="dlightrag")
     postgres_password: str = Field(default="dlightrag")
     postgres_database: str = Field(default="dlightrag")
+    postgres_pool_min_size: int = Field(
+        default=2, description="DlightRAG domain store pool min connections."
+    )
+    postgres_pool_max_size: int = Field(
+        default=10, description="DlightRAG domain store pool max connections."
+    )
     workspace: str = Field(default="default")
 
     # pgvector HNSW index configuration

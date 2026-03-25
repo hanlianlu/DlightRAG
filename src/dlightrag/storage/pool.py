@@ -50,19 +50,21 @@ class PGPool:
             from dlightrag.config import get_config
 
             config = get_config()
+            min_size = getattr(config, "postgres_pool_min_size", _DEFAULT_MIN_SIZE)
+            max_size = getattr(config, "postgres_pool_max_size", _DEFAULT_MAX_SIZE)
             self._pool = await asyncpg.create_pool(
                 host=config.postgres_host,
                 port=config.postgres_port,
                 user=config.postgres_user,
                 password=config.postgres_password,
                 database=config.postgres_database,
-                min_size=_DEFAULT_MIN_SIZE,
-                max_size=_DEFAULT_MAX_SIZE,
+                min_size=min_size,
+                max_size=max_size,
             )
             logger.info(
                 "DlightRAG domain store pool created (min=%d, max=%d)",
-                _DEFAULT_MIN_SIZE,
-                _DEFAULT_MAX_SIZE,
+                min_size,
+                max_size,
             )
             return self._pool
 
