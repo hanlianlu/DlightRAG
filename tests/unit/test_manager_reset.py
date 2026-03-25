@@ -21,9 +21,7 @@ def _make_manager() -> RAGServiceManager:
     manager._ready = True
     manager._degraded = False
     manager._startup_warnings = []
-    manager._last_error = None
-    manager._last_error_ts = None
-    manager._retry_after = 30.0
+    manager._backoff = {}
     manager._answer_engine = None
     manager._lock = None
     return manager
@@ -34,9 +32,11 @@ def _make_mock_service(workspace: str = "default") -> MagicMock:
     svc.areset = AsyncMock(
         return_value={
             "workspace": workspace,
-            "storages_dropped": 12,
-            "dlightrag_cleared": ["hash_index"],
+            "pending_tasks_cancelled": 0,
+            "lightrag_storages_dropped": 12,
+            "domain_stores_dropped": ["hash_index"],
             "orphan_tables_cleaned": 0,
+            "graphs_dropped": [],
             "local_files_removed": 5,
             "errors": [],
         }
