@@ -353,6 +353,69 @@ async def delete_files(
 
 
 # ---------------------------------------------------------------------------
+# Ingestion progress (SSE)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ingest/progress")
+async def ingest_progress(request: Request):
+    """SSE endpoint for ingestion progress -- pushes task event dicts.
+
+    Event types sent to the client:
+    - ``snapshot``: all current tasks (initial state)
+    - ``task_created``: new task submitted
+    - ``progress``: task updated (status/step/progress changed)
+    - ``done``: task completed successfully
+    - ``failed``: task failed with error
+    """
+    ingest_mgr = getattr(request.app.state, "ingest_task_manager", None)
+    if ingest_mgr is None:
+
+        async def _no_mgr() -> AsyncIterator[str]:
+            yield f"event: error\ndata: {json.dumps({'detail': 'Ingest task manager not available'})}\n\n"
+
+        return StreamingResponse(
+            _no_mgr(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    # Map internal event types to client SSE event names
+    _EVENT_MAP = {
+        "snapshot": "snapshot",
+        "task_created": "task_created",
+        "task_updated": "progress",
+        "task_progress": "progress",
+        "task_done": "done",
+        "task_failed": "failed",
+    }
+
+    async def stream() -> AsyncIterator[str]:
+        async for event in ingest_mgr.subscribe():
+            if await request.is_disconnected():
+                break
+
+            etype = event.get("type", "")
+            sse_name = _EVENT_MAP.get(etype)
+            if not sse_name:
+                continue
+
+            # Encode the event payload as JSON
+            if sse_name == "snapshot":
+                tasks = event.get("tasks", [])
+                yield f"event: snapshot\ndata: {json.dumps(tasks)}\n\n"
+            else:
+                task = event.get("task", {})
+                yield f"event: {sse_name}\ndata: {json.dumps(task)}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Workspaces
 # ---------------------------------------------------------------------------
 

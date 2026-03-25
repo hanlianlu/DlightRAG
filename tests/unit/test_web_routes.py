@@ -219,3 +219,22 @@ class TestWebWorkspaceDelete:
             data={"workspace_name": "", "confirm_name": ""},
         )
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# TestIngestProgress
+# ---------------------------------------------------------------------------
+
+
+class TestIngestProgress:
+    """Tests for GET /web/ingest/progress SSE endpoint."""
+
+    async def test_no_task_manager_returns_error(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        # Ensure no ingest_task_manager is set
+        if hasattr(web_app.state, "ingest_task_manager"):
+            del web_app.state.ingest_task_manager
+        resp = await client.get("/web/ingest/progress")
+        assert resp.status_code == 200
+        assert "error" in resp.text
