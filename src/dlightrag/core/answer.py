@@ -24,9 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.citations.parser import extract_references
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.models.schemas import StructuredAnswer
 from dlightrag.models.streaming import AnswerStream
 from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 from dlightrag.utils.logging import log_answer_llm_output, log_references
@@ -97,25 +95,39 @@ class AnswerEngine:
             repr(raw[:200]) if isinstance(raw, str) else repr(raw),
         )
 
-        # Parse response — always freetext
-        result = self._parse_response(raw, query=query)
+        # Extract references programmatically via CitationProcessor
+        # (not from LLM-generated ### References section)
+        from dlightrag.citations.processor import CitationProcessor
+        from dlightrag.citations.source_builder import build_sources
+
+        chunks = contexts.get("chunks", [])
+        sources = build_sources(contexts)
+        processor = CitationProcessor(chunks, sources)
+        processed = processor.process(raw)
 
         logger.info(
-            "[AE] generate: parsed refs=%d answer_len=%d",
-            len(result.references),
-            len(result.answer) if result.answer else 0,
+            "[AE] generate: parsed sources=%d answer_len=%d",
+            len(processed.sources),
+            len(processed.answer) if processed.answer else 0,
         )
+
+        # Convert sources to Reference objects for RetrievalResult
+        from dlightrag.models.schemas import Reference
+
+        references = [
+            Reference(id=i + 1, title=s.title or s.path) for i, s in enumerate(processed.sources)
+        ]
 
         log_references(
             "answer_engine.generate",
-            result.references,
+            references,
             query=query,
         )
 
         return RetrievalResult(
-            answer=result.answer,
+            answer=processed.answer,
             contexts=contexts,
-            references=result.references,
+            references=references,
         )
 
     async def generate_stream(
@@ -425,29 +437,9 @@ class AnswerEngine:
         ]
         return "\n\n".join(prompt_parts), indexer
 
-    def _parse_response(
-        self,
-        raw: str,
-        query: str,
-    ) -> StructuredAnswer:
-        """Parse LLM response into a StructuredAnswer.
-
-        Always uses freetext parsing: extract answer text and references
-        from ``### References`` section.
-        """
-        log_answer_llm_output(
-            "answer_engine.generate",
-            structured=False,
-            query=query,
-            answer_text=raw,
-        )
-        logger.info("[AE] _parse_response: extracting refs from raw")
-        answer_text, refs = extract_references(raw)
-        logger.info(
-            "[AE] _parse_response: extracted refs=%d",
-            len(refs),
-        )
-        return StructuredAnswer(answer=answer_text, references=refs)
+    # _parse_response removed: references are now extracted programmatically
+    # by CitationProcessor from inline [n]/[n-m] markers, not from
+    # LLM-generated ### References sections.
 
 
 def _build_image_label(

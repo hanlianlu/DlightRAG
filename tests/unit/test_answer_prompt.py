@@ -7,15 +7,14 @@ from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
 
 
 class TestGetAnswerSystemPrompt:
-    def test_unified_prompt_contains_references_heading(self) -> None:
-        """Unified prompt includes ### References format instructions."""
+    def test_unified_prompt_no_references_section_instruction(self) -> None:
+        """Prompt must NOT ask LLM to generate ### References (code-built)."""
         prompt = get_answer_system_prompt()
-        assert "### References" in prompt
+        assert "### References" not in prompt
 
     def test_unified_prompt_no_json_format_instruction(self) -> None:
         """Unified prompt must NOT contain JSON output instructions."""
         prompt = get_answer_system_prompt()
-        # The prompt should not instruct JSON object output
         assert '"answer"' not in prompt
         assert '"references"' not in prompt
 
