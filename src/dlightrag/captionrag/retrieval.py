@@ -62,16 +62,20 @@ class RetrievalEngine:
         else:
             enable_rerank = kwargs.pop("enable_rerank", self.config.rerank.enabled)
 
+        max_entity_tokens = kwargs.pop("max_entity_tokens", self.config.max_entity_tokens)
+        max_relation_tokens = kwargs.pop("max_relation_tokens", self.config.max_relation_tokens)
+        max_total_tokens = kwargs.pop("max_total_tokens", self.config.max_total_tokens)
+
+        if kwargs:
+            logger.warning("Unknown retrieval kwargs (ignored): %s", list(kwargs.keys()))
+
         query_kwargs = {
             "top_k": adjusted_top_k,
             "chunk_top_k": adjusted_chunk_top_k,
             "enable_rerank": enable_rerank,
-            "max_entity_tokens": kwargs.pop("max_entity_tokens", self.config.max_entity_tokens),
-            "max_relation_tokens": kwargs.pop(
-                "max_relation_tokens", self.config.max_relation_tokens
-            ),
-            "max_total_tokens": kwargs.pop("max_total_tokens", self.config.max_total_tokens),
-            **kwargs,
+            "max_entity_tokens": max_entity_tokens,
+            "max_relation_tokens": max_relation_tokens,
+            "max_total_tokens": max_total_tokens,
         }
 
         query_param = QueryParam(mode=mode or self.config.default_mode, **query_kwargs)
