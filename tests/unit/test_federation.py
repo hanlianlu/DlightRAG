@@ -100,8 +100,10 @@ class TestFederatedRetrieve:
     async def test_multi_workspace_parallel(self) -> None:
         svc_a = AsyncMock()
         svc_a.aretrieve.return_value = _make_result(chunks=[{"id": "a1"}])
+        svc_a._metadata_index = None
         svc_b = AsyncMock()
         svc_b.aretrieve.return_value = _make_result(chunks=[{"id": "b1"}])
+        svc_b._metadata_index = None
 
         services = {"ws-a": svc_a, "ws-b": svc_b}
 
@@ -118,9 +120,11 @@ class TestFederatedRetrieve:
     async def test_failed_workspace_excluded(self) -> None:
         svc_ok = AsyncMock()
         svc_ok.aretrieve.return_value = _make_result(chunks=[{"id": "ok1"}])
+        svc_ok._metadata_index = None
 
         svc_fail = AsyncMock()
         svc_fail.aretrieve.side_effect = RuntimeError("DB down")
+        svc_fail._metadata_index = None
 
         services = {"ws-ok": svc_ok, "ws-fail": svc_fail}
 
@@ -136,6 +140,7 @@ class TestFederatedRetrieve:
     async def test_all_workspaces_fail(self) -> None:
         svc = AsyncMock()
         svc.aretrieve.side_effect = RuntimeError("fail")
+        svc._metadata_index = None
 
         async def get_svc(ws: str):
             return svc
