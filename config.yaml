@@ -23,8 +23,8 @@
 
 chat:
   provider: openai
-  model: gpt-4.1
-  # base_url:                         # only needed for proxies, Ollama, or local models
+  model: qwen/qwen3.5-flash-02-23
+  base_url: https://openrouter.ai/api/v1
   temperature: 0.5
   timeout: 120.0
 
@@ -33,13 +33,13 @@ chat:
 
 # ingest:
 #   provider: openai
-#   model: gpt-4.1-mini
+#   model: qwen3.5-opus:9b-80k
+#   base_url: http://host.docker.internal:11434/v1
 
 embedding:
-  provider: openai
-  model: text-embedding-3-large
+  model: voyage-multimodal-3.5
+  base_url: https://api.voyageai.com/v1
   dim: 1024
-  max_token_size: 8192
 
 rerank:
   enabled: true
@@ -77,7 +77,7 @@ rag_mode: caption                     # caption or unified
 working_dir: ./dlightrag_storage
 parser: mineru                        # mineru, docling, vlm  (Unified mode doesn't use parser — the chat model handles everything)
 parse_method: auto                    # auto, ocr, txt
-# page_render_dpi: 250               # unified mode rendering DPI
+page_render_dpi: 250                  # unified mode rendering DPI
 
 # Content processing
 enable_image_processing: true
