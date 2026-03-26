@@ -12,6 +12,8 @@ from collections.abc import Callable
 from functools import partial
 from typing import Any
 
+import numpy as np
+
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.providers import get_provider
 
@@ -103,14 +105,15 @@ def get_embedding_func(config: DlightragConfig) -> Any:
         base_url=cfg.base_url,
     )
 
-    async def embed_func(texts: list[str]) -> list[list[float]]:
-        return await httpx_embed(
+    async def embed_func(texts: list[str]) -> np.ndarray:
+        result = await httpx_embed(
             texts,
             model=cfg.model,
             api_key=cfg.api_key or "",
             base_url=cfg.base_url or "",
             provider=embed_provider,
         )
+        return np.array(result)
 
     return EmbeddingFunc(
         embedding_dim=cfg.dim,
