@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
 from PIL import Image
 
-from dlightrag.unifiedrepresent.embedder import VisualEmbedder, VoyageProvider, httpx_text_embed
+from dlightrag.models.providers.embed_providers import VoyageEmbedProvider
+from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 
 DIM = 128
 
@@ -154,58 +155,22 @@ class TestEmbedTexts:
 # ---------------------------------------------------------------------------
 
 
-class TestVoyageProvider:
+class TestVoyageEmbedProvider:
     def test_image_payload_passes_full_data_uri(self) -> None:
-        prov = VoyageProvider()
+        prov = VoyageEmbedProvider()
         data_uri = "data:image/png;base64,AAAA"
-        payload = prov.build_image_payload("voyage-multimodal-3", data_uri)
+        payload = prov.build_payload("voyage-multimodal-3", [data_uri])
         img_content = payload["inputs"][0]["content"][0]
         assert img_content["type"] == "image_base64"
         assert img_content["image_base64"] == data_uri
 
     def test_text_payload_nested_structure(self) -> None:
-        prov = VoyageProvider()
-        payload = prov.build_text_payload("voyage-multimodal-3", ["hello", "world"])
+        prov = VoyageEmbedProvider()
+        payload = prov.build_payload("voyage-multimodal-3", ["hello", "world"])
         assert len(payload["inputs"]) == 2
         assert payload["inputs"][0]["content"][0] == {"type": "text", "text": "hello"}
         assert payload["inputs"][1]["content"][0] == {"type": "text", "text": "world"}
 
     def test_endpoint(self) -> None:
-        prov = VoyageProvider()
+        prov = VoyageEmbedProvider()
         assert prov.endpoint == "/multimodalembeddings"
-
-
-# ---------------------------------------------------------------------------
-# TestHttpxTextEmbedVoyage
-# ---------------------------------------------------------------------------
-
-
-class TestHttpxTextEmbedVoyage:
-    async def test_uses_voyage_endpoint_and_payload(self) -> None:
-        mock_resp = MagicMock()
-        mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "data": [{"embedding": [0.1] * 128}],
-        }
-
-        mock_client = AsyncMock()
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-
-        with patch(
-            "dlightrag.unifiedrepresent.embedder.httpx.AsyncClient", return_value=mock_client
-        ):
-            result = await httpx_text_embed(
-                texts=["hello"],
-                model="voyage-multimodal-3",
-                base_url="https://api.voyageai.com/v1",
-                api_key="sk-test",
-                provider=VoyageProvider(),
-            )
-
-        call_args = mock_client.post.call_args
-        assert "/multimodalembeddings" in call_args[0][0]
-        payload = call_args[1]["json"]
-        assert payload["inputs"][0]["content"][0]["type"] == "text"
-        assert result.shape == (1, 128)

@@ -1,49 +1,42 @@
-"""Embedding callables.
-
-Two tracks matching the completion module:
-- _openai_embedding: AsyncOpenAI SDK
-- _litellm_embedding: LiteLLM
-"""
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Embedding callables using httpx with EmbedProvider strategy."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from openai import AsyncOpenAI
+import httpx
 
 
-async def _openai_embedding(
+async def httpx_embed(
     texts: list[str],
     *,
-    model: str,
-    api_key: str | None = None,
-    base_url: str | None = None,
-    _client: AsyncOpenAI | None = None,
-    **kwargs: Any,
+    model: str = "",
+    base_url: str = "",
+    api_key: str = "",
+    provider: Any = None,
+    timeout: float = 120.0,
 ) -> list[list[float]]:
-    """OpenAI SDK embedding."""
-    client = _client or AsyncOpenAI(api_key=api_key, base_url=base_url)
-    response = await client.embeddings.create(model=model, input=texts, **kwargs)
-    return [d.embedding for d in response.data]
+    """Embed texts via httpx POST to an embedding endpoint.
+
+    Uses OpenAICompatEmbedProvider by default.
+    """
+    if not texts:
+        return []
+
+    prov = provider
+    url = (base_url.rstrip("/") if base_url else "https://api.openai.com") + prov.endpoint
+    payload = prov.build_payload(model, texts)
+    headers: dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+    return prov.parse_response(data)
 
 
-async def _litellm_embedding(
-    texts: list[str],
-    *,
-    model: str,
-    api_key: str | None = None,
-    base_url: str | None = None,
-    **kwargs: Any,
-) -> list[list[float]]:
-    """LiteLLM embedding."""
-    import litellm
-
-    call_kwargs: dict[str, Any] = {"model": model, "input": texts, "api_key": api_key}
-    if base_url:
-        call_kwargs["api_base"] = base_url
-    call_kwargs.update(kwargs)
-    response = await litellm.aembedding(**call_kwargs)
-    return [d["embedding"] for d in response.data]
-
-
-__all__ = ["_openai_embedding", "_litellm_embedding"]
+__all__ = ["httpx_embed"]
