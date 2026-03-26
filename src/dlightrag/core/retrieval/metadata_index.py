@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,48 +13,67 @@ from dlightrag.core.retrieval.models import MetadataFilter
 
 logger = logging.getLogger(__name__)
 
-_SYSTEM_FIELDS = frozenset(
-    {
-        "filename",
-        "filename_stem",
-        "file_path",
-        "file_extension",
-        "doc_title",
-        "doc_author",
-        "creation_date",
-        "original_format",
-        "page_count",
-        "rag_mode",
-    }
-)
 
-_CREATE_TABLE = """\
-CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (
-    workspace       VARCHAR(255) NOT NULL,
-    doc_id          VARCHAR(255) NOT NULL,
-    filename        VARCHAR(512),
-    filename_stem   VARCHAR(512),
-    file_path       TEXT,
-    file_extension  VARCHAR(32),
-    doc_title       TEXT,
-    doc_author      VARCHAR(255),
-    creation_date   TIMESTAMPTZ,
-    original_format VARCHAR(32),
-    page_count      INTEGER,
-    rag_mode        VARCHAR(32),
-    ingested_at     TIMESTAMPTZ DEFAULT NOW(),
-    custom_metadata JSONB DEFAULT '{}',
-    PRIMARY KEY (workspace, doc_id)
-)"""
+@dataclass(frozen=True)
+class MetadataFieldDef:
+    """Defines a metadata column in dlightrag_doc_metadata."""
 
-_CREATE_INDEXES = [
-    "CREATE INDEX IF NOT EXISTS idx_dm_filename ON dlightrag_doc_metadata USING gin (filename gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_dm_stem ON dlightrag_doc_metadata USING gin (filename_stem gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_dm_title ON dlightrag_doc_metadata USING gin (doc_title gin_trgm_ops)",
-    "CREATE INDEX IF NOT EXISTS idx_dm_author ON dlightrag_doc_metadata (doc_author)",
-    "CREATE INDEX IF NOT EXISTS idx_dm_date ON dlightrag_doc_metadata (creation_date)",
-    "CREATE INDEX IF NOT EXISTS idx_dm_custom ON dlightrag_doc_metadata USING gin (custom_metadata)",
+    field_id: str
+    pg_type: str
+    filterable: bool = False
+    index_type: str | None = None
+
+
+METADATA_FIELDS: list[MetadataFieldDef] = [
+    MetadataFieldDef("filename", "VARCHAR(512)", filterable=True, index_type="gin_trgm"),
+    MetadataFieldDef("filename_stem", "VARCHAR(512)", filterable=True, index_type="gin_trgm"),
+    MetadataFieldDef("file_path", "TEXT"),
+    MetadataFieldDef("file_extension", "VARCHAR(32)", filterable=True, index_type="btree"),
+    MetadataFieldDef("doc_title", "TEXT", filterable=True, index_type="gin_trgm"),
+    MetadataFieldDef("doc_author", "VARCHAR(255)", filterable=True, index_type="btree"),
+    MetadataFieldDef("creation_date", "TIMESTAMPTZ", filterable=True, index_type="btree"),
+    MetadataFieldDef("original_format", "VARCHAR(32)"),
+    MetadataFieldDef("page_count", "INTEGER"),
+    MetadataFieldDef("rag_mode", "VARCHAR(32)", filterable=True),
+    MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),
+    MetadataFieldDef("custom_metadata", "JSONB DEFAULT '{}'", filterable=True, index_type="gin"),
 ]
+
+# System field names for upsert partitioning
+_SYSTEM_FIELDS = frozenset(f.field_id for f in METADATA_FIELDS if f.field_id != "custom_metadata")
+
+
+def _build_create_table() -> str:
+    cols = [
+        "workspace       VARCHAR(255) NOT NULL",
+        "doc_id          VARCHAR(255) NOT NULL",
+    ]
+    for f in METADATA_FIELDS:
+        cols.append(f"    {f.field_id}    {f.pg_type}")
+    cols.append("    PRIMARY KEY (workspace, doc_id)")
+    return "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata (\n" + ",\n".join(cols) + "\n)"
+
+
+_CREATE_TABLE = _build_create_table()
+
+
+def _build_create_indexes() -> list[str]:
+    indexes = []
+    idx_mapping = {
+        "gin_trgm": " USING gin ({field} gin_trgm_ops)",
+        "btree": " ({field})",
+        "gin": " USING gin ({field})",
+    }
+    for f in METADATA_FIELDS:
+        if f.index_type and f.index_type in idx_mapping:
+            indexes.append(
+                f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
+                f"ON dlightrag_doc_metadata{idx_mapping[f.index_type].format(field=f.field_id)}"
+            )
+    return indexes
+
+
+_CREATE_INDEXES = _build_create_indexes()
 
 _UPSERT = """\
 INSERT INTO dlightrag_doc_metadata
@@ -62,12 +82,17 @@ INSERT INTO dlightrag_doc_metadata
      page_count, rag_mode, custom_metadata)
 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 ON CONFLICT (workspace, doc_id) DO UPDATE SET
-    filename=EXCLUDED.filename, filename_stem=EXCLUDED.filename_stem,
-    file_path=EXCLUDED.file_path, file_extension=EXCLUDED.file_extension,
-    doc_title=EXCLUDED.doc_title, doc_author=EXCLUDED.doc_author,
-    creation_date=EXCLUDED.creation_date, original_format=EXCLUDED.original_format,
-    page_count=EXCLUDED.page_count, rag_mode=EXCLUDED.rag_mode,
-    custom_metadata=EXCLUDED.custom_metadata"""
+    filename = COALESCE(EXCLUDED.filename, dlightrag_doc_metadata.filename),
+    filename_stem = COALESCE(EXCLUDED.filename_stem, dlightrag_doc_metadata.filename_stem),
+    file_path = COALESCE(EXCLUDED.file_path, dlightrag_doc_metadata.file_path),
+    file_extension = COALESCE(EXCLUDED.file_extension, dlightrag_doc_metadata.file_extension),
+    doc_title = COALESCE(EXCLUDED.doc_title, dlightrag_doc_metadata.doc_title),
+    doc_author = COALESCE(EXCLUDED.doc_author, dlightrag_doc_metadata.doc_author),
+    creation_date = COALESCE(EXCLUDED.creation_date, dlightrag_doc_metadata.creation_date),
+    original_format = COALESCE(EXCLUDED.original_format, dlightrag_doc_metadata.original_format),
+    page_count = COALESCE(EXCLUDED.page_count, dlightrag_doc_metadata.page_count),
+    rag_mode = COALESCE(EXCLUDED.rag_mode, dlightrag_doc_metadata.rag_mode),
+    custom_metadata = dlightrag_doc_metadata.custom_metadata || EXCLUDED.custom_metadata"""
 
 
 class PGMetadataIndex:
@@ -83,18 +108,19 @@ class PGMetadataIndex:
 
     async def initialize(self) -> None:
         """Create table and indexes. Call once during service startup."""
-        from lightrag.kg.postgres_impl import ClientManager
+        from dlightrag.storage.pool import pg_pool
 
-        db = await ClientManager.get_client()
-        self._pool = db.pool
+        pool = await pg_pool.get()
+        self._pool = pool
         async with self._pool.acquire() as conn:
             await conn.execute(_CREATE_TABLE)
             for idx_sql in _CREATE_INDEXES:
                 try:
                     await conn.execute(idx_sql)
                 except Exception:
-                    logger.debug(
-                        "Index creation skipped (pg_trgm may not be available): %s", idx_sql[:60]
+                    logger.warning(
+                        "Index creation skipped (pg_trgm may not be available): %s",
+                        idx_sql[:60],
                     )
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
