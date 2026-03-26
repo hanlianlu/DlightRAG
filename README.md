@@ -32,7 +32,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 
 ## Quick Start
 
-> **Defaults:** `gpt-4.1` (chat) + `text-embedding-3-large` (embedding) via OpenAI. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
+> **Defaults:** `qwen/qwen3.5-flash-02-23` (chat via OpenRouter) + `voyage-multimodal-3.5` (embedding via Voyage) in unified mode. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
 
 ### Web UI
 ##### Click the image to watch demo (YouTube)
