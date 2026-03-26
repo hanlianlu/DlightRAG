@@ -11,130 +11,17 @@ import asyncio
 import base64
 import io
 import logging
-from abc import ABC, abstractmethod
 
 import httpx
 import numpy as np
 from PIL import Image
 
+from dlightrag.models.providers.embed_providers import (
+    OpenAICompatEmbedProvider,
+    VoyageEmbedProvider,
+)
+
 logger = logging.getLogger(__name__)
-
-
-class MultimodalEmbedProvider(ABC):
-    """Strategy for different multimodal embedding API protocols."""
-
-    @property
-    @abstractmethod
-    def endpoint(self) -> str:
-        """API endpoint path (e.g., '/embeddings')."""
-
-    @abstractmethod
-    def build_image_payload(self, model: str, image_b64: str) -> dict: ...
-
-    @abstractmethod
-    def build_text_payload(self, model: str, texts: list[str]) -> dict: ...
-
-    def parse_response(self, response_json: dict) -> list[list[float]]:
-        return [item["embedding"] for item in response_json["data"]]
-
-
-class OpenAICompatProvider(MultimodalEmbedProvider):
-    """Qwen-VL, GME, Xinference, Azure Voyage 3.5 — POST /embeddings with data URI."""
-
-    @property
-    def endpoint(self) -> str:
-        return "/embeddings"
-
-    def build_image_payload(self, model: str, image_b64: str) -> dict:
-        return {"model": model, "input": image_b64, "encoding_format": "float"}
-
-    def build_text_payload(self, model: str, texts: list[str]) -> dict:
-        return {"model": model, "input": texts, "encoding_format": "float"}
-
-
-class VoyageProvider(MultimodalEmbedProvider):
-    """Voyage Multimodal-3 — POST /multimodalembeddings.
-
-    Voyage multimodal API accepts full data URIs in the image_base64 field
-    (e.g., "data:image/png;base64,..."). No output_dimension support on
-    the multimodal endpoint (only on text-only Voyage models).
-    """
-
-    @property
-    def endpoint(self) -> str:
-        return "/multimodalembeddings"
-
-    def build_image_payload(self, model: str, image_b64: str) -> dict:
-        return {
-            "model": model,
-            "inputs": [{"content": [{"type": "image_base64", "image_base64": image_b64}]}],
-        }
-
-    def build_text_payload(self, model: str, texts: list[str]) -> dict:
-        return {
-            "model": model,
-            "inputs": [{"content": [{"type": "text", "text": t}]} for t in texts],
-        }
-
-
-# -----------------------------------------------------------------------
-# Standalone text embedding function (deepcopy-safe via functools.partial)
-# -----------------------------------------------------------------------
-
-
-async def httpx_text_embed(
-    texts: list[str],
-    model: str = "",
-    base_url: str = "",
-    api_key: str = "",
-    provider: MultimodalEmbedProvider | None = None,
-    timeout: float = 120.0,
-) -> np.ndarray:
-    """Embed texts via httpx POST to an embedding endpoint.
-
-    Designed to be used with ``functools.partial`` to bind model/base_url/api_key
-    (and optionally provider), then wrapped in LightRAG's ``EmbeddingFunc``.
-
-    When *provider* is ``None`` (the default), uses ``OpenAICompatProvider`` which
-    posts to ``/embeddings`` with ``encoding_format: "float"`` — compatible with
-    Xinference VL embedding models.  Pass ``VoyageProvider()`` to hit the Voyage
-    ``/multimodalembeddings`` endpoint instead.
-
-    A new ``httpx.AsyncClient`` is created per call (same pattern as
-    ``openai_embed`` which creates a new ``AsyncOpenAI`` per call).
-    """
-    if not texts:
-        return np.empty((0,), dtype=np.float32)
-
-    prov = provider or OpenAICompatProvider()
-    payload = prov.build_text_payload(model, texts)
-
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        headers={"Authorization": f"Bearer {api_key}"},
-        transport=httpx.AsyncHTTPTransport(retries=2),
-    ) as client:
-        resp: httpx.Response | None = None
-        for attempt in range(4):  # 1 initial + 3 retries
-            resp = await client.post(
-                f"{base_url.rstrip('/')}{prov.endpoint}",
-                json=payload,
-            )
-            if resp.status_code == 429 and attempt < 3:
-                retry_after = float(resp.headers.get("retry-after", 2 ** (attempt + 1)))
-                logger.warning(
-                    "429 rate-limited, retrying in %.1fs (attempt %d/3)", retry_after, attempt + 1
-                )
-                await asyncio.sleep(retry_after)
-                continue
-            resp.raise_for_status()
-            break
-        if resp is None:
-            raise RuntimeError("Embedding API: no response after retries")
-        return np.array(
-            prov.parse_response(resp.json()),
-            dtype=np.float32,
-        )
 
 
 class VisualEmbedder:
@@ -152,13 +39,13 @@ class VisualEmbedder:
         dim: int,
         batch_size: int = 4,
         timeout: float = 120.0,
-        provider: MultimodalEmbedProvider | None = None,
+        provider: OpenAICompatEmbedProvider | VoyageEmbedProvider | None = None,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.dim = dim
         self.batch_size = batch_size
-        self.provider = provider or OpenAICompatProvider()
+        self.provider = provider or OpenAICompatEmbedProvider()
         self._client = httpx.AsyncClient(
             timeout=timeout,
             headers={"Authorization": f"Bearer {api_key}"},
@@ -191,7 +78,7 @@ class VisualEmbedder:
         async def _embed_one(img: Image.Image) -> list[float]:
             async with sem:
                 image_b64 = self._image_to_b64(img)
-                payload = self.provider.build_image_payload(self.model, image_b64)
+                payload = self._build_image_payload(image_b64)
                 resp: httpx.Response | None = None
                 for attempt in range(4):  # 1 initial + 3 retries
                     resp = await self._client.post(
@@ -235,7 +122,7 @@ class VisualEmbedder:
         """
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
-        payload = self.provider.build_text_payload(self.model, texts)
+        payload = self.provider.build_payload(self.model, texts)
         resp: httpx.Response | None = None
         for attempt in range(4):  # 1 initial + 3 retries
             resp = await self._client.post(
@@ -261,6 +148,16 @@ class VisualEmbedder:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _build_image_payload(self, image_b64: str) -> dict:
+        """Build payload for image embedding based on provider type."""
+        if isinstance(self.provider, VoyageEmbedProvider):
+            return {
+                "model": self.model,
+                "inputs": [{"content": [{"type": "image_base64", "image_base64": image_b64}]}],
+            }
+        # OpenAICompatEmbedProvider and others
+        return {"model": self.model, "input": image_b64, "encoding_format": "float"}
 
     @staticmethod
     def _image_to_b64(image: Image.Image) -> str:

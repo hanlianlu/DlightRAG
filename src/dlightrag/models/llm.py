@@ -1,10 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Model factory functions.
 
-Builds messages-first callables from config with 2-track dispatch:
-- provider=openai  -> AsyncOpenAI SDK
-- provider=litellm -> LiteLLM
-
+Uses the provider registry (openai, anthropic, gemini) to build callables.
 Provides _adapt_for_lightrag() to bridge to LightRAG's (prompt, system_prompt) signature.
 """
 
@@ -15,33 +12,20 @@ from collections.abc import Callable
 from functools import partial
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from dlightrag.config import DlightragConfig, ModelConfig
-from dlightrag.models.completion import _litellm_completion, _openai_completion
-from dlightrag.models.embedding import _litellm_embedding, _openai_embedding
+from dlightrag.models.providers import get_provider
 
 logger = logging.getLogger(__name__)
 
 
 def _adapt_for_lightrag(completion_func: Callable) -> Callable:
-    """Wrap messages-first callable for LightRAG's (prompt, system_prompt, ...) signature.
-
-    Mirrors LightRAG's own ``openai_complete_if_cache`` signature: all LightRAG-internal
-    kwargs are received as explicit parameters (not blacklist-filtered), so new upstream
-    kwargs never leak to the API accidentally.
-
-    Caching is NOT handled here — LightRAG's operate.py layer manages it via
-    ``handle_cache`` / ``save_to_cache``.  The ``hashing_kv`` kwarg is bound by
-    LightRAG at init time via ``partial``; we accept and discard it.
-    """
+    """Wrap messages-first callable for LightRAG's (prompt, system_prompt, ...) signature."""
 
     async def wrapper(
         prompt: str,
         *,
         system_prompt: str | None = None,
-        # -- LightRAG-internal params (accepted explicitly, not forwarded) --
-        hashing_kv: Any = None,  # noqa: ARG001 — bound via partial at LightRAG init
+        hashing_kv: Any = None,  # noqa: ARG001
         history_messages: list[dict[str, Any]] | None = None,
         keyword_extraction: bool = False,  # noqa: ARG001
         enable_cot: bool = False,  # noqa: ARG001
@@ -57,55 +41,31 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
         if history_messages:
             messages.extend(history_messages)
         messages.append({"role": "user", "content": prompt})
-
         return await completion_func(messages=messages, **kwargs)
 
     return wrapper
 
 
-# ------------------------------------------------------------------ #
-# Factory helpers                                                      #
-# ------------------------------------------------------------------ #
-
-
 def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None) -> partial:
     """Build a messages-first completion callable from config."""
     api_key = cfg.api_key or fallback_api_key
-    if cfg.provider == "openai":
-        client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=cfg.base_url,
-            timeout=cfg.timeout,
-            max_retries=cfg.max_retries,
-        )
-        extra: dict[str, Any] = {**cfg.model_kwargs}
-        if cfg.temperature is not None:
-            extra["temperature"] = cfg.temperature
-        return partial(
-            _openai_completion,
+    provider = get_provider(
+        cfg.provider,
+        api_key=api_key,
+        base_url=cfg.base_url,
+        timeout=cfg.timeout,
+        max_retries=cfg.max_retries,
+    )
+
+    async def completion_wrapper(messages: list[dict[str, Any]], **kw: Any) -> str:
+        return await provider.complete(
+            messages=messages,
             model=cfg.model,
-            api_key=api_key,
-            base_url=cfg.base_url,
-            _client=client,
-            **extra,
-        )
-    else:  # litellm
-        extra = {**cfg.model_kwargs, "num_retries": cfg.max_retries}
-        if cfg.temperature is not None:
-            extra["temperature"] = cfg.temperature
-        return partial(
-            _litellm_completion,
-            model=cfg.model,
-            api_key=api_key,
-            base_url=cfg.base_url,
-            timeout=cfg.timeout,
-            **extra,
+            temperature=cfg.temperature,
+            model_kwargs={**cfg.model_kwargs, **kw},
         )
 
-
-# ------------------------------------------------------------------ #
-# Public factory functions                                             #
-# ------------------------------------------------------------------ #
+    return partial(completion_wrapper)
 
 
 def get_chat_model_func(config: DlightragConfig) -> Callable:
@@ -134,32 +94,28 @@ def get_embedding_func(config: DlightragConfig) -> Any:
     """Build LightRAG EmbeddingFunc from config."""
     from lightrag.utils import EmbeddingFunc
 
+    from dlightrag.models.embedding import httpx_embed
+    from dlightrag.models.providers.embed_providers import detect_embed_provider
+
     cfg = config.embedding
-    if cfg.provider == "openai":
-        client = AsyncOpenAI(
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-            timeout=cfg.timeout,
-            max_retries=cfg.max_retries,
-        )
-        func = partial(
-            _openai_embedding,
+    embed_provider = detect_embed_provider(
+        model=cfg.model,
+        base_url=cfg.base_url,
+    )
+
+    async def embed_func(texts: list[str]) -> list[list[float]]:
+        return await httpx_embed(
+            texts,
             model=cfg.model,
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-            _client=client,
+            api_key=cfg.api_key or "",
+            base_url=cfg.base_url or "",
+            provider=embed_provider,
         )
-    else:
-        func = partial(
-            _litellm_embedding,
-            model=cfg.model,
-            api_key=cfg.api_key,
-            base_url=cfg.base_url,
-        )
+
     return EmbeddingFunc(
         embedding_dim=cfg.dim,
         max_token_size=cfg.max_token_size,
-        func=func,
+        func=embed_func,
         model_name=cfg.model,
     )
 
@@ -174,23 +130,17 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
     if not rc.enabled:
         return None
 
-    if rc.backend == "llm":
-        # LLM-based reranking uses the ingest model
+    if rc.strategy == "llm_listwise":
         ingest_func = get_ingest_model_func_for_lightrag(config)
         return _build_llm_rerank_func(ingest_func, config)
+    if rc.strategy == "vlm_pointwise":
+        raise NotImplementedError("vlm_pointwise rerank not yet implemented")
 
-    # API-based rerankers
     return _build_api_rerank_func(rc)
 
 
 def _build_llm_rerank_func(ingest_func: Callable, config: DlightragConfig) -> Callable:
-    """LLM-based listwise reranker.
-
-    3-layer defense:
-    1. response_format=json_object (universal, replaces per-provider kwargs)
-    2. Prompt always instructs JSON format
-    3. Pydantic model_validate_json() as safety net
-    """
+    """LLM-based listwise reranker."""
     from dlightrag.models.schemas import RerankResult
     from dlightrag.utils.text import extract_json
 
@@ -223,7 +173,6 @@ def _build_llm_rerank_func(ingest_func: Callable, config: DlightragConfig) -> Ca
                 system_prompt="".join(system_parts),
                 response_format={"type": "json_object"},
             )
-
             parsed = RerankResult.model_validate_json(extract_json(result_str))
 
             seen: set[int] = set()
@@ -233,7 +182,6 @@ def _build_llm_rerank_func(ingest_func: Callable, config: DlightragConfig) -> Ca
                     seen.add(chunk.index)
                     results.append({"index": chunk.index, "relevance_score": chunk.relevance_score})
 
-            # Append any chunks LLM didn't return
             if len(results) < len(documents):
                 min_score = results[-1]["relevance_score"] if results else 0.5
                 for idx in range(len(documents)):
@@ -251,13 +199,12 @@ def _build_llm_rerank_func(ingest_func: Callable, config: DlightragConfig) -> Ca
 
 
 def _fallback_ranking(n: int) -> list[dict[str, float]]:
-    """Return original order ranking as fallback."""
     return [{"index": i, "relevance_score": 1.0 - i * 0.01} for i in range(n)]
 
 
 def _build_api_rerank_func(rc: Any) -> Callable:
     """Build API-based rerank function (cohere, jina, aliyun, azure_cohere)."""
-    if rc.backend == "azure_cohere":
+    if rc.strategy == "azure_cohere":
         return _build_azure_cohere_rerank_func(rc)
 
     from lightrag.rerank import ali_rerank, cohere_rerank, jina_rerank
@@ -267,14 +214,14 @@ def _build_api_rerank_func(rc: Any) -> Callable:
         "jina": jina_rerank,
         "aliyun": ali_rerank,
     }
-    selected_func = rerank_functions[rc.backend]
+    selected_func = rerank_functions[rc.strategy]
     kwargs: dict[str, Any] = {"api_key": rc.api_key, "model": rc.model}
     if rc.base_url:
         kwargs["base_url"] = rc.base_url
 
     logger.info(
-        "Reranker: backend=%s, model=%s, base_url=%s",
-        rc.backend,
+        "Reranker: strategy=%s, model=%s, base_url=%s",
+        rc.strategy,
         rc.model,
         rc.base_url or "(provider default)",
     )
