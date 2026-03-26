@@ -149,7 +149,8 @@ class PGJsonbKVStorage(BaseKVStorage):
                     blob_bytes = raw
             rows.append((self.workspace, self.namespace, k, json.dumps(v), blob_bytes))
         async with self._get_pool().acquire() as conn:
-            await conn.executemany(_UPSERT, rows)
+            async with conn.transaction():
+                await conn.executemany(_UPSERT, rows)
 
     @staticmethod
     def _parse_data(raw: Any) -> dict[str, Any]:
