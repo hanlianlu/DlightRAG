@@ -26,6 +26,7 @@ services:
     volumes:
       - dlightrag_data:/app/dlightrag_storage
       - ./src:/app/src:ro
+      - ./config.yaml:/app/config.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -47,6 +48,7 @@ services:
     volumes:
       - dlightrag_data:/app/dlightrag_storage
       - ./src:/app/src:ro
+      - ./config.yaml:/app/config.yaml:ro
     depends_on:
       postgres:
         condition: service_healthy
