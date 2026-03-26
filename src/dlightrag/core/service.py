@@ -442,26 +442,26 @@ class RAGService:
         # does asdict→deepcopy on embedding_func).
         from functools import partial
 
-        from dlightrag.unifiedrepresent.embedder import (
-            OpenAICompatProvider,
-            VisualEmbedder,
-            VoyageProvider,
-            httpx_text_embed,
+        from dlightrag.models.embedding import httpx_embed
+        from dlightrag.models.providers.embed_providers import (
+            OpenAICompatEmbedProvider,
+            VoyageEmbedProvider,
         )
+        from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 
         emb_base_url = config.embedding.base_url or ""
         emb_api_key = config.embedding.api_key or ""
 
         if "voyage" in config.embedding.model.lower():
-            embed_provider = VoyageProvider()
+            embed_provider = VoyageEmbedProvider()
         else:
-            embed_provider = OpenAICompatProvider()
+            embed_provider = OpenAICompatEmbedProvider()
 
         embedding_func = EmbeddingFunc(
             embedding_dim=config.embedding.dim,
             max_token_size=8192,
             func=partial(
-                httpx_text_embed,
+                httpx_embed,
                 model=config.embedding.model,
                 base_url=emb_base_url,
                 api_key=emb_api_key,
