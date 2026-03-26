@@ -1113,9 +1113,10 @@ class RAGService:
             return []
 
         logger.info(
-            "[MultiPath] Plan: paths=%s, has_filters=%s",
+            "[MultiPath] Plan: paths=%s, has_filters=%s, filters=%s",
             plan.paths,
             plan.metadata_filters is not None,
+            plan.metadata_filters,
         )
 
         chunks_vdb = None

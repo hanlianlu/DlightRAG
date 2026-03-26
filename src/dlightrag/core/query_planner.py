@@ -200,6 +200,11 @@ class QueryPlanner:
         if explicit_filter is not None and not _is_empty_filter(explicit_filter):
             plan.metadata_filter = self._merge_filters(explicit_filter, plan.metadata_filter)
 
+        logger.info(
+            "[Planner] result: standalone=%r, filter=%s",
+            plan.standalone_query[:60],
+            plan.metadata_filter,
+        )
         return plan
 
     def _parse_response(self, response: str, query: str) -> QueryPlan | None:
