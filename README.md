@@ -15,7 +15,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 - **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
 - **Knowledge graph + vector + visual retrieval** — Multi-strategy retrieval across knowledge graph and vector similarity [LightRAG](https://github.com/HKUDS/LightRAG), visual content, and dynamic metadata filters
 - **Multimodal ingestion** — PDF, Images, Office Documents from local filesystem, Azure Blob Storage etc.
-- **Broad LLM support** — Any OpenAI-compatible LLM endpoint, plus [100+ providers](https://docs.litellm.ai/docs/providers) via LiteLLM
+- **Broad LLM support** — Native SDKs for OpenAI, Anthropic, Gemini + any OpenAI-compatible endpoint
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
 - **Four interfaces** — Web UI, REST API, Python SDK, and MCP server
@@ -192,8 +192,8 @@ All caption mode parsers use Docling's HybridChunker for structure-aware chunkin
 | Table / equation captioning | chat model | — |
 | Entity extraction | chat model | chat model (VLM) |
 | Embedding | embedding model | embedding model (multimodal) |
-| Rerank (llm backend) | ingest/chat model | chat model (VLM, pointwise scoring) |
-| Rerank (API backend) | cohere/jina/aliyun API | cohere/jina/aliyun API |
+| Rerank (llm_listwise) | ingest/chat model | chat model (VLM, pointwise scoring) |
+| Rerank (API strategy) | cohere/jina/aliyun API | cohere/jina/aliyun API |
 | Answer generation | chat model | chat model (VLM, sees text excerpts + page images) |
 
 > **Important:** The chat model must support vision (multimodal/VLM). It doubles as the vision model for image captioning, VLM parser, unified mode, and multimodal queries. A text-only chat model will fail on these tasks.
@@ -216,12 +216,21 @@ embedding:
 
 ### Providers
 
-Two-track dispatch — choose per model block in `config.yaml`:
+Three native SDKs — choose per model block in `config.yaml`:
 
 | Provider | SDK | Use for |
 |----------|-----|---------|
 | `openai` (default) | AsyncOpenAI | OpenAI, Azure OpenAI, Qwen/DashScope, MiniMax, Ollama, Xinference, OpenRouter, any OpenAI-compatible endpoint |
-| `litellm` | LiteLLM | Anthropic, Google Gemini, and everything else via [LiteLLM model prefixes](https://docs.litellm.ai/docs/providers) |
+| `anthropic` | Anthropic SDK | Anthropic Claude models |
+| `gemini` | Google GenAI SDK | Google Gemini models |
+
+Optional providers require extra dependencies:
+
+```bash
+pip install dlightrag[anthropic]   # Anthropic SDK
+pip install dlightrag[gemini]      # Google GenAI SDK
+pip install dlightrag[all]         # all optional providers
+```
 
 ```yaml
 # config.yaml — OpenAI-compatible (Ollama example)
@@ -230,10 +239,15 @@ chat:
   model: qwen3:8b
   base_url: http://localhost:11434/v1
 
-# config.yaml — LiteLLM (Anthropic example)
+# config.yaml — Anthropic (native SDK)
 chat:
-  provider: litellm
-  model: anthropic/claude-sonnet-4-20250514
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+
+# config.yaml — Google Gemini (native SDK)
+chat:
+  provider: gemini
+  model: gemini-2.5-pro
 ```
 
 API keys go in `.env`:
@@ -273,14 +287,14 @@ Set in `config.yaml` under the `rerank:` block:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `rerank.backend` | `llm` | `llm`, `cohere`, `jina`, `aliyun`, `azure_cohere` |
-| `rerank.model` | (backend default) | Model name sent to the endpoint |
+| `rerank.strategy` | `llm_listwise` | `llm_listwise`, `cohere`, `jina`, `aliyun`, `azure_cohere` |
+| `rerank.model` | (strategy default) | Model name sent to the endpoint |
 | `rerank.base_url` | (provider default) | Custom endpoint URL for any compatible service |
 | `rerank.api_key` | — | Set in `.env` as `DLIGHTRAG_RERANK__API_KEY` |
 
-| Backend | Default model | API key |
+| Strategy | Default model | API key |
 |---------|---------------|---------|
-| `llm` | (uses ingest/chat model) | (reuses chat/ingest key) |
+| `llm_listwise` | (uses ingest/chat model) | (reuses chat/ingest key) |
 | `cohere` | `rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
 | `jina` | `jina-reranker-v3` | `DLIGHTRAG_RERANK__API_KEY` |
 | `aliyun` | `qwen3-rerank` | `DLIGHTRAG_RERANK__API_KEY` |

@@ -3,12 +3,9 @@
 
 from __future__ import annotations
 
-import pytest
-
 from dlightrag.core.retrieval.metadata_index import (
-    METADATA_FIELDS,
-    MetadataFieldDef,
     _UPSERT,
+    METADATA_FIELDS,
 )
 
 

@@ -8,9 +8,10 @@
 # ─────────────────────────────────────────────────────────────────
 # Models
 # ─────────────────────────────────────────────────────────────────
-# provider: "openai" (AsyncOpenAI SDK) or "litellm" (LiteLLM)
-#   openai  — OpenAI, Azure OpenAI, Qwen, MiniMax, Ollama, Xinference, OpenRouter
-#   litellm — Anthropic, Google Gemini, and everything else via litellm prefix
+# provider: "openai" (AsyncOpenAI SDK), "anthropic" (Anthropic SDK), or "gemini" (Google GenAI SDK)
+#   openai    — OpenAI, Azure OpenAI, Qwen, MiniMax, Ollama, Xinference, OpenRouter, any OpenAI-compatible endpoint
+#   anthropic — Anthropic Claude models (native SDK)
+#   gemini    — Google Gemini models (native SDK)
 #
 # IMPORTANT: chat model must support vision (multimodal/VLM).
 # It doubles as the vision model for: image captioning, VLM parser,
@@ -42,7 +43,7 @@ embedding:
 
 rerank:
   enabled: true
-  backend: llm                        # llm (uses ingest/chat model), cohere, jina, aliyun, azure_cohere
+  strategy: llm_listwise              # llm_listwise (uses ingest/chat model), cohere, jina, aliyun, azure_cohere
   # model:                            # defaults: cohere→rerank-v4.0-pro, jina→jina-reranker-v3
   score_threshold: 0.5
 
@@ -55,11 +56,11 @@ rerank:
 #     model: qwen3:8b
 #     base_url: http://host.docker.internal:11434/v1
 
-# Anthropic (via LiteLLM):
+# Anthropic (native SDK — requires: pip install dlightrag[anthropic]):
 
 #   chat:
-#     provider: litellm
-#     model: anthropic/claude-sonnet-4-20250514
+#     provider: anthropic
+#     model: claude-sonnet-4-20250514
 
 # Azure OpenAI:
 
