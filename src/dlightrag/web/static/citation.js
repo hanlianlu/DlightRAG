@@ -568,6 +568,24 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
                 _markOutOfContext(meta.history_kept);
             }
         } catch (e) { /* ignore */ }
+    } else if (eventType === 'progress') {
+        // Show phase status while waiting for first token
+        try {
+            const info = JSON.parse(data);
+            const labels = {
+                planning: 'Analyzing query…',
+                searching: 'Searching knowledge base…',
+                generating: 'Generating answer…',
+            };
+            const label = labels[info.phase] || info.phase;
+            // Only update if we haven't received tokens yet
+            const dot = contentDiv.querySelector('.streaming-dot');
+            if (dot) {
+                dot.textContent = '';
+                dot.className = 'streaming-dot progress-phase';
+                dot.setAttribute('data-phase', label);
+            }
+        } catch (_) { /* ignore */ }
     } else if (eventType === 'error') {
         contentDiv.textContent = data;
         contentDiv.style.color = '#c44';

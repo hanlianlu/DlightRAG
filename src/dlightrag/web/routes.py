@@ -109,22 +109,47 @@ async def answer_stream(
             history_kept = len(conversation_history) if conversation_history else 0
             yield f"event: meta\ndata: {json.dumps({'history_kept': history_kept})}\n\n"
 
-            # QueryPlanner handles rewriting + filter extraction in one LLM call
-            contexts, token_iter = await manager.aanswer_stream(
-                query=query,
+            # --- Phase 1: Query planning ---
+            yield f"event: progress\ndata: {json.dumps({'phase': 'planning'})}\n\n"
+
+            ws_list = workspaces or [workspace or manager._config.workspace]
+            planner = manager._get_query_planner()
+            plan = await planner.plan(
+                query,
                 conversation_history=conversation_history,
-                workspace=workspace,
-                workspaces=workspaces,
+                max_turns=manager._config.max_conversation_turns,
+                max_tokens=manager._config.max_conversation_tokens,
+            )
+            logger.info(
+                "Query plan: original=%r, standalone=%r",
+                plan.original_query[:60],
+                plan.standalone_query[:60],
+            )
+
+            # --- Phase 2: Retrieval ---
+            yield f"event: progress\ndata: {json.dumps({'phase': 'searching'})}\n\n"
+
+            retrieval = await manager.aretrieve(
+                query,
+                plan=plan,
+                workspaces=ws_list,
                 multimodal_content=multimodal_content,
+            )
+
+            # --- Phase 3: Answer generation (streaming) ---
+            yield f"event: progress\ndata: {json.dumps({'phase': 'generating'})}\n\n"
+
+            engine = manager._get_answer_engine()
+            contexts, token_iter = await engine.generate_stream(
+                plan.standalone_query,
+                retrieval.contexts,
             )
 
             # token_iter may be an AsyncIterator, a plain str, or None
             # depending on the RAG mode and provider capabilities.
-            #
-            # Tokens are JSON-encoded so newlines and special chars are
-            # properly escaped within the SSE data line.
             accumulated_text = ""
             last_preview_ts = 0.0
+            last_preview_len = 0
 
             if token_iter is None:
                 pass
@@ -138,10 +163,12 @@ async def answer_stream(
                     accumulated_text += chunk
                     yield f"event: token\ndata: {json.dumps(chunk)}\n\n"
                     now = time.monotonic()
-                    if now - last_preview_ts > 0.3:
+                    new_chars = len(accumulated_text) - last_preview_len
+                    if now - last_preview_ts > 0.3 and new_chars > 20:
                         preview_html = render_markdown(accumulated_text)
                         yield f"event: preview\ndata: {json.dumps(preview_html)}\n\n"
                         last_preview_ts = now
+                        last_preview_len = len(accumulated_text)
 
             # References extracted by AnswerStream post-stream
             refs = getattr(token_iter, "references", None) or []
@@ -180,8 +207,7 @@ async def answer_stream(
             )
             yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
 
-            # Highlight extraction (best-effort, async follow-up)
-            # Skip only when no chunk has text content at all.
+            # Highlight extraction (best-effort, short timeout since done is sent)
             has_text_chunks = any(
                 chunk.content for src in result.sources if src.chunks for chunk in src.chunks
             )
@@ -196,7 +222,7 @@ async def answer_stream(
                             answer_text=result.answer,
                             llm_func=llm_func,
                         ),
-                        timeout=15.0,
+                        timeout=5.0,
                     )
                     highlights_html = _render_partial(
                         "partials/source_panel.html",
@@ -204,7 +230,7 @@ async def answer_stream(
                     )
                     yield f"event: highlights\ndata: {json.dumps(highlights_html)}\n\n"
                 except TimeoutError:
-                    logger.warning("Highlight extraction timed out, skipping")
+                    logger.warning("Highlight extraction timed out (5s), skipping")
                 except Exception:
                     logger.warning("Highlight extraction failed", exc_info=True)
 

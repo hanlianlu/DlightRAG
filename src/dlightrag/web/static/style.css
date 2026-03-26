@@ -639,6 +639,32 @@ body {
     50% { opacity: 1; }
 }
 
+.streaming-dot.progress-phase {
+    width: auto;
+    height: auto;
+    background: none;
+    border-radius: 0;
+    animation: none;
+    font-size: 0.85rem;
+    color: var(--text-400, #888);
+}
+
+.streaming-dot.progress-phase::before {
+    content: attr(data-phase);
+}
+
+.streaming-dot.progress-phase::after {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    background: var(--gold-200);
+    border-radius: 50%;
+    margin-left: 6px;
+    vertical-align: middle;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
 /* === Toast === */
 
 .toast {
