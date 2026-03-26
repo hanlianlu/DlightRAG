@@ -178,17 +178,10 @@ async def answer_stream(
                         last_preview_ts = now
                         last_preview_len = len(accumulated_text)
 
-            # References extracted by AnswerStream post-stream
-            refs = getattr(token_iter, "references", None) or []
+            # AnswerStream cleans invalid citations; use its answer if available
             clean_answer = getattr(token_iter, "answer", None) or full_answer
 
-            logger.info("[WebUI] SSE: refs_count=%d", len(refs))
-
-            if refs:
-                refs_data = [r.model_dump() for r in refs]
-                yield f"event: references\ndata: {json.dumps(refs_data)}\n\n"
-
-            # Build cited-only sources (clean_answer has refs section stripped)
+            # Build cited-only sources
             flat_contexts = []
             for items in contexts.values():
                 if isinstance(items, list):

@@ -7,8 +7,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
-from dlightrag.citations.parser import clean_invalid_citations, extract_references
-from dlightrag.models.schemas import Reference
+from dlightrag.citations.parser import clean_invalid_citations
 
 if TYPE_CHECKING:
     from dlightrag.citations.indexer import CitationIndexer
@@ -17,20 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 class AnswerStream(AsyncIterator[str]):
-    """Async iterator that passes through tokens and validates citations post-stream.
+    """Async iterator that passes through tokens and cleans citations post-stream.
 
     Yields all tokens as-is for real-time display. After the stream ends,
-    ``self.references`` contains extracted references and ``self.answer``
-    contains the cleaned answer text (reference sections stripped, invalid
-    citations removed).
+    ``self.answer`` contains the cleaned answer text (invalid citations
+    referencing non-existent chunks/docs are removed).
 
     When an ``indexer`` is provided (from the answer engine), invalid
-    citations that reference non-existent chunks/docs are cleaned from
-    the final answer.  This ensures the streaming path produces the same
-    citation quality as the non-streaming path.
-
-    Consumers should use ``self.answer`` (not locally accumulated text) for
-    post-stream processing like CitationProcessor.
+    citations are cleaned from the final answer. This ensures the streaming
+    path produces the same citation quality as the non-streaming path.
     """
 
     def __init__(
@@ -43,7 +37,6 @@ class AnswerStream(AsyncIterator[str]):
         self._indexer = indexer
         self._parts: list[str] = []
         self._gen = self._iterate()
-        self.references: list[Reference] = []
         self.answer: str = ""
 
     def __aiter__(self) -> AsyncIterator[str]:
@@ -59,14 +52,12 @@ class AnswerStream(AsyncIterator[str]):
 
         full = "".join(self._parts)
 
-        # Clean invalid citations when indexer is available
         if self._indexer is not None:
             full = clean_invalid_citations(self._indexer, full)
 
-        self.answer, self.references = extract_references(full)
+        self.answer = full
         logger.info(
-            "[AnswerStream] Post-stream extraction: refs=%d, answer_len=%d, validated=%s",
-            len(self.references),
+            "[AnswerStream] Post-stream: answer_len=%d, validated=%s",
             len(self.answer),
             self._indexer is not None,
         )
