@@ -109,6 +109,9 @@ async def answer_stream(
             history_kept = len(conversation_history) if conversation_history else 0
             yield f"event: meta\ndata: {json.dumps({'history_kept': history_kept})}\n\n"
 
+            t0 = time.monotonic()
+            logger.info("[SSE] query received: %s", query[:80])
+
             # --- Phase 1: Query planning ---
             yield f"event: progress\ndata: {json.dumps({'phase': 'planning'})}\n\n"
 
@@ -120,8 +123,10 @@ async def answer_stream(
                 max_turns=manager._config.max_conversation_turns,
                 max_tokens=manager._config.max_conversation_tokens,
             )
+            t1 = time.monotonic()
             logger.info(
-                "Query plan: original=%r, standalone=%r",
+                "[SSE] planning done (%.1fs): original=%r, standalone=%r",
+                t1 - t0,
                 plan.original_query[:60],
                 plan.standalone_query[:60],
             )
@@ -135,6 +140,8 @@ async def answer_stream(
                 workspaces=ws_list,
                 multimodal_content=multimodal_content,
             )
+            t2 = time.monotonic()
+            logger.info("[SSE] retrieval done (%.1fs)", t2 - t1)
 
             # --- Phase 3: Answer generation (streaming) ---
             yield f"event: progress\ndata: {json.dumps({'phase': 'generating'})}\n\n"
@@ -144,6 +151,7 @@ async def answer_stream(
                 plan.standalone_query,
                 retrieval.contexts,
             )
+            logger.info("[SSE] stream started (%.1fs since retrieval)", time.monotonic() - t2)
 
             # token_iter may be an AsyncIterator, a plain str, or None
             # depending on the RAG mode and provider capabilities.
