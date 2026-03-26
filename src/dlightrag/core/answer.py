@@ -27,7 +27,6 @@ from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.streaming import AnswerStream
 from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
-from dlightrag.utils.logging import log_answer_llm_output, log_references
 
 logger = logging.getLogger(__name__)
 
@@ -80,12 +79,6 @@ class AnswerEngine:
             query[:60],
         )
 
-        log_answer_llm_output(
-            "answer_engine.generate",
-            structured=False,
-            query=query,
-        )
-
         raw = await self.model_func(messages=messages)
 
         logger.info(
@@ -118,12 +111,6 @@ class AnswerEngine:
             Reference(id=i + 1, title=s.title or s.path) for i, s in enumerate(processed.sources)
         ]
 
-        log_references(
-            "answer_engine.generate",
-            references,
-            query=query,
-        )
-
         return RetrievalResult(
             answer=processed.answer,
             contexts=contexts,
@@ -153,12 +140,6 @@ class AnswerEngine:
             "[AE] generate_stream: chunks=%d query=%s",
             len(contexts.get("chunks", [])),
             query[:60],
-        )
-
-        log_answer_llm_output(
-            "answer_engine.generate_stream",
-            structured=False,
-            query=query,
         )
 
         token_iterator = await self.model_func(messages=messages, stream=True)

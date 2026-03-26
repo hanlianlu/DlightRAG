@@ -553,50 +553,6 @@ class TestAnswerEngineHelpers:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngine -- Logging
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerEngineLogging:
-    """Test that logging functions are called correctly."""
-
-    @pytest.mark.asyncio
-    async def test_generate_calls_log_answer_llm_output(self) -> None:
-        raw = "answer\n\n### References\n- [1] report.pdf"
-        model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
-
-        with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
-            await engine.generate("query", _text_contexts())
-            # Called once before LLM call (refs now via CitationProcessor, not parse)
-            assert mock_log.call_count >= 1
-
-    @pytest.mark.asyncio
-    async def test_generate_calls_log_references(self) -> None:
-        raw = "answer\n\n### References\n- [1] report.pdf"
-        model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
-
-        with patch("dlightrag.core.answer.log_references") as mock_log:
-            await engine.generate("query", _text_contexts())
-            mock_log.assert_called_once()
-            assert mock_log.call_args[0][0] == "answer_engine.generate"
-
-    @pytest.mark.asyncio
-    async def test_generate_stream_calls_log_answer_llm_output(self) -> None:
-        async def mock_stream():
-            yield "token"
-
-        model_func = AsyncMock(return_value=mock_stream())
-        engine = AnswerEngine(model_func=model_func)
-
-        with patch("dlightrag.core.answer.log_answer_llm_output") as mock_log:
-            await engine.generate_stream("query", _text_contexts())
-            mock_log.assert_called_once()
-            assert mock_log.call_args[0][0] == "answer_engine.generate_stream"
-
-
-# ---------------------------------------------------------------------------
 # TestAnswerEngine -- Freetext reference parsing
 # ---------------------------------------------------------------------------
 
