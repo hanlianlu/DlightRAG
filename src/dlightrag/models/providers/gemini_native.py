@@ -152,7 +152,7 @@ class GeminiProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str, None]:  # type: ignore
         model_id, contents, config = self._build_args(
             messages,
             model,

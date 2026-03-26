@@ -67,7 +67,7 @@ class OpenAICompatProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[str, None]:  # type: ignore
         call_kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
