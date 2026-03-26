@@ -41,7 +41,7 @@ def _find_yaml_config() -> Path | None:
 class ModelConfig(BaseModel):
     """Reusable model configuration block."""
 
-    provider: Literal["openai", "litellm"] = "openai"
+    provider: Literal["openai", "anthropic", "gemini"] = "openai"
     model: str
     api_key: str | None = None
     base_url: str | None = None
@@ -51,23 +51,37 @@ class ModelConfig(BaseModel):
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
-class EmbeddingConfig(ModelConfig):
+class EmbeddingConfig(BaseModel):
     """Embedding-specific configuration."""
 
+    provider: str | None = None  # None = auto-detect from model/base_url
     model: str = "text-embedding-3-large"
+    api_key: str | None = None
+    base_url: str | None = None
     dim: int = 1024
     max_token_size: int = 8192
 
 
 class RerankConfig(BaseModel):
-    """Reranking configuration (independent provider system)."""
+    """Reranking configuration."""
 
     enabled: bool = True
-    backend: Literal["llm", "cohere", "jina", "aliyun", "azure_cohere"] = "llm"
+    strategy: Literal[
+        "llm_listwise",
+        "vlm_pointwise",
+        "cohere",
+        "jina",
+        "aliyun",
+        "azure_cohere",
+    ] = "llm_listwise"
+    provider: Literal["openai", "anthropic", "gemini"] | None = None
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
     score_threshold: float = 0.5
+    max_concurrency: int = 4
+    temperature: float | None = None
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
 class DlightragConfig(BaseSettings):
@@ -246,7 +260,10 @@ class DlightragConfig(BaseSettings):
     max_relation_tokens: int = Field(default=8000)
     max_total_tokens: int = Field(default=40000)
     default_mode: Literal["local", "global", "hybrid", "naive", "mix"] = Field(default="mix")
-    rrf_k: int = Field(default=60, description="RRF fusion parameter k for multi-path retrieval")
+    rrf_k: int = Field(
+        default=60,
+        description="RRF fusion parameter k for multi-path retrieval (60 recommended for naive/hybrid modes)",
+    )
     max_conversation_turns: int = Field(default=50)
     max_conversation_tokens: int = Field(default=150000)
 
