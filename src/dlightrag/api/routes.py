@@ -190,15 +190,8 @@ async def answer(
                     full_answer += chunk
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
 
-            # References extracted by AnswerStream post-stream
-            refs = getattr(token_iter, "references", None) or []
-            # Use cleaned answer for downstream processing (JSON/ref sections stripped)
+            # AnswerStream cleans invalid citations; use its answer if available
             clean_answer = getattr(token_iter, "answer", None) or full_answer
-
-            logger.info("[API] SSE: refs_count=%d", len(refs))
-
-            refs_data = [r.model_dump() for r in refs]
-            yield f"data: {json.dumps({'type': 'references', 'data': refs_data}, ensure_ascii=False)}\n\n"
 
             # Build cited-only sources
             flat_contexts: list[dict[str, Any]] = []

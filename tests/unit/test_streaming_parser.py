@@ -24,8 +24,8 @@ class TestAnswerStream:
             parts.append(token)
         assert "".join(parts) == "Hello world."
 
-    async def test_extracts_references_from_freetext(self) -> None:
-        """Post-stream extraction finds ### References section."""
+    async def test_answer_preserves_full_text(self) -> None:
+        """Post-stream .answer contains the full accumulated text."""
 
         async def fake_stream():
             yield "Growth is 15% [1].\n\n"
@@ -33,33 +33,12 @@ class TestAnswerStream:
             yield "- [1] report.pdf"
 
         stream = AnswerStream(fake_stream())
-        parts = []
-        async for token in stream:
-            parts.append(token)
-        assert len(stream.references) == 1
-        assert stream.references[0].title == "report.pdf"
-        assert "### References" not in stream.answer
+        async for _ in stream:
+            pass
+        assert stream.answer == "Growth is 15% [1].\n\n### References\n- [1] report.pdf"
 
-    async def test_extracts_references_from_json_block(self) -> None:
-        """Post-stream extraction finds trailing JSON block."""
-
-        async def fake_stream():
-            yield "Based on the data [1-1].\n\n"
-            yield '{"answer": "Based on the data [1-1].", '
-            yield '"references": [{"id": 1, "title": "report.pdf"}]}'
-
-        stream = AnswerStream(fake_stream())
-        parts = []
-        async for token in stream:
-            parts.append(token)
-        # Raw stream includes JSON (inherent streaming limitation)
-        assert '{"answer"' in "".join(parts)
-        # But .answer is cleaned
-        assert '{"answer"' not in stream.answer
-        assert len(stream.references) == 1
-
-    async def test_no_references(self) -> None:
-        """Plain text -- empty references, answer equals full text."""
+    async def test_no_references_attr(self) -> None:
+        """AnswerStream no longer exposes .references."""
 
         async def fake_stream():
             yield "Just a plain answer."
@@ -67,7 +46,7 @@ class TestAnswerStream:
         stream = AnswerStream(fake_stream())
         async for _ in stream:
             pass
-        assert stream.references == []
+        assert not hasattr(stream, "references")
         assert stream.answer == "Just a plain answer."
 
     async def test_empty_stream(self) -> None:
@@ -82,7 +61,6 @@ class TestAnswerStream:
         async for token in stream:
             parts.append(token)
         assert parts == []
-        assert stream.references == []
         assert stream.answer == ""
 
 
@@ -92,7 +70,6 @@ class TestAnswerStreamCitationValidation:
 
     async def test_invalid_citations_cleaned_with_indexer(self) -> None:
         """When indexer is provided, invalid citations are removed from answer."""
-        # Build an indexer with only ref_id=1, chunk_idx=1
         indexer = CitationIndexer()
         indexer.build_index(
             [
@@ -107,32 +84,24 @@ class TestAnswerStreamCitationValidation:
 
         async def fake_stream():
             # [1-1] is valid, [9-9] is invalid
-            yield "Valid citation [1-1] and invalid [9-9].\n\n"
-            yield "### References\n"
-            yield "- [1] report.pdf"
+            yield "Valid citation [1-1] and invalid [9-9]."
 
         stream = AnswerStream(fake_stream(), indexer=indexer)
         async for _ in stream:
             pass
 
-        # Invalid citation should be removed
-        assert "[1-1]" in stream.answer or "[1]" in stream.answer
+        assert "[1-1]" in stream.answer
         assert "[9-9]" not in stream.answer
-        assert len(stream.references) == 1
 
     async def test_no_indexer_passes_through_all_citations(self) -> None:
-        """Without indexer, all citations pass through (backward compat)."""
+        """Without indexer, all citations pass through."""
 
         async def fake_stream():
-            yield "Citation [1-1] and [9-9].\n\n"
-            yield "### References\n"
-            yield "- [1] report.pdf\n"
-            yield "- [9] phantom.pdf"
+            yield "Citation [1-1] and [9-9]."
 
         stream = AnswerStream(fake_stream())
         async for _ in stream:
             pass
 
-        # Both citations remain
-        assert "[1-1]" in stream.answer or "[1]" in stream.answer
-        assert "[9-9]" in stream.answer or "[9]" in stream.answer
+        assert "[1-1]" in stream.answer
+        assert "[9-9]" in stream.answer
