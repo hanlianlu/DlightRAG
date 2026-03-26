@@ -97,11 +97,11 @@ answer generation uses the image descriptions as the question context.
 
 ### Reranking
 
-Two backends, configured via `rerank_backend`:
+Two strategies, configured via `rerank.strategy`:
 
-| Backend | How it works |
+| Strategy | How it works |
 |---------|-------------|
-| `llm` | VLM pointwise scoring: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Uses `response_format=json_object` for structured output. |
+| `llm_listwise` | VLM pointwise scoring: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Uses `response_format=json_object` for structured output. |
 | API (`rerank_base_url`) | Calls external OpenAI-compatible `/rerank` endpoint with query + page images. |
 
 Post-rerank filtering removes chunks below `rerank_score_threshold` (default
@@ -185,7 +185,7 @@ query + multimodal_content
 | Page representation | Original page images (base64) | OCR text captions |
 | Visual vector search | Yes (multimodal embedding) | No |
 | Visual resolution | chunk_id → page image via KV (text-only chunks kept) | N/A |
-| Reranking | VLM pointwise or external API | LightRAG built-in (text) |
+| Reranking | llm_listwise (VLM pointwise) or external API | LightRAG built-in (text) |
 | Answer model | VLM (sees text excerpts + page images) | LLM (text-only) |
 | Dual-path retrieval | Yes (text + visual embedding) | No (text only) |
 | Structured output | Provider-dependent JSON schema | N/A (LightRAG controls) |

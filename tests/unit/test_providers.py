@@ -81,7 +81,8 @@ class TestAnthropicProvider:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             p._client = None
             await p.complete(
-                [{"role": "user", "content": "hi"}], "claude-sonnet-4-20250514",
+                [{"role": "user", "content": "hi"}],
+                "claude-sonnet-4-20250514",
                 model_kwargs={"thinking": {"type": "enabled", "budget_tokens": 1024}},
             )
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
@@ -98,7 +99,8 @@ class TestAnthropicProvider:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             p._client = None
             await p.complete(
-                [{"role": "user", "content": "hi"}], "claude-sonnet-4-20250514",
+                [{"role": "user", "content": "hi"}],
+                "claude-sonnet-4-20250514",
                 response_format={"type": "json_object"},
             )
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
@@ -125,7 +127,8 @@ class TestOpenAICompatProvider:
             create_mock = AsyncMock(return_value=mock_response)
             mock_client.return_value.chat.completions.create = create_mock
             await p.complete(
-                [{"role": "user", "content": "hi"}], "gpt-4.1",
+                [{"role": "user", "content": "hi"}],
+                "gpt-4.1",
                 model_kwargs={"enable_thinking": True},
             )
             call_kwargs = create_mock.call_args[1]
@@ -189,9 +192,8 @@ class TestGeminiProvider:
                 "gemini-2.0-flash",
             )
             call_args = mock_client.models.generate_content.call_args
-            contents = call_args[1].get("contents", call_args[0][1] if len(call_args[0]) > 1 else None)
-            # Verify assistant → model role mapping
-            assert any(
-                c.get("role") == "model" for c in contents
-                if isinstance(c, dict)
+            contents = call_args[1].get(
+                "contents", call_args[0][1] if len(call_args[0]) > 1 else None
             )
+            # Verify assistant → model role mapping
+            assert any(c.get("role") == "model" for c in contents if isinstance(c, dict))

@@ -7,10 +7,9 @@ import pytest
 
 from dlightrag.models.providers.embed_base import EmbedProvider
 from dlightrag.models.providers.embed_providers import (
+    OllamaEmbedProvider,
     OpenAICompatEmbedProvider,
     VoyageEmbedProvider,
-    JinaEmbedProvider,
-    OllamaEmbedProvider,
     detect_embed_provider,
 )
 
