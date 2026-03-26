@@ -32,6 +32,8 @@ class TestUpsertAndGet:
         """Upsert calls executemany with INSERT ... ON CONFLICT DO UPDATE."""
         storage = _make_storage()
         mock_conn = AsyncMock()
+        mock_txn = AsyncMock()
+        mock_conn.transaction = MagicMock(return_value=mock_txn)
         storage._pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
         storage._pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
