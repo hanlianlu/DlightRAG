@@ -59,12 +59,21 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
         max_retries=cfg.max_retries,
     )
 
-    async def completion_wrapper(messages: list[dict[str, Any]], **kw: Any) -> str:
+    async def completion_wrapper(messages: list[dict[str, Any]], **kw: Any) -> Any:
+        stream = kw.pop("stream", False)
+        model_kwargs = {**cfg.model_kwargs, **kw}
+        if stream:
+            return provider.stream(
+                messages=messages,
+                model=cfg.model,
+                temperature=cfg.temperature,
+                model_kwargs=model_kwargs,
+            )
         return await provider.complete(
             messages=messages,
             model=cfg.model,
             temperature=cfg.temperature,
-            model_kwargs={**cfg.model_kwargs, **kw},
+            model_kwargs=model_kwargs,
         )
 
     return partial(completion_wrapper)
