@@ -155,7 +155,10 @@ class QueryPlanner:
         history = self._truncate_history(conversation_history, max_turns, max_tokens)
 
         # Refresh schema (TTL-cached)
+        t0 = time.monotonic()
         schema = await self._refresh_schema()
+        t1 = time.monotonic()
+        logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
 
         # Build prompt
         schema_section = _build_schema_section(schema)
@@ -181,8 +184,11 @@ class QueryPlanner:
                     {"role": "user", "content": query},
                 ]
             )
+            logger.info("[Planner] LLM call: %.1fs", time.monotonic() - t1)
         except Exception:
-            logger.warning("QueryPlanner LLM call failed", exc_info=True)
+            logger.warning(
+                "QueryPlanner LLM call failed (%.1fs)", time.monotonic() - t1, exc_info=True
+            )
             return fallback
 
         # Parse response
