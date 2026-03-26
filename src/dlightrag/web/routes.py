@@ -50,8 +50,9 @@ def _render_partial(name: str, **ctx: Any) -> str:
 async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""
     return templates.TemplateResponse(
+        request,
         "index.html",
-        {"request": request, "workspace": workspace},
+        {"workspace": workspace},
     )
 
 
@@ -265,8 +266,9 @@ async def file_list(request: Request, workspace: str = Depends(get_workspace)):
         files = []
 
     return templates.TemplateResponse(
+        request,
         "partials/file_list.html",
-        {"request": request, "files": files, "workspace": workspace},
+        {"files": files, "workspace": workspace},
     )
 
 
@@ -398,8 +400,9 @@ async def workspace_list(request: Request, workspace: str = Depends(get_workspac
         workspaces = ["default"]
 
     return templates.TemplateResponse(
+        request,
         "partials/workspace_list.html",
-        {"request": request, "workspaces": workspaces, "current_workspace": workspace},
+        {"workspaces": workspaces, "current_workspace": workspace},
     )
 
 
