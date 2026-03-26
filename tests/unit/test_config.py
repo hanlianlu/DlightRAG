@@ -19,9 +19,9 @@ class TestModelConfig:
         assert cfg.max_retries == 3
         assert cfg.model_kwargs == {}
 
-    def test_litellm_provider(self):
-        cfg = ModelConfig(provider="litellm", model="anthropic/claude-3")
-        assert cfg.provider == "litellm"
+    def test_anthropic_provider(self):
+        cfg = ModelConfig(provider="anthropic", model="claude-3-5-sonnet")
+        assert cfg.provider == "anthropic"
 
     def test_invalid_provider(self):
         with pytest.raises(ValidationError):
@@ -38,7 +38,7 @@ class TestEmbeddingConfig:
         assert cfg.model == "text-embedding-3-large"
         assert cfg.dim == 1024
         assert cfg.max_token_size == 8192
-        assert cfg.provider == "openai"
+        assert cfg.provider is None
 
     def test_custom(self):
         cfg = EmbeddingConfig(model="custom-embed", dim=768, max_token_size=4096)
@@ -50,13 +50,13 @@ class TestRerankConfig:
     def test_defaults(self):
         cfg = RerankConfig()
         assert cfg.enabled is True
-        assert cfg.backend == "llm"
+        assert cfg.strategy == "llm_listwise"
         assert cfg.model is None
         assert cfg.score_threshold == 0.5
 
-    def test_cohere_backend(self):
-        cfg = RerankConfig(backend="cohere", model="rerank-v4.0-pro", api_key="key")
-        assert cfg.backend == "cohere"
+    def test_cohere_strategy(self):
+        cfg = RerankConfig(strategy="cohere", model="rerank-v4.0-pro", api_key="key")
+        assert cfg.strategy == "cohere"
 
 
 class TestDlightragConfigNested:
@@ -88,11 +88,11 @@ class TestDlightragConfigNested:
     def test_ingest_explicit(self):
         cfg = DlightragConfig(
             chat=ModelConfig(model="gpt-4.1-mini", api_key="sk-chat"),
-            ingest=ModelConfig(provider="litellm", model="ollama/qwen3:8b"),
+            ingest=ModelConfig(provider="anthropic", model="claude-3-5-sonnet"),
             embedding=EmbeddingConfig(api_key="sk-test"),
         )
-        assert cfg.ingest.provider == "litellm"
-        assert cfg.ingest.model == "ollama/qwen3:8b"
+        assert cfg.ingest.provider == "anthropic"
+        assert cfg.ingest.model == "claude-3-5-sonnet"
 
     def test_env_var_nested(self, monkeypatch):
         """Test env var override with __ delimiter."""
