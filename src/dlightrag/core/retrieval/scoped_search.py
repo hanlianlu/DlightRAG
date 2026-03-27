@@ -101,7 +101,7 @@ async def _milvus_scoped_search(
     try:
         query_vec = await _embed_query(chunks_vdb, query)
         client = chunks_vdb._client
-        collection = chunks_vdb._collection_name
+        collection = chunks_vdb.final_namespace
 
         id_list_str = ", ".join(f'"{cid}"' for cid in chunk_ids)
         filter_expr = f"id in [{id_list_str}]"
@@ -133,7 +133,7 @@ async def _qdrant_scoped_search(
 
         query_vec = await _embed_query(chunks_vdb, query)
         client = chunks_vdb._client
-        collection = chunks_vdb._collection_name
+        collection = chunks_vdb.final_namespace
 
         results = client.query_points(
             collection_name=collection,
