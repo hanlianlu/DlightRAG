@@ -16,21 +16,48 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MetadataFieldDef:
-    """Defines a metadata column in dlightrag_doc_metadata."""
+    """Defines a metadata column in dlightrag_doc_metadata.
+
+    Attributes:
+        trigram: Use pg_trgm similarity() for fuzzy matching (requires gin_trgm index).
+        searchable: Eligible for query filtering.
+    """
 
     field_id: str
     pg_type: str
     filterable: bool = False
+    searchable: bool = False
+    trigram: bool = False
     index_type: str | None = None
 
 
 METADATA_FIELDS: list[MetadataFieldDef] = [
-    MetadataFieldDef("filename", "VARCHAR(512)", filterable=True, index_type="gin_trgm"),
-    MetadataFieldDef("filename_stem", "VARCHAR(512)", filterable=True, index_type="gin_trgm"),
+    MetadataFieldDef(
+        "filename",
+        "VARCHAR(512)",
+        filterable=True,
+        searchable=True,
+        trigram=True,
+        index_type="gin_trgm",
+    ),
+    MetadataFieldDef(
+        "filename_stem",
+        "VARCHAR(512)",
+        filterable=True,
+        searchable=True,
+        trigram=True,
+        index_type="gin_trgm",
+    ),
     MetadataFieldDef("file_path", "TEXT"),
-    MetadataFieldDef("file_extension", "VARCHAR(32)", filterable=True, index_type="btree"),
-    MetadataFieldDef("doc_title", "TEXT", filterable=True, index_type="gin_trgm"),
-    MetadataFieldDef("doc_author", "VARCHAR(255)", filterable=True, index_type="btree"),
+    MetadataFieldDef(
+        "file_extension", "VARCHAR(32)", filterable=True, searchable=True, index_type="btree"
+    ),
+    MetadataFieldDef(
+        "doc_title", "TEXT", filterable=True, searchable=True, trigram=True, index_type="gin_trgm"
+    ),
+    MetadataFieldDef(
+        "doc_author", "VARCHAR(255)", filterable=True, searchable=True, index_type="btree"
+    ),
     MetadataFieldDef("creation_date", "TIMESTAMPTZ", filterable=True, index_type="btree"),
     MetadataFieldDef("original_format", "VARCHAR(32)"),
     MetadataFieldDef("page_count", "INTEGER"),
@@ -38,6 +65,12 @@ METADATA_FIELDS: list[MetadataFieldDef] = [
     MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),
     MetadataFieldDef("custom_metadata", "JSONB DEFAULT '{}'", filterable=True, index_type="gin"),
 ]
+
+_TRIGRAM_THRESHOLD = 0.3
+_INTEGER_PG_TYPES = frozenset({"INTEGER", "BIGINT", "SMALLINT", "INT"})
+
+# Field lookup by id for search dispatching
+_FIELD_BY_ID: dict[str, MetadataFieldDef] = {f.field_id: f for f in METADATA_FIELDS}
 
 # System field names for upsert partitioning
 _SYSTEM_FIELDS = frozenset(f.field_id for f in METADATA_FIELDS if f.field_id != "custom_metadata")
@@ -149,31 +182,47 @@ class PGMetadataIndex:
             )
 
     async def query(self, filters: MetadataFilter) -> list[str]:
-        """Query for doc_ids matching the given filters."""
-        conditions = ["workspace = $1"]
+        """Query for doc_ids matching the given filters.
+
+        Match strategy per field type:
+        - trigram fields: similarity() > threshold (fuzzy, handles typos/variants)
+        - btree string fields: exact match (case-insensitive)
+        - integer fields: exact match
+        - date fields: range queries (from/to)
+        - JSONB: containment (@>)
+        - filename_pattern: ILIKE with user-provided wildcards
+        """
+        conditions: list[str] = ["workspace = $1"]
         params: list[Any] = [self._workspace]
         idx = 2
 
-        if filters.filename:
-            conditions.append(f"LOWER(filename) LIKE LOWER(${idx})")
-            params.append(f"%{filters.filename}%")
+        # Searchable fields — dispatch by field type
+        for attr in ("filename", "filename_stem", "file_extension", "doc_title", "doc_author"):
+            value = getattr(filters, attr, None)
+            if value is None:
+                continue
+            fdef = _FIELD_BY_ID.get(attr)
+            if fdef is None:
+                continue
+            if fdef.trigram:
+                conditions.append(f"similarity({attr}, ${idx}) > {_TRIGRAM_THRESHOLD}")
+                params.append(value)
+            elif fdef.pg_type.upper() in _INTEGER_PG_TYPES:
+                conditions.append(f"{attr} = ${idx}")
+                params.append(value)
+            else:
+                # btree / non-trigram string: exact case-insensitive
+                conditions.append(f"LOWER({attr}) = LOWER(${idx})")
+                params.append(value)
             idx += 1
+
+        # Filename pattern (ILIKE with user wildcards)
         if filters.filename_pattern:
             conditions.append(f"filename ILIKE ${idx}")
             params.append(filters.filename_pattern)
             idx += 1
-        if filters.file_extension:
-            conditions.append(f"LOWER(file_extension) = LOWER(${idx})")
-            params.append(filters.file_extension)
-            idx += 1
-        if filters.doc_title:
-            conditions.append(f"doc_title ILIKE ${idx}")
-            params.append(f"%{filters.doc_title}%")
-            idx += 1
-        if filters.doc_author:
-            conditions.append(f"LOWER(doc_author) = LOWER(${idx})")
-            params.append(filters.doc_author)
-            idx += 1
+
+        # Date range
         if filters.date_from:
             conditions.append(f"creation_date >= ${idx}")
             params.append(filters.date_from)
@@ -182,10 +231,14 @@ class PGMetadataIndex:
             conditions.append(f"creation_date <= ${idx}")
             params.append(filters.date_to)
             idx += 1
+
+        # Exact enum match
         if filters.rag_mode:
             conditions.append(f"rag_mode = ${idx}")
             params.append(filters.rag_mode)
             idx += 1
+
+        # JSONB containment
         if filters.custom:
             conditions.append(f"custom_metadata @> ${idx}::jsonb")
             params.append(json.dumps(filters.custom))
@@ -195,6 +248,39 @@ class PGMetadataIndex:
         sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
+
+        doc_ids = [r["doc_id"] for r in rows]
+
+        # Fallback: if strict trigram/exact returned 0, retry with ILIKE
+        if not doc_ids and len(conditions) > 1:
+            doc_ids = await self._fallback_ilike_query(filters)
+
+        return doc_ids
+
+    async def _fallback_ilike_query(self, filters: MetadataFilter) -> list[str]:
+        """Relaxed fallback: retry text fields with ILIKE instead of trigram/exact."""
+        conditions: list[str] = ["workspace = $1"]
+        params: list[Any] = [self._workspace]
+        idx = 2
+
+        for attr in ("filename", "doc_title", "doc_author"):
+            value = getattr(filters, attr, None)
+            if value is None:
+                continue
+            conditions.append(f"{attr} ILIKE ${idx}")
+            params.append(f"%{value}%")
+            idx += 1
+
+        if len(conditions) <= 1:
+            return []
+
+        where = " AND ".join(conditions)
+        sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        if rows:
+            logger.info("Metadata fallback (ILIKE): %d doc(s) found", len(rows))
         return [r["doc_id"] for r in rows]
 
     async def get(self, doc_id: str) -> dict[str, Any] | None:
