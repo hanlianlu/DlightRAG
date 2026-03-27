@@ -73,24 +73,36 @@ services:
       - "shared_preload_libraries=age"
       # Memory
       - "-c"
-      - "shared_buffers=6GB"
+      - "shared_buffers=8GB"
       - "-c"
       - "work_mem=256MB"
       - "-c"
       - "maintenance_work_mem=2GB"
       - "-c"
-      - "effective_cache_size=16GB"
+      - "effective_cache_size=18GB"
       # SSD / IO
       - "-c"
       - "random_page_cost=1.1"
       - "-c"
       - "effective_io_concurrency=200"
-      # WAL
+      # WAL (single-instance, no replication)
       - "-c"
       - "wal_buffers=16MB"
+      - "-c"
+      - "wal_level=minimal"
+      - "-c"
+      - "max_wal_senders=0"
       # Parallelism
       - "-c"
       - "max_parallel_workers_per_gather=4"
+      - "-c"
+      - "max_parallel_maintenance_workers=4"
+      # Connections
+      - "-c"
+      - "max_connections=50"
+      # Disable JIT (no benefit for vector/JSONB workloads, saves compilation overhead)
+      - "-c"
+      - "jit=off"
       # Docker
       - "-c"
       - "huge_pages=off"
