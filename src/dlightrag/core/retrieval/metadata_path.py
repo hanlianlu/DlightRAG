@@ -6,9 +6,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from dlightrag.core.retrieval.metadata_index import PGMetadataIndex
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.scoped_search import scoped_vector_search
+from dlightrag.storage.metadata_index import PGMetadataIndex
 
 logger = logging.getLogger(__name__)
 

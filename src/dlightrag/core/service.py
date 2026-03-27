@@ -644,7 +644,7 @@ class RAGService:
             return None
 
         try:
-            from dlightrag.core.retrieval.metadata_index import PGMetadataIndex
+            from dlightrag.storage.metadata_index import PGMetadataIndex
 
             idx = PGMetadataIndex(workspace=config.workspace)
             await idx.initialize()

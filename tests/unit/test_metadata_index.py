@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dlightrag.core.retrieval.metadata_index import (
+from dlightrag.storage.metadata_index import (
     _UPSERT,
     METADATA_FIELDS,
 )
