@@ -388,6 +388,16 @@ class RAGService:
                 logger.error(f"LightRAG initialization failed: {error_msg}")
                 raise RuntimeError(f"LightRAG initialization failed: {error_msg}")
 
+        # Wrap chunks_vdb for metadata in-filtering (caption mode)
+        lr = getattr(self.rag, "lightrag", None)
+        if lr is not None and getattr(lr, "chunks_vdb", None) is not None:
+            from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
+
+            lr.chunks_vdb = FilteredVectorStorage(
+                original=lr.chunks_vdb,
+                embedding_func=embedding_func,
+            )
+
         # Auto-detect hash index backend based on storage config
         hash_index = await self._create_hash_index(config)
 
@@ -510,6 +520,15 @@ class RAGService:
         await lightrag.initialize_storages()
         self._lightrag = lightrag
         logger.info("LightRAG storages initialized")
+
+        # Wrap chunks_vdb for metadata in-filtering
+        if lightrag.chunks_vdb is not None:
+            from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
+
+            lightrag.chunks_vdb = FilteredVectorStorage(  # type: ignore[assignment]
+                original=lightrag.chunks_vdb,
+                embedding_func=embedding_func,
+            )
 
         # Post-init verification: ensure AGE graph labels actually exist.
         # Catches stale/corrupted graphs left by previous failed inits
@@ -965,22 +984,62 @@ class RAGService:
         if filters and self._metadata_index is None:
             logger.warning("Metadata filters ignored: metadata index requires PostgreSQL backend")
 
-        # Phase 1: KG retrieval (existing path)
-        kg_result = await backend.aretrieve(
-            query,
-            multimodal_content=multimodal_content,
-            mode=mode,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            is_reretrieve=is_reretrieve,
-            **kwargs,
-        )
+        # Resolve metadata candidates for in-filtering (if available)
+        candidate_ids: set[str] | None = None
+        effective_filters = filters
+        if effective_filters is None and _plan is not None:
+            effective_filters = getattr(_plan, "metadata_filters", None)
+        if effective_filters and self._metadata_index is not None:
+            try:
+                from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 
-        # Phase 2: Multi-path retrieval (metadata + vector, supplementary)
-        # Accept pre-computed plan from federation to avoid redundant LLM calls
+                lr = self._lightrag or getattr(self.rag, "lightrag", None)
+                chunk_ids = await metadata_retrieve(
+                    self._metadata_index,
+                    effective_filters,
+                    lr,
+                    self.config.rag_mode,
+                    query=query,
+                    top_k=500,
+                )
+                if chunk_ids:
+                    candidate_ids = set(chunk_ids)
+                    logger.info("In-filter: %d candidate chunks from metadata", len(candidate_ids))
+            except Exception as exc:
+                logger.warning("Metadata candidate resolution failed (non-fatal): %s", exc)
+
+        # Phase 1: KG retrieval with in-filtering scope
+        from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
+
+        async with metadata_filter_scope(candidate_ids):
+            kg_result = await backend.aretrieve(
+                query,
+                multimodal_content=multimodal_content,
+                mode=mode,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                is_reretrieve=is_reretrieve,
+                **kwargs,
+            )
+
+        # Fallback: if in-filter returned 0 chunks but candidates existed, retry unfiltered
+        if candidate_ids and not kg_result.contexts.chunks:
+            logger.info("In-filter returned 0 chunks, retrying unfiltered")
+            kg_result = await backend.aretrieve(
+                query,
+                multimodal_content=multimodal_content,
+                mode=mode,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                is_reretrieve=is_reretrieve,
+                **kwargs,
+            )
+
+        # Phase 2: Supplementary multi-path (only when no in-filtering was applied)
         shared_plan = _plan
-        if self._metadata_index is not None or (
-            self.config.rag_mode == "unified" and self._lightrag
+        if candidate_ids is None and (
+            self._metadata_index is not None
+            or (self.config.rag_mode == "unified" and self._lightrag)
         ):
             try:
                 supplementary = await self._run_multi_path_retrieval(
