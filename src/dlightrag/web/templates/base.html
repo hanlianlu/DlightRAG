@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DlightRAG</title>
     <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
 
     <!-- KaTeX math rendering -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css">
@@ -13,10 +13,10 @@
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16/dist/contrib/auto-render.min.js"></script>
 
     <!-- Pygments code highlighting theme -->
-    <link rel="stylesheet" href="/static/pygments.css">
+    <link rel="stylesheet" href="/static/pygments.css?v={{ static_version() }}">
 </head>
 <body>
     {% block content %}{% endblock %}
-    <script src="/static/citation.js"></script>
+    <script src="/static/citation.js?v={{ static_version() }}"></script>
 </body>
 </html>

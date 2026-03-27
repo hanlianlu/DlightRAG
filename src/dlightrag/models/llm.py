@@ -102,10 +102,13 @@ def get_ingest_model_func_for_lightrag(config: DlightragConfig) -> Callable:
 
 
 def get_embedding_func(config: DlightragConfig) -> Any:
-    """Build LightRAG EmbeddingFunc from config."""
+    """Build LightRAG EmbeddingFunc from config.
+
+    Uses a shared httpx client for connection pooling across requests.
+    """
     from lightrag.utils import EmbeddingFunc
 
-    from dlightrag.models.embedding import httpx_embed
+    from dlightrag.models.embedding import create_embed_client, httpx_embed
     from dlightrag.models.providers.embed_providers import detect_embed_provider
 
     cfg = config.embedding
@@ -113,6 +116,7 @@ def get_embedding_func(config: DlightragConfig) -> Any:
         model=cfg.model,
         base_url=cfg.base_url,
     )
+    client = create_embed_client(cfg.api_key or "", timeout=float(config.embedding_request_timeout))
 
     async def embed_func(texts: list[str]) -> np.ndarray:
         result = await httpx_embed(
@@ -121,7 +125,9 @@ def get_embedding_func(config: DlightragConfig) -> Any:
             api_key=cfg.api_key or "",
             base_url=cfg.base_url or "",
             provider=embed_provider,
+            client=client,
         )
+        # LightRAG's EmbeddingFunc validates via result.size — requires numpy
         return np.array(result)
 
     return EmbeddingFunc(
