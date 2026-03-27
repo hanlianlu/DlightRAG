@@ -47,8 +47,12 @@ You are a document domain query understanding system. Given a user query (and op
 conversation history), produce a JSON response with these keys:
 
 - "standalone_query": If conversation history is provided, rewrite the follow-up into
-  a self-contained query capturing full intent. If no history or the query is already
-  standalone, return it unchanged. This is the primary search query -- keep it complete.
+  a self-contained query that captures the FULL intent from conversation context.
+  If no history or the query is already standalone, return it unchanged.
+  CRITICAL: The standalone_query is the primary search query. It MUST preserve ALL
+  important context — names, topics, constraints, file references, time ranges — from
+  both the conversation history and the follow-up. Never drop metadata-bearing keywords.
+  When in doubt, include more context rather than less.
 - "filters": An object with applicable fields from the metadata schema below.
   Only include fields you are highly confident about. Leave out uncertain fields.
 
@@ -73,6 +77,10 @@ Query: "what are the main revenue trends"
 
 Query: "张三写的2024年财报分析"
 {{"standalone_query": "张三写的2024年财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}}}
+
+History: user asked about "Dr. Wang's research papers on neural networks"
+Follow-up: "那PDF的呢？"
+{{"standalone_query": "Dr. Wang's research papers on neural networks in PDF format", "filters": {{"doc_author": "Dr. Wang", "file_extension": "pdf"}}}}
 
 Return valid JSON only, no markdown fences."""
 
