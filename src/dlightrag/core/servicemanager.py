@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import defaultdict
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -47,7 +48,7 @@ class RAGServiceManager:
 
         self._config = config or get_config()
         self._services: dict[str, RAGService] = {}
-        self._lock: asyncio.Lock | None = None
+        self._locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
         # Health/error tracking
         self._ready: bool = False
@@ -62,21 +63,42 @@ class RAGServiceManager:
 
     @classmethod
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
-        """Async factory — creates manager and ensures default workspace is ready."""
-        manager = cls(config=config)
-        try:
-            await manager._get_service(manager._config.workspace)
-            manager._ready = True
-        except RAGServiceUnavailableError as e:
-            manager._degraded = True
-            manager._startup_warnings.append(f"Default workspace init failed: {e.detail}")
-            logger.error("RAG service started in degraded mode: %s", e.detail)
-        return manager
+        """Async factory — creates manager, warms up all known workspaces in parallel."""
+        from dlightrag.utils.concurrency import bounded_gather
 
-    def _get_lock(self) -> asyncio.Lock:
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
+        manager = cls(config=config)
+
+        # Discover all known workspaces and warm them up in parallel
+        all_ws = await manager._list_all_workspaces()
+        default_ws = config.workspace if config else manager._config.workspace
+        if default_ws not in all_ws:
+            all_ws.insert(0, default_ws)
+
+        warmup_coros = [manager._get_service(ws) for ws in all_ws]
+        results = await bounded_gather(warmup_coros, max_concurrent=8, task_name="warmup")
+        failed = [ws for ws, r in zip(all_ws, results, strict=True) if isinstance(r, Exception)]
+        ok = len(all_ws) - len(failed)
+        logger.info("Warmed up %d/%d workspace services", ok, len(all_ws))
+        if failed:
+            logger.warning("Failed to warm up: %s", ", ".join(failed))
+
+        if default_ws in manager._services:
+            manager._ready = True
+        else:
+            manager._degraded = True
+            # Include original error detail for diagnostics
+            default_err = next(
+                (
+                    r
+                    for ws, r in zip(all_ws, results, strict=True)
+                    if ws == default_ws and isinstance(r, Exception)
+                ),
+                None,
+            )
+            detail = getattr(default_err, "detail", str(default_err)) if default_err else "unknown"
+            manager._startup_warnings.append(f"Default workspace init failed: {detail}")
+            logger.error("RAG service started in degraded mode: %s", detail)
+        return manager
 
     @staticmethod
     def _actionable_error(exc: Exception) -> str:
@@ -113,8 +135,7 @@ class RAGServiceManager:
                     detail=f"Workspace '{workspace}' in backoff (retry in {interval:.0f}s)"
                 )
 
-        lock = self._get_lock()
-        async with lock:
+        async with self._locks[workspace]:
             # Double-check after acquiring lock
             if workspace in self._services:
                 return self._services[workspace]

@@ -6,7 +6,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -97,7 +96,7 @@ class TestUpsertWithVisualVectors:
             "chunk-001": {"content": "page one text", "full_doc_id": "doc-1"},
             "chunk-002": {"content": "page two text", "full_doc_id": "doc-1"},
         }
-        vectors = np.random.rand(2, 1024).astype(np.float32)
+        vectors = [[0.1] * 1024, [0.2] * 1024]
 
         await engine._upsert_with_visual_vectors(chunks_data, vectors)
 
@@ -128,7 +127,7 @@ class TestUpsertWithVisualVectors:
         )
 
         chunks_data = {"chunk-001": {"content": "text", "full_doc_id": "d1"}}
-        vectors = np.random.rand(1, 1024).astype(np.float32)
+        vectors = [[0.1] * 1024]
 
         with pytest.raises(RuntimeError, match="boom"):
             await engine._upsert_with_visual_vectors(chunks_data, vectors)
@@ -185,7 +184,7 @@ class TestAingest:
         )
 
         # Mock embedder: returns (2, 1024) vectors
-        vectors = np.zeros((2, 1024), dtype=np.float32)
+        vectors = [[0.0] * 1024, [0.0] * 1024]
         engine.embedder.embed_pages = AsyncMock(return_value=vectors)
 
         # Mock extractor: returns page_infos
@@ -286,8 +285,8 @@ class TestAingestMultipleBatches:
         # Embedder: returns correct-sized vectors per batch
         engine.embedder.embed_pages = AsyncMock(
             side_effect=[
-                np.zeros((2, 1024), dtype=np.float32),
-                np.zeros((1, 1024), dtype=np.float32),
+                [[0.0] * 1024, [0.0] * 1024],
+                [[0.0] * 1024],
             ]
         )
 
@@ -451,7 +450,7 @@ class TestAingestDocStatus:
         engine.renderer.render_file_batched = MagicMock(
             return_value=_async_gen_from_list([render_result])
         )
-        engine.embedder.embed_pages = AsyncMock(return_value=np.zeros((2, 1024), dtype=np.float32))
+        engine.embedder.embed_pages = AsyncMock(return_value=[[0.0] * 1024, [0.0] * 1024])
         engine.extractor.extract_from_pages = AsyncMock(
             return_value=[
                 {"chunk_id": "chunk-aaa", "page_index": 0, "content": "Page one"},
