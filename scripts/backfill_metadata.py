@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 async def backfill(workspace: str, dry_run: bool = False) -> None:
     from dlightrag.config import get_config
-    from dlightrag.core.retrieval.metadata_index import PGMetadataIndex, extract_system_metadata
+    from dlightrag.storage.metadata_index import PGMetadataIndex, extract_system_metadata
 
     config = get_config()
 

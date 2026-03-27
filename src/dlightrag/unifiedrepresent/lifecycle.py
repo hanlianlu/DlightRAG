@@ -96,7 +96,7 @@ async def _ingest_single_local(
     # Upsert document metadata (best-effort)
     if result.get("doc_id") and metadata_index is not None:
         try:
-            from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+            from dlightrag.storage.metadata_index import extract_system_metadata
 
             meta = extract_system_metadata(
                 path,
@@ -281,7 +281,7 @@ async def _ingest_single_blob(
         # Upsert document metadata (best-effort)
         if result.get("doc_id") and metadata_index is not None:
             try:
-                from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+                from dlightrag.storage.metadata_index import extract_system_metadata
 
                 meta = extract_system_metadata(
                     target,
@@ -389,7 +389,7 @@ async def _ingest_single_s3(
         # Upsert document metadata (best-effort)
         if result.get("doc_id") and metadata_index is not None:
             try:
-                from dlightrag.core.retrieval.metadata_index import extract_system_metadata
+                from dlightrag.storage.metadata_index import extract_system_metadata
 
                 meta = extract_system_metadata(
                     target,
