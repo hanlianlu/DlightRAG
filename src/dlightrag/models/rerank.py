@@ -7,12 +7,48 @@ Aliyun, Azure Cohere), and the factory function that dispatches based on config.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from collections.abc import Callable
 from functools import partial
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_BATCH_SIZE = 7
+_DEFAULT_SCORE_THRESHOLD = 0.3
+
+_LISTWISE_PROMPT = """\
+You are a relevance judge. Given a query and {n} text chunks, \
+score each chunk's relevance to the query.
+
+Respond with ONLY a JSON array of {n} scores in order: [<float>, <float>, ...]
+Each score is 0.00 (completely irrelevant) to 1.00 (perfectly relevant).
+
+Query: {query}"""
+
+
+def _clamp(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _parse_listwise_scores(text: str, expected: int) -> list[float]:
+    """Parse a JSON array of scores from LLM response."""
+    text = text.strip()
+    # Try JSON array
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            return [_clamp(float(s)) for s in data[:expected]]
+    except (json.JSONDecodeError, ValueError, TypeError):
+        pass
+    # Fallback: extract all floats from text
+    matches = re.findall(r"\d+\.\d+", text)
+    if matches:
+        return [_clamp(float(m)) for m in matches[:expected]]
+    logger.warning("Could not parse listwise scores from: %s", text[:200])
+    return [0.0] * expected
 
 
 def _fallback_ranking(n: int) -> list[dict[str, float]]:
@@ -23,15 +59,20 @@ def _fallback_ranking(n: int) -> list[dict[str, float]]:
 def build_llm_rerank_func(
     ingest_func: Callable,
     domain_knowledge_hints: str = "",
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    score_threshold: float = _DEFAULT_SCORE_THRESHOLD,
 ) -> Callable:
-    """LLM-based listwise reranker.
+    """LLM-based listwise reranker with batched scoring.
+
+    Scores chunks in batches for reliable relative comparison.
+    Uses a simple JSON array prompt instead of structured JSON objects.
 
     Args:
         ingest_func: LightRAG-adapted callable (prompt, system_prompt, ...).
-        domain_knowledge_hints: Optional domain context appended to system prompt.
+        domain_knowledge_hints: Optional domain context appended to prompt.
+        batch_size: Number of chunks per LLM call (default 7).
+        score_threshold: Minimum score to include in results (default 0.3).
     """
-    from dlightrag.models.schemas import RerankResult
-    from dlightrag.utils.text import extract_json
 
     async def rerank_func(
         query: str,
@@ -42,45 +83,55 @@ def build_llm_rerank_func(
         if not documents:
             return []
 
-        effective_domain_knowledge = domain_knowledge or domain_knowledge_hints
-        doc_lines = "\n".join([f"[{idx}] {doc}" for idx, doc in enumerate(documents)])
+        effective_hints = domain_knowledge or domain_knowledge_hints
+        all_scores: list[tuple[int, float]] = []  # (original_index, score)
 
-        system_parts = [
-            "You are a reranker. Given a query and a list of chunks, rank them by relevance.",
-            '\nRespond with JSON only: {"ranked_chunks": [{"index": 0, "relevance_score": 0.95}, ...]}',
+        for batch_start in range(0, len(documents), batch_size):
+            batch = documents[batch_start : batch_start + batch_size]
+            prompt_parts = [_LISTWISE_PROMPT.format(query=query, n=len(batch))]
+            if effective_hints:
+                prompt_parts.append(f"\nContext: {effective_hints}")
+            for i, doc in enumerate(batch):
+                prompt_parts.append(f"\n--- Chunk {i + 1} ---\n{doc[:500]}")
+            user_content = "".join(prompt_parts)
+
+            try:
+                result_str = await ingest_func(user_content, system_prompt="")
+                scores = _parse_listwise_scores(result_str, len(batch))
+                logger.info(
+                    "Rerank batch [%d..%d]: scores=%s",
+                    batch_start,
+                    batch_start + len(batch) - 1,
+                    [f"{s:.3f}" for s in scores],
+                )
+            except Exception as exc:
+                logger.warning("Rerank failed for batch %d: %s", batch_start, exc)
+                scores = [0.0] * len(batch)
+
+            for i, score in enumerate(scores):
+                all_scores.append((batch_start + i, score))
+
+        # Apply threshold
+        results = [
+            {"index": idx, "relevance_score": score}
+            for idx, score in all_scores
+            if score >= score_threshold
         ]
-        if effective_domain_knowledge:
-            system_parts.append(f"\n{effective_domain_knowledge}")
 
-        user_content = f"Query: {query}\n\nChunks:\n{doc_lines}"
-
-        try:
-            result_str = await ingest_func(
-                user_content,
-                system_prompt="".join(system_parts),
-                response_format={"type": "json_object"},
+        # Fallback: if threshold filtered everything, keep top-5 by score
+        if not results and all_scores:
+            by_score = sorted(all_scores, key=lambda x: x[1], reverse=True)
+            results = [{"index": idx, "relevance_score": score} for idx, score in by_score[:5]]
+            logger.info(
+                "Rerank: all below threshold %.2f, kept top-%d (best=%.3f)",
+                score_threshold,
+                len(results),
+                results[0]["relevance_score"] if results else 0,
             )
-            parsed = RerankResult.model_validate_json(extract_json(result_str))
 
-            seen: set[int] = set()
-            results = []
-            for chunk in parsed.ranked_chunks:
-                if 0 <= chunk.index < len(documents) and chunk.index not in seen:
-                    seen.add(chunk.index)
-                    results.append({"index": chunk.index, "relevance_score": chunk.relevance_score})
-
-            if len(results) < len(documents):
-                min_score = results[-1]["relevance_score"] if results else 0.5
-                for idx in range(len(documents)):
-                    if idx not in seen:
-                        results.append(
-                            {"index": idx, "relevance_score": max(0.0, min_score - 0.01)}
-                        )
-
-            return results or _fallback_ranking(len(documents))
-        except Exception as exc:
-            logger.warning("Rerank failed: %s", exc)
-            return _fallback_ranking(len(documents))
+        # Sort by score descending
+        results.sort(key=lambda r: r["relevance_score"], reverse=True)
+        return results or _fallback_ranking(len(documents))
 
     return rerank_func
 
@@ -167,7 +218,12 @@ def build_rerank_func(config: Any) -> Callable | None:
 
     if rc.strategy == "llm_listwise":
         ingest_func = get_ingest_model_func_for_lightrag(config)
-        return build_llm_rerank_func(ingest_func, config.domain_knowledge_hints)
+        return build_llm_rerank_func(
+            ingest_func,
+            config.domain_knowledge_hints,
+            batch_size=getattr(rc, "batch_size", _DEFAULT_BATCH_SIZE),
+            score_threshold=getattr(rc, "score_threshold", _DEFAULT_SCORE_THRESHOLD),
+        )
     if rc.strategy == "vlm_pointwise":
         raise NotImplementedError("vlm_pointwise rerank not yet implemented")
 
@@ -179,4 +235,5 @@ __all__ = [
     "build_llm_rerank_func",
     "build_api_rerank_func",
     "_fallback_ranking",
+    "_parse_listwise_scores",
 ]
