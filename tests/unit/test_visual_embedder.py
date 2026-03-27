@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import numpy as np
 import pytest
 from PIL import Image
 
@@ -62,12 +61,10 @@ class TestVisualEmbedderInit:
 
 
 class TestEmbedPages:
-    async def test_empty_list_returns_zero_rows(self) -> None:
+    async def test_empty_list_returns_empty(self) -> None:
         emb = _make_embedder()
         result = await emb.embed_pages([])
-        assert isinstance(result, np.ndarray)
-        assert result.shape == (0, DIM)
-        assert result.dtype == np.float32
+        assert result == []
 
     async def test_single_image(self) -> None:
         emb = _make_embedder()
@@ -75,8 +72,8 @@ class TestEmbedPages:
 
         result = await emb.embed_pages([_tiny_image()])
 
-        assert result.shape == (1, DIM)
-        assert result.dtype == np.float32
+        assert len(result) == 1
+        assert len(result[0]) == DIM
 
     async def test_concurrency_five_images_batch_size_two(self) -> None:
         emb = _make_embedder(batch_size=2)
@@ -88,15 +85,17 @@ class TestEmbedPages:
         result = await emb.embed_pages(images)
 
         assert emb._client.post.call_count == 5
-        assert result.shape == (5, DIM)
+        assert len(result) == 5
 
-    async def test_result_dtype_is_float32(self) -> None:
+    async def test_result_is_list_of_lists(self) -> None:
         emb = _make_embedder()
         emb._client.post = AsyncMock(return_value=_mock_response(DIM, n=1))
 
         result = await emb.embed_pages([_tiny_image(), _tiny_image()])
 
-        assert result.dtype == np.float32
+        assert isinstance(result, list)
+        assert isinstance(result[0], list)
+        assert len(result[0]) == DIM
 
 
 # ---------------------------------------------------------------------------
@@ -105,12 +104,10 @@ class TestEmbedPages:
 
 
 class TestEmbedTexts:
-    async def test_empty_list_returns_zero_rows(self) -> None:
+    async def test_empty_list_returns_empty(self) -> None:
         emb = _make_embedder()
         result = await emb.embed_texts([])
-        assert isinstance(result, np.ndarray)
-        assert result.shape == (0, DIM)
-        assert result.dtype == np.float32
+        assert result == []
 
     async def test_batch_of_three(self) -> None:
         emb = _make_embedder()
@@ -118,8 +115,8 @@ class TestEmbedTexts:
 
         result = await emb.embed_texts(["a", "b", "c"])
 
-        assert result.shape == (3, DIM)
-        assert result.dtype == np.float32
+        assert len(result) == 3
+        assert len(result[0]) == DIM
         # Single HTTP call with all texts batched
         emb._client.post.assert_awaited_once()
 

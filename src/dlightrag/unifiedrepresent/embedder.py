@@ -13,7 +13,6 @@ import io
 import logging
 
 import httpx
-import numpy as np
 from PIL import Image
 
 from dlightrag.models.providers.embed_providers import (
@@ -60,7 +59,7 @@ class VisualEmbedder:
     # Public API
     # ------------------------------------------------------------------
 
-    async def embed_pages(self, images: list[Image.Image]) -> np.ndarray:
+    async def embed_pages(self, images: list[Image.Image]) -> list[list[float]]:
         """Embed a list of PIL images into visual vectors.
 
         Multimodal embedding APIs treat a list of images as a single
@@ -68,10 +67,10 @@ class VisualEmbedder:
         embedded individually.  ``batch_size`` controls concurrency.
 
         Returns:
-            np.ndarray of shape ``(len(images), dim)`` with dtype float32.
+            List of embedding vectors, one per input image.
         """
         if not images:
-            return np.empty((0, self.dim), dtype=np.float32)
+            return []
 
         sem = asyncio.Semaphore(self.batch_size)
 
@@ -105,9 +104,9 @@ class VisualEmbedder:
                 return vec
 
         results = await asyncio.gather(*[_embed_one(img) for img in images])
-        return np.asarray(results, dtype=np.float32)
+        return list(results)
 
-    async def embed_texts(self, texts: list[str]) -> np.ndarray:
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts via the same multimodal embedding API.
 
         Used as the LightRAG ``embedding_func`` in unified mode so that
@@ -118,10 +117,10 @@ class VisualEmbedder:
         Xinference VL embedding models.
 
         Returns:
-            np.ndarray of shape ``(len(texts), dim)`` with dtype float32.
+            List of embedding vectors, one per input text.
         """
         if not texts:
-            return np.empty((0, self.dim), dtype=np.float32)
+            return []
         payload = self.provider.build_payload(self.model, texts)
         resp: httpx.Response | None = None
         for attempt in range(4):  # 1 initial + 3 retries
@@ -143,7 +142,7 @@ class VisualEmbedder:
         embeddings = self.provider.parse_response(resp.json())
         if len(embeddings) > 0 and len(embeddings[0]) != self.dim:
             raise ValueError(f"Expected embedding dim {self.dim}, got {len(embeddings[0])}")
-        return np.asarray(embeddings, dtype=np.float32)
+        return embeddings
 
     # ------------------------------------------------------------------
     # Internal helpers

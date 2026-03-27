@@ -276,7 +276,7 @@ class VisualRetriever:
             try:
                 pil_img = Image.open(io.BytesIO(img_bytes))
                 vec = await self.embedder.embed_pages([pil_img])
-                embedding = vec[0].tolist()
+                embedding = vec[0]
 
                 raw_chunks = await self.lightrag.chunks_vdb.query(
                     query="",

@@ -15,7 +15,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
 from PIL import Image
 
@@ -389,7 +388,7 @@ class UnifiedRepresentEngine:
     async def _upsert_with_visual_vectors(
         self,
         chunks_data: dict[str, dict],
-        visual_vectors: np.ndarray,
+        visual_vectors: list[list[float]],
     ) -> None:
         """Upsert chunks with pre-computed visual vectors to chunks_vdb.
 
@@ -404,19 +403,19 @@ class UnifiedRepresentEngine:
             return
 
         # Build cache: content text -> pre-computed vector
-        vector_cache: dict[str, np.ndarray] = {}
+        vector_cache: dict[str, list[float]] = {}
         for (_, chunk_dict), vector in zip(chunks_data.items(), visual_vectors, strict=True):
             vector_cache[chunk_dict["content"]] = vector
 
         # Temporary embedding function that looks up cached vectors
-        async def cached_embed(texts: list[str]) -> np.ndarray:
-            results = []
+        async def cached_embed(texts: list[str]) -> list[list[float]]:
+            results: list[list[float]] = []
             for text in texts:
                 if text in vector_cache:
                     results.append(vector_cache[text])
                 else:
                     raise ValueError(f"No pre-computed vector for: {text[:80]}...")
-            return np.array(results, dtype=np.float32)
+            return results
 
         # Swap embedding func on chunks_vdb
         original_func = self.lightrag.chunks_vdb.embedding_func
