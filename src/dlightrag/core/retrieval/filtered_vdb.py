@@ -142,10 +142,10 @@ class FilteredVectorStorage:
         candidate_ids: set[str],
         top_k: int,
     ) -> list[dict[str, Any]]:
-        """Milvus native filtered vector search."""
+        """Milvus native filtered vector search (experimental — not production-tested)."""
         try:
             client = self._original._client
-            collection = self._original._collection_name
+            collection = self._original.final_namespace
 
             id_list_str = ", ".join(f'"{cid}"' for cid in candidate_ids)
             filter_expr = f"id in [{id_list_str}]"
@@ -170,7 +170,7 @@ class FilteredVectorStorage:
                 ]
             return []
         except Exception as exc:
-            logger.warning("In-filtered Milvus search failed: %s, falling back", exc)
+            logger.warning("In-filtered Milvus search failed: %s, falling back to post-filter", exc)
             results = await self._original.query("", top_k * 3, embedding)
             return [r for r in results if r.get("id") in candidate_ids][:top_k]
 
@@ -180,12 +180,12 @@ class FilteredVectorStorage:
         candidate_ids: set[str],
         top_k: int,
     ) -> list[dict[str, Any]]:
-        """Qdrant native filtered vector search."""
+        """Qdrant native filtered vector search (experimental — not production-tested)."""
         try:
             from qdrant_client import models  # type: ignore[import-not-found]
 
             client = self._original._client
-            collection = self._original._collection_name
+            collection = self._original.final_namespace
 
             results = client.query_points(
                 collection_name=collection,
@@ -208,7 +208,7 @@ class FilteredVectorStorage:
                 ]
             return []
         except Exception as exc:
-            logger.warning("In-filtered Qdrant search failed: %s, falling back", exc)
+            logger.warning("In-filtered Qdrant search failed: %s, falling back to post-filter", exc)
             results = await self._original.query("", top_k * 3, embedding)
             return [r for r in results if r.get("id") in candidate_ids][:top_k]
 
