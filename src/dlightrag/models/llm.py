@@ -147,10 +147,38 @@ def get_embedding_func(config: DlightragConfig) -> Any:
 
 
 def get_rerank_func(config: DlightragConfig) -> Callable | None:
-    """Build rerank callable. Delegates to models.rerank.build_rerank_func."""
+    """Build multimodal rerank callable from config.
+
+    For chat_llm_reranker: uses an independent VLM model if provider/model
+    are set in rerank config, otherwise falls back to the ingest model.
+    """
     from dlightrag.models.rerank import build_rerank_func
 
-    return build_rerank_func(config)
+    rc = config.rerank
+    if not rc.enabled:
+        return None
+
+    # For chat_llm_reranker: build VLM callable (messages-first, NOT LightRAG-adapted)
+    if rc.strategy == "chat_llm_reranker":
+        if rc.provider and rc.model:
+            # Independent VLM model for reranking
+            vlm_func = _make_completion_func(
+                ModelConfig(
+                    provider=rc.provider,
+                    model=rc.model,
+                    api_key=rc.api_key,
+                    base_url=rc.base_url,
+                    temperature=rc.temperature or 0.0,
+                    model_kwargs=rc.model_kwargs,
+                ),
+                fallback_api_key=config.chat.api_key,
+            )
+        else:
+            # Fall back to chat model
+            vlm_func = get_chat_model_func(config)
+        return build_rerank_func(rc, ingest_func=vlm_func)
+
+    return build_rerank_func(rc)
 
 
 __all__ = [

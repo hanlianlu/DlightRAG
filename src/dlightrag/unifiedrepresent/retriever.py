@@ -2,7 +2,7 @@
 """Visual retrieval pipeline for unified representational RAG.
 
 Handles query processing: LightRAG KG retrieval -> visual chunk resolution ->
-visual reranking.
+multimodal reranking.
 """
 
 from __future__ import annotations
@@ -10,11 +10,9 @@ from __future__ import annotations
 import io
 import json
 import logging
-import re
 from collections.abc import Callable
 from typing import Any, Literal, cast
 
-import httpx
 from lightrag import LightRAG, QueryParam
 from lightrag.constants import GRAPH_FIELD_SEP
 from PIL import Image
@@ -36,10 +34,7 @@ class VisualRetriever:
         visual_chunks: Any,  # BaseKVStorage instance
         config: Any,  # DlightragConfig
         vision_model_func: Callable | None = None,
-        rerank_model: str | None = None,
-        rerank_base_url: str | None = None,
-        rerank_api_key: str | None = None,
-        rerank_backend: str | None = None,
+        rerank_func: Callable | None = None,
         path_resolver: PathResolver | None = None,
         embedder: Any | None = None,
     ) -> None:
@@ -47,10 +42,7 @@ class VisualRetriever:
         self.visual_chunks = visual_chunks
         self.config = config
         self.vision_model_func = vision_model_func
-        self.rerank_model = rerank_model
-        self.rerank_base_url = rerank_base_url
-        self.rerank_api_key = rerank_api_key
-        self.rerank_backend = rerank_backend
+        self._rerank_func = rerank_func
         self.path_resolver = path_resolver
         self.embedder = embedder
 
@@ -176,38 +168,8 @@ class VisualRetriever:
         chunk_id_list = list(chunk_ids)
         resolved = await self._resolve_visual_chunks(chunk_id_list)
 
-        # Phase 3: Visual reranking (optional)
-        if self.rerank_backend == "llm" and self.vision_model_func and resolved:
-            resolved = await self._llm_visual_rerank(query, resolved, chunk_top_k, chunk_text)
-        elif self.rerank_base_url and self.rerank_model and resolved:
-            resolved = await self._visual_rerank(query, resolved, chunk_top_k, chunk_text)
-        else:
-            resolved = dict(list(resolved.items())[:chunk_top_k])
-            logger.info(
-                "[Visual Rerank] Skipped (backend=%s, vision=%s, resolved=%d)",
-                self.rerank_backend,
-                self.vision_model_func is not None,
-                len(resolved),
-            )
-
-        # Filter low-score chunks after reranking (only affects scored chunks)
-        threshold = getattr(self.config, "rerank_score_threshold", 0.5)
-        before = len(resolved)
-        resolved = {
-            cid: vd
-            for cid, vd in resolved.items()
-            if vd.get("relevance_score") is None or vd["relevance_score"] >= threshold
-        }
-        filtered = before - len(resolved)
-        if filtered:
-            logger.info(
-                "[Rerank Filter] Removed %d/%d chunks below %.2f threshold",
-                filtered,
-                before,
-                threshold,
-            )
-
-        # Build unified candidate set: visual + text-only
+        # Phase 3: Multimodal reranking (optional)
+        # Build chunk dicts for reranker (content + image_data)
         all_candidates: dict[str, dict] = {}
         for cid, vd in resolved.items():
             all_candidates[cid] = vd
@@ -216,17 +178,35 @@ class VisualRetriever:
             if cid not in all_candidates and cid in chunk_text:
                 all_candidates[cid] = {}  # No visual data
 
-        # Cap total candidates
-        if len(all_candidates) > chunk_top_k:
-            # Visual-resolved chunks first (already reranked), then text-only
-            ordered_ids: list[str] = list(resolved.keys())
-            for cid in chunk_ids:
-                if cid not in resolved and cid in all_candidates:
-                    ordered_ids.append(cid)
-            ordered_ids = ordered_ids[:chunk_top_k]
-            all_candidates = {
-                cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates
-            }
+        if self._rerank_func and all_candidates:
+            rerank_chunks = [
+                {
+                    "chunk_id": cid,
+                    "content": chunk_text.get(cid, ""),
+                    "image_data": vd.get("image_data"),
+                }
+                for cid, vd in all_candidates.items()
+            ]
+            pre_rerank_count = len(rerank_chunks)
+            scored = await self._rerank_func(
+                query=query, chunks=rerank_chunks, top_k=chunk_top_k
+            )
+            logger.info("Rerank: %d -> %d chunks", pre_rerank_count, len(scored))
+
+            # Rebuild all_candidates from scored results
+            scored_ids = [c["chunk_id"] for c in scored]
+            all_candidates = {cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates}
+        else:
+            # No reranker — cap total candidates
+            if len(all_candidates) > chunk_top_k:
+                ordered_ids: list[str] = list(resolved.keys())
+                for cid in chunk_ids:
+                    if cid not in resolved and cid in all_candidates:
+                        ordered_ids.append(cid)
+                ordered_ids = ordered_ids[:chunk_top_k]
+                all_candidates = {
+                    cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates
+                }
 
         # Build return dict
         return {
@@ -341,184 +321,3 @@ class VisualRetriever:
         logger.info("[Visual Resolve] Resolved %d/%d chunks", len(resolved), len(chunk_ids))
         return resolved
 
-    async def _llm_visual_rerank(
-        self,
-        query: str,
-        resolved: dict[str, dict],
-        top_k: int,
-        chunk_text: dict[str, str] | None = None,
-    ) -> dict[str, dict]:
-        """Rerank visual chunks using VLM pointwise scoring.
-
-        Sends each page image to vision_model_func with a scoring prompt.
-        Pages scored 0-1 by VLM, sorted descending.
-        Falls back to text prompt when image is unavailable.
-        """
-        import asyncio
-
-        from dlightrag.prompts import VISUAL_RERANK_PROMPT
-
-        if not resolved or not self.vision_model_func:
-            return dict(list(resolved.items())[:top_k])
-
-        vision_model_func = self.vision_model_func
-        prompt = VISUAL_RERANK_PROMPT.format(query=query)
-        sem = asyncio.Semaphore(4)
-        chunk_ids = list(resolved.keys())
-        logger.info("[Visual Rerank] Scoring %d chunks (pointwise VLM)", len(chunk_ids))
-
-        async def _score_one(cid: str) -> tuple[str, float]:
-            vd = resolved[cid]
-            img_data = vd.get("image_data")
-            text = chunk_text.get(cid, "") if chunk_text else ""
-            if not img_data and not text:
-                return cid, 0.0
-            async with sem:
-                try:
-                    content: list[dict] = []
-                    if img_data:
-                        content.append(
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/png;base64,{img_data}"},
-                            }
-                        )
-                    text_content = prompt if img_data else f"{prompt}\n\nDocument text:\n{text}"
-                    content.append({"type": "text", "text": text_content})
-                    messages = [{"role": "user", "content": content}]
-                    resp = await vision_model_func(
-                        messages=messages,
-                        response_format={"type": "json_object"},
-                    )
-                    score = self._parse_rerank_score(resp)
-                    logger.debug("[Visual Rerank] chunk=%s score=%.2f", cid, score)
-                    return cid, score
-                except Exception:
-                    logger.warning("VLM rerank failed for chunk %s", cid, exc_info=True)
-                    return cid, 0.0
-
-        results = await asyncio.gather(*[_score_one(cid) for cid in chunk_ids])
-        scored = sorted(results, key=lambda x: x[1], reverse=True)
-
-        reranked: dict[str, dict] = {}
-        for cid, score in scored[:top_k]:
-            resolved[cid]["relevance_score"] = score
-            reranked[cid] = resolved[cid]
-        scores_str = ", ".join(f"{s:.1f}" for _, s in scored[:top_k])
-        logger.info("[Visual Rerank] Top %d scores: [%s]", top_k, scores_str)
-        return reranked
-
-    @staticmethod
-    def _parse_rerank_score(response: str) -> float:
-        """Parse VLM response to a 0-1 relevance score.
-
-        Handles multiple output formats:
-        1. Plain float ("0.82")
-        2. JSON from structured output ({"score": 0.82})
-        3. Free-form text with trailing score (think-mode models)
-        """
-        if response is None:
-            logger.warning("Could not parse rerank score from: %r", response)
-            return 0.0
-
-        text = str(response).strip()
-
-        # 1. Plain float
-        try:
-            return max(0.0, min(1.0, float(text)))
-        except (ValueError, TypeError):
-            pass
-
-        # Strip chat wrappers from local servers
-        text = text.replace("<|im_end|>", "").strip()
-
-        # 2. JSON (e.g. {"score": 0.82} from response_schema)
-        try:
-            parsed = json.loads(text)
-            if isinstance(parsed, dict):
-                for key in ("score", "relevance_score"):
-                    if key in parsed:
-                        return max(0.0, min(1.0, float(parsed[key])))
-        except Exception:
-            pass
-
-        # 3. Last number in [0, 1] range from free-form text
-        numbers = re.findall(r"-?\d+(?:\.\d+)?", text)
-        for token in reversed(numbers):
-            try:
-                val = float(token)
-            except ValueError:
-                continue
-            if 0.0 <= val <= 1.0:
-                return val
-
-        logger.warning("Could not parse rerank score from: %r", response)
-        return 0.0
-
-    async def _visual_rerank(
-        self,
-        query: str,
-        resolved: dict[str, dict],
-        top_k: int,
-        chunk_text: dict[str, str] | None = None,
-    ) -> dict[str, dict]:
-        """Rerank resolved visual chunks using multimodal reranker API.
-
-        Calls OpenAI-compatible rerank endpoint with query + page images.
-        """
-        if not resolved:
-            return resolved
-
-        chunk_ids = list(resolved.keys())
-        documents: list[dict | str] = []
-        for cid in chunk_ids:
-            vd = resolved[cid]
-            img_data = vd.get("image_data")
-            if img_data:
-                documents.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{img_data}"},
-                    }
-                )
-            else:
-                # Fallback to text content if no image
-                documents.append(chunk_text.get(cid, "") if chunk_text else "")
-
-        if self.rerank_base_url is None:
-            raise RuntimeError("rerank_base_url is required for visual reranking")
-        url = f"{self.rerank_base_url.rstrip('/')}/rerank"
-        payload = {
-            "model": self.rerank_model,
-            "query": query,
-            "documents": documents,
-            "top_n": min(top_k, len(documents)),
-        }
-        headers: dict[str, str] = {}
-        if self.rerank_api_key:
-            headers["Authorization"] = f"Bearer {self.rerank_api_key}"
-
-        try:
-            rerank_timeout = getattr(self.config, "embedding_request_timeout", 120)
-            async with httpx.AsyncClient(timeout=float(rerank_timeout)) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                resp.raise_for_status()
-            results = resp.json().get("results", [])
-
-            # Sort by relevance_score descending
-            results.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-
-            reranked: dict[str, dict] = {}
-            for item in results[:top_k]:
-                idx = item["index"]
-                cid = chunk_ids[idx]
-                resolved[cid]["relevance_score"] = item.get("relevance_score")
-                reranked[cid] = resolved[cid]
-            return reranked
-
-        except Exception:
-            logger.warning(
-                "Visual reranking failed, returning unranked results",
-                exc_info=True,
-            )
-            return dict(list(resolved.items())[:top_k])

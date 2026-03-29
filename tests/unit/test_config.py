@@ -50,13 +50,14 @@ class TestRerankConfig:
     def test_defaults(self):
         cfg = RerankConfig()
         assert cfg.enabled is True
-        assert cfg.strategy == "llm_listwise"
+        assert cfg.strategy == "chat_llm_reranker"
         assert cfg.model is None
         assert cfg.score_threshold == 0.5
+        assert cfg.batch_size == 7
 
-    def test_cohere_strategy(self):
-        cfg = RerankConfig(strategy="cohere", model="rerank-v4.0-pro", api_key="key")
-        assert cfg.strategy == "cohere"
+    def test_jina_strategy(self):
+        cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-m0", api_key="key")
+        assert cfg.strategy == "jina_reranker"
 
 
 class TestDlightragConfigNested:

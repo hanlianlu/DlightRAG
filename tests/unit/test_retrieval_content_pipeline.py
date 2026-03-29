@@ -66,7 +66,7 @@ class TestVisualRetrieverIncludesTextOnlyChunks:
             lightrag=mock_lightrag,
             visual_chunks=mock_visual_chunks,
             config=mock_config,
-            rerank_backend=None,  # skip reranking
+            rerank_func=None,  # skip reranking
         )
         result = await retriever._retrieve("test query", top_k=60, chunk_top_k=10)
 

@@ -43,7 +43,7 @@ embedding:
 
 rerank:
   enabled: true
-  strategy: llm_listwise              # llm_listwise (uses ingest/chat model), cohere, jina, aliyun, azure_cohere
+  strategy: chat_llm_reranker              # chat_llm_reranker (uses ingest/chat model), cohere, jina, aliyun, azure_cohere
   # model:                            # defaults: cohere→rerank-v4.0-pro, jina→jina-reranker-v3
   score_threshold: 0.5
 

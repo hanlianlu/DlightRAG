@@ -330,6 +330,13 @@ class RAGService:
         embedding_func = get_embedding_func(config)
         rerank_func = get_rerank_func(config)
 
+        # LightRAG needs (query, documents: list[str]) — wrap multimodal reranker
+        lightrag_rerank_func = None
+        if rerank_func is not None:
+            from dlightrag.models.rerank import build_lightrag_rerank_adapter
+
+            lightrag_rerank_func = build_lightrag_rerank_adapter(rerank_func)
+
         # Create VLM OCR parser if configured
         vlm_parser = None
         if config.parser == "vlm":
@@ -355,7 +362,7 @@ class RAGService:
             "graph_storage": config.graph_storage,
             "kv_storage": config.kv_storage,
             "doc_status_storage": config.doc_status_storage,
-            "rerank_model_func": rerank_func,
+            "rerank_model_func": lightrag_rerank_func,
             "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
             "addon_params": {
                 "entity_types": config.kg_entity_types,
@@ -443,6 +450,7 @@ class RAGService:
         chat_func_lr = get_chat_model_func_for_lightrag(config)
         chat_func = get_chat_model_func(config)
         ingest_func = get_ingest_model_func(config)
+        rerank_func = get_rerank_func(config)
 
         # Use httpx_text_embed instead of LightRAG's openai_embed for text
         # embedding.  openai_embed uses encoding_format:"base64" and the openai
@@ -570,6 +578,7 @@ class RAGService:
             visual_embedder=visual_embedder,
             path_resolver=self._path_resolver,
             context_model_func=ingest_func,
+            rerank_func=rerank_func,
         )
         self._backend = self.unified
 

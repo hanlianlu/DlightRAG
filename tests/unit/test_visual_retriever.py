@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import base64
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import httpx
+from unittest.mock import AsyncMock, MagicMock
 
 from dlightrag.unifiedrepresent.retriever import VisualRetriever
 
@@ -89,11 +87,7 @@ def _make_visual_data() -> list[dict | None]:
 
 def _make_retriever(
     *,
-    rerank_model: str | None = None,
-    rerank_base_url: str | None = None,
-    rerank_api_key: str | None = None,
-    rerank_backend: str | None = None,
-    vision_model_func: AsyncMock | None = None,
+    rerank_func: AsyncMock | None = None,
     visual_data: list[dict | None] | None = None,
 ) -> VisualRetriever:
     lightrag = MagicMock()
@@ -112,11 +106,7 @@ def _make_retriever(
         lightrag=lightrag,
         visual_chunks=visual_chunks,
         config=_make_config(),
-        vision_model_func=vision_model_func,
-        rerank_model=rerank_model,
-        rerank_base_url=rerank_base_url,
-        rerank_api_key=rerank_api_key,
-        rerank_backend=rerank_backend,
+        rerank_func=rerank_func,
     )
 
 
@@ -225,7 +215,7 @@ class TestRetrieve:
 
 
 class TestRetrieveNoRerank:
-    """Without rerank_model, resolved should be truncated to chunk_top_k."""
+    """Without rerank_func, resolved should be truncated to chunk_top_k."""
 
     async def test_truncated_to_chunk_top_k(self) -> None:
         # Create visual data with more items than chunk_top_k=2
@@ -266,8 +256,7 @@ class TestRetrieveNoRerank:
             lightrag=lightrag,
             visual_chunks=visual_chunks,
             config=_make_config(),
-            vision_model_func=None,
-            rerank_model=None,
+            rerank_func=None,
         )
 
         result = await retriever.retrieve("query", chunk_top_k=2)
@@ -275,329 +264,38 @@ class TestRetrieveNoRerank:
 
 
 # ---------------------------------------------------------------------------
-# TestVisualRerank
+# TestRerankIntegration
 # ---------------------------------------------------------------------------
 
 
-class TestVisualRerank:
-    """Test _visual_rerank HTTP call and sorting."""
-
-    async def test_reranking_sorts_by_relevance(self) -> None:
-        retriever = _make_retriever(
-            rerank_model="reranker-v1",
-            rerank_base_url="http://localhost:8080",
-            rerank_api_key="key-123",
-        )
-
-        resolved = {
-            "c-0": {"image_data": "img0"},
-            "c-1": {"image_data": "img1"},
-            "c-2": {"image_data": "img2"},
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "results": [
-                {"index": 2, "relevance_score": 0.95},
-                {"index": 0, "relevance_score": 0.80},
-                {"index": 1, "relevance_score": 0.60},
-            ],
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            result = await retriever._visual_rerank("query", resolved, top_k=3)
-
-        # Sorted descending by relevance_score
-        keys = list(result.keys())
-        assert keys == ["c-2", "c-0", "c-1"]
-        assert result["c-2"]["relevance_score"] == 0.95
-        assert result["c-0"]["relevance_score"] == 0.80
-        assert result["c-1"]["relevance_score"] == 0.60
-
-    async def test_reranking_respects_top_k(self) -> None:
-        retriever = _make_retriever(
-            rerank_model="reranker-v1",
-            rerank_base_url="http://localhost:8080",
-        )
-
-        resolved = {
-            "c-0": {"image_data": "img0"},
-            "c-1": {"image_data": "img1"},
-            "c-2": {"image_data": "img2"},
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "results": [
-                {"index": 2, "relevance_score": 0.95},
-                {"index": 0, "relevance_score": 0.80},
-                {"index": 1, "relevance_score": 0.60},
-            ],
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            result = await retriever._visual_rerank("query", resolved, top_k=2)
-
-        assert len(result) == 2
-
-    async def test_reranking_failure_returns_unranked(self) -> None:
-        retriever = _make_retriever(
-            rerank_model="reranker-v1",
-            rerank_base_url="http://localhost:8080",
-        )
-
-        resolved = {
-            "c-0": {},
-            "c-1": {},
-            "c-2": {},
-        }
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.post.side_effect = httpx.HTTPError("connection refused")
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            result = await retriever._visual_rerank("query", resolved, top_k=2)
-
-        # Fallback: first top_k items by insertion order
-        assert len(result) == 2
-        assert list(result.keys()) == ["c-0", "c-1"]
-
-    async def test_text_fallback_from_chunk_text(self) -> None:
-        """Chunks without image_data should use chunk_text for rerank documents."""
-        retriever = _make_retriever(
-            rerank_model="reranker-v1",
-            rerank_base_url="http://localhost:8080",
-        )
-
-        resolved = {
-            "c-0": {"image_data": "img0"},
-            "c-1": {},  # no image — should fall back to chunk_text
-        }
-        chunk_text = {"c-1": "text description of page"}
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "results": [
-                {"index": 0, "relevance_score": 0.9},
-                {"index": 1, "relevance_score": 0.7},
-            ],
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            await retriever._visual_rerank("query", resolved, top_k=2, chunk_text=chunk_text)
-
-        payload = mock_client.post.call_args[1]["json"]
-        docs = payload["documents"]
-        assert docs[0]["type"] == "image_url"  # c-0 has image
-        assert docs[1] == "text description of page"  # c-1 falls back to text
-
-    async def test_empty_resolved_returns_empty(self) -> None:
-        retriever = _make_retriever(
-            rerank_model="reranker-v1",
-            rerank_base_url="http://localhost:8080",
-        )
-        result = await retriever._visual_rerank("query", {}, top_k=5)
-        assert result == {}
-
-    async def test_rerank_sends_correct_payload(self) -> None:
-        retriever = _make_retriever(
-            rerank_model="reranker-v1",
-            rerank_base_url="http://localhost:8080/v1",
-            rerank_api_key="secret",
-        )
-
-        resolved = {
-            "c-0": {"image_data": "imgdata"},
-        }
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "results": [{"index": 0, "relevance_score": 0.9}],
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.post.return_value = mock_response
-            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client.__aexit__ = AsyncMock(return_value=False)
-            mock_client_cls.return_value = mock_client
-
-            await retriever._visual_rerank("my query", resolved, top_k=5)
-
-        # Verify the POST call
-        call_kwargs = mock_client.post.call_args
-        assert call_kwargs[0][0] == "http://localhost:8080/v1/rerank"
-        payload = call_kwargs[1]["json"]
-        assert payload["model"] == "reranker-v1"
-        assert payload["query"] == "my query"
-        assert len(payload["documents"]) == 1
-        assert payload["documents"][0]["type"] == "image_url"
-        headers = call_kwargs[1]["headers"]
-        assert headers["Authorization"] == "Bearer secret"
-
-
-# ---------------------------------------------------------------------------
-# TestParseRerankScore
-# ---------------------------------------------------------------------------
-
-
-class TestParseRerankScore:
-    """Test _parse_rerank_score static method: parsing, clamping, edge cases."""
-
-    def test_valid_float(self) -> None:
-        assert VisualRetriever._parse_rerank_score("0.8") == 0.8
-
-    def test_valid_decimal(self) -> None:
-        assert VisualRetriever._parse_rerank_score("0.75") == 0.75
-
-    def test_whitespace_stripped(self) -> None:
-        assert VisualRetriever._parse_rerank_score("  0.9 \n") == 0.9
-
-    def test_non_numeric_returns_zero(self) -> None:
-        assert VisualRetriever._parse_rerank_score("This page is very relevant") == 0.0
-
-    def test_clamped_above_one(self) -> None:
-        assert VisualRetriever._parse_rerank_score("1.5") == 1.0
-
-    def test_clamped_below_zero(self) -> None:
-        assert VisualRetriever._parse_rerank_score("-0.3") == 0.0
-
-    def test_json_schema_output(self) -> None:
-        assert VisualRetriever._parse_rerank_score('{"score": 0.62}') == 0.62
-
-    def test_thinking_with_trailing_score(self) -> None:
-        text = "<think>analysis about figure 10 and section 4.4</think>\n\n0.0<|im_end|>\n"
-        assert VisualRetriever._parse_rerank_score(text) == 0.0
-
-    def test_thinking_with_nonzero_score(self) -> None:
-        text = "<think>relevant content found</think>\n\n0.85<|im_end|>\n"
-        assert VisualRetriever._parse_rerank_score(text) == 0.85
-
-    def test_none_returns_zero(self) -> None:
-        assert VisualRetriever._parse_rerank_score(None) == 0.0  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# TestLlmVisualRerank
-# ---------------------------------------------------------------------------
-
-
-class TestLlmVisualRerank:
-    """Test _llm_visual_rerank: VLM pointwise scoring, sorting, error handling."""
-
-    async def test_sorts_by_score_descending(self) -> None:
-        call_count = 0
-
-        async def mock_vision(*, messages=None, **kwargs):
-            nonlocal call_count
-            scores = ["0.3", "0.9", "0.6"]
-            result = scores[call_count]
-            call_count += 1
-            return result
-
-        img = _TINY_PNG_B64
-        resolved = {
-            "chunk-a": {"image_data": img},
-            "chunk-b": {"image_data": img},
-            "chunk-c": {"image_data": img},
-        }
-
-        ret = _make_retriever(
-            vision_model_func=mock_vision,
-            rerank_backend="llm",
-        )
-        result = await ret._llm_visual_rerank("test query", resolved, top_k=2)
-
-        # Should return 2 chunks, highest scores first
-        assert len(result) == 2
-        scores_out = [v["relevance_score"] for v in result.values()]
-        assert scores_out == sorted(scores_out, reverse=True)
-        # chunk-b scored 0.9, chunk-c scored 0.6 — those are the top 2
-        assert list(result.keys()) == ["chunk-b", "chunk-c"]
-
-    async def test_no_image_no_text_scores_zero(self) -> None:
-        """No image_data and no chunk_text → score 0, VLM not called."""
-        resolved = {
-            "chunk-a": {},  # no image_data key
-        }
-        vision_func = AsyncMock(return_value="0.8")
-        ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
-
-        result = await ret._llm_visual_rerank("query", resolved, top_k=5)
-        assert result["chunk-a"]["relevance_score"] == 0.0
-        vision_func.assert_not_awaited()
-
-    async def test_text_fallback_when_no_image(self) -> None:
-        """No image_data but chunk_text available → VLM scores via text."""
-        resolved = {
-            "chunk-a": {},  # no image_data
-        }
-        vision_func = AsyncMock(return_value="0.7")
-        ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
-
-        result = await ret._llm_visual_rerank(
-            "query", resolved, top_k=5, chunk_text={"chunk-a": "page text"}
-        )
-        assert result["chunk-a"]["relevance_score"] == 0.7
-        vision_func.assert_awaited_once()
-
-    async def test_vision_error_scores_zero(self) -> None:
-        resolved = {
-            "chunk-a": {"image_data": _TINY_PNG_B64},
-        }
-        vision_func = AsyncMock(side_effect=RuntimeError("API timeout"))
-        ret = _make_retriever(vision_model_func=vision_func, rerank_backend="llm")
-
-        result = await ret._llm_visual_rerank("query", resolved, top_k=5)
-        assert result["chunk-a"]["relevance_score"] == 0.0
-
-
-# ---------------------------------------------------------------------------
-# TestRerankRouting
-# ---------------------------------------------------------------------------
-
-
-class TestRerankRouting:
-    """Test Phase 3 routing: rerank_backend selects correct rerank path."""
-
-    def test_llm_backend_with_vision_func(self) -> None:
-        ret = _make_retriever(
-            rerank_backend="llm",
-            vision_model_func=AsyncMock(),
-        )
-        assert ret.rerank_backend == "llm"
-        assert ret.vision_model_func is not None
-
-    def test_api_backend_with_base_url(self) -> None:
-        ret = _make_retriever(
-            rerank_backend="cohere",
-            rerank_model="rerank-v4",
-            rerank_base_url="https://api.cohere.com/v2",
-        )
-        assert ret.rerank_backend == "cohere"
-        assert ret.rerank_base_url is not None
+class TestRerankIntegration:
+    """Test unified rerank_func integration in Phase 3."""
+
+    async def test_rerank_func_called_with_chunks(self) -> None:
+        """rerank_func receives chunks with content + image_data."""
+        received = {}
+
+        async def mock_rerank(query, chunks, top_k):
+            received["query"] = query
+            received["chunks"] = chunks
+            received["top_k"] = top_k
+            # Return top 2 chunks with scores
+            return [
+                {**c, "rerank_score": 0.9 - i * 0.1}
+                for i, c in enumerate(chunks[:top_k])
+            ]
+
+        retriever = _make_retriever(rerank_func=mock_rerank)
+        result = await retriever.retrieve("test query", chunk_top_k=2)
+
+        assert received["query"] == "test query"
+        assert received["top_k"] == 2
+        # Chunks should have content and image_data
+        assert any(c.get("image_data") for c in received["chunks"])
+        assert len(result["contexts"]["chunks"]) == 2
+
+    async def test_no_rerank_func_truncates(self) -> None:
+        """Without rerank_func, candidates are truncated to chunk_top_k."""
+        retriever = _make_retriever(rerank_func=None)
+        result = await retriever.retrieve("query", chunk_top_k=1)
+        assert len(result["contexts"]["chunks"]) == 1
