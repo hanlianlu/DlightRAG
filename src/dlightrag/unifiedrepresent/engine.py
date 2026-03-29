@@ -70,6 +70,7 @@ class UnifiedRepresentEngine:
         visual_embedder: VisualEmbedder | None = None,
         path_resolver: PathResolver | None = None,
         context_model_func: Callable | None = None,
+        rerank_func: Callable | None = None,
     ) -> None:
         self.lightrag = lightrag
         self.visual_chunks = visual_chunks
@@ -107,10 +108,7 @@ class UnifiedRepresentEngine:
             visual_chunks=visual_chunks,
             config=config,
             vision_model_func=vision_model_func,
-            rerank_model=(config.rerank.model if config.rerank.enabled else None),
-            rerank_base_url=(config.rerank.base_url if config.rerank.enabled else None),
-            rerank_api_key=(config.rerank.api_key if config.rerank.enabled else None),
-            rerank_backend=(config.rerank.backend if config.rerank.enabled else None),
+            rerank_func=rerank_func,
             path_resolver=path_resolver,
             embedder=self.embedder,
         )

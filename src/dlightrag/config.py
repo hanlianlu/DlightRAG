@@ -67,19 +67,19 @@ class RerankConfig(BaseModel):
 
     enabled: bool = True
     strategy: Literal[
-        "llm_listwise",
-        "vlm_pointwise",
-        "cohere",
-        "jina",
-        "aliyun",
+        "chat_llm_reranker",
+        "jina_reranker",
+        "aliyun_reranker",
+        "local_reranker",
         "azure_cohere",
-    ] = "llm_listwise"
+    ] = "chat_llm_reranker"
     provider: Literal["openai", "anthropic", "gemini"] | None = None
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
     score_threshold: float = 0.5
     max_concurrency: int = 4
+    batch_size: int = 7
     temperature: float | None = None
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
