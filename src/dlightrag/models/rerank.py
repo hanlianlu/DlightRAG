@@ -19,14 +19,13 @@ logger = logging.getLogger(__name__)
 _DEFAULT_BATCH_SIZE = 7
 _DEFAULT_SCORE_THRESHOLD = 0.3
 
-_LISTWISE_PROMPT = """\
-You are a relevance judge. Given a query and {n} text chunks, \
+_RERANK_SYSTEM_PROMPT = """\
+You are a relevance judge. Given a query and text chunks, \
 score each chunk's relevance to the query.
+Respond with ONLY a JSON array of scores in order: [<float>, <float>, ...]
+Each score is 0.00 (completely irrelevant) to 1.00 (perfectly relevant)."""
 
-Respond with ONLY a JSON array of {n} scores in order: [<float>, <float>, ...]
-Each score is 0.00 (completely irrelevant) to 1.00 (perfectly relevant).
-
-Query: {query}"""
+_LISTWISE_PROMPT = "Query: {query}"
 
 
 def _clamp(value: float) -> float:
@@ -88,7 +87,7 @@ def build_llm_rerank_func(
 
         for batch_start in range(0, len(documents), batch_size):
             batch = documents[batch_start : batch_start + batch_size]
-            prompt_parts = [_LISTWISE_PROMPT.format(query=query, n=len(batch))]
+            prompt_parts = [_LISTWISE_PROMPT.format(query=query)]
             if effective_hints:
                 prompt_parts.append(f"\nContext: {effective_hints}")
             for i, doc in enumerate(batch):
@@ -96,7 +95,11 @@ def build_llm_rerank_func(
             user_content = "".join(prompt_parts)
 
             try:
-                result_str = await ingest_func(user_content, system_prompt="")
+                result_str = await ingest_func(
+                    user_content,
+                    system_prompt=_RERANK_SYSTEM_PROMPT,
+                    response_format={"type": "json_object"},
+                )
                 scores = _parse_listwise_scores(result_str, len(batch))
                 logger.info(
                     "Rerank batch [%d..%d]: scores=%s",

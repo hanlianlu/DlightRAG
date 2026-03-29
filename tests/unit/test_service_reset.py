@@ -37,7 +37,6 @@ def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test_w
     service._cancel_checker = None
     service.enable_vlm = False
     service._table_schema = None
-    service._table_schema_ttl = 0.0
 
     # Create fake LightRAG with all storage attrs (dynamic-discovery friendly)
     lightrag = _FakeLightRAG()

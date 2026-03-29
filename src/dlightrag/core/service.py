@@ -1029,7 +1029,7 @@ class RAGService:
             )
 
         # Fallback: if in-filter returned 0 chunks but candidates existed, retry unfiltered
-        if candidate_ids and not kg_result.contexts.chunks:
+        if candidate_ids and not kg_result.contexts.get("chunks"):
             logger.info("In-filter returned 0 chunks, retrying unfiltered")
             kg_result = await backend.aretrieve(
                 query,
