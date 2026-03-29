@@ -64,9 +64,11 @@ class RAGServiceManager:
     @classmethod
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
         """Async factory — creates manager, warms up all known workspaces in parallel."""
+        from dlightrag.observability import init_tracing
         from dlightrag.utils.concurrency import bounded_gather
 
         manager = cls(config=config)
+        init_tracing(manager._config)
 
         # Discover all known workspaces and warm them up in parallel
         all_ws = await manager._list_all_workspaces()
@@ -318,14 +320,17 @@ class RAGServiceManager:
         if plan and plan.metadata_filter is not None:
             kwargs.setdefault("filters", plan.metadata_filter)
         ws_list = workspaces or [workspace or self._config.workspace]
+        from dlightrag.observability import trace_pipeline
+
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                if len(ws_list) == 1:
-                    svc = await self._get_service(ws_list[0])
-                    return await svc.aretrieve(effective_query, **kwargs)
-                return await federated_retrieve(
-                    effective_query, ws_list, self._get_service, **kwargs
-                )
+                async with trace_pipeline("retrieve", workspaces=ws_list, query=effective_query):
+                    if len(ws_list) == 1:
+                        svc = await self._get_service(ws_list[0])
+                        return await svc.aretrieve(effective_query, **kwargs)
+                    return await federated_retrieve(
+                        effective_query, ws_list, self._get_service, **kwargs
+                    )
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -342,19 +347,22 @@ class RAGServiceManager:
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate."""
         ws_list = workspaces or [workspace or self._config.workspace]
+        from dlightrag.observability import trace_pipeline
+
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                planner = self._get_query_planner()
-                plan = await planner.plan(
-                    query,
-                    conversation_history=conversation_history,
-                    max_turns=self._config.max_conversation_turns,
-                    max_tokens=self._config.max_conversation_tokens,
-                )
+                async with trace_pipeline("answer_pipeline", workspaces=ws_list, query=query):
+                    planner = self._get_query_planner()
+                    plan = await planner.plan(
+                        query,
+                        conversation_history=conversation_history,
+                        max_turns=self._config.max_conversation_turns,
+                        max_tokens=self._config.max_conversation_tokens,
+                    )
 
-                retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
-                engine = self._get_answer_engine()
-                return await engine.generate(plan.standalone_query, retrieval.contexts)
+                    retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
+                    engine = self._get_answer_engine()
+                    return await engine.generate(plan.standalone_query, retrieval.contexts)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -371,24 +379,29 @@ class RAGServiceManager:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces: plan -> retrieve -> stream."""
         ws_list = workspaces or [workspace or self._config.workspace]
+        from dlightrag.observability import trace_pipeline
+
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                planner = self._get_query_planner()
-                plan = await planner.plan(
-                    query,
-                    conversation_history=conversation_history,
-                    max_turns=self._config.max_conversation_turns,
-                    max_tokens=self._config.max_conversation_tokens,
-                )
-                logger.info(
-                    "Query plan: original=%r, standalone=%r",
-                    plan.original_query[:60],
-                    plan.standalone_query[:60],
-                )
+                async with trace_pipeline(
+                    "answer_stream_pipeline", workspaces=ws_list, query=query
+                ):
+                    planner = self._get_query_planner()
+                    plan = await planner.plan(
+                        query,
+                        conversation_history=conversation_history,
+                        max_turns=self._config.max_conversation_turns,
+                        max_tokens=self._config.max_conversation_tokens,
+                    )
+                    logger.info(
+                        "Query plan: original=%r, standalone=%r",
+                        plan.original_query[:60],
+                        plan.standalone_query[:60],
+                    )
 
-                retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
-                engine = self._get_answer_engine()
-                return await engine.generate_stream(plan.standalone_query, retrieval.contexts)
+                    retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
+                    engine = self._get_answer_engine()
+                    return await engine.generate_stream(plan.standalone_query, retrieval.contexts)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -500,6 +513,8 @@ class RAGServiceManager:
 
     async def close(self) -> None:
         """Close all managed RAGService instances."""
+        from dlightrag.observability import shutdown_tracing
+
         for ws, svc in self._services.items():
             try:
                 await svc.close()
@@ -507,6 +522,7 @@ class RAGServiceManager:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()
         self._ready = False
+        shutdown_tracing()
 
     # --- Health ---
 

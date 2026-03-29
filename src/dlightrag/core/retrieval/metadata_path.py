@@ -7,7 +7,6 @@ import logging
 from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.core.retrieval.scoped_search import scoped_vector_search
 from dlightrag.storage.metadata_index import PGMetadataIndex
 
 logger = logging.getLogger(__name__)
@@ -18,9 +17,6 @@ async def metadata_retrieve(
     filters: MetadataFilter,
     lightrag: Any,
     rag_mode: str,
-    query: str = "",
-    chunks_vdb: Any = None,
-    top_k: int = 20,
 ) -> list[str]:
     """Retrieve chunk_ids matching the given metadata filters.
 
@@ -48,15 +44,6 @@ async def metadata_retrieve(
         chunk_ids.extend(resolved)
 
     logger.info("[MetadataPath] resolved %d chunk(s) total", len(chunk_ids))
-
-    # Scoped vector search when result set is large
-    if len(chunk_ids) > top_k and query and chunks_vdb is not None:
-        logger.info(
-            "[MetadataPath] %d chunks > top_k=%d, running scoped vector search",
-            len(chunk_ids),
-            top_k,
-        )
-        return await scoped_vector_search(query, chunk_ids, chunks_vdb, top_k)
 
     return chunk_ids
 

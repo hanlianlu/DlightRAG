@@ -76,7 +76,11 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
             model_kwargs=model_kwargs,
         )
 
-    return partial(completion_wrapper)
+    from dlightrag.observability import wrap_chat_func
+
+    traced_func = wrap_chat_func(completion_wrapper, name=f"llm_{cfg.model}")
+
+    return partial(traced_func)
 
 
 def get_chat_model_func(config: DlightragConfig) -> Callable:
@@ -130,10 +134,14 @@ def get_embedding_func(config: DlightragConfig) -> Any:
         # LightRAG's EmbeddingFunc validates via result.size — requires numpy
         return np.array(result)
 
+    from dlightrag.observability import wrap_embedding_func
+
+    traced_embed_func = wrap_embedding_func(embed_func, name=f"embed_{cfg.model}")
+
     return EmbeddingFunc(
         embedding_dim=cfg.dim,
         max_token_size=cfg.max_token_size,
-        func=embed_func,
+        func=traced_embed_func,
         model_name=cfg.model,
     )
 

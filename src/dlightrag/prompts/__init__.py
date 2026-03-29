@@ -1,0 +1,43 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Centralized prompts for DlightRAG."""
+
+from .planner import (
+    PLANNER_HISTORY_TEMPLATE,
+    PLANNER_NO_HISTORY_TEMPLATE,
+    PLANNER_SYSTEM_PROMPT,
+)
+from .rag import (
+    ANSWER_CORE,
+    HIGHLIGHT_SYSTEM_PROMPT,
+    HIGHLIGHT_USER_PROMPT,
+    VISUAL_RERANK_PROMPT,
+    get_answer_system_prompt,
+)
+from .vision import (
+    OCR_SYSTEM_PROMPT,
+    OCR_USER_PROMPT,
+    SMART_IMAGE_ANALYSIS_PROMPT,
+    SMART_IMAGE_ANALYSIS_PROMPT_WITH_CONTEXT,
+    SMART_IMAGE_ANALYSIS_SYSTEM,
+    STRUCTURAL_CONTEXT_PROMPT,
+)
+
+__all__ = [
+    # planner
+    "PLANNER_SYSTEM_PROMPT",
+    "PLANNER_HISTORY_TEMPLATE",
+    "PLANNER_NO_HISTORY_TEMPLATE",
+    # rag
+    "ANSWER_CORE",
+    "get_answer_system_prompt",
+    "VISUAL_RERANK_PROMPT",
+    "HIGHLIGHT_SYSTEM_PROMPT",
+    "HIGHLIGHT_USER_PROMPT",
+    # vision
+    "SMART_IMAGE_ANALYSIS_SYSTEM",
+    "SMART_IMAGE_ANALYSIS_PROMPT",
+    "SMART_IMAGE_ANALYSIS_PROMPT_WITH_CONTEXT",
+    "OCR_SYSTEM_PROMPT",
+    "OCR_USER_PROMPT",
+    "STRUCTURAL_CONTEXT_PROMPT",
+]

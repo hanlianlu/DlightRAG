@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -38,17 +38,3 @@ class MetadataFilter:
                 self.custom,
             ]
         )
-
-
-@dataclass
-class RetrievalPlan:
-    """Output of QueryAnalyzer — describes which retrieval paths to activate.
-
-    The ``query`` field is always the original user query, unchanged.
-    QueryAnalyzer only extracts metadata filters — it never rewrites
-    or decomposes the query itself (that's LightRAG's job).
-    """
-
-    query: str
-    metadata_filters: MetadataFilter | None
-    paths: list[str] = field(default_factory=lambda: ["kgvector"])

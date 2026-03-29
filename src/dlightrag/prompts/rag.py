@@ -1,11 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""VLM prompts for unified representational RAG.
+"""Answer generation and evaluation prompts."""
 
-Used during query (answer generation) and visual reranking.
-OCR/ingestion prompts live in :mod:`dlightrag.core.vlm_ocr`.
-"""
+# --- Answer Generation ---
 
-_ANSWER_CORE = """\
+ANSWER_CORE = """\
 You are an expert document analysis assistant. You answer questions based on \
 the provided document content, page images, and knowledge graph context.
 
@@ -47,12 +45,14 @@ def get_answer_system_prompt() -> str:
     """Return the single unified system prompt for answer generation.
 
     The LLM only generates the answer with inline ``[n]`` / ``[n-m]``
-    citation markers.  References are extracted programmatically by
+    citation markers. References are extracted programmatically by
     CitationProcessor — the LLM is NOT asked to produce a References
     section (that approach is fragile and error-prone).
     """
-    return _ANSWER_CORE
+    return ANSWER_CORE
 
+
+# --- Reranking ---
 
 VISUAL_RERANK_PROMPT = """\
 Rate how relevant this document page is to the following query.
@@ -60,37 +60,19 @@ Query: {query}
 Respond **ONLY** with a decimal number ranging from 0.00 to 1.00 (0.00 = completely irrelevant, 1.00 = fully relevant).
 """
 
-STRUCTURAL_CONTEXT_PROMPT = """\
-You are a document structure analyst. You maintain a running structural \
-context that helps OCR extraction of subsequent pages understand where \
-they are in the document.
 
-You will receive:
-1. The current structural context (may be empty for the first page)
-2. The extracted text content of the current page
+# --- Semantic Highlighting ---
 
-Decide whether the structural context needs updating:
-- UPDATE when you see: new section headings, new table headers, \
-new document structure, or a transition to different content
-- KEEP when the page is a continuation of existing content \
-(more data rows, same section text continuing)
+HIGHLIGHT_SYSTEM_PROMPT = (
+    "You are a precise text analysis assistant. Given a citing sentence and a "
+    "chunk of source text, identify 1-3 short phrases (3-12 words each) from "
+    "the chunk that most directly support the citing sentence. Return ONLY "
+    "phrases that appear verbatim in the chunk text.\n\n"
+    'Return JSON: {"phrases": ["phrase1", "phrase2"], "confidence": 0.0-1.0}'
+)
 
-When updating, write a concise structural context that captures ONLY \
-information needed for understanding subsequent pages:
-- Active section/document headings
-- Active table column headers
-- Any persistent structural landmarks
-
-Do NOT include actual data values, row content, or page-specific details.
-
-Output JSON only:
-{"action": "update", "context": "..."}
-or
-{"action": "keep"}
-"""
-
-__all__ = [
-    "STRUCTURAL_CONTEXT_PROMPT",
-    "VISUAL_RERANK_PROMPT",
-    "get_answer_system_prompt",
-]
+HIGHLIGHT_USER_PROMPT = (
+    "Citing sentence: {citing_sentence}\n\n"
+    "Source chunk:\n{chunk_content}\n\n"
+    "Extract 1-3 supporting phrases from the source chunk (must be exact substrings)."
+)

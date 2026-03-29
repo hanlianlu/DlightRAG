@@ -26,7 +26,7 @@ from typing import Any
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.models.streaming import AnswerStream
-from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+from dlightrag.prompts import get_answer_system_prompt
 
 logger = logging.getLogger(__name__)
 
