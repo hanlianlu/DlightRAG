@@ -356,7 +356,7 @@ class VisualRetriever:
         """
         import asyncio
 
-        from dlightrag.unifiedrepresent.prompts import VISUAL_RERANK_PROMPT
+        from dlightrag.prompts import VISUAL_RERANK_PROMPT
 
         if not resolved or not self.vision_model_func:
             return dict(list(resolved.items())[:top_k])

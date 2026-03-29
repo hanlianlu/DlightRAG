@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dlightrag.unifiedrepresent.prompts import get_answer_system_prompt
+from dlightrag.prompts import get_answer_system_prompt
 
 
 class TestGetAnswerSystemPrompt:

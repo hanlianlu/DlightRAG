@@ -260,10 +260,7 @@ class DlightragConfig(BaseSettings):
     max_relation_tokens: int = Field(default=8000)
     max_total_tokens: int = Field(default=40000)
     default_mode: Literal["local", "global", "hybrid", "naive", "mix"] = Field(default="mix")
-    rrf_k: int = Field(
-        default=60,
-        description="RRF fusion parameter k for multi-path retrieval (60 recommended for naive/hybrid modes)",
-    )
+
     max_conversation_turns: int = Field(default=50)
     max_conversation_tokens: int = Field(default=150000)
 
@@ -324,6 +321,11 @@ class DlightragConfig(BaseSettings):
         default=600,
         description="Overall request timeout in seconds for ingest/retrieve/answer operations.",
     )
+
+    # ===== Observability =====
+    langfuse_public_key: str | None = Field(default=None)
+    langfuse_secret_key: str | None = Field(default=None)
+    langfuse_host: str = Field(default="https://cloud.langfuse.com")
 
     # ===== Validators =====
 

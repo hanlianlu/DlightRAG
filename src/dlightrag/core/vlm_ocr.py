@@ -20,42 +20,6 @@ logger = logging.getLogger(__name__)
 # Prompts
 # ---------------------------------------------------------------------------
 
-OCR_SYSTEM_PROMPT = (
-    "You are a document OCR expert. You extract ALL content from document page "
-    "images into structured JSON with perfect accuracy. You never hallucinate or "
-    "invent text that is not visible in the image. You preserve the original "
-    "language — never translate."
-)
-
-OCR_USER_PROMPT = """\
-Extract all content from this document page into structured JSON.
-
-Return a JSON object: {"blocks": [...]} where each block is one of:
-
-1. heading — {"type": "heading", "level": 1-4, "text": "..."}
-   (1=title, 2=section, 3=subsection, 4=sub-subsection)
-
-2. text — {"type": "text", "text": "..."}
-   (Use Markdown: - for lists, > for quotes, **bold**, *italic*)
-
-3. table — {"type": "table", "html": "<table>...</table>"}
-   (Use <th> for headers. colspan/rowspan as needed.
-    Do NOT use <br> in cells. Do NOT use Markdown table syntax.)
-
-4. formula — {"type": "formula", "latex": "..."}
-   (Use \\( \\) for inline, \\[ \\] for block math.
-    Do NOT use $ delimiters or Unicode math symbols.)
-
-5. figure — {"type": "figure", "description": "..."}
-   (Describe content, data trends, labels, key information.)
-
-RULES:
-- Output blocks in natural reading order.
-- Extract ALL visible text including headers, footers, captions, footnotes.
-- ACCURACY IS CRITICAL: double-check numerical values. Watch for 6<->8, 5<->6, 0<->O, 1<->l.
-- Empty page: return {"blocks": []}.
-- Return ONLY the JSON object. No explanation, no markdown fences."""
-
 
 # ---------------------------------------------------------------------------
 # Utilities

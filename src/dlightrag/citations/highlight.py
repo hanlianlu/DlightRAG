@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from dlightrag.prompts import HIGHLIGHT_SYSTEM_PROMPT, HIGHLIGHT_USER_PROMPT
+
 if TYPE_CHECKING:
     from .schemas import SourceReference
 
@@ -23,20 +25,6 @@ logger = logging.getLogger(__name__)
 
 _MAX_CONCURRENT_HIGHLIGHTS = 15
 _MAX_INPUT_CHARS = 4096
-
-_HIGHLIGHT_SYSTEM_PROMPT = (
-    "You are a precise text analysis assistant. Given a citing sentence and a "
-    "chunk of source text, identify 1-3 short phrases (3-12 words each) from "
-    "the chunk that most directly support the citing sentence. Return ONLY "
-    "phrases that appear verbatim in the chunk text.\n\n"
-    'Return JSON: {"phrases": ["phrase1", "phrase2"], "confidence": 0.0-1.0}'
-)
-
-_HIGHLIGHT_USER_PROMPT = (
-    "Citing sentence: {citing_sentence}\n\n"
-    "Source chunk:\n{chunk_content}\n\n"
-    "Extract 1-3 supporting phrases from the source chunk (must be exact substrings)."
-)
 
 
 class HighlightPhrases(BaseModel):
@@ -111,12 +99,12 @@ class HighlightExtractor:
         citing_sentence = citing_sentence[:_MAX_INPUT_CHARS]
         chunk_content = chunk_content[:_MAX_INPUT_CHARS]
 
-        user_prompt = _HIGHLIGHT_USER_PROMPT.format(
+        user_prompt = HIGHLIGHT_USER_PROMPT.format(
             citing_sentence=citing_sentence,
             chunk_content=chunk_content,
         )
         messages = [
-            {"role": "system", "content": _HIGHLIGHT_SYSTEM_PROMPT},
+            {"role": "system", "content": HIGHLIGHT_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
 

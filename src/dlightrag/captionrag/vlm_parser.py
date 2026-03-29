@@ -16,10 +16,12 @@ from pathlib import Path
 from lightrag.utils import compute_mdhash_id
 
 from dlightrag.core.vlm_ocr import (
-    OCR_SYSTEM_PROMPT,
-    OCR_USER_PROMPT,
     image_to_png_bytes,
     parse_vlm_response,
+)
+from dlightrag.prompts import (
+    OCR_SYSTEM_PROMPT,
+    OCR_USER_PROMPT,
 )
 from dlightrag.unifiedrepresent.renderer import PageRenderer
 

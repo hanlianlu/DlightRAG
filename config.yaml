@@ -127,7 +127,6 @@ embedding_request_timeout: 120        # seconds per embedding request
 top_k: 60
 chunk_top_k: 30
 default_mode: mix                     # local, global, hybrid, naive, mix
-rrf_k: 60
 max_conversation_turns: 25
 max_conversation_tokens: 65536
 
@@ -146,3 +145,12 @@ kg_entity_types:
   - Biography
   - Location
   - Event
+
+# ─────────────────────────────────────────────────────────────────
+# Security & Auth (Optional — best kept in .env)
+# ─────────────────────────────────────────────────────────────────
+
+# auth_mode: none                       # none, simple, jwt
+# api_auth_token: ""                    # Bearer token for simple auth mode
+# jwt_secret: ""                        # Required if auth_mode is jwt
+# jwt_algorithm: "HS256"                # Signature algorithm for JWT

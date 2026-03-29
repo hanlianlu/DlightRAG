@@ -242,18 +242,22 @@ async def federated_retrieve(
     first_svc = await get_service(workspaces[0])
     if first_svc._metadata_index is not None:
         try:
-            from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
+            from dlightrag.core.query_planner import QueryPlanner
 
             lr = first_svc._lightrag or (
                 getattr(first_svc.rag, "lightrag", None) if first_svc.rag else None
             )
             llm_func = getattr(lr, "llm_model_func", None) if lr else None
-            schema = getattr(first_svc, "_table_schema", None)
-            analyzer = QueryAnalyzer(llm_func=llm_func, schema=schema)
-            shared_plan = await analyzer.analyze(query, explicit_filters=kwargs.get("filters"))
+
+            # Provider for schema refresh
+            async def _schema_provider():
+                return await first_svc._metadata_index.get_table_schema()
+
+            planner = QueryPlanner(llm_func=llm_func, schema_provider=_schema_provider)
+            shared_plan = await planner.plan(query, explicit_filter=kwargs.get("filters"))
             logger.info(
                 "Federation: shared plan computed, query=%r",
-                (shared_plan.query or "")[:60],
+                (shared_plan.standalone_query or "")[:60],
             )
         except Exception as exc:
             logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)

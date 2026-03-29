@@ -180,7 +180,6 @@ class RAGService:
         self._hash_index: Any = None  # Content-hash deduplication index
         self._metadata_index: Any = None  # Document metadata index
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
-        self._table_schema_ttl: float = 0.0  # Cache expiry timestamp
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by _do_initialize / _do_initialize_unified;
@@ -970,11 +969,17 @@ class RAGService:
     ) -> RetrievalResult:
         """Retrieve structured data without generating answer.
 
+        Architecture: Plan-First In-Filtering (matching ArtRAG pattern).
+
+        1. Resolve metadata filters → candidate chunk_ids (upfront)
+        2. Set contextvar via metadata_filter_scope
+        3. KG retrieval runs with FilteredVectorStorage (WHERE id = ANY)
+        4. Rerank operates only on filtered results
+        5. Enrich with document metadata
+
         Args:
             filters: Optional MetadataFilter for structured metadata queries.
-                     Also auto-detected from query text via QueryAnalyzer.
-            _plan: Pre-computed RetrievalPlan from federation (avoids
-                   redundant LLM calls in multi-workspace retrieval).
+            _plan: Pre-computed QueryPlan from QueryPlanner (via ServiceManager).
         """
         self._ensure_initialized()
         backend = self._effective_backend
@@ -984,11 +989,12 @@ class RAGService:
         if filters and self._metadata_index is None:
             logger.warning("Metadata filters ignored: metadata index requires PostgreSQL backend")
 
-        # Resolve metadata candidates for in-filtering (if available)
+        # --- Step 1: Resolve metadata filter → candidate chunk_ids ---
         candidate_ids: set[str] | None = None
         effective_filters = filters
         if effective_filters is None and _plan is not None:
-            effective_filters = getattr(_plan, "metadata_filters", None)
+            effective_filters = getattr(_plan, "metadata_filter", None)
+
         if effective_filters and self._metadata_index is not None:
             try:
                 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
@@ -999,16 +1005,16 @@ class RAGService:
                     effective_filters,
                     lr,
                     self.config.rag_mode,
-                    query=query,
-                    top_k=500,
                 )
                 if chunk_ids:
                     candidate_ids = set(chunk_ids)
                     logger.info("In-filter: %d candidate chunks from metadata", len(candidate_ids))
+                else:
+                    logger.info("Metadata filter matched 0 candidates, proceeding unfiltered")
             except Exception as exc:
                 logger.warning("Metadata candidate resolution failed (non-fatal): %s", exc)
 
-        # Phase 1: KG retrieval with in-filtering scope
+        # --- Step 2: KG retrieval with in-filtering scope ---
         from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
 
         async with metadata_filter_scope(candidate_ids):
@@ -1035,30 +1041,7 @@ class RAGService:
                 **kwargs,
             )
 
-        # Phase 2: Supplementary multi-path (only when no in-filtering was applied)
-        shared_plan = _plan
-        if candidate_ids is None and (
-            self._metadata_index is not None
-            or (self.config.rag_mode == "unified" and self._lightrag)
-        ):
-            try:
-                supplementary = await self._run_multi_path_retrieval(
-                    query,
-                    filters,
-                    top_k=top_k or self.config.top_k,
-                    plan=shared_plan,
-                )
-                if supplementary:
-                    self._merge_round_robin(
-                        kg_result,
-                        supplementary,
-                        top_k=chunk_top_k or self.config.chunk_top_k,
-                    )
-            except Exception as exc:
-                logger.warning("Multi-path retrieval failed (non-fatal): %s", exc)
-
-        # Phase 3: Enrich chunks with document metadata (doc_title, doc_author, etc.)
-        # so the AnswerEngine can produce better-grounded responses.
+        # --- Step 3: Enrich chunks with document metadata ---
         if self._metadata_index is not None:
             await self._enrich_chunks_with_metadata(kg_result)
 
@@ -1125,151 +1108,6 @@ class RAGService:
                 existing = chunk.get("metadata") or {}
                 existing.update(doc_meta)
                 chunk["metadata"] = existing
-
-    async def _run_multi_path_retrieval(
-        self,
-        query: str,
-        explicit_filters: MetadataFilter | None,
-        top_k: int = 60,
-        plan: Any = None,
-    ) -> list[dict[str, Any]]:
-        """Run QueryAnalyzer + Orchestrator for supplementary chunk retrieval.
-
-        Parameters
-        ----------
-        plan:
-            Pre-computed ``RetrievalPlan`` from federation. When provided,
-            skips QueryAnalyzer LLM call (avoids redundant analysis in
-            multi-workspace federation).
-        """
-        from dlightrag.core.retrieval.orchestrator import RetrievalOrchestrator
-
-        if plan is None:
-            from dlightrag.core.retrieval.query_analyzer import QueryAnalyzer
-
-            # Get LLM func for QueryAnalyzer's NL extraction fallback
-            lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
-            llm_func = getattr(lr, "llm_model_func", None) if lr else None
-
-            # Refresh table schema (cached, 5-min TTL)
-            import time
-
-            now = time.monotonic()
-            if self._metadata_index and now > self._table_schema_ttl:
-                try:
-                    self._table_schema = await self._metadata_index.get_table_schema()
-                    self._table_schema_ttl = now + 300
-                except Exception as exc:
-                    logger.debug("Table schema refresh failed: %s", exc)
-
-            analyzer = QueryAnalyzer(llm_func=llm_func, schema=self._table_schema)
-            plan = await analyzer.analyze(query, explicit_filters=explicit_filters)
-
-        if not plan.metadata_filters and not plan.query:
-            logger.info(
-                "[MultiPath] No filters and no semantic query, skipping multi-path retrieval"
-            )
-            return []
-
-        logger.info(
-            "[MultiPath] Plan: paths=%s, has_filters=%s, filters=%s",
-            plan.paths,
-            plan.metadata_filters is not None,
-            plan.metadata_filters,
-        )
-
-        chunks_vdb = None
-        if self._lightrag and self.config.rag_mode == "unified":
-            chunks_vdb = getattr(self._lightrag, "chunks_vdb", None)
-
-        orchestrator = RetrievalOrchestrator(
-            metadata_index=self._metadata_index,
-            lightrag=self._lightrag or getattr(self.rag, "lightrag", None),
-            rag_mode=self.config.rag_mode,
-            chunks_vdb=chunks_vdb,
-        )
-
-        chunk_ids = await orchestrator.orchestrate(plan, top_k=top_k)
-        if not chunk_ids:
-            return []
-
-        return await self._resolve_chunk_contexts(chunk_ids)
-
-    async def _resolve_chunk_contexts(
-        self,
-        chunk_ids: list[str],
-    ) -> list[dict[str, Any]]:
-        """Resolve chunk_ids to ChunkContext dicts via text_chunks KV store."""
-        lr = self._lightrag or (getattr(self.rag, "lightrag", None) if self.rag else None)
-        if not lr or not hasattr(lr, "text_chunks"):
-            return []
-
-        try:
-            chunk_data_list = await lr.text_chunks.get_by_ids(chunk_ids)
-        except Exception:
-            return []
-
-        contexts: list[dict[str, Any]] = []
-        for cid, cdata in zip(chunk_ids, chunk_data_list, strict=True):
-            if not cdata:
-                continue
-            ctx: dict[str, Any] = {
-                "chunk_id": cid,
-                "reference_id": cdata.get("full_doc_id", ""),
-                "file_path": cdata.get("file_path", ""),
-                "content": cdata.get("content", ""),
-                "metadata": {"source": "multi_path_retrieval"},
-            }
-            if cdata.get("page_idx") is not None:
-                ctx["page_idx"] = cdata["page_idx"] + 1  # 0-based to 1-based
-            contexts.append(ctx)
-
-        # Unified mode: enrich with visual data (image_data, page_index)
-        if self.config.rag_mode == "unified":
-            visual_store = getattr(self.unified, "visual_chunks", None) if self.unified else None
-            if visual_store:
-                try:
-                    resolved_cids = [ctx["chunk_id"] for ctx in contexts]
-                    visual_data = await visual_store.get_by_ids(resolved_cids)
-                    for ctx, vd in zip(contexts, visual_data, strict=False):
-                        if not vd or not isinstance(vd, dict):
-                            continue
-                        if vd.get("image_data"):
-                            ctx["image_data"] = vd["image_data"]
-                        if vd.get("page_index") is not None:
-                            ctx["page_idx"] = vd["page_index"] + 1
-                except Exception as exc:
-                    logger.warning("Visual enrichment failed (non-fatal): %s", exc)
-
-        return contexts
-
-    @staticmethod
-    def _merge_round_robin(
-        result: RetrievalResult,
-        supplementary: list[dict[str, Any]],
-        top_k: int = 20,
-    ) -> None:
-        """Merge Step 2 chunks into Step 1 via round-robin interleaving.
-
-        Deduplicates by chunk_id (Step 1 wins). Interleaves Step 1 and
-        Step 2 chunks alternately, then caps at top_k.
-        """
-        primary_chunks = result.contexts.get("chunks", [])
-
-        # Dedup: exclude supplementary chunks already in primary
-        existing_ids = {c.get("chunk_id") for c in primary_chunks}
-        new_supplementary = [c for c in supplementary if c.get("chunk_id") not in existing_ids]
-
-        # Round-robin interleave
-        merged: list[dict[str, Any]] = []
-        max_len = max(len(primary_chunks), len(new_supplementary))
-        for i in range(max_len):
-            if i < len(primary_chunks):
-                merged.append(primary_chunks[i])
-            if i < len(new_supplementary):
-                merged.append(new_supplementary[i])
-
-        result.contexts["chunks"] = merged[:top_k]
 
     # === METADATA API ===
 

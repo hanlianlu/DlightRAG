@@ -140,12 +140,11 @@ class EntityExtractor:
     ) -> str:
         """Call VLM to extract structured content and convert to text."""
         from dlightrag.core.vlm_ocr import (
-            OCR_SYSTEM_PROMPT,
-            OCR_USER_PROMPT,
             blocks_to_text,
             image_to_png_bytes,
             parse_vlm_response,
         )
+        from dlightrag.prompts import OCR_SYSTEM_PROMPT, OCR_USER_PROMPT
 
         if self.vision_model_func is None:
             raise RuntimeError("vision_model_func is required but was not set")
@@ -202,7 +201,7 @@ class EntityExtractor:
         if self.context_model_func is None:
             return structural_ctx
 
-        from dlightrag.unifiedrepresent.prompts import STRUCTURAL_CONTEXT_PROMPT
+        from dlightrag.prompts import STRUCTURAL_CONTEXT_PROMPT
 
         ctx_display = structural_ctx if structural_ctx else "(empty — first page)"
         user_content = (

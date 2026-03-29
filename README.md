@@ -18,6 +18,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 - **Broad LLM support** — Native SDKs for OpenAI, Anthropic, Gemini + any OpenAI-compatible endpoint
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
+- **Observability** — Zero-overhead telemetry via Langfuse for tracking pipelines, queries, and generations
 - **Four interfaces** — Web UI, REST API, Python SDK, and MCP server
 
 
@@ -301,6 +302,20 @@ Set in `config.yaml` under the `rerank:` block:
 | `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
 
 Point any backend at a local reranker (Xinference, etc.) via `rerank.base_url` + `rerank.model` in config.yaml.
+
+### Observability (Langfuse)
+
+DlightRAG includes native, zero-overhead tracing using [Langfuse](https://langfuse.com/). When configured, you get detailed waterfall traces of every RAG pipeline stage, LLM generation, and embedding call. If keys are omitted, the tracing module operates as a pure no-op with zero performance penalty.
+
+To enable observability, set the following in your `.env`:
+
+```bash
+DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
+DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
+# DLIGHTRAG_LANGFUSE_HOST=https://cloud.langfuse.com  # Optional: defaults to cloud
+```
+
+This will automatically track `retrieve`, `answer`, and `ingest` operations at the service level.
 
 
 ## Development

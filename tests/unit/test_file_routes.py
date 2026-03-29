@@ -29,7 +29,7 @@ def client(tmp_working_dir: Path) -> TestClient:
         embedding=EmbeddingConfig(api_key="test"),
     )
     with (
-        patch("dlightrag.api.routes.get_config", return_value=config),
+        patch("dlightrag.api.routes.files.get_config", return_value=config),
         patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
     ):
         with TestClient(app) as c:
@@ -62,7 +62,7 @@ class TestFileEndpoint:
 
 class TestFileEndpointAzureRedirect:
     @patch(
-        "dlightrag.api.routes.generate_azure_sas_url",
+        "dlightrag.api.routes.files.generate_azure_sas_url",
         return_value="https://acct.blob.core.windows.net/c/b?sig=x",
     )
     def test_azure_302_redirect(self, mock_sas, tmp_working_dir: Path) -> None:
@@ -74,7 +74,7 @@ class TestFileEndpointAzureRedirect:
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
         with (
-            patch("dlightrag.api.routes.get_config", return_value=config),
+            patch("dlightrag.api.routes.files.get_config", return_value=config),
             patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
         ):
             with TestClient(app, follow_redirects=False) as c:

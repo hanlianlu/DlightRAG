@@ -1,11 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for MetadataFilter and RetrievalPlan data models."""
+"""Tests for MetadataFilter data model."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from dlightrag.core.retrieval.models import MetadataFilter, RetrievalPlan
+from dlightrag.core.retrieval.models import MetadataFilter
 
 
 class TestMetadataFilter:
@@ -42,48 +42,3 @@ class TestMetadataFilter:
             custom=None,
         )
         assert f.is_empty()
-
-
-class TestRetrievalPlan:
-    def test_default_paths(self) -> None:
-        plan = RetrievalPlan(query="test", metadata_filters=None)
-        assert plan.paths == ["kgvector"]
-
-    def test_with_filters(self) -> None:
-        f = MetadataFilter(filename="test.pdf")
-        plan = RetrievalPlan(
-            query="test",
-            metadata_filters=f,
-            paths=["metafilters", "kgvector"],
-        )
-        assert "metafilters" in plan.paths
-        assert "kgvector" in plan.paths
-
-    def test_query_preserved_unchanged(self) -> None:
-        """Query is always stored unchanged (no rewriting by analyzer)."""
-        plan = RetrievalPlan(
-            query="original query with file.pdf",
-            metadata_filters=None,
-        )
-        assert plan.query == "original query with file.pdf"
-
-
-class TestRrfKConfig:
-    def test_rrf_k_default(self) -> None:
-        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
-
-        config = DlightragConfig(  # type: ignore[call-arg]
-            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
-            embedding=EmbeddingConfig(api_key="test-key"),
-        )
-        assert config.rrf_k == 60
-
-    def test_rrf_k_custom(self) -> None:
-        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
-
-        config = DlightragConfig(  # type: ignore[call-arg]
-            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
-            embedding=EmbeddingConfig(api_key="test-key"),
-            rrf_k=100,
-        )
-        assert config.rrf_k == 100
