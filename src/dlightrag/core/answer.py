@@ -136,18 +136,27 @@ class AnswerEngine:
         user_prompt, indexer = self._build_user_prompt(query, contexts)
         messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
-        # Debug: count image blocks to verify image_data reaches LLM
-        image_count = sum(
-            1
-            for block in (messages[1].get("content", []) if len(messages) > 1 else [])
-            if isinstance(block, dict) and block.get("type") == "image_url"
-        )
+        # Debug: log context structure sent to LLM
+        content_blocks = messages[1].get("content", []) if len(messages) > 1 else []
+        image_count = 0
+        text_headers: list[str] = []
+        for block in content_blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "image_url":
+                image_count += 1
+            elif block.get("type") == "text":
+                text = block["text"]
+                if text.startswith("### Document") or text.startswith("## "):
+                    text_headers.append(text[:120])
         logger.info(
             "[AE] generate_stream: chunks=%d images=%d query=%s",
             len(contexts.get("chunks", [])),
             image_count,
             query[:60],
         )
+        for h in text_headers:
+            logger.info("[AE] context header: %s", h)
 
         token_iterator = await self.model_func(messages=messages, stream=True)
 
@@ -261,28 +270,27 @@ class AnswerEngine:
         if not chunks:
             return []
 
-        # Group chunks by reference_id, falling back to file_path when
-        # reference_id is empty (entity-path chunks lack reference_id).
+        # Group chunks by file_path (most reliable across all retrieval paths).
+        # LightRAG's reference_id can collide across files — file_path is unique.
         doc_groups: dict[str, list[dict[str, Any]]] = {}
         doc_order: list[str] = []
         for chunk in chunks:
-            ref_id = str(chunk.get("reference_id", ""))
-            if not ref_id:
-                ref_id = chunk.get("file_path", "") or ""
-            if ref_id not in doc_groups:
-                doc_order.append(ref_id)
-            doc_groups.setdefault(ref_id, []).append(chunk)
+            group_key = chunk.get("file_path", "") or str(chunk.get("reference_id", ""))
+            if group_key not in doc_groups:
+                doc_order.append(group_key)
+            doc_groups.setdefault(group_key, []).append(chunk)
 
         blocks: list[dict[str, Any]] = []
         blocks.append({"type": "text", "text": "## Document Excerpts"})
 
-        for ref_id in doc_order:
-            doc_chunks = doc_groups[ref_id]
+        for group_key in doc_order:
+            doc_chunks = doc_groups[group_key]
 
             # Document section header
             first = doc_chunks[0]
             file_path = first.get("file_path", "")
-            filename = Path(file_path).name if file_path else f"Source {ref_id}"
+            ref_id = str(first.get("reference_id", ""))
+            filename = Path(file_path).name if file_path else f"Source {ref_id or group_key}"
 
             # Collect document-level metadata from first chunk
             meta = first.get("metadata") or {}
@@ -293,7 +301,8 @@ class AnswerEngine:
                     meta_parts.append(f"{display_key}: {v}")
             meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
 
-            header = f"### Document [{ref_id}]: {filename}{meta_suffix}"
+            display_ref = ref_id or filename
+            header = f"### Document [{display_ref}]: {filename}{meta_suffix}"
             blocks.append({"type": "text", "text": header})
 
             # Per-chunk: image label + image + text content
@@ -302,6 +311,7 @@ class AnswerEngine:
                 chunk_id = chunk.get("chunk_id", "")
                 page_idx = chunk.get("page_idx")
                 img_data = chunk.get("image_data")
+                ref_id = str(chunk.get("reference_id", ""))
 
                 # Build citation tag
                 cite_tag = ""
