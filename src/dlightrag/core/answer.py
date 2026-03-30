@@ -136,27 +136,11 @@ class AnswerEngine:
         user_prompt, indexer = self._build_user_prompt(query, contexts)
         messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
-        # Debug: log context structure sent to LLM
-        content_blocks = messages[1].get("content", []) if len(messages) > 1 else []
-        image_count = 0
-        text_headers: list[str] = []
-        for block in content_blocks:
-            if not isinstance(block, dict):
-                continue
-            if block.get("type") == "image_url":
-                image_count += 1
-            elif block.get("type") == "text":
-                text = block["text"]
-                if text.startswith("### Document") or text.startswith("## "):
-                    text_headers.append(text[:120])
         logger.info(
-            "[AE] generate_stream: chunks=%d images=%d query=%s",
+            "[AE] generate_stream: chunks=%d query=%s",
             len(contexts.get("chunks", [])),
-            image_count,
             query[:60],
         )
-        for h in text_headers:
-            logger.info("[AE] context header: %s", h)
 
         token_iterator = await self.model_func(messages=messages, stream=True)
 

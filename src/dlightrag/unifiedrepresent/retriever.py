@@ -25,6 +25,31 @@ QueryMode = Literal["local", "global", "hybrid", "naive", "mix", "bypass"]
 logger = logging.getLogger(__name__)
 
 
+def _build_rerank_content(
+    raw_content: str,
+    file_path: str = "",
+    doc_title: str = "",
+    doc_author: str = "",
+    page_index: int | None = None,
+) -> str:
+    """Prepend file-level metadata header to content for reranker context.
+
+    Uses Stage 1 fields from visual_chunks (zero extra IO).
+    """
+    parts: list[str] = []
+    if file_path:
+        parts.append(f"Source: {Path(file_path).name}")
+    if doc_title:
+        parts.append(f"Title: {doc_title}")
+    if doc_author:
+        parts.append(f"Author: {doc_author}")
+    if page_index is not None:
+        parts.append(f"Page: {page_index + 1}")
+    if parts:
+        return f"[{' | '.join(parts)}]\n{raw_content}"
+    return raw_content
+
+
 class VisualRetriever:
     """Query pipeline for unified representational RAG (Phases 2-4)."""
 
@@ -153,15 +178,8 @@ class VisualRetriever:
         from dlightrag.core.retrieval.filtered_vdb import _active_filter
 
         active_ids = _active_filter.get()
-        logger.info("Force-inject: active_ids=%s, chunk_ids_count=%d", active_ids, len(chunk_ids))
         if active_ids:
             missing = active_ids - chunk_ids
-            logger.info(
-                "In-filter check: active=%d, in_chunk_ids=%d, missing=%d",
-                len(active_ids),
-                len(active_ids & chunk_ids),
-                len(missing),
-            )
             if missing:
                 inject_ids = sorted(missing)[:chunk_top_k]
                 raw_contents = await self.lightrag.text_chunks.get_by_ids(inject_ids)
@@ -192,47 +210,39 @@ class VisualRetriever:
                 all_candidates[cid] = {}  # No visual data
 
         if self._rerank_func and all_candidates:
+            # Stage 1: enrich content with file-level metadata for reranker
             rerank_chunks = []
             for cid, vd in all_candidates.items():
-                # Enrich content with document metadata so the reranker can
-                # handle filename/title/author/page queries, not just content.
                 meta = chunk_meta.get(cid, {})
-                file_path = meta.get("file_path", vd.get("file_path", ""))
-                filename = Path(file_path).name if file_path else ""
-                doc_title = vd.get("doc_title", "")
-                doc_author = vd.get("doc_author", "")
-                page_idx = (vd.get("page_index", 0) or 0) + 1
-
-                meta_parts: list[str] = []
-                if filename:
-                    meta_parts.append(f"Source: {filename}")
-                if doc_title:
-                    meta_parts.append(f"Title: {doc_title}")
-                if doc_author:
-                    meta_parts.append(f"Author: {doc_author}")
-                if page_idx:
-                    meta_parts.append(f"Page: {page_idx}")
-
-                raw_content = chunk_text.get(cid, "")
-                meta_header = " | ".join(meta_parts)
-                content = f"[{meta_header}]\n{raw_content}" if meta_header else raw_content
-
+                enriched_content = _build_rerank_content(
+                    raw_content=chunk_text.get(cid, ""),
+                    file_path=meta.get("file_path") or vd.get("file_path") or "",
+                    doc_title=vd.get("doc_title", ""),
+                    doc_author=vd.get("doc_author", ""),
+                    page_index=vd.get("page_index"),
+                )
                 rerank_chunks.append(
                     {
                         "chunk_id": cid,
-                        "content": content,
+                        "content": enriched_content,
                         "image_data": vd.get("image_data"),
+                        "_raw_content": chunk_text.get(cid, ""),
                     }
                 )
             pre_rerank_count = len(rerank_chunks)
             scored = await self._rerank_func(query=query, chunks=rerank_chunks, top_k=chunk_top_k)
             logger.info("Rerank: %d -> %d chunks", pre_rerank_count, len(scored))
 
-            # Rebuild all_candidates from scored results
+            # Rebuild all_candidates; restore raw content (strip Stage 1 header)
             scored_ids = [c["chunk_id"] for c in scored]
             all_candidates = {
                 cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates
             }
+            for sc in scored:
+                cid = sc["chunk_id"]
+                raw = sc.get("_raw_content")
+                if raw is not None and cid in chunk_text:
+                    chunk_text[cid] = raw  # restore for answer engine
         else:
             # No reranker — cap total candidates
             if len(all_candidates) > chunk_top_k:
@@ -244,16 +254,6 @@ class VisualRetriever:
                 all_candidates = {
                     cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates
                 }
-
-        # Debug: log final chunk mapping
-        for cid in all_candidates:
-            meta = chunk_meta.get(cid, {})
-            logger.info(
-                "Final chunk: %s ref=%s file=%s",
-                cid[:20],
-                meta.get("reference_id", "?"),
-                Path(meta.get("file_path", "")).name if meta.get("file_path") else "?",
-            )
 
         # Build return dict
         return {
