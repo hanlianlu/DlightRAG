@@ -164,6 +164,29 @@ class VisualRetriever:
                     if cid:
                         chunk_ids.add(cid)
 
+        # Force-inject metadata-resolved chunks BEFORE visual resolution
+        # so they participate in dedup (dict keying) and rerank naturally.
+        # Cap to chunk_top_k to bound input for large filter results.
+        from dlightrag.core.retrieval.filtered_vdb import _active_filter
+
+        active_ids = _active_filter.get()
+        if active_ids:
+            missing = active_ids - chunk_ids
+            if missing:
+                inject_ids = sorted(missing)[:chunk_top_k]
+                raw_contents = await self.lightrag.text_chunks.get_by_ids(inject_ids)
+                for cid, content_raw in zip(inject_ids, raw_contents, strict=False):
+                    if content_raw is None:
+                        continue
+                    content = (
+                        content_raw
+                        if isinstance(content_raw, str)
+                        else content_raw.get("content", "")
+                    )
+                    chunk_ids.add(cid)
+                    chunk_text[cid] = content
+                logger.info("Force-injected %d metadata-resolved chunks", len(missing))
+
         # Phase 2: Visual resolution
         chunk_id_list = list(chunk_ids)
         resolved = await self._resolve_visual_chunks(chunk_id_list)
