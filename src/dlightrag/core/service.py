@@ -1073,6 +1073,10 @@ class RAGService:
                 "rag_mode",
                 "page_count",
                 "original_format",
+                # doc_title/doc_author already injected into reranker content
+                # from visual_chunks — skip to avoid duplication in answer header.
+                "doc_title",
+                "doc_author",
             }
         )
 
