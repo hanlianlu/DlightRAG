@@ -178,6 +178,15 @@ class VisualRetriever:
             if cid not in all_candidates and cid in chunk_text:
                 all_candidates[cid] = {}  # No visual data
 
+        # Apply metadata in-filter: entity/relation paths bypass FilteredVectorStorage,
+        # so post-filter here to enforce the per-request candidate constraint.
+        from dlightrag.core.retrieval.filtered_vdb import _active_filter
+
+        active_ids = _active_filter.get()
+        if active_ids:
+            all_candidates = {cid: vd for cid, vd in all_candidates.items() if cid in active_ids}
+            logger.info("In-filter applied: %d candidates remain", len(all_candidates))
+
         if self._rerank_func and all_candidates:
             rerank_chunks = [
                 {
