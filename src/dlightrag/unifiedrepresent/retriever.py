@@ -188,14 +188,14 @@ class VisualRetriever:
                 for cid, vd in all_candidates.items()
             ]
             pre_rerank_count = len(rerank_chunks)
-            scored = await self._rerank_func(
-                query=query, chunks=rerank_chunks, top_k=chunk_top_k
-            )
+            scored = await self._rerank_func(query=query, chunks=rerank_chunks, top_k=chunk_top_k)
             logger.info("Rerank: %d -> %d chunks", pre_rerank_count, len(scored))
 
             # Rebuild all_candidates from scored results
             scored_ids = [c["chunk_id"] for c in scored]
-            all_candidates = {cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates}
+            all_candidates = {
+                cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates
+            }
         else:
             # No reranker — cap total candidates
             if len(all_candidates) > chunk_top_k:
@@ -320,4 +320,3 @@ class VisualRetriever:
                 resolved[cid] = vd
         logger.info("[Visual Resolve] Resolved %d/%d chunks", len(resolved), len(chunk_ids))
         return resolved
-

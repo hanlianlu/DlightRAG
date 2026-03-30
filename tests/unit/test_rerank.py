@@ -129,9 +129,7 @@ class TestChatLlmRerank:
         mock_vlm = AsyncMock(return_value="[0.9, 0.5]")
         chunks = [{"content": "doc0"}, {"content": "doc1"}]
         original = [c.copy() for c in chunks]
-        await _chat_llm_rerank(
-            "query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.3
-        )
+        await _chat_llm_rerank("query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.3)
         assert chunks == original
 
 
@@ -143,10 +141,7 @@ class TestLightragAdapter:
             # Verify chunks have content field
             assert all("content" in c for c in chunks)
             # Return scored chunks
-            return [
-                {**c, "rerank_score": 0.9 - i * 0.1}
-                for i, c in enumerate(chunks[:top_k])
-            ]
+            return [{**c, "rerank_score": 0.9 - i * 0.1} for i, c in enumerate(chunks[:top_k])]
 
         adapter = build_lightrag_rerank_adapter(mock_rerank)
         result = await adapter("test query", ["doc A", "doc B", "doc C"])

@@ -101,7 +101,7 @@ class FilteredVectorStorage:
         table_name = self._original.table_name
         workspace = self._original.workspace
         cosine_threshold = self._original.cosine_better_than_threshold
-        pool = self._original.db._pool
+        pool = self._original.db.pool
 
         embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
