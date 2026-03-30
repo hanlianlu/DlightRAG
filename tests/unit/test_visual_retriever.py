@@ -56,6 +56,12 @@ def _make_lightrag_result() -> dict:
                     "reference_id": "1",
                     "file_path": "/test/doc.pdf",
                 },
+                {
+                    "chunk_id": "chunk-def",
+                    "content": "text from chunk def",
+                    "reference_id": "2",
+                    "file_path": "/test/doc2.pdf",
+                },
             ],
         },
     }
@@ -146,12 +152,12 @@ class TestRetrieve:
         assert rels[0]["src_id"] == "E1"
         assert rels[0]["tgt_id"] == "E2"
 
-    async def test_chunk_ids_extracted_from_all_sources(self) -> None:
-        """chunk-abc comes from chunks + entities; chunk-def from relationships."""
+    async def test_chunk_ids_from_lightrag_chunks(self) -> None:
+        """All chunk IDs come from LightRAG's merged data.chunks section."""
         retriever = _make_retriever()
         await retriever.retrieve("query")
 
-        # get_by_ids should be called with a list containing both chunk IDs
+        # get_by_ids should be called with chunk IDs from data.chunks
         call_args = retriever.visual_chunks.get_by_ids.call_args
         chunk_id_list = call_args[0][0]
         assert set(chunk_id_list) == {"chunk-abc", "chunk-def"}
@@ -162,7 +168,7 @@ class TestRetrieve:
         chunks = result["contexts"]["chunks"]
         # Both chunks resolved
         assert len(chunks) == 2
-        # chunk-abc has reference_id="1" from chunks; chunk-def has "" (entity-sourced)
+        # Both chunks have reference_id from LightRAG's merged chunks
         for chunk in chunks:
             assert "chunk_id" in chunk
             assert "reference_id" in chunk
