@@ -97,10 +97,14 @@ class FilteredVectorStorage:
         candidate_ids: set[str],
         top_k: int,
     ) -> list[dict[str, Any]]:
-        """pgvector SQL with in-filtering + iterative scanning."""
+        """pgvector SQL with in-filtering + iterative scanning.
+
+        No cosine threshold applied: metadata-resolved candidates are
+        always returned regardless of semantic distance (the user
+        explicitly named this file/document).
+        """
         table_name = self._original.table_name
         workspace = self._original.workspace
-        cosine_threshold = self._original.cosine_better_than_threshold
         pool = self._original.db.pool
 
         embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
@@ -113,13 +117,11 @@ class FilteredVectorStorage:
                 f"FROM {table_name} "
                 f"WHERE workspace = $2 "
                 f"AND id = ANY($3) "
-                f"AND 1 - (content_vector <=> $1::vector) > $4 "
                 f"ORDER BY content_vector <=> $1::vector "
-                f"LIMIT $5",
+                f"LIMIT $4",
                 embedding_str,
                 workspace,
                 list(candidate_ids),
-                cosine_threshold,
                 top_k,
             )
 
