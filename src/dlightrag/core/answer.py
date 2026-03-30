@@ -261,11 +261,14 @@ class AnswerEngine:
         if not chunks:
             return []
 
-        # Group chunks by reference_id, preserving first-seen order
+        # Group chunks by reference_id, falling back to file_path when
+        # reference_id is empty (entity-path chunks lack reference_id).
         doc_groups: dict[str, list[dict[str, Any]]] = {}
         doc_order: list[str] = []
         for chunk in chunks:
             ref_id = str(chunk.get("reference_id", ""))
+            if not ref_id:
+                ref_id = chunk.get("file_path", "") or ""
             if ref_id not in doc_groups:
                 doc_order.append(ref_id)
             doc_groups.setdefault(ref_id, []).append(chunk)
