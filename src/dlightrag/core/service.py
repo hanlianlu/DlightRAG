@@ -1037,33 +1037,9 @@ class RAGService:
                 **kwargs,
             )
 
-        # Tier 3 fallback (matches ArtRAG): if none of the metadata-resolved
-        # candidate chunks appear in the final results, the cosine threshold
-        # filtered them out.  Retry without the in-filter scope so the user
-        # still gets useful (unfiltered) results.
-        if candidate_ids:
-            returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
-            has_candidate_hit = bool(returned_cids & candidate_ids)
-        else:
-            has_candidate_hit = True  # no filter → nothing to check
-
-        if candidate_ids and not has_candidate_hit:
-            logger.info(
-                "In-filter: none of %d candidates in results, retrying unfiltered",
-                len(candidate_ids),
-            )
-            kg_result = await backend.aretrieve(
-                query,
-                multimodal_content=multimodal_content,
-                mode=mode,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                is_reretrieve=is_reretrieve,
-                **kwargs,
-            )
-
-        # Tier 4: force-inject metadata-resolved chunks that still didn't
-        # surface through any retrieval path (vector similarity too low).
+        # Tier 3: force-inject metadata-resolved chunks that didn't surface
+        # through retrieval (vector cosine too low for cross-modal queries).
+        # Direct KV fetch is cheap (~ms) vs unfiltered retry (~seconds).
         # The user explicitly named the file — those chunks MUST appear.
         if candidate_ids:
             returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
