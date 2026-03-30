@@ -270,27 +270,25 @@ class AnswerEngine:
         if not chunks:
             return []
 
-        # Group chunks by file_path (most reliable across all retrieval paths).
-        # LightRAG's reference_id can collide across files — file_path is unique.
+        # Group chunks by reference_id, preserving first-seen order
         doc_groups: dict[str, list[dict[str, Any]]] = {}
         doc_order: list[str] = []
         for chunk in chunks:
-            group_key = chunk.get("file_path", "") or str(chunk.get("reference_id", ""))
-            if group_key not in doc_groups:
-                doc_order.append(group_key)
-            doc_groups.setdefault(group_key, []).append(chunk)
+            ref_id = str(chunk.get("reference_id", ""))
+            if ref_id not in doc_groups:
+                doc_order.append(ref_id)
+            doc_groups.setdefault(ref_id, []).append(chunk)
 
         blocks: list[dict[str, Any]] = []
         blocks.append({"type": "text", "text": "## Document Excerpts"})
 
-        for group_key in doc_order:
-            doc_chunks = doc_groups[group_key]
+        for ref_id in doc_order:
+            doc_chunks = doc_groups[ref_id]
 
             # Document section header
             first = doc_chunks[0]
             file_path = first.get("file_path", "")
-            ref_id = str(first.get("reference_id", ""))
-            filename = Path(file_path).name if file_path else f"Source {ref_id or group_key}"
+            filename = Path(file_path).name if file_path else f"Source {ref_id}"
 
             # Collect document-level metadata from first chunk
             meta = first.get("metadata") or {}
@@ -301,8 +299,7 @@ class AnswerEngine:
                     meta_parts.append(f"{display_key}: {v}")
             meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
 
-            display_ref = ref_id or filename
-            header = f"### Document [{display_ref}]: {filename}{meta_suffix}"
+            header = f"### Document [{ref_id}]: {filename}{meta_suffix}"
             blocks.append({"type": "text", "text": header})
 
             # Per-chunk: image label + image + text content
@@ -311,7 +308,6 @@ class AnswerEngine:
                 chunk_id = chunk.get("chunk_id", "")
                 page_idx = chunk.get("page_idx")
                 img_data = chunk.get("image_data")
-                ref_id = str(chunk.get("reference_id", ""))
 
                 # Build citation tag
                 cite_tag = ""
