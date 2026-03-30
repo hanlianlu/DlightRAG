@@ -11,6 +11,7 @@ import io
 import json
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, Literal, cast
 
 from lightrag import LightRAG, QueryParam
@@ -205,9 +206,20 @@ class VisualRetriever:
 
             # Rebuild all_candidates from scored results
             scored_ids = [c["chunk_id"] for c in scored]
+            pre_rerank_candidates = all_candidates
             all_candidates = {
-                cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates
+                cid: pre_rerank_candidates[cid]
+                for cid in scored_ids
+                if cid in pre_rerank_candidates
             }
+
+            # Guarantee metadata-resolved chunks survive rerank — they were
+            # matched by filename, not by content similarity.
+            if active_ids:
+                for cid in active_ids:
+                    if cid not in all_candidates and cid in pre_rerank_candidates:
+                        all_candidates[cid] = pre_rerank_candidates[cid]
+                        logger.info("Preserved metadata chunk after rerank: %s", cid[:30])
         else:
             # No reranker — cap total candidates
             if len(all_candidates) > chunk_top_k:
@@ -219,6 +231,16 @@ class VisualRetriever:
                 all_candidates = {
                     cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates
                 }
+
+        # Debug: log final chunk mapping
+        for cid in all_candidates:
+            meta = chunk_meta.get(cid, {})
+            logger.info(
+                "Final chunk: %s ref=%s file=%s",
+                cid[:20],
+                meta.get("reference_id", "?"),
+                Path(meta.get("file_path", "")).name if meta.get("file_path") else "?",
+            )
 
         # Build return dict
         return {
