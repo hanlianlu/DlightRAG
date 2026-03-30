@@ -136,9 +136,16 @@ class AnswerEngine:
         user_prompt, indexer = self._build_user_prompt(query, contexts)
         messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
 
+        # Debug: count image blocks to verify image_data reaches LLM
+        image_count = sum(
+            1
+            for block in (messages[1].get("content", []) if len(messages) > 1 else [])
+            if isinstance(block, dict) and block.get("type") == "image_url"
+        )
         logger.info(
-            "[AE] generate_stream: chunks=%d query=%s",
+            "[AE] generate_stream: chunks=%d images=%d query=%s",
             len(contexts.get("chunks", [])),
+            image_count,
             query[:60],
         )
 

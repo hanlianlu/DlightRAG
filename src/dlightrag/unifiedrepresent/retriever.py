@@ -170,8 +170,15 @@ class VisualRetriever:
         from dlightrag.core.retrieval.filtered_vdb import _active_filter
 
         active_ids = _active_filter.get()
+        logger.info("Force-inject: active_ids=%s, chunk_ids_count=%d", active_ids, len(chunk_ids))
         if active_ids:
             missing = active_ids - chunk_ids
+            logger.info(
+                "In-filter check: active=%d, in_chunk_ids=%d, missing=%d",
+                len(active_ids),
+                len(active_ids & chunk_ids),
+                len(missing),
+            )
             if missing:
                 inject_ids = sorted(missing)[:chunk_top_k]
                 raw_contents = await self.lightrag.text_chunks.get_by_ids(inject_ids)
