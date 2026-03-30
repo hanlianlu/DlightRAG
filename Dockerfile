@@ -27,16 +27,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/.venv /app/.venv
-COPY pyproject.toml uv.lock README.md ./
-COPY src/ src/
+# Create non-root user BEFORE copying files to avoid chown layer duplication
+RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
+    && mkdir -p /app/dlightrag_storage && chown app:app /app/dlightrag_storage
+
+COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chown=app:app pyproject.toml uv.lock README.md ./
+COPY --chown=app:app src/ src/
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev
-
-# Non-root user for runtime security
-RUN groupadd --gid 1000 app && useradd --uid 1000 --gid app --create-home app \
-    && mkdir -p /app/dlightrag_storage && chown -R app:app /app
 
 ENV PATH="/app/.venv/bin:$PATH"
 
