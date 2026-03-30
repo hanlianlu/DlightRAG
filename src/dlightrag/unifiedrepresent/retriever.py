@@ -14,7 +14,6 @@ from collections.abc import Callable
 from typing import Any, Literal, cast
 
 from lightrag import LightRAG, QueryParam
-from lightrag.constants import GRAPH_FIELD_SEP
 from PIL import Image
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
@@ -129,13 +128,14 @@ class VisualRetriever:
         )
         result = await self.lightrag.aquery_data(query, param=param)
 
-        # Extract chunk_ids, text, and reference metadata from result
+        # Extract chunks from LightRAG result. aquery_data already collects
+        # chunks from all sources (vector search + entity source_ids +
+        # relationship source_ids) via internal round-robin merge.
         data = result.get("data", {})
         chunk_text: dict[str, str] = {}
         chunk_meta: dict[str, dict[str, str]] = {}  # chunk_id -> {reference_id, file_path}
         chunk_ids: set[str] = set()
 
-        # From chunks section
         for chunk in data.get("chunks", []):
             cid = chunk.get("chunk_id")
             if cid:
@@ -145,24 +145,6 @@ class VisualRetriever:
                     "reference_id": str(chunk.get("reference_id", "")),
                     "file_path": chunk.get("file_path", ""),
                 }
-
-        # From entities source_id
-        for entity in data.get("entities", []):
-            source_id = entity.get("source_id", "")
-            if source_id:
-                for cid in source_id.split(GRAPH_FIELD_SEP):
-                    cid = cid.strip()
-                    if cid:
-                        chunk_ids.add(cid)
-
-        # From relationships source_id
-        for rel in data.get("relationships", []):
-            source_id = rel.get("source_id", "")
-            if source_id:
-                for cid in source_id.split(GRAPH_FIELD_SEP):
-                    cid = cid.strip()
-                    if cid:
-                        chunk_ids.add(cid)
 
         # Force-inject metadata-resolved chunks BEFORE visual resolution
         # so they participate in dedup (dict keying) and rerank naturally.
