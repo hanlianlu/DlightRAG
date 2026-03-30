@@ -474,17 +474,26 @@ class RAGService:
         else:
             embed_provider = OpenAICompatEmbedProvider()
 
+        _httpx_embed = partial(
+            httpx_embed,
+            model=config.embedding.model,
+            base_url=emb_base_url,
+            api_key=emb_api_key,
+            provider=embed_provider,
+            timeout=float(config.embedding_request_timeout),
+        )
+
+        async def _embed_for_lightrag(texts: list[str]) -> Any:
+            result = await _httpx_embed(texts)
+            # LightRAG's EmbeddingFunc validates via result.size — requires numpy
+            import numpy as np
+
+            return np.array(result)
+
         embedding_func = EmbeddingFunc(
             embedding_dim=config.embedding.dim,
             max_token_size=8192,
-            func=partial(
-                httpx_embed,
-                model=config.embedding.model,
-                base_url=emb_base_url,
-                api_key=emb_api_key,
-                provider=embed_provider,
-                timeout=float(config.embedding_request_timeout),
-            ),
+            func=_embed_for_lightrag,
             model_name=config.embedding.model,
         )
 
