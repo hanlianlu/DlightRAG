@@ -103,20 +103,25 @@ class FilteredVectorStorage:
         cosine_threshold = self._original.cosine_better_than_threshold
         pool = self._original.db.pool
 
-        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        vector_cast = (
+            "halfvec"
+            if getattr(self._original.db, "vector_index_type", None) == "HNSW_HALFVEC"
+            else "vector"
+        )
+        # LightRAG inlines embedding into SQL text (asyncpg can't bind $1::vector).
+        embedding_string = ",".join(map(str, embedding))
 
         async with pool.acquire() as conn:
             await conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
             rows = await conn.fetch(
                 f"SELECT id, content, file_path, "
-                f"1 - (content_vector <=> $1::vector) AS score "
+                f"1 - (content_vector <=> '[{embedding_string}]'::{vector_cast}) AS score "
                 f"FROM {table_name} "
-                f"WHERE workspace = $2 "
-                f"AND id = ANY($3) "
-                f"AND 1 - (content_vector <=> $1::vector) > $4 "
-                f"ORDER BY content_vector <=> $1::vector "
-                f"LIMIT $5",
-                embedding_str,
+                f"WHERE workspace = $1 "
+                f"AND id = ANY($2) "
+                f"AND 1 - (content_vector <=> '[{embedding_string}]'::{vector_cast}) > $3 "
+                f"ORDER BY content_vector <=> '[{embedding_string}]'::{vector_cast} "
+                f"LIMIT $4",
                 workspace,
                 list(candidate_ids),
                 cosine_threshold,
