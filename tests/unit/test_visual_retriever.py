@@ -280,10 +280,7 @@ class TestRerankIntegration:
             received["chunks"] = chunks
             received["top_k"] = top_k
             # Return top 2 chunks with scores
-            return [
-                {**c, "rerank_score": 0.9 - i * 0.1}
-                for i, c in enumerate(chunks[:top_k])
-            ]
+            return [{**c, "rerank_score": 0.9 - i * 0.1} for i, c in enumerate(chunks[:top_k])]
 
         retriever = _make_retriever(rerank_func=mock_rerank)
         result = await retriever.retrieve("test query", chunk_top_k=2)

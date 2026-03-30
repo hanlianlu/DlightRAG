@@ -432,8 +432,7 @@ def build_lightrag_rerank_adapter(rerank_func: Callable[..., Any]) -> Callable[.
         chunks = [{"content": doc, "_orig_idx": i} for i, doc in enumerate(documents)]
         scored = await rerank_func(query=query, chunks=chunks, top_k=top_k)
         return [
-            {"index": c["_orig_idx"], "relevance_score": c.get("rerank_score", 0.0)}
-            for c in scored
+            {"index": c["_orig_idx"], "relevance_score": c.get("rerank_score", 0.0)} for c in scored
         ]
 
     return adapter
