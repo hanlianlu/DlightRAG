@@ -1037,9 +1037,21 @@ class RAGService:
                 **kwargs,
             )
 
-        # Fallback: if in-filter returned 0 chunks but candidates existed, retry unfiltered
-        if candidate_ids and not kg_result.contexts.get("chunks"):
-            logger.info("In-filter returned 0 chunks, retrying unfiltered")
+        # Tier 3 fallback (matches ArtRAG): if none of the metadata-resolved
+        # candidate chunks appear in the final results, the cosine threshold
+        # filtered them out.  Retry without the in-filter scope so the user
+        # still gets useful (unfiltered) results.
+        if candidate_ids:
+            returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
+            has_candidate_hit = bool(returned_cids & candidate_ids)
+        else:
+            has_candidate_hit = True  # no filter → nothing to check
+
+        if candidate_ids and not has_candidate_hit:
+            logger.info(
+                "In-filter: none of %d candidates in results, retrying unfiltered",
+                len(candidate_ids),
+            )
             kg_result = await backend.aretrieve(
                 query,
                 multimodal_content=multimodal_content,
