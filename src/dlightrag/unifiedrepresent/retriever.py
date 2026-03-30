@@ -192,34 +192,30 @@ class VisualRetriever:
                 all_candidates[cid] = {}  # No visual data
 
         if self._rerank_func and all_candidates:
-            rerank_chunks = [
-                {
-                    "chunk_id": cid,
-                    "content": chunk_text.get(cid, ""),
-                    "image_data": vd.get("image_data"),
-                }
-                for cid, vd in all_candidates.items()
-            ]
+            rerank_chunks = []
+            for cid, vd in all_candidates.items():
+                # Prepend source filename so reranker can associate
+                # content with filename-based queries (e.g. "IMG 9551").
+                file_path = chunk_meta.get(cid, {}).get("file_path", vd.get("file_path", ""))
+                filename = Path(file_path).name if file_path else ""
+                raw_content = chunk_text.get(cid, "")
+                content = f"[Source: {filename}]\n{raw_content}" if filename else raw_content
+                rerank_chunks.append(
+                    {
+                        "chunk_id": cid,
+                        "content": content,
+                        "image_data": vd.get("image_data"),
+                    }
+                )
             pre_rerank_count = len(rerank_chunks)
             scored = await self._rerank_func(query=query, chunks=rerank_chunks, top_k=chunk_top_k)
             logger.info("Rerank: %d -> %d chunks", pre_rerank_count, len(scored))
 
             # Rebuild all_candidates from scored results
             scored_ids = [c["chunk_id"] for c in scored]
-            pre_rerank_candidates = all_candidates
             all_candidates = {
-                cid: pre_rerank_candidates[cid]
-                for cid in scored_ids
-                if cid in pre_rerank_candidates
+                cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates
             }
-
-            # Guarantee metadata-resolved chunks survive rerank — they were
-            # matched by filename, not by content similarity.
-            if active_ids:
-                for cid in active_ids:
-                    if cid not in all_candidates and cid in pre_rerank_candidates:
-                        all_candidates[cid] = pre_rerank_candidates[cid]
-                        logger.info("Preserved metadata chunk after rerank: %s", cid[:30])
         else:
             # No reranker — cap total candidates
             if len(all_candidates) > chunk_top_k:
