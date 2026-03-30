@@ -13,7 +13,8 @@ conversation history), produce a JSON response with these keys:
 
 Filter fields (use null for unmentioned):
 - filename: best-guess normalized filename (underscores, correct extension case)
-- filename_pattern: SQL ILIKE pattern with % wildcards when reference is ambiguous
+- filename_pattern: SQL ILIKE pattern with % wildcards when the filename reference is \
+partial, missing extension, or uses spaces instead of underscores (e.g. "IMG 9551" → "%IMG%9551%")
 - file_extension: e.g. "pdf", "png" (lowercase, no dot)
 - doc_title: document title reference
 - doc_author: author name
@@ -29,6 +30,9 @@ Query: "summarize the key findings in annual-report.pdf"
 
 Query: "what are the main revenue trends"
 {{"standalone_query": "what are the main revenue trends", "filters": {{}}}}
+
+Query: "what is in IMG 9551?"
+{{"standalone_query": "what is in IMG 9551?", "filters": {{"filename_pattern": "%IMG%9551%"}}}}
 
 Query: "张三写的2024年财报分析"
 {{"standalone_query": "张三写的2024年财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}}}
