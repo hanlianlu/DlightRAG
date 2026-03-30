@@ -678,7 +678,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.3.2"
+version = "1.3.3"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -1752,7 +1752,7 @@ wheels = [
 
 [[package]]
 name = "mineru"
-version = "3.0.1"
+version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1791,7 +1791,7 @@ dependencies = [
     { name = "uvicorn" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ad/76/0f06c14939d5cea50ce5373fa540aa5effaf7bd5e3cb50f4a6c45b2295b9/mineru-3.0.1-py3-none-any.whl", hash = "sha256:29565ea3d156f5bcc61498fb9e0e8b8c95ab434dc8d522455038ce4ff65af7e8", size = 1440263, upload-time = "2026-03-29T05:31:15.839Z" },
+    { url = "https://files.pythonhosted.org/packages/ac/66/6ee98aae7ff065dcce782ed53c86fec6b7a004fb5ec78d72d9e41cce9bda/mineru-3.0.2-py3-none-any.whl", hash = "sha256:7ea358bd456b4609dac5669fcca49b8e38122ec95e957fb019753f6aeb28beda", size = 1441381, upload-time = "2026-03-30T09:32:09.205Z" },
 ]
 
 [package.optional-dependencies]
