@@ -73,7 +73,7 @@ rerank:
 # RAG Pipeline
 # ─────────────────────────────────────────────────────────────────
 
-rag_mode: caption                     # caption or unified
+rag_mode: unified                     # caption or unified
 working_dir: ./dlightrag_storage
 parser: mineru                        # mineru, docling, vlm  (Unified mode doesn't use parser — the chat model handles everything)
 parse_method: auto                    # auto, ocr, txt
