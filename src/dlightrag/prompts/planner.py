@@ -12,9 +12,11 @@ conversation history), produce a JSON response with these keys:
   Only include fields you are highly confident about. Leave out uncertain fields.
 
 Filter fields (use null for unmentioned):
-- filename: best-guess normalized filename (underscores, correct extension case)
-- filename_pattern: SQL ILIKE pattern with % wildcards when the filename reference is \
-partial, missing extension, or uses spaces instead of underscores (e.g. "IMG 9551" → "%IMG%9551%")
+- filename: exact filename when the user gives a complete name with extension
+- filename_pattern: SQL ILIKE pattern (% wildcards) when the reference is partial, \
+abbreviated, missing extension, or uses spaces/different separators. Be generous — \
+any token that looks like a file identifier (codes, numbers, abbreviations) should \
+produce a pattern.
 - file_extension: e.g. "pdf", "png" (lowercase, no dot)
 - doc_title: document title reference
 - doc_author: author name
@@ -33,6 +35,9 @@ Query: "what are the main revenue trends"
 
 Query: "what is in IMG 9551?"
 {{"standalone_query": "what is in IMG 9551?", "filters": {{"filename_pattern": "%IMG%9551%"}}}}
+
+Query: "show me slide deck 3"
+{{"standalone_query": "show me slide deck 3", "filters": {{"filename_pattern": "%slide%deck%3%"}}}}
 
 Query: "张三写的2024年财报分析"
 {{"standalone_query": "张三写的2024年财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}}}
