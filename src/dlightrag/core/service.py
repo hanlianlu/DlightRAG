@@ -1062,11 +1062,66 @@ class RAGService:
                 **kwargs,
             )
 
+        # Tier 4: force-inject metadata-resolved chunks that still didn't
+        # surface through any retrieval path (vector similarity too low).
+        # The user explicitly named the file — those chunks MUST appear.
+        if candidate_ids:
+            returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
+            missing = candidate_ids - returned_cids
+            if missing:
+                await self._inject_candidate_chunks(kg_result, missing)
+
         # --- Step 3: Enrich chunks with document metadata ---
         if self._metadata_index is not None:
             await self._enrich_chunks_with_metadata(kg_result)
 
         return kg_result
+
+    async def _inject_candidate_chunks(self, result: RetrievalResult, chunk_ids: set[str]) -> None:
+        """Force-inject metadata-resolved chunks that retrieval paths missed.
+
+        Fetches content from text_chunks (and image_data from visual_chunks
+        in unified mode) and prepends them to the result so the LLM always
+        sees the user-requested documents.
+        """
+        lr = self.lightrag
+        if lr is None:
+            return
+
+        id_list = list(chunk_ids)
+        raw_contents = await lr.text_chunks.get_by_ids(id_list)
+
+        # Optionally fetch visual data (unified mode)
+        visual_data: dict[str, dict] = {}
+        if self._visual_chunks is not None:
+            raw_visual = await self._visual_chunks.get_by_ids(id_list)
+            for cid, vd in zip(id_list, raw_visual, strict=False):
+                if isinstance(vd, dict):
+                    visual_data[cid] = vd
+
+        injected: list[dict] = []
+        for cid, content_raw in zip(id_list, raw_contents, strict=False):
+            if content_raw is None:
+                continue
+            content = (
+                content_raw if isinstance(content_raw, str) else content_raw.get("content", "")
+            )
+            vd = visual_data.get(cid, {})
+            injected.append(
+                {
+                    "chunk_id": cid,
+                    "content": content,
+                    "image_data": vd.get("image_data"),
+                    "file_path": vd.get("file_path", ""),
+                    "page_idx": (vd.get("page_index", 0) or 0) + 1,
+                    "metadata_injected": True,
+                }
+            )
+
+        if injected:
+            chunks = result.contexts.get("chunks", [])
+            result.contexts["chunks"] = injected + chunks
+            logger.info("Injected %d metadata-resolved chunks into context", len(injected))
 
     async def _enrich_chunks_with_metadata(self, result: RetrievalResult) -> None:
         """Inject document metadata into chunk contexts for LLM consumption.
