@@ -194,12 +194,29 @@ class VisualRetriever:
         if self._rerank_func and all_candidates:
             rerank_chunks = []
             for cid, vd in all_candidates.items():
-                # Prepend source filename so reranker can associate
-                # content with filename-based queries (e.g. "IMG 9551").
-                file_path = chunk_meta.get(cid, {}).get("file_path", vd.get("file_path", ""))
+                # Enrich content with document metadata so the reranker can
+                # handle filename/title/author/page queries, not just content.
+                meta = chunk_meta.get(cid, {})
+                file_path = meta.get("file_path", vd.get("file_path", ""))
                 filename = Path(file_path).name if file_path else ""
+                doc_title = vd.get("doc_title", "")
+                doc_author = vd.get("doc_author", "")
+                page_idx = (vd.get("page_index", 0) or 0) + 1
+
+                meta_parts: list[str] = []
+                if filename:
+                    meta_parts.append(f"Source: {filename}")
+                if doc_title:
+                    meta_parts.append(f"Title: {doc_title}")
+                if doc_author:
+                    meta_parts.append(f"Author: {doc_author}")
+                if page_idx:
+                    meta_parts.append(f"Page: {page_idx}")
+
                 raw_content = chunk_text.get(cid, "")
-                content = f"[Source: {filename}]\n{raw_content}" if filename else raw_content
+                meta_header = " | ".join(meta_parts)
+                content = f"[{meta_header}]\n{raw_content}" if meta_header else raw_content
+
                 rerank_chunks.append(
                     {
                         "chunk_id": cid,
