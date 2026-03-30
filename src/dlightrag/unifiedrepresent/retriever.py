@@ -25,29 +25,29 @@ QueryMode = Literal["local", "global", "hybrid", "naive", "mix", "bypass"]
 logger = logging.getLogger(__name__)
 
 
-def _build_rerank_content(
-    raw_content: str,
-    file_path: str = "",
-    doc_title: str = "",
-    doc_author: str = "",
-    page_index: int | None = None,
-) -> str:
+def _build_rerank_content(chunk: dict[str, Any]) -> str:
     """Prepend file-level metadata header to content for reranker context.
 
-    Uses Stage 1 fields from visual_chunks (zero extra IO).
+    Reads Stage 1 fields directly from the chunk dict (populated by
+    ``_resolve_visual_chunks``).  Stores original content in
+    ``_raw_content`` so it can be restored after reranking.
     """
     parts: list[str] = []
+    file_path = chunk.get("file_path", "")
     if file_path:
         parts.append(f"Source: {Path(file_path).name}")
-    if doc_title:
-        parts.append(f"Title: {doc_title}")
-    if doc_author:
-        parts.append(f"Author: {doc_author}")
-    if page_index is not None:
-        parts.append(f"Page: {page_index + 1}")
+    if title := chunk.get("doc_title", ""):
+        parts.append(f"Title: {title}")
+    if author := chunk.get("doc_author", ""):
+        parts.append(f"Author: {author}")
+    if page := chunk.get("page_idx"):
+        parts.append(f"Page: {page}")
+
+    raw = chunk.get("content", "")
+    chunk["_raw_content"] = raw
     if parts:
-        return f"[{' | '.join(parts)}]\n{raw_content}"
-    return raw_content
+        return f"[{' | '.join(parts)}]\n{raw}"
+    return raw
 
 
 class VisualRetriever:
@@ -90,7 +90,6 @@ class VisualRetriever:
         text queries this equals *query*; when *images* are supplied it includes
         VLM-generated image descriptions.
         """
-        # Dual-path: if images provided, run VLM-enhanced text query + visual embedding
         if images:
             if self.vision_model_func:
                 enhanced_query = await enhance_query_with_images(
@@ -102,18 +101,10 @@ class VisualRetriever:
                 enhanced_query = query
                 logger.warning("No vision_model_func; using original query for text path")
 
-            # Text path: standard retrieval with enhanced query
-            text_result = await self._retrieve(
-                enhanced_query,
-                mode,
-                top_k,
-                chunk_top_k,
-            )
-
-            # Image path: visual embedding direct query
+            text_result = await self._retrieve(enhanced_query, mode, top_k, chunk_top_k)
             visual_chunks = await self.query_by_visual_embedding(images, top_k=chunk_top_k)
 
-            # Round-robin merge text chunks + visual chunks
+            # Round-robin merge text + visual chunks
             text_chunks = text_result.get("contexts", {}).get("chunks", [])
             merged_chunks: list[dict[str, Any]] = []
             max_len = max(len(text_chunks), len(visual_chunks))
@@ -123,12 +114,10 @@ class VisualRetriever:
                 if i < len(visual_chunks):
                     merged_chunks.append(visual_chunks[i])
 
-            # Cap at chunk_top_k to maintain consistent result count with text-only queries
             text_result["contexts"]["chunks"] = merged_chunks[:chunk_top_k]
             text_result["enhanced_query"] = enhanced_query
             return text_result
 
-        # Text-only: unchanged existing path
         result = await self._retrieve(query, mode, top_k, chunk_top_k)
         result["enhanced_query"] = query
         return result
@@ -142,44 +131,41 @@ class VisualRetriever:
     ) -> dict:
         """Run Phase 1-3: LightRAG retrieval -> visual resolution -> reranking.
 
-        Returns dict with keys:
-            contexts: {entities, relationships, chunks}
+        Uses a single chunk list as the pipeline data structure. Each chunk
+        is a dict carrying all fields; the list itself represents pipeline state.
         """
         # Phase 1: LightRAG retrieval
         param = QueryParam(
             mode=cast(QueryMode, mode),
             only_need_context=True,
             top_k=top_k,
-            enable_rerank=False,  # We handle reranking ourselves
+            enable_rerank=False,
         )
         result = await self.lightrag.aquery_data(query, param=param)
-
-        # Extract chunks from LightRAG result. aquery_data already collects
-        # chunks from all sources (vector search + entity source_ids +
-        # relationship source_ids) via internal round-robin merge.
         data = result.get("data", {})
-        chunk_text: dict[str, str] = {}
-        chunk_meta: dict[str, dict[str, str]] = {}  # chunk_id -> {reference_id, file_path}
-        chunk_ids: set[str] = set()
 
-        for chunk in data.get("chunks", []):
-            cid = chunk.get("chunk_id")
-            if cid:
-                chunk_ids.add(cid)
-                chunk_text[cid] = chunk.get("content", "")
-                chunk_meta[cid] = {
-                    "reference_id": str(chunk.get("reference_id", "")),
-                    "file_path": chunk.get("file_path", ""),
-                }
+        # Build chunk list from LightRAG's merged output
+        chunks: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for raw in data.get("chunks", []):
+            cid = raw.get("chunk_id")
+            if cid and cid not in seen_ids:
+                seen_ids.add(cid)
+                chunks.append(
+                    {
+                        "chunk_id": cid,
+                        "content": raw.get("content", ""),
+                        "reference_id": str(raw.get("reference_id", "")),
+                        "file_path": raw.get("file_path", ""),
+                    }
+                )
 
-        # Force-inject metadata-resolved chunks BEFORE visual resolution
-        # so they participate in dedup (dict keying) and rerank naturally.
-        # Cap to chunk_top_k to bound input for large filter results.
+        # Force-inject metadata-resolved chunks before visual resolution
         from dlightrag.core.retrieval.filtered_vdb import _active_filter
 
         active_ids = _active_filter.get()
         if active_ids:
-            missing = active_ids - chunk_ids
+            missing = active_ids - seen_ids
             if missing:
                 inject_ids = sorted(missing)[:chunk_top_k]
                 raw_contents = await self.lightrag.text_chunks.get_by_ids(inject_ids)
@@ -191,88 +177,54 @@ class VisualRetriever:
                         if isinstance(content_raw, str)
                         else content_raw.get("content", "")
                     )
-                    chunk_ids.add(cid)
-                    chunk_text[cid] = content
+                    seen_ids.add(cid)
+                    chunks.append(
+                        {
+                            "chunk_id": cid,
+                            "content": content,
+                            "reference_id": "",
+                            "file_path": "",
+                        }
+                    )
                 logger.info("Force-injected %d metadata-resolved chunks", len(missing))
 
-        # Phase 2: Visual resolution
-        chunk_id_list = list(chunk_ids)
-        resolved = await self._resolve_visual_chunks(chunk_id_list)
+        # Phase 2: Visual resolution (mutates chunks in-place)
+        await self._resolve_visual_chunks(chunks)
 
-        # Phase 3: Multimodal reranking (optional)
-        # Build chunk dicts for reranker (content + image_data)
-        all_candidates: dict[str, dict] = {}
-        for cid, vd in resolved.items():
-            all_candidates[cid] = vd
-        # Add text-only chunks (not in visual_chunks but have content)
-        for cid in chunk_ids:
-            if cid not in all_candidates and cid in chunk_text:
-                all_candidates[cid] = {}  # No visual data
+        # Phase 3: Multimodal reranking
+        if self._rerank_func and chunks:
+            for chunk in chunks:
+                chunk["content"] = _build_rerank_content(chunk)
 
-        if self._rerank_func and all_candidates:
-            # Stage 1: enrich content with file-level metadata for reranker
-            rerank_chunks = []
-            for cid, vd in all_candidates.items():
-                meta = chunk_meta.get(cid, {})
-                enriched_content = _build_rerank_content(
-                    raw_content=chunk_text.get(cid, ""),
-                    file_path=meta.get("file_path") or vd.get("file_path") or "",
-                    doc_title=vd.get("doc_title", ""),
-                    doc_author=vd.get("doc_author", ""),
-                    page_index=vd.get("page_index"),
-                )
-                rerank_chunks.append(
-                    {
-                        "chunk_id": cid,
-                        "content": enriched_content,
-                        "image_data": vd.get("image_data"),
-                        "_raw_content": chunk_text.get(cid, ""),
-                    }
-                )
-            pre_rerank_count = len(rerank_chunks)
-            scored = await self._rerank_func(query=query, chunks=rerank_chunks, top_k=chunk_top_k)
+            pre_rerank_count = len(chunks)
+            scored = await self._rerank_func(query=query, chunks=chunks, top_k=chunk_top_k)
             logger.info("Rerank: %d -> %d chunks", pre_rerank_count, len(scored))
 
-            # Rebuild all_candidates; restore raw content (strip Stage 1 header)
-            scored_ids = [c["chunk_id"] for c in scored]
-            all_candidates = {
-                cid: all_candidates[cid] for cid in scored_ids if cid in all_candidates
-            }
-            for sc in scored:
-                cid = sc["chunk_id"]
-                raw = sc.get("_raw_content")
-                if raw is not None and cid in chunk_text:
-                    chunk_text[cid] = raw  # restore for answer engine
-        else:
-            # No reranker — cap total candidates
-            if len(all_candidates) > chunk_top_k:
-                ordered_ids: list[str] = list(resolved.keys())
-                for cid in chunk_ids:
-                    if cid not in resolved and cid in all_candidates:
-                        ordered_ids.append(cid)
-                ordered_ids = ordered_ids[:chunk_top_k]
-                all_candidates = {
-                    cid: all_candidates[cid] for cid in ordered_ids if cid in all_candidates
-                }
+            # Restore raw content (strip Stage 1 header)
+            for chunk in scored:
+                raw = chunk.pop("_raw_content", None)
+                if raw is not None:
+                    chunk["content"] = raw
 
-        # Build return dict
+            chunks = scored
+        elif len(chunks) > chunk_top_k:
+            chunks = chunks[:chunk_top_k]
+
         return {
             "contexts": {
                 "entities": data.get("entities", []),
                 "relationships": data.get("relationships", []),
                 "chunks": [
                     {
-                        "chunk_id": cid,
-                        "reference_id": chunk_meta.get(cid, {}).get("reference_id", ""),
-                        "file_path": chunk_meta.get(cid, {}).get(
-                            "file_path", vd.get("file_path", "")
-                        ),
-                        "content": chunk_text.get(cid, ""),
-                        "image_data": vd.get("image_data"),
-                        "page_idx": (vd.get("page_index", 0) or 0) + 1,
-                        "relevance_score": vd.get("relevance_score"),
+                        "chunk_id": c["chunk_id"],
+                        "reference_id": c.get("reference_id", ""),
+                        "file_path": c.get("file_path", ""),
+                        "content": c.get("content", ""),
+                        "image_data": c.get("image_data"),
+                        "page_idx": c.get("page_idx", 1),
+                        "relevance_score": c.get("relevance_score"),
                     }
-                    for cid, vd in all_candidates.items()
+                    for c in chunks
                 ],
             },
         }
@@ -287,13 +239,6 @@ class VisualRetriever:
         Each image is embedded via VisualEmbedder and queried against the
         chunks vector database directly. Results from multiple images are
         merged via round-robin interleaving.
-
-        Args:
-            images: List of raw image bytes.
-            top_k: Number of results per image.
-
-        Returns:
-            Round-robin merged list of chunk dicts from all images.
         """
         if not images or self.embedder is None:
             return []
@@ -310,24 +255,23 @@ class VisualRetriever:
                     top_k=top_k,
                     query_embedding=embedding,
                 )
-                # Resolve visual_chunks to get image_data
-                raw_ids = [c.get("id", "") for c in (raw_chunks or []) if c.get("id")]
-                visual_data = await self._resolve_visual_chunks(raw_ids)
 
-                # Normalize VDB results to match text chunk schema
-                normalized = [
+                # Build chunk list from VDB results
+                vdb_chunks: list[dict[str, Any]] = [
                     {
                         "chunk_id": c.get("id", ""),
-                        "reference_id": "",  # Not available from VDB; set by merge
-                        "file_path": c.get("file_path", ""),
                         "content": c.get("content", ""),
-                        "image_data": visual_data.get(c.get("id", ""), {}).get("image_data"),
-                        "page_idx": (c.get("chunk_order_index") or 0) + 1,  # 0→1-based
+                        "file_path": c.get("file_path", ""),
+                        "reference_id": "",
+                        "page_idx": (c.get("chunk_order_index") or 0) + 1,
                         "relevance_score": c.get("distance", 0.0),
                     }
                     for c in (raw_chunks or [])
                 ]
-                per_image_results.append(normalized)
+
+                # Visual resolution adds image_data + Stage 1 metadata
+                await self._resolve_visual_chunks(vdb_chunks)
+                per_image_results.append(vdb_chunks)
             except Exception:
                 logger.warning("Visual embedding query failed for image", exc_info=True)
                 per_image_results.append([])
@@ -345,25 +289,33 @@ class VisualRetriever:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _resolve_visual_chunks(self, chunk_ids: list[str]) -> dict[str, dict]:
-        """Look up chunk_ids in visual_chunks KV store, return resolved dict.
+    async def _resolve_visual_chunks(self, chunks: list[dict[str, Any]]) -> None:
+        """Resolve visual_chunks KV data into each chunk dict in-place.
 
-        Handles None results, JSONB-as-string parsing, and logs progress.
+        Adds ``image_data``, ``page_idx``, ``doc_title``, ``doc_author``,
+        and backfills ``file_path`` from visual_chunks when missing.
         """
-        if not chunk_ids:
-            return {}
+        if not chunks:
+            return
+        chunk_ids = [c["chunk_id"] for c in chunks]
         raw = await self.visual_chunks.get_by_ids(chunk_ids)
-        resolved: dict[str, dict] = {}
-        for cid, vd in zip(chunk_ids, raw, strict=False):
+        resolved_count = 0
+        for chunk, vd in zip(chunks, raw, strict=False):
             if vd is None:
                 continue
             if isinstance(vd, str):
                 try:
                     vd = json.loads(vd)
                 except (json.JSONDecodeError, TypeError):
-                    logger.warning("Skipping unparseable visual_chunk %s", cid)
+                    logger.warning("Skipping unparseable visual_chunk %s", chunk["chunk_id"])
                     continue
-            if isinstance(vd, dict):
-                resolved[cid] = vd
-        logger.info("[Visual Resolve] Resolved %d/%d chunks", len(resolved), len(chunk_ids))
-        return resolved
+            if not isinstance(vd, dict):
+                continue
+            resolved_count += 1
+            chunk["image_data"] = vd.get("image_data")
+            chunk["page_idx"] = (vd.get("page_index", 0) or 0) + 1
+            chunk["doc_title"] = vd.get("doc_title", "")
+            chunk["doc_author"] = vd.get("doc_author", "")
+            if not chunk.get("file_path"):
+                chunk["file_path"] = vd.get("file_path", "")
+        logger.info("[Visual Resolve] Resolved %d/%d chunks", resolved_count, len(chunks))
