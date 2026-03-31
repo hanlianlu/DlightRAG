@@ -23,8 +23,8 @@ if TYPE_CHECKING:
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 
 from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
-from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -653,7 +653,8 @@ class RAGService:
         return HashIndex(config.working_dir_path, workspace=config.workspace)
 
     async def _create_metadata_index(
-        self, config: DlightragConfig,
+        self,
+        config: DlightragConfig,
     ) -> MetadataIndexProtocol:
         """Create the appropriate metadata index backend.
 
@@ -670,9 +671,7 @@ class RAGService:
             except ImportError:
                 logger.warning("asyncpg not available, falling back to JSON metadata index")
             except Exception as e:
-                logger.warning(
-                    "PGMetadataIndex creation failed, falling back to JSON: %s", e
-                )
+                logger.warning("PGMetadataIndex creation failed, falling back to JSON: %s", e)
 
         from dlightrag.storage.json_metadata_index import JsonMetadataIndex
 
@@ -1022,6 +1021,7 @@ class RAGService:
                 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 
                 lr = self._lightrag or getattr(self.rag, "lightrag", None)
+                assert self._metadata_index is not None  # set by initialize()
                 chunk_ids = await metadata_retrieve(
                     self._metadata_index,
                     effective_filters,
@@ -1151,6 +1151,8 @@ class RAGService:
         # Lookup metadata by filename (best-effort)
         from pathlib import Path as _Path
 
+        if self._metadata_index is None:
+            return
         for fp in path_meta:
             try:
                 filename = _Path(fp).name
