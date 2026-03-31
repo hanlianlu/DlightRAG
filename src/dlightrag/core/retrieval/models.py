@@ -3,13 +3,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import warnings
 from datetime import datetime
 from typing import Any
 
+from pydantic import BaseModel
 
-@dataclass
-class MetadataFilter:
+
+class MetadataFilter(BaseModel):
     """Structured filter for document metadata queries."""
 
     filename: str | None = None
@@ -24,17 +25,20 @@ class MetadataFilter:
 
     def is_empty(self) -> bool:
         """Return True if no filter criteria are set."""
-        return all(
-            v is None
-            for v in [
-                self.filename,
-                self.filename_pattern,
-                self.file_extension,
-                self.doc_title,
-                self.doc_author,
-                self.date_from,
-                self.date_to,
-                self.rag_mode,
-                self.custom,
-            ]
+        return all(v is None for v in self.model_dump().values())
+
+
+def _validate_filter_coverage() -> None:
+    """Warn at import time if searchable fields are missing from MetadataFilter."""
+    from dlightrag.storage.metadata_fields import searchable_field_ids
+
+    filter_fields = set(MetadataFilter.model_fields.keys())
+    missing = searchable_field_ids() - filter_fields
+    if missing:
+        warnings.warn(
+            f"MetadataFilter missing searchable fields: {missing}",
+            stacklevel=2,
         )
+
+
+_validate_filter_coverage()
