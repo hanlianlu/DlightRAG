@@ -216,7 +216,7 @@ class JsonMetadataIndex:
         ]
 
     async def get_field_schema(self) -> dict[str, Any]:
-        """Return schema information compatible with PGMetadataIndex.get_table_schema.
+        """Return schema information compatible with PGMetadataIndex.get_field_schema.
 
         - ``columns``: from METADATA_FIELDS registry (excluding internal cols).
         - ``custom_keys``: union of all keys found in documents' custom_metadata.
