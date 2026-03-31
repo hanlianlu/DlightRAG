@@ -33,7 +33,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 
 ## Quick Start
 
-> **Defaults:** `qwen/qwen3.5-flash-02-23` (chat via OpenRouter) + `voyage-multimodal-3.5` (embedding via Voyage) in unified mode. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
+> **Defaults:** `qwen/qwen3.5-flash-02-23` (chat via OpenRouter) + `voyage-multimodal-3.5` (embedding via Voyage) in `unified` mode. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
 
 ### Web UI
 ##### Click the image to watch demo (YouTube)
@@ -172,8 +172,8 @@ The first decision — determines your ingestion pipeline, model requirements, a
 
 | Mode | Pipeline | Best for |
 |------|----------|----------|
-| `caption` (default) | Document parsing → VLM captioning → text embedding → KG | Text-heavy documents, structured elements |
-| `unified` | Page rendering → multimodal embedding → VLM entity extraction → KG | Visually rich documents (charts, diagrams, complex layouts) |
+| `caption` | Document parsing → VLM captioning → text embedding → KG | Text-heavy documents, structured elements |
+| `unified` (default)| Page rendering → multimodal embedding → VLM entity extraction → KG | Visually rich documents (charts, diagrams, complex layouts) |
 
 **Caption mode parsers** (`parser` in config.yaml):
 
