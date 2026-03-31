@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
+    from dlightrag.storage.protocols import MetadataIndexProtocol
     from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ async def unified_ingest(
     config: DlightragConfig,
     hash_index: HashIndexProtocol,
     source_type: Literal["local", "azure_blob", "s3"],
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Unified ingestion entry point — dispatches by source_type."""
@@ -78,7 +79,7 @@ async def _ingest_single_local(
     hash_index: HashIndexProtocol,
     path: Path,
     replace: bool,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
     user_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Ingest a single local file with dedup."""
@@ -96,7 +97,7 @@ async def _ingest_single_local(
     # Upsert document metadata (best-effort)
     if result.get("doc_id") and metadata_index is not None:
         try:
-            from dlightrag.storage.metadata_index import extract_system_metadata
+            from dlightrag.core.ingestion.metadata_extract import extract_system_metadata
 
             meta = extract_system_metadata(
                 path,
@@ -126,7 +127,7 @@ async def _ingest_local_dir(
     hash_index: HashIndexProtocol,
     path: Path,
     replace: bool,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
     user_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Recursively ingest all supported files in a directory."""
@@ -193,7 +194,7 @@ async def _ingest_azure_blob(
     engine: UnifiedRepresentEngine,
     config: DlightragConfig,
     hash_index: HashIndexProtocol,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Download blob(s) to temp -> visual pipeline."""
@@ -256,7 +257,7 @@ async def _ingest_single_blob(
     source: Any,
     blob_path: str,
     replace: bool = False,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
 ) -> dict[str, Any]:
     """Download one blob to temp dir, ingest via unified engine, cleanup."""
     tmpdir = config.temp_dir / uuid.uuid4().hex[:12]
@@ -281,7 +282,7 @@ async def _ingest_single_blob(
         # Upsert document metadata (best-effort)
         if result.get("doc_id") and metadata_index is not None:
             try:
-                from dlightrag.storage.metadata_index import extract_system_metadata
+                from dlightrag.core.ingestion.metadata_extract import extract_system_metadata
 
                 meta = extract_system_metadata(
                     target,
@@ -308,7 +309,7 @@ async def _ingest_s3(
     engine: UnifiedRepresentEngine,
     config: DlightragConfig,
     hash_index: HashIndexProtocol,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Download S3 object(s) to temp -> unified visual pipeline."""
@@ -364,7 +365,7 @@ async def _ingest_single_s3(
     bucket: str,
     key: str,
     replace: bool = False,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
 ) -> dict[str, Any]:
     """Download one S3 object to temp dir, ingest via unified engine, cleanup."""
     tmpdir = config.temp_dir / uuid.uuid4().hex[:12]
@@ -389,7 +390,7 @@ async def _ingest_single_s3(
         # Upsert document metadata (best-effort)
         if result.get("doc_id") and metadata_index is not None:
             try:
-                from dlightrag.storage.metadata_index import extract_system_metadata
+                from dlightrag.core.ingestion.metadata_extract import extract_system_metadata
 
                 meta = extract_system_metadata(
                     target,
@@ -422,7 +423,7 @@ async def unified_delete_files(
     *,
     file_paths: list[str] | None = None,
     filenames: list[str] | None = None,
-    metadata_index: Any = None,
+    metadata_index: MetadataIndexProtocol | None = None,
 ) -> list[dict[str, Any]]:
     """Delete files in unified mode — delegates to cascade_delete.
 
