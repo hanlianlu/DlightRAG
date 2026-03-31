@@ -7,13 +7,13 @@ import logging
 from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.storage.metadata_index import PGMetadataIndex
+from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
 
 async def metadata_retrieve(
-    metadata_index: PGMetadataIndex,
+    metadata_index: MetadataIndexProtocol,
     filters: MetadataFilter,
     lightrag: Any,
     rag_mode: str,
@@ -50,7 +50,7 @@ async def metadata_retrieve(
 
 async def _resolve_chunks_for_doc(
     doc_id: str,
-    metadata_index: PGMetadataIndex,
+    metadata_index: MetadataIndexProtocol,
     lightrag: Any,
     rag_mode: str,
 ) -> list[str]:
@@ -71,7 +71,7 @@ async def _resolve_caption(doc_id: str, lightrag: Any) -> list[str]:
     return []
 
 
-async def _resolve_unified(doc_id: str, metadata_index: PGMetadataIndex) -> list[str]:
+async def _resolve_unified(doc_id: str, metadata_index: MetadataIndexProtocol) -> list[str]:
     """Unified mode: compute chunk_ids from doc_id + page_count.
 
     Reads page_count from dlightrag_doc_metadata (our table) rather than

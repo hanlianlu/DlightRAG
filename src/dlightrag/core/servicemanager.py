@@ -289,7 +289,7 @@ class RAGServiceManager:
         if workspaces:
             svc = await self._get_service(workspaces[0])
             if svc._metadata_index is not None:
-                return await svc._metadata_index.get_table_schema()
+                return await svc._metadata_index.get_field_schema()
         return {}
 
     def get_llm_func(self):

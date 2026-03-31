@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +179,7 @@ class RAGService:
         self._lightrag: Any = None  # Direct LightRAG reference (unified mode)
         self._visual_chunks: Any = None  # Visual chunks KV store (unified mode)
         self._hash_index: Any = None  # Content-hash deduplication index
-        self._metadata_index: Any = None  # Document metadata index
+        self._metadata_index: MetadataIndexProtocol | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
@@ -651,28 +652,33 @@ class RAGService:
         logger.info("Hash index: HashIndex (JSON file)")
         return HashIndex(config.working_dir_path, workspace=config.workspace)
 
-    async def _create_metadata_index(self, config: DlightragConfig) -> Any:
-        """Create PGMetadataIndex if using PostgreSQL backend, else None.
+    async def _create_metadata_index(
+        self,
+        config: DlightragConfig,
+    ) -> MetadataIndexProtocol:
+        """Create the appropriate metadata index backend.
 
-        Metadata index is best-effort: non-PG backends silently skip it.
+        PG backends use PGMetadataIndex; all others fall back to JsonMetadataIndex.
         """
-        if not config.kv_storage.startswith("PG"):
-            logger.info("Metadata index: disabled (non-PG backend)")
-            return None
+        if config.kv_storage.startswith("PG"):
+            try:
+                from dlightrag.storage.pg_metadata_index import PGMetadataIndex
 
-        try:
-            from dlightrag.storage.metadata_index import PGMetadataIndex
+                idx = PGMetadataIndex(workspace=config.workspace)
+                await idx.initialize()
+                logger.info("Metadata index: PGMetadataIndex (PostgreSQL)")
+                return idx
+            except ImportError:
+                logger.warning("asyncpg not available, falling back to JSON metadata index")
+            except Exception as e:
+                logger.warning("PGMetadataIndex creation failed, falling back to JSON: %s", e)
 
-            idx = PGMetadataIndex(workspace=config.workspace)
-            await idx.initialize()
-            logger.info("Metadata index: PGMetadataIndex (PostgreSQL)")
-            return idx
-        except ImportError:
-            logger.warning("asyncpg not available — metadata index disabled")
-            return None
-        except Exception as e:
-            logger.warning("PGMetadataIndex creation failed — metadata index disabled: %s", e)
-            return None
+        from dlightrag.storage.json_metadata_index import JsonMetadataIndex
+
+        idx = JsonMetadataIndex(config.working_dir_path, workspace=config.workspace)
+        await idx.initialize()
+        logger.info("Metadata index: JsonMetadataIndex (JSON file fallback)")
+        return idx
 
     def _ensure_initialized(self) -> None:
         """Raise error if not initialized."""
@@ -1004,20 +1010,18 @@ class RAGService:
         if not backend:
             raise RuntimeError("Retrieval backend not initialized")
 
-        if filters and self._metadata_index is None:
-            logger.warning("Metadata filters ignored: metadata index requires PostgreSQL backend")
-
         # --- Step 1: Resolve metadata filter → candidate chunk_ids ---
         candidate_ids: set[str] | None = None
         effective_filters = filters
         if effective_filters is None and _plan is not None:
             effective_filters = getattr(_plan, "metadata_filter", None)
 
-        if effective_filters and self._metadata_index is not None:
+        if effective_filters:
             try:
                 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 
                 lr = self._lightrag or getattr(self.rag, "lightrag", None)
+                assert self._metadata_index is not None  # set by initialize()
                 chunk_ids = await metadata_retrieve(
                     self._metadata_index,
                     effective_filters,
@@ -1056,8 +1060,7 @@ class RAGService:
                 await self._inject_candidate_chunks(kg_result, sorted(missing))
 
         # --- Step 3: Enrich chunks with document metadata ---
-        if self._metadata_index is not None:
-            await self._enrich_chunks_with_metadata(kg_result)
+        await self._enrich_chunks_with_metadata(kg_result)
 
         return kg_result
 
@@ -1148,6 +1151,8 @@ class RAGService:
         # Lookup metadata by filename (best-effort)
         from pathlib import Path as _Path
 
+        if self._metadata_index is None:
+            return
         for fp in path_meta:
             try:
                 filename = _Path(fp).name
@@ -1176,22 +1181,16 @@ class RAGService:
 
     async def aget_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get document metadata by ID."""
-        if self._metadata_index is None:
-            raise ValueError("Metadata index not available for this workspace")
-        result = await self._metadata_index.get(doc_id)
+        result = await self._metadata_index.get(doc_id)  # type: ignore[union-attr]
         return result if result else {}
 
     async def aupdate_metadata(self, doc_id: str, data: dict[str, Any]) -> None:
         """Update (merge) document metadata."""
-        if self._metadata_index is None:
-            raise ValueError("Metadata index not available for this workspace")
-        await self._metadata_index.upsert(doc_id, data)
+        await self._metadata_index.upsert(doc_id, data)  # type: ignore[union-attr]
 
     async def asearch_metadata(self, filters: dict[str, Any]) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
-        if self._metadata_index is None:
-            raise ValueError("Metadata index not available for this workspace")
-        return await self._metadata_index.query(filters)
+        return await self._metadata_index.query(filters)  # type: ignore[union-attr]
 
     # === FILE MANAGEMENT API ===
 
