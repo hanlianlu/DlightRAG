@@ -17,32 +17,11 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
+
+from dlightrag.storage.protocols import HashIndexProtocol
 
 logger = logging.getLogger(__name__)
-
-
-@runtime_checkable
-class HashIndexProtocol(Protocol):
-    """Common interface for all hash index backends.
-
-    Implemented by HashIndex (JSON), PGHashIndex, RedisHashIndex, MongoHashIndex.
-    """
-
-    async def check_exists(self, content_hash: str) -> tuple[bool, str | None]: ...
-    async def register(self, content_hash: str, doc_id: str, file_path: str) -> None: ...
-    async def remove(self, content_hash: str) -> bool: ...
-    async def should_skip_file(
-        self, file_path: Path, replace: bool
-    ) -> tuple[bool, str | None, str | None]: ...
-    async def clear(self) -> None: ...
-    async def list_all(self) -> list[dict[str, Any]]: ...
-    def invalidate(self) -> None: ...
-    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]: ...
-    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]: ...
-
-    @staticmethod
-    def generate_doc_id_from_path(file_path: Path) -> str: ...
 
 
 def derive_source_type(file_path: str) -> str:

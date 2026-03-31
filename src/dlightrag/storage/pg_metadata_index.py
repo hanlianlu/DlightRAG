@@ -1,79 +1,22 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Document-level metadata index for structured queries."""
+"""PostgreSQL-backed document metadata index for structured queries."""
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.storage.metadata_fields import (
+    METADATA_FIELDS,
+    field_by_id,
+    system_field_ids,
+)
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass(frozen=True)
-class MetadataFieldDef:
-    """Defines a metadata column in dlightrag_doc_metadata.
-
-    Attributes:
-        trigram: Use pg_trgm similarity() for fuzzy matching (requires gin_trgm index).
-        searchable: Eligible for query filtering.
-    """
-
-    field_id: str
-    pg_type: str
-    filterable: bool = False
-    searchable: bool = False
-    trigram: bool = False
-    index_type: str | None = None
-
-
-METADATA_FIELDS: list[MetadataFieldDef] = [
-    MetadataFieldDef(
-        "filename",
-        "VARCHAR(512)",
-        filterable=True,
-        searchable=True,
-        trigram=True,
-        index_type="gin_trgm",
-    ),
-    MetadataFieldDef(
-        "filename_stem",
-        "VARCHAR(512)",
-        filterable=True,
-        searchable=True,
-        trigram=True,
-        index_type="gin_trgm",
-    ),
-    MetadataFieldDef("file_path", "TEXT"),
-    MetadataFieldDef(
-        "file_extension", "VARCHAR(32)", filterable=True, searchable=True, index_type="btree"
-    ),
-    MetadataFieldDef(
-        "doc_title", "TEXT", filterable=True, searchable=True, trigram=True, index_type="gin_trgm"
-    ),
-    MetadataFieldDef(
-        "doc_author", "VARCHAR(255)", filterable=True, searchable=True, index_type="btree"
-    ),
-    MetadataFieldDef("creation_date", "TIMESTAMPTZ", filterable=True, index_type="btree"),
-    MetadataFieldDef("original_format", "VARCHAR(32)"),
-    MetadataFieldDef("page_count", "INTEGER"),
-    MetadataFieldDef("rag_mode", "VARCHAR(32)", filterable=True),
-    MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),
-    MetadataFieldDef("custom_metadata", "JSONB DEFAULT '{}'", filterable=True, index_type="gin"),
-]
-
 _TRIGRAM_THRESHOLD = 0.3
-_INTEGER_PG_TYPES = frozenset({"INTEGER", "BIGINT", "SMALLINT", "INT"})
-
-# Field lookup by id for search dispatching
-_FIELD_BY_ID: dict[str, MetadataFieldDef] = {f.field_id: f for f in METADATA_FIELDS}
-
-# System field names for upsert partitioning
-_SYSTEM_FIELDS = frozenset(f.field_id for f in METADATA_FIELDS if f.field_id != "custom_metadata")
 
 
 def _build_create_table() -> str:
@@ -158,10 +101,9 @@ class PGMetadataIndex:
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
-        system = {k: metadata.get(k) for k in _SYSTEM_FIELDS}
-        custom = {
-            k: v for k, v in metadata.items() if k not in _SYSTEM_FIELDS and k != "ingested_at"
-        }
+        sys_fields = system_field_ids()
+        system = {k: metadata.get(k) for k in sys_fields}
+        custom = {k: v for k, v in metadata.items() if k not in sys_fields and k != "ingested_at"}
 
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -201,13 +143,13 @@ class PGMetadataIndex:
             value = getattr(filters, attr, None)
             if value is None:
                 continue
-            fdef = _FIELD_BY_ID.get(attr)
+            fdef = field_by_id(attr)
             if fdef is None:
                 continue
             if fdef.trigram:
                 conditions.append(f"similarity({attr}, ${idx}) > {_TRIGRAM_THRESHOLD}")
                 params.append(value)
-            elif fdef.pg_type.upper() in _INTEGER_PG_TYPES:
+            elif fdef.pg_type.upper() in {"INTEGER", "BIGINT", "SMALLINT", "INT"}:
                 conditions.append(f"{attr} = ${idx}")
                 params.append(value)
             else:
@@ -316,7 +258,7 @@ class PGMetadataIndex:
     # Internal columns excluded from schema hints — not user-filterable
     _INTERNAL_COLS = frozenset({"workspace", "doc_id", "ingested_at"})
 
-    async def get_table_schema(self) -> dict[str, Any]:
+    async def get_field_schema(self) -> dict[str, Any]:
         """Read table structure dynamically.
 
         - Column names/types from information_schema (table structure)
@@ -353,26 +295,3 @@ class PGMetadataIndex:
                 name,
             )
         return [r["doc_id"] for r in rows]
-
-
-def extract_system_metadata(
-    file_path: str | Path,
-    rag_mode: str = "caption",
-    page_count: int | None = None,
-) -> dict[str, Any]:
-    """Extract system metadata from a file path.
-
-    Returns a dict suitable for PGMetadataIndex.upsert().
-    """
-    p = Path(file_path)
-    meta: dict[str, Any] = {
-        "filename": p.name,
-        "filename_stem": p.stem,
-        "file_path": str(p),
-        "file_extension": p.suffix.lower().lstrip(".") if p.suffix else None,
-        "original_format": p.suffix.lower().lstrip(".") if p.suffix else None,
-        "rag_mode": rag_mode,
-    }
-    if page_count is not None:
-        meta["page_count"] = page_count
-    return meta

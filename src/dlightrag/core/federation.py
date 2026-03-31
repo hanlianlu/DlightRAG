@@ -251,7 +251,7 @@ async def federated_retrieve(
 
             # Provider for schema refresh
             async def _schema_provider():
-                return await first_svc._metadata_index.get_table_schema()
+                return await first_svc._metadata_index.get_field_schema()
 
             planner = QueryPlanner(llm_func=llm_func, schema_provider=_schema_provider)
             shared_plan = await planner.plan(query, explicit_filter=kwargs.get("filters"))

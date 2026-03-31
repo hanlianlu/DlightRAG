@@ -1,0 +1,59 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Centralised storage protocols for metadata and hash index backends.
+
+MetadataIndexProtocol — interface for structured metadata CRUD + query.
+HashIndexProtocol     — interface for content-hash deduplication tracking.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
+
+from dlightrag.core.retrieval.models import MetadataFilter
+
+
+@runtime_checkable
+class MetadataIndexProtocol(Protocol):
+    """Common interface for all metadata index backends.
+
+    Implementors: PGMetadataIndex, JsonMetadataIndex (planned).
+    """
+
+    async def initialize(self) -> None: ...
+    async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None: ...
+    async def get(self, doc_id: str) -> dict[str, Any] | None: ...
+    async def query(self, filters: MetadataFilter) -> list[str]: ...
+    async def delete(self, doc_id: str) -> None: ...
+    async def clear(self) -> None: ...
+    async def find_by_filename(self, name: str) -> list[str]: ...
+    async def get_field_schema(self) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class HashIndexProtocol(Protocol):
+    """Common interface for all hash index backends.
+
+    Implemented by HashIndex (JSON), PGHashIndex, RedisHashIndex, MongoHashIndex.
+    """
+
+    async def check_exists(self, content_hash: str) -> tuple[bool, str | None]: ...
+    async def register(self, content_hash: str, doc_id: str, file_path: str) -> None: ...
+    async def remove(self, content_hash: str) -> bool: ...
+    async def should_skip_file(
+        self, file_path: Path, replace: bool
+    ) -> tuple[bool, str | None, str | None]: ...
+    async def clear(self) -> None: ...
+    async def list_all(self) -> list[dict[str, Any]]: ...
+    def invalidate(self) -> None: ...
+    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]: ...
+    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]: ...
+
+    @staticmethod
+    def generate_doc_id_from_path(file_path: Path) -> str: ...
+
+
+__all__ = [
+    "HashIndexProtocol",
+    "MetadataIndexProtocol",
+]

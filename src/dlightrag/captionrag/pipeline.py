@@ -289,7 +289,7 @@ class IngestionPipeline:
             # Step 5: Upsert document metadata (best-effort)
             if doc_id and self._metadata_index is not None:
                 try:
-                    from dlightrag.storage.metadata_index import extract_system_metadata
+                    from dlightrag.core.ingestion.metadata_extract import extract_system_metadata
 
                     meta = extract_system_metadata(
                         file_path,
