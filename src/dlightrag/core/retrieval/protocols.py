@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict, runtime_checkable
+from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
-if TYPE_CHECKING:
-    from dlightrag.models.schemas import Reference
+from dlightrag.models.schemas import Reference
 
 # ── Structured context types ──────────────────────────────────────
 

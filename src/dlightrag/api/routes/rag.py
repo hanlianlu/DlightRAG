@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """RAG operations API routes."""
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -132,18 +133,19 @@ async def answer(
 
     async def event_generator() -> AsyncIterator[str]:
         yield f"data: {json.dumps({'type': 'context', 'data': contexts}, ensure_ascii=False)}\n\n"
-        full_answer = ""
+        answer_parts: list[str] = []
         try:
             if token_iter is None:
                 pass
             elif isinstance(token_iter, str):
-                full_answer = token_iter
+                answer_parts.append(token_iter)
                 yield f"data: {json.dumps({'type': 'token', 'content': token_iter}, ensure_ascii=False)}\n\n"
             else:
                 async for chunk in token_iter:
-                    full_answer += chunk
+                    answer_parts.append(chunk)
                     yield f"data: {json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
 
+            full_answer = "".join(answer_parts)
             clean_answer = getattr(token_iter, "answer", None) or full_answer
             flat_contexts: list[dict[str, Any]] = []
             for items in contexts.values():
@@ -159,6 +161,9 @@ async def answer(
 
             yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        except asyncio.CancelledError:
+            logger.debug("Client disconnected during SSE streaming")
+            raise
         except Exception:
             logger.exception("Error during SSE streaming")
             yield f"data: {json.dumps({'type': 'error', 'message': 'Internal server error during streaming'}, ensure_ascii=False)}\n\n"

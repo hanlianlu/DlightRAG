@@ -7,14 +7,13 @@ Called by both web routes and API server after retrieval.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
+
+from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 from .schemas import ChunkSnippet, SourceReference
 from .utils import filter_content_for_display
-
-if TYPE_CHECKING:
-    from dlightrag.core.retrieval.path_resolver import PathResolver
-    from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 
 def build_sources(

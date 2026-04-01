@@ -161,32 +161,12 @@ class VisualRetriever:
                 )
 
         # Force-inject metadata-resolved chunks before visual resolution
-        from dlightrag.core.retrieval.filtered_vdb import _active_filter
+        from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 
-        active_ids = _active_filter.get()
-        if active_ids:
-            missing = active_ids - seen_ids
-            if missing:
-                inject_ids = sorted(missing)[:chunk_top_k]
-                raw_contents = await self.lightrag.text_chunks.get_by_ids(inject_ids)
-                for cid, content_raw in zip(inject_ids, raw_contents, strict=False):
-                    if content_raw is None:
-                        continue
-                    content = (
-                        content_raw
-                        if isinstance(content_raw, str)
-                        else content_raw.get("content", "")
-                    )
-                    seen_ids.add(cid)
-                    chunks.append(
-                        {
-                            "chunk_id": cid,
-                            "content": content,
-                            "reference_id": "",
-                            "file_path": "",
-                        }
-                    )
-                logger.info("Force-injected %d metadata-resolved chunks", len(missing))
+        injected = await fetch_missing_chunks(self.lightrag.text_chunks, seen_ids, chunk_top_k)
+        for c in injected:
+            seen_ids.add(c["chunk_id"])
+        chunks.extend(injected)
 
         # Phase 2: Visual resolution (mutates chunks in-place)
         await self._resolve_visual_chunks(chunks)

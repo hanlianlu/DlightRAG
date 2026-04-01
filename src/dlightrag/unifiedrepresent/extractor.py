@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -30,6 +31,8 @@ logger = logging.getLogger(__name__)
 class EntityExtractor:
     """Extract entities from page images via VLM + LightRAG pipeline."""
 
+    _CACHE_MAX_SIZE = 2048
+
     def __init__(
         self,
         lightrag: Any,  # LightRAG instance
@@ -43,6 +46,8 @@ class EntityExtractor:
         self.vision_model_func = vision_model_func
         self.context_model_func = context_model_func
         self._vlm_semaphore = asyncio.Semaphore(max_concurrent_vlm)
+        # Content-hash → VLM description cache (per-instance)
+        self._description_cache: dict[str, str] = {}
 
     async def extract_from_pages(
         self,
@@ -132,13 +137,23 @@ class EntityExtractor:
             )
         ]
 
+    @staticmethod
+    def _image_content_hash(image_bytes: bytes) -> str:
+        """Compute SHA-256 hash of image bytes for caching."""
+        return hashlib.sha256(image_bytes).hexdigest()
+
     async def _describe_page(
         self,
         image: Any,
         page_index: int,
         structural_ctx: str | None = None,
     ) -> str:
-        """Call VLM to extract structured content and convert to text."""
+        """Call VLM to extract structured content and convert to text.
+
+        Results are cached by image content hash (without structural context).
+        When structural context is provided, the cache is bypassed since the
+        same image may produce different output depending on preceding pages.
+        """
         from dlightrag.core.vlm_ocr import (
             blocks_to_text,
             image_to_png_bytes,
@@ -150,6 +165,16 @@ class EntityExtractor:
             raise RuntimeError("vision_model_func is required but was not set")
 
         image_bytes = image_to_png_bytes(image)
+
+        # Check cache (only for context-free descriptions with real image data)
+        _MIN_CACHEABLE_SIZE = 256  # real PNGs are always > 256 bytes
+        cache_key: str | None = None
+        if structural_ctx is None and len(image_bytes) >= _MIN_CACHEABLE_SIZE:
+            cache_key = self._image_content_hash(image_bytes)
+            cached = self._description_cache.get(cache_key)
+            if cached is not None:
+                logger.debug("VLM cache hit for page %d", page_index)
+                return cached
 
         b64 = base64.b64encode(image_bytes).decode()
 
@@ -181,10 +206,20 @@ class EntityExtractor:
         blocks = parse_vlm_response(raw)
         if blocks is None:
             # Could not parse structured JSON — use raw text as fallback
-            return raw.strip()
+            result = raw.strip()
+        else:
+            result = blocks_to_text(blocks) or f"[Page {page_index + 1}: no content extracted]"
 
-        text = blocks_to_text(blocks)
-        return text or f"[Page {page_index + 1}: no content extracted]"
+        # Store in cache (context-free only)
+        if cache_key is not None:
+            if len(self._description_cache) >= self._CACHE_MAX_SIZE:
+                # Evict oldest entries (simple FIFO)
+                excess = len(self._description_cache) - self._CACHE_MAX_SIZE + 1
+                for key in list(self._description_cache)[:excess]:
+                    del self._description_cache[key]
+            self._description_cache[cache_key] = result
+
+        return result
 
     async def _update_structural_context(
         self,

@@ -5,12 +5,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING
 
+from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import clean_invalid_citations
-
-if TYPE_CHECKING:
-    from dlightrag.citations.indexer import CitationIndexer
 
 logger = logging.getLogger(__name__)
 

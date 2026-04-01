@@ -10,10 +10,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from dlightrag.core.ingestion.hash_index import HashIndexProtocol
+from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 
 logger = logging.getLogger(__name__)
 

@@ -68,6 +68,8 @@ async def bounded_gather(
                 return
             try:
                 results[idx] = await coro
+            except asyncio.CancelledError:
+                raise  # propagate cancellation immediately
             except BaseException as exc:
                 logger.warning("%s #%d failed: %s", task_name, idx, exc)
                 results[idx] = exc if isinstance(exc, Exception) else Exception(str(exc))
