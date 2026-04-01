@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.providers.base import CompletionProvider
 
 _PROVIDER_CLASSES: dict[str, str] = {
     "openai": "dlightrag.models.providers.openai_compat.OpenAICompatProvider",

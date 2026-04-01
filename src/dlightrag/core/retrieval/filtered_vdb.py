@@ -153,7 +153,9 @@ class FilteredVectorStorage:
             client = self._original._client
             collection = self._original.final_namespace
 
-            id_list_str = ", ".join(f'"{cid}"' for cid in candidate_ids)
+            # Escape double-quotes inside chunk_ids to prevent filter injection
+            escaped = [cid.replace("\\", "\\\\").replace('"', '\\"') for cid in candidate_ids]
+            id_list_str = ", ".join(f'"{cid}"' for cid in escaped)
             filter_expr = f"id in [{id_list_str}]"
 
             results = client.search(
@@ -221,3 +223,50 @@ class FilteredVectorStorage:
     def __getattr__(self, name: str) -> Any:
         """Proxy all other attributes to original (table_name, workspace, etc.)."""
         return getattr(self._original, name)
+
+
+# ── Shared force-injection helper ─────────────────────────────────
+# Used by both RAGService (caption mode, post-rerank) and
+# VisualRetriever (unified mode, pre-rerank) to inject
+# metadata-resolved chunks that the KG retrieval missed.
+
+
+async def fetch_missing_chunks(
+    text_chunks: Any,
+    seen_ids: set[str],
+    max_count: int = 30,
+) -> list[dict[str, Any]]:
+    """Fetch chunks matching the active metadata filter but missing from *seen_ids*.
+
+    Reads the per-request ``_active_filter`` contextvar and fetches any
+    chunk_ids that are in the filter set but absent from *seen_ids*.
+
+    Returns a list of basic chunk dicts (chunk_id, content, reference_id,
+    file_path).  Callers may enrich with visual data or metadata afterward.
+    """
+    active_ids = _active_filter.get()
+    if not active_ids:
+        return []
+    missing = active_ids - seen_ids
+    if not missing:
+        return []
+
+    inject_ids = sorted(missing)[:max_count]
+    raw_contents = await text_chunks.get_by_ids(inject_ids)
+
+    chunks: list[dict[str, Any]] = []
+    for cid, content_raw in zip(inject_ids, raw_contents, strict=False):
+        if content_raw is None:
+            continue
+        content = content_raw if isinstance(content_raw, str) else content_raw.get("content", "")
+        chunks.append(
+            {
+                "chunk_id": cid,
+                "content": content,
+                "reference_id": "",
+                "file_path": "",
+            }
+        )
+    if chunks:
+        logger.info("Force-injected %d metadata-resolved chunks", len(chunks))
+    return chunks

@@ -88,11 +88,6 @@ def get_chat_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(config.chat)
 
 
-def get_chat_model_func_for_lightrag(config: DlightragConfig) -> Callable:
-    """LightRAG-compatible chat callable with adapter."""
-    return _adapt_for_lightrag(get_chat_model_func(config))
-
-
 def get_ingest_model_func(config: DlightragConfig) -> Callable:
     """Messages-first ingest callable, fallback to chat."""
     cfg = config.ingest or config.chat
@@ -100,9 +95,21 @@ def get_ingest_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(cfg, fallback_api_key=fallback_key)
 
 
-def get_ingest_model_func_for_lightrag(config: DlightragConfig) -> Callable:
-    """LightRAG-compatible ingest callable with adapter."""
-    return _adapt_for_lightrag(get_ingest_model_func(config))
+def _lightrag_adapted(
+    factory: Callable[[DlightragConfig], Callable],
+) -> Callable[[DlightragConfig], Callable]:
+    """Wrap a messages-first model factory to produce a LightRAG-compatible callable."""
+
+    def wrapper(config: DlightragConfig) -> Callable:
+        return _adapt_for_lightrag(factory(config))
+
+    wrapper.__doc__ = f"LightRAG-adapted version of {factory.__name__}."
+    wrapper.__name__ = f"{factory.__name__}_for_lightrag"
+    return wrapper
+
+
+get_chat_model_func_for_lightrag = _lightrag_adapted(get_chat_model_func)
+get_ingest_model_func_for_lightrag = _lightrag_adapted(get_ingest_model_func)
 
 
 def get_embedding_func(config: DlightragConfig) -> Any:

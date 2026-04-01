@@ -10,12 +10,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
 
 from dlightrag.models.schemas import Reference
 
-if TYPE_CHECKING:
-    from .indexer import CitationIndexer
+from .indexer import CitationIndexer
 
 logger = logging.getLogger(__name__)
 

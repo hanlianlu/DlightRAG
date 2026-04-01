@@ -17,13 +17,11 @@ import platform
 import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
-
-if TYPE_CHECKING:
-    from dlightrag.core.ingestion.hash_index import HashIndexProtocol
+from typing import Any, Literal
 
 from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
@@ -273,11 +271,17 @@ class RAGService:
                     await conn.execute("SELECT pg_advisory_unlock($1)", _PG_INIT_LOCK_KEY)
             else:
                 logger.info("Another worker is initializing, waiting for lock...")
-                for _ in range(180):
-                    await asyncio.sleep(1)
+                waited = 0.0
+                backoff = 0.1
+                while waited < 180:
+                    await asyncio.sleep(backoff)
+                    waited += backoff
                     if await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY):
                         await conn.execute("SELECT pg_advisory_unlock($1)", _PG_INIT_LOCK_KEY)
                         break
+                    backoff = min(backoff * 1.5, 5.0)
+                else:
+                    logger.warning("Lock acquisition timeout after 180s")
                 logger.info("Lock released, connecting to existing storages...")
                 await self._do_initialize()
         finally:
@@ -741,9 +745,11 @@ class RAGService:
                 )
                 import re
 
-                safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", graph_name)
+                if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", graph_name):
+                    logger.error("Invalid AGE graph name: %r, skipping drop", graph_name)
+                    return
                 await conn.execute('SET search_path = ag_catalog, "$user", public')
-                await conn.execute(f"SELECT drop_graph('{safe_name}', true)")
+                await conn.execute("SELECT drop_graph($1, true)", graph_name)
 
         except Exception:
             logger.warning(
@@ -1067,47 +1073,36 @@ class RAGService:
     async def _inject_candidate_chunks(self, result: RetrievalResult, chunk_ids: list[str]) -> None:
         """Force-inject metadata-resolved chunks missing from retrieval results.
 
-        Fetches content from text_chunks and (in unified mode) image_data
-        from visual_chunks. Appends to the chunks list so the LLM sees the
-        user-requested documents.
+        Uses the shared ``fetch_missing_chunks`` helper for base text_chunks
+        retrieval, then enriches with visual_chunks data in unified mode.
         """
+        from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
+
         lr = self.lightrag
         if lr is None:
             return
 
-        raw_contents = await lr.text_chunks.get_by_ids(chunk_ids)
+        returned_cids: set[str] = {
+            cid for c in result.contexts.get("chunks", []) if (cid := c.get("chunk_id"))
+        }
+        injected = await fetch_missing_chunks(
+            lr.text_chunks, returned_cids, max_count=len(chunk_ids)
+        )
+        if not injected:
+            return
 
-        # Unified mode: also fetch visual data
-        visual_map: dict[str, dict] = {}
+        # Enrich with visual_chunks data (unified mode)
         if self._visual_chunks is not None:
-            raw_visuals = await self._visual_chunks.get_by_ids(chunk_ids)
-            for cid, vd in zip(chunk_ids, raw_visuals, strict=False):
+            inject_ids = [c["chunk_id"] for c in injected]
+            raw_visuals = await self._visual_chunks.get_by_ids(inject_ids)
+            for chunk, vd in zip(injected, raw_visuals, strict=False):
                 if isinstance(vd, dict):
-                    visual_map[cid] = vd
+                    chunk["file_path"] = vd.get("file_path", chunk.get("file_path", ""))
+                    chunk["image_data"] = vd.get("image_data")
+                    chunk["page_idx"] = (vd.get("page_index", 0) or 0) + 1
 
-        injected: list[dict] = []
-        for cid, content_raw in zip(chunk_ids, raw_contents, strict=False):
-            if content_raw is None:
-                continue
-            content = (
-                content_raw if isinstance(content_raw, str) else content_raw.get("content", "")
-            )
-            vd = visual_map.get(cid, {})
-            injected.append(
-                {
-                    "chunk_id": cid,
-                    "content": content,
-                    "reference_id": "",
-                    "file_path": vd.get("file_path", ""),
-                    "image_data": vd.get("image_data"),
-                    "page_idx": (vd.get("page_index", 0) or 0) + 1,
-                }
-            )
-
-        if injected:
-            chunks = result.contexts.get("chunks", [])
-            result.contexts["chunks"] = chunks + injected
-            logger.info("Force-injected %d metadata-resolved chunks", len(injected))
+        chunks = result.contexts.get("chunks", [])
+        result.contexts["chunks"] = chunks + injected
 
     async def _enrich_chunks_with_metadata(self, result: RetrievalResult) -> None:
         """Inject document metadata into chunk contexts for LLM consumption.

@@ -151,27 +151,32 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== Storage Backends (configurable, default PostgreSQL) =====
-    vector_storage: str = Field(
-        default="PGVectorStorage",
-        description="LightRAG vector storage backend. Options: PGVectorStorage, "
-        "MilvusVectorDBStorage, NanoVectorDBStorage, ChromaVectorDBStorage, "
-        "FaissVectorDBStorage, QdrantVectorDBStorage",
-    )
-    graph_storage: str = Field(
-        default="PGGraphStorage",
-        description="LightRAG graph storage backend. Options: PGGraphStorage, "
-        "Neo4JStorage, NetworkXStorage, MemgraphStorage",
-    )
-    kv_storage: str = Field(
-        default="PGKVStorage",
-        description="LightRAG KV storage backend. Options: PGKVStorage, "
-        "JsonKVStorage, RedisKVStorage, MongoKVStorage",
-    )
-    doc_status_storage: str = Field(
-        default="PGDocStatusStorage",
-        description="LightRAG doc status backend. Options: PGDocStatusStorage, "
-        "JsonDocStatusStorage, RedisDocStatusStorage, MongoDocStatusStorage",
-    )
+    vector_storage: Literal[
+        "PGVectorStorage",
+        "MilvusVectorDBStorage",
+        "NanoVectorDBStorage",
+        "ChromaVectorDBStorage",
+        "FaissVectorDBStorage",
+        "QdrantVectorDBStorage",
+    ] = Field(default="PGVectorStorage", description="LightRAG vector storage backend.")
+    graph_storage: Literal[
+        "PGGraphStorage",
+        "Neo4JStorage",
+        "NetworkXStorage",
+        "MemgraphStorage",
+    ] = Field(default="PGGraphStorage", description="LightRAG graph storage backend.")
+    kv_storage: Literal[
+        "PGKVStorage",
+        "JsonKVStorage",
+        "RedisKVStorage",
+        "MongoKVStorage",
+    ] = Field(default="PGKVStorage", description="LightRAG KV storage backend.")
+    doc_status_storage: Literal[
+        "PGDocStatusStorage",
+        "JsonDocStatusStorage",
+        "RedisDocStatusStorage",
+        "MongoDocStatusStorage",
+    ] = Field(default="PGDocStatusStorage", description="LightRAG doc status backend.")
 
     # ===== Optional: Neo4j (if graph_storage=Neo4JStorage) =====
     neo4j_uri: str = Field(default="bolt://localhost:7687")

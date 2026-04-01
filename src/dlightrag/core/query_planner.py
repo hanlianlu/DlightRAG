@@ -11,6 +11,7 @@ Consumers:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -136,22 +137,44 @@ class QueryPlanner:
             history_section=history_section,
         )
 
-        # Single LLM call
-        try:
-            response = await self._llm_func(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query},
-                ]
-            )
-            logger.info("[Planner] LLM call: %.1fs", time.monotonic() - t1)
-        except Exception:
-            logger.warning(
-                "QueryPlanner LLM call failed (%.1fs)", time.monotonic() - t1, exc_info=True
-            )
-            return fallback
+        # LLM call with adaptive retry (up to 2 retries with exponential backoff)
+        _MAX_RETRIES = 2
+        response: str | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = await self._llm_func(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query},
+                    ]
+                )
+                logger.info(
+                    "[Planner] LLM call: %.1fs (attempt %d)", time.monotonic() - t1, attempt
+                )
+                break
+            except Exception:
+                if attempt < _MAX_RETRIES:
+                    delay = 2**attempt  # 1s, 2s
+                    logger.warning(
+                        "QueryPlanner LLM call failed (attempt %d/%d), retrying in %ds",
+                        attempt + 1,
+                        _MAX_RETRIES + 1,
+                        delay,
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.warning(
+                        "QueryPlanner LLM call failed after %d attempts (%.1fs)",
+                        _MAX_RETRIES + 1,
+                        time.monotonic() - t1,
+                        exc_info=True,
+                    )
+                    return fallback
 
-        # Parse response
+        # Parse response (response is guaranteed str here; None means all retries failed)
+        if response is None:
+            return fallback
         plan = self._parse_response(response, query)
         if plan is None:
             return fallback

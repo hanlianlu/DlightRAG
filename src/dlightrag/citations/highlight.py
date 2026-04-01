@@ -12,14 +12,12 @@ import logging
 import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from dlightrag.prompts import HIGHLIGHT_SYSTEM_PROMPT, HIGHLIGHT_USER_PROMPT
 
-if TYPE_CHECKING:
-    from .schemas import SourceReference
+from .schemas import SourceReference
 
 logger = logging.getLogger(__name__)
 
