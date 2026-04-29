@@ -58,12 +58,19 @@ class AnswerEngine:
         self,
         query: str,
         contexts: RetrievalContexts,
+        query_images: list[str | dict[str, Any]] | None = None,
     ) -> RetrievalResult:
         """Non-streaming answer generation.
 
         Returns a :class:`RetrievalResult` with ``answer``, ``contexts``,
         and ``references`` populated.  Uses the same freetext prompt as
         streaming; references are extracted from ``### References``.
+
+        ``query_images`` are user-attached images (URLs or base64 data URIs)
+        inlined as OpenAI ``image_url`` content blocks ahead of the
+        retrieved-document section, letting the model see the user's input
+        images in addition to retrieved chunks. Designed for multi-turn chat
+        where the user uploads images alongside their question.
         """
         if self.model_func is None:
             logger.info("[AE] generate: no model_func available, returning None answer")
@@ -71,7 +78,13 @@ class AnswerEngine:
 
         system_prompt = get_answer_system_prompt()
         user_prompt, indexer = self._build_user_prompt(query, contexts)
-        messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
+        messages = self._build_messages(
+            system_prompt,
+            user_prompt,
+            contexts,
+            indexer=indexer,
+            query_images=query_images,
+        )
 
         logger.info(
             "[AE] generate: chunks=%d query=%s",
@@ -121,12 +134,17 @@ class AnswerEngine:
         self,
         query: str,
         contexts: RetrievalContexts,
+        query_images: list[str | dict[str, Any]] | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
 
         Uses the same freetext prompt as ``generate()``.  Wraps the
         token stream with :class:`AnswerStream` for post-stream citation
         validation via :class:`CitationProcessor`.
+
+        ``query_images`` mirrors ``generate()``: user-attached images
+        (URLs or base64 data URIs) are inlined as OpenAI ``image_url``
+        content blocks before retrieved-document context.
         """
         if self.model_func is None:
             logger.info("[AE] generate_stream: no model_func, returning None")
@@ -134,7 +152,13 @@ class AnswerEngine:
 
         system_prompt = get_answer_system_prompt()
         user_prompt, indexer = self._build_user_prompt(query, contexts)
-        messages = self._build_messages(system_prompt, user_prompt, contexts, indexer=indexer)
+        messages = self._build_messages(
+            system_prompt,
+            user_prompt,
+            contexts,
+            indexer=indexer,
+            query_images=query_images,
+        )
 
         logger.info(
             "[AE] generate_stream: chunks=%d query=%s",
@@ -166,14 +190,32 @@ class AnswerEngine:
         user_prompt: str,
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
+        query_images: list[str | dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Build OpenAI-format messages with per-document grouped images.
 
         Instead of flat-listing all images at the start, images are
         interleaved with their document's text excerpts so the LLM can
         associate each image with its source context.
+
+        When ``query_images`` is non-empty, those user-attached images are
+        prepended (with a clear section header) so the LLM sees them
+        before retrieved-document context. Any item that already looks
+        like an OpenAI ``image_url`` block dict is passed through verbatim;
+        plain strings are wrapped as ``{"type": "image_url", "image_url":
+        {"url": s}}`` so callers can pass either URLs or pre-built blocks.
         """
-        content: list[dict[str, Any]] = self._build_excerpt_blocks(contexts, indexer)
+        content: list[dict[str, Any]] = []
+
+        if query_images:
+            content.append({"type": "text", "text": "## User-attached images\n"})
+            for img in query_images:
+                if isinstance(img, dict) and img.get("type") == "image_url":
+                    content.append(img)
+                else:
+                    content.append({"type": "image_url", "image_url": {"url": img}})
+
+        content.extend(self._build_excerpt_blocks(contexts, indexer))
 
         content.append({"type": "text", "text": user_prompt})
 

@@ -288,6 +288,12 @@ class HashIndex:
                 return (info.get("doc_id"), h, stored_path)
         return (None, None, None)
 
+    async def find_by_hash(self, content_hash: str) -> tuple[str | None, str | None, str | None]:
+        info = self.lookup(content_hash)
+        if info is None:
+            return (None, None, None)
+        return (info.get("doc_id"), content_hash, info.get("file_path"))
+
     async def list_all(self) -> list[dict[str, Any]]:
         self.invalidate()
         index = self._load()
@@ -440,6 +446,18 @@ class PGHashIndex:
                 return (row["doc_id"], row["content_hash"], row["file_path"])
             return (None, None, None)
 
+    async def find_by_hash(self, content_hash: str) -> tuple[str | None, str | None, str | None]:
+        async with self._get_pool().acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT doc_id, file_path FROM {self.TABLE} "
+                f"WHERE content_hash = $1 AND workspace = $2 LIMIT 1",
+                content_hash,
+                self._workspace,
+            )
+            if row:
+                return (row["doc_id"], content_hash, row["file_path"])
+            return (None, None, None)
+
     async def list_all(self) -> list[dict[str, Any]]:
         async with self._get_pool().acquire() as conn:
             rows = await conn.fetch(
@@ -496,17 +514,7 @@ class RedisHashIndex:
         from lightrag.kg.redis_impl import RedisConnectionManager
         from redis.asyncio import Redis  # type: ignore[import-not-found]
 
-        config_uri = "redis://localhost:6379"
-        try:
-            import configparser
-
-            cfg = configparser.ConfigParser()
-            cfg.read("config.ini", "utf-8")
-            config_uri = cfg.get("redis", "uri", fallback=config_uri)
-        except Exception:
-            pass
-        self._redis_url = os.environ.get("REDIS_URI", config_uri)
-
+        self._redis_url = os.environ.get("REDIS_URI", "redis://localhost:6379")
         pool = RedisConnectionManager.get_pool(self._redis_url)
         self._redis = Redis(connection_pool=pool)
 
@@ -570,6 +578,13 @@ class RedisHashIndex:
             if info.get("file_path") == file_path:
                 return (info.get("doc_id"), content_hash, info.get("file_path"))
         return (None, None, None)
+
+    async def find_by_hash(self, content_hash: str) -> tuple[str | None, str | None, str | None]:
+        data = await self._get_redis().hget(self._key(), content_hash)
+        if not data:
+            return (None, None, None)
+        info = json.loads(data)
+        return (info.get("doc_id"), content_hash, info.get("file_path"))
 
     async def list_all(self) -> list[dict[str, Any]]:
         all_entries = await self._get_redis().hgetall(self._key())
@@ -693,6 +708,13 @@ class MongoHashIndex:
         )
         if doc:
             return (doc.get("doc_id"), doc.get("content_hash"), doc.get("file_path"))
+        return (None, None, None)
+
+    async def find_by_hash(self, content_hash: str) -> tuple[str | None, str | None, str | None]:
+        col = self._get_collection()
+        doc = await col.find_one({"_id": content_hash, "workspace": self._workspace})
+        if doc:
+            return (doc.get("doc_id"), content_hash, doc.get("file_path"))
         return (None, None, None)
 
     async def list_all(self) -> list[dict[str, Any]]:

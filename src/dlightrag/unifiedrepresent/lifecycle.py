@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
+from dlightrag.core.ingestion.cleanup import purge_stale_for_hash
+
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
     from dlightrag.core.ingestion.hash_index import HashIndexProtocol
@@ -21,6 +23,41 @@ if TYPE_CHECKING:
     from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 
 logger = logging.getLogger(__name__)
+
+
+async def _purge_if_replacing(
+    *,
+    replace: bool,
+    content_hash: str | None,
+    engine: UnifiedRepresentEngine,
+    hash_index: HashIndexProtocol,
+    metadata_index: MetadataIndexProtocol | None,
+) -> None:
+    """Cascade-delete the prior doc registered for ``content_hash`` when
+    ``replace=True`` so the upcoming ingest produces a clean upsert.
+
+    **Call AFTER ``engine.aingest()`` succeeds and BEFORE
+    ``hash_index.register()`` of the new doc.** This ordering preserves the
+    prior good record on engine failure (we never lose data we couldn't
+    replace) and lets ``cascade_delete`` find the stale ``doc_id`` via the
+    still-old hash_index entry. The subsequent ``register()`` re-creates
+    the hash_index slot under the new ``doc_id``.
+
+    No-op when ``replace`` is falsy or no hash is available. Hides the
+    boilerplate that the three ``_ingest_single_*`` callers used to
+    duplicate verbatim. See
+    :func:`dlightrag.core.ingestion.cleanup.purge_stale_for_hash` for the
+    underlying contract.
+    """
+    if not (replace and content_hash):
+        return
+    await purge_stale_for_hash(
+        content_hash=content_hash,
+        hash_index=hash_index,
+        lightrag=engine.lightrag,
+        visual_chunks=engine.visual_chunks,
+        metadata_index=metadata_index,
+    )
 
 
 def _normalize_ingest_result(raw: dict[str, Any]) -> dict[str, Any]:
@@ -90,6 +127,16 @@ async def _ingest_single_local(
 
     raw = await engine.aingest(file_path=str(path))
     result = _normalize_ingest_result(raw)
+
+    # Post-ingest purge: only drop the prior record after the new ingest
+    # succeeded, so a mid-pipeline failure leaves the prior doc intact.
+    await _purge_if_replacing(
+        replace=replace,
+        content_hash=content_hash,
+        engine=engine,
+        hash_index=hash_index,
+        metadata_index=metadata_index,
+    )
 
     if content_hash and result.get("doc_id"):
         await hash_index.register(content_hash, result["doc_id"], str(path))
@@ -276,6 +323,15 @@ async def _ingest_single_blob(
         raw = await engine.aingest(file_path=str(target))
         result = _normalize_ingest_result(raw)
 
+        # Post-ingest purge: prior doc only dropped after new ingest succeeded.
+        await _purge_if_replacing(
+            replace=replace,
+            content_hash=content_hash,
+            engine=engine,
+            hash_index=hash_index,
+            metadata_index=metadata_index,
+        )
+
         if content_hash and result.get("doc_id"):
             await hash_index.register(content_hash, result["doc_id"], f"azure://{blob_path}")
 
@@ -383,6 +439,15 @@ async def _ingest_single_s3(
         logger.info("Downloaded S3 object to temp: %s", target)
         raw = await engine.aingest(file_path=str(target))
         result = _normalize_ingest_result(raw)
+
+        # Post-ingest purge: prior doc only dropped after new ingest succeeded.
+        await _purge_if_replacing(
+            replace=replace,
+            content_hash=content_hash,
+            engine=engine,
+            hash_index=hash_index,
+            metadata_index=metadata_index,
+        )
 
         if content_hash and result.get("doc_id"):
             await hash_index.register(content_hash, result["doc_id"], f"s3://{bucket}/{key}")

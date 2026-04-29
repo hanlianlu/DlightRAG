@@ -43,6 +43,9 @@ class _HashIndexStub:
     def invalidate(self) -> None: ...
     async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]: ...
     async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]: ...
+    async def find_by_hash(
+        self, content_hash: str
+    ) -> tuple[str | None, str | None, str | None]: ...
 
     @staticmethod
     def generate_doc_id_from_path(file_path: Path) -> str:
@@ -125,6 +128,7 @@ class TestHashIndexProtocol:
             "invalidate",
             "find_by_name",
             "find_by_path",
+            "find_by_hash",
             "generate_doc_id_from_path",
         ],
     )

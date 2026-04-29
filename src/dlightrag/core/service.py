@@ -26,10 +26,18 @@ from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
-# Init lock key for PostgreSQL advisory lock (arbitrary 64-bit int)
-_PG_INIT_LOCK_KEY = 0x436F727072616700  # "Dlightrag\0" as int
+# Init lock key for the PostgreSQL advisory lock taken during workspace
+# storage initialisation. Arbitrary 64-bit constant — only needs to be
+# unique among DlightRAG-owned advisory locks. Value is the legacy
+# `b"Corprag\0"` from the pre-rename codebase. Advisory locks are
+# session-scoped and not persisted, so the specific number is
+# irrelevant beyond uniqueness.
+_PG_INIT_LOCK_KEY = 0x436F727072616700
 
-# LightRAG storage attribute names — authoritative list for reset/drop.
+# LightRAG storage attribute names — authoritative list referenced by reset
+# tests to assert that areset() iterates over the full set. The reset module
+# itself uses dynamic ``vars()`` discovery; this constant exists as the test
+# contract / documentation of what should be covered.
 _STORAGE_ATTRS = (
     "full_docs",
     "text_chunks",
@@ -105,15 +113,17 @@ from lightrag.utils import EmbeddingFunc  # noqa: E402
 
 from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
 from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
+from dlightrag.core.compat_guard import LightRAGCompatGuard  # noqa: E402
 from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
 from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
-    get_chat_model_func,
+    build_role_llm_configs,
     get_chat_model_func_for_lightrag,
     get_embedding_func,
     get_ingest_model_func,
     get_rerank_func,
+    get_vlm_model_func,
 )
 from dlightrag.unifiedrepresent.lifecycle import unified_delete_files, unified_ingest  # noqa: E402
 
@@ -331,7 +341,7 @@ class RAGService:
 
         # Get model functions
         chat_func_lr = get_chat_model_func_for_lightrag(config)
-        chat_func = get_chat_model_func(config)
+        vlm_func = get_vlm_model_func(config)
         embedding_func = get_embedding_func(config)
         rerank_func = get_rerank_func(config)
 
@@ -348,7 +358,7 @@ class RAGService:
             from dlightrag.captionrag.vlm_parser import VlmOcrParser
 
             vlm_parser = VlmOcrParser(
-                vision_model_func=chat_func,
+                vision_model_func=vlm_func,
                 dpi=config.page_render_dpi,
             )
 
@@ -369,11 +379,17 @@ class RAGService:
             "doc_status_storage": config.doc_status_storage,
             "rerank_model_func": lightrag_rerank_func,
             "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
+            "kg_chunk_pick_method": config.kg_chunk_pick_method,
             "addon_params": {
                 "entity_types": config.kg_entity_types,
                 "language": "English",
             },
         }
+
+        role_overrides = build_role_llm_configs(config)
+        if role_overrides is not None:
+            lightrag_kwargs["role_llm_configs"] = role_overrides
+            logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
 
         # Only use our custom HybridChunker for parsers that benefit from it
         if config.parser in ("docling", "vlm"):
@@ -402,6 +418,8 @@ class RAGService:
         # Wrap chunks_vdb for metadata in-filtering (caption mode)
         lr = getattr(self.rag, "lightrag", None)
         if lr is not None and getattr(lr, "chunks_vdb", None) is not None:
+            await LightRAGCompatGuard(lr).verify_all()
+
             from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
 
             lr.chunks_vdb = FilteredVectorStorage(
@@ -453,9 +471,12 @@ class RAGService:
 
         # Get model functions
         chat_func_lr = get_chat_model_func_for_lightrag(config)
-        chat_func = get_chat_model_func(config)
+        vlm_func = get_vlm_model_func(config)
         ingest_func = get_ingest_model_func(config)
         rerank_func = get_rerank_func(config)
+        role_overrides = build_role_llm_configs(config)
+        if role_overrides is not None:
+            logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
 
         # Use httpx_text_embed instead of LightRAG's openai_embed for text
         # embedding.  openai_embed uses encoding_format:"base64" and the openai
@@ -533,6 +554,8 @@ class RAGService:
             kv_storage=config.kv_storage,
             doc_status_storage=config.doc_status_storage,
             vector_db_storage_cls_kwargs=self._build_vector_db_kwargs(config),
+            role_llm_configs=role_overrides,
+            kg_chunk_pick_method=config.kg_chunk_pick_method,
             addon_params={
                 "entity_types": config.kg_entity_types,
                 "language": "English",
@@ -544,6 +567,8 @@ class RAGService:
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
+            await LightRAGCompatGuard(lightrag).verify_all()
+
             from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
 
             lightrag.chunks_vdb = FilteredVectorStorage(  # type: ignore[assignment]
@@ -588,7 +613,7 @@ class RAGService:
             lightrag=lightrag,
             visual_chunks=visual_chunks,
             config=config,
-            vision_model_func=chat_func,
+            vision_model_func=vlm_func,
             visual_embedder=visual_embedder,
             path_resolver=self._path_resolver,
             context_model_func=ingest_func,
@@ -1197,6 +1222,99 @@ class RAGService:
         if not self.ingestion:
             raise RuntimeError("Ingestion pipeline not initialized")
         return await self.ingestion.alist_ingested_files()
+
+    async def alist_failed_docs(self) -> list[dict[str, Any]]:
+        """Return all documents currently in DocStatus.FAILED for this workspace."""
+        self._ensure_initialized()
+        if self._lightrag is None:
+            return []
+
+        from lightrag.base import DocStatus
+
+        try:
+            failed = await self._lightrag.doc_status.get_docs_by_status(DocStatus.FAILED)
+        except Exception as exc:
+            logger.warning("Failed to query FAILED docs: %s", exc)
+            return []
+
+        return [
+            {
+                "doc_id": doc_id,
+                "file_path": getattr(info, "file_path", "") or "",
+                "error": getattr(info, "error_msg", None) or getattr(info, "content_summary", ""),
+                "updated_at": str(getattr(info, "updated_at", "")),
+            }
+            for doc_id, info in (failed or {}).items()
+        ]
+
+    async def aretry_failed_docs(self) -> dict[str, Any]:
+        """Re-ingest every FAILED document with ``replace=True``.
+
+        Each doc's stored ``file_path`` is parsed via
+        :func:`dlightrag.sourcing.uri.parse_remote_uri` to dispatch the right
+        ``aingest()`` source type.
+
+        FAILED docs typically aren't registered in ``hash_index`` (the
+        post-ingest ``register()`` call never ran), so the
+        ``purge_stale_for_hash`` short-circuits inside ``replace=True``.
+        To make this endpoint actually drain the FAILED list, we
+        explicitly call ``adelete_by_doc_id`` *before* re-ingest — that
+        drops the FAILED doc_status row and any partial chunks/entities
+        it may have left behind.
+
+        Returns a summary dict with counts and per-doc outcomes.
+        """
+        from dlightrag.sourcing.uri import parse_remote_uri
+
+        failed = await self.alist_failed_docs()
+        if not failed:
+            return {"retried": 0, "succeeded": 0, "failed": 0, "results": []}
+
+        lr = self.lightrag
+        succeeded: list[dict[str, Any]] = []
+        still_failed: list[dict[str, Any]] = []
+
+        for entry in failed:
+            doc_id = entry["doc_id"]
+            file_path = entry["file_path"]
+            if not file_path:
+                still_failed.append({"doc_id": doc_id, "reason": "no file_path on doc_status"})
+                continue
+
+            try:
+                source_type, ingest_kwargs = parse_remote_uri(file_path)
+            except ValueError as exc:
+                still_failed.append({"doc_id": doc_id, "file_path": file_path, "reason": str(exc)})
+                continue
+
+            # Drop the FAILED doc_status row before re-ingesting so the next
+            # alist_failed_docs() call no longer returns this doc_id even when
+            # hash_index has no matching entry for purge_stale_for_hash to act
+            # on. Best-effort: a missing doc_id is a no-op upstream.
+            if lr is not None:
+                try:
+                    await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                except Exception as exc:
+                    logger.warning(
+                        "Pre-retry adelete_by_doc_id failed for doc_id=%s: %s", doc_id, exc
+                    )
+
+            try:
+                result = await self.aingest(source_type, replace=True, **ingest_kwargs)
+                succeeded.append({"doc_id": doc_id, "file_path": file_path, "result": result})
+            except Exception as exc:
+                logger.warning(
+                    "Retry failed for doc_id=%s file_path=%s: %s", doc_id, file_path, exc
+                )
+                still_failed.append({"doc_id": doc_id, "file_path": file_path, "reason": str(exc)})
+
+        return {
+            "retried": len(failed),
+            "succeeded": len(succeeded),
+            "failed": len(still_failed),
+            "succeeded_docs": succeeded,
+            "failed_docs": still_failed,
+        }
 
     async def adelete_files(
         self,

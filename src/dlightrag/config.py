@@ -205,6 +205,14 @@ class DlightragConfig(BaseSettings):
     # ===== New nested config =====
     chat: ModelConfig = Field(default_factory=lambda: ModelConfig(model="gpt-4.1", temperature=0.5))
     ingest: ModelConfig | None = None
+    # Per-role LLM configs (optional, fallback to chat). All four are routed via
+    # LightRAG 1.5.0+ role_llm_configs registry where applicable; vlm is also
+    # used by DlightRAG's own vision_model_func paths (vlm_parser, multimodal
+    # query, unified extractor).
+    extract: ModelConfig | None = None
+    keywords: ModelConfig | None = None
+    query: ModelConfig | None = None
+    vlm: ModelConfig | None = None
     embedding: EmbeddingConfig  # required, no default
     rerank: RerankConfig = Field(default_factory=RerankConfig)
 
@@ -270,6 +278,13 @@ class DlightragConfig(BaseSettings):
     max_conversation_tokens: int = Field(default=150000)
 
     # ===== Knowledge Graph =====
+    kg_chunk_pick_method: Literal["VECTOR", "WEIGHT"] = Field(
+        default="VECTOR",
+        description="How LightRAG selects chunks linked to KG entities/relations. "
+        "VECTOR: rank by similarity to query embedding (recommended for most workloads). "
+        "WEIGHT: rank by entity/relation importance scores. "
+        "Maps to LightRAG's KG_CHUNK_PICK_METHOD (1.4.7+).",
+    )
     kg_entity_types: list[str] = Field(
         default=[
             "Product",
