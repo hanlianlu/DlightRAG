@@ -26,13 +26,12 @@ from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
-# Init lock key for the PostgreSQL advisory lock taken during workspace
-# storage initialisation. Arbitrary 64-bit constant — only needs to be
-# unique among DlightRAG-owned advisory locks. Value is `b"DlightRA"`
-# (truncation of "DlightRAG" to 8 bytes since pg_try_advisory_lock takes
-# int8) packed big-endian. Advisory locks are session-scoped and not
-# persisted, so the specific number has no migration cost.
-_PG_INIT_LOCK_KEY = 0x446C696768745241
+# PostgreSQL advisory lock key for workspace storage init. Layout follows
+# ArtRAG: 6-byte project tag + zero pad + 1-byte namespace. The trailing
+# 0x01 reserves room for additional DlightRAG-owned locks (0x02, 0x03,
+# ...) without colliding. Advisory locks are session-scoped, not
+# persisted, so this is purely for in-process coordination.
+_PG_INIT_LOCK_KEY = 0x446C_6967_6874_0001  # "Dlight\x00\x01"
 
 # LightRAG storage attribute names — authoritative list referenced by reset
 # tests to assert that areset() iterates over the full set. The reset module
