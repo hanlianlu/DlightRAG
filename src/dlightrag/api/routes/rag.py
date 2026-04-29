@@ -91,6 +91,8 @@ async def answer(
     kwargs: dict[str, Any] = {}
     if body.multimodal_content:
         kwargs["multimodal_content"] = body.multimodal_content
+    if body.query_images:
+        kwargs["query_images"] = body.query_images
 
     if not body.stream:
         result = await manager.aanswer(

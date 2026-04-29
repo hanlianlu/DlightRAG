@@ -353,9 +353,16 @@ class RAGServiceManager:
         conversation_history: list[dict[str, str]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        query_images: list[str | dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
-        """Answer from one or more workspaces: plan -> retrieve -> generate."""
+        """Answer from one or more workspaces: plan -> retrieve -> generate.
+
+        ``query_images`` are user-attached images inlined into the answer LLM
+        call as ``image_url`` blocks (URLs or pre-built dict blocks). Distinct
+        from retrieval-time ``multimodal_content`` in ``kwargs``: this list
+        only affects answer generation, never the retrieval pipeline.
+        """
         ws_list = workspaces or [workspace or self._config.workspace]
         from dlightrag.observability import trace_pipeline
 
@@ -372,7 +379,11 @@ class RAGServiceManager:
 
                     retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
                     engine = self._get_answer_engine()
-                    return await engine.generate(plan.standalone_query, retrieval.contexts)
+                    return await engine.generate(
+                        plan.standalone_query,
+                        retrieval.contexts,
+                        query_images=query_images,
+                    )
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -385,9 +396,13 @@ class RAGServiceManager:
         conversation_history: list[dict[str, str]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        query_images: list[str | dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Streaming answer from one or more workspaces: plan -> retrieve -> stream."""
+        """Streaming answer from one or more workspaces: plan -> retrieve -> stream.
+
+        See ``aanswer`` for ``query_images`` semantics.
+        """
         ws_list = workspaces or [workspace or self._config.workspace]
         from dlightrag.observability import trace_pipeline
 
@@ -411,7 +426,11 @@ class RAGServiceManager:
 
                     retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
                     engine = self._get_answer_engine()
-                    return await engine.generate_stream(plan.standalone_query, retrieval.contexts)
+                    return await engine.generate_stream(
+                        plan.standalone_query,
+                        retrieval.contexts,
+                        query_images=query_images,
+                    )
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
