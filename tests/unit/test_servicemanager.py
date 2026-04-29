@@ -213,7 +213,7 @@ class TestRouting:
 
         await manager.aanswer("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
-        mock_engine.generate.assert_awaited_once_with("query", mock_contexts)
+        mock_engine.generate.assert_awaited_once_with("query", mock_contexts, query_images=None)
 
 
 class TestAnswerViaEngine:
@@ -238,7 +238,9 @@ class TestAnswerViaEngine:
 
         result = await manager.aanswer("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
-        mock_engine.generate.assert_awaited_once_with("what is X?", mock_contexts)
+        mock_engine.generate.assert_awaited_once_with(
+            "what is X?", mock_contexts, query_images=None
+        )
         assert result is expected_result
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -260,7 +262,9 @@ class TestAnswerViaEngine:
 
         contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
-        mock_engine.generate_stream.assert_awaited_once_with("what is X?", mock_contexts)
+        mock_engine.generate_stream.assert_awaited_once_with(
+            "what is X?", mock_contexts, query_images=None
+        )
         assert contexts is mock_contexts
         assert stream is mock_stream
 
@@ -283,7 +287,7 @@ class TestAnswerViaEngine:
 
         result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
-        mock_engine.generate.assert_awaited_once_with("query", mock_contexts)
+        mock_engine.generate.assert_awaited_once_with("query", mock_contexts, query_images=None)
         assert result is expected_result
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
@@ -305,7 +309,9 @@ class TestAnswerViaEngine:
 
         contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
-        mock_engine.generate_stream.assert_awaited_once_with("query", mock_contexts)
+        mock_engine.generate_stream.assert_awaited_once_with(
+            "query", mock_contexts, query_images=None
+        )
         assert contexts is mock_contexts
 
     def test_get_answer_engine_lazy_creates(self, test_cfg) -> None:

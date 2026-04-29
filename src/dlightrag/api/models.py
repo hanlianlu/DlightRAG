@@ -74,12 +74,28 @@ class AnswerRequest(BaseModel):
     workspaces: list[str] | None = None
     multimodal_content: list[dict[str, Any]] | None = None
     conversation_history: list[dict[str, str]] | None = None
+    query_images: list[str | dict[str, Any]] | None = None
+    """User-attached images inlined into the answer LLM call as
+    OpenAI ``image_url`` content blocks. Each item is either a URL/data
+    URI string or a pre-built ``{"type":"image_url","image_url":{...}}``
+    dict. Distinct from ``multimodal_content`` (which drives visual
+    retrieval in unified mode); pass both if you want the same images
+    used for both retrieval and answer reasoning."""
 
     @field_validator("multimodal_content")
     @classmethod
     def validate_image_count(cls, v: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
         if v and len(v) > 3:
             raise ValueError("Maximum 3 multimodal items per query")
+        return v
+
+    @field_validator("query_images")
+    @classmethod
+    def validate_query_image_count(
+        cls, v: list[str | dict[str, Any]] | None
+    ) -> list[str | dict[str, Any]] | None:
+        if v and len(v) > 10:
+            raise ValueError("Maximum 10 query_images per request")
         return v
 
 
