@@ -33,7 +33,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 
 ## Quick Start
 
-> **Defaults:** `qwen/qwen3.5-flash-02-23` (chat via OpenRouter) + `voyage-multimodal-3.5` (embedding via Voyage) in `unified` mode. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
+> **Defaults:** `google/gemini-2.5-flash-lite` (chat via OpenRouter) + `voyage-multimodal-3.5` (embedding via Voyage) in `unified` mode. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
 
 ### Web UI
 ##### Click the image to watch demo (YouTube)
@@ -140,7 +140,7 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/ingest` | Ingest from local, Azure Blob, or Snowflake |
+| `POST` | `/ingest` | Ingest from local, Azure Blob, or AWS S3 |
 | `POST` | `/retrieve` | Contexts + sources (no LLM answer) |
 | `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
 | `GET` | `/files` | List ingested documents |
@@ -189,15 +189,18 @@ All caption mode parsers use Docling's HybridChunker for structure-aware chunkin
 
 **Model usage by stage:**
 
-| Stage | Caption | Unified |
-|-------|---------|---------|
-| Image captioning | chat model (VLM) | chat model (VLM) |
-| Table / equation captioning | chat model | — |
-| Entity extraction | chat model | chat model (VLM) |
-| Embedding | embedding model | embedding model (multimodal) |
-| Rerank (llm_listwise) | ingest/chat model | chat model (VLM, pointwise scoring) |
-| Rerank (API strategy) | cohere/jina/aliyun API | cohere/jina/aliyun API |
-| Answer generation | chat model | chat model (VLM, sees text excerpts + page images) |
+Each stage resolves its model via the per-role overrides below; if a role is unset, it falls back to `chat`.
+
+| Stage | Caption | Unified | Role override |
+|-------|---------|---------|---------------|
+| Image captioning | chat (VLM) | chat (VLM) | `vlm` |
+| Table / equation captioning | chat | — | `vlm` |
+| Entity extraction | chat | chat (VLM) | `extract` |
+| Embedding | embedding model | embedding model (multimodal) | (separate `embedding` block) |
+| Rerank (llm_listwise) | ingest/chat | vlm/chat (pointwise) | `vlm` |
+| Rerank (API strategy) | cohere/jina/aliyun/azure_cohere | cohere/jina/aliyun/azure_cohere | (separate `rerank` block) |
+| Keyword extraction (per-query) | chat | chat | `keywords` |
+| Answer generation | chat | chat (VLM, sees text excerpts + page images) | `query` |
 
 > **Important:** The chat model must support vision (multimodal/VLM). It doubles as the vision model for image captioning, VLM parser, unified mode, and multimodal queries. A text-only chat model will fail on these tasks.
 
@@ -215,7 +218,7 @@ embedding:
   dim: 4096
 ```
 
-> **Limitations:** Snowflake is text-only (no visual embedding). A workspace is locked to one mode after first ingestion. Page images ~3-7 MB/page at 250 DPI.
+> **Limitations:** A workspace is locked to one mode after first ingestion. Page images ~3-7 MB/page at 250 DPI.
 
 ### Providers
 
@@ -322,7 +325,7 @@ Set in `config.yaml` under the `rerank:` block:
 
 | Strategy | Default model | API key |
 |---------|---------------|---------|
-| `llm_listwise` | (uses ingest/chat model) | (reuses chat/ingest key) |
+| `llm_listwise` | falls through `vlm` → `ingest` → `chat` role | (reuses the chosen role's key) |
 | `cohere` | `rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
 | `jina` | `jina-reranker-v3` | `DLIGHTRAG_RERANK__API_KEY` |
 | `aliyun` | `qwen3-rerank` | `DLIGHTRAG_RERANK__API_KEY` |

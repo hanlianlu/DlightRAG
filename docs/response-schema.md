@@ -23,8 +23,8 @@ result = await manager.aingest(
     prefix="reports/",       # or blob_path="reports/q1.pdf"
 )
 
-# Snowflake
-result = await manager.aingest("default", source_type="snowflake", query="SELECT * FROM docs")
+# AWS S3
+result = await manager.aingest("default", source_type="s3", bucket="my-bucket", key="docs/q1.pdf")
 ```
 
 ### REST API
@@ -37,14 +37,14 @@ curl -X POST http://localhost:8100/ingest \
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `source_type` | `string` | yes | `local`, `azure_blob`, `snowflake` |
+| `source_type` | `string` | yes | `local`, `azure_blob`, `s3` |
 | `path` | `string` | local | File or directory path |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
-| `prefix` | `string` | — | Blob prefix filter |
-| `query` | `string` | snowflake | SQL query |
-| `table` | `string` | — | Snowflake table name |
-| `replace` | `boolean` | — | Replace existing documents with same name |
+| `prefix` | `string` | — | Blob/key prefix filter |
+| `bucket` | `string` | s3 | S3 bucket name |
+| `key` | `string` | s3 | S3 object key |
+| `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 
 ### MCP Server
@@ -118,7 +118,8 @@ async for token in token_iter:
 | `mode` | `str` | `"mix"` | `local`, `global`, `hybrid`, `naive`, `mix` |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
-| `multimodal_content` | `list[dict]` | `None` | Up to 3 images (unified mode) |
+| `multimodal_content` | `list[dict]` | `None` | Up to 3 images for visual retrieval (unified mode only) |
+| `query_images` | `list[str \| dict]` | `None` | User-attached images inlined into the answer LLM call as `image_url` blocks (URL strings or pre-built dict blocks). Capped at 10. Distinct from `multimodal_content`: this only affects answer generation, not retrieval. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query) |
 
 ### REST API
