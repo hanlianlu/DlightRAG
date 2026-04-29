@@ -50,12 +50,10 @@ VisualRetriever._retrieve()
 #### Pure Text Query
 
 ```
-query → LightRAG mix mode (KG + vector search)
+query → LightRAG mix mode (KG + vector search, returns chunks with text)
           │
-          ├─ entities/relationships (source_id → chunk_ids)
+          ├─ entities/relationships (source_id → chunk_ids, joined by LightRAG)
           └─ chunks (text vector match)
-                  │
-             [Backfill] recover text for entity/relationship chunks
                   │
              Visual Resolve: chunk_id → page image (visual_chunks KV)
                   │
@@ -63,7 +61,12 @@ query → LightRAG mix mode (KG + vector search)
 ```
 
 - No visual embedding search — text embedding already covers chunk retrieval.
-- Visual resolve maps chunk_ids to page images for VLM consumption.
+- LightRAG's `aquery_data()` Stage 3 (Merge Chunks) already joins
+  entity/relationship `source_id` back to chunk text content; DlightRAG
+  no longer maintains its own text "backfill" path.
+- Visual resolve maps chunk_ids to page images for VLM consumption — this
+  is the *only* lookup DlightRAG performs against `visual_chunks` (image
+  data only; text is handled inside LightRAG).
 
 #### Image + Text Query (Dual-Path)
 
