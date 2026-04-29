@@ -33,7 +33,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 
 ## Quick Start
 
-> **Defaults:** `google/gemini-2.5-flash-lite` (chat via OpenRouter) + `voyage-multimodal-3.5` (embedding via Voyage) in `unified` mode. To use other providers or models, edit `config.yaml` — see [Configuration](#configuration).
+> **Defaults:** `google/gemini-2.5-flash-lite` for chat (routed through an OpenAI-compatible gateway) + `voyage-multimodal-3.5` for embedding (Voyage) in `unified` mode. Swap providers or models by editing `config.yaml` — see [Configuration](#configuration).
 
 ### Web UI
 ##### Click the image to watch demo (YouTube)
@@ -226,7 +226,7 @@ Three native SDKs — choose per model block in `config.yaml`:
 
 | Provider | SDK | Use for |
 |----------|-----|---------|
-| `openai` (default) | AsyncOpenAI | OpenAI, Azure OpenAI, Qwen/DashScope, MiniMax, Ollama, Xinference, OpenRouter, any OpenAI-compatible endpoint |
+| `openai` (default) | AsyncOpenAI | OpenAI, Azure OpenAI, Qwen/DashScope, MiniMax, Ollama, Xinference, any OpenAI-compatible endpoint |
 | `anthropic` | Anthropic SDK | Anthropic Claude models |
 | `gemini` | Google GenAI SDK | Google Gemini models |
 
@@ -281,10 +281,12 @@ extract:
   provider: anthropic
   model: claude-sonnet-4-20250514
 
+# Cheap local fallback for high-volume keyword extraction:
 keywords:
   provider: openai
-  model: gpt-5-mini
-  base_url: https://openrouter.ai/api/v1
+  model: gemma4:9b-it-q4_K_M
+  base_url: http://host.docker.internal:11434/v1
+  api_key: ollama
 ```
 
 ### Storage Backends
