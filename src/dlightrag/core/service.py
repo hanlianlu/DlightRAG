@@ -28,11 +28,11 @@ logger = logging.getLogger(__name__)
 
 # Init lock key for the PostgreSQL advisory lock taken during workspace
 # storage initialisation. Arbitrary 64-bit constant — only needs to be
-# unique among DlightRAG-owned advisory locks. Value is the legacy
-# `b"Corprag\0"` from the pre-rename codebase. Advisory locks are
-# session-scoped and not persisted, so the specific number is
-# irrelevant beyond uniqueness.
-_PG_INIT_LOCK_KEY = 0x436F727072616700
+# unique among DlightRAG-owned advisory locks. Value is `b"DlightRA"`
+# (truncation of "DlightRAG" to 8 bytes since pg_try_advisory_lock takes
+# int8) packed big-endian. Advisory locks are session-scoped and not
+# persisted, so the specific number has no migration cost.
+_PG_INIT_LOCK_KEY = 0x446C696768745241
 
 # LightRAG storage attribute names — authoritative list referenced by reset
 # tests to assert that areset() iterates over the full set. The reset module
