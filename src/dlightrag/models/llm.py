@@ -132,7 +132,6 @@ def _lightrag_adapted(
 
 
 get_chat_model_func_for_lightrag = _lightrag_adapted(get_chat_model_func)
-get_ingest_model_func_for_lightrag = _lightrag_adapted(get_ingest_model_func)
 
 
 # DlightRAG config field name → upstream LightRAG role name (1.5.0 ROLES
@@ -254,7 +253,6 @@ __all__ = [
     "get_chat_model_func_for_lightrag",
     "get_embedding_func",
     "get_ingest_model_func",
-    "get_ingest_model_func_for_lightrag",
     "get_query_model_func",
     "get_rerank_func",
     "get_vlm_model_func",
