@@ -26,11 +26,23 @@ from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
-# PostgreSQL advisory lock key for workspace storage init. Layout follows
-# ArtRAG: 6-byte project tag + zero pad + 1-byte namespace. The trailing
-# 0x01 reserves room for additional DlightRAG-owned locks (0x02, 0x03,
-# ...) without colliding. Advisory locks are session-scoped, not
-# persisted, so this is purely for in-process coordination.
+# PostgreSQL advisory lock serializing first-time storage init across
+# concurrent workers (multi-Gunicorn replicas, Docker scale-out, launchd
+# respawn). Wraps the multi-step DDL sequence — CREATE EXTENSION pgvector
+# / age, CREATE TABLE, CREATE INDEX, AGE create_graph(), seed rows — as
+# a critical section. Per-statement IF NOT EXISTS isn't enough: the PG
+# catalog has known races on concurrent CREATE TABLE, AGE create_graph()
+# is non-idempotent, and the sequence itself can't run in a single
+# transaction (CREATE EXTENSION / CREATE INDEX both bar that). First
+# acquirer runs _do_initialize(); other workers poll with backoff up to
+# 180s, then proceed against ready storage. Same pattern Flyway / Django
+# / Rails / golang-migrate all use; PG ships pg_try_advisory_lock for
+# exactly this purpose, so we are not working around a missing feature.
+#
+# Key layout matches ArtRAG: 6-byte project tag + 0x00 + 1-byte
+# namespace. 0x01 = init; 0x02..0xFF reserved for future DlightRAG
+# locks. Advisory locks are session-scoped and not persisted, so the
+# specific number is irrelevant beyond uniqueness within DlightRAG.
 _PG_INIT_LOCK_KEY = 0x446C_6967_6874_0001  # "Dlight\x00\x01"
 
 # LightRAG storage attribute names — authoritative list referenced by reset
