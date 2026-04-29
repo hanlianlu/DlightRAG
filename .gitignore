@@ -40,6 +40,9 @@ Thumbs.db
 dlightrag_storage/
 *.db
 
+# Runtime logs (e.g. lightrag.log emitted at cwd by some upstream paths)
+*.log
+
 # Linting/typing caches
 .ruff_cache/
 .mypy_cache/

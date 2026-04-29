@@ -145,6 +145,8 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 | `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
 | `GET` | `/files` | List ingested documents |
 | `DELETE` | `/files` | Delete documents |
+| `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |
+| `POST` | `/files/retry` | Re-ingest all FAILED documents (replace=True, source-aware) |
 | `GET` | `/api/files/{path}` | Serve/download a file (local: stream, Azure: 302 SAS redirect) |
 | `POST` | `/reset` | Reset workspace(s) — drop storage, clear indexes |
 | `GET` | `/workspaces` | List available workspaces |
@@ -255,6 +257,31 @@ API keys go in `.env`:
 ```bash
 DLIGHTRAG_CHAT__API_KEY=sk-...
 DLIGHTRAG_EMBEDDING__API_KEY=sk-...
+```
+
+#### Per-role LLM overrides (optional)
+
+Built on LightRAG 1.5.0's role registry. Each role falls back to `chat`
+when not specified — start with `chat` only, split out a role later when
+cost or quality needs it.
+
+| Role | What it drives | Recommended model class |
+|---|---|---|
+| `extract` | KG entity & relation extraction during ingest | Heavy reasoning (Claude Sonnet / GPT-5) |
+| `keywords` | Per-query keyword extraction | Cheap & fast (Haiku / Gemini Flash Lite) |
+| `query` | Answer generation + retrieval planning | Balanced–heavy (Claude Opus / GPT-5) |
+| `vlm` | DlightRAG vision paths: VLM OCR, multimodal query, unified extractor | Vision-strong (GPT-5-vision / Gemini 2.5 Flash) |
+
+```yaml
+# config.yaml
+extract:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+
+keywords:
+  provider: openai
+  model: gpt-5-mini
+  base_url: https://openrouter.ai/api/v1
 ```
 
 ### Storage Backends

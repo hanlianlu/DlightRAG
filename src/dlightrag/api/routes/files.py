@@ -61,6 +61,32 @@ async def delete_files(
     return {"results": results, "workspace": ws}
 
 
+@router.get("/files/failed")
+async def list_failed_files(
+    request: Request,
+    workspace: str | None = Query(default=None),
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """List documents currently in DocStatus.FAILED."""
+    manager = get_manager(request)
+    ws = resolve_workspace(workspace)
+    failed = await manager.list_failed_docs(ws)
+    return {"failed": failed, "count": len(failed), "workspace": ws}
+
+
+@router.post("/files/retry")
+async def retry_failed_files(
+    request: Request,
+    workspace: str | None = Query(default=None),
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Re-ingest all FAILED documents (replace=True). Source type is derived
+    from each doc's stored file_path scheme (azure://, s3://, otherwise local)."""
+    manager = get_manager(request)
+    ws = resolve_workspace(workspace)
+    return await manager.retry_failed_docs(ws)
+
+
 @router.get("/api/files/{file_path:path}", response_model=None)
 async def serve_file(
     file_path: str, user: UserContext = Depends(get_current_user)

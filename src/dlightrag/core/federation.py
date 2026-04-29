@@ -11,7 +11,9 @@ Backported L1-weighted merge from ArtRAG's federation module.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
@@ -196,6 +198,7 @@ async def federated_retrieve(
     top_k: int | None = None,
     chunk_top_k: int | None = None,
     max_concurrency: int = 8,
+    per_workspace_timeout: float | None = None,
     workspace_filter: WorkspaceFilter | None = None,
     get_quality_score: Callable[[str], Awaitable[float | None]] | None = None,
     **kwargs: Any,
@@ -210,6 +213,10 @@ async def federated_retrieve(
         top_k: Per-workspace top_k for vector search.
         chunk_top_k: Final merged chunk count limit.
         max_concurrency: Maximum concurrent workspace queries (default 8).
+        per_workspace_timeout: Optional timeout (seconds) for each workspace
+            query. A workspace exceeding this bound is treated as a partial
+            failure (logged + dropped from the merge), so a single slow
+            backend cannot block the federation. ``None`` disables the cap.
         workspace_filter: Optional RBAC filter — given requested workspaces,
             returns the accessible subset.
         get_quality_score: Optional async callable returning a quality score
@@ -262,24 +269,51 @@ async def federated_retrieve(
         except Exception as exc:
             logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)
 
-    # Bounded parallel queries
+    # Bounded parallel queries with per-workspace timing + optional timeout.
+    # A slow/hanging workspace is treated as a partial failure rather than
+    # blocking the merge, matching ArtRAG's federation graceful-degradation
+    # contract.
     async def _query_workspace(ws: str) -> RetrievalResult:
-        svc = await get_service(ws)
-        return await svc.aretrieve(
-            query=query,
-            mode=mode,
-            top_k=top_k,
-            chunk_top_k=chunk_top_k,
-            _plan=shared_plan,
-            **kwargs,
-        )
+        start = time.monotonic()
+        try:
+            svc = await get_service(ws)
+            coro = svc.aretrieve(
+                query=query,
+                mode=mode,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                _plan=shared_plan,
+                **kwargs,
+            )
+            if per_workspace_timeout is not None:
+                result = await asyncio.wait_for(coro, timeout=per_workspace_timeout)
+            else:
+                result = await coro
+            elapsed = time.monotonic() - start
+            logger.info(
+                "Federation workspace '%s' retrieved %d chunks in %.2fs",
+                ws,
+                len(result.contexts.get("chunks", [])),
+                elapsed,
+            )
+            return result
+        except TimeoutError:
+            elapsed = time.monotonic() - start
+            logger.warning(
+                "Federation workspace '%s' timed out after %.2fs (cap=%.2fs)",
+                ws,
+                elapsed,
+                per_workspace_timeout or 0.0,
+            )
+            raise
 
     coros = [_query_workspace(ws) for ws in workspaces]
     raw_results = await bounded_gather(
         coros, max_concurrent=max_concurrency, task_name="federation"
     )
 
-    # Filter out failed workspaces
+    # Filter out failed workspaces (errors, timeouts) — partial result is
+    # returned to the caller rather than raising.
     successful_results: list[RetrievalResult] = []
     successful_workspaces: list[str] = []
     failed_workspaces: list[str] = []

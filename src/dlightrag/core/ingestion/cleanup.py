@@ -199,4 +199,78 @@ async def cascade_delete(
     return stats
 
 
-__all__ = ["DeletionContext", "cascade_delete", "collect_deletion_context"]
+async def purge_stale_for_hash(
+    *,
+    content_hash: str,
+    hash_index: HashIndexProtocol,
+    lightrag: Any,
+    visual_chunks: Any | None = None,
+    metadata_index: Any | None = None,
+) -> None:
+    """Cascade-delete the doc previously registered for ``content_hash``.
+
+    Used by ``replace=True`` ingest to purge a stale parallel record before
+    re-ingesting. Without this, ``replace`` semantics are incomplete: the new
+    ingest derives a fresh ``doc_id`` from its own path, so the second ingest
+    of the same bytes produces a *new* doc beside the old one — leaving stale
+    rows in chunks_vdb, KG, visual_chunks, metadata_index that diverge from
+    the latest content. Purging up front turns ``replace`` into a true upsert.
+
+    Best-effort: any failure is logged and skipped so the re-ingest still
+    proceeds. ``find_by_hash`` returning ``(None, None, None)`` is the no-op
+    case.
+    """
+    old_doc_id, _hash, old_path = await hash_index.find_by_hash(content_hash)
+    if not old_doc_id:
+        return
+
+    identifier = old_path or old_doc_id
+    try:
+        ctx = await collect_deletion_context(
+            identifier=identifier,
+            hash_index=hash_index,
+            lightrag=lightrag,
+            metadata_index=metadata_index,
+        )
+    except Exception:
+        logger.warning(
+            "Pre-replace purge: collect_deletion_context failed for hash=%s "
+            "(old_doc_id=%s); proceeding with re-ingest, stale record may remain",
+            content_hash,
+            old_doc_id,
+            exc_info=True,
+        )
+        return
+
+    if not ctx.doc_ids:
+        return
+
+    try:
+        await cascade_delete(
+            ctx=ctx,
+            lightrag=lightrag,
+            visual_chunks=visual_chunks,
+            hash_index=hash_index,
+            metadata_index=metadata_index,
+        )
+        logger.info(
+            "Pre-replace purge: cascaded %d stale doc_ids for hash=%s",
+            len(ctx.doc_ids),
+            content_hash,
+        )
+    except Exception:
+        logger.warning(
+            "Pre-replace purge: cascade_delete failed for hash=%s (doc_ids=%s); "
+            "proceeding with re-ingest, stale record may remain",
+            content_hash,
+            sorted(ctx.doc_ids),
+            exc_info=True,
+        )
+
+
+__all__ = [
+    "DeletionContext",
+    "cascade_delete",
+    "collect_deletion_context",
+    "purge_stale_for_hash",
+]

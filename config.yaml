@@ -36,6 +36,30 @@ chat:
 #   model: qwen3.5-opus:9b-80k
 #   base_url: http://host.docker.internal:11434/v1
 
+# Per-role LLM overrides (LightRAG 1.5.0+, all optional, fallback to chat):
+#   extract  — KG entity/relation extraction (heavy reasoning recommended)
+#   keywords — Keyword extraction during retrieval (cheap model recommended)
+#   query    — AnswerEngine + QueryPlanner + LightRAG query stage
+#   vlm      — DlightRAG vision paths: vlm_parser, multimodal_query, unified extractor
+#
+# extract:
+#   provider: anthropic
+#   model: claude-sonnet-4-20250514
+#
+# keywords:
+#   provider: openai
+#   model: gpt-5-mini
+#   base_url: https://openrouter.ai/api/v1
+#
+# query:
+#   provider: anthropic
+#   model: claude-opus-4-20250514
+#
+# vlm:
+#   provider: openai
+#   model: google/gemini-2.5-flash
+#   base_url: https://openrouter.ai/api/v1
+
 embedding:
   model: voyage-multimodal-3.5
   base_url: https://api.voyageai.com/v1

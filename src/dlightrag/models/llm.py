@@ -95,6 +95,29 @@ def get_ingest_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(cfg, fallback_api_key=fallback_key)
 
 
+def get_query_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first query callable for AnswerEngine and QueryPlanner.
+
+    Uses ``config.query`` if set, otherwise falls back to ``config.chat``.
+    """
+    cfg = config.query or config.chat
+    fallback_key = config.chat.api_key
+    return _make_completion_func(cfg, fallback_api_key=fallback_key)
+
+
+def get_vlm_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first VLM callable for vlm_parser, multimodal_query, and unified extractor.
+
+    Uses ``config.vlm`` if set, otherwise falls back to ``config.chat`` (which must
+    be vision-capable). Centralises the VLM choice so users can pin a single
+    vision-strong model for all DlightRAG visual paths without affecting text
+    LLM roles.
+    """
+    cfg = config.vlm or config.chat
+    fallback_key = config.chat.api_key
+    return _make_completion_func(cfg, fallback_api_key=fallback_key)
+
+
 def _lightrag_adapted(
     factory: Callable[[DlightragConfig], Callable],
 ) -> Callable[[DlightragConfig], Callable]:
@@ -110,6 +133,43 @@ def _lightrag_adapted(
 
 get_chat_model_func_for_lightrag = _lightrag_adapted(get_chat_model_func)
 get_ingest_model_func_for_lightrag = _lightrag_adapted(get_ingest_model_func)
+
+
+# DlightRAG config field name → upstream LightRAG role name (1.5.0 ROLES
+# registry uses singular ``keyword``; we surface ``keywords`` in DlightRAG
+# config to match the broader codebase convention).
+_DLIGHTRAG_TO_LIGHTRAG_ROLE: tuple[tuple[str, str], ...] = (
+    ("extract", "extract"),
+    ("keywords", "keyword"),
+    ("query", "query"),
+)
+
+
+def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
+    """Build LightRAG ``role_llm_configs`` dict from per-role ModelConfig fields.
+
+    Each DlightRAG config field listed in ``_DLIGHTRAG_TO_LIGHTRAG_ROLE`` is
+    translated into a ``RoleLLMConfig`` if set. Unset fields are *omitted*
+    from the returned dict — do NOT insert ``RoleLLMConfig(func=None, ...)``
+    here, as LightRAG's resolver treats an explicit ``func=None`` differently
+    from a missing entry. When no overrides are configured, this function
+    returns ``None`` so the LightRAG constructor skips role registration
+    entirely.
+    """
+    from lightrag import RoleLLMConfig
+
+    overrides: dict[str, Any] = {}
+    for dlightrag_field, lightrag_role in _DLIGHTRAG_TO_LIGHTRAG_ROLE:
+        role_cfg: ModelConfig | None = getattr(config, dlightrag_field)
+        if role_cfg is None:
+            continue
+        completion = _make_completion_func(role_cfg, fallback_api_key=config.chat.api_key)
+        overrides[lightrag_role] = RoleLLMConfig(
+            func=_adapt_for_lightrag(completion),
+            timeout=int(role_cfg.timeout),
+        )
+
+    return overrides or None
 
 
 def get_embedding_func(config: DlightragConfig) -> Any:
@@ -189,10 +249,13 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
 
 
 __all__ = [
+    "build_role_llm_configs",
     "get_chat_model_func",
     "get_chat_model_func_for_lightrag",
     "get_embedding_func",
     "get_ingest_model_func",
     "get_ingest_model_func_for_lightrag",
+    "get_query_model_func",
     "get_rerank_func",
+    "get_vlm_model_func",
 ]

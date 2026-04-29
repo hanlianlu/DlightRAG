@@ -3,7 +3,8 @@
 ## LightRAG Upstream Bug Patches
 
 DlightRAG (and ArtRAG) maintain monkey-patches for two critical LightRAG
-PostgreSQL bugs that remain unfixed as of **LightRAG v1.4.11** (2026-03-24).
+PostgreSQL bugs that remain unfixed as of **LightRAG v1.5.0rc1** (2026-04-26).
+The patches self-disable via source inspection if upstream adds the fix.
 
 ### Bug 1: `configure_age()` missing `DuplicateSchemaError`
 

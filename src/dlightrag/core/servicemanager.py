@@ -201,6 +201,16 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.adelete_files(**kwargs)
 
+    async def list_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
+        """List FAILED documents in a specific workspace."""
+        svc = await self._get_service(workspace)
+        return await svc.alist_failed_docs()
+
+    async def retry_failed_docs(self, workspace: str) -> dict[str, Any]:
+        """Retry all FAILED documents in a specific workspace via re-ingest."""
+        svc = await self._get_service(workspace)
+        return await svc.aretry_failed_docs()
+
     async def aget_metadata(self, workspace: str, doc_id: str) -> dict[str, Any]:
         """Get document metadata by ID."""
         svc = await self._get_service(workspace)
@@ -264,20 +274,20 @@ class RAGServiceManager:
     def _get_answer_engine(self) -> AnswerEngine:
         """Lazy-create AnswerEngine from global config."""
         if self._answer_engine is None:
-            from dlightrag.models.llm import get_chat_model_func
+            from dlightrag.models.llm import get_query_model_func
 
             self._answer_engine = AnswerEngine(
-                model_func=get_chat_model_func(self._config),
+                model_func=get_query_model_func(self._config),
             )
         return self._answer_engine
 
     def _get_query_planner(self) -> QueryPlanner:
         """Lazy-create QueryPlanner with schema TTL refresh."""
         if self._query_planner is None:
-            from dlightrag.models.llm import get_chat_model_func
+            from dlightrag.models.llm import get_query_model_func
 
             self._query_planner = QueryPlanner(
-                llm_func=get_chat_model_func(self._config),
+                llm_func=get_query_model_func(self._config),
                 schema_provider=self._get_schema,
                 schema_ttl=300.0,
             )

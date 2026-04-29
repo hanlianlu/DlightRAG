@@ -89,7 +89,7 @@ class TestServiceComposition:
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_vlm_model_func", side_effect=_dummy_llm_func)
     @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_create_initializes_all_components(
         self, _llm_lr, _llm, _embed, _rerank, fs_config
@@ -109,7 +109,7 @@ class TestServiceComposition:
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_vlm_model_func", side_effect=_dummy_llm_func)
     @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_single_rag_shared(self, _llm_lr, _llm, _embed, _rerank, fs_config) -> None:
         """Ingestion and retrieval share the same RAGAnything instance."""
@@ -124,7 +124,7 @@ class TestServiceComposition:
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_vlm_model_func", side_effect=_dummy_llm_func)
     @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_workspace_in_working_dir(
         self, _llm_lr, _llm, _embed, _rerank, fs_config
@@ -148,7 +148,7 @@ class TestManagerWorkspaceIsolation:
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_vlm_model_func", side_effect=_dummy_llm_func)
     @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_different_workspaces_get_different_services(
         self, _llm_lr, _llm, _embed, _rerank, fs_config
@@ -169,7 +169,7 @@ class TestManagerWorkspaceIsolation:
 
     @patch("dlightrag.core.service.get_rerank_func", side_effect=_dummy_rerank_func)
     @patch("dlightrag.core.service.get_embedding_func", side_effect=_dummy_embedding_func)
-    @patch("dlightrag.core.service.get_chat_model_func", side_effect=_dummy_llm_func)
+    @patch("dlightrag.core.service.get_vlm_model_func", side_effect=_dummy_llm_func)
     @patch("dlightrag.core.service.get_chat_model_func_for_lightrag", side_effect=_dummy_llm_func)
     async def test_same_workspace_returns_cached(
         self, _llm_lr, _llm, _embed, _rerank, fs_config
