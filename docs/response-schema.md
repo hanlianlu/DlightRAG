@@ -332,7 +332,7 @@ When using unified mode with a provider that supports structured output, the `an
 
 **Relationship to `sources`:** `sources` contains all documents from retrieval; `references` contains only those the LLM cited. For providers that don't support structured output (Ollama, Xinference) or caption mode, `references` is an empty array.
 
-**Supported providers:** OpenAI, Azure OpenAI, Anthropic, Google Gemini, Qwen, Minimax, OpenRouter.
+**Supported providers:** OpenAI, Azure OpenAI, Anthropic, Google Gemini, Qwen, Minimax, and any OpenAI-compatible gateway hosting a structured-output-capable model.
 
 
 ## Citations
