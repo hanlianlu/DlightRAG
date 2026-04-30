@@ -323,12 +323,28 @@ class DlightragConfig(BaseSettings):
         default=None,
         description="Bearer token for REST API authentication. If not set, no auth required.",
     )
-    auth_mode: str = Field(
+    auth_mode: Literal["none", "simple", "jwt"] = Field(
         default="none",
         description="API auth strategy: 'none', 'simple' (bearer token), 'jwt'.",
     )
     jwt_secret: str | None = Field(default=None)
-    jwt_algorithm: str = Field(default="HS256")
+    jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = Field(
+        default="HS256",
+        description="JWT signature algorithm — restricted to safe HMAC/RSA/ECDSA variants. "
+        "Notably 'none' is rejected to prevent unsigned-token forgery.",
+    )
+    cors_allow_origins: list[str] = Field(
+        default_factory=lambda: ["*"],
+        description="CORS allow_origins list. Default '*' is convenient for dev; set "
+        "explicit origins (e.g. ['https://app.example.com']) when auth_mode is "
+        "not 'none'. Browsers reject the '*' + credentials combo.",
+    )
+    max_upload_size_mb: int = Field(
+        default=512,
+        description="Per-request upload cap for /web/files/upload (MB). Reject the "
+        "whole request when Content-Length exceeds this so we don't fill the temp "
+        "directory before noticing.",
+    )
 
     # ===== Operational =====
     log_level: str = Field(default="info")
@@ -349,6 +365,20 @@ class DlightragConfig(BaseSettings):
         """Auto-upgrade: if api_auth_token is set but auth_mode is default, use 'simple'."""
         if self.auth_mode == "none" and self.api_auth_token:
             self.auth_mode = "simple"
+        # Fail-fast: jwt mode requires a secret; otherwise every request 500s.
+        if self.auth_mode == "jwt" and not self.jwt_secret:
+            raise ValueError("auth_mode='jwt' requires jwt_secret to be set")
+        # Browsers reject allow_origins=['*'] with credentials. When auth is
+        # on, an explicit origin list MUST replace the wildcard.
+        if self.auth_mode != "none" and self.cors_allow_origins == ["*"]:
+            import warnings
+
+            warnings.warn(
+                "auth_mode is enabled but cors_allow_origins=['*']; browsers will "
+                "reject credentialed cross-origin requests. Set DLIGHTRAG_CORS_ALLOW_ORIGINS "
+                "to explicit origins (e.g. ['https://your-frontend.example.com']).",
+                stacklevel=2,
+            )
         return self
 
     # ===== Computed Properties =====

@@ -47,6 +47,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app(*, include_web: bool = True) -> FastAPI:
     """Create and configure the FastAPI application."""
+    from dlightrag.config import get_config
+
+    cfg = get_config()
+
     application = FastAPI(
         title="dlightrag",
         description="DlightRAG - Dual-mode (Caption based & Unified representation based) multi-modal RAG service",
@@ -57,11 +61,14 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     # -- Request ID middleware (outermost — runs first) --
     application.add_middleware(RequestIdMiddleware)
 
-    # -- CORS middleware --
+    # -- CORS middleware (config-driven; see DlightragConfig.cors_allow_origins) --
+    # allow_credentials toggles based on origin list: browsers refuse '*' +
+    # credentials, so we only enable credentials when origins are explicit.
+    allow_credentials = cfg.cors_allow_origins != ["*"]
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=cfg.cors_allow_origins,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -89,6 +96,18 @@ def create_app(*, include_web: bool = True) -> FastAPI:
                 from dlightrag.web.deps import _TEMPLATE_DIR
                 from dlightrag.web.routes import router as web_router
 
+                # SECURITY: web routes use cookie-based workspace selection,
+                # not the bearer/JWT auth that protects /ingest, /retrieve etc.
+                # When auth_mode != "none" the REST surface is locked but the
+                # web UI is not — operators must terminate web auth at a
+                # reverse proxy or run web behind a private network.
+                if cfg.auth_mode != "none":
+                    logger.warning(
+                        "Mounting web UI under /web/ without auth (auth_mode=%s applies "
+                        "to REST only). Reverse-proxy or network-isolate the web UI in "
+                        "untrusted environments.",
+                        cfg.auth_mode,
+                    )
                 application.include_router(web_router)
                 _static_dir = _TEMPLATE_DIR.parent / "static"
                 if _static_dir.exists():

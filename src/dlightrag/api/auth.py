@@ -8,6 +8,7 @@ They never know which auth strategy is active.
 from __future__ import annotations
 
 import logging
+import secrets
 
 import jwt
 from fastapi import HTTPException, Request
@@ -51,7 +52,9 @@ async def get_current_user(request: Request) -> UserContext:
 
     if mode == "simple":
         provided = _extract_bearer_token(request)
-        if not token or provided != token:
+        # secrets.compare_digest is constant-time — defends against timing
+        # side-channels where a naive `==` leaks token-prefix length info.
+        if not token or not secrets.compare_digest(provided, token):
             raise HTTPException(status_code=403, detail="Invalid token")
         user_id = request.headers.get("X-User-Id", "anonymous")
         return UserContext(user_id=user_id, auth_mode="simple")

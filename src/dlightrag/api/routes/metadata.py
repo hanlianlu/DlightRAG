@@ -59,6 +59,18 @@ async def search_metadata(
     user: UserContext = Depends(get_current_user),
 ) -> list[str]:
     """Return a list of document IDs matching all key-value pairs in 'filters'."""
+    from pydantic import ValidationError
+
+    from dlightrag.core.retrieval.models import MetadataFilter
+
+    # Validate the user-supplied dict against the MetadataFilter schema.
+    # The storage backend's query() takes a Pydantic model, not a raw dict,
+    # so this also rejects unknown keys before they reach the SQL layer.
+    try:
+        validated = MetadataFilter.model_validate(filters)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
-    return await manager.asearch_metadata(ws, filters)
+    return await manager.asearch_metadata(ws, validated)

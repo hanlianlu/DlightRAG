@@ -1213,9 +1213,11 @@ class RAGService:
         """Update (merge) document metadata."""
         await self._metadata_index.upsert(doc_id, data)  # type: ignore[union-attr]
 
-    async def asearch_metadata(self, filters: dict[str, Any]) -> list[str]:
+    async def asearch_metadata(self, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
-        return await self._metadata_index.query(filters)  # type: ignore[union-attr]
+        if self._metadata_index is None:
+            return []
+        return await self._metadata_index.query(filters)
 
     # === FILE MANAGEMENT API ===
 

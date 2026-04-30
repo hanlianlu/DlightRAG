@@ -3,7 +3,6 @@
 
 import json
 import logging
-import shutil
 import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -47,16 +46,55 @@ async def upload_files(
     workspace: str = Depends(get_workspace),
 ):
     """Upload and ingest files."""
+    from dlightrag.config import get_config
+
+    cfg = get_config()
+    max_bytes = cfg.max_upload_size_mb * 1024 * 1024
+
+    # Reject oversized requests up front (Content-Length header). This is a
+    # cheap pre-check; the per-file budget below catches malformed CL too.
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_bytes:
+        return HTMLResponse(
+            _render_partial(
+                "partials/error.html",
+                message=f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+            ),
+            status_code=413,
+        )
+
     manager = get_manager(request)
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="dlightrag_upload_"))
+    bytes_written = 0
     try:
         for f in files:
             if not f.filename:
                 continue
-            dest = tmp_dir / f.filename
+            # Strip any path components from the user-supplied filename —
+            # ``tmp_dir / "../etc/passwd"`` or ``tmp_dir / "/etc/passwd"``
+            # would otherwise escape tmp_dir on open().
+            safe_name = Path(f.filename).name
+            if not safe_name or safe_name in (".", ".."):
+                logger.warning("Rejected upload with unsafe filename: %r", f.filename)
+                continue
+            dest = tmp_dir / safe_name
+            # Stream-copy with running budget so a missing/lying Content-Length
+            # can't blow past max_bytes.
             with open(dest, "wb") as out:
-                shutil.copyfileobj(f.file, out)
+                while chunk := await f.read(1024 * 1024):
+                    bytes_written += len(chunk)
+                    if bytes_written > max_bytes:
+                        out.close()
+                        dest.unlink(missing_ok=True)
+                        return HTMLResponse(
+                            _render_partial(
+                                "partials/error.html",
+                                message=f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+                            ),
+                            status_code=413,
+                        )
+                    out.write(chunk)
 
         await manager.aingest(
             workspace=workspace,
