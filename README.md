@@ -33,7 +33,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 
 ## Quick Start
 
-> **Defaults:** `google/gemini-2.5-flash-lite` for chat (routed through an OpenAI-compatible gateway) + `voyage-multimodal-3.5` for embedding (Voyage) in `unified` mode. Swap providers or models by editing `config.yaml` — see [Configuration](#configuration).
+> **Defaults shipped in `config.yaml`:** `unified` RAG mode + `google/gemini-2.5-flash-lite` chat (via an OpenAI-compatible gateway) + `voyage-multimodal-3.5` embedding (Voyage). Swap providers or models by editing `config.yaml` — see [Configuration](#configuration).
 
 ### Web UI
 ##### Click the image to watch demo (YouTube)
@@ -63,7 +63,7 @@ cp .env.example .env    # set API keys in .env; edit config.yaml for models/prov
 docker compose up
 ```
 
-Includes PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`).
+Includes PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`, host-mapped to loopback by default — see [Deployment & auth](#deployment--auth) before exposing externally).
 
 > **Local models (Ollama, Xinference, etc.):** use `host.docker.internal` instead of `localhost` in `base_url` settings.
 
@@ -272,13 +272,7 @@ Three native SDKs — choose per model block in `config.yaml`:
 | `anthropic` | Anthropic SDK | Anthropic Claude models |
 | `gemini` | Google GenAI SDK | Google Gemini models |
 
-Optional providers require extra dependencies:
-
-```bash
-pip install dlightrag[anthropic]   # Anthropic SDK
-pip install dlightrag[gemini]      # Google GenAI SDK
-pip install dlightrag[all]         # all optional providers
-```
+All three SDKs ship in the base install; no extras to install.
 
 ```yaml
 # config.yaml — OpenAI-compatible (Ollama example)
@@ -370,9 +364,9 @@ Set in `config.yaml` under the `rerank:` block:
 | Strategy | Default model | API key |
 |---------|---------------|---------|
 | `chat_llm_reranker` | falls through `vlm` → `ingest` → `chat` role | (reuses the chosen role's key) |
-| `jina_reranker` | `jina-reranker-v3` | `DLIGHTRAG_RERANK__API_KEY` |
-| `aliyun_reranker` | `qwen3-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
-| `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
+| `jina_reranker` | `jina-reranker-m0` | `DLIGHTRAG_RERANK__API_KEY` |
+| `aliyun_reranker` | `gte-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
+| `azure_cohere` | `cohere-rerank-v3.5` | `DLIGHTRAG_RERANK__API_KEY` |
 | `local_reranker` | (set `rerank.model` + `rerank.base_url`) | (none — local endpoint) |
 
 For self-hosted rerankers (Xinference, vLLM, TEI etc.), use `local_reranker` with `rerank.base_url` + `rerank.model`. For any other OpenAI-compatible `/rerank` endpoint, point `rerank.base_url` at it.
