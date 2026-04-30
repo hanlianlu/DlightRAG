@@ -83,3 +83,61 @@ class TestRetrievalBackendProtocol:
 
         backend: RetrievalBackend = FakeBackend()
         assert isinstance(backend, FakeBackend)
+
+
+class TestCanonicalizeReferenceIds:
+    """canonicalize_reference_ids fills empty reference_id slots and is
+    idempotent on chunks already assigned by aquery_data."""
+
+    def test_empty_input(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        assert canonicalize_reference_ids([]) == []
+
+    def test_assigns_ids_by_file_path_frequency(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [
+            {"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""},
+            {"chunk_id": "c2", "file_path": "/B.pdf", "reference_id": ""},
+            {"chunk_id": "c3", "file_path": "/A.pdf", "reference_id": ""},
+        ]
+        out = canonicalize_reference_ids(chunks)
+        # A.pdf appears 2x → gets ref_id=1; B.pdf 1x → ref_id=2
+        assert out[0]["reference_id"] == "1"
+        assert out[2]["reference_id"] == "1"
+        assert out[1]["reference_id"] == "2"
+
+    def test_fills_missing_on_injected_chunks(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        # Mix: chunks from aquery_data (with ref_id) + injected (empty ref_id)
+        chunks = [
+            {"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": "1"},
+            {"chunk_id": "c2", "file_path": "/B.pdf", "reference_id": "2"},
+            {"chunk_id": "c3", "file_path": "/A.pdf", "reference_id": ""},  # injected, dup
+            {"chunk_id": "c4", "file_path": "/C.pdf", "reference_id": ""},  # injected, new
+        ]
+        out = canonicalize_reference_ids(chunks)
+        # Same file → same ref_id; new file → next sequential id
+        assert out[0]["reference_id"] == out[2]["reference_id"]
+        assert out[3]["reference_id"] not in {out[0]["reference_id"], out[1]["reference_id"]}
+        assert out[3]["reference_id"] != ""
+
+    def test_empty_file_path_keeps_empty_ref_id(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [
+            {"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""},
+            {"chunk_id": "c2", "file_path": "", "reference_id": ""},
+        ]
+        out = canonicalize_reference_ids(chunks)
+        assert out[0]["reference_id"] == "1"
+        assert out[1]["reference_id"] == ""
+
+    def test_does_not_mutate_input(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [{"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""}]
+        canonicalize_reference_ids(chunks)
+        assert chunks[0]["reference_id"] == ""

@@ -1075,6 +1075,15 @@ class RAGService:
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)
 
+        # --- Step 4: Canonicalize reference_id across all merged chunks ---
+        # Required so injected chunks (metadata path / visual-only) get a
+        # stable doc-level ID and become citable as [ref-chunk_idx].
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        kg_result.contexts["chunks"] = canonicalize_reference_ids(
+            kg_result.contexts.get("chunks", [])
+        )
+
         return kg_result
 
     async def _inject_candidate_chunks(self, result: RetrievalResult, chunk_ids: list[str]) -> None:

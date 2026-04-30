@@ -241,8 +241,12 @@ async def fetch_missing_chunks(
     Reads the per-request ``_active_filter`` contextvar and fetches any
     chunk_ids that are in the filter set but absent from *seen_ids*.
 
-    Returns a list of basic chunk dicts (chunk_id, content, reference_id,
-    file_path).  Callers may enrich with visual data or metadata afterward.
+    Returns basic chunk dicts (chunk_id, content, reference_id, file_path).
+    ``file_path`` is populated from the LightRAG text_chunks payload when
+    available; this is required so downstream
+    ``canonicalize_reference_ids`` can assign a stable doc-level
+    ``reference_id`` (the upstream helper skips chunks with empty
+    file_path). Callers may further enrich with visual data afterward.
     """
     active_ids = _active_filter.get()
     if not active_ids:
@@ -258,13 +262,18 @@ async def fetch_missing_chunks(
     for cid, content_raw in zip(inject_ids, raw_contents, strict=False):
         if content_raw is None:
             continue
-        content = content_raw if isinstance(content_raw, str) else content_raw.get("content", "")
+        if isinstance(content_raw, str):
+            content = content_raw
+            file_path = ""
+        else:
+            content = content_raw.get("content", "")
+            file_path = content_raw.get("file_path", "") or ""
         chunks.append(
             {
                 "chunk_id": cid,
                 "content": content,
                 "reference_id": "",
-                "file_path": "",
+                "file_path": file_path,
             }
         )
     if chunks:
