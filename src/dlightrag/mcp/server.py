@@ -420,8 +420,7 @@ async def run_streamable_http(host: str, port: int) -> None:
     if not token:
         if host not in ("127.0.0.1", "localhost", "::1"):
             logger.warning(
-                "=" * 72
-                + "\nMCP streamable-http on host=%s:%d WITHOUT DLIGHTRAG_API_AUTH_TOKEN.\n"
+                "=" * 72 + "\nMCP streamable-http on host=%s:%d WITHOUT DLIGHTRAG_API_AUTH_TOKEN.\n"
                 "If this bind reaches a non-loopback network, ANY client can call\n"
                 "ingest, delete_files, retrieve, answer against EVERY workspace.\n"
                 "Safe configurations:\n"
@@ -429,15 +428,12 @@ async def run_streamable_http(host: str, port: int) -> None:
                 "      and REST (same secret).\n"
                 "  (b) Bind to 127.0.0.1 (loopback only).\n"
                 "  (c) Map host port to 127.0.0.1 only (compose: '127.0.0.1:8101:8101')\n"
-                "      — safe even with container-internal 0.0.0.0.\n"
-                + "=" * 72,
+                "      — safe even with container-internal 0.0.0.0.\n" + "=" * 72,
                 host,
                 port,
             )
         else:
-            logger.info(
-                "MCP streamable-http on %s:%d (loopback, no token required)", host, port
-            )
+            logger.info("MCP streamable-http on %s:%d (loopback, no token required)", host, port)
 
     class BearerAuthMiddleware(BaseHTTPMiddleware):
         """Enforce Bearer auth on every request to the MCP transport.
