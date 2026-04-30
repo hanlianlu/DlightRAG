@@ -106,10 +106,10 @@ class TestDlightragConfigNested:
         assert cfg.chat.model == "gpt-4.1"
         assert cfg.chat.api_key == "sk-env"
 
-    def test_legacy_field_detection(self):
-        """Legacy field names should raise clear error."""
-        with pytest.raises(ValidationError, match="Legacy config fields"):
+    def test_unknown_field_rejected(self):
+        """Unknown fields (legacy schema, typos) should raise via extra=forbid."""
+        with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
             DlightragConfig(
-                openai_api_key="sk-old",
+                openai_api_key="sk-old",  # legacy flat-schema field
                 embedding=EmbeddingConfig(api_key="sk-test"),
             )
