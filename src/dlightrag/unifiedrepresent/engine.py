@@ -362,7 +362,8 @@ class UnifiedRepresentEngine:
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve relevant visual chunks (Phases 1-3)."""
-        images = self._extract_image_bytes(multimodal_content)
+        # _extract_image_bytes does Path.read_bytes per image — run off-thread.
+        images = await asyncio.to_thread(self._extract_image_bytes, multimodal_content)
         result = await self.retriever.retrieve(
             query=query,
             mode=mode or self.config.default_mode,

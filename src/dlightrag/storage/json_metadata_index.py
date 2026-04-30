@@ -7,6 +7,7 @@ Thread-safety: designed for single-process async usage (no file locking).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -54,10 +55,10 @@ class JsonMetadataIndex:
     async def initialize(self) -> None:
         """Load existing data from disk (or create empty store)."""
         directory = self._working_dir / "metadata_index"
-        directory.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(directory.mkdir, parents=True, exist_ok=True)
         self._file = directory / f"{self._workspace}.json"
-        if self._file.exists():
-            text = self._file.read_text(encoding="utf-8")
+        if await asyncio.to_thread(self._file.exists):
+            text = await asyncio.to_thread(self._file.read_text, encoding="utf-8")
             self._data = json.loads(text) if text.strip() else {}
         else:
             self._data = {}
@@ -97,7 +98,7 @@ class JsonMetadataIndex:
             existing["custom_metadata"] = existing_custom
 
         self._data[doc_id] = existing
-        self._persist()
+        await asyncio.to_thread(self._persist)
 
     async def get(self, doc_id: str) -> dict[str, Any] | None:
         """Return metadata dict for a single document, or None."""
@@ -111,12 +112,12 @@ class JsonMetadataIndex:
         """Remove metadata for a document."""
         if doc_id in self._data:
             del self._data[doc_id]
-            self._persist()
+            await asyncio.to_thread(self._persist)
 
     async def clear(self) -> None:
         """Remove all metadata for this workspace."""
         self._data.clear()
-        self._persist()
+        await asyncio.to_thread(self._persist)
         logger.info("JsonMetadataIndex cleared for workspace %s", self._workspace)
 
     # ------------------------------------------------------------------

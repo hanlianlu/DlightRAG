@@ -540,6 +540,10 @@ async def unified_delete_files(
         )
 
         deletion_result["cleanup_results"] = stats
+        # Top-level file_path / doc_id are part of the public delete
+        # response shape (REST /files DELETE + MCP delete_files JSON-
+        # serialise this dict directly). For single-resolution deletes
+        # we surface the first match; ``doc_ids_found`` carries the set.
         deletion_result["file_path"] = list(ctx.file_paths)[0] if ctx.file_paths else identifier
         deletion_result["doc_id"] = list(ctx.doc_ids)[0] if ctx.doc_ids else None
         results.append(deletion_result)

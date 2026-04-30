@@ -249,10 +249,13 @@ class IngestionPipeline:
             )
 
             # Step 2.5: Docling JSON post-processing
-            # Rebuild text items with heading markers and correct page_idx
+            # Rebuild text items with heading markers and correct page_idx.
+            # The helper does sync file I/O + json.loads — push to a thread.
             if self.config.parser == "docling" and result.index_stream:
                 json_path = artifacts_dir / file_path.stem / "docling" / f"{file_path.stem}.json"
-                improved_texts = rebuild_text_items_from_docling_json(json_path)
+                improved_texts = await asyncio.to_thread(
+                    rebuild_text_items_from_docling_json, json_path
+                )
                 if improved_texts is not None:
                     non_text = [i for i in result.index_stream if i.get("type") != "text"]
                     result.index_stream = improved_texts + non_text
@@ -896,7 +899,11 @@ class IngestionPipeline:
                             logger.info(f"Deleted artifacts directory: {match}")
                 deletion_result["cleanup_results"]["artifacts"] = "cleaned"
 
-            # Set file_path and doc_id for backward compatibility
+            # Top-level file_path / doc_id are part of the public delete
+            # response shape (REST /files DELETE + MCP delete_files JSON-
+            # serialise this dict directly). When a single delete request
+            # resolves to multiple doc_ids, we surface the first; the full
+            # set is in ``doc_ids_found``.
             deletion_result["file_path"] = list(ctx.file_paths)[0] if ctx.file_paths else identifier
             deletion_result["doc_id"] = list(ctx.doc_ids)[0] if ctx.doc_ids else None
 
