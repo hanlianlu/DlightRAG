@@ -60,6 +60,12 @@ def merge_results(
     if chunk_top_k is not None:
         merged_chunks = merged_chunks[:chunk_top_k]
 
+    # Re-canonicalize reference_id under the federation namespace so
+    # citations like [3-2] map to one chunk across the merged answer.
+    from dlightrag.core.retrieval import canonicalize_reference_ids
+
+    merged_chunks = canonicalize_reference_ids(merged_chunks, federated=True)
+
     merged_entities = _round_robin_merge_key(results, workspaces, "entities")
     merged_relations = _round_robin_merge_key(results, workspaces, "relationships")
 
@@ -154,6 +160,11 @@ def merge_results_weighted(
         if not added:
             break
         rnd += 1
+
+    # Re-canonicalize reference_id under the federation namespace.
+    from dlightrag.core.retrieval import canonicalize_reference_ids
+
+    merged = canonicalize_reference_ids(merged, federated=True)
 
     merged_entities = _round_robin_merge_key(results, workspaces, "entities")
     merged_relations = _round_robin_merge_key(results, workspaces, "relationships")
@@ -345,7 +356,8 @@ async def federated_retrieve(
         for ws in successful_workspaces:
             try:
                 scores[ws] = await get_quality_score(ws)
-            except Exception:
+            except Exception as exc:
+                logger.debug("Quality score lookup failed for %s: %s", ws, exc)
                 scores[ws] = None
         return merge_results_weighted(
             successful_results,

@@ -159,7 +159,7 @@ class TestAingestFromLocal:
         src = tmp_path / "new.pdf"
         src.write_text("content")
 
-        result = await pipeline.aingest_from_local(src)
+        result = await pipeline._aingest_from_local(src)
 
         assert result.source_type == "local"
         assert result.total_files == 1
@@ -174,10 +174,10 @@ class TestAingestFromLocal:
         src.write_text("content")
 
         # Ingest once
-        await pipeline.aingest_from_local(src)
+        await pipeline._aingest_from_local(src)
 
         # Second ingest should skip
-        result = await pipeline.aingest_from_local(src)
+        result = await pipeline._aingest_from_local(src)
 
         assert result.processed == 0
         assert result.skipped == 1
@@ -185,7 +185,7 @@ class TestAingestFromLocal:
     async def test_path_not_found(self, test_config: DlightragConfig) -> None:
         pipeline = _make_pipeline(test_config)
         with pytest.raises(FileNotFoundError, match="Path not found"):
-            await pipeline.aingest_from_local(Path("/nonexistent/file.pdf"))
+            await pipeline._aingest_from_local(Path("/nonexistent/file.pdf"))
 
     async def test_directory_multiple_files(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -197,7 +197,7 @@ class TestAingestFromLocal:
         (d / "b.pdf").write_text("bbb")
         (d / "c.pdf").write_text("ccc")
 
-        result = await pipeline.aingest_from_local(d)
+        result = await pipeline._aingest_from_local(d)
 
         assert result.total_files == 3
         assert result.processed == 3
@@ -208,7 +208,7 @@ class TestAingestFromLocal:
         d = tmp_path / "empty_dir"
         d.mkdir()
 
-        result = await pipeline.aingest_from_local(d)
+        result = await pipeline._aingest_from_local(d)
 
         assert result.processed == 0
         assert result.total_files == 0
@@ -221,7 +221,7 @@ class TestAingestFromLocal:
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_text("test content")
 
-        result = await pipeline.aingest_from_local(test_file)
+        result = await pipeline._aingest_from_local(test_file)
 
         assert result.status == "success"
         assert result.processed == 1
@@ -236,7 +236,7 @@ class TestAingestFromLocal:
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_text("test content")
 
-        await pipeline.aingest_from_local(test_file)
+        await pipeline._aingest_from_local(test_file)
 
         sources_local = test_config.working_dir_path / "sources" / "local"
         assert not sources_local.exists() or not list(sources_local.iterdir())
@@ -249,7 +249,7 @@ class TestAingestFromLocal:
         test_file.parent.mkdir(parents=True, exist_ok=True)
         test_file.write_text("test content")
 
-        await pipeline.aingest_from_local(test_file)
+        await pipeline._aingest_from_local(test_file)
 
         tmp_dir = test_config.temp_dir
         assert not tmp_dir.exists() or not list(tmp_dir.iterdir())
@@ -349,7 +349,7 @@ class TestAingestFromAzureBlob:
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"blob content")
 
-        result = await pipeline.aingest_from_azure_blob(
+        result = await pipeline._aingest_from_azure_blob(
             source=mock_source,
             container_name="mycontainer",
             blob_path="data/report.pdf",
@@ -368,7 +368,7 @@ class TestAingestFromAzureBlob:
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"blob content")
 
-        await pipeline.aingest_from_azure_blob(
+        await pipeline._aingest_from_azure_blob(
             source=mock_source,
             container_name="mycontainer",
             blob_path="data/report.pdf",
@@ -384,7 +384,7 @@ class TestAingestFromAzureBlob:
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"blob content")
 
-        await pipeline.aingest_from_azure_blob(
+        await pipeline._aingest_from_azure_blob(
             source=mock_source,
             container_name="mycontainer",
             blob_path="data/report.pdf",
@@ -411,9 +411,9 @@ class TestAingestFromLocalEdgeCases:
         src.write_text("content")
 
         # First ingest
-        await pipeline.aingest_from_local(src)
+        await pipeline._aingest_from_local(src)
         # Second ingest with replace — should NOT skip
-        result = await pipeline.aingest_from_local(src, replace=True)
+        result = await pipeline._aingest_from_local(src, replace=True)
         assert result.processed == 1
         assert result.skipped == 0
 
@@ -439,7 +439,7 @@ class TestAingestFromLocalEdgeCases:
             return await original_parse(*args, **kwargs)
 
         pipeline.rag.parse_document = AsyncMock(side_effect=maybe_fail)
-        result = await pipeline.aingest_from_local(d)
+        result = await pipeline._aingest_from_local(d)
 
         assert result.total_files == 2
         # At least one succeeded

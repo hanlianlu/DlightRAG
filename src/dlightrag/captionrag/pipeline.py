@@ -60,15 +60,18 @@ class IngestionResult(BaseModel):
 
 
 class IngestionPipeline:
-    """Document ingestion with content filtering.
+    """Caption-mode document ingestion with content filtering.
 
     Uses parse_document -> policy filter -> insert_content_list flow
-    to filter out MinerU discarded blocks before indexing.
+    to filter out MinerU discarded blocks before indexing. End users
+    don't instantiate this directly — RAGService owns one and dispatches
+    to it via ``aingest(source_type=...)``.
 
     Public API:
-      - aingest_from_local(...)
-      - aingest_from_azure_blob(...)
-      - aingest_content_list(...)
+      - aingest(source_type, **kwargs)         — dispatcher
+      - aingest_content_list(content_list, ...) — pre-parsed input
+      - adelete_files(...)
+      - alist_failed_docs() / aretry_failed_docs()
     """
 
     def __init__(
@@ -341,10 +344,10 @@ class IngestionPipeline:
             )
 
     # ─────────────────────────────────────────────────────────────────
-    # Public API: Local ingestion
+    # Internal: per-source ingestion (called by RAGService.aingest dispatcher)
     # ─────────────────────────────────────────────────────────────────
 
-    async def aingest_from_local(
+    async def _aingest_from_local(
         self,
         path: Path,
         replace: bool = False,
@@ -515,10 +518,10 @@ class IngestionPipeline:
         raise ValueError(f"Invalid path (neither file nor directory): {path}")
 
     # ─────────────────────────────────────────────────────────────────
-    # Public API: Azure Blob ingestion
+    # Internal: Azure Blob ingestion (called by RAGService.aingest dispatcher)
     # ─────────────────────────────────────────────────────────────────
 
-    async def aingest_from_azure_blob(
+    async def _aingest_from_azure_blob(
         self,
         source: AsyncDataSource,
         container_name: str,

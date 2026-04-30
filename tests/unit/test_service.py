@@ -23,10 +23,10 @@ class TestRAGServiceAingest:
         service = RAGService(config=config)
         service._initialized = True
         service.ingestion = MagicMock()
-        service.ingestion.aingest_from_local = AsyncMock(
+        service.ingestion._aingest_from_local = AsyncMock(
             return_value=MagicMock(model_dump=MagicMock(return_value={"status": "success"}))
         )
-        service.ingestion.aingest_from_azure_blob = AsyncMock(
+        service.ingestion._aingest_from_azure_blob = AsyncMock(
             return_value=MagicMock(model_dump=MagicMock(return_value={"status": "success"}))
         )
         service.rag = MagicMock()
@@ -42,7 +42,7 @@ class TestRAGServiceAingest:
         test_config.ingestion_replace_default = True
         service = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path="/tmp/file.pdf")
-        call_kwargs = service.ingestion.aingest_from_local.call_args
+        call_kwargs = service.ingestion._aingest_from_local.call_args
         assert call_kwargs.kwargs["replace"] is True
 
     async def test_aingest_replace_explicit_overrides_config(
@@ -51,7 +51,7 @@ class TestRAGServiceAingest:
         test_config.ingestion_replace_default = True
         service = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path="/tmp/file.pdf", replace=False)
-        call_kwargs = service.ingestion.aingest_from_local.call_args
+        call_kwargs = service.ingestion._aingest_from_local.call_args
         assert call_kwargs.kwargs["replace"] is False
 
     # -- Azure blob lifecycle --
@@ -63,7 +63,7 @@ class TestRAGServiceAingest:
         service = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
-        call_kwargs = service.ingestion.aingest_from_azure_blob.call_args.kwargs
+        call_kwargs = service.ingestion._aingest_from_azure_blob.call_args.kwargs
         assert call_kwargs["prefix"] == ""
         assert call_kwargs.get("blob_path") is None
 
@@ -77,7 +77,7 @@ class TestRAGServiceAingest:
     async def test_aingest_azure_calls_aclose_on_error(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called even when ingestion raises."""
         service = self._make_initialized_service(test_config)
-        service.ingestion.aingest_from_azure_blob = AsyncMock(
+        service.ingestion._aingest_from_azure_blob = AsyncMock(
             side_effect=RuntimeError("ingestion failed")
         )
         mock_source = AsyncMock()
