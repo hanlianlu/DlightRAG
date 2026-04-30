@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
+from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
 
@@ -221,7 +222,7 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         await svc.aupdate_metadata(doc_id, data)
 
-    async def asearch_metadata(self, workspace: str, filters: dict[str, Any]) -> list[str]:
+    async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
         svc = await self._get_service(workspace)
         return await svc.asearch_metadata(filters)
