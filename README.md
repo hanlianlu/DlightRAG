@@ -28,7 +28,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
   <img src="docs/architecture.png" alt="DlightRAG Architecture" width="1080" />
 </p>
 
-<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a></sub>
+<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a> (runtime data flow) &middot; <a href="docs/module-layers.md">docs/module-layers.md</a> (code-organisation layers)</sub>
 
 
 ## Quick Start
