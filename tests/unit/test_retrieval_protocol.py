@@ -141,3 +141,37 @@ class TestCanonicalizeReferenceIds:
         chunks = [{"chunk_id": "c1", "file_path": "/A.pdf", "reference_id": ""}]
         canonicalize_reference_ids(chunks)
         assert chunks[0]["reference_id"] == ""
+
+    def test_federated_separates_same_filename_across_workspaces(self) -> None:
+        """Two workspaces ingesting different docs with the same filename
+        must end up with distinct reference_ids after federation merge."""
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [
+            # Workspace A's report.pdf (one doc)
+            {"chunk_id": "a1", "file_path": "/report.pdf", "_workspace": "ws_a"},
+            {"chunk_id": "a2", "file_path": "/report.pdf", "_workspace": "ws_a"},
+            # Workspace B's report.pdf (a DIFFERENT doc, same filename)
+            {"chunk_id": "b1", "file_path": "/report.pdf", "_workspace": "ws_b"},
+        ]
+        out = canonicalize_reference_ids(chunks, federated=True)
+        ws_a_ref = out[0]["reference_id"]
+        ws_b_ref = out[2]["reference_id"]
+        assert ws_a_ref != ws_b_ref, "cross-workspace duplicates must split"
+        # Same workspace + same file → same ref_id
+        assert out[0]["reference_id"] == out[1]["reference_id"]
+        # file_path on the chunk must be the original, not the \x00-prefixed proxy
+        assert out[0]["file_path"] == "/report.pdf"
+        assert out[2]["file_path"] == "/report.pdf"
+
+    def test_federated_groups_same_workspace_same_file(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [
+            {"chunk_id": "c1", "file_path": "/A.pdf", "_workspace": "ws"},
+            {"chunk_id": "c2", "file_path": "/B.pdf", "_workspace": "ws"},
+            {"chunk_id": "c3", "file_path": "/A.pdf", "_workspace": "ws"},
+        ]
+        out = canonicalize_reference_ids(chunks, federated=True)
+        assert out[0]["reference_id"] == out[2]["reference_id"]
+        assert out[0]["reference_id"] != out[1]["reference_id"]

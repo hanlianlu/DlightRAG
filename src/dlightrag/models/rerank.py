@@ -160,8 +160,14 @@ async def _http_rerank(
     model: str,
     api_key: str | None = None,
     score_threshold: float = 0.5,
+    client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, Any]]:
-    """Shared HTTP reranker for Jina, Aliyun, and self-hosted endpoints."""
+    """Shared HTTP reranker for Jina, Aliyun, and self-hosted endpoints.
+
+    Reuses *client* when provided (pooled by ``build_rerank_func``);
+    falls back to an ephemeral client otherwise so the function stays
+    callable in tests and ad-hoc scripts.
+    """
     if not chunks:
         return []
 
@@ -181,10 +187,15 @@ async def _http_rerank(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    if client is not None:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         data = resp.json()
+    else:
+        async with httpx.AsyncClient(timeout=60.0) as ephemeral:
+            resp = await ephemeral.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
 
     scored = []
     all_results = data.get("results", [])
@@ -246,8 +257,12 @@ async def _azure_cohere_rerank(
     api_key: str,
     deployment: str,
     score_threshold: float = 0.5,
+    client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, Any]]:
-    """Azure AI Services Cohere reranker (text-only)."""
+    """Azure AI Services Cohere reranker (text-only).
+
+    Reuses *client* when provided; ephemeral fallback otherwise.
+    """
     if not chunks:
         return []
 
@@ -257,15 +272,18 @@ async def _azure_cohere_rerank(
         else f"{endpoint}/providers/cohere/v2/rerank"
     )
     documents = [c.get("content", "") for c in chunks]
+    headers = {"api-key": api_key, "Content-Type": "application/json"}
+    json_body = {"model": deployment, "query": query, "documents": documents}
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            rerank_url,
-            headers={"api-key": api_key, "Content-Type": "application/json"},
-            json={"model": deployment, "query": query, "documents": documents},
-        )
+    if client is not None:
+        resp = await client.post(rerank_url, headers=headers, json=json_body)
         resp.raise_for_status()
         results = resp.json().get("results", [])
+    else:
+        async with httpx.AsyncClient(timeout=30.0) as ephemeral:
+            resp = await ephemeral.post(rerank_url, headers=headers, json=json_body)
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
 
     scored = []
     for r in results:
@@ -323,22 +341,28 @@ def build_rerank_func(
             url = url.rstrip("/") + "/rerank"
         if needs_key and not rc.api_key:
             raise ValueError(f"{strategy} requires api_key")
+        # Pool the httpx client across calls — caption mode reranks every
+        # query, so per-call client construction wastes connection setup.
+        client = httpx.AsyncClient(timeout=60.0)
         fn = partial(
             _http_rerank,
             url=url,
             model=rc.model or default_model,
             api_key=rc.api_key,
             score_threshold=rc.score_threshold,
+            client=client,
         )
     elif strategy == "azure_cohere":
         if not rc.base_url or not rc.api_key:
             raise ValueError("azure_cohere requires base_url and api_key")
+        client = httpx.AsyncClient(timeout=30.0)
         fn = partial(
             _azure_cohere_rerank,
             endpoint=rc.base_url,
             api_key=rc.api_key,
             deployment=rc.model or "cohere-rerank-v3.5",
             score_threshold=rc.score_threshold,
+            client=client,
         )
     else:
         raise ValueError(f"Unknown rerank strategy: {strategy}")

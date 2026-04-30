@@ -495,9 +495,7 @@ class RAGService:
         # Python client — both fail with Xinference VL models.
         # partial() with plain strings is deepcopy-safe (LightRAG's __post_init__
         # does asdict→deepcopy on embedding_func).
-        from functools import partial
-
-        from dlightrag.models.embedding import httpx_embed
+        from dlightrag.models.embedding import create_embed_client, httpx_embed
         from dlightrag.models.providers.embed_providers import (
             OpenAICompatEmbedProvider,
             VoyageEmbedProvider,
@@ -512,17 +510,24 @@ class RAGService:
         else:
             embed_provider = OpenAICompatEmbedProvider()
 
-        _httpx_embed = partial(
-            httpx_embed,
-            model=config.embedding.model,
-            base_url=emb_base_url,
-            api_key=emb_api_key,
-            provider=embed_provider,
-            timeout=float(config.embedding_request_timeout),
+        # Pooled client for connection reuse across LightRAG embed calls.
+        # Closure capture is deepcopy-safe in practice (LightRAG copies the
+        # EmbeddingFunc dataclass; the closure cell still references the
+        # original client).
+        embed_client = create_embed_client(
+            emb_api_key, timeout=float(config.embedding_request_timeout)
         )
 
         async def _embed_for_lightrag(texts: list[str]) -> Any:
-            result = await _httpx_embed(texts)
+            result = await httpx_embed(
+                texts,
+                model=config.embedding.model,
+                base_url=emb_base_url,
+                api_key=emb_api_key,
+                provider=embed_provider,
+                timeout=float(config.embedding_request_timeout),
+                client=embed_client,
+            )
             # LightRAG's EmbeddingFunc validates via result.size — requires numpy
             import numpy as np
 
@@ -927,7 +932,7 @@ class RAGService:
 
             logger.info(f"Ingesting from local path: {path}")
 
-            result = await ingestion.aingest_from_local(
+            result = await ingestion._aingest_from_local(
                 path=path,
                 replace=replace,
                 user_metadata=user_metadata,
@@ -956,7 +961,7 @@ class RAGService:
                 prefix = ""
 
             try:
-                result = await ingestion.aingest_from_azure_blob(
+                result = await ingestion._aingest_from_azure_blob(
                     source=source,
                     container_name=container_name,
                     blob_path=blob_path,
@@ -986,7 +991,7 @@ class RAGService:
             await asyncio.to_thread(local_path.write_bytes, content)
 
             replace = kwargs.get("replace", self.config.ingestion_replace_default)
-            result = await ingestion.aingest_from_local(path=local_path, replace=replace)
+            result = await ingestion._aingest_from_local(path=local_path, replace=replace)
             return result.model_dump(exclude_none=True)
         finally:
             await source.aclose()
