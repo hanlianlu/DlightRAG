@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
-from dlightrag.unifiedrepresent.renderer import PageRenderer, RenderResult
+from dlightrag.converters.page_renderer import PageRenderer, RenderResult
 
 
 class TestRenderPdf:
@@ -41,7 +41,7 @@ class TestRenderPdf:
             "CreationDate": "D:20250101",
         }
 
-        with patch("dlightrag.unifiedrepresent.renderer.pdfium.PdfDocument", return_value=mock_doc):
+        with patch("dlightrag.converters.page_renderer.pdfium.PdfDocument", return_value=mock_doc):
             result = renderer._render_pdf_sync(Path("/fake/doc.pdf"))
 
         assert isinstance(result, RenderResult)
@@ -76,7 +76,7 @@ class TestRenderPdf:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_doc.get_metadata_dict.return_value = {}
 
-        with patch("dlightrag.unifiedrepresent.renderer.pdfium.PdfDocument", return_value=mock_doc):
+        with patch("dlightrag.converters.page_renderer.pdfium.PdfDocument", return_value=mock_doc):
             renderer._render_pdf_sync(Path("/fake/doc.pdf"))
 
         mock_page.render.assert_called_once_with(scale=144 / 72)
@@ -96,7 +96,7 @@ class TestRenderPdf:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_doc.get_metadata_dict.side_effect = RuntimeError("corrupt metadata")
 
-        with patch("dlightrag.unifiedrepresent.renderer.pdfium.PdfDocument", return_value=mock_doc):
+        with patch("dlightrag.converters.page_renderer.pdfium.PdfDocument", return_value=mock_doc):
             result = renderer._render_pdf_sync(Path("/fake/doc.pdf"))
 
         assert result.metadata["original_format"] == "pdf"
@@ -145,7 +145,7 @@ class TestRenderOffice:
         doc_path = tmp_path / "doc.docx"
         doc_path.touch()
 
-        with patch("dlightrag.unifiedrepresent.renderer.shutil.which", return_value=None):
+        with patch("dlightrag.converters.page_renderer.shutil.which", return_value=None):
             with pytest.raises(RuntimeError, match="LibreOffice is required"):
                 await renderer._render_office(doc_path)
 
@@ -176,11 +176,11 @@ class TestRenderOffice:
 
         with (
             patch(
-                "dlightrag.unifiedrepresent.renderer.shutil.which",
+                "dlightrag.converters.page_renderer.shutil.which",
                 side_effect=lambda cmd: "/usr/bin/libreoffice" if cmd == "libreoffice" else None,
             ),
             patch(
-                "dlightrag.unifiedrepresent.renderer.subprocess.run",
+                "dlightrag.converters.page_renderer.subprocess.run",
                 side_effect=fake_subprocess_run,
             ) as mock_run,
             patch.object(renderer, "_render_pdf_sync", return_value=mock_render_result),
@@ -211,11 +211,11 @@ class TestRenderOffice:
 
         with (
             patch(
-                "dlightrag.unifiedrepresent.renderer.shutil.which",
+                "dlightrag.converters.page_renderer.shutil.which",
                 return_value="/usr/bin/libreoffice",
             ),
             patch(
-                "dlightrag.unifiedrepresent.renderer.subprocess.run",
+                "dlightrag.converters.page_renderer.subprocess.run",
                 return_value=mock_run_result,
             ),
         ):
@@ -289,10 +289,10 @@ class TestRenderOfficeWithConverter:
 
         with (
             patch(
-                "dlightrag.unifiedrepresent.renderer.shutil.which",
+                "dlightrag.converters.page_renderer.shutil.which",
                 return_value="/usr/bin/libreoffice",
             ),
-            patch("dlightrag.unifiedrepresent.renderer.subprocess.run", side_effect=fake_run),
+            patch("dlightrag.converters.page_renderer.subprocess.run", side_effect=fake_run),
             patch.object(renderer, "_render_pdf_sync", return_value=mock_render_result),
         ):
             result = await renderer._render_office(doc_path)
@@ -320,7 +320,7 @@ class TestRenderPdfFromBytes:
         mock_doc.get_metadata_dict.return_value = {}
 
         with patch(
-            "dlightrag.unifiedrepresent.renderer.pdfium.PdfDocument", return_value=mock_doc
+            "dlightrag.converters.page_renderer.pdfium.PdfDocument", return_value=mock_doc
         ) as mock_cls:
             result = renderer._render_pdf_from_bytes(b"%PDF-fake")
 

@@ -178,7 +178,7 @@ async def _ingest_local_dir(
     user_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Recursively ingest all supported files in a directory."""
-    from dlightrag.unifiedrepresent.renderer import (
+    from dlightrag.converters.page_renderer import (
         _IMAGE_EXTENSIONS,
         _OFFICE_EXTENSIONS,
     )

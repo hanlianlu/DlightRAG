@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from dlightrag.citations.indexer import CitationIndexer
-from dlightrag.models.streaming import AnswerStream
+from dlightrag.citations.streaming import AnswerStream
 
 
 @pytest.mark.asyncio

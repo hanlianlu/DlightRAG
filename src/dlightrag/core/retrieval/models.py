@@ -30,7 +30,7 @@ class MetadataFilter(BaseModel):
 
 def _validate_filter_coverage() -> None:
     """Warn at import time if searchable fields are missing from MetadataFilter."""
-    from dlightrag.storage.metadata_fields import searchable_field_ids
+    from dlightrag.core.retrieval.metadata_fields import searchable_field_ids
 
     filter_fields = set(MetadataFilter.model_fields.keys())
     missing = searchable_field_ids() - filter_fields

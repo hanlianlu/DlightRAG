@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
+from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.models.streaming import AnswerStream
 from dlightrag.prompts import get_answer_system_prompt
 
 logger = logging.getLogger(__name__)

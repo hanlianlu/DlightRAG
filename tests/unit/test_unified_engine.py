@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from PIL import Image
 
+from dlightrag.converters.page_renderer import RenderResult
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
-from dlightrag.unifiedrepresent.renderer import RenderResult
 
 # ---------------------------------------------------------------------------
 # Helpers
