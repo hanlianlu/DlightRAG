@@ -106,9 +106,15 @@ class VlmOcrParser:
         Rendering resolution passed to :class:`PageRenderer`.
     """
 
-    def __init__(self, vision_model_func: Callable, dpi: int = 250) -> None:
+    def __init__(
+        self,
+        vision_model_func: Callable,
+        dpi: int = 250,
+        max_concurrent: int = 4,
+    ) -> None:
         self.vision_model_func = vision_model_func
         self.renderer = PageRenderer(dpi=dpi)
+        self.max_concurrent = max_concurrent
 
     async def parse(self, file_path: str, output_dir: str) -> tuple[list[dict], str]:
         """Parse a document file into a RAGAnything content_list.
@@ -125,29 +131,45 @@ class VlmOcrParser:
         tuple[list[dict], str]
             ``(content_list, doc_id)``
         """
+        import asyncio
+
+        from dlightrag.utils.concurrency import bounded_gather
+
         # Step 1: Render pages
         result = await self.renderer.render_file(file_path)
 
         # Step 2: Ensure output directory for page images
         pages_dir = Path(output_dir) / "pages"
-        pages_dir.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(pages_dir.mkdir, parents=True, exist_ok=True)
 
-        content_list: list[dict] = []
-
-        for page_idx, image in result.pages:
-            # Save page image
+        # Step 3: Per-page work — save image (sync PIL I/O via thread) +
+        # VLM extraction. Pages are independent; cap concurrency so we
+        # don't blow past the chat model's rate limit.
+        async def _process_page(page_idx: int, image) -> tuple[int, str, list[dict]]:  # noqa: ANN001
             page_image_path = pages_dir / f"page_{page_idx}.png"
-            image.save(str(page_image_path), format="PNG")
-
-            # Step 3: Extract structured content via VLM
+            await asyncio.to_thread(image.save, str(page_image_path), format="PNG")
             page_entries = await self._extract_page(image, page_idx)
-            content_list.extend(page_entries)
+            return page_idx, str(page_image_path), page_entries
 
-            # Step 4: Add page image entry (for media/visual embedding)
+        coros = [_process_page(idx, img) for idx, img in result.pages]
+        page_results = await bounded_gather(
+            coros, max_concurrent=self.max_concurrent, task_name="vlm-parse"
+        )
+
+        # Step 4: Assemble content_list in page order. Per-page entries
+        # come first, then the page-image entry, matching the original
+        # interleaving used by the linear loop.
+        content_list: list[dict] = []
+        for outcome in page_results:
+            if isinstance(outcome, BaseException):
+                # Surface the first failure rather than silently dropping pages.
+                raise outcome
+            page_idx, image_path, page_entries = outcome
+            content_list.extend(page_entries)
             content_list.append(
                 {
                     "type": "image",
-                    "img_path": str(page_image_path),
+                    "img_path": image_path,
                     "image_caption": [],
                     "page_idx": page_idx,
                 }
