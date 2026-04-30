@@ -266,9 +266,6 @@ class DlightragConfig(BaseSettings):
     ingestion_batch_pages: int = Field(
         default=20, description="Pages per batch during streaming ingestion."
     )
-    api_image_quality: int = Field(
-        default=95, description="JPEG quality for VLM/embedding API calls."
-    )
 
     # ===== Query Configuration =====
     top_k: int = Field(default=60)
@@ -313,12 +310,6 @@ class DlightragConfig(BaseSettings):
     # ===== Sourcing (Optional) =====
     blob_connection_string: str | None = Field(default=None)
     azure_sas_expiry: int = Field(default=3600, description="Azure SAS URL expiry in seconds")
-
-    # ===== Domain Knowledge (injected by caller) =====
-    domain_knowledge_hints: str = Field(
-        default="",
-        description="Domain-specific hints for reranking. Injected by the calling application.",
-    )
 
     # ===== MCP Server =====
     mcp_transport: Literal["stdio", "streamable-http"] = Field(default="stdio")

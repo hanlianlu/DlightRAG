@@ -18,14 +18,6 @@ IMAGE_METADATA_MARKERS = (
     "Visual Analysis:",
 )
 
-# Redundant placeholder values that should be filtered
-REDUNDANT_PLACEHOLDERS = (
-    "Captions: None",
-    "Caption: None",
-    "Footnotes: None",
-    "Footnote: None",
-)
-
 # Regex pattern to match markdown table separator lines
 TABLE_SEPARATOR_PATTERN = re.compile(r"^\|[\s:\-|]+\|?\s*$")
 
@@ -90,7 +82,6 @@ def filter_content_for_snippet(content: str, max_chars: int = 100) -> str:
 
 __all__ = [
     "IMAGE_METADATA_MARKERS",
-    "REDUNDANT_PLACEHOLDERS",
     "TABLE_SEPARATOR_PATTERN",
     "is_table_separator_line",
     "extract_table_row_text",

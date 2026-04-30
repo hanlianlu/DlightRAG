@@ -482,22 +482,11 @@ def create_converter(config: DlightragConfig | None = None) -> LibreOfficeConver
     return LibreOfficeConverter(config)
 
 
-def convert_office_bytes_to_pdf(
-    file_data: bytes,
-    mime_type: str,
-    config: DlightragConfig | None = None,
-) -> bytes | None:
-    """Convenience function to convert Office document bytes to PDF."""
-    converter = create_converter(config)
-    return converter.convert_bytes_to_pdf(file_data, mime_type)
-
-
 __all__ = [
     "LibreOfficeConverter",
     "OfficeConverterError",
     "PageSetup",
     "create_converter",
-    "convert_office_bytes_to_pdf",
     "EXCEL_EXTENSIONS",
     "SKIP_CONVERSION_EXTENSIONS",
 ]

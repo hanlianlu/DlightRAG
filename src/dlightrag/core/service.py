@@ -371,6 +371,7 @@ class RAGService:
             vlm_parser = VlmOcrParser(
                 vision_model_func=vlm_func,
                 dpi=config.page_render_dpi,
+                max_concurrent=config.max_async,
             )
 
         # LightRAG configuration
@@ -1160,25 +1161,32 @@ class RAGService:
             if fp and fp not in path_meta:
                 path_meta[fp] = {}
 
-        # Lookup metadata by filename (best-effort)
+        # Lookup metadata by filename in parallel (best-effort, independent
+        # PG round-trips per unique file_path).
         from pathlib import Path as _Path
 
-        if self._metadata_index is None:
+        idx = self._metadata_index
+        if idx is None:
             return
-        for fp in path_meta:
+
+        async def _fetch(fp: str) -> tuple[str, dict[str, Any]]:
             try:
-                filename = _Path(fp).name
-                doc_ids = await self._metadata_index.find_by_filename(filename)
-                if doc_ids:
-                    meta = await self._metadata_index.get(doc_ids[0])
-                    if meta:
-                        path_meta[fp] = {
-                            k: v
-                            for k, v in meta.items()
-                            if k not in _SKIP and v is not None and v != ""
-                        }
+                doc_ids = await idx.find_by_filename(_Path(fp).name)
+                if not doc_ids:
+                    return fp, {}
+                meta = await idx.get(doc_ids[0])
+                if not meta:
+                    return fp, {}
+                return fp, {
+                    k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
+                }
             except Exception:
-                pass  # enrichment is best-effort
+                return fp, {}  # enrichment is best-effort
+
+        results = await asyncio.gather(*(_fetch(fp) for fp in path_meta))
+        for fp, doc_meta in results:
+            if doc_meta:
+                path_meta[fp] = doc_meta
 
         # Inject into each chunk's metadata field
         for chunk in chunks:
