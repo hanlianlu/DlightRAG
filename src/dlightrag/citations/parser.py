@@ -128,16 +128,16 @@ _REF_LINE_RE = re.compile(r"(?:\[(\d+)\]|【(\d+)】):?\s*(.+)")
 
 
 def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
-    """Extract references from freetext LLM output.
+    """Level-2 reference extractor: parse a ``### References`` markdown section.
 
-    .. deprecated::
-        Use :func:`extract_references` instead, which provides 3-level
-        fallback (JSON block → ``### References`` → empty).
+    Splits *raw* on the references heading, then matches lines like
+    ``[n] Title``, ``[n]: Title``, or ``【n】Title``. Returns
+    ``(answer_text, references)`` with the references section stripped
+    from the answer.
 
-    Looks for a references section at the end of the response with lines
-    like ``[n] Title``, ``[n]: Title``, or ``【n】Title``.
-    Returns ``(answer_text, references)`` where *answer_text* has the
-    references section stripped.
+    Usually consumed via :func:`extract_references` (JSON first, this
+    second). Exposed directly so tests can target the markdown path in
+    isolation.
     """
     parts = _REFERENCES_HEADING_RE.split(raw)
     if len(parts) < 2:

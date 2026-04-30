@@ -148,8 +148,11 @@ async def inject_page_idx_to_chunks(
     search_pos = 0
 
     for chunk_id, chunk_data in indexed:
-        # Prefer _raw_content (from HybridChunker) for offset matching;
-        # fall back to content for backward compatibility.
+        # Prefer ``_raw_content`` (set by docling_hybrid_chunking_func when
+        # parser is docling/vlm) — the wrapped ``content`` adds parent-
+        # heading context that is NOT in the source merged_text, so a
+        # contains-search would miss. For MinerU parser, LightRAG's built-
+        # in chunker only sets ``content`` and that match is exact.
         match_text = chunk_data.get("_raw_content") or chunk_data.get("content", "")
         if not match_text:
             continue

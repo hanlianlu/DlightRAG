@@ -977,11 +977,12 @@ class RAGService:
         source = S3DataSource(bucket=bucket)
         try:
             content = await source.aload_document(key)
-            # Write to temp file and ingest
+            # Write to temp file and ingest. S3 objects can be large — keep
+            # the write off the event loop.
             tmp_dir = self.config.temp_dir / "s3"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
+            await asyncio.to_thread(tmp_dir.mkdir, parents=True, exist_ok=True)
             local_path = tmp_dir / Path(key).name
-            local_path.write_bytes(content)
+            await asyncio.to_thread(local_path.write_bytes, content)
 
             replace = kwargs.get("replace", self.config.ingestion_replace_default)
             result = await ingestion.aingest_from_local(path=local_path, replace=replace)
