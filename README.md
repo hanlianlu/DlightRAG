@@ -120,10 +120,13 @@ asyncio.run(main())
 
 ### MCP Server (for AI Agents)
 
+Two transports — pick by how the agent runs:
+
+**stdio** — agent spawns dlightrag-mcp as a subprocess (Claude Desktop, Cursor):
+
 ```bash
-uv tool install dlightrag   # or: pip install dlightrag
+uv tool install dlightrag
 cp .env.example .env        # set API keys in .env
-dlightrag-mcp
 ```
 
 ```json
@@ -137,7 +140,39 @@ dlightrag-mcp
 }
 ```
 
-Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all with workspace isolation.
+**streamable-http** — agent connects over HTTP (remote / multi-client):
+
+```bash
+DLIGHTRAG_MCP_TRANSPORT=streamable-http \
+DLIGHTRAG_MCP_HOST=127.0.0.1 \
+dlightrag-mcp
+# agent posts to http://127.0.0.1:8101/mcp
+```
+
+Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_workspaces` — all workspace-isolated.
+
+
+## Deployment & auth
+
+Pick the row matching your use case:
+
+| Scenario | Transport | Bind | Bearer token |
+|---|---|---|---|
+| Local agent (Claude Desktop / Cursor) | `stdio` | n/a | not needed |
+| Self-hosted, single-machine | `streamable-http` | `127.0.0.1` (default) | not needed |
+| `docker compose up` (default) | `streamable-http` | container `0.0.0.0`, host port `127.0.0.1:8101` | not needed |
+| LAN / team access | `streamable-http` | `0.0.0.0` | **required** |
+| Production / public network | `streamable-http` behind reverse proxy + TLS | proxy → `127.0.0.1` | **required** |
+
+**Rule of thumb:** if anyone other than you can reach port `8100` (REST) or `8101` (MCP), set a token.
+
+```bash
+openssl rand -base64 32                                     # generate
+echo "DLIGHTRAG_API_AUTH_TOKEN=<generated>" >> .env         # set
+# clients send: Authorization: Bearer <generated>
+```
+
+The same token guards both REST and MCP. The MCP server logs a multi-line warning at startup if it binds non-loopback without a token configured.
 
 
 ## API & Internals
@@ -159,7 +194,7 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 | `GET` | `/workspaces` | List available workspaces |
 | `GET` | `/health` | Health check with storage status |
 
-All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. Set `DLIGHTRAG_API_AUTH_TOKEN` in `.env` to enable bearer auth.
+All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. See [Deployment & auth](#deployment--auth) for token setup.
 
 - **Request/response schema** — [`docs/response-schema.md`](docs/response-schema.md) for ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
 - **Retrieval & answer pipeline** — [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md) for unified vs caption mode, visual resolution, reranking, Step 1+2 merge.
