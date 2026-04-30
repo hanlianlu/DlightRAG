@@ -35,8 +35,13 @@ services:
   dlightrag-mcp:
     restart: unless-stopped
     build: .
+    # SECURITY: MCP streamable-http exposes ingest / delete_files / answer
+    # without per-tool auth, so the transport-level bearer token is
+    # mandatory when bound to 0.0.0.0. Bind to 127.0.0.1 here means MCP
+    # is only reachable from within the compose network; map a host port
+    # below only after setting DLIGHTRAG_API_AUTH_TOKEN in .env.
     ports:
-      - "8101:8101"
+      - "127.0.0.1:8101:8101"
     environment:
       <<: *common-env
       DLIGHTRAG_MCP_TRANSPORT: streamable-http
