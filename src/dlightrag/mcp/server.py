@@ -390,17 +390,71 @@ async def run_stdio() -> None:
 
 
 async def run_streamable_http(host: str, port: int) -> None:
-    """Run MCP server over streamable-http transport."""
-    await _ensure_manager()
+    """Run MCP server over streamable-http transport.
+
+    Bearer-token auth is enforced when ``DLIGHTRAG_API_AUTH_TOKEN`` is set
+    (the same secret as the REST API). Without a token, the server runs
+    open — caller is responsible for binding to loopback or trusted network
+    only. We log a loud warning in that case and refuse the unsafe combo
+    of ``host=0.0.0.0`` + no token.
+    """
+    import secrets
+
     import uvicorn
     from mcp.server.streamable_http import StreamableHTTPServerTransport
     from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import JSONResponse
     from starlette.routing import Mount
+
+    cfg = _get_config()
+    token = cfg.api_auth_token
+
+    # Refuse the misconfiguration that lets anyone on a reachable network
+    # delete every workspace's data.
+    if not token and host not in ("127.0.0.1", "localhost", "::1"):
+        raise RuntimeError(
+            f"MCP streamable-http on host={host!r} requires DLIGHTRAG_API_AUTH_TOKEN. "
+            "Without auth, any client reaching the bind address can call ingest, "
+            "delete_files, retrieve, and answer. Either set the token or restrict "
+            "the bind to loopback (127.0.0.1)."
+        )
+    if not token:
+        logger.warning(
+            "MCP streamable-http running on %s:%d without DLIGHTRAG_API_AUTH_TOKEN. "
+            "Loopback-only is safe for local agents; exposing this to other hosts "
+            "without auth is not.",
+            host,
+            port,
+        )
+
+    class BearerAuthMiddleware(BaseHTTPMiddleware):
+        """Enforce Bearer auth on every request to the MCP transport.
+
+        No-op when token is None (operator opted out). Constant-time
+        comparison defends against timing side-channels.
+        """
+
+        async def dispatch(self, request, call_next):
+            if not token:
+                return await call_next(request)
+            header = request.headers.get("Authorization", "")
+            if not header.startswith("Bearer "):
+                return JSONResponse(
+                    {"error": "Missing or invalid Authorization header"}, status_code=401
+                )
+            if not secrets.compare_digest(header[7:], token):
+                return JSONResponse({"error": "Invalid token"}, status_code=403)
+            return await call_next(request)
+
+    await _ensure_manager()
 
     transport = StreamableHTTPServerTransport(mcp_session_id=None)
 
     starlette_app = Starlette(
         routes=[Mount("/mcp", app=transport.handle_request)],
+        middleware=[Middleware(BearerAuthMiddleware)],
     )
 
     config = uvicorn.Config(

@@ -313,7 +313,14 @@ class DlightragConfig(BaseSettings):
 
     # ===== MCP Server =====
     mcp_transport: Literal["stdio", "streamable-http"] = Field(default="stdio")
-    mcp_host: str = Field(default="0.0.0.0")
+    mcp_host: str = Field(
+        default="127.0.0.1",
+        description="MCP streamable-http bind address. Default 127.0.0.1 (loopback only) "
+        "because MCP exposes ingest/answer/delete_files with no native auth — exposing "
+        "to a network without auth would let any reachable client wipe data. Set to "
+        "0.0.0.0 only when api_auth_token is also set; the bearer-token middleware "
+        "then guards the transport.",
+    )
     mcp_port: int = Field(default=8101)
 
     # ===== REST API Server =====
