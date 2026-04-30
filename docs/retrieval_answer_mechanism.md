@@ -100,12 +100,12 @@ answer generation uses the image descriptions as the question context.
 
 ### Reranking
 
-Two strategies, configured via `rerank.strategy`:
+Two strategy classes, configured via `rerank.strategy`:
 
 | Strategy | How it works |
 |---------|-------------|
-| `llm_listwise` | VLM pointwise scoring: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Uses `response_format=json_object` for structured output. |
-| API (`rerank_base_url`) | Calls external OpenAI-compatible `/rerank` endpoint with query + page images. |
+| `chat_llm_reranker` (default) | VLM pointwise scoring via the chat/vlm/ingest role: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Uses `response_format=json_object` for structured output. |
+| `jina_reranker` / `aliyun_reranker` / `azure_cohere` / `local_reranker` | Calls an external OpenAI-compatible `/rerank` endpoint (managed cloud, Azure, or self-hosted via `local_reranker` + `rerank.base_url`) with query + page images. |
 
 Post-rerank filtering removes chunks below `rerank_score_threshold` (default
 0.5). Chunks without scores (unranked) are kept.
@@ -188,7 +188,7 @@ query + multimodal_content
 | Page representation | Original page images (base64) | OCR text captions |
 | Visual vector search | Yes (multimodal embedding) | No |
 | Visual resolution | chunk_id → page image via KV (text-only chunks kept) | N/A |
-| Reranking | llm_listwise (VLM pointwise) or external API | LightRAG built-in (text) |
+| Reranking | chat_llm_reranker (VLM pointwise) or external API | LightRAG built-in (text) |
 | Answer model | VLM (sees text excerpts + page images) | LLM (text-only) |
 | Dual-path retrieval | Yes (text + visual embedding) | No (text only) |
 | Structured output | Provider-dependent JSON schema | N/A (LightRAG controls) |

@@ -105,7 +105,7 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "source_type": {
                         "type": "string",
-                        "enum": ["local", "azure_blob", "snowflake"],
+                        "enum": ["local", "azure_blob", "s3"],
                         "description": "Type of data source",
                     },
                     "path": {
@@ -118,11 +118,19 @@ async def list_tools() -> list[Tool]:
                     },
                     "blob_path": {
                         "type": "string",
-                        "description": "Specific blob path",
+                        "description": "Specific blob path (azure_blob)",
+                    },
+                    "bucket": {
+                        "type": "string",
+                        "description": "S3 bucket name (s3)",
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "S3 object key — single object or prefix (s3)",
                     },
                     "prefix": {
                         "type": "string",
-                        "description": "Blob prefix filter",
+                        "description": "Path/blob/key prefix filter (azure_blob, s3)",
                     },
                     "replace": {
                         "type": "boolean",
@@ -297,6 +305,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 kwargs["container_name"] = arguments.get("container_name", "")
                 if arguments.get("blob_path"):
                     kwargs["blob_path"] = arguments["blob_path"]
+                if arguments.get("prefix") is not None:
+                    kwargs["prefix"] = arguments["prefix"]
+            elif source_type == "s3":
+                kwargs["bucket"] = arguments.get("bucket", "")
+                kwargs["key"] = arguments.get("key", "")
                 if arguments.get("prefix") is not None:
                     kwargs["prefix"] = arguments["prefix"]
             if arguments.get("replace") is not None:

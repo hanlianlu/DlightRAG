@@ -99,15 +99,19 @@ load_dotenv()  # load .env
 
 async def main():
     config = DlightragConfig()
-    manager = RAGServiceManager(config)
+    # Async factory: parallel-warms every workspace and initializes Langfuse tracing.
+    # Bare `RAGServiceManager(config)` also works but defers warmup until first call.
+    manager = await RAGServiceManager.create(config)
+    try:
+        await manager.aingest(workspace="default", source_type="local", path="./docs")
 
-    await manager.aingest(workspace="default", source_type="local", path="./docs")
+        result = await manager.aretrieve("What are the key findings?")
+        print(result.contexts)
 
-    result = await manager.aretrieve(query="What are the key findings?")
-    print(result.contexts)
-
-    result = await manager.aanswer(query="What are the key findings?")
-    print(result.answer)
+        result = await manager.aanswer("What are the key findings?")
+        print(result.answer)
+    finally:
+        await manager.close()
 
 asyncio.run(main())
 ```
@@ -141,13 +145,16 @@ Tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, `list_works
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/ingest` | Ingest from local, Azure Blob, or AWS S3 |
-| `POST` | `/retrieve` | Contexts + sources (no LLM answer) |
+| `POST` | `/retrieve` | Contexts + sources, no LLM call (response still ships `answer: null` for shape parity with `/answer`) |
 | `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
 | `GET` | `/files` | List ingested documents |
 | `DELETE` | `/files` | Delete documents |
 | `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |
 | `POST` | `/files/retry` | Re-ingest all FAILED documents (replace=True, source-aware) |
 | `GET` | `/api/files/{path}` | Serve/download a file (local: stream, Azure: 302 SAS redirect) |
+| `GET` | `/metadata/{doc_id}` | Read a document's metadata JSONB |
+| `POST` | `/metadata/{doc_id}` | Merge custom keys into a document's metadata JSONB |
+| `POST` | `/metadata/search` | Find document IDs matching a key/value filter dict |
 | `POST` | `/reset` | Reset workspace(s) — drop storage, clear indexes |
 | `GET` | `/workspaces` | List available workspaces |
 | `GET` | `/health` | Health check with storage status |
@@ -197,8 +204,8 @@ Each stage resolves its model via the per-role overrides below; if a role is uns
 | Table / equation captioning | chat | — | `vlm` |
 | Entity extraction | chat | chat (VLM) | `extract` |
 | Embedding | embedding model | embedding model (multimodal) | (separate `embedding` block) |
-| Rerank (llm_listwise) | ingest/chat | vlm/chat (pointwise) | `vlm` |
-| Rerank (API strategy) | cohere/jina/aliyun/azure_cohere | cohere/jina/aliyun/azure_cohere | (separate `rerank` block) |
+| Rerank (chat_llm_reranker) | ingest/chat | vlm/chat (pointwise) | `vlm` |
+| Rerank (API strategy) | jina_reranker / aliyun_reranker / azure_cohere / local_reranker | jina_reranker / aliyun_reranker / azure_cohere / local_reranker | (separate `rerank` block) |
 | Keyword extraction (per-query) | chat | chat | `keywords` |
 | Answer generation | chat | chat (VLM, sees text excerpts + page images) | `query` |
 
@@ -320,20 +327,20 @@ Set in `config.yaml` under the `rerank:` block:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `rerank.strategy` | `llm_listwise` | `llm_listwise`, `cohere`, `jina`, `aliyun`, `azure_cohere` |
+| `rerank.strategy` | `chat_llm_reranker` | `chat_llm_reranker`, `jina_reranker`, `aliyun_reranker`, `azure_cohere`, `local_reranker` |
 | `rerank.model` | (strategy default) | Model name sent to the endpoint |
 | `rerank.base_url` | (provider default) | Custom endpoint URL for any compatible service |
 | `rerank.api_key` | — | Set in `.env` as `DLIGHTRAG_RERANK__API_KEY` |
 
 | Strategy | Default model | API key |
 |---------|---------------|---------|
-| `llm_listwise` | falls through `vlm` → `ingest` → `chat` role | (reuses the chosen role's key) |
-| `cohere` | `rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
-| `jina` | `jina-reranker-v3` | `DLIGHTRAG_RERANK__API_KEY` |
-| `aliyun` | `qwen3-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
+| `chat_llm_reranker` | falls through `vlm` → `ingest` → `chat` role | (reuses the chosen role's key) |
+| `jina_reranker` | `jina-reranker-v3` | `DLIGHTRAG_RERANK__API_KEY` |
+| `aliyun_reranker` | `qwen3-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
 | `azure_cohere` | `Cohere-rerank-v4.0-pro` | `DLIGHTRAG_RERANK__API_KEY` |
+| `local_reranker` | (set `rerank.model` + `rerank.base_url`) | (none — local endpoint) |
 
-Point any backend at a local reranker (Xinference, etc.) via `rerank.base_url` + `rerank.model` in config.yaml.
+For self-hosted rerankers (Xinference, vLLM, TEI etc.), use `local_reranker` with `rerank.base_url` + `rerank.model`. For any other OpenAI-compatible `/rerank` endpoint, point `rerank.base_url` at it.
 
 ### Observability (Langfuse)
 
