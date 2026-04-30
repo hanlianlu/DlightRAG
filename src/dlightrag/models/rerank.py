@@ -214,69 +214,24 @@ async def _http_rerank(
     return scored[:top_k]
 
 
-async def _jina_rerank(
-    query: str,
-    chunks: list[dict[str, Any]],
-    top_k: int,
-    *,
-    api_key: str,
-    model: str = "jina-reranker-m0",
-    base_url: str = "https://api.jina.ai/v1/rerank",
-    score_threshold: float = 0.5,
-) -> list[dict[str, Any]]:
-    """Jina multimodal reranker via /v1/rerank API."""
-    return await _http_rerank(
-        query,
-        chunks,
-        top_k,
-        url=base_url,
-        model=model,
-        api_key=api_key,
-        score_threshold=score_threshold,
-    )
-
-
-async def _aliyun_rerank(
-    query: str,
-    chunks: list[dict[str, Any]],
-    top_k: int,
-    *,
-    api_key: str,
-    model: str = "gte-rerank",
-    base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/rerank",
-    score_threshold: float = 0.5,
-) -> list[dict[str, Any]]:
-    """Aliyun DashScope reranker."""
-    return await _http_rerank(
-        query,
-        chunks,
-        top_k,
-        url=base_url,
-        model=model,
-        api_key=api_key,
-        score_threshold=score_threshold,
-    )
-
-
-async def _local_rerank(
-    query: str,
-    chunks: list[dict[str, Any]],
-    top_k: int,
-    *,
-    model: str,
-    base_url: str,
-    score_threshold: float = 0.5,
-) -> list[dict[str, Any]]:
-    """Self-hosted OpenAI-compatible /rerank endpoint."""
-    rerank_url = base_url.rstrip("/") + "/rerank"
-    return await _http_rerank(
-        query,
-        chunks,
-        top_k,
-        url=rerank_url,
-        model=model,
-        score_threshold=score_threshold,
-    )
+# ── HTTP /rerank strategy registry ───────────────────────────────
+# Three strategies share `_http_rerank`'s shape; only defaults differ.
+# Tuple = (default_base_url, default_model, append_/rerank_to_base, requires_api_key)
+_HTTP_RERANK_DEFAULTS: dict[str, tuple[str | None, str, bool, bool]] = {
+    "jina_reranker": (
+        "https://api.jina.ai/v1/rerank",
+        "jina-reranker-m0",
+        False,
+        True,
+    ),
+    "aliyun_reranker": (
+        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/rerank",
+        "gte-rerank",
+        False,
+        True,
+    ),
+    "local_reranker": (None, "default", True, False),
+}
 
 
 # ── Azure Cohere (text-only, enterprise) ─────────────────────────
@@ -359,33 +314,20 @@ def build_rerank_func(
             score_threshold=rc.score_threshold,
             batch_size=rc.batch_size,
         )
-    elif strategy == "jina_reranker":
-        if not rc.api_key:
-            raise ValueError("jina_reranker requires api_key")
+    elif strategy in _HTTP_RERANK_DEFAULTS:
+        default_url, default_model, append_path, needs_key = _HTTP_RERANK_DEFAULTS[strategy]
+        url = rc.base_url or default_url
+        if url is None:
+            raise ValueError(f"{strategy} requires base_url")
+        if append_path:
+            url = url.rstrip("/") + "/rerank"
+        if needs_key and not rc.api_key:
+            raise ValueError(f"{strategy} requires api_key")
         fn = partial(
-            _jina_rerank,
+            _http_rerank,
+            url=url,
+            model=rc.model or default_model,
             api_key=rc.api_key,
-            model=rc.model or "jina-reranker-m0",
-            base_url=rc.base_url or "https://api.jina.ai/v1/rerank",
-            score_threshold=rc.score_threshold,
-        )
-    elif strategy == "aliyun_reranker":
-        if not rc.api_key:
-            raise ValueError("aliyun_reranker requires api_key")
-        fn = partial(
-            _aliyun_rerank,
-            api_key=rc.api_key,
-            model=rc.model or "gte-rerank",
-            base_url=rc.base_url or "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/rerank",
-            score_threshold=rc.score_threshold,
-        )
-    elif strategy == "local_reranker":
-        if not rc.base_url:
-            raise ValueError("local_reranker requires base_url")
-        fn = partial(
-            _local_rerank,
-            model=rc.model or "default",
-            base_url=rc.base_url,
             score_threshold=rc.score_threshold,
         )
     elif strategy == "azure_cohere":
