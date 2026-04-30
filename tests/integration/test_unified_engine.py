@@ -15,8 +15,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from dlightrag.converters.page_renderer import RenderResult
 from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
-from dlightrag.unifiedrepresent.renderer import RenderResult
 
 
 async def _async_gen_from_list(items: list) -> AsyncIterator:

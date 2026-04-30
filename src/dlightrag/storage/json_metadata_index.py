@@ -14,8 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS, system_field_ids
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.storage.metadata_fields import METADATA_FIELDS, system_field_ids
 
 logger = logging.getLogger(__name__)
 

@@ -7,7 +7,7 @@ as a high-DPI image, embedded via multimodal embedding model, and
 stored alongside a LightRAG knowledge graph built from VLM-extracted text.
 """
 
+from dlightrag.converters.page_renderer import PageRenderer
 from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
-from dlightrag.unifiedrepresent.renderer import PageRenderer
 
 __all__ = ["UnifiedRepresentEngine", "PageRenderer"]

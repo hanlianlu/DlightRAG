@@ -203,7 +203,7 @@ class TestAnswerEngineStream:
         contexts: RetrievalContexts = {"chunks": []}
         ctx, token_iter = await engine.generate_stream("test", contexts)
 
-        from dlightrag.models.streaming import AnswerStream
+        from dlightrag.citations.streaming import AnswerStream
 
         assert isinstance(token_iter, AnswerStream)
 
@@ -282,7 +282,7 @@ class TestAnswerEngineStream:
 
         _, token_iter = await engine.generate_stream("query", _text_contexts())
 
-        from dlightrag.models.streaming import AnswerStream
+        from dlightrag.citations.streaming import AnswerStream
 
         assert isinstance(token_iter, AnswerStream)
         assert token_iter._indexer is not None

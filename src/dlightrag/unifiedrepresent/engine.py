@@ -18,11 +18,11 @@ from typing import Any
 from lightrag.utils import EmbeddingFunc, compute_mdhash_id
 from PIL import Image
 
+from dlightrag.converters.page_renderer import PageRenderer
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.unifiedrepresent.embedder import VisualEmbedder
 from dlightrag.unifiedrepresent.extractor import EntityExtractor
-from dlightrag.unifiedrepresent.renderer import PageRenderer
 from dlightrag.unifiedrepresent.retriever import VisualRetriever
 
 logger = logging.getLogger(__name__)

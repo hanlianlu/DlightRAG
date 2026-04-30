@@ -7,12 +7,12 @@ import json
 import logging
 from typing import Any
 
-from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.storage.metadata_fields import (
+from dlightrag.core.retrieval.metadata_fields import (
     METADATA_FIELDS,
     field_by_id,
     system_field_ids,
 )
+from dlightrag.core.retrieval.models import MetadataFilter
 
 logger = logging.getLogger(__name__)
 
