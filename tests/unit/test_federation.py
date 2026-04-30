@@ -79,6 +79,37 @@ class TestMergeResults:
         assert merged.contexts["chunks"] == []
         assert merged.answer is None
 
+    def test_canonicalizes_ref_ids_across_workspaces(self) -> None:
+        """Two workspaces both ingesting different docs that happen to share a
+        filename: each had reference_id=1 in its own answer, but post-merge
+        they must have distinct reference_ids so [1-2] is unambiguous.
+        """
+        # Same filename in both workspaces (different actual docs).
+        r1 = _make_result(
+            chunks=[
+                {"chunk_id": "a1", "file_path": "/report.pdf", "reference_id": "1"},
+                {"chunk_id": "a2", "file_path": "/report.pdf", "reference_id": "1"},
+            ]
+        )
+        r2 = _make_result(
+            chunks=[
+                {"chunk_id": "b1", "file_path": "/report.pdf", "reference_id": "1"},
+            ]
+        )
+
+        merged = merge_results([r1, r2], ["ws-a", "ws-b"])
+        chunks = merged.contexts["chunks"]
+
+        # ws-a chunks share one ref_id; ws-b chunks have a different one.
+        ws_a_chunks = [c for c in chunks if c["_workspace"] == "ws-a"]
+        ws_b_chunks = [c for c in chunks if c["_workspace"] == "ws-b"]
+        assert len({c["reference_id"] for c in ws_a_chunks}) == 1
+        assert len({c["reference_id"] for c in ws_b_chunks}) == 1
+        assert ws_a_chunks[0]["reference_id"] != ws_b_chunks[0]["reference_id"]
+        # file_path is preserved unchanged (sentinel proxy is internal).
+        assert ws_a_chunks[0]["file_path"] == "/report.pdf"
+        assert ws_b_chunks[0]["file_path"] == "/report.pdf"
+
 
 class TestFederatedRetrieve:
     """Test federated_retrieve orchestration."""
