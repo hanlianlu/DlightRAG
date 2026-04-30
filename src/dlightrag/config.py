@@ -103,7 +103,11 @@ class DlightragConfig(BaseSettings):
         env_file=find_dotenv(usecwd=True),
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",
+        # Reject any unknown DLIGHTRAG_* env var, .env entry, or
+        # config.yaml key. Catches typos AND old flat-schema fields
+        # (openai_api_key, llm_provider, etc.) without hardcoding a
+        # finite legacy list.
+        extra="forbid",
     )
 
     @classmethod
@@ -355,41 +359,6 @@ class DlightragConfig(BaseSettings):
         if self.auth_mode == "none" and self.api_auth_token:
             self.auth_mode = "simple"
         return self
-
-    @model_validator(mode="before")
-    @classmethod
-    def _warn_legacy_fields(cls, values):
-        if not isinstance(values, dict):
-            return values
-        legacy = {
-            "openai_api_key",
-            "azure_openai_api_key",
-            "anthropic_api_key",
-            "qwen_api_key",
-            "minimax_api_key",
-            "ollama_api_key",
-            "xinference_api_key",
-            "openrouter_api_key",
-            "voyage_api_key",
-            "llm_provider",
-            "chat_model",
-            "vision_model",
-            "vision_provider",
-            "embedding_provider",
-            "embedding_model",
-            "embedding_dim",
-            "ingestion_model",
-            "llm_temperature",
-            "llm_request_timeout",
-        }
-        found = [k for k in values if k in legacy]
-        if found:
-            raise ValueError(
-                f"Legacy config fields detected: {found}. "
-                "Please migrate to the new nested format. "
-                "See .env.example for the new configuration format."
-            )
-        return values
 
     # ===== Computed Properties =====
 
