@@ -641,14 +641,11 @@ class RAGService:
         logger.info("Unified representational RAG mode ready")
 
     async def _create_hash_index(self, config: DlightragConfig) -> HashIndexProtocol:
-        """Create the appropriate hash index backend based on KV storage config.
+        """Create the appropriate hash index backend.
 
-        Uses the same backend as the configured KV storage for consistency.
-        Falls back to JSON file-based HashIndex if the backend package is unavailable.
+        PG when ``kv_storage`` is PostgreSQL, otherwise the JSON file fallback.
         """
-        kv = config.kv_storage
-
-        if kv.startswith("PG"):
+        if config.kv_storage.startswith("PG"):
             try:
                 from dlightrag.core.ingestion.hash_index import PGHashIndex
 
@@ -660,32 +657,6 @@ class RAGService:
                 logger.warning("asyncpg not available, falling back to JSON HashIndex")
             except Exception as e:
                 logger.warning(f"PGHashIndex creation failed, falling back to JSON: {e}")
-
-        elif kv.startswith("Redis"):
-            try:
-                from dlightrag.core.ingestion.hash_index import RedisHashIndex
-
-                idx = RedisHashIndex(workspace=config.workspace)
-                await idx.initialize()
-                logger.info("Hash index: RedisHashIndex (Redis via shared pool)")
-                return idx
-            except ImportError:
-                logger.warning("redis not available, falling back to JSON HashIndex")
-            except Exception as e:
-                logger.warning(f"RedisHashIndex creation failed, falling back to JSON: {e}")
-
-        elif kv.startswith("Mongo"):
-            try:
-                from dlightrag.core.ingestion.hash_index import MongoHashIndex
-
-                idx = MongoHashIndex(workspace=config.workspace)
-                await idx.initialize()
-                logger.info("Hash index: MongoHashIndex (MongoDB via shared client)")
-                return idx
-            except ImportError:
-                logger.warning("motor not available, falling back to JSON HashIndex")
-            except Exception as e:
-                logger.warning(f"MongoHashIndex creation failed, falling back to JSON: {e}")
 
         from dlightrag.core.ingestion.hash_index import HashIndex
 

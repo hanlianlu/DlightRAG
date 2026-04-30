@@ -34,7 +34,7 @@ class MetadataIndexProtocol(Protocol):
 class HashIndexProtocol(Protocol):
     """Common interface for all hash index backends.
 
-    Implemented by HashIndex (JSON), PGHashIndex, RedisHashIndex, MongoHashIndex.
+    Implemented by HashIndex (JSON) and PGHashIndex.
     """
 
     async def check_exists(self, content_hash: str) -> tuple[bool, str | None]: ...
