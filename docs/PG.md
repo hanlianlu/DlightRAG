@@ -2,9 +2,10 @@
 
 ## LightRAG Upstream Bug Patches
 
-DlightRAG (and ArtRAG) maintain monkey-patches for two critical LightRAG
-PostgreSQL bugs that remain unfixed as of **LightRAG v1.5.0rc1** (2026-04-26).
-The patches self-disable via source inspection if upstream adds the fix.
+DlightRAG maintains monkey-patches for two critical LightRAG PostgreSQL bugs
+that remain unfixed in the currently supported baseline,
+**LightRAG v1.5.0rc1**. The patches self-disable via source inspection if
+upstream adds the equivalent fixes.
 
 ### Bug 1: `configure_age()` missing `DuplicateSchemaError`
 
@@ -46,14 +47,21 @@ level, respecting `ignore_if_exists` and `upsert` flags.
 
 ### Auto-detection
 
-Both patches use `inspect.getsource()` to check if the upstream code has
-been fixed. If LightRAG adds the pre-check or exception handling, our
-patches automatically skip themselves:
+Both patches use `inspect.getsource()` to check the exact upstream method they
+wrap. If LightRAG adds the pre-check and exception handling, the corresponding
+patch automatically skips itself:
 
 ```python
-def _needs_patch(method):
+def _configure_age_needs_patch(method):
     source = inspect.getsource(method)
-    return "ag_catalog.ag_graph" not in source  # pre-check sentinel
+    return not (
+        "ag_catalog.ag_graph" in source
+        and "DuplicateSchemaError" in source
+    )
+
+def _execute_needs_patch(method):
+    source = inspect.getsource(method)
+    return "DuplicateSchemaError" not in source
 ```
 
 ### Post-Init Graph Verification
@@ -82,16 +90,19 @@ BYTEA blobs).
 |------|-----------------|----------------|-------|
 | 2026-03-23 | 1.4.11rc2 | Yes (both bugs) | Initial patch created |
 | 2026-03-24 | 1.4.11 | Yes (both bugs) | Verified: upstream unchanged |
+| 2026-05-06 | 1.5.0rc1 | Yes (both bugs) | Verified after RAGAnything 1.3.0 upgrade |
 
 Update this table when LightRAG releases new versions. Check by running:
 ```bash
 uv run python -c "
 from lightrag.kg.postgres_impl import PostgreSQLDB
 import inspect
-src = inspect.getsource(PostgreSQLDB.configure_age)
-print('Pre-check:', 'ag_catalog.ag_graph' in src)
-print('DuplicateSchemaError:', 'DuplicateSchemaError' in src)
+configure_age = inspect.getsource(PostgreSQLDB.configure_age)
+execute = inspect.getsource(PostgreSQLDB.execute)
+print('configure_age pre-check:', 'ag_catalog.ag_graph' in configure_age)
+print('configure_age DuplicateSchemaError:', 'DuplicateSchemaError' in configure_age)
+print('execute DuplicateSchemaError:', 'DuplicateSchemaError' in execute)
 "
 ```
 
-If both print `True`, the patches can be removed.
+If all three checks print `True`, the patches can be removed.

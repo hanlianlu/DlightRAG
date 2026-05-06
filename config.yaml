@@ -13,10 +13,11 @@
 #   anthropic — Anthropic Claude models (native SDK)
 #   gemini    — Google Gemini models (native SDK)
 #
-# IMPORTANT: chat model must support vision (multimodal/VLM).
-# It doubles as the fallback vision model for: RAGAnything captioning,
-# VLM parser, unified mode visual extraction, multimodal query enhancement,
-# and chat_llm_reranker when no rerank model override is set.
+# IMPORTANT: any role that receives image_url content must use a vision-capable
+# model. With default fallbacks, chat is used for RAGAnything captioning,
+# VLM parser, unified visual extraction, multimodal query enhancement, answer
+# generation, and chat_llm_reranker when no explicit vlm/query/rerank override
+# is set. The reranker does not consume the vlm role implicitly.
 #
 # ingest model (optional) is used for unified-mode structural context updates.
 # If unset, falls back to chat model. Reranker-specific model choices belong

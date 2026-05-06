@@ -26,10 +26,10 @@ RAGService.aretrieve / aanswer(query, multimodal_content)
     Answer  Mode-specific answer generation
 ```
 
-**Step 2** runs identically for all query types and modes. It requires
-PostgreSQL backend (`metadata_index`); with JSON/file backends, only Step 1
-runs. Step 2 supplements Step 1 with document-level precision when metadata
-filters (e.g. filename) are available or auto-detected from the query.
+**Step 2** runs identically for all query types and modes. PostgreSQL backends
+use `PGMetadataIndex`; local/file backends use `JsonMetadataIndex` as a
+fallback. Step 2 supplements Step 1 with document-level precision when
+metadata filters (e.g. filename) are available or auto-detected from the query.
 
 ---
 
@@ -105,7 +105,8 @@ Two strategy classes, configured via `rerank.strategy`:
 | Strategy | How it works |
 |---------|-------------|
 | `chat_llm_reranker` (default) | Batched listwise scoring via `rerank.provider/model` when set, otherwise `chat`. The selected model must support image inputs when chunks include page images. Batch parallelism is capped by `rerank.max_concurrency`; per-call batch size is `rerank.batch_size`. |
-| `jina_reranker` / `aliyun_reranker` / `azure_cohere` / `local_reranker` | Calls an external OpenAI-compatible `/rerank` endpoint (managed cloud, Azure, or self-hosted via `local_reranker` + `rerank.base_url`) with query + page images. |
+| `jina_reranker` / `aliyun_reranker` / `local_reranker` | Calls an external OpenAI-compatible `/rerank` endpoint (managed cloud or self-hosted via `local_reranker` + `rerank.base_url`). Unified mode sends image documents when page images are available; caption mode sends text documents through LightRAG's adapter. |
+| `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents only. |
 
 Post-rerank filtering removes chunks below `rerank.score_threshold` (default
 0.5). If every scored chunk falls below the threshold, DlightRAG keeps the
@@ -150,7 +151,7 @@ RetrievalEngine (captionrag/retrieval.py)
 #### Pure Text Query
 
 ```
-query → LightRAG.aquery_data() / aquery_llm()
+query → LightRAG.aquery_data()
           │
           ├─ KG traversal (entities/relationships)
           └─ Chunk vector search (text embedding)
@@ -179,7 +180,9 @@ query + multimodal_content
 - Images are converted to text descriptions by RAGAnything's internal VLM.
 - No visual embedding path — only text-path retrieval.
 - No dual-path merging.
-- Answer uses `enhanced_query` for both retrieval and LLM generation.
+- Retrieval uses the enhanced query. Answer generation is handled by
+  DlightRAG's `AnswerEngine`; user-supplied images must be passed through
+  `query_images` when the answer model itself should see them.
 
 ---
 
@@ -195,4 +198,4 @@ query + multimodal_content
 | Dual-path retrieval | Yes (text + visual embedding) | No (text only) |
 | Structured output | Provider-dependent JSON schema | N/A (LightRAG controls) |
 | Citation format | `[n-m]` page-level inline | LightRAG default |
-| Step 2 (MetadataPath) | Always available | Requires PostgreSQL backend |
+| Step 2 (MetadataPath) | PG or JSON metadata index | PG or JSON metadata index |

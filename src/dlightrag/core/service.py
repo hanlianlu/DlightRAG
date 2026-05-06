@@ -1,10 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""RAG Service - High-level facade for ingestion and retrieval.
+"""Per-workspace RAG service facade for ingestion and retrieval.
 
-Slim RAGService that uses a SINGLE RAGAnything instance, composing
-IngestionPipeline and RetrievalEngine. No external backend dependencies.
-Uses PostgreSQL advisory locks instead of Redis for distributed
-initialization coordination.
+Caption mode composes one RAGAnything instance with DlightRAG ingestion and
+retrieval adapters. Unified mode creates LightRAG directly and adds visual
+embedding retrieval. PostgreSQL advisory locks coordinate first-time storage
+initialization across concurrent workers.
 """
 
 from __future__ import annotations
@@ -111,16 +111,8 @@ from dlightrag.models.prompts import inject_custom_prompts  # noqa: E402
 
 inject_custom_prompts()
 
-# RAGAnything is only needed for caption mode — make import optional
-# so unified mode doesn't require raganything dependencies.
-try:
-    from raganything import RAGAnything, RAGAnythingConfig  # noqa: E402
-
-    _HAS_RAGANYTHING = True
-except ImportError:
-    _HAS_RAGANYTHING = False
-
 from lightrag.utils import EmbeddingFunc  # noqa: E402
+from raganything import RAGAnything, RAGAnythingConfig  # noqa: E402
 
 from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
 from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
@@ -332,12 +324,7 @@ class RAGService:
             await self._do_initialize_unified()
             return
 
-        # --- Caption mode (existing code, unchanged) ---
-        if not _HAS_RAGANYTHING:
-            raise ImportError(
-                "raganything is required for caption mode. Install it with: pip install raganything"
-            )
-
+        # --- Caption mode: RAGAnything composition ---
         # Detect optimal MinerU backend based on hardware (only for mineru parser)
         mineru_backend = None
         if config.parser == "mineru":
@@ -346,7 +333,7 @@ class RAGService:
             logger.info(f"Using {config.parser} parser, MinerU backend detection skipped")
 
         # Configure RAGAnything
-        rag_config = RAGAnythingConfig(  # type: ignore[possibly-undefined]
+        rag_config = RAGAnythingConfig(
             working_dir=str(config.working_dir_path),
             max_concurrent_files=config.max_concurrent_ingestion,
             parser=config.parser,
@@ -415,9 +402,9 @@ class RAGService:
         if config.parser in ("docling", "vlm"):
             lightrag_kwargs["chunking_func"] = docling_hybrid_chunking_func
 
-        # ONE RAGAnything with unified chat model (LightRAG-adapted)
+        # Single RAGAnything instance with LightRAG-adapted callables.
         logger.info("Creating RAGAnything instance...")
-        self.rag = RAGAnything(  # type: ignore[possibly-undefined]
+        self.rag = RAGAnything(
             None,
             chat_func_lr,
             chat_func_lr,

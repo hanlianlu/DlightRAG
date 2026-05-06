@@ -19,9 +19,9 @@ from typing import Any
 from lightrag.operate import extract_entities, merge_nodes_and_edges
 from lightrag.utils import compute_mdhash_id
 
-# LightRAG v1.4.10 merge_nodes_and_edges unconditionally does
-# ``async with pipeline_status_lock`` — crashes when lock is None.
-# We provide a real lock + status dict to satisfy the contract.
+# LightRAG merge_nodes_and_edges still writes progress through
+# pipeline_status_lock despite accepting None defaults in the signature.
+# Provide a real lock + status dict to satisfy the runtime contract.
 _NOOP_PIPELINE_STATUS: dict = {"latest_message": "", "history_messages": []}
 _PIPELINE_STATUS_LOCK = asyncio.Lock()
 

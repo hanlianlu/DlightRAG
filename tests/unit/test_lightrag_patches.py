@@ -1,5 +1,4 @@
-# tests/unit/test_lightrag_patches.py
-# Copyright 2025-2026 Hanlian Lu. All rights reserved.
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for LightRAG AGE monkey-patches."""
 
 from __future__ import annotations
@@ -167,29 +166,61 @@ class TestExecutePatch:
 class TestNeedsPatch:
     """Test the source-inspection guard."""
 
-    def test_detects_unpatched_method(self):
-        from dlightrag.core._lightrag_patches import _needs_patch
+    def test_configure_age_detects_missing_precheck(self):
+        from dlightrag.core._lightrag_patches import _configure_age_needs_patch
 
         def missing_precheck():
+            # DuplicateSchemaError
             pass
 
-        assert _needs_patch(missing_precheck) is True
+        assert _configure_age_needs_patch(missing_precheck) is True
 
-    def test_detects_already_patched_method(self):
-        from dlightrag.core._lightrag_patches import _needs_patch
+    def test_configure_age_detects_missing_duplicate_schema_guard(self):
+        from dlightrag.core._lightrag_patches import _configure_age_needs_patch
 
-        def already_fixed():
+        def missing_duplicate_schema():
             # SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)
             pass
 
-        assert _needs_patch(already_fixed) is False
+        assert _configure_age_needs_patch(missing_duplicate_schema) is True
+
+    def test_configure_age_detects_already_fixed_method(self):
+        from dlightrag.core._lightrag_patches import _configure_age_needs_patch
+
+        def already_fixed():
+            # SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)
+            # DuplicateSchemaError
+            pass
+
+        assert _configure_age_needs_patch(already_fixed) is False
+
+    def test_execute_detects_missing_duplicate_schema_guard(self):
+        from dlightrag.core._lightrag_patches import _execute_needs_patch
+
+        def missing_duplicate_schema():
+            pass
+
+        assert _execute_needs_patch(missing_duplicate_schema) is True
+
+    def test_execute_detects_already_fixed_method(self):
+        from dlightrag.core._lightrag_patches import _execute_needs_patch
+
+        def already_fixed():
+            # DuplicateSchemaError
+            pass
+
+        assert _execute_needs_patch(already_fixed) is False
 
     def test_uninspectable_returns_true(self):
         """If getsource fails, assume patch is needed (safe default)."""
-        from dlightrag.core._lightrag_patches import _needs_patch
+        from dlightrag.core._lightrag_patches import (
+            _configure_age_needs_patch,
+            _execute_needs_patch,
+        )
 
         # Built-in functions can't be inspected
-        assert _needs_patch(len) is True
+        assert _configure_age_needs_patch(len) is True
+        assert _execute_needs_patch(len) is True
 
 
 class TestPatchIdempotency:
