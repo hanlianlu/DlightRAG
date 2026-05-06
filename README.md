@@ -389,7 +389,7 @@ For self-hosted rerankers (Xinference, vLLM, TEI etc.), use `local_reranker` wit
 
 ### Observability (Langfuse)
 
-DlightRAG includes native, zero-overhead tracing using [Langfuse](https://langfuse.com/). When configured, you get detailed waterfall traces of every RAG pipeline stage, LLM generation, and embedding call. If keys are omitted, the tracing module operates as a pure no-op with zero performance penalty.
+DlightRAG includes native tracing using [Langfuse](https://langfuse.com/). When configured, it records hierarchical observations for service pipelines, retrieval, reranking, LLM generations, and embedding calls. If keys are omitted, the tracing module operates as a pure no-op.
 
 To enable observability, set the following in your `.env`:
 
@@ -397,9 +397,12 @@ To enable observability, set the following in your `.env`:
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
 DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
 # DLIGHTRAG_LANGFUSE_HOST=https://cloud.langfuse.com  # Optional: defaults to cloud
+# DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false       # Optional: keep false to avoid double-counting auto GenAI spans
 ```
 
-This will automatically track `retrieve`, `answer`, and `ingest` operations at the service level.
+By default DlightRAG exports only observations created by its own wrappers. Set
+`DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=true` only if you intentionally want
+Langfuse to also ingest third-party OpenTelemetry GenAI/LLM spans.
 
 
 ## Development

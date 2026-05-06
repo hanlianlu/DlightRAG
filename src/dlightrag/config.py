@@ -387,6 +387,11 @@ class DlightragConfig(BaseSettings):
     langfuse_public_key: str | None = Field(default=None)
     langfuse_secret_key: str | None = Field(default=None)
     langfuse_host: str = Field(default="https://cloud.langfuse.com")
+    langfuse_export_external_spans: bool = Field(
+        default=False,
+        description="Export third-party GenAI/LLM OpenTelemetry spans to Langfuse. "
+        "Disabled by default because DlightRAG records model calls manually.",
+    )
 
     # ===== Validators =====
 

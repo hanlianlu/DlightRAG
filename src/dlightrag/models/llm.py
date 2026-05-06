@@ -78,7 +78,14 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
 
     from dlightrag.observability import wrap_chat_func
 
-    traced_func = wrap_chat_func(completion_wrapper, name=f"llm_{cfg.model}")
+    traced_func = wrap_chat_func(
+        completion_wrapper,
+        name=f"llm_{cfg.model}",
+        model=cfg.model,
+        model_parameters={"temperature": cfg.temperature}
+        if cfg.temperature is not None
+        else None,
+    )
 
     return partial(traced_func)
 
