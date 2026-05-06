@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -38,20 +39,20 @@ class TestParseListwiseScores:
 
 class TestChatLlmRerank:
     async def test_ranks_chunks(self):
-        mock_vlm = AsyncMock(return_value="[0.5, 0.9]")
+        mock_scoring = AsyncMock(return_value="[0.5, 0.9]")
         chunks = [{"content": "doc0"}, {"content": "doc1"}]
         result = await _chat_llm_rerank(
-            "query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.3
+            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
         )
         assert result[0]["rerank_score"] == pytest.approx(0.9)
         assert result[0]["content"] == "doc1"
         assert result[1]["rerank_score"] == pytest.approx(0.5)
 
     async def test_multimodal_chunks(self):
-        """Chunks with image_data should include images in VLM messages."""
+        """Chunks with image_data should include images in scoring messages."""
         received_messages = []
 
-        async def mock_vlm(messages, **kwargs):
+        async def mock_scoring(messages, **kwargs):
             received_messages.append(messages)
             return "[0.8, 0.6]"
 
@@ -59,9 +60,11 @@ class TestChatLlmRerank:
             {"content": "text only"},
             {"content": "with image", "image_data": "aW1hZ2U="},  # base64 "image"
         ]
-        await _chat_llm_rerank("query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.3)
+        await _chat_llm_rerank(
+            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
+        )
 
-        # Should have sent one VLM call with multimodal content
+        # Should have sent one scoring call with multimodal content
         assert len(received_messages) == 1
         content = received_messages[0][0]["content"]
         # Check that image_url type is present for the chunk with image_data
@@ -69,37 +72,37 @@ class TestChatLlmRerank:
         assert has_image
 
     async def test_fallback_on_error(self):
-        mock_vlm = AsyncMock(side_effect=RuntimeError("API down"))
+        mock_scoring = AsyncMock(side_effect=RuntimeError("API down"))
         chunks = [{"content": "doc0"}, {"content": "doc1"}]
         result = await _chat_llm_rerank(
-            "query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.3
+            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
         )
         # Fallback keeps top-5 (all zeros)
         assert len(result) == 2
         assert all(c["rerank_score"] == 0.0 for c in result)
 
     async def test_empty_chunks(self):
-        mock_vlm = AsyncMock()
+        mock_scoring = AsyncMock()
         result = await _chat_llm_rerank(
-            "query", [], top_k=10, vlm_func=mock_vlm, score_threshold=0.3
+            "query", [], top_k=10, scoring_func=mock_scoring, score_threshold=0.3
         )
         assert result == []
-        mock_vlm.assert_not_called()
+        mock_scoring.assert_not_called()
 
     async def test_score_threshold_filters(self):
-        mock_vlm = AsyncMock(return_value="[0.1, 0.9, 0.2]")
+        mock_scoring = AsyncMock(return_value="[0.1, 0.9, 0.2]")
         chunks = [{"content": "a"}, {"content": "b"}, {"content": "c"}]
         result = await _chat_llm_rerank(
-            "query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.5
+            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.5
         )
         assert len(result) == 1
         assert result[0]["content"] == "b"
 
     async def test_threshold_fallback_keeps_top5(self):
-        mock_vlm = AsyncMock(return_value="[0.05, 0.08, 0.03]")
+        mock_scoring = AsyncMock(return_value="[0.05, 0.08, 0.03]")
         chunks = [{"content": "a"}, {"content": "b"}, {"content": "c"}]
         result = await _chat_llm_rerank(
-            "query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.5
+            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.5
         )
         assert len(result) == 3
         assert result[0]["rerank_score"] == pytest.approx(0.08)
@@ -107,7 +110,7 @@ class TestChatLlmRerank:
     async def test_batched_scoring(self):
         call_count = 0
 
-        async def mock_vlm(messages, **kwargs):
+        async def mock_scoring(messages, **kwargs):
             nonlocal call_count
             call_count += 1
             # Count items by "--- Item" markers in the content
@@ -119,17 +122,60 @@ class TestChatLlmRerank:
 
         chunks = [{"content": c} for c in ["a", "b", "c", "d", "e"]]
         result = await _chat_llm_rerank(
-            "query", chunks, top_k=10, vlm_func=mock_vlm, batch_size=2, score_threshold=0.3
+            "query",
+            chunks,
+            top_k=10,
+            scoring_func=mock_scoring,
+            batch_size=2,
+            score_threshold=0.3,
         )
         # 5 chunks, batch_size=2 → 3 batches (2+2+1)
         assert call_count == 3
         assert len(result) == 5
 
+    async def test_max_concurrency_runs_batches_in_parallel(self):
+        first_entered = asyncio.Event()
+        second_entered = asyncio.Event()
+        release = asyncio.Event()
+        starts = 0
+
+        async def mock_scoring(messages, **kwargs):
+            nonlocal starts
+            starts += 1
+            if starts == 1:
+                first_entered.set()
+            elif starts == 2:
+                second_entered.set()
+            await release.wait()
+            return "[0.7]"
+
+        chunks = [{"content": c} for c in ["a", "b", "c"]]
+        task = asyncio.create_task(
+            _chat_llm_rerank(
+                "query",
+                chunks,
+                top_k=10,
+                scoring_func=mock_scoring,
+                batch_size=1,
+                max_concurrency=2,
+                score_threshold=0.3,
+            )
+        )
+
+        await asyncio.wait_for(first_entered.wait(), timeout=0.5)
+        try:
+            await asyncio.wait_for(second_entered.wait(), timeout=0.1)
+        finally:
+            release.set()
+            await task
+
     async def test_no_mutation_of_input(self):
-        mock_vlm = AsyncMock(return_value="[0.9, 0.5]")
+        mock_scoring = AsyncMock(return_value="[0.9, 0.5]")
         chunks = [{"content": "doc0"}, {"content": "doc1"}]
         original = [c.copy() for c in chunks]
-        await _chat_llm_rerank("query", chunks, top_k=10, vlm_func=mock_vlm, score_threshold=0.3)
+        await _chat_llm_rerank(
+            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
+        )
         assert chunks == original
 
 

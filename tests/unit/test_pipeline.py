@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -144,6 +145,45 @@ class TestIngestSingleFileWithPolicy:
 
         call_kwargs = pipeline.rag.parse_document.call_args
         assert call_kwargs.kwargs.get("backend") == "hybrid-auto-engine"
+
+    async def test_mineru_timeout_and_vlm_url_passed_to_parse_kwargs(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        test_config.mineru_timeout = 300
+        test_config.mineru_vlm_url = "http://127.0.0.1:30000"
+        pipeline = _make_pipeline(test_config, mineru_backend="vlm-http-client")
+        file_path = tmp_path / "doc.pdf"
+        file_path.write_text("content")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+
+        call_kwargs = pipeline.rag.parse_document.call_args.kwargs
+        assert call_kwargs["timeout"] == 300
+        assert call_kwargs["vlm_url"] == "http://127.0.0.1:30000"
+
+    async def test_docling_options_passed_to_parse_kwargs(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        test_config.parser = "docling"
+        test_config.docling_table_mode = "accurate"
+        test_config.docling_tables = False
+        test_config.docling_allow_ocr = False
+        test_config.docling_artifacts_path = "/models/docling"
+        pipeline = _make_pipeline(test_config)
+        file_path = tmp_path / "doc.pdf"
+        file_path.write_text("content")
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        await pipeline._ingest_single_file_with_policy(file_path, artifacts)
+
+        call_kwargs = pipeline.rag.parse_document.call_args.kwargs
+        assert call_kwargs["table_mode"] == "accurate"
+        assert call_kwargs["tables"] is False
+        assert call_kwargs["allow_ocr"] is False
+        assert call_kwargs["artifacts_path"] == "/models/docling"
 
 
 # ---------------------------------------------------------------------------
@@ -529,8 +569,9 @@ class TestDoclingPostprocessing:
         artifacts = tmp_path / "artifacts"
         artifacts.mkdir()
 
-        # Create Docling JSON at the expected path
-        docling_dir = artifacts / "report" / "docling"
+        # RAGAnything 1.3 writes Docling artifacts under <stem>_<path-hash>/.
+        path_hash = hashlib.md5(str(file_path.resolve()).encode()).hexdigest()[:8]
+        docling_dir = artifacts / f"report_{path_hash}" / "report" / "docling"
         docling_dir.mkdir(parents=True)
         docling_json = {
             "body": {
@@ -564,7 +605,7 @@ class TestDoclingPostprocessing:
         # Rebuilt texts come first: heading with ## prefix, then paragraph
         text_items = [i for i in content_list if i["type"] == "text"]
         assert text_items[0]["text"] == "## Introduction"
-        assert text_items[0]["page_idx"] == 1
+        assert text_items[0]["page_idx"] == 0
         assert text_items[1]["text"] == "Some body text here."
 
         # Non-text items (image) are preserved
@@ -598,6 +639,21 @@ class TestDoclingPostprocessing:
         content_list = call_args.kwargs.get("content_list") or call_args[1]["content_list"]
         # Content should be the original items (after policy, which keeps them)
         assert content_list == original_items
+
+
+class TestContentListIngestion:
+    """In-memory content_list ingestion behavior."""
+
+    async def test_generated_doc_id_passed_to_insert_content_list(
+        self, test_config: DlightragConfig
+    ) -> None:
+        pipeline = _make_pipeline(test_config)
+        content_list = [{"type": "text", "text": "inline content"}]
+
+        result = await pipeline.aingest_content_list(content_list, file_path="inline")
+
+        call_kwargs = pipeline.rag.insert_content_list.call_args.kwargs
+        assert call_kwargs["doc_id"] == result.doc_id
 
     @pytest.mark.asyncio
     async def test_docling_json_missing_falls_back(

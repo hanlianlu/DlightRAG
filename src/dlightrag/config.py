@@ -206,13 +206,12 @@ class DlightragConfig(BaseSettings):
         'Example: DLIGHTRAG_VECTOR_DB_KWARGS=\'{"index_type": "HNSW_SQ", "sq_type": "SQ8"}\'',
     )
 
-    # ===== New nested config =====
+    # ===== Model config =====
     chat: ModelConfig = Field(default_factory=lambda: ModelConfig(model="gpt-4.1", temperature=0.5))
     ingest: ModelConfig | None = None
-    # Per-role LLM configs (optional, fallback to chat). All four are routed via
-    # LightRAG 1.5.0+ role_llm_configs registry where applicable; vlm is also
-    # used by DlightRAG's own vision_model_func paths (vlm_parser, multimodal
-    # query, unified extractor).
+    # Optional model overrides. extract/keywords/query are routed through
+    # LightRAG 1.5.0+ role_llm_configs; vlm is DlightRAG-local for visual
+    # paths (vlm_parser, multimodal query, unified extractor).
     extract: ModelConfig | None = None
     keywords: ModelConfig | None = None
     query: ModelConfig | None = None
@@ -238,6 +237,30 @@ class DlightragConfig(BaseSettings):
         description="MinerU parsing backend. If None, auto-detects: CUDA GPU → hybrid-auto-engine, "
         "otherwise → pipeline. "
         "Valid values: pipeline, vlm-auto-engine, vlm-http-client, hybrid-auto-engine, hybrid-http-client.",
+    )
+    mineru_timeout: int | None = Field(
+        default=None,
+        description="Optional MinerU subprocess timeout in seconds. None leaves MinerU unbounded.",
+    )
+    mineru_vlm_url: str | None = Field(
+        default=None,
+        description="Remote MinerU VLM server URL for vlm-http-client or hybrid-http-client backends.",
+    )
+    docling_table_mode: Literal["fast", "accurate"] = Field(
+        default="fast",
+        description="Docling TableFormer mode.",
+    )
+    docling_tables: bool = Field(
+        default=True,
+        description="Enable Docling table structure recognition.",
+    )
+    docling_allow_ocr: bool = Field(
+        default=True,
+        description="Allow Docling OCR for scanned content.",
+    )
+    docling_artifacts_path: str | None = Field(
+        default=None,
+        description="Optional Docling model artifacts path.",
     )
     enable_image_processing: bool = Field(default=True)
     enable_table_processing: bool = Field(default=True)

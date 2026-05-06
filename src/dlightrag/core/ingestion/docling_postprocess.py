@@ -4,11 +4,12 @@
 RAGAnything's default parser discards heading labels and estimates page_idx
 via ``cnt // 10``.  This module reads the raw Docling JSON export and builds
 a proper ``content_list`` with markdown-style headings and accurate page_idx
-sourced from ``prov[0].page_no``.
+normalized from ``prov[0].page_no``.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -17,13 +18,48 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def find_docling_json_export(artifacts_dir: Path, file_path: Path) -> Path | None:
+    """Locate the Docling JSON export for a parsed file.
+
+    RAGAnything 1.3 writes parser artifacts below ``<stem>_<path-hash>/`` to
+    avoid same-name collisions. Older versions wrote directly under
+    ``<stem>/``. Support both layouts so post-processing remains compatible
+    across upgrades.
+    """
+    stem = file_path.stem
+    filename = f"{stem}.json"
+
+    try:
+        resolved = file_path.resolve()
+    except OSError:
+        resolved = file_path.absolute()
+
+    path_hash = hashlib.md5(str(resolved).encode()).hexdigest()[:8]
+    candidates = [
+        artifacts_dir / f"{stem}_{path_hash}" / stem / "docling" / filename,
+        artifacts_dir / stem / "docling" / filename,
+    ]
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    globbed = [
+        p for p in artifacts_dir.glob(f"{stem}_*/{stem}/docling/{filename}") if p.is_file()
+    ]
+    if not globbed:
+        return None
+
+    return max(globbed, key=lambda p: p.stat().st_mtime)
+
+
 def rebuild_text_items_from_docling_json(json_path: Path) -> list[dict[str, Any]] | None:
     """Read a Docling JSON file and produce annotated text items.
 
     Each returned dict represents a single text block with:
     - ``text``: the block text (with ``#`` heading prefix for section_header/title)
     - ``type``: ``"text"`` or ``"equation"`` (for formula blocks)
-    - ``page_idx``: page number from ``prov[0].page_no`` (default 0)
+    - ``page_idx``: zero-based page index normalized from ``prov[0].page_no``
 
     Returns ``None`` on any failure (missing file, bad JSON, missing ``body``
     key) so the caller can fall back to the original content_list.
@@ -109,7 +145,7 @@ def _text_block_to_item(block: dict[str, Any]) -> dict[str, Any]:
     # Page index from provenance
     prov = block.get("prov")
     if prov and isinstance(prov, list) and len(prov) > 0:
-        page_idx = prov[0].get("page_no", 0)
+        page_idx = _docling_page_no_to_page_idx(prov[0].get("page_no"))
     else:
         page_idx = 0
 
@@ -128,6 +164,16 @@ def _text_block_to_item(block: dict[str, Any]) -> dict[str, Any]:
     return {"type": "text", "text": text, "page_idx": page_idx}
 
 
+def _docling_page_no_to_page_idx(page_no: Any) -> int:
+    """Convert Docling's 1-based page_no to DlightRAG's 0-based page_idx."""
+    try:
+        page_no_int = int(page_no)
+    except (TypeError, ValueError):
+        return 0
+    return max(page_no_int - 1, 0)
+
+
 __all__ = [
+    "find_docling_json_export",
     "rebuild_text_items_from_docling_json",
 ]

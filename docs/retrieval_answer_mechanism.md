@@ -42,7 +42,7 @@ VisualRetriever._retrieve()
   Phase 1  LightRAG mix mode (KG traversal + vector search, internal round-robin)
   Phase 2  Visual resolution (chunk_id → page image via visual_chunks KV)
              Text-only chunks (no visual data) are kept with their text content
-  Phase 3  Visual reranking (VLM pointwise or API reranker)
+  Phase 3  Visual reranking (LLM/VLM listwise or API reranker)
 ```
 
 ### Query Types
@@ -104,16 +104,15 @@ Two strategy classes, configured via `rerank.strategy`:
 
 | Strategy | How it works |
 |---------|-------------|
-| `chat_llm_reranker` (default) | VLM pointwise scoring via the chat/vlm/ingest role: each chunk scored 0-1 independently. Concurrency capped at `Semaphore(4)`. Uses `response_format=json_object` for structured output. |
+| `chat_llm_reranker` (default) | Batched listwise scoring via `rerank.provider/model` when set, otherwise `chat`. The selected model must support image inputs when chunks include page images. Batch parallelism is capped by `rerank.max_concurrency`; per-call batch size is `rerank.batch_size`. |
 | `jina_reranker` / `aliyun_reranker` / `azure_cohere` / `local_reranker` | Calls an external OpenAI-compatible `/rerank` endpoint (managed cloud, Azure, or self-hosted via `local_reranker` + `rerank.base_url`) with query + page images. |
 
-Post-rerank filtering removes chunks below `rerank_score_threshold` (default
-0.5). Chunks without scores (unranked) are kept.
+Post-rerank filtering removes chunks below `rerank.score_threshold` (default
+0.5). If every scored chunk falls below the threshold, DlightRAG keeps the
+top scored fallback set.
 
-Score parsing (`_parse_rerank_score`) handles three formats:
-1. Plain float: `0.82`
-2. JSON: `{"score": 0.82}`
-3. Free-form text with trailing number (think-mode models)
+Listwise score parsing (`_parse_listwise_scores`) expects a JSON array such
+as `[0.82, 0.41]`, with a numeric regex fallback for less strict models.
 
 ### Answer Generation
 
@@ -142,7 +141,8 @@ Structured providers return `StructuredAnswer` (JSON with `answer` +
 ```
 RetrievalEngine (captionrag/retrieval.py)
   wraps RAGAnything → LightRAG
-  Retrieval/reranking handled by LightRAG internally
+  Retrieval handled by LightRAG; reranking is invoked through LightRAG's
+  rerank_model_func adapter when rerank.enabled=true
 ```
 
 ### Query Types
@@ -155,12 +155,14 @@ query → LightRAG.aquery_data() / aquery_llm()
           ├─ KG traversal (entities/relationships)
           └─ Chunk vector search (text embedding)
           │
-          Reranking: handled by LightRAG (if rerank.enabled=true)
+          Reranking: LightRAG rerank_model_func adapter (if rerank.enabled=true)
 ```
 
 - No visual resolution — caption mode stores OCR captions as text chunks,
   not page images.
-- Reranking is LightRAG's built-in reranker (not VLM-based).
+- Reranking receives text documents from LightRAG. Even when the configured
+  strategy is `chat_llm_reranker`, caption mode does not provide page images
+  to that adapter.
 
 #### Multimodal Query (Image + Text)
 
@@ -188,7 +190,7 @@ query + multimodal_content
 | Page representation | Original page images (base64) | OCR text captions |
 | Visual vector search | Yes (multimodal embedding) | No |
 | Visual resolution | chunk_id → page image via KV (text-only chunks kept) | N/A |
-| Reranking | chat_llm_reranker (VLM pointwise) or external API | LightRAG built-in (text) |
+| Reranking | chat_llm_reranker (LLM/VLM listwise) or external API | LightRAG adapter receives text documents |
 | Answer model | VLM (sees text excerpts + page images) | LLM (text-only) |
 | Dual-path retrieval | Yes (text + visual embedding) | No (text only) |
 | Structured output | Provider-dependent JSON schema | N/A (LightRAG controls) |

@@ -210,6 +210,27 @@ class TestBuildVectorDbKwargs:
 
 
 # ---------------------------------------------------------------------------
+# TestBuildAddonParams
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAddonParams:
+    """Test LightRAG addon_params compatibility."""
+
+    def test_uses_lightrag_15_entity_guidance(self, test_config: DlightragConfig) -> None:
+        test_config.kg_entity_types = ["Product", "Technology", "Organization"]
+
+        result = RAGService._build_addon_params(test_config)
+
+        assert result["language"] == "English"
+        assert "entity_types" not in result
+        assert result["entity_types_guidance"] == (
+            "Prioritize domain entities in these categories: "
+            "Product, Technology, Organization."
+        )
+
+
+# ---------------------------------------------------------------------------
 # TestRAGServiceUnifiedMode
 # ---------------------------------------------------------------------------
 
