@@ -14,12 +14,13 @@
 #   gemini    — Google Gemini models (native SDK)
 #
 # IMPORTANT: chat model must support vision (multimodal/VLM).
-# It doubles as the vision model for: image captioning, VLM parser,
-# unified mode (page description, entity extraction, visual reranking),
-# and multimodal query enhancement. A text-only model will fail on these tasks.
+# It doubles as the fallback vision model for: RAGAnything captioning,
+# VLM parser, unified mode visual extraction, multimodal query enhancement,
+# and chat_llm_reranker when no rerank model override is set.
 #
-# ingest model (if set) should also support vision — the LLM reranker uses it.
-# If unset, falls back to chat model.
+# ingest model (optional) is used for unified-mode structural context updates.
+# If unset, falls back to chat model. Reranker-specific model choices belong
+# under rerank.provider / rerank.model / rerank.base_url.
 
 # Default: Google's Gemini 2.5 Flash Lite (vision-capable) routed through
 # an OpenAI-compatible gateway. The base_url below is one such gateway —
@@ -34,7 +35,7 @@ chat:
   timeout: 120.0
 
 # Ingest model (optional — falls back to chat if not set).
-# Use a cheaper/faster model for entity extraction and LLM reranking.
+# Use a cheaper/faster model for structural context updates.
 
 # ingest:
 #   provider: openai
@@ -42,11 +43,11 @@ chat:
 #   base_url: http://host.docker.internal:11434/v1
 #   api_key: ollama
 
-# Per-role LLM overrides (LightRAG 1.5.0+, all optional, fallback to chat):
-#   extract  — KG entity/relation extraction (heavy reasoning recommended)
-#   keywords — Keyword extraction during retrieval (cheap model recommended)
+# Model overrides (all optional, fallback to chat):
+#   extract  — LightRAG KG entity/relation extraction (heavy reasoning recommended)
+#   keywords — LightRAG keyword extraction during retrieval (cheap model recommended)
 #   query    — AnswerEngine + QueryPlanner + LightRAG query stage
-#   vlm      — DlightRAG vision paths: vlm_parser, multimodal_query, unified extractor
+#   vlm      — DlightRAG-local visual paths: vlm_parser, multimodal_query, unified extractor
 #
 # extract:
 #   provider: anthropic
@@ -75,8 +76,10 @@ embedding:
 
 rerank:
   enabled: true
-  strategy: chat_llm_reranker              # chat_llm_reranker (uses ingest/chat model), cohere, jina, aliyun, azure_cohere
-  # model:                            # defaults: cohere→rerank-v4.0-pro, jina→jina-reranker-v3
+  strategy: chat_llm_reranker              # chat_llm_reranker, jina_reranker, aliyun_reranker, azure_cohere, local_reranker
+  # provider: openai                  # optional for chat_llm_reranker override
+  # model:                            # default: chat_llm_reranker→chat model, jina→jina-reranker-m0, aliyun→gte-rerank
+  # base_url:
   score_threshold: 0.5
 
 # Provider examples — uncomment one block to override chat above:
@@ -124,6 +127,15 @@ working_dir: ./dlightrag_storage
 parser: mineru                        # mineru, docling, vlm  (Unified mode doesn't use parser — the chat model handles everything)
 parse_method: auto                    # auto, ocr, txt
 page_render_dpi: 250                  # unified mode rendering DPI
+
+# Caption parser options
+# mineru_backend:                      # pipeline, vlm-auto-engine, vlm-http-client, hybrid-auto-engine, hybrid-http-client
+# mineru_timeout:                      # seconds; unset leaves MinerU unbounded
+# mineru_vlm_url:                      # remote VLM server for MinerU *-http-client backends
+# docling_table_mode: fast             # fast or accurate
+# docling_tables: true                 # table structure recognition
+# docling_allow_ocr: true              # OCR for scanned content
+# docling_artifacts_path:              # optional Docling model artifacts path
 
 # Content processing
 enable_image_processing: true

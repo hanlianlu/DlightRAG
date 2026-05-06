@@ -228,6 +228,17 @@ class RAGService:
         kwargs.update(config.vector_db_kwargs)
         return kwargs
 
+    @staticmethod
+    def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
+        """Build LightRAG 1.5+ addon_params without legacy entity_types."""
+        params: dict[str, Any] = {"language": "English"}
+        if config.kg_entity_types:
+            params["entity_types_guidance"] = (
+                "Prioritize domain entities in these categories: "
+                f"{', '.join(config.kg_entity_types)}."
+            )
+        return params
+
     def _unregister_atexit_cleanup(self, rag_obj: Any) -> None:
         """Prevent double-close logging errors by removing raganything atexit hooks."""
         try:
@@ -392,10 +403,7 @@ class RAGService:
             "rerank_model_func": lightrag_rerank_func,
             "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
             "kg_chunk_pick_method": config.kg_chunk_pick_method,
-            "addon_params": {
-                "entity_types": config.kg_entity_types,
-                "language": "English",
-            },
+            "addon_params": self._build_addon_params(config),
         }
 
         role_overrides = build_role_llm_configs(config)
@@ -573,10 +581,7 @@ class RAGService:
             vector_db_storage_cls_kwargs=self._build_vector_db_kwargs(config),
             role_llm_configs=role_overrides,
             kg_chunk_pick_method=config.kg_chunk_pick_method,
-            addon_params={
-                "entity_types": config.kg_entity_types,
-                "language": "English",
-            },
+            addon_params=self._build_addon_params(config),
         )
         await lightrag.initialize_storages()
         self._lightrag = lightrag

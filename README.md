@@ -224,10 +224,24 @@ The first decision — determines your ingestion pipeline, model requirements, a
 | Parser | Description |
 |--------|-------------|
 | `mineru` (default) | MinerU PDF parser — fast, good for text-heavy documents |
-| `docling` | Docling parser — alternative structure-aware parser |
-| `vlm` | VLM-based OCR — renders pages and uses chat model (must be VLM) to extract structured content; no external parser dependency |
+| `docling` | Docling parser — structure-aware parser with Docling JSON post-processing for headings and page metadata |
+| `vlm` | VLM-based OCR — renders pages and uses the visual model to extract structured content; no external parser dependency |
 
-All caption mode parsers use Docling's HybridChunker for structure-aware chunking.
+Docling and VLM caption paths use Docling's HybridChunker for structure-aware
+chunking. MinerU uses LightRAG's default text chunking after DlightRAG's
+content policy filter removes parser noise.
+
+**Caption parser options:**
+
+| Setting | Applies to | Description |
+|---------|------------|-------------|
+| `mineru_backend` | MinerU | Parser backend (`pipeline`, `vlm-auto-engine`, `vlm-http-client`, `hybrid-auto-engine`, `hybrid-http-client`) |
+| `mineru_timeout` | MinerU | Optional parser timeout in seconds; unset leaves MinerU unbounded |
+| `mineru_vlm_url` | MinerU | Remote VLM server URL for `*-http-client` backends |
+| `docling_table_mode` | Docling | `fast` or `accurate` TableFormer mode |
+| `docling_tables` | Docling | Enable table structure recognition |
+| `docling_allow_ocr` | Docling | Allow OCR for scanned content |
+| `docling_artifacts_path` | Docling | Optional local Docling model artifacts path |
 
 **Model usage by stage:**
 
@@ -235,16 +249,17 @@ Each stage resolves its model via the per-role overrides below; if a role is uns
 
 | Stage | Caption | Unified | Role override |
 |-------|---------|---------|---------------|
-| Image captioning | chat (VLM) | chat (VLM) | `vlm` |
-| Table / equation captioning | chat | — | `vlm` |
-| Entity extraction | chat | chat (VLM) | `extract` |
+| Image captioning | chat (RAGAnything vision function) | — | `chat` |
+| Table / equation captioning | chat (RAGAnything vision function) | — | `chat` |
+| VLM OCR / visual page description | `vlm` override → chat | `vlm` override → chat | `vlm` |
+| Entity extraction | chat | chat | `extract` |
 | Embedding | embedding model | embedding model (multimodal) | (separate `embedding` block) |
-| Rerank (chat_llm_reranker) | ingest/chat | vlm/chat (pointwise) | `vlm` |
+| Rerank (chat_llm_reranker) | rerank override → chat | rerank override → chat (vision-capable if page images are present) | `rerank.*` |
 | Rerank (API strategy) | jina_reranker / aliyun_reranker / azure_cohere / local_reranker | jina_reranker / aliyun_reranker / azure_cohere / local_reranker | (separate `rerank` block) |
 | Keyword extraction (per-query) | chat | chat | `keywords` |
 | Answer generation | chat | chat (VLM, sees text excerpts + page images) | `query` |
 
-> **Important:** The chat model must support vision (multimodal/VLM). It doubles as the vision model for image captioning, VLM parser, unified mode, and multimodal queries. A text-only chat model will fail on these tasks.
+> **Important:** The chat model must support vision (multimodal/VLM). It doubles as the fallback vision model for image captioning, VLM parser, unified mode, multimodal queries, and `chat_llm_reranker` when no `rerank.*` model override is set. A text-only chat model will fail on these tasks.
 
 For unified mode, set `rag_mode: unified` in `config.yaml` and use multimodal models:
 
@@ -298,18 +313,19 @@ DLIGHTRAG_CHAT__API_KEY=sk-...
 DLIGHTRAG_EMBEDDING__API_KEY=sk-...
 ```
 
-#### Per-role LLM overrides (optional)
+#### Per-role LLM Overrides
 
-Built on LightRAG 1.5.0's role registry. Each role falls back to `chat`
-when not specified — start with `chat` only, split out a role later when
-cost or quality needs it.
+LightRAG role overrides (`extract`, `keywords`, `query`) are built on
+LightRAG 1.5.0's role registry. DlightRAG also has a local `vlm` model block
+for its own visual paths. Each unset role falls back to `chat` — start with
+`chat` only, split out a role later when cost or quality needs it.
 
 | Role | What it drives | Recommended model class |
 |---|---|---|
 | `extract` | KG entity & relation extraction during ingest | Heavy reasoning (Claude Sonnet / GPT-5) |
 | `keywords` | Per-query keyword extraction | Cheap & fast (Haiku / Gemini Flash Lite) |
 | `query` | Answer generation + retrieval planning | Balanced–heavy (Claude Opus / GPT-5) |
-| `vlm` | DlightRAG vision paths: VLM OCR, multimodal query, unified extractor | Vision-strong (GPT-5-vision / Gemini 2.5 Flash) |
+| `vlm` | DlightRAG-local visual paths: VLM OCR, multimodal query enhancement, unified extractor | Vision-strong (GPT-5-vision / Gemini 2.5 Flash) |
 
 ```yaml
 # config.yaml
@@ -363,7 +379,7 @@ Set in `config.yaml` under the `rerank:` block:
 
 | Strategy | Default model | API key |
 |---------|---------------|---------|
-| `chat_llm_reranker` | falls through `vlm` → `ingest` → `chat` role | (reuses the chosen role's key) |
+| `chat_llm_reranker` | uses `rerank.provider/model` if set, otherwise `chat`; selected model must support images when reranking visual chunks | reuses chat key unless `DLIGHTRAG_RERANK__API_KEY` is set |
 | `jina_reranker` | `jina-reranker-m0` | `DLIGHTRAG_RERANK__API_KEY` |
 | `aliyun_reranker` | `gte-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
 | `azure_cohere` | `cohere-rerank-v3.5` | `DLIGHTRAG_RERANK__API_KEY` |

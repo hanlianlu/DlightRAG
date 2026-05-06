@@ -20,7 +20,6 @@ class TestVisualRetrieverIncludesTextOnlyChunks:
         mock_lightrag = MagicMock()
         mock_visual_chunks = AsyncMock()
         mock_config = MagicMock()
-        mock_config.rerank_score_threshold = 0.5
 
         # LightRAG returns 3 chunks
         mock_lightrag.aquery_data = AsyncMock(

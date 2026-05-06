@@ -215,8 +215,10 @@ def get_embedding_func(config: DlightragConfig) -> Any:
 def get_rerank_func(config: DlightragConfig) -> Callable | None:
     """Build multimodal rerank callable from config.
 
-    For chat_llm_reranker: uses an independent VLM model if provider/model
-    are set in rerank config, otherwise falls back to the ingest model.
+    For chat_llm_reranker: uses an independent rerank model if provider/model
+    are set in rerank config, otherwise falls back to chat. In unified mode,
+    whichever callable is selected must support image inputs because chunks
+    may include page images.
     """
     from dlightrag.models.rerank import build_rerank_func
 
@@ -224,11 +226,11 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
     if not rc.enabled:
         return None
 
-    # For chat_llm_reranker: build VLM callable (messages-first, NOT LightRAG-adapted)
+    # For chat_llm_reranker: build scoring callable (messages-first, NOT LightRAG-adapted)
     if rc.strategy == "chat_llm_reranker":
         if rc.provider and rc.model:
-            # Independent VLM model for reranking
-            vlm_func = _make_completion_func(
+            # Independent model for reranking
+            scoring_func = _make_completion_func(
                 ModelConfig(
                     provider=rc.provider,
                     model=rc.model,
@@ -240,9 +242,10 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
                 fallback_api_key=config.chat.api_key,
             )
         else:
-            # Fall back to chat model
-            vlm_func = get_chat_model_func(config)
-        return build_rerank_func(rc, ingest_func=vlm_func)
+            # Fall back to chat. Do not implicitly consume config.vlm here:
+            # reranker-specific model choices belong under rerank.*.
+            scoring_func = get_chat_model_func(config)
+        return build_rerank_func(rc, ingest_func=scoring_func)
 
     return build_rerank_func(rc)
 

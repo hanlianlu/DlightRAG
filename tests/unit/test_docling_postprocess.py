@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 from dlightrag.core.ingestion.docling_postprocess import (
+    find_docling_json_export,
     rebuild_text_items_from_docling_json,
 )
 
@@ -120,7 +122,7 @@ class TestHeadingMarkers:
 
 
 class TestPageIdx:
-    """page_idx is sourced from prov[0].page_no."""
+    """page_idx is normalized from Docling's prov[0].page_no."""
 
     def test_page_idx_from_prov(self, tmp_path: Path) -> None:
         doc = _minimal_doc(
@@ -141,7 +143,25 @@ class TestPageIdx:
         assert result is not None
         assert len(result) == 2
         assert result[0]["page_idx"] == 0
-        assert result[1]["page_idx"] == 3
+        assert result[1]["page_idx"] == 2
+
+    def test_docling_page_no_is_normalized_to_zero_based_page_idx(
+        self, tmp_path: Path
+    ) -> None:
+        doc = _minimal_doc(
+            texts=[
+                {
+                    "orig": "Third page",
+                    "label": "paragraph",
+                    "prov": [{"page_no": 3, "bbox": {}, "charspan": [0, 10]}],
+                },
+            ],
+        )
+
+        result = rebuild_text_items_from_docling_json(_write_docling_json(tmp_path, doc))
+
+        assert result is not None
+        assert result[0]["page_idx"] == 2
 
     def test_each_item_has_own_page_idx(self, tmp_path: Path) -> None:
         """Items are NOT merged; each preserves its individual page_idx."""
@@ -150,7 +170,7 @@ class TestPageIdx:
                 {
                     "orig": f"Block {i}",
                     "label": "paragraph",
-                    "prov": [{"page_no": i, "bbox": {}, "charspan": [0, 7]}],
+                    "prov": [{"page_no": i + 1, "bbox": {}, "charspan": [0, 7]}],
                 }
                 for i in range(4)
             ],
@@ -185,7 +205,7 @@ class TestFormula:
         assert len(result) == 1
         assert result[0]["type"] == "equation"
         assert result[0]["text"] == "E = mc^2"
-        assert result[0]["page_idx"] == 2
+        assert result[0]["page_idx"] == 1
 
     def test_formula_among_text(self, tmp_path: Path) -> None:
         """A formula surrounded by paragraphs has correct types."""
@@ -279,7 +299,7 @@ class TestNestedGroups:
         assert result is not None
         assert len(result) == 1
         assert result[0]["text"] == "Grouped paragraph"
-        assert result[0]["page_idx"] == 1
+        assert result[0]["page_idx"] == 0
 
     def test_nested_groups(self, tmp_path: Path) -> None:
         """group -> group -> text resolves recursively."""
@@ -303,7 +323,7 @@ class TestNestedGroups:
         assert result is not None
         assert len(result) == 1
         assert result[0]["text"] == "Deeply nested"
-        assert result[0]["page_idx"] == 5
+        assert result[0]["page_idx"] == 4
 
     def test_circular_group_ref(self, tmp_path: Path) -> None:
         """Circular group references do not cause infinite recursion."""
@@ -364,6 +384,34 @@ class TestNestedGroups:
         assert result[0]["text"] == "# First"
         assert result[0]["page_idx"] == 0
         assert result[1]["text"] == "Inside group"
-        assert result[1]["page_idx"] == 1
+        assert result[1]["page_idx"] == 0
         assert result[2]["text"] == "Last"
-        assert result[2]["page_idx"] == 2
+        assert result[2]["page_idx"] == 1
+
+
+class TestFindDoclingJsonExport:
+    """Locate Docling JSON exports produced by different RAGAnything versions."""
+
+    def test_finds_raganything_unique_output_dir(self, tmp_path: Path) -> None:
+        source = tmp_path / "report.pdf"
+        source.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+
+        path_hash = hashlib.md5(str(source.resolve()).encode()).hexdigest()[:8]
+        docling_dir = artifacts / f"report_{path_hash}" / "report" / "docling"
+        docling_dir.mkdir(parents=True)
+        expected = docling_dir / "report.json"
+        expected.write_text("{}", encoding="utf-8")
+
+        assert find_docling_json_export(artifacts, source) == expected
+
+    def test_falls_back_to_legacy_output_dir(self, tmp_path: Path) -> None:
+        source = tmp_path / "report.pdf"
+        source.write_bytes(b"fake")
+        artifacts = tmp_path / "artifacts"
+        docling_dir = artifacts / "report" / "docling"
+        docling_dir.mkdir(parents=True)
+        expected = docling_dir / "report.json"
+        expected.write_text("{}", encoding="utf-8")
+
+        assert find_docling_json_export(artifacts, source) == expected

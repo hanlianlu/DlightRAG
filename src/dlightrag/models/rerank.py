@@ -46,7 +46,7 @@ def _clamp(value: float) -> float:
 
 
 def _parse_listwise_scores(text: str, expected: int) -> list[float]:
-    """Parse a JSON array of scores from VLM response."""
+    """Parse a JSON array of scores from a model response."""
     text = text.strip()
     # Try JSON array
     try:
@@ -63,7 +63,7 @@ def _parse_listwise_scores(text: str, expected: int) -> list[float]:
     return [0.0] * expected
 
 
-# ── VLM listwise reranker ────────────────────────────────────────
+# ── LLM/VLM listwise reranker ────────────────────────────────────
 
 
 async def _chat_llm_rerank(
@@ -71,22 +71,21 @@ async def _chat_llm_rerank(
     chunks: list[dict[str, Any]],
     top_k: int,
     *,
-    vlm_func: Callable[..., Any],
+    scoring_func: Callable[..., Any],
     max_concurrency: int = 4,
     score_threshold: float = 0.5,
     batch_size: int = _DEFAULT_BATCH_SIZE,
 ) -> list[dict[str, Any]]:
-    """VLM listwise reranker. Scores chunks in batches for relative comparison."""
+    """LLM/VLM listwise reranker. Scores chunks in bounded-concurrency batches."""
     if not chunks:
         return []
 
-    all_results: list[tuple[dict[str, Any], float]] = []
-
-    for batch_start in range(0, len(chunks), batch_size):
-        batch = chunks[batch_start : batch_start + batch_size]
+    async def _score_batch(
+        batch_start: int,
+        batch: list[dict[str, Any]],
+    ) -> list[tuple[dict[str, Any], float]]:
         prompt = _LISTWISE_PROMPT.format(query=query, n=len(batch))
 
-        # Build multimodal content: interleave items with labels
         content: list[dict[str, Any]] = []
         content.append({"type": "text", "text": prompt})
 
@@ -106,7 +105,7 @@ async def _chat_llm_rerank(
 
         messages = [{"role": "user", "content": content}]
         try:
-            resp = await vlm_func(messages=messages)
+            resp = await scoring_func(messages=messages)
             scores = _parse_listwise_scores(resp, len(batch))
             logger.info(
                 "Rerank batch [%d..%d] (%d items): scores=%s",
@@ -116,11 +115,30 @@ async def _chat_llm_rerank(
                 [f"{s:.3f}" for s in scores],
             )
         except Exception:
-            logger.warning("VLM listwise rerank failed for batch %d", batch_start, exc_info=True)
+            logger.warning(
+                "LLM/VLM listwise rerank failed for batch %d", batch_start, exc_info=True
+            )
             scores = [0.0] * len(batch)
 
-        for chunk, score in zip(batch, scores, strict=False):
-            all_results.append((chunk, score))
+        return list(zip(batch, scores, strict=False))
+
+    from dlightrag.utils.concurrency import bounded_gather
+
+    batches = [
+        (batch_start, chunks[batch_start : batch_start + batch_size])
+        for batch_start in range(0, len(chunks), batch_size)
+    ]
+    batch_results = await bounded_gather(
+        [_score_batch(batch_start, batch) for batch_start, batch in batches],
+        max_concurrent=max(1, max_concurrency),
+        task_name="rerank-batch",
+    )
+
+    all_results: list[tuple[dict[str, Any], float]] = []
+    for result in batch_results:
+        if isinstance(result, Exception):
+            continue
+        all_results.extend(result)
 
     # Apply threshold
     scored = []
@@ -324,10 +342,10 @@ def build_rerank_func(
 
     if strategy == "chat_llm_reranker":
         if ingest_func is None:
-            raise ValueError("chat_llm_reranker requires ingest_func (VLM)")
+            raise ValueError("chat_llm_reranker requires a messages-first scoring callable")
         fn = partial(
             _chat_llm_rerank,
-            vlm_func=ingest_func,
+            scoring_func=ingest_func,
             max_concurrency=rc.max_concurrency,
             score_threshold=rc.score_threshold,
             batch_size=rc.batch_size,
@@ -390,7 +408,7 @@ def build_lightrag_rerank_adapter(rerank_func: Callable[..., Any]) -> Callable[.
         documents: list[str],
         top_n: int | None = None,
         **kwargs: Any,
-    ) -> list[dict[str, float]]:
+    ) -> list[dict[str, Any]]:
         if not documents:
             return []
 

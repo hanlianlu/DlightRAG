@@ -69,6 +69,38 @@ class TestGetIngestModelFunc:
         assert callable(func)
 
 
+class TestGetRerankFunc:
+    def test_chat_llm_reranker_uses_chat_fallback_without_override(self, monkeypatch):
+        from dlightrag.models import llm
+
+        seen_models: list[str] = []
+        seen_ingest_func = None
+
+        def fake_make_completion_func(cfg, fallback_api_key=None):
+            seen_models.append(cfg.model)
+            return f"completion:{cfg.model}"
+
+        def fake_build_rerank_func(rc, ingest_func=None):
+            nonlocal seen_ingest_func
+            seen_ingest_func = ingest_func
+            return "rerank-func"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        monkeypatch.setattr("dlightrag.models.rerank.build_rerank_func", fake_build_rerank_func)
+
+        config = DlightragConfig(
+            chat=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+            vlm=ModelConfig(provider="openai", model="vlm-model"),
+            embedding=EmbeddingConfig(api_key="sk-test"),
+        )
+
+        result = llm.get_rerank_func(config)
+
+        assert result == "rerank-func"
+        assert seen_ingest_func == "completion:chat-model"
+        assert seen_models == ["chat-model"]
+
+
 class TestGetEmbeddingFunc:
     def test_returns_embedding_func(self):
         from dlightrag.models.llm import get_embedding_func

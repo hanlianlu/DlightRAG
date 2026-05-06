@@ -21,7 +21,10 @@ from raganything import RAGAnything
 
 from dlightrag.converters.office import create_converter
 from dlightrag.core.ingestion.cleanup import collect_deletion_context
-from dlightrag.core.ingestion.docling_postprocess import rebuild_text_items_from_docling_json
+from dlightrag.core.ingestion.docling_postprocess import (
+    find_docling_json_export,
+    rebuild_text_items_from_docling_json,
+)
 from dlightrag.core.ingestion.hash_index import HashIndex
 from dlightrag.core.ingestion.policy import IngestionPolicy, PolicyStats
 
@@ -232,8 +235,19 @@ class IngestionPipeline:
             else:
                 parse_method = self.config.parse_method
                 parse_kwargs: dict[str, Any] = {}
-                if self.mineru_backend:
+                if self.config.parser == "mineru" and self.mineru_backend:
                     parse_kwargs["backend"] = self.mineru_backend
+                if self.config.parser == "mineru":
+                    if self.config.mineru_timeout is not None:
+                        parse_kwargs["timeout"] = self.config.mineru_timeout
+                    if self.config.mineru_vlm_url:
+                        parse_kwargs["vlm_url"] = self.config.mineru_vlm_url
+                elif self.config.parser == "docling":
+                    parse_kwargs["table_mode"] = self.config.docling_table_mode
+                    parse_kwargs["tables"] = self.config.docling_tables
+                    parse_kwargs["allow_ocr"] = self.config.docling_allow_ocr
+                    if self.config.docling_artifacts_path:
+                        parse_kwargs["artifacts_path"] = self.config.docling_artifacts_path
                 content_list, doc_id = await self.rag.parse_document(
                     file_path=str(file_path),
                     output_dir=str(artifacts_dir),
@@ -255,13 +269,14 @@ class IngestionPipeline:
             # Rebuild text items with heading markers and correct page_idx.
             # The helper does sync file I/O + json.loads — push to a thread.
             if self.config.parser == "docling" and result.index_stream:
-                json_path = artifacts_dir / file_path.stem / "docling" / f"{file_path.stem}.json"
-                improved_texts = await asyncio.to_thread(
-                    rebuild_text_items_from_docling_json, json_path
-                )
-                if improved_texts is not None:
-                    non_text = [i for i in result.index_stream if i.get("type") != "text"]
-                    result.index_stream = improved_texts + non_text
+                json_path = find_docling_json_export(artifacts_dir, file_path)
+                if json_path is not None:
+                    improved_texts = await asyncio.to_thread(
+                        rebuild_text_items_from_docling_json, json_path
+                    )
+                    if improved_texts is not None:
+                        non_text = [i for i in result.index_stream if i.get("type") != "text"]
+                        result.index_stream = improved_texts + non_text
 
             # Step 3: Insert filtered content
             if result.index_stream:
@@ -778,6 +793,7 @@ class IngestionPipeline:
             await self.rag.insert_content_list(  # type: ignore[misc]
                 content_list=result.index_stream,
                 file_path=file_path,
+                doc_id=doc_id,
                 display_stats=display_stats,
             )
 
