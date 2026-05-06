@@ -1,5 +1,4 @@
-# src/dlightrag/core/_lightrag_patches.py
-# Copyright 2025-2026 Hanlian Lu. All rights reserved.
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Monkey-patches for LightRAG upstream bugs.
 
 Bug: LightRAG's PostgreSQLDB.configure_age() calls create_graph() unconditionally,
@@ -40,22 +39,45 @@ def apply() -> None:
     if _PATCHED:
         return
 
-    _patch_configure_age()
-    _patch_execute()
+    applied = []
+    if _patch_configure_age():
+        applied.append("configure_age")
+    if _patch_execute():
+        applied.append("execute")
     _PATCHED = True
-    logger.info("Applied LightRAG AGE patches (DuplicateSchemaError)")
+    if applied:
+        logger.info("Applied LightRAG AGE patches: %s", ", ".join(applied))
+    else:
+        logger.debug("LightRAG AGE patches already covered upstream")
 
 
-def _needs_patch(method: Callable[..., Any]) -> bool:
-    """Return True if the method's source still lacks the ag_catalog pre-check."""
+def _source_contains(method: Callable[..., Any], needle: str) -> bool | None:
+    """Return whether *needle* appears in method source, or None if unavailable."""
     try:
         source = inspect.getsource(method)
-        return "ag_catalog.ag_graph" not in source
     except (OSError, TypeError):
+        return None
+    return needle in source
+
+
+def _configure_age_needs_patch(method: Callable[..., Any]) -> bool:
+    """Return True if configure_age still lacks DlightRAG's required guards."""
+    has_precheck = _source_contains(method, "ag_catalog.ag_graph")
+    has_duplicate_schema = _source_contains(method, "DuplicateSchemaError")
+    if has_precheck is None or has_duplicate_schema is None:
         return True
+    return not (has_precheck and has_duplicate_schema)
 
 
-def _patch_configure_age() -> None:
+def _execute_needs_patch(method: Callable[..., Any]) -> bool:
+    """Return True if execute still fails to tolerate DuplicateSchemaError."""
+    has_duplicate_schema = _source_contains(method, "DuplicateSchemaError")
+    if has_duplicate_schema is None:
+        return True
+    return not has_duplicate_schema
+
+
+def _patch_configure_age() -> bool:
     """Replace PostgreSQLDB.configure_age with a pre-check version.
 
     The original calls ``create_graph()`` unconditionally, causing PG to log
@@ -69,9 +91,9 @@ def _patch_configure_age() -> None:
 
     original = PostgreSQLDB.configure_age
 
-    if not _needs_patch(original):
-        logger.debug("configure_age already has pre-check, skipping patch")
-        return
+    if not _configure_age_needs_patch(original):
+        logger.debug("configure_age already has pre-check and DuplicateSchemaError guard")
+        return False
 
     @staticmethod  # type: ignore[misc]
     async def patched_configure_age(connection: asyncpg.Connection, graph_name: str) -> None:
@@ -91,9 +113,10 @@ def _patch_configure_age() -> None:
                 pass  # race condition
 
     PostgreSQLDB.configure_age = patched_configure_age  # type: ignore[assignment]
+    return True
 
 
-def _patch_execute() -> None:
+def _patch_execute() -> bool:
     """Wrap PostgreSQLDB.execute to also catch DuplicateSchemaError.
 
     Defence-in-depth: the primary fix is configure_age(), but execute()'s
@@ -105,9 +128,9 @@ def _patch_execute() -> None:
 
     original = PostgreSQLDB.execute
 
-    if not _needs_patch(original):
+    if not _execute_needs_patch(original):
         logger.debug("execute already handles DuplicateSchemaError, skipping patch")
-        return
+        return False
 
     async def wrapped_execute(  # type: ignore[no-untyped-def]
         self,
@@ -136,3 +159,4 @@ def _patch_execute() -> None:
             raise
 
     PostgreSQLDB.execute = wrapped_execute  # type: ignore[assignment]
+    return True

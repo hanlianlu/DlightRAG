@@ -18,7 +18,7 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 - **Broad LLM support** — Native SDKs for OpenAI, Anthropic, Gemini + any OpenAI-compatible endpoint
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
-- **Observability** — Zero-overhead telemetry via Langfuse for tracking pipelines, queries, and generations
+- **Observability** — Hierarchical Langfuse traces for pipelines, retrieval, reranking, generations, and embeddings; no-op when disabled
 - **Four interfaces** — Web UI, REST API, Python SDK, and MCP server
 
 
@@ -259,7 +259,7 @@ Each stage resolves its model via the per-role overrides below; if a role is uns
 | Keyword extraction (per-query) | chat | chat | `keywords` |
 | Answer generation | chat | chat (VLM, sees text excerpts + page images) | `query` |
 
-> **Important:** The chat model must support vision (multimodal/VLM). It doubles as the fallback vision model for image captioning, VLM parser, unified mode, multimodal queries, and `chat_llm_reranker` when no `rerank.*` model override is set. A text-only chat model will fail on these tasks.
+> **Important:** Any role that receives `image_url` content must use a vision-capable model. With the default fallbacks, `chat` is used for RAGAnything captioning, VLM parser, unified visual extraction, multimodal query enhancement, answer generation, and `chat_llm_reranker` when no explicit `vlm`, `query`, or `rerank.*` override is set. The reranker does not consume the `vlm` role implicitly; reranker-specific model choices belong under `rerank.*`.
 
 For unified mode, set `rag_mode: unified` in `config.yaml` and use multimodal models:
 
