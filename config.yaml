@@ -212,3 +212,12 @@ kg_entity_types:
 # api_auth_token: ""                    # Bearer token for simple auth mode
 # jwt_secret: ""                        # Required if auth_mode is jwt
 # jwt_algorithm: "HS256"                # Signature algorithm for JWT
+
+# ─────────────────────────────────────────────────────────────────
+# Observability (Optional — best kept in .env)
+# ─────────────────────────────────────────────────────────────────
+
+# langfuse_public_key:
+# langfuse_secret_key:
+# langfuse_host: https://cloud.langfuse.com
+# langfuse_export_external_spans: false  # keep false to avoid double-counting auto GenAI spans
