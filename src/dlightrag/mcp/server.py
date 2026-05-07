@@ -392,11 +392,11 @@ async def run_stdio() -> None:
 async def run_streamable_http(host: str, port: int) -> None:
     """Run MCP server over streamable-http transport.
 
-    Bearer-token auth is enforced when ``DLIGHTRAG_API_AUTH_TOKEN`` is set
-    (the same secret as the REST API). Without a token, the server runs
-    open — caller is responsible for binding to loopback or trusted network
-    only. We log a loud warning in that case and refuse the unsafe combo
-    of ``host=0.0.0.0`` + no token.
+    Bearer-token auth is enforced when ``DLIGHTRAG_API_AUTH_TOKEN`` is set.
+    Runtime configuration requires an explicit auth mode when a token is
+    present. Without a token, the server runs open — caller is responsible
+    for binding to loopback or trusted network only. We log a loud warning
+    in that case.
     """
     import secrets
 
@@ -424,8 +424,8 @@ async def run_streamable_http(host: str, port: int) -> None:
                 "If this bind reaches a non-loopback network, ANY client can call\n"
                 "ingest, delete_files, retrieve, answer against EVERY workspace.\n"
                 "Safe configurations:\n"
-                "  (a) Set DLIGHTRAG_API_AUTH_TOKEN — bearer auth then guards MCP\n"
-                "      and REST (same secret).\n"
+                "  (a) Set DLIGHTRAG_AUTH_MODE=simple + DLIGHTRAG_API_AUTH_TOKEN\n"
+                "      — bearer auth then guards MCP and REST (same secret).\n"
                 "  (b) Bind to 127.0.0.1 (loopback only).\n"
                 "  (c) Map host port to 127.0.0.1 only (compose: '127.0.0.1:8101:8101')\n"
                 "      — safe even with container-internal 0.0.0.0.\n" + "=" * 72,

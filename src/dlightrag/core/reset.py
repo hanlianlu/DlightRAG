@@ -365,14 +365,12 @@ async def _drop_age_graphs(
 
 
 def _reset_local_files(working_dir: Path, *, dry_run: bool) -> int:
-    """Phase 5: Remove working_dir/* except sources/. Returns file count."""
+    """Phase 5: Remove all files under working_dir. Returns file count."""
     if not working_dir.exists():
         return 0
 
     file_count = 0
     for item in sorted(working_dir.iterdir()):
-        if item.name == "sources":
-            continue
         if item.is_file():
             file_count += 1
             if not dry_run:

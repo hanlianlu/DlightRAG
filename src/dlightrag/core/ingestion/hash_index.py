@@ -26,7 +26,7 @@ def derive_source_type(file_path: str) -> str:
     """Derive source type from a file path or URI.
 
     Returns "azure_blobs", "s3", "local", or "unknown".
-    Handles both new-style URIs (azure://...) and legacy sources/ paths.
+    Remote sources use explicit URI schemes; all plain paths are local.
     """
     if not file_path:
         return "unknown"
@@ -34,11 +34,6 @@ def derive_source_type(file_path: str) -> str:
         return "azure_blobs"
     if file_path.startswith("s3://"):
         return "s3"
-    # Legacy: /abs/path/sources/{source_type}/file.pdf
-    parts = Path(file_path).parts
-    idx = next((i for i, p in enumerate(parts) if p == "sources"), -1)
-    if idx >= 0 and len(parts) > idx + 1:
-        return parts[idx + 1]
     # Default for local absolute/relative paths
     if file_path.startswith("/") or file_path.startswith(".") or "://" not in file_path:
         return "local"

@@ -118,6 +118,7 @@ async for token in token_iter:
 | `mode` | `str` | `"mix"` | `local`, `global`, `hybrid`, `naive`, `mix` |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
+| `stream` | `bool` | required for REST `/answer` | `false` returns JSON; `true` returns SSE |
 | `multimodal_content` | `list[dict]` | `None` | Up to 3 images for visual retrieval (unified mode only) |
 | `query_images` | `list[str \| dict]` | `None` | User-attached images inlined into the answer LLM call as `image_url` blocks (URL strings or pre-built dict blocks). Capped at 10. Distinct from `multimodal_content`: this only affects answer generation, not retrieval. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query) |
@@ -133,7 +134,7 @@ curl -X POST http://localhost:8100/retrieve \
 # Answer
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
-  -d '{"query": "key findings"}'
+  -d '{"query": "key findings", "stream": false}'
 
 # Streaming answer
 curl -X POST http://localhost:8100/answer \
@@ -271,9 +272,9 @@ Sources are document-level groupings derived from chunks via `build_sources()`. 
 {
   "id": "1",
   "title": "report.pdf",
-  "path": "/data/report.pdf",
+  "path": "/data/dlightrag_storage/docs/report.pdf",
   "type": "file",
-  "url": "file://sources/local/report.pdf",
+  "url": "/api/files/docs/report.pdf",
   "chunks": [
     {
       "chunk_id": "abc123",
@@ -379,6 +380,7 @@ curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{
     "query": "What does this diagram show?",
+    "stream": false,
     "multimodal_content": [{"type": "image", "data": "<base64>"}]
   }'
 
@@ -387,6 +389,7 @@ curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{
     "query": "What does this diagram show?",
+    "stream": false,
     "multimodal_content": [{"type": "image", "img_path": "/data/diagram.png"}]
   }'
 ```

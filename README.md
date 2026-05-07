@@ -72,7 +72,7 @@ curl http://localhost:8100/health
 
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "/app/dlightrag_storage/sources"}'
+  -d '{"source_type": "local", "path": "/app/dlightrag_storage/docs"}'
 
 curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
@@ -168,6 +168,7 @@ Pick the row matching your use case:
 
 ```bash
 openssl rand -base64 32                                     # generate
+echo "DLIGHTRAG_AUTH_MODE=simple" >> .env                   # enable bearer auth
 echo "DLIGHTRAG_API_AUTH_TOKEN=<generated>" >> .env         # set
 # clients send: Authorization: Bearer <generated>
 ```
@@ -181,7 +182,7 @@ The same token guards both REST and MCP. The MCP server logs a multi-line warnin
 |---|---|---|
 | `POST` | `/ingest` | Ingest from local, Azure Blob, or AWS S3 |
 | `POST` | `/retrieve` | Contexts + sources, no LLM call (response still ships `answer: null` for shape parity with `/answer`) |
-| `POST` | `/answer` | LLM answer + contexts + sources (`stream: true` for SSE) |
+| `POST` | `/answer` | LLM answer + contexts + sources (`stream` is explicit; `true` for SSE, `false` for JSON) |
 | `GET` | `/files` | List ingested documents |
 | `DELETE` | `/files` | Delete documents |
 | `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |

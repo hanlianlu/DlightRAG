@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def app():
-    from dlightrag.api.server import app as real_app
+    from dlightrag.api.server import create_app
+
+    real_app = create_app(include_web=True)
 
     mock_manager = MagicMock()
     mock_manager.list_ingested_files = AsyncMock(

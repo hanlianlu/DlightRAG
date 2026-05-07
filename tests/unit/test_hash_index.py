@@ -384,11 +384,11 @@ class TestDeriveSourceType:
 
         assert derive_source_type("report.pdf") == "local"
 
-    def test_legacy_sources_path(self):
+    def test_sources_directory_is_plain_local_path(self):
         from dlightrag.core.ingestion.hash_index import derive_source_type
 
         assert derive_source_type("/abs/path/sources/local/file.pdf") == "local"
-        assert derive_source_type("/abs/path/sources/azure_blobs/c/file.pdf") == "azure_blobs"
+        assert derive_source_type("/abs/path/sources/azure_blobs/c/file.pdf") == "local"
 
     def test_empty_string(self):
         from dlightrag.core.ingestion.hash_index import derive_source_type
