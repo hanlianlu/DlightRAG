@@ -419,9 +419,10 @@ DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 **Local self-host**
 
 DlightRAG does not embed the Langfuse web/worker/database services, but it does
-ship the local setup helper around the official Langfuse v3 Docker Compose
-stack. Requirements: Docker with Docker Compose, and internet access the first
-time the stack is downloaded.
+ship the local setup helper around the
+[official Langfuse v3 Docker Compose stack](https://langfuse.com/self-hosting/local).
+Requirements: Docker with Docker Compose, and internet access the first time the
+stack is downloaded.
 
 From the DlightRAG repo:
 
@@ -432,6 +433,10 @@ cp .env.example .env
 make langfuse-up
 make langfuse-health
 ```
+
+For a first local setup, run only `make langfuse-up` yourself. It includes the
+download/preparation and key bootstrap steps. `make langfuse-health` is the
+verification step after the containers start.
 
 `make langfuse-up` is the full local Langfuse setup path:
 
@@ -459,14 +464,14 @@ can hold Langfuse data and secrets without committing them to DlightRAG. The
 helper binds host ports to loopback and avoids common development ports such as
 `3000`, `5432`, `6379`, `8123`, and `9000`.
 
-```bash
-make langfuse-stack       # optional: download/patch compose without starting
-make langfuse-bootstrap   # optional: sync env files without starting Langfuse
-make langfuse-up
-make langfuse-health
-make langfuse-logs
-make langfuse-down
-```
+| Command | When to run it | What it does |
+|---|---|---|
+| `make langfuse-up` | Normal setup/start command | Runs `langfuse-stack`, then `langfuse-bootstrap`, then starts Langfuse with Docker Compose |
+| `make langfuse-health` | After `make langfuse-up` | Checks `http://localhost:3300/api/public/health` |
+| `make langfuse-logs` | When startup/debugging needs logs | Tails the local Langfuse compose logs |
+| `make langfuse-down` | When you want to stop Langfuse | Stops the local Langfuse compose stack |
+| `make langfuse-stack` | Optional advanced/debug step | Downloads/patches `../langfuse-local/docker-compose.yml` without syncing keys or starting containers |
+| `make langfuse-bootstrap` | Optional advanced/debug step | Syncs project keys into `../langfuse-local/.env` and DlightRAG `.env` without starting containers |
 
 To log into the local Langfuse UI, read the bootstrap user from the local stack
 env file:
@@ -475,13 +480,25 @@ env file:
 grep '^LANGFUSE_INIT_USER_' ../langfuse-local/.env
 ```
 
-To preselect fixed project keys instead of using the generated local values,
-pass them to the bootstrap command:
+Do not set `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` or
+`LANGFUSE_INIT_PROJECT_SECRET_KEY` for normal local use. `make langfuse-up`
+creates or reuses a local pair and writes the matching DlightRAG values for you.
+
+These two values are the API credentials that
+[headless Langfuse initialization](https://langfuse.com/self-hosting/administration/headless-initialization)
+seeds into the local project on startup. They are not copied from the UI before
+first startup. If you override them, they are not arbitrary throwaway labels:
+the public key and secret key must be the exact pair used by both Langfuse and
+DlightRAG, and the secret key should be a strong random value. A mismatch causes
+DlightRAG tracing requests to be rejected by Langfuse.
+
+Only preselect fixed project keys when you need deterministic local credentials,
+for example in repeatable local automation. Set them before first startup:
 
 ```bash
-LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-... \
-LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-... \
-make langfuse-bootstrap
+LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-my-local-project \
+LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-use-a-long-random-secret \
+make langfuse-up
 ```
 
 If you create or rotate Langfuse project keys after DlightRAG has already
