@@ -419,8 +419,10 @@ DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 **Local self-host**
 
 To enable tracing with local self-hosted Langfuse, run Langfuse separately using
-the official v3 self-host stack, create or initialize a project in that local
-Langfuse instance, then use that local project's keys:
+the official v3 self-host stack. The recommended path is headless initialization:
+set the Langfuse stack's `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and
+`LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, then set the matching
+DlightRAG keys before starting DlightRAG:
 
 ```bash
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
@@ -439,6 +441,14 @@ make langfuse-up
 make langfuse-health
 make langfuse-logs
 make langfuse-down
+```
+
+If you create or rotate Langfuse project keys after DlightRAG has already
+started, restart the DlightRAG process so it reloads `.env`. With Docker Compose,
+recreate the affected containers rather than only restarting existing ones:
+
+```bash
+docker compose up -d --force-recreate dlightrag-api dlightrag-mcp
 ```
 
 If DlightRAG runs inside Docker while Langfuse is bound on the host, use a host
