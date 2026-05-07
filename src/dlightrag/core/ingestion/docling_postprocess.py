@@ -22,9 +22,8 @@ def find_docling_json_export(artifacts_dir: Path, file_path: Path) -> Path | Non
     """Locate the Docling JSON export for a parsed file.
 
     RAGAnything 1.3 writes parser artifacts below ``<stem>_<path-hash>/`` to
-    avoid same-name collisions. Older versions wrote directly under
-    ``<stem>/``. Support both layouts so post-processing remains compatible
-    across upgrades.
+    avoid same-name collisions.  Only hashed artifact directories are
+    considered; legacy ``<stem>/docling`` outputs are intentionally ignored.
     """
     stem = file_path.stem
     filename = f"{stem}.json"
@@ -37,7 +36,6 @@ def find_docling_json_export(artifacts_dir: Path, file_path: Path) -> Path | Non
     path_hash = hashlib.md5(str(resolved).encode()).hexdigest()[:8]
     candidates = [
         artifacts_dir / f"{stem}_{path_hash}" / stem / "docling" / filename,
-        artifacts_dir / stem / "docling" / filename,
     ]
 
     for candidate in candidates:

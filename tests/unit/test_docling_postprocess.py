@@ -405,13 +405,13 @@ class TestFindDoclingJsonExport:
 
         assert find_docling_json_export(artifacts, source) == expected
 
-    def test_falls_back_to_legacy_output_dir(self, tmp_path: Path) -> None:
+    def test_ignores_legacy_unhashed_output_dir(self, tmp_path: Path) -> None:
         source = tmp_path / "report.pdf"
         source.write_bytes(b"fake")
         artifacts = tmp_path / "artifacts"
         docling_dir = artifacts / "report" / "docling"
         docling_dir.mkdir(parents=True)
-        expected = docling_dir / "report.json"
-        expected.write_text("{}", encoding="utf-8")
+        legacy = docling_dir / "report.json"
+        legacy.write_text("{}", encoding="utf-8")
 
-        assert find_docling_json_export(artifacts, source) == expected
+        assert find_docling_json_export(artifacts, source) is None
