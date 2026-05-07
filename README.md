@@ -419,38 +419,60 @@ DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 **Local self-host**
 
 DlightRAG does not embed the Langfuse web/worker/database services, but it does
-ship the local setup helper. For the default local self-host flow, do not edit
-the keys by hand. Run:
+ship the local setup helper around the official Langfuse v3 Docker Compose
+stack. Requirements: Docker with Docker Compose, and internet access the first
+time the stack is downloaded.
+
+From the DlightRAG repo:
 
 ```bash
+cp .env.example .env
+# Edit .env for DlightRAG's normal model/storage settings.
+# Leave local Langfuse keys blank unless you intentionally want fixed keys.
 make langfuse-up
+make langfuse-health
 ```
 
-Before Docker starts Langfuse, DlightRAG runs a headless bootstrap that writes
-matching project keys into both places:
+`make langfuse-up` is the full local Langfuse setup path:
+
+1. `make langfuse-stack` downloads the official Langfuse `docker-compose.yml`
+   into `../langfuse-local` if it is missing, then patches it for local ports.
+2. `make langfuse-bootstrap` writes matching headless project keys into both env
+   files.
+3. Docker Compose starts the Langfuse web, worker, Postgres, ClickHouse, Redis,
+   and MinIO containers.
 
 | File | Written keys |
 |---|---|
 | `../langfuse-local/.env` | `LANGFUSE_INIT_PROJECT_PUBLIC_KEY`, `LANGFUSE_INIT_PROJECT_SECRET_KEY` |
 | `.env` | `DLIGHTRAG_LANGFUSE_PUBLIC_KEY`, `DLIGHTRAG_LANGFUSE_SECRET_KEY`, `DLIGHTRAG_LANGFUSE_HOST` |
 
-The default local host is:
+Default local endpoints:
+
+| Service | URL |
+|---|---|
+| Langfuse UI/API | `http://localhost:3300` |
+| DlightRAG Langfuse host | `DLIGHTRAG_LANGFUSE_HOST=http://localhost:3300` |
+
+The local compose stack is kept outside this repo at `../langfuse-local` so it
+can hold Langfuse data and secrets without committing them to DlightRAG. The
+helper binds host ports to loopback and avoids common development ports such as
+`3000`, `5432`, `6379`, `8123`, and `9000`.
 
 ```bash
-DLIGHTRAG_LANGFUSE_HOST=http://localhost:3300             # Local process -> local self-host
-DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
-```
-
-The helper expects the official Langfuse v3 stack in `../langfuse-local` and
-binds the UI/API to `127.0.0.1:3300` to avoid the common `3000` development
-port.
-
-```bash
+make langfuse-stack       # optional: download/patch compose without starting
 make langfuse-bootstrap   # optional: sync env files without starting Langfuse
 make langfuse-up
 make langfuse-health
 make langfuse-logs
 make langfuse-down
+```
+
+To log into the local Langfuse UI, read the bootstrap user from the local stack
+env file:
+
+```bash
+grep '^LANGFUSE_INIT_USER_' ../langfuse-local/.env
 ```
 
 To preselect fixed project keys instead of using the generated local values,
