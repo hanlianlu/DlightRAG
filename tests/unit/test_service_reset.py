@@ -212,8 +212,8 @@ class TestAresetPhase5:
 
         result = await service.areset()
 
-        assert result["local_files_removed"] == 2
-        assert (tmp_path / "sources" / "keep.pdf").exists()
+        assert result["local_files_removed"] == 3
+        assert not (tmp_path / "sources").exists()
         assert not (tmp_path / "cache.json").exists()
         assert not (tmp_path / "subdir").exists()
 

@@ -255,7 +255,7 @@ class TestAingestFromLocal:
 
     @pytest.mark.asyncio
     async def test_single_file_records_original_path(self, test_config):
-        """Ingested file metadata records the original path, not a sources/ copy."""
+        """Ingested file metadata records the original path."""
         pipeline = _make_pipeline(test_config)
         test_file = test_config.working_dir_path / "outside" / "report.pdf"
         test_file.parent.mkdir(parents=True, exist_ok=True)
@@ -270,7 +270,7 @@ class TestAingestFromLocal:
 
     @pytest.mark.asyncio
     async def test_no_copy_to_sources_dir(self, test_config):
-        """Files are NOT copied to sources/ anymore."""
+        """Ingestion does not create managed copies under the storage directory."""
         pipeline = _make_pipeline(test_config)
         test_file = test_config.working_dir_path / "outside" / "report.pdf"
         test_file.parent.mkdir(parents=True, exist_ok=True)
@@ -403,7 +403,7 @@ class TestAingestFromAzureBlob:
 
     @pytest.mark.asyncio
     async def test_azure_no_permanent_download(self, test_config):
-        """Azure blobs are NOT permanently stored in sources/."""
+        """Azure blobs are not kept as permanent local downloads."""
         pipeline = _make_pipeline(test_config)
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"blob content")

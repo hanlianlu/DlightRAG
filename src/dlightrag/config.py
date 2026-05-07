@@ -341,8 +341,8 @@ class DlightragConfig(BaseSettings):
         description="MCP streamable-http bind address. Default 127.0.0.1 (loopback only) "
         "because MCP exposes ingest/answer/delete_files with no native auth — exposing "
         "to a network without auth would let any reachable client wipe data. Set to "
-        "0.0.0.0 only when api_auth_token is also set; the bearer-token middleware "
-        "then guards the transport.",
+        "0.0.0.0 only when api_auth_token is set with an explicit auth_mode; "
+        "the bearer-token middleware then guards the transport.",
     )
     mcp_port: int = Field(default=8101)
 
@@ -351,7 +351,10 @@ class DlightragConfig(BaseSettings):
     api_port: int = Field(default=8100)
     api_auth_token: str | None = Field(
         default=None,
-        description="Bearer token for REST API authentication. If not set, no auth required.",
+        description=(
+            "Bearer token for auth_mode='simple' and MCP streamable-http. "
+            "Setting this while auth_mode='none' is invalid."
+        ),
     )
     auth_mode: Literal["none", "simple", "jwt"] = Field(
         default="none",
@@ -396,10 +399,12 @@ class DlightragConfig(BaseSettings):
     # ===== Validators =====
 
     @model_validator(mode="after")
-    def _infer_auth_mode(self):
-        """Auto-upgrade: if api_auth_token is set but auth_mode is default, use 'simple'."""
+    def _validate_auth_mode(self):
+        """Validate explicit auth configuration."""
         if self.auth_mode == "none" and self.api_auth_token:
-            self.auth_mode = "simple"
+            raise ValueError("api_auth_token is set; configure auth_mode='simple' explicitly")
+        if self.auth_mode == "simple" and not self.api_auth_token:
+            raise ValueError("auth_mode='simple' requires api_auth_token to be set")
         # Fail-fast: jwt mode requires a secret; otherwise every request 500s.
         if self.auth_mode == "jwt" and not self.jwt_secret:
             raise ValueError("auth_mode='jwt' requires jwt_secret to be set")

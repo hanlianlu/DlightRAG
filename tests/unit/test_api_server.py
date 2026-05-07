@@ -11,7 +11,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.auth import UserContext, get_current_user
-from dlightrag.api.server import app
+from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
@@ -21,6 +21,7 @@ from dlightrag.core.servicemanager import RAGServiceUnavailableError
 # ---------------------------------------------------------------------------
 
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
+app = create_app(include_web=False)
 
 
 @pytest.fixture
@@ -93,6 +94,13 @@ async def client():
 # ---------------------------------------------------------------------------
 
 
+def test_api_server_has_no_eager_module_app() -> None:
+    """The ASGI app is exposed through factories only."""
+    import dlightrag.api.server as server
+
+    assert not hasattr(server, "app")
+
+
 class TestAuthMiddleware:
     """Test pluggable auth (none / simple / jwt)."""
 
@@ -157,7 +165,7 @@ class TestAuthMiddleware:
         [
             ("POST", "/ingest", {"source_type": "local", "path": "/tmp/f.pdf"}),
             ("POST", "/retrieve", {"query": "hello"}),
-            ("POST", "/answer", {"query": "hello"}),
+            ("POST", "/answer", {"query": "hello", "stream": False}),
             ("DELETE", "/files", {"filenames": ["f.pdf"]}),
         ],
     )
@@ -185,15 +193,14 @@ class TestAuthMiddleware:
         assert resp.status_code == 200
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_backward_compat_token_auto_sets_simple(
+    async def test_token_requires_explicit_simple_auth_mode(
         self, test_config: DlightragConfig
     ) -> None:
-        """Setting api_auth_token without auth_mode auto-upgrades to simple."""
+        """Setting api_auth_token without auth_mode is a config error."""
         test_config.api_auth_token = "my-token"
         test_config.auth_mode = "none"
-        # Trigger the validator manually (simulating fresh construction)
-        result = test_config._infer_auth_mode()
-        assert result.auth_mode == "simple"
+        with pytest.raises(ValueError, match="auth_mode='simple'"):
+            test_config._validate_auth_mode()
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +489,7 @@ class TestAnswerEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "What is RAG?"})
+        resp = await client.post("/answer", json={"query": "What is RAG?", "stream": False})
         assert resp.status_code == 200
         body = resp.json()
         assert "answer" in body
@@ -495,7 +502,7 @@ class TestAnswerEndpoint:
     ) -> None:
         mock_manager.aanswer = AsyncMock(side_effect=RAGServiceUnavailableError("RAG not ready"))
         app.state.manager = mock_manager
-        resp = await client.post("/answer", json={"query": "hello"})
+        resp = await client.post("/answer", json={"query": "hello", "stream": False})
         assert resp.status_code == 503
 
 
@@ -621,7 +628,7 @@ class TestAnswerStreamMode:
     async def test_stream_false_returns_json(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        """stream=false (default) returns normal JSON response."""
+        """stream=false returns normal JSON response."""
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test", "stream": False})
         assert resp.status_code == 200
@@ -629,12 +636,10 @@ class TestAnswerStreamMode:
         assert "answer" in body
         assert body["answer"] == "The answer is 42"
 
-    async def test_default_no_stream_returns_json(
+    async def test_missing_stream_is_validation_error(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        """Omitting stream field returns normal JSON (backwards compatible)."""
+        """REST clients must choose JSON or SSE explicitly."""
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test"})
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "answer" in body
+        assert resp.status_code == 422

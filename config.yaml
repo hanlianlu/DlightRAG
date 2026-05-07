@@ -209,8 +209,8 @@ kg_entity_types:
 # Security & Auth (Optional — best kept in .env)
 # ─────────────────────────────────────────────────────────────────
 
-# auth_mode: none                       # none, simple, jwt
-# api_auth_token: ""                    # Bearer token for simple auth mode
+# auth_mode: none                       # none, simple, jwt (set simple explicitly when api_auth_token is set)
+# api_auth_token: ""                    # Bearer token for auth_mode: simple
 # jwt_secret: ""                        # Required if auth_mode is jwt
 # jwt_algorithm: "HS256"                # Signature algorithm for JWT
 

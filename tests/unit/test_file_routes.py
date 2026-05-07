@@ -9,15 +9,17 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from dlightrag.api.server import app
+from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
+
+app = create_app(include_web=False)
 
 
 @pytest.fixture()
 def tmp_working_dir(tmp_path: Path) -> Path:
-    sources = tmp_path / "sources" / "local"
-    sources.mkdir(parents=True)
-    (sources / "report.pdf").write_bytes(b"%PDF-1.4 test content")
+    docs = tmp_path / "docs"
+    docs.mkdir(parents=True)
+    (docs / "report.pdf").write_bytes(b"%PDF-1.4 test content")
     return tmp_path
 
 
@@ -39,7 +41,7 @@ def client(tmp_working_dir: Path) -> TestClient:
 class TestFileEndpoint:
     def test_streams_local_file(self, client: TestClient) -> None:
         """Happy path: local file served with correct content and MIME type."""
-        resp = client.get("/api/files/sources/local/report.pdf")
+        resp = client.get("/api/files/docs/report.pdf")
         assert resp.status_code == 200
         assert b"%PDF-1.4 test content" in resp.content
         assert resp.headers["content-type"] == "application/pdf"

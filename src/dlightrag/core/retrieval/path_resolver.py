@@ -29,8 +29,8 @@ class PathResolver:
         resolver = PathResolver(working_dir="/data/rag_storage")
 
         # Local file:
-        resolver.resolve("/data/rag_storage/sources/local/f.pdf")
-        # → "/api/files/sources/local/f.pdf"
+        resolver.resolve("/data/rag_storage/files/f.pdf")
+        # → "/api/files/files/f.pdf"
 
         # Azure blob:
         resolver.resolve("azure://mycontainer/doc.pdf")
@@ -40,7 +40,7 @@ class PathResolver:
         # whether to stream locally or 302 redirect to a signed URL.
     """
 
-    _FALLBACK_MARKERS = ("sources/", "artifacts/")
+    _FALLBACK_MARKERS = ("artifacts/",)
 
     def __init__(
         self,
@@ -52,10 +52,6 @@ class PathResolver:
 
     def resolve(self, raw_path: str) -> str:
         """Convert a raw storage path to a /api/files/ URL."""
-        # Strip file:// scheme — treat as local
-        if raw_path.startswith("file://"):
-            raw_path = raw_path[7:]
-
         # Remote schemes (azure://, s3://) — wrap as-is
         if "://" in raw_path:
             return f"{self._base_url}/{raw_path}"
@@ -69,10 +65,10 @@ class PathResolver:
     def resolve_relative(self, raw_path: str) -> str | None:
         """Extract working_dir-relative path. None if not under working_dir.
 
-        Tries working_dir prefix first, then falls back to known directory
-        markers (sources/, artifacts/).
+        Tries working_dir prefix first, then falls back to known artifact
+        directory markers.
 
-        E.g. "/data/rag_storage/sources/local/f.pdf" → "sources/local/f.pdf"
+        E.g. "/data/rag_storage/artifacts/page.png" → "artifacts/page.png"
         """
         if self._working_dir:
             idx = raw_path.find(self._working_dir)

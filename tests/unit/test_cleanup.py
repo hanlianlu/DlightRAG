@@ -92,7 +92,7 @@ class TestCollectDeletionContext:
 
     async def test_lightrag_doc_status_fallback(self) -> None:
         index = _make_hash_index()  # Returns nothing
-        lightrag = _make_lightrag({"doc-003": "/storage/sources/local/report.pdf"})
+        lightrag = _make_lightrag({"doc-003": "/storage/docs/report.pdf"})
         ctx = await collect_deletion_context(
             identifier="report.pdf",
             hash_index=index,
@@ -103,7 +103,7 @@ class TestCollectDeletionContext:
 
     async def test_both_strategies_merge(self) -> None:
         index = _make_hash_index(find_by_name_result=("doc-001", "sha256:abc", "/path/file.pdf"))
-        lightrag = _make_lightrag({"doc-002": "/storage/sources/local/file.pdf"})
+        lightrag = _make_lightrag({"doc-002": "/storage/docs/file.pdf"})
         ctx = await collect_deletion_context(
             identifier="file.pdf",
             hash_index=index,

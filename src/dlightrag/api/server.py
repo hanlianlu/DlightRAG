@@ -120,10 +120,6 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     return application
 
 
-# Backward compat: module-level app for uvicorn and tests
-app = create_app()
-
-
 def get_app() -> FastAPI:
     """ASGI factory entry point (e.g. uvicorn dlightrag.api.server:get_app --factory)."""
     return create_app()
@@ -154,11 +150,12 @@ def main() -> None:
     logging.getLogger().addFilter(RequestIdLogFilter())
 
     uvicorn.run(
-        "dlightrag.api.server:app",
+        "dlightrag.api.server:get_app",
         host=config.api_host,
         port=config.api_port,
         log_level=config.log_level,
+        factory=True,
     )
 
 
-__all__ = ["app", "create_app", "get_app", "main"]
+__all__ = ["create_app", "get_app", "main"]
