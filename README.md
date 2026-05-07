@@ -392,20 +392,38 @@ For self-hosted rerankers (Xinference, vLLM, TEI etc.), use `local_reranker` wit
 
 DlightRAG includes native tracing using [Langfuse](https://langfuse.com/). When configured, it records hierarchical observations for service pipelines, retrieval, reranking, LLM generations, and embedding calls. If keys are omitted, the tracing module operates as a pure no-op.
 
-To enable observability, set the following in your `.env`:
+Use the public and secret keys from a Langfuse project. `DLIGHTRAG_LANGFUSE_HOST`
+is the Langfuse API/UI base URL that the DlightRAG process can reach.
+
+**Langfuse Cloud**
+
+Create a project in your chosen Langfuse Cloud region, then set:
 
 ```bash
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
 DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
-DLIGHTRAG_LANGFUSE_HOST=http://localhost:3300          # Local self-host
-DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false         # Keep false to avoid double-counting auto GenAI spans
+DLIGHTRAG_LANGFUSE_HOST=https://cloud.langfuse.com        # EU Cloud, also DlightRAG's default
+# DLIGHTRAG_LANGFUSE_HOST=https://us.cloud.langfuse.com   # US Cloud
+# DLIGHTRAG_LANGFUSE_HOST=https://jp.cloud.langfuse.com   # Japan Cloud
+# DLIGHTRAG_LANGFUSE_HOST=https://hipaa.cloud.langfuse.com # HIPAA Cloud
+DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 ```
 
-For local self-hosting, run the official Langfuse v3 Docker Compose stack
-separately, create or initialize a project, then use that project's public and
-secret keys here. DlightRAG runs only the SDK client; it does not embed the
-Langfuse web/worker/database services in its own API process. The local helper
-targets expect the stack in `../langfuse-local` and bind the UI/API to
+**Local self-host**
+
+Run Langfuse separately using the official v3 self-host stack, create or
+initialize a project in that Langfuse instance, then use that project's keys:
+
+```bash
+DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
+DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
+DLIGHTRAG_LANGFUSE_HOST=http://localhost:3300             # Local process -> local self-host
+DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
+```
+
+DlightRAG runs only the Langfuse SDK client; it does not embed the Langfuse
+web/worker/database services in its own API process. The local helper targets
+expect the stack in `../langfuse-local` and bind the UI/API to
 `127.0.0.1:3300` to avoid the common `3000` development port:
 
 ```bash
@@ -414,6 +432,10 @@ make langfuse-health
 make langfuse-logs
 make langfuse-down
 ```
+
+If DlightRAG runs inside Docker while Langfuse is bound on the host, use a host
+URL reachable from that container, for example `http://host.docker.internal:3300`
+on Docker Desktop.
 
 By default DlightRAG exports only observations created by its own wrappers. Set
 `DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=true` only if you intentionally want
