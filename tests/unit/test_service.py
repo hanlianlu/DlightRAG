@@ -225,8 +225,7 @@ class TestBuildAddonParams:
         assert result["language"] == "English"
         assert "entity_types" not in result
         assert result["entity_types_guidance"] == (
-            "Prioritize domain entities in these categories: "
-            "Product, Technology, Organization."
+            "Prioritize domain entities in these categories: Product, Technology, Organization."
         )
 
 
