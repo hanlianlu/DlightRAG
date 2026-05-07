@@ -17,6 +17,10 @@ class TestMetadataFilter:
         f = MetadataFilter(filename="test.pdf")
         assert not f.is_empty()
 
+    def test_filename_stem_makes_non_empty(self) -> None:
+        f = MetadataFilter(filename_stem="test")
+        assert not f.is_empty()
+
     def test_custom_metadata_makes_non_empty(self) -> None:
         f = MetadataFilter(custom={"department": "finance"})
         assert not f.is_empty()
@@ -32,6 +36,7 @@ class TestMetadataFilter:
     def test_all_none_is_empty(self) -> None:
         f = MetadataFilter(
             filename=None,
+            filename_stem=None,
             filename_pattern=None,
             file_extension=None,
             doc_title=None,

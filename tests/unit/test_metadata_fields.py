@@ -100,6 +100,7 @@ class TestDerivedFunctions:
         ids = searchable_field_ids()
         assert isinstance(ids, frozenset)
         assert "filename" in ids
+        assert "filename_stem" in ids
         assert "doc_title" in ids
         # page_count is not searchable
         assert "page_count" not in ids

@@ -121,7 +121,7 @@ async for token in token_iter:
 | `stream` | `bool` | required for REST `/answer` | `false` returns JSON; `true` returns SSE |
 | `multimodal_content` | `list[dict]` | `None` | Up to 3 images for visual retrieval (unified mode only) |
 | `query_images` | `list[str \| dict]` | `None` | User-attached images inlined into the answer LLM call as `image_url` blocks (URL strings or pre-built dict blocks). Capped at 10. Distinct from `multimodal_content`: this only affects answer generation, not retrieval. |
-| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query) |
+| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `filename_stem`, `filename_pattern`, extension, title, author, dates, mode, and custom metadata |
 
 ### REST API
 
