@@ -22,6 +22,21 @@ def _render_partial(name: str, **ctx: Any) -> str:
     return templates.env.get_template(name).render(**ctx)
 
 
+def _workspace_cookie_value(raw: str, known_workspaces: list[str]) -> str:
+    """Resolve a requested workspace to a safe cookie value from known workspaces."""
+    from dlightrag.utils import normalize_workspace
+
+    requested = normalize_workspace(raw)
+    if not requested:
+        return "default"
+
+    for known in known_workspaces:
+        candidate = normalize_workspace(known)
+        if candidate == requested:
+            return candidate
+    return "default"
+
+
 @router.get("/workspaces", response_class=HTMLResponse)
 async def workspace_list(request: Request, workspace: str = Depends(get_workspace)):
     """Return workspace list fragment."""
@@ -41,12 +56,17 @@ async def workspace_list(request: Request, workspace: str = Depends(get_workspac
 @router.post("/workspaces/switch")
 async def switch_workspace(request: Request):
     """Switch workspace via cookie."""
-    from dlightrag.utils import normalize_workspace
-
+    manager = get_manager(request)
     form = await request.form()
     raw = str(form.get("workspace", "default"))
-    # Sanitize: only allow [a-z0-9_]+, fall back to "default" on empty result.
-    workspace = normalize_workspace(raw) or "default"
+
+    try:
+        known_workspaces = await manager.list_workspaces()
+    except Exception:
+        logger.exception("Workspace listing failed")
+        known_workspaces = ["default"]
+
+    workspace = _workspace_cookie_value(raw, known_workspaces)
     response = RedirectResponse(url="/web/", status_code=303)
     response.set_cookie("dlightrag_workspace", workspace, httponly=True, samesite="lax")
     return response

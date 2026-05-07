@@ -124,6 +124,19 @@ class TestWebWorkspaces:
         assert resp.status_code in {302, 303, 307}
         assert resp.headers.get("location", "").endswith("/web/")
 
+    async def test_switch_workspace_ignores_unknown_tampered_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/web/workspaces/switch",
+            data={"workspace": "evil\r\nSet-Cookie: injected=1"},
+        )
+        cookie = resp.headers.get("set-cookie", "")
+
+        assert resp.status_code == 303
+        assert "dlightrag_workspace=default" in cookie
+        assert "injected" not in cookie
+
 
 # ---------------------------------------------------------------------------
 # TestWebWorkspaceCreateDelete
