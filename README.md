@@ -390,14 +390,21 @@ For self-hosted rerankers (Xinference, vLLM, TEI etc.), use `local_reranker` wit
 
 ### Observability (Langfuse)
 
-DlightRAG includes native tracing using [Langfuse](https://langfuse.com/). When configured, it records hierarchical observations for service pipelines, retrieval, reranking, LLM generations, and embedding calls. If keys are omitted, the tracing module operates as a pure no-op.
+DlightRAG includes native tracing using [Langfuse](https://langfuse.com/). When configured, it records hierarchical observations for service pipelines, retrieval, reranking, LLM generations, and embedding calls.
 
-Use the public and secret keys from a Langfuse project. `DLIGHTRAG_LANGFUSE_HOST`
-is the Langfuse API/UI base URL that the DlightRAG process can reach.
+Langfuse is optional. If `DLIGHTRAG_LANGFUSE_PUBLIC_KEY` and
+`DLIGHTRAG_LANGFUSE_SECRET_KEY` are both omitted, tracing is disabled and the
+observability layer is a pure no-op. If you want tracing, set both keys from the
+target Langfuse project. This is true for both Langfuse Cloud and local
+self-hosted Langfuse; only the key source and host URL differ.
+
+`DLIGHTRAG_LANGFUSE_HOST` is the Langfuse API/UI base URL that the DlightRAG
+process can reach.
 
 **Langfuse Cloud**
 
-Create a project in your chosen Langfuse Cloud region, then set:
+To enable tracing with Langfuse Cloud, create a project in your chosen Cloud
+region, copy that project's keys, then set:
 
 ```bash
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
@@ -411,8 +418,9 @@ DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 
 **Local self-host**
 
-Run Langfuse separately using the official v3 self-host stack, create or
-initialize a project in that Langfuse instance, then use that project's keys:
+To enable tracing with local self-hosted Langfuse, run Langfuse separately using
+the official v3 self-host stack, create or initialize a project in that local
+Langfuse instance, then use that local project's keys:
 
 ```bash
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
