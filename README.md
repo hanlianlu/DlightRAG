@@ -434,13 +434,26 @@ DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 DlightRAG runs only the Langfuse SDK client; it does not embed the Langfuse
 web/worker/database services in its own API process. The local helper targets
 expect the stack in `../langfuse-local` and bind the UI/API to
-`127.0.0.1:3300` to avoid the common `3000` development port:
+`127.0.0.1:3300` to avoid the common `3000` development port. `make
+langfuse-up` and `make langfuse-restart` run a headless bootstrap first: they
+ensure `../langfuse-local/.env` has `LANGFUSE_INIT_PROJECT_*` values and that
+DlightRAG's `.env` has matching `DLIGHTRAG_LANGFUSE_*` values before starting
+Langfuse.
 
 ```bash
+make langfuse-bootstrap   # optional: sync env files without starting Langfuse
 make langfuse-up
 make langfuse-health
 make langfuse-logs
 make langfuse-down
+```
+
+To preselect your own project keys instead of using the generated local values:
+
+```bash
+LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-... \
+LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-... \
+make langfuse-bootstrap
 ```
 
 If you create or rotate Langfuse project keys after DlightRAG has already
