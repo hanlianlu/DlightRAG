@@ -418,27 +418,32 @@ DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 
 **Local self-host**
 
-To enable tracing with local self-hosted Langfuse, run Langfuse separately using
-the official v3 self-host stack. The recommended path is headless initialization:
-set the Langfuse stack's `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` and
-`LANGFUSE_INIT_PROJECT_SECRET_KEY` before first startup, then set the matching
-DlightRAG keys before starting DlightRAG:
+DlightRAG does not embed the Langfuse web/worker/database services, but it does
+ship the local setup helper. For the default local self-host flow, do not edit
+the keys by hand. Run:
 
 ```bash
-DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
-DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
+make langfuse-up
+```
+
+Before Docker starts Langfuse, DlightRAG runs a headless bootstrap that writes
+matching project keys into both places:
+
+| File | Written keys |
+|---|---|
+| `../langfuse-local/.env` | `LANGFUSE_INIT_PROJECT_PUBLIC_KEY`, `LANGFUSE_INIT_PROJECT_SECRET_KEY` |
+| `.env` | `DLIGHTRAG_LANGFUSE_PUBLIC_KEY`, `DLIGHTRAG_LANGFUSE_SECRET_KEY`, `DLIGHTRAG_LANGFUSE_HOST` |
+
+The default local host is:
+
+```bash
 DLIGHTRAG_LANGFUSE_HOST=http://localhost:3300             # Local process -> local self-host
 DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 ```
 
-DlightRAG runs only the Langfuse SDK client; it does not embed the Langfuse
-web/worker/database services in its own API process. The local helper targets
-expect the stack in `../langfuse-local` and bind the UI/API to
-`127.0.0.1:3300` to avoid the common `3000` development port. `make
-langfuse-up` and `make langfuse-restart` run a headless bootstrap first: they
-ensure `../langfuse-local/.env` has `LANGFUSE_INIT_PROJECT_*` values and that
-DlightRAG's `.env` has matching `DLIGHTRAG_LANGFUSE_*` values before starting
-Langfuse.
+The helper expects the official Langfuse v3 stack in `../langfuse-local` and
+binds the UI/API to `127.0.0.1:3300` to avoid the common `3000` development
+port.
 
 ```bash
 make langfuse-bootstrap   # optional: sync env files without starting Langfuse
@@ -448,7 +453,8 @@ make langfuse-logs
 make langfuse-down
 ```
 
-To preselect your own project keys instead of using the generated local values:
+To preselect fixed project keys instead of using the generated local values,
+pass them to the bootstrap command:
 
 ```bash
 LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-... \
