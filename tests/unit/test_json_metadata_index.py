@@ -90,6 +90,14 @@ class TestQuery:
         assert result == ["doc1"]
 
     @pytest.mark.asyncio
+    async def test_query_by_filename_stem_substring(self, index: JsonMetadataIndex) -> None:
+        await index.upsert("doc1", {"filename_stem": "Annual_Report_2025"})
+        await index.upsert("doc2", {"filename_stem": "budget"})
+
+        result = await index.query(MetadataFilter(filename_stem="report"))
+        assert result == ["doc1"]
+
+    @pytest.mark.asyncio
     async def test_query_by_exact_extension(self, index: JsonMetadataIndex) -> None:
         await index.upsert("doc1", {"file_extension": "pdf"})
         await index.upsert("doc2", {"file_extension": "docx"})
