@@ -179,7 +179,9 @@ def test_init_tracing_filters_external_spans_by_default(monkeypatch: pytest.Monk
     should_export_span = captured["should_export_span"]
 
     assert captured["base_url"] == "https://cloud.langfuse.com"
-    assert should_export_span(SimpleNamespace(instrumentation_scope=SimpleNamespace(name="langfuse-sdk")))
+    assert should_export_span(
+        SimpleNamespace(instrumentation_scope=SimpleNamespace(name="langfuse-sdk"))
+    )
     assert not should_export_span(
         SimpleNamespace(instrumentation_scope=SimpleNamespace(name="openai"))
     )

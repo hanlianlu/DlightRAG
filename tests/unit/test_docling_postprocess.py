@@ -145,9 +145,7 @@ class TestPageIdx:
         assert result[0]["page_idx"] == 0
         assert result[1]["page_idx"] == 2
 
-    def test_docling_page_no_is_normalized_to_zero_based_page_idx(
-        self, tmp_path: Path
-    ) -> None:
+    def test_docling_page_no_is_normalized_to_zero_based_page_idx(self, tmp_path: Path) -> None:
         doc = _minimal_doc(
             texts=[
                 {

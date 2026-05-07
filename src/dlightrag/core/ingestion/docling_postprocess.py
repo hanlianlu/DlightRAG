@@ -42,9 +42,7 @@ def find_docling_json_export(artifacts_dir: Path, file_path: Path) -> Path | Non
         if candidate.is_file():
             return candidate
 
-    globbed = [
-        p for p in artifacts_dir.glob(f"{stem}_*/{stem}/docling/{filename}") if p.is_file()
-    ]
+    globbed = [p for p in artifacts_dir.glob(f"{stem}_*/{stem}/docling/{filename}") if p.is_file()]
     if not globbed:
         return None
 
