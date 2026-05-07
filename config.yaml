@@ -220,5 +220,5 @@ kg_entity_types:
 
 # langfuse_public_key:
 # langfuse_secret_key:
-# langfuse_host: http://localhost:3000  # Local self-host
+# langfuse_host: http://localhost:3300  # Local self-host
 # langfuse_export_external_spans: false  # keep false to avoid double-counting auto GenAI spans

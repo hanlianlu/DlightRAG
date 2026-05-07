@@ -397,14 +397,23 @@ To enable observability, set the following in your `.env`:
 ```bash
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
 DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
-DLIGHTRAG_LANGFUSE_HOST=http://localhost:3000          # Local self-host
+DLIGHTRAG_LANGFUSE_HOST=http://localhost:3300          # Local self-host
 DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false         # Keep false to avoid double-counting auto GenAI spans
 ```
 
 For local self-hosting, run the official Langfuse v3 Docker Compose stack
 separately, create or initialize a project, then use that project's public and
 secret keys here. DlightRAG runs only the SDK client; it does not embed the
-Langfuse web/worker/database services in its own API process.
+Langfuse web/worker/database services in its own API process. The local helper
+targets expect the stack in `../langfuse-local` and bind the UI/API to
+`127.0.0.1:3300` to avoid the common `3000` development port:
+
+```bash
+make langfuse-up
+make langfuse-health
+make langfuse-logs
+make langfuse-down
+```
 
 By default DlightRAG exports only observations created by its own wrappers. Set
 `DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=true` only if you intentionally want
