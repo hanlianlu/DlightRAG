@@ -20,11 +20,23 @@ class OpenAICompatProvider(CompletionProvider):
     Any endpoint that speaks the OpenAI chat completions protocol.
     model_kwargs are routed to extra_body for provider extensions
     (DeepSeek thinking, Kimi partial, etc.).
+
+    Tracks ``last_reasoning`` — the ``reasoning_content`` from the most
+    recent completion or stream call.  Consumers of thinking-mode models
+    must echo this back on the assistant message in follow-up requests.
     """
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._client: AsyncOpenAI | None = None
+        self.last_reasoning: str = ""
+
+    @staticmethod
+    def _extract_reasoning(message: Any) -> str:
+        """Extract ``reasoning_content`` from an OpenAI SDK message object."""
+        extras = getattr(message, "model_extra", None) or {}
+        rc = extras.get("reasoning_content")
+        return str(rc) if isinstance(rc, str) else ""
 
     def _get_client(self) -> AsyncOpenAI:
         if self._client is None:
@@ -56,7 +68,9 @@ class OpenAICompatProvider(CompletionProvider):
         if model_kwargs:
             call_kwargs["extra_body"] = model_kwargs
         response = await self._get_client().chat.completions.create(**call_kwargs)
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message
+        self.last_reasoning = self._extract_reasoning(message)
+        return message.content or ""
 
     async def stream(
         self,
@@ -82,7 +96,13 @@ class OpenAICompatProvider(CompletionProvider):
         if model_kwargs:
             call_kwargs["extra_body"] = model_kwargs
         response = await self._get_client().chat.completions.create(**call_kwargs)
+        reasoning_parts: list[str] = []
         async for chunk in response:
             delta = chunk.choices[0].delta
+            extras = getattr(delta, "model_extra", None) or {}
+            rc = extras.get("reasoning_content")
+            if isinstance(rc, str) and rc:
+                reasoning_parts.append(rc)
             if delta.content is not None:
                 yield delta.content
+        self.last_reasoning = "".join(reasoning_parts)
