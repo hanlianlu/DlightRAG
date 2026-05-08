@@ -40,7 +40,7 @@ chat:
 
 # ingest:
 #   provider: openai
-#   model: qwen3.5-opus:9b-80k
+#   model: gemma4:26b-a4b-it-q8_0
 #   base_url: http://host.docker.internal:11434/v1
 #   api_key: ollama
 
@@ -56,7 +56,7 @@ chat:
 #
 # keywords:
 #   provider: openai
-#   model: gemma4:9b-it-q4_K_M
+#   model: gemma4:26b-a4b-it-q8_0
 #   base_url: http://host.docker.internal:11434/v1
 #   api_key: ollama
 #
@@ -66,7 +66,7 @@ chat:
 #
 # vlm:
 #   provider: openai
-#   model: gemma4:26b-a4b-it-q4_K_M
+#   model: gemma4:26b-a4b-it-q8_0
 #   base_url: http://host.docker.internal:11434/v1
 #   api_key: ollama
 
@@ -101,7 +101,7 @@ rerank:
 #
 #   chat:
 #     provider: openai
-#     model: gemma4:26b-a4b-it-q4_K_M
+#     model: gemma4:26b-a4b-it-q8_0
 #     base_url: http://host.docker.internal:11434/v1
 #     api_key: ollama
 #     timeout: 180.0

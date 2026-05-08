@@ -17,7 +17,7 @@ def yaml_config_dir(tmp_path, monkeypatch):
     config_data = {
         "chat": {
             "provider": "openai",
-            "model": "qwen3:8b",
+            "model": "gemma4:26b-a4b-it-q8_0",
             "base_url": "http://localhost:11434/v1",
         },
         "embedding": {"model": "text-embedding-3-large", "dim": 512},
@@ -54,7 +54,7 @@ class TestFindYamlConfig:
 class TestYamlConfigLoading:
     def test_loads_from_yaml(self, yaml_config_dir):
         config = DlightragConfig()
-        assert config.chat.model == "qwen3:8b"
+        assert config.chat.model == "gemma4:26b-a4b-it-q8_0"
         assert config.chat.base_url == "http://localhost:11434/v1"
         assert config.embedding.dim == 512
         assert config.rerank.enabled is False
@@ -74,7 +74,7 @@ class TestYamlConfigLoading:
     def test_constructor_overrides_yaml(self, yaml_config_dir):
         config = DlightragConfig(top_k=300)
         assert config.top_k == 300  # constructor override
-        assert config.chat.model == "qwen3:8b"  # from yaml
+        assert config.chat.model == "gemma4:26b-a4b-it-q8_0"  # from yaml
 
 
 class TestBackwardCompat:

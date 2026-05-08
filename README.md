@@ -269,7 +269,7 @@ For unified mode, set `rag_mode: unified` in `config.yaml` and use multimodal mo
 rag_mode: unified
 
 chat:
-  model: qwen3-vl-32b          # must support vision
+  model: gemma4:26b-a4b-it-q8_0          # must support vision
 
 embedding:
   model: Qwen3-VL-Embedding    # must be multimodal
@@ -294,7 +294,7 @@ All three SDKs ship in the base install; no extras to install.
 # config.yaml — OpenAI-compatible (Ollama example)
 chat:
   provider: openai
-  model: qwen3:8b
+  model: gemma4:26b-a4b-it-q8_0
   base_url: http://localhost:11434/v1
 
 # config.yaml — Anthropic (native SDK)
@@ -337,7 +337,7 @@ extract:
 # Cheap local fallback for high-volume keyword extraction:
 keywords:
   provider: openai
-  model: gemma4:9b-it-q4_K_M
+  model: gemma4:26b-a4b-it-q8_0
   base_url: http://host.docker.internal:11434/v1
   api_key: ollama
 ```
