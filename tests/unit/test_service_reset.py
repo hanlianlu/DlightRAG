@@ -47,14 +47,9 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
 
     service._lightrag = lightrag
 
-    # Mock DlightRAG stores
+    # Mock DlightRAG-owned domain store.
     service._metadata_index = MagicMock()
     service._metadata_index.clear = AsyncMock()
-
-    service._visual_chunks = MagicMock()
-    service._visual_chunks.drop = AsyncMock(
-        return_value={"status": "success", "message": "dropped"}
-    )
 
     return service
 
@@ -127,22 +122,11 @@ class TestAresetPhase2:
         await service.areset()
         service._metadata_index.clear.assert_awaited_once()
 
-    async def test_drops_visual_chunks(self) -> None:
-        service = _make_service()
-        await service.areset()
-        service._visual_chunks.drop.assert_awaited_once()
-
     async def test_skips_none_metadata_index(self) -> None:
         service = _make_service()
         service._metadata_index = None
         result = await service.areset()
         assert "metadata_index" not in result["domain_stores_dropped"]
-
-    async def test_skips_none_visual_chunks(self) -> None:
-        service = _make_service()
-        service._visual_chunks = None
-        result = await service.areset()
-        assert "visual_chunks" not in result["domain_stores_dropped"]
 
 
 class TestAresetPhase3:

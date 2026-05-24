@@ -21,8 +21,8 @@ primary              -> physical streaming replication -> replica
 
 - LightRAG storages are bound to an existing PostgreSQL pool without
   `initialize_storages()` DDL.
-- DlightRAG metadata, artifact, provenance, visual chunk, and BM25 stores verify
-  schema/index existence without creating tables or indexes.
+- DlightRAG metadata and BM25 stores verify schema/index existence without
+  creating tables or indexes.
 - Missing schema is a startup error; initialize or migrate on primary first.
 
 ## Configuration

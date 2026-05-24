@@ -45,7 +45,6 @@ class TestMetadataSQL:
         assert "ingest_strategy" in _UPSERT
         assert "parse_engine" in _UPSERT
         assert "process_options" in _UPSERT
-        assert "artifact_status" in _UPSERT
 
     def test_pg_metadata_index_does_not_query_lightrag_doc_status_metadata(self):
         from dlightrag.storage import pg_metadata_index as module

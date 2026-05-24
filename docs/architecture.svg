@@ -169,8 +169,8 @@
 
   <rect class="box" x="470" y="734" width="340" height="86" stroke="#22c55e"/>
   <text class="label" text-anchor="middle" x="640" y="759">Storage Surfaces</text>
-  <text class="small" text-anchor="middle" x="640" y="778">pgvector HNSW, Apache AGE, pg_textsearch BM25</text>
-  <text class="small" text-anchor="middle" x="640" y="795">metadata, artifacts, provenance, visual side tables</text>
+  <text class="small" text-anchor="middle" x="640" y="778">LightRAG chunks/doc status/KG/vectors</text>
+  <text class="small" text-anchor="middle" x="640" y="795">DlightRAG metadata index + pg_textsearch BM25</text>
 
   <rect class="box box-green" x="920" y="748" width="240" height="58"/>
   <text class="label" text-anchor="middle" x="1040" y="771">Read Replica</text>

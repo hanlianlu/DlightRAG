@@ -94,7 +94,7 @@ primary                      -> physical streaming replication -> replica
 ```
 
 Set `runtime_role: ingest|admin|query`. Ingest/admin workers attach to the
-primary endpoint and may run DDL, write sidecar tables, update metadata, and
+primary endpoint and may run DDL, ingest LightRAG data, update metadata, and
 perform resets. Query workers attach to `postgres_replica_*`, skip advisory
 locks and write-time initialization, verify that required LightRAG/DlightRAG
 tables already exist, and reject mutating APIs.
@@ -110,10 +110,10 @@ DlightRAG uses two asyncpg pools per process target:
 | Pool | Owner | Purpose |
 |---|---|---|
 | LightRAG ClientManager pool | LightRAG | KV, vector, graph, doc status |
-| `pg_pool` singleton | DlightRAG | Metadata registry, document artifacts, chunk provenance, visual side tables |
+| `pg_pool` singleton | DlightRAG | Metadata index, BM25, workspace/role metadata |
 
 The dedicated DlightRAG pool avoids contention between LightRAG internals and
-domain side-table reads/writes. In query role, both pools attach to the replica
+metadata/BM25 reads and writes. In query role, both pools attach to the replica
 and only read or verify schema.
 
 ### Replica Requirements

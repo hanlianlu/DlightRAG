@@ -22,13 +22,13 @@ class UnifiedRetriever:
         backend: Any,
         bm25: Any | None,
         metadata_index: Any,
-        chunk_provenance: Any,
+        stores: Any,
         rrf_k: int = 60,
     ) -> None:
         self._backend = backend
         self._bm25 = bm25
         self._metadata_index = metadata_index
-        self._chunk_provenance = chunk_provenance
+        self._stores = stores
         self._rrf_k = rrf_k
 
     async def aretrieve(
@@ -83,7 +83,7 @@ class UnifiedRetriever:
             return None
         chunk_ids = await metadata_retrieve(
             metadata_index=self._metadata_index,
-            chunk_provenance=self._chunk_provenance,
+            stores=self._stores,
             filters=metadata_filter,
         )
         return set(chunk_ids)

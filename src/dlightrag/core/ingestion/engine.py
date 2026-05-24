@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -46,8 +47,6 @@ class UnifiedIngestionEngine:
         lightrag: Any,
         stores: Any,
         metadata_index: Any,
-        document_artifacts: Any,
-        chunk_provenance: Any,
         multimodal_embedder: Any,
         workspace: str,
         parser_rules: str,
@@ -60,8 +59,6 @@ class UnifiedIngestionEngine:
         self._lightrag = lightrag
         self._stores = stores
         self._metadata_index = metadata_index
-        self._document_artifacts = document_artifacts
-        self._chunk_provenance = chunk_provenance
         self._multimodal_embedder = multimodal_embedder
         self._workspace = workspace
         self._parser_rules = parser_rules
@@ -172,35 +169,11 @@ class UnifiedIngestionEngine:
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
         lightrag_record = self._lightrag_metadata(full_doc, doc_status)
         await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
-        await self._document_artifacts.upsert(
-            {
-                "full_doc_id": doc_id,
-                "source_uri": file_path.as_uri(),
-                "parser": "lightrag",
-                "parse_engine": lightrag_record.get("lightrag.parse_engine"),
-                "process_options": lightrag_record.get("lightrag.process_options"),
-                "chunk_options": lightrag_record.get("lightrag.chunk_options") or {},
-                "content_hash": lightrag_record.get("lightrag.content_hash"),
-                "sidecar_location": lightrag_record.get("lightrag.sidecar_location"),
-                "metadata": metadata_record,
-            }
-        )
 
-        provenance = [
-            {
-                "chunk_id": chunk_id,
-                "full_doc_id": doc_id,
-                "embedding_input_kind": "text",
-                "sidecar_type": "block",
-            }
-            for chunk_id in light_chunks
-        ]
         direct_chunks = await self._ingest_sidecar_direct_images(
             doc_id=doc_id,
             sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
         )
-        provenance.extend(direct_chunks["provenance"])
-        await self._chunk_provenance.upsert_many(provenance)
 
         return {
             "doc_id": doc_id,
@@ -219,11 +192,10 @@ class UnifiedIngestionEngine:
     ) -> dict[str, Any]:
         artifact_dir = _artifact_dir_from_uri(sidecar_location)
         if artifact_dir is None or not artifact_dir.exists():
-            return {"chunk_ids": [], "provenance": []}
+            return {"chunk_ids": []}
 
         rows: dict[str, dict[str, Any]] = {}
         vectors: dict[str, list[float]] = {}
-        provenance = []
         for ref in collect_sidecar_refs(artifact_dir):
             if ref.asset_path is None or not ref.asset_path.exists():
                 continue
@@ -237,17 +209,6 @@ class UnifiedIngestionEngine:
             )
             rows[chunk_id] = row
             vectors[chunk_id] = vector
-            provenance.append(
-                {
-                    "chunk_id": chunk_id,
-                    "full_doc_id": doc_id,
-                    "embedding_input_kind": "image",
-                    "sidecar_type": ref.sidecar_type,
-                    "sidecar_id": ref.sidecar_id,
-                    "sidecar_path": str(ref.asset_path),
-                    "page_index": ref.page_number,
-                }
-            )
         if rows:
             await self._stores.upsert_chunks_with_vectors(
                 rows,
@@ -257,7 +218,7 @@ class UnifiedIngestionEngine:
                 ),
                 max_token_size=8192,
             )
-        return {"chunk_ids": list(rows), "provenance": provenance}
+        return {"chunk_ids": list(rows)}
 
     async def _ingest_native_image(
         self,
@@ -273,6 +234,20 @@ class UnifiedIngestionEngine:
             ref=ref,
             embedder=self._multimodal_embedder,
             text_content=f"Native image: {file_path.name}",
+        )
+        content_hash = _file_sha256(file_path)
+        await self._stores.upsert_document_record(
+            doc_id=doc_id,
+            content=f"Native image: {file_path.name}",
+            file_path=str(file_path),
+            chunks=[chunk_id],
+            parse_engine="native_image",
+            parse_format=FULL_DOCS_FORMAT_RAW,
+            content_hash=content_hash,
+            metadata={"source_kind": "image"},
+            sidecar_location=file_path.as_uri(),
+            process_options="P",
+            chunk_options=self._chunk_options,
         )
         await self._stores.upsert_chunks_with_vectors(
             {chunk_id: row},
@@ -296,26 +271,6 @@ class UnifiedIngestionEngine:
             )
             await self._lightrag.apipeline_process_enqueue_documents()
         await self._metadata_index.upsert(doc_id, metadata_record)
-        await self._document_artifacts.upsert(
-            {
-                "full_doc_id": doc_id,
-                "source_uri": file_path.as_uri(),
-                "parser": "native_image",
-                "metadata": metadata_record,
-            }
-        )
-        await self._chunk_provenance.upsert_many(
-            [
-                {
-                    "chunk_id": chunk_id,
-                    "full_doc_id": doc_id,
-                    "embedding_input_kind": "image",
-                    "sidecar_type": "native_image",
-                    "sidecar_id": ref.sidecar_id,
-                    "sidecar_path": str(file_path),
-                }
-            ]
-        )
         return {
             "doc_id": doc_id,
             "source_kind": "image",
@@ -358,3 +313,11 @@ def _sidecar_text_content(ref: LightRAGSidecarRef) -> str:
     if caption := payload.get("caption"):
         return str(caption)
     return f"{ref.sidecar_type} {ref.sidecar_id}"
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"

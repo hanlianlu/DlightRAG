@@ -426,10 +426,6 @@ class TestRAGServiceLightRAGMainPath:
         service._metadata_index = MagicMock()
         service._metadata_index.get = AsyncMock(return_value={"page_count": 0})
         service._metadata_index.delete = AsyncMock()
-        service._document_artifacts = MagicMock()
-        service._document_artifacts.delete_doc = AsyncMock()
-        service._chunk_provenance = MagicMock()
-        service._chunk_provenance.delete_doc = AsyncMock()
 
         result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
 
@@ -438,8 +434,6 @@ class TestRAGServiceLightRAGMainPath:
         service._lightrag.adelete_by_doc_id.assert_awaited_once_with(
             "old-doc", delete_llm_cache=True
         )
-        service._document_artifacts.delete_doc.assert_awaited_once_with("old-doc")
-        service._chunk_provenance.delete_doc.assert_awaited_once_with("old-doc")
         service._metadata_index.delete.assert_awaited_once_with("old-doc")
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
@@ -463,25 +457,21 @@ class TestRAGServiceLightRAGMainPath:
         assert result.contexts == {"chunks": []}
 
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
-        """close() calls finalize on visual_chunks and LightRAG storages."""
+        """close() finalizes LightRAG storages."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._visual_chunks = AsyncMock()
         service._lightrag = AsyncMock()
 
         await service.close()
 
-        service._visual_chunks.finalize.assert_awaited_once()
         service._lightrag.finalize_storages.assert_awaited_once()
 
     # -- File deletion --
 
     async def test_adelete_files_unified(self, test_config: DlightragConfig) -> None:
-        """Deletion removes LightRAG data, visual chunks, and indexes."""
+        """Deletion removes LightRAG data and metadata index entries."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._visual_chunks = MagicMock()
-        service._visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._lightrag.doc_status = MagicMock()
@@ -499,7 +489,6 @@ class TestRAGServiceLightRAGMainPath:
         assert results[0]["status"] == "deleted"
         service._lightrag.adelete_by_doc_id.assert_awaited_once()
         service._metadata_index.delete.assert_awaited_once_with("d1")
-        service._visual_chunks.delete.assert_awaited_once()
 
     async def test_adelete_files_unified_not_found(self, test_config: DlightragConfig) -> None:
         """Deletion returns not_found when doc is not in doc_status or metadata."""
@@ -517,11 +506,9 @@ class TestRAGServiceLightRAGMainPath:
     async def test_adelete_files_unified_continues_after_layer1_failure(
         self, test_config: DlightragConfig
     ) -> None:
-        """Layers 2 (visual_chunks) and 3 (indexes) still run when Layer 1 (LightRAG) fails."""
+        """Metadata cleanup still runs when LightRAG deletion fails."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._visual_chunks = MagicMock()
-        service._visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=RuntimeError("LightRAG down"))
         service._lightrag.doc_status = MagicMock()
@@ -536,21 +523,4 @@ class TestRAGServiceLightRAGMainPath:
         results = await service.adelete_files(filenames=["a.pdf"])
 
         assert results[0]["status"] == "deleted_with_errors"
-        # Layers 2 and 3 ran despite Layer 1 failure
-        service._visual_chunks.delete.assert_awaited_once()
         service._metadata_index.delete.assert_awaited_once_with("d1")
-
-
-# ---------------------------------------------------------------------------
-# TestVisualChunksStorage
-# ---------------------------------------------------------------------------
-
-
-class TestVisualChunksStorage:
-    """Test that visual chunks use PGJsonbKVStorage."""
-
-    def test_runtime_uses_pgjsonb(self) -> None:
-        """Visual chunks always use PGJsonbKVStorage."""
-        from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
-
-        assert PGJsonbKVStorage.__name__ == "PGJsonbKVStorage"

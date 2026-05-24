@@ -111,7 +111,7 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
 
         candidate_chunks = await metadata_retrieve(
             metadata_index=service._metadata_index,
-            chunk_provenance=service._chunk_provenance,
+            stores=service._lightrag_stores,
             filters=MetadataFilter(custom={"e2e_case": "pg18"}),
         )
         assert candidate_chunks == [chunk_id]

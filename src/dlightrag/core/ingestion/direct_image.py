@@ -40,7 +40,13 @@ async def build_direct_image_chunk(
         "content": text_content,
         "file_path": str(ref.asset_path),
         "heading": {},
-        "sidecar": {"type": ref.sidecar_type, "id": ref.sidecar_id},
+        "sidecar": {
+            "type": ref.sidecar_type,
+            "id": ref.sidecar_id,
+            "path": str(ref.asset_path),
+            "page_index": ref.page_number,
+            "bbox": ref.bbox,
+        },
         "llm_cache_list": [],
     }
     return chunk_id, row, vector

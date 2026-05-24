@@ -188,7 +188,6 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
     MetadataFieldDef("ingest_strategy", "VARCHAR(64)"),
     MetadataFieldDef("parse_engine", "VARCHAR(64)"),
     MetadataFieldDef("process_options", "JSONB DEFAULT '{}'"),
-    MetadataFieldDef("artifact_status", "VARCHAR(64)"),
     MetadataFieldDef("ingested_at", "TIMESTAMPTZ DEFAULT NOW()"),
     MetadataFieldDef(
         "custom_metadata",

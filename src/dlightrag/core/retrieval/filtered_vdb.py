@@ -217,7 +217,7 @@ async def fetch_missing_chunks(
     available; this is required so downstream
     ``canonicalize_reference_ids`` can assign a stable doc-level
     ``reference_id`` (the upstream helper skips chunks with empty
-    file_path). Callers may further enrich with visual data afterward.
+    file_path). Callers may further enrich with image data afterward.
     """
     active_ids = _active_filter.get()
     if active_ids is None:
@@ -227,6 +227,17 @@ async def fetch_missing_chunks(
         return []
 
     inject_ids = sorted(missing)[:max_count]
+    chunks = await fetch_chunks_by_ids(text_chunks, inject_ids)
+    if chunks:
+        logger.info("Force-injected %d metadata-resolved chunks", len(chunks))
+    return chunks
+
+
+async def fetch_chunks_by_ids(text_chunks: Any, chunk_ids: list[str]) -> list[dict[str, Any]]:
+    """Fetch explicit LightRAG text chunk ids and format them for retrieval contexts."""
+    if not chunk_ids:
+        return []
+    inject_ids = list(dict.fromkeys(chunk_ids))
     raw_contents = await text_chunks.get_by_ids(inject_ids)
 
     chunks: list[dict[str, Any]] = []
@@ -247,6 +258,4 @@ async def fetch_missing_chunks(
                 "file_path": file_path,
             }
         )
-    if chunks:
-        logger.info("Force-injected %d metadata-resolved chunks", len(chunks))
     return chunks

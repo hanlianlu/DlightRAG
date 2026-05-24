@@ -12,14 +12,14 @@ from dlightrag.core.retrieval.retriever import UnifiedRetriever
 async def test_unified_retriever_empty_metadata_candidates_short_circuits() -> None:
     metadata_index = AsyncMock()
     metadata_index.query.return_value = []
-    chunk_provenance = AsyncMock()
+    stores = AsyncMock()
     backend = AsyncMock()
     bm25 = AsyncMock()
     retriever = UnifiedRetriever(
         backend=backend,
         bm25=bm25,
         metadata_index=metadata_index,
-        chunk_provenance=chunk_provenance,
+        stores=stores,
     )
 
     result = await retriever.aretrieve("query", metadata_filter=MetadataFilter(filename="x.pdf"))
@@ -34,7 +34,7 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
 
     metadata_index = AsyncMock()
     metadata_index.query.return_value = []
-    chunk_provenance = AsyncMock()
+    stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
         contexts={"chunks": [{"chunk_id": "semantic-a"}], "entities": [], "relationships": []}
@@ -45,7 +45,7 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
         backend=backend,
         bm25=bm25,
         metadata_index=metadata_index,
-        chunk_provenance=chunk_provenance,
+        stores=stores,
     )
 
     result = await retriever.aretrieve(
@@ -64,7 +64,7 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
     from dlightrag.core.retrieval.protocols import RetrievalResult
 
     metadata_index = AsyncMock()
-    chunk_provenance = AsyncMock()
+    stores = AsyncMock()
     backend = AsyncMock()
     backend.aretrieve.return_value = RetrievalResult(
         contexts={
@@ -79,7 +79,7 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
         backend=backend,
         bm25=bm25,
         metadata_index=metadata_index,
-        chunk_provenance=chunk_provenance,
+        stores=stores,
         rrf_k=60,
     )
 

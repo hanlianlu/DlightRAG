@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Metadata retrieval path: resolve hard filters to provenance chunk IDs."""
+"""Metadata retrieval path: resolve hard filters to LightRAG chunk IDs."""
 
 from __future__ import annotations
 
@@ -15,16 +15,16 @@ logger = logging.getLogger(__name__)
 async def metadata_retrieve(
     *,
     metadata_index: MetadataIndexProtocol,
-    chunk_provenance: Any,
+    stores: Any,
     filters: MetadataFilter,
 ) -> list[str]:
-    """Resolve metadata filters to chunk IDs through DlightRAG provenance."""
+    """Resolve metadata filters to chunk IDs through LightRAG text_chunks."""
     doc_ids = await metadata_index.query(filters)
     if not doc_ids:
         logger.info("[MetadataPath] filters matched 0 documents")
         return []
 
-    chunk_ids = await chunk_provenance.chunk_ids_for_docs(doc_ids)
+    chunk_ids = await stores.chunk_ids_for_docs(doc_ids)
     logger.info(
         "[MetadataPath] filters matched %d doc(s), resolved %d chunk(s)",
         len(doc_ids),
