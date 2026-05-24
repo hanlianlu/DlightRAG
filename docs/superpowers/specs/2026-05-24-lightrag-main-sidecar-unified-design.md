@@ -324,13 +324,15 @@ Context mapping is mandatory:
 - Image queries call image embedding with `context="query"`.
 - LightRAG receives an `EmbeddingFunc(..., supports_asymmetric=True)` whenever the selected provider supports task-aware query/document routing.
 
+This context is an embedding-generation hint, not a vector-store query flag. The stored vectors are already produced with document/index semantics; query-time retrieval first produces a query vector with query semantics, then the vector store compares vectors normally. DlightRAG APIs should therefore avoid ambiguous names such as `embed_pages()` and instead expose separate indexing/query call sites such as `embed_index_images(..., context="document")` and `embed_query_images(..., context="query")`.
+
 ### 7.2 Provider Matrix
 
 | Provider | Target models | Context mapping | Image payload | Dimension policy |
 |---|---|---|---|---|
 | `voyage` | `voyage-multimodal-3.5` | `query`/`document` -> `input_type` | `/multimodalembeddings` `image_base64` content | default `1024`; validate returned dim. |
 | `dashscope_qwen` | `qwen3-vl-embedding` cloud API | provider task/instruction/fusion parameters where supported | DashScope multimodal `contents` with text/image items | cloud default `2560`; allow configured dimensions such as `2048`, `1536`, `1024`, `768`, `512`, `256`. |
-| `qwen_openai_compatible` | LM Studio/vLLM-style `qwen3-vl-embedding-2b` and `qwen3-vl-embedding-8b` | provider-specific instruction or explicit task mode when the server supports it | OpenAI-compatible `input` using text and image data URIs | validate returned dim; expected local model dims include `2048` for 2B and `4096` for 8B unless the serving stack documents projection. |
+| `qwen_openai_compatible` | LM Studio/vLLM-style `qwen3-vl-embedding-2b` and `qwen3-vl-embedding-8b` | no asymmetric mapping by default; use provider-specific instruction or explicit task mode only when the server documents it | OpenAI-compatible `input` using text and image data URIs | validate returned dim; expected local model dims include `2048` for 2B and `4096` for 8B unless the serving stack documents projection. |
 | `gemini` | `gemini-embedding-2` | map query/document to the native retrieval task behavior | native Google multimodal embedding request | default `3072`; common configured dims `1536` or `768`. |
 | `jina` | Jina multimodal embeddings v4 | `query` -> `retrieval.query`, `document` -> `retrieval.passage` | Jina text/image input items | default dense `2048`; validate returned dim. |
 | `openai_compatible` | explicit local or proxy provider | only asymmetric if configured/probed as task-aware | data URI passthrough if the server accepts images | no hard default; startup probe and returned-dim validation are required. |
@@ -346,6 +348,7 @@ Validation policy:
 - The provider must report `supports_images=True` or pass an image embedding probe.
 - Known text-only models fail startup before LightRAG initialization.
 - The returned vector length must equal `embedding.dim`.
+- `supports_asymmetric=True` is allowed only for providers with native task parameters or an explicit configured query/document instruction strategy. It must not be inferred from OpenAI compatibility alone.
 - If `supports_asymmetric=True`, both query and document probes should be exercised where provider cost allows; unit tests can mock this.
 - A provider/model/dimension change after indexing must fail fast unless the workspace is explicitly reset or vector indexes are rebuilt.
 

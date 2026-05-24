@@ -86,7 +86,7 @@ Delete after replacements are green:
 Keep and move where useful:
 
 - multimodal embedding provider code from `src/dlightrag/models/providers/`
-- `VisualEmbedder` logic from `src/dlightrag/unifiedrepresent/embedder.py`
+- reusable image embedding helper logic from `src/dlightrag/unifiedrepresent/embedder.py`, renamed into explicit index/query image entry points
 - image query helper ideas from `src/dlightrag/unifiedrepresent/retriever.py`
 - metadata field registry and PG metadata index structure
 
@@ -821,16 +821,19 @@ def test_jina_payload_maps_context_to_retrieval_task() -> None:
     assert payload["input"] == [{"image": "data:image/jpeg;base64,abc"}]
 
 
-def test_qwen_openai_compat_payload_preserves_image_data_uri() -> None:
-    payload = QwenOpenAICompatEmbedProvider().build_payload(
+def test_qwen_openai_compat_payload_preserves_image_data_uri_without_task_hint() -> None:
+    provider = QwenOpenAICompatEmbedProvider()
+    payload = provider.build_payload(
         "qwen3-vl-embedding-2b",
         [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
         context="document",
         output_dimension=2048,
     )
 
+    assert provider.supports_asymmetric is False
     assert payload["input"] == ["data:image/png;base64,abc"]
     assert payload["encoding_format"] == "float"
+    assert "input_type" not in payload
 ```
 
 Create `tests/unit/test_multimodal_embedding.py`:
@@ -843,7 +846,7 @@ from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 from dlightrag.models.providers.embed_providers import VoyageEmbedProvider
 
 
-def test_visual_embedder_uses_document_context_for_images() -> None:
+def test_image_embedder_uses_separate_index_and_query_contexts() -> None:
     provider = VoyageEmbedProvider()
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -853,10 +856,13 @@ def test_visual_embedder_uses_document_context_for_images() -> None:
         provider=provider,
     )
 
-    payload = embedder.build_image_payload_for_test(Image.new("RGB", (1, 1), "white"), context="document")
+    image = Image.new("RGB", (1, 1), "white")
+    index_payload = embedder.build_image_payload_for_test(image, context="document")
+    query_payload = embedder.build_image_payload_for_test(image, context="query")
 
-    assert payload["input_type"] == "document"
-    assert payload["inputs"][0]["content"][0]["type"] == "image_base64"
+    assert index_payload["input_type"] == "document"
+    assert query_payload["input_type"] == "query"
+    assert index_payload["inputs"][0]["content"][0]["type"] == "image_base64"
 
 
 def test_dimension_mismatch_raises() -> None:
@@ -1019,7 +1025,7 @@ class DashScopeQwenEmbedProvider(EmbedProvider):
 
 class QwenOpenAICompatEmbedProvider(OpenAICompatEmbedProvider):
     supports_images = True
-    supports_asymmetric = True
+    supports_asymmetric = False
     default_dim = 2048
     known_dims = None
 
@@ -1050,7 +1056,7 @@ class JinaEmbedProvider(EmbedProvider):
         return {"model": model, "task": task, "input": [_to_jina_item(item) for item in inputs]}
 ```
 
-Keep `OpenAICompatEmbedProvider` for explicit `openai_compatible` local/proxy servers, but mark `supports_asymmetric=False` unless config or a startup probe proves task routing. Keep `OllamaEmbedProvider` text-only by default; it must not pass service startup for the multimodal architecture unless a future provider-specific image probe is added.
+Keep `QwenOpenAICompatEmbedProvider` and `OpenAICompatEmbedProvider` image-capable where the server accepts image data URIs, but mark `supports_asymmetric=False` by default. OpenAI compatibility proves payload shape, not query/document task support. Enable asymmetric behavior only through a separate configured adapter when the serving stack documents a task parameter or instruction strategy. Keep `OllamaEmbedProvider` text-only by default; it must not pass service startup for the multimodal architecture unless a future provider-specific image probe is added.
 
 Provider registry keys are:
 
@@ -1154,7 +1160,7 @@ class MultimodalEmbedder:
         return await asyncio.gather(*(one(image) for image in images))
 
     async def probe_image_embedding(self) -> None:
-        await self.embed_images([Image.new("RGB", (1, 1), "white")], context="document")
+        await self.embed_index_images([Image.new("RGB", (1, 1), "white")])
 
     def build_image_payload_for_test(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
         return self._build_image_payload(image, context=context)
@@ -1180,6 +1186,17 @@ class MultimodalEmbedder:
         if vectors and len(vectors[0]) != self.dim:
             raise ValueError(f"Expected embedding dim {self.dim}, got {len(vectors[0])}")
 
+```
+
+Do not keep the old `VisualEmbedder.embed_pages()` API name. The new module should expose separate call sites for index-time and query-time image embeddings so context cannot be accidentally chosen by the caller:
+
+```python
+async def embed_index_images(self, images: list[Image.Image]) -> list[list[float]]:
+    return await self.embed_images(images, context="document")
+
+
+async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
+    return await self.embed_images(images, context="query")
 ```
 
 - [ ] **Step 7: Route LightRAG text embeddings through the multimodal embedder**
@@ -1765,7 +1782,7 @@ async def build_direct_image_chunk(
     if ref.asset_path is None:
         raise ValueError(f"{ref.sidecar_type}:{ref.sidecar_id} has no asset_path")
     image = Image.open(ref.asset_path).convert("RGB")
-    vector = (await embedder.embed_images([image], context="document"))[0]
+    vector = (await embedder.embed_index_images([image]))[0]
     chunk_id = direct_image_chunk_id(workspace, full_doc_id, ref)
     row = {
         "content": text_content,
@@ -2241,7 +2258,7 @@ chunks = rrf_fuse([lightrag_chunks, bm25_chunks, visual_chunks], k=self._rrf_k)[
 
 Set `query_param = QueryParam(mode="mix", top_k=self._top_k, chunk_top_k=self._chunk_top_k)` and never expose LightRAG `hybrid` mode.
 
-Implement `_direct_visual()` so every query image is decoded and embedded with `embedder.embed_images(images, context="query")`; apply `candidate_ids` before returning ranked chunks.
+Implement `_direct_visual()` so every query image is decoded and embedded with `embedder.embed_query_images(images)`; apply `candidate_ids` before returning ranked chunks.
 
 - [ ] **Step 7: Wire BM25 into service startup**
 
