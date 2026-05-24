@@ -18,6 +18,7 @@ import os
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlencode
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -33,9 +34,26 @@ _LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(
         "SURROUNDING_LEADING_MAX_TOKENS",
         "SURROUNDING_TRAILING_MAX_TOKENS",
         "LIGHTRAG_FORCE_REPARSE_MINERU",
+        "MINERU_API_MODE",
+        "MINERU_API_TOKEN",
+        "MINERU_OFFICIAL_ENDPOINT",
+        "MINERU_MODEL_VERSION",
+        "MINERU_IS_OCR",
+        "MINERU_POLL_INTERVAL_SECONDS",
+        "MINERU_MAX_POLLS",
+        "MINERU_LANGUAGE",
+        "MINERU_ENABLE_TABLE",
+        "MINERU_ENABLE_FORMULA",
+        "MINERU_PAGE_RANGES",
+        "MINERU_ENGINE_VERSION",
+        "MINERU_LOCAL_ENDPOINT",
+        "MINERU_LOCAL_BACKEND",
+        "MINERU_LOCAL_PARSE_METHOD",
+        "MINERU_LOCAL_IMAGE_ANALYSIS",
+        "MINERU_LOCAL_START_PAGE_ID",
+        "MINERU_LOCAL_END_PAGE_ID",
     }
 )
-_LIGHTRAG_SIDECAR_ENV_PREFIXES = ("MINERU_",)
 
 
 def _find_env_file() -> Path | None:
@@ -61,7 +79,7 @@ def _iter_env_files(env_file: Any) -> Iterable[Path]:
 
 
 def _is_lightrag_sidecar_env_key(key: str) -> bool:
-    return key in _LIGHTRAG_SIDECAR_ENV_KEYS or key.startswith(_LIGHTRAG_SIDECAR_ENV_PREFIXES)
+    return key in _LIGHTRAG_SIDECAR_ENV_KEYS
 
 
 def _load_lightrag_sidecar_env(env_file: Any, *, force: bool = False) -> None:
@@ -154,7 +172,54 @@ class ExtractionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     use_json: bool = True
+    language: str = "English"
     entity_type_prompt_file: str | None = None
+
+
+class VLMSidecarConfig(BaseModel):
+    """LightRAG visual sidecar analysis settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    max_image_bytes: int = 5_242_880
+    surrounding_leading_max_tokens: int | None = None
+    surrounding_trailing_max_tokens: int | None = None
+
+
+class MinerUSidecarConfig(BaseModel):
+    """LightRAG MinerU parser sidecar settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_mode: Literal["local", "official"] = "local"
+    api_token: str | None = None
+    official_endpoint: str = "https://mineru.net"
+    model_version: str = "vlm"
+    is_ocr: bool = False
+    poll_interval_seconds: int = 2
+    max_polls: int = 180
+    language: str = "ch"
+    enable_table: bool = True
+    enable_formula: bool = True
+    page_ranges: str | None = None
+    engine_version: str | None = None
+    force_reparse: bool = False
+    local_endpoint: str = "http://127.0.0.1:8210"
+    local_backend: str = "hybrid-auto-engine"
+    local_parse_method: Literal["auto", "txt", "ocr"] = "auto"
+    local_image_analysis: bool = True
+    local_start_page_id: int | None = None
+    local_end_page_id: int | None = None
+
+
+class ParserSidecarsConfig(BaseModel):
+    """Typed config that DlightRAG bridges into LightRAG parser env vars."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    vlm: VLMSidecarConfig = Field(default_factory=VLMSidecarConfig)
+    mineru: MinerUSidecarConfig = Field(default_factory=MinerUSidecarConfig)
 
 
 class MetadataConfig(BaseModel):
@@ -283,6 +348,14 @@ class DlightragConfig(BaseSettings):
     postgres_pool_max_size: int = Field(
         default=10, description="DlightRAG domain store pool max connections."
     )
+    postgres_session_settings: dict[str, str | int | float | bool] = Field(
+        default_factory=dict,
+        description="Per-connection PostgreSQL GUCs applied to both LightRAG and DlightRAG pools.",
+    )
+    postgres_statement_cache_size: int | None = Field(
+        default=None,
+        description="Optional asyncpg statement cache size for LightRAG and DlightRAG pools.",
+    )
     workspace: str = Field(default="default")
 
     postgres_required_major: int = Field(default=18)
@@ -331,6 +404,7 @@ class DlightragConfig(BaseSettings):
     embedding: EmbeddingConfig  # required, no default
     rerank: RerankConfig = Field(default_factory=RerankConfig)
     parser: ParserConfig = Field(default_factory=ParserConfig)
+    parser_sidecars: ParserSidecarsConfig = Field(default_factory=ParserSidecarsConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     metadata: MetadataConfig = Field(default_factory=MetadataConfig)
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
@@ -538,6 +612,69 @@ class DlightragConfig(BaseSettings):
             "database": self._pg_endpoint_value(resolved, "database"),
         }
 
+    @staticmethod
+    def _env_value(value: str | int | float | bool | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        text = str(value).strip()
+        return text or None
+
+    def postgres_server_settings_dict(self) -> dict[str, str]:
+        """Return asyncpg server_settings for both LightRAG and DlightRAG pools."""
+        settings: dict[str, str] = {"hnsw.ef_search": str(self.pg_hnsw_ef_search)}
+        for key, value in self.postgres_session_settings.items():
+            rendered = self._env_value(value)
+            if rendered is not None:
+                settings[str(key)] = rendered
+        return settings
+
+    def postgres_server_settings_env_value(self) -> str:
+        """Return LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
+        return urlencode(self.postgres_server_settings_dict())
+
+    def _lightrag_sidecar_env_map(self) -> dict[str, str]:
+        vlm = self.parser_sidecars.vlm
+        mineru = self.parser_sidecars.mineru
+        raw: dict[str, str | int | float | bool | None] = {
+            "VLM_PROCESS_ENABLE": vlm.enabled,
+            "VLM_MAX_IMAGE_BYTES": vlm.max_image_bytes,
+            "SURROUNDING_LEADING_MAX_TOKENS": vlm.surrounding_leading_max_tokens,
+            "SURROUNDING_TRAILING_MAX_TOKENS": vlm.surrounding_trailing_max_tokens,
+            "MINERU_API_MODE": mineru.api_mode,
+            "MINERU_API_TOKEN": mineru.api_token,
+            "MINERU_OFFICIAL_ENDPOINT": mineru.official_endpoint,
+            "MINERU_MODEL_VERSION": mineru.model_version,
+            "MINERU_IS_OCR": mineru.is_ocr,
+            "MINERU_POLL_INTERVAL_SECONDS": mineru.poll_interval_seconds,
+            "MINERU_MAX_POLLS": mineru.max_polls,
+            "MINERU_LANGUAGE": mineru.language,
+            "MINERU_ENABLE_TABLE": mineru.enable_table,
+            "MINERU_ENABLE_FORMULA": mineru.enable_formula,
+            "MINERU_PAGE_RANGES": mineru.page_ranges,
+            "MINERU_ENGINE_VERSION": mineru.engine_version,
+            "MINERU_LOCAL_ENDPOINT": mineru.local_endpoint,
+            "MINERU_LOCAL_BACKEND": mineru.local_backend,
+            "MINERU_LOCAL_PARSE_METHOD": mineru.local_parse_method,
+            "MINERU_LOCAL_IMAGE_ANALYSIS": mineru.local_image_analysis,
+            "MINERU_LOCAL_START_PAGE_ID": mineru.local_start_page_id,
+            "MINERU_LOCAL_END_PAGE_ID": mineru.local_end_page_id,
+            "LIGHTRAG_FORCE_REPARSE_MINERU": True if mineru.force_reparse else None,
+        }
+        rendered: dict[str, str] = {}
+        for key, value in raw.items():
+            text = self._env_value(value)
+            if text is not None:
+                rendered[key] = text
+        return rendered
+
+    def apply_lightrag_sidecar_env(self, *, force: bool = False) -> None:
+        """Bridge typed parser sidecar config into LightRAG's upstream env API."""
+        for key, value in self._lightrag_sidecar_env_map().items():
+            if force or key not in os.environ:
+                os.environ[key] = value
+
     def apply_lightrag_backend_env(self, *, force: bool = False) -> None:
         """Bridge this config's active PostgreSQL endpoint into LightRAG env vars."""
         active_pg = self.pg_connection_kwargs()
@@ -553,16 +690,19 @@ class DlightragConfig(BaseSettings):
             # LightRAG's POSTGRES_HNSW_EF is used as ef_construction.
             "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
         }
+        if self.postgres_statement_cache_size is not None:
+            pg_env_map["POSTGRES_STATEMENT_CACHE_SIZE"] = str(self.postgres_statement_cache_size)
         for key, value in pg_env_map.items():
             if force or key not in os.environ:
                 os.environ[key] = value
 
         if force or "POSTGRES_SERVER_SETTINGS" not in os.environ:
-            os.environ["POSTGRES_SERVER_SETTINGS"] = f"hnsw.ef_search={self.pg_hnsw_ef_search}"
+            os.environ["POSTGRES_SERVER_SETTINGS"] = self.postgres_server_settings_env_value()
 
     def model_post_init(self, __context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
         _load_lightrag_sidecar_env(self.__class__.model_config.get("env_file"), force=False)
+        self.apply_lightrag_sidecar_env(force=False)
         self.apply_lightrag_backend_env(force=False)
 
         # Resolve working_dir to absolute path

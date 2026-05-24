@@ -164,12 +164,21 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.embedding.asymmetric == "auto"
     assert cfg.parser.rules == "docx:native-iteP,*:mineru-iteP"
     assert cfg.extraction.use_json is True
+    assert cfg.extraction.language == "English"
+    assert cfg.parser_sidecars.vlm.enabled is True
+    assert cfg.parser_sidecars.vlm.max_image_bytes == 5_242_880
+    assert cfg.parser_sidecars.mineru.api_mode == "local"
+    assert cfg.parser_sidecars.mineru.local_endpoint == "http://127.0.0.1:8210"
+    assert cfg.parser_sidecars.mineru.local_backend == "hybrid-auto-engine"
+    assert cfg.parser_sidecars.mineru.enable_table is True
+    assert cfg.parser_sidecars.mineru.enable_formula is True
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
     assert cfg.pg_vector_index_type == "HNSW"
     assert cfg.pg_hnsw_m == 32
     assert cfg.pg_hnsw_ef_construction == 256
     assert cfg.pg_hnsw_ef_search == 256
+    assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
     assert cfg.runtime_role == "ingest"
     assert cfg.pg_target_for_runtime() == "primary"
     assert cfg.citations.highlights.enabled is False
@@ -413,6 +422,144 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
 
 
+def test_typed_parser_sidecar_config_exports_lightrag_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "VLM_PROCESS_ENABLE",
+        "VLM_MAX_IMAGE_BYTES",
+        "SURROUNDING_LEADING_MAX_TOKENS",
+        "SURROUNDING_TRAILING_MAX_TOKENS",
+        "MINERU_API_MODE",
+        "MINERU_LOCAL_ENDPOINT",
+        "MINERU_LOCAL_BACKEND",
+        "MINERU_LOCAL_PARSE_METHOD",
+        "MINERU_LOCAL_IMAGE_ANALYSIS",
+        "MINERU_ENABLE_TABLE",
+        "MINERU_ENABLE_FORMULA",
+        "MINERU_LANGUAGE",
+        "MINERU_POLL_INTERVAL_SECONDS",
+        "MINERU_MAX_POLLS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        parser_sidecars={
+            "vlm": {
+                "enabled": True,
+                "max_image_bytes": 7_000_000,
+                "surrounding_leading_max_tokens": 123,
+                "surrounding_trailing_max_tokens": 456,
+            },
+            "mineru": {
+                "api_mode": "local",
+                "local_endpoint": "http://shared-mineru.local:8210",
+                "local_backend": "pipeline",
+                "local_parse_method": "ocr",
+                "local_image_analysis": False,
+                "enable_table": False,
+                "enable_formula": True,
+                "language": "ch,en",
+                "poll_interval_seconds": 3,
+                "max_polls": 42,
+            },
+        },
+    )
+
+    assert os.environ["VLM_PROCESS_ENABLE"] == "true"
+    assert os.environ["VLM_MAX_IMAGE_BYTES"] == "7000000"
+    assert os.environ["SURROUNDING_LEADING_MAX_TOKENS"] == "123"
+    assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "456"
+    assert os.environ["MINERU_API_MODE"] == "local"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://shared-mineru.local:8210"
+    assert os.environ["MINERU_LOCAL_BACKEND"] == "pipeline"
+    assert os.environ["MINERU_LOCAL_PARSE_METHOD"] == "ocr"
+    assert os.environ["MINERU_LOCAL_IMAGE_ANALYSIS"] == "false"
+    assert os.environ["MINERU_ENABLE_TABLE"] == "false"
+    assert os.environ["MINERU_ENABLE_FORMULA"] == "true"
+    assert os.environ["MINERU_LANGUAGE"] == "ch,en"
+    assert os.environ["MINERU_POLL_INTERVAL_SECONDS"] == "3"
+    assert os.environ["MINERU_MAX_POLLS"] == "42"
+
+
+def test_sidecar_env_loader_does_not_export_service_helper_keys(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
+                "MINERU_SERVICE_VENV=/tmp/mineru",
+                "MINERU_INSTALL_EXTRAS=core,vllm",
+                "MINERU_API_HOST=0.0.0.0",
+                "MINERU_API_PORT=9001",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for key in (
+        "MINERU_SERVICE_VENV",
+        "MINERU_INSTALL_EXTRAS",
+        "MINERU_API_HOST",
+        "MINERU_API_PORT",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
+
+    DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    assert "MINERU_SERVICE_VENV" not in os.environ
+    assert "MINERU_INSTALL_EXTRAS" not in os.environ
+    assert "MINERU_API_HOST" not in os.environ
+    assert "MINERU_API_PORT" not in os.environ
+
+
+def test_postgres_session_settings_merge_hnsw_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("POSTGRES_SERVER_SETTINGS", raising=False)
+    monkeypatch.delenv("POSTGRES_STATEMENT_CACHE_SIZE", raising=False)
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        pg_hnsw_ef_search=384,
+        postgres_session_settings={
+            "application_name": "dlightrag api",
+            "statement_timeout": "60000",
+        },
+        postgres_statement_cache_size=256,
+    )
+
+    assert cfg.postgres_server_settings_dict() == {
+        "hnsw.ef_search": "384",
+        "application_name": "dlightrag api",
+        "statement_timeout": "60000",
+    }
+    assert os.environ["POSTGRES_SERVER_SETTINGS"] == (
+        "hnsw.ef_search=384&application_name=dlightrag+api&statement_timeout=60000"
+    )
+    assert os.environ["POSTGRES_STATEMENT_CACHE_SIZE"] == "256"
+
+
 def test_dotenv_rejects_unknown_dlightrag_keys(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
     removed_key = "DLIGHTRAG_REMOVED__API_KEY"
@@ -465,7 +612,9 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
 
 
-def test_blank_sidecar_values_are_not_exported(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_blank_sidecar_values_do_not_override_typed_defaults(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(
         "\n".join(
@@ -491,4 +640,4 @@ def test_blank_sidecar_values_are_not_exported(tmp_path, monkeypatch: pytest.Mon
     )
 
     assert os.environ["MINERU_API_MODE"] == "local"
-    assert "MINERU_LOCAL_ENDPOINT" not in os.environ
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"

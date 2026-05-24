@@ -9,11 +9,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dlightrag.config import DlightragConfig
-from dlightrag.core.service import RAGService
+from dlightrag.core.service import RAGService, _parse_postgres_server_settings
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
 # ---------------------------------------------------------------------------
+
+
+def test_parse_postgres_server_settings_decodes_query_string() -> None:
+    assert _parse_postgres_server_settings(
+        "hnsw.ef_search=384&application_name=dlightrag+api&statement_timeout=60000"
+    ) == {
+        "hnsw.ef_search": "384",
+        "application_name": "dlightrag api",
+        "statement_timeout": "60000",
+    }
 
 
 class TestRAGServiceAingest:
@@ -250,6 +260,20 @@ class TestBuildAddonParams:
         assert result["entity_types_guidance"] == (
             "Prioritize domain entities in these categories: Product, Technology, Organization."
         )
+
+    def test_addon_params_include_extraction_prompt_profile(
+        self, test_config: DlightragConfig
+    ) -> None:
+        test_config.extraction.language = "Chinese"
+        test_config.extraction.entity_type_prompt_file = "/prompts/domain-entities.md"
+        test_config.kg_entity_types = []
+
+        result = RAGService._build_addon_params(test_config)
+
+        assert result == {
+            "language": "Chinese",
+            "entity_type_prompt_file": "/prompts/domain-entities.md",
+        }
 
 
 # ---------------------------------------------------------------------------

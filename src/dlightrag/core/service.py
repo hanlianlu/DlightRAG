@@ -16,6 +16,7 @@ import sys
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import parse_qsl
 
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
@@ -60,6 +61,13 @@ _STORAGE_ATTRS = (
     "llm_response_cache",
     "doc_status",
 )
+
+
+def _parse_postgres_server_settings(raw: Any) -> dict[str, str]:
+    """Parse LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
+    if raw is None:
+        return {}
+    return {key: value for key, value in parse_qsl(str(raw), keep_blank_values=False)}
 
 
 def _ensure_venv_in_path() -> None:
@@ -182,7 +190,9 @@ class RAGService:
     @staticmethod
     def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
         """Build LightRAG 1.5+ addon_params from the active config."""
-        params: dict[str, Any] = {"language": "English"}
+        params: dict[str, Any] = {"language": config.extraction.language}
+        if config.extraction.entity_type_prompt_file:
+            params["entity_type_prompt_file"] = config.extraction.entity_type_prompt_file
         if config.kg_entity_types:
             params["entity_types_guidance"] = (
                 "Prioritize domain entities in these categories: "
@@ -322,6 +332,7 @@ class RAGService:
             vector_db_storage_cls_kwargs=self._build_vector_db_kwargs(config),
             role_llm_configs=role_overrides,
             kg_chunk_pick_method=config.kg_chunk_pick_method,
+            entity_extraction_use_json=config.extraction.use_json,
             addon_params=self._build_addon_params(config),
         )
         read_only = config.is_query_role is True
@@ -482,11 +493,7 @@ class RAGService:
             elif ssl_mode == "disable":
                 pool_kwargs["ssl"] = False
         if db.server_settings:
-            settings = {}
-            for pair in str(db.server_settings).split("&"):
-                if "=" in pair:
-                    key, value = pair.split("=", 1)
-                    settings[key] = value
+            settings = _parse_postgres_server_settings(db.server_settings)
             if settings:
                 pool_kwargs["server_settings"] = settings
 

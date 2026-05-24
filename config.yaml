@@ -69,7 +69,31 @@ parser:
 
 extraction:
   use_json: true
+  language: English
   entity_type_prompt_file:
+
+parser_sidecars:
+  vlm:
+    enabled: true
+    max_image_bytes: 5242880
+    # surrounding_leading_max_tokens: 2000
+    # surrounding_trailing_max_tokens: 2000
+  mineru:
+    api_mode: local
+    local_endpoint: http://127.0.0.1:8210
+    local_backend: hybrid-auto-engine
+    local_parse_method: auto
+    local_image_analysis: true
+    enable_table: true
+    enable_formula: true
+    poll_interval_seconds: 2
+    max_polls: 180
+    language: ch
+    # page_ranges:
+    # api_token:
+    # official_endpoint: https://mineru.net
+    # model_version: vlm
+    # is_ocr: false
 
 metadata:
   enabled: true
@@ -133,6 +157,8 @@ pg_vector_index_type: HNSW
 pg_hnsw_m: 32
 pg_hnsw_ef_construction: 256
 pg_hnsw_ef_search: 256
+postgres_session_settings: {}
+postgres_statement_cache_size:
 
 # ─────────────────────────────────────────────────────────────────
 # Ingestion Performance
