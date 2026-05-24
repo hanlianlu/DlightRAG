@@ -60,8 +60,8 @@ class TestFindYamlConfig:
 class TestYamlConfigLoading:
     def test_loads_from_yaml(self, yaml_config_dir):
         config = DlightragConfig()
-        assert config.chat.model == "gemma4:26b-a4b-it-q8_0"
-        assert config.chat.base_url == "http://localhost:11434/v1"
+        assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"
+        assert config.llm.default.base_url == "http://localhost:11434/v1"
         assert config.embedding.dim == 512
         assert config.rerank.enabled is False
         assert config.top_k == 100
@@ -72,19 +72,18 @@ class TestYamlConfigLoading:
         monkeypatch.setenv("DLIGHTRAG_TOP_K", "200")
 
         config = DlightragConfig()
-        assert config.chat.model == "gpt-4.1"  # env override
-        assert config.chat.base_url == "http://localhost:11434/v1"  # from yaml
+        assert config.llm.default.model == "gpt-4.1"  # env override
+        assert config.llm.default.base_url == "http://localhost:11434/v1"  # from yaml
         assert config.top_k == 200  # env override
 
     def test_constructor_overrides_yaml(self, yaml_config_dir):
         config = DlightragConfig(top_k=300)
         assert config.top_k == 300  # constructor override
-        assert config.chat.model == "gemma4:26b-a4b-it-q8_0"  # from yaml
+        assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"  # from yaml
 
 
-class TestBackwardCompat:
+class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):
-        """Pure .env users should not be affected."""
         monkeypatch.chdir(tmp_path)
         config = DlightragConfig(
             embedding={
@@ -95,11 +94,10 @@ class TestBackwardCompat:
             },
             llm={"default": {"model": "gpt-4.1-mini", "api_key": "test"}},
         )
-        assert config.chat.model == "gpt-4.1-mini"
+        assert config.llm.default.model == "gpt-4.1-mini"
         assert config.embedding.model == "text-embedding-3-large"
 
     def test_env_vars_still_work_without_yaml(self, tmp_path, monkeypatch):
-        """DLIGHTRAG_* env vars should work exactly as before."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-4.1")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__PROVIDER", "openai_compatible")
@@ -108,4 +106,4 @@ class TestBackwardCompat:
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__STARTUP_PROBE", "false")
 
         config = DlightragConfig()
-        assert config.chat.model == "gpt-4.1"
+        assert config.llm.default.model == "gpt-4.1"

@@ -27,9 +27,9 @@ primary              -> physical streaming replication -> replica
 
 ## Configuration
 
-Use `runtime_role` to select the process role. Existing `postgres_*` fields are
-the primary endpoint for compatibility. `postgres_replica_*` fields are used by
-query workers; unset replica fields fall back to primary for local development.
+Use `runtime_role` to select the process role. `postgres_*` fields are the
+primary endpoint. `postgres_replica_*` fields are used by query workers; unset
+replica fields fall back to primary for local development.
 
 ```yaml
 runtime_role: query

@@ -120,7 +120,6 @@ async for token in token_iter:
 | `query` | `str` | required | Search query |
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
-| `mode` | `str` | `"mix"` | Only `mix` is supported. This is kept for API compatibility. |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
@@ -134,7 +133,7 @@ async for token in token_iter:
 # Retrieve
 curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
-  -d '{"query": "key findings", "mode": "mix"}'
+  -d '{"query": "key findings"}'
 
 # Answer as one JSON response
 curl -X POST http://localhost:8100/answer \

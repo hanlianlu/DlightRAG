@@ -30,9 +30,7 @@ def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
     if provider.supports_asymmetric:
         return True
     if mode == "require":
-        raise ValueError(
-            f"{provider.__class__.__name__} does not support asymmetric embeddings"
-        )
+        raise ValueError(f"{provider.__class__.__name__} does not support asymmetric embeddings")
     return False
 
 
@@ -121,7 +119,9 @@ class MultimodalEmbedder:
         """Probe that the configured provider can embed an image."""
         await self.embed_index_images([Image.new("RGB", (1, 1), "white")])
 
-    def build_image_payload_for_test(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
+    def build_image_payload_for_test(
+        self, image: Image.Image, *, context: EmbeddingContext
+    ) -> dict:
         """Expose payload construction to unit tests without HTTP calls."""
         return self._build_image_payload(image, context=context)
 

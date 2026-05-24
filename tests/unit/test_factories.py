@@ -178,9 +178,9 @@ class TestGetChatModelFunc:
         assert callable(func)
 
 
-class TestGetIngestModelFunc:
-    def test_fallback_to_chat(self):
-        from dlightrag.models.llm import get_ingest_model_func
+class TestGetExtractModelFunc:
+    def test_fallback_to_default_llm(self):
+        from dlightrag.models.llm import get_extract_model_func
 
         config = DlightragConfig(
             llm=LLMConfig(
@@ -188,11 +188,11 @@ class TestGetIngestModelFunc:
             ),
             embedding=_embedding_config(),
         )
-        func = get_ingest_model_func(config)
+        func = get_extract_model_func(config)
         assert callable(func)
 
     def test_explicit_extract_role(self):
-        from dlightrag.models.llm import get_ingest_model_func
+        from dlightrag.models.llm import get_extract_model_func
 
         config = DlightragConfig(
             llm=LLMConfig(
@@ -203,7 +203,7 @@ class TestGetIngestModelFunc:
             ),
             embedding=_embedding_config(),
         )
-        func = get_ingest_model_func(config)
+        func = get_extract_model_func(config)
         assert callable(func)
 
 

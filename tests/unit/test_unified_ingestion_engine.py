@@ -55,7 +55,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     deps["chunk_provenance"].upsert_many.assert_awaited_once()
 
 
-async def test_document_ingest_rejects_unrouted_legacy_parser_fallback(tmp_path: Path) -> None:
+async def test_document_ingest_rejects_unrouted_parser_fallback(tmp_path: Path) -> None:
     source = tmp_path / "notes.unsupported"
     source.write_text("plain text")
     engine, deps = _make_engine(parser_rules="docx:native-iteP,pdf:mineru-iteP")

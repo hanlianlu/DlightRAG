@@ -19,10 +19,7 @@ from dlightrag.core.ingestion.lightrag_sidecar import LightRAGSidecarRef
 def test_direct_image_chunk_id_is_deterministic() -> None:
     ref = LightRAGSidecarRef(sidecar_type="drawing", sidecar_id="fig-1")
 
-    assert (
-        direct_image_chunk_id("default", "doc-1", ref)
-        == "default:doc-1:sidecar:drawing:fig-1"
-    )
+    assert direct_image_chunk_id("default", "doc-1", ref) == "default:doc-1:sidecar:drawing:fig-1"
 
 
 async def test_build_direct_image_chunk_embeds_original_image(tmp_path) -> None:

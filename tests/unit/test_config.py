@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the new nested provider config schema."""
 
+import os
+
 import pytest
 from pydantic import ValidationError
 
@@ -12,6 +14,7 @@ from dlightrag.config import (
     LLMRolesConfig,
     ModelConfig,
     RerankConfig,
+    load_config,
 )
 
 
@@ -130,10 +133,10 @@ class TestDlightragConfigNested:
         assert cfg.llm.default.api_key == "sk-env"
 
     def test_unknown_field_rejected(self):
-        """Unknown fields (legacy schema, typos) should raise via extra=forbid."""
+        """Unknown fields and typos should raise via extra=forbid."""
         with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
             DlightragConfig(
-                openai_api_key="sk-old",  # legacy flat-schema field
+                openai_api_key="sk-old",
                 embedding=EmbeddingConfig(
                     provider="voyage",
                     model="voyage-multimodal-3.5",
@@ -170,6 +173,8 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.runtime_role == "ingest"
     assert cfg.pg_target_for_runtime() == "primary"
     assert cfg.citations.highlights.enabled is False
+    for removed_shortcut in ("chat", "extract", "keywords", "query", "vlm"):
+        assert not hasattr(cfg, removed_shortcut)
 
 
 @pytest.mark.parametrize(
@@ -250,7 +255,7 @@ def test_role_config_uses_lightrag_role_names() -> None:
     assert cfg.llm.roles.keyword.model == "gpt-4.1-mini"
 
 
-def test_pg_connection_kwargs_uses_primary_compat_fields_by_default() -> None:
+def test_pg_connection_kwargs_uses_primary_fields_by_default() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
             provider="voyage",
@@ -316,8 +321,8 @@ def test_read_after_write_primary_route_is_rejected() -> None:
         DlightragConfig(**kwargs)
 
 
-@pytest.mark.parametrize("legacy_field", ["ingest", "keywords"])
-def test_legacy_llm_fields_rejected(legacy_field: str) -> None:
+@pytest.mark.parametrize("removed_field", ["ingest", "keywords"])
+def test_removed_top_level_llm_fields_rejected(removed_field: str) -> None:
     kwargs = {
         "embedding": {
             "provider": "voyage",
@@ -326,14 +331,14 @@ def test_legacy_llm_fields_rejected(legacy_field: str) -> None:
             "dim": 1024,
             "startup_probe": False,
         },
-        legacy_field: {"provider": "openai", "model": "gpt-4.1-mini"},
+        removed_field: {"provider": "openai", "model": "gpt-4.1-mini"},
     }
 
     with pytest.raises(ValidationError):
         DlightragConfig(**kwargs)
 
 
-def test_legacy_parser_engine_process_options_rejected() -> None:
+def test_removed_parser_engine_process_options_rejected() -> None:
     with pytest.raises(ValidationError):
         DlightragConfig(
             embedding=EmbeddingConfig(
@@ -345,3 +350,144 @@ def test_legacy_parser_engine_process_options_rejected() -> None:
             ),
             parser={"engine": "mineru", "process_options": "teP"},
         )
+
+
+def test_unknown_postgres_shadow_fields_rejected() -> None:
+    removed_shadow_field = "postgres_" + "primary_host"
+    with pytest.raises(ValidationError):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+            **{removed_shadow_field: "primary.internal"},
+        )
+
+
+def test_dotenv_allows_upstream_lightrag_parser_env(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
+                "VLM_PROCESS_ENABLE=true",
+                "VLM_MAX_IMAGE_BYTES=5242880",
+                "MINERU_API_MODE=official",
+                "MINERU_API_TOKEN=mineru-token",
+                "MINERU_OFFICIAL_ENDPOINT=https://mineru.net",
+                "MINERU_MODEL_VERSION=vlm",
+                "MINERU_IS_OCR=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for key in (
+        "VLM_PROCESS_ENABLE",
+        "VLM_MAX_IMAGE_BYTES",
+        "MINERU_API_MODE",
+        "MINERU_API_TOKEN",
+        "MINERU_OFFICIAL_ENDPOINT",
+        "MINERU_MODEL_VERSION",
+        "MINERU_IS_OCR",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    assert cfg.llm.default.api_key == "sk-env"
+    assert "vlm_process_enable" not in cfg.model_fields_set
+    assert os.environ["VLM_PROCESS_ENABLE"] == "true"
+    assert os.environ["MINERU_API_TOKEN"] == "mineru-token"
+
+
+def test_dotenv_rejects_unknown_dlightrag_keys(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env"
+    removed_key = "DLIGHTRAG_REMOVED__API_KEY"
+    env_file.write_text(f"{removed_key}=sk-old\n", encoding="utf-8")
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
+
+    with pytest.raises(ValidationError, match="removed"):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        )
+
+
+def test_load_config_uses_explicit_env_file_without_global_dotenv(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-explicit",
+                "DLIGHTRAG_API_PORT=9900",
+                "MINERU_API_MODE=official",
+                "MINERU_API_TOKEN=mineru-token",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("DLIGHTRAG_API_PORT", raising=False)
+    monkeypatch.delenv("MINERU_API_MODE", raising=False)
+    monkeypatch.delenv("MINERU_API_TOKEN", raising=False)
+
+    cfg = load_config(
+        env_file,
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    assert cfg.api_port == 9900
+    assert cfg.llm.default.api_key == "sk-explicit"
+    assert os.environ["MINERU_API_MODE"] == "official"
+    assert os.environ["MINERU_API_TOKEN"] == "mineru-token"
+
+
+def test_blank_sidecar_values_are_not_exported(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
+                "MINERU_API_MODE=official",
+                "MINERU_API_TOKEN=",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("MINERU_API_MODE", raising=False)
+    monkeypatch.delenv("MINERU_API_TOKEN", raising=False)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
+
+    DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    assert os.environ["MINERU_API_MODE"] == "official"
+    assert "MINERU_API_TOKEN" not in os.environ

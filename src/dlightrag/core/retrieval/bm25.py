@@ -32,9 +32,7 @@ class PostgresBM25:
         self._workspace = workspace
         self._top_k = top_k
 
-    async def ensure_index(
-        self, *, text_config: Literal["simple", "english"] = "simple"
-    ) -> None:
+    async def ensure_index(self, *, text_config: Literal["simple", "english"] = "simple") -> None:
         if text_config not in BM25_TEXT_CONFIGS:
             raise ValueError(f"unsupported BM25 text_config: {text_config}")
         async with self._pool.acquire() as conn:

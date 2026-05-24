@@ -54,6 +54,11 @@ DLIGHTRAG_LLM__DEFAULT__API_KEY=...
 DLIGHTRAG_EMBEDDING__API_KEY=...
 ```
 
+The default document route uses LightRAG native parsing for DOCX and MinerU
+for other document types. For PDFs and similar inputs, either set
+`MINERU_API_TOKEN` for the official MinerU API or switch the MinerU block in
+`.env` to a local `MINERU_LOCAL_ENDPOINT`.
+
 2. Start the service stack:
 
 ```bash
@@ -291,14 +296,18 @@ Priority:
 constructor args > environment variables > .env > config.yaml > defaults
 ```
 
-Environment variables use the `DLIGHTRAG_` prefix. Double underscores address
-nested objects:
+DlightRAG-owned environment variables use the `DLIGHTRAG_` prefix. Double
+underscores address nested objects:
 
 ```bash
 DLIGHTRAG_LLM__DEFAULT__API_KEY=...
 DLIGHTRAG_EMBEDDING__API_KEY=...
 DLIGHTRAG_RERANK__API_KEY=...
 ```
+
+LightRAG parser sidecar settings intentionally keep upstream names, for
+example `VLM_PROCESS_ENABLE`, `MINERU_API_MODE`, and `MINERU_API_TOKEN`.
+These are documented in [`.env.example`](.env.example).
 
 ### Model Providers
 

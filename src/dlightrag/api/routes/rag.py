@@ -91,7 +91,6 @@ async def retrieve(
     result = await manager.aretrieve(
         body.query,
         workspaces=body.workspaces,
-        mode=body.mode,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
         **kwargs,
@@ -124,7 +123,6 @@ async def answer(
             body.query,
             conversation_history=body.conversation_history,
             workspaces=body.workspaces,
-            mode=body.mode,
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
             **kwargs,
@@ -154,7 +152,6 @@ async def answer(
         body.query,
         conversation_history=body.conversation_history,
         workspaces=body.workspaces,
-        mode=body.mode,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
         **kwargs,

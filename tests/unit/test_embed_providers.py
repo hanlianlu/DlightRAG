@@ -123,9 +123,9 @@ class TestDetectProvider:
         p = detect_embed_provider("any-model", provider="openai_compatible")
         assert isinstance(p, OpenAICompatEmbedProvider)
 
-    def test_legacy_explicit_openai_alias(self) -> None:
-        p = detect_embed_provider("any-model", provider="openai")
-        assert isinstance(p, OpenAICompatEmbedProvider)
+    def test_openai_alias_is_not_an_embedding_provider(self) -> None:
+        with pytest.raises(ValueError, match="Unknown embed provider"):
+            detect_embed_provider("any-model", provider="openai")
 
     def test_explicit_voyage(self) -> None:
         p = detect_embed_provider("any-model", provider="voyage")

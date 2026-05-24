@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # ═══════════════════════════════════════════════════════════════════
 # Request Models
@@ -14,6 +14,8 @@ from pydantic import BaseModel, field_validator, model_validator
 
 class MetadataFilterRequest(BaseModel):
     """Structured metadata filter for retrieval queries."""
+
+    model_config = ConfigDict(extra="forbid")
 
     filename: str | None = None
     filename_stem: str | None = None
@@ -27,6 +29,8 @@ class MetadataFilterRequest(BaseModel):
 
 
 class IngestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     source_type: Literal["local", "azure_blob", "s3"]
     path: str | None = None
     container_name: str | None = None
@@ -60,8 +64,9 @@ class IngestRequest(BaseModel):
 
 
 class RetrieveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str
-    mode: Literal["mix"] = "mix"
     top_k: int | None = None
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
@@ -79,8 +84,9 @@ class RetrieveRequest(BaseModel):
 
 
 class AnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str
-    mode: Literal["mix"] = "mix"
     stream: bool = True
     top_k: int | None = None
     chunk_top_k: int | None = None

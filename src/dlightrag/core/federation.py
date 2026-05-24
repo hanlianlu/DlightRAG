@@ -15,7 +15,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal
+from typing import Any
 
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.utils.concurrency import bounded_gather
@@ -205,7 +205,6 @@ async def federated_retrieve(
     workspaces: list[str],
     get_service: Callable[[str], Awaitable[Any]],
     *,
-    mode: Literal["mix"] = "mix",
     top_k: int | None = None,
     chunk_top_k: int | None = None,
     max_concurrency: int = 8,
@@ -220,7 +219,6 @@ async def federated_retrieve(
         query: The search query.
         workspaces: List of workspace names to search.
         get_service: Async callable that returns a RAGService for a workspace name.
-        mode: LightRAG query mode. Only `mix` is supported.
         top_k: Per-workspace top_k for vector search.
         chunk_top_k: Final merged chunk count limit.
         max_concurrency: Maximum concurrent workspace queries (default 8).
@@ -248,9 +246,7 @@ async def federated_retrieve(
     # Single workspace — no federation overhead
     if len(workspaces) == 1:
         svc = await get_service(workspaces[0])
-        result = await svc.aretrieve(
-            query=query, mode=mode, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs
-        )
+        result = await svc.aretrieve(query=query, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs)
         for chunk in result.contexts.get("chunks", []):
             chunk["_workspace"] = workspaces[0]
         return result
@@ -288,7 +284,6 @@ async def federated_retrieve(
             svc = await get_service(ws)
             coro = svc.aretrieve(
                 query=query,
-                mode=mode,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
                 _plan=shared_plan,

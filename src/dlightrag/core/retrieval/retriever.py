@@ -78,9 +78,7 @@ class UnifiedRetriever:
             lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
         return lightrag_result
 
-    async def _resolve_candidates(
-        self, metadata_filter: MetadataFilter | None
-    ) -> set[str] | None:
+    async def _resolve_candidates(self, metadata_filter: MetadataFilter | None) -> set[str] | None:
         if metadata_filter is None or metadata_filter.is_empty():
             return None
         chunk_ids = await metadata_retrieve(

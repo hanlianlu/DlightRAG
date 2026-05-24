@@ -110,9 +110,7 @@ def clean_invalid_citations(indexer: CitationIndexer, answer_text: str) -> str:
 
 # Matches generated reference-section headings at a line boundary:
 # # References, ## References, **References**, References:, References
-_REFERENCES_HEADING_RE = re.compile(
-    r"(?im)^\s{0,3}(?:#{1,6}\s*|\*{2})?references(?:\*{2})?[:\s]*$"
-)
+_REFERENCES_HEADING_RE = re.compile(r"(?im)^\s{0,3}(?:#{1,6}\s*|\*{2})?references(?:\*{2})?[:\s]*$")
 
 
 def strip_generated_references_section(answer_text: str) -> str:

@@ -71,9 +71,8 @@ async def httpx_embed(
 
     prov = provider
     url = (
-        (base_url.rstrip("/") if base_url else "https://api.openai.com/v1")
-        + prov.endpoint_for_model(model)
-    )
+        base_url.rstrip("/") if base_url else "https://api.openai.com/v1"
+    ) + prov.endpoint_for_model(model)
     payload = prov.build_payload(
         model,
         [TextEmbeddingInput(text=text) for text in texts],

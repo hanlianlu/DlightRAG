@@ -402,7 +402,7 @@ class TestRetrieveEndpoint:
         assert "contexts" in body
         assert "sources" in body
 
-    async def test_retrieve_rejects_non_mix_mode(
+    async def test_retrieve_rejects_mode_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
@@ -756,6 +756,7 @@ class TestAnswerStreamMode:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         """REST /answer streams by default; stream=false opts into JSON."""
+
         async def mock_tokens():
             yield "Hello"
 

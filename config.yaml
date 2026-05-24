@@ -108,8 +108,8 @@ read_after_write_timeout: 15.0
 postgres_required_major: 18
 postgres_min_minor: "18.4"
 
-# Backward-compatible primary endpoint fields.
-# Query workers use postgres_replica_* when runtime_role=query; omitted
+# Primary endpoint fields. Query workers use postgres_replica_* when
+# runtime_role=query; omitted
 # replica fields fall back to the primary values for local/dev setups.
 # postgres_host: localhost
 # postgres_port: 5432
@@ -151,7 +151,6 @@ embedding_request_timeout: 120
 
 top_k: 60
 chunk_top_k: 30
-default_mode: mix
 bm25_enabled: true
 bm25_top_k: 40
 bm25_text_config: simple
