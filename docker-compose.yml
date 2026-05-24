@@ -71,7 +71,7 @@ services:
       POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
       POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql
     command:
       - "postgres"
       # AGE and pg_textsearch require preloading
