@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""DlightRAG - Dual-mode (Caption based & Unified representation based) multi-modal RAG service.
+"""DlightRAG: PostgreSQL-backed multimodal RAG built on LightRAG main.
 
-Built on RAGAnything and LightRAG with PostgreSQL as the default unified backend.
 Exposable as both a REST API (bulk ingestion) and MCP server (agent integration).
 """
 

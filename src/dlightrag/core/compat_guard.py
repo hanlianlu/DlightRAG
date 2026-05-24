@@ -22,9 +22,8 @@ logger = logging.getLogger(__name__)
 class LightRAGCompatGuard:
     """Validates LightRAG internal API assumptions at startup.
 
-    Collects all errors before raising — produces one report instead of
-    failing on the first issue. PG-specific checks are skipped automatically
-    when the active backend is not PostgreSQL.
+    Collects all errors before raising, producing one report instead of
+    failing on the first issue. PostgreSQL is the only supported backend.
     """
 
     _CHUNKS_VDB_COLUMNS = {"id", "content", "content_vector", "workspace", "file_path"}
@@ -39,32 +38,32 @@ class LightRAGCompatGuard:
     async def verify_all(self) -> None:
         """Run all checks, collect errors, raise if any."""
         errors: list[str] = []
-        is_pg = self._is_pg_backend()
-        if is_pg:
+        self._require_pg_backend(errors)
+        if not errors:
             await self._check_chunks_table_schema(errors)
             await self._check_bm25_table(errors)
-        self._check_embedding_func_attr(errors)
-        self._check_pool_access(errors, require_pg=is_pg)
+            self._check_embedding_func_attr(errors)
+            self._check_pool_access(errors)
         self._check_patch_signatures(errors)
         if errors:
             raise RuntimeError(
                 f"LightRAG compatibility check failed "
                 f"({len(errors)} issue(s)):\n" + "\n".join(f"  - {e}" for e in errors)
             )
-        logger.info(
-            "LightRAG compatibility check passed (backend=%s)",
-            "postgresql" if is_pg else "non-pg",
-        )
+        logger.info("LightRAG compatibility check passed (backend=postgresql)")
 
-    def _is_pg_backend(self) -> bool:
-        """Detect whether chunks_vdb is backed by PostgreSQL with a live pool."""
+    def _require_pg_backend(self, errors: list[str]) -> None:
+        """Require chunks_vdb to expose PostgreSQL pool access."""
         vdb = getattr(self._lightrag, "chunks_vdb", None)
         if vdb is None:
-            return False
+            errors.append("chunks_vdb missing (PostgreSQL backend required)")
+            return
         db = getattr(vdb, "db", None)
         if db is None:
-            return False
-        return hasattr(db, "pool") and getattr(db, "pool", None) is not None
+            errors.append("chunks_vdb.db missing (PostgreSQL backend required)")
+            return
+        if not hasattr(db, "pool") or getattr(db, "pool", None) is None:
+            errors.append("chunks_vdb.db.pool missing (PostgreSQL backend required)")
 
     async def _check_chunks_table_schema(self, errors: list[str]) -> None:
         """Check A: chunks_vdb table has all columns we depend on."""
@@ -116,10 +115,8 @@ class LightRAGCompatGuard:
                 errors.append("chunks_vdb.embedding_func is a read-only property")
                 return
 
-    def _check_pool_access(self, errors: list[str], require_pg: bool) -> None:
-        """Check D: chunks_vdb.db.pool attribute chain reachable on PG backends."""
-        if not require_pg:
-            return
+    def _check_pool_access(self, errors: list[str]) -> None:
+        """Check D: chunks_vdb.db.pool attribute chain remains reachable."""
         vdb = self._lightrag.chunks_vdb
         if not hasattr(vdb, "db"):
             errors.append("chunks_vdb missing 'db' attribute (PG backend expected)")
@@ -130,12 +127,8 @@ class LightRAGCompatGuard:
     def _check_patch_signatures(self, errors: list[str]) -> None:
         """Check E: PostgreSQLDB method signatures match _lightrag_patches assumptions.
 
-        Only runs when PG storage is in use; non-PG backends never load the patch
-        target module so the import-then-inspect dance would be misleading.
+        PostgreSQLDB is part of the supported storage contract.
         """
-        if not self._is_pg_backend():
-            return
-
         import inspect
 
         try:

@@ -1,8 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Ingestion policy for filtering MinerU content_list before RAGAnything processing.
+"""Ingestion policy for filtering MinerU content_list before LightRAG processing.
 
 Filters out noise content (discarded blocks) from MinerU's parse output
-before it reaches RAGAnything's insert_content_list().
+before it reaches LightRAG document processing.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class PolicyResult(BaseModel):
 
 
 class IngestionPolicy:
-    """Filter MinerU content_list to remove noise before RAGAnything processing.
+    """Filter MinerU content_list to remove noise before LightRAG processing.
 
     Usage:
         policy = IngestionPolicy()

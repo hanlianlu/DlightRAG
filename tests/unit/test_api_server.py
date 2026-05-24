@@ -368,7 +368,7 @@ class TestRetrieveEndpoint:
         assert "contexts" in body
         assert "sources" in body
 
-    async def test_retrieve_with_custom_mode(
+    async def test_retrieve_rejects_non_mix_mode(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
@@ -376,9 +376,8 @@ class TestRetrieveEndpoint:
             "/retrieve",
             json={"query": "hello", "mode": "local"},
         )
-        assert resp.status_code == 200
-        call_kwargs = mock_manager.aretrieve.call_args
-        assert call_kwargs.kwargs["mode"] == "local"
+        assert resp.status_code == 422
+        mock_manager.aretrieve.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -390,8 +389,25 @@ class TestHealthEndpoint:
     """Test /health endpoint."""
 
     async def test_health_returns_status(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        class MockConnection:
+            async def fetchval(self, query: str) -> int:
+                return 1
+
+            async def close(self) -> None:
+                return None
+
+        async def fake_connect(**kwargs):
+            return MockConnection()
+
+        import asyncpg
+
+        monkeypatch.setattr(asyncpg, "connect", fake_connect)
         app.state.manager = mock_manager
         resp = await client.get("/health")
         assert resp.status_code == 200
@@ -421,8 +437,25 @@ class TestHealthEndpointEnhanced:
         assert "Embedding unreachable" in body["warnings"]
 
     async def test_health_healthy_no_warnings(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        class MockConnection:
+            async def fetchval(self, query: str) -> int:
+                return 1
+
+            async def close(self) -> None:
+                return None
+
+        async def fake_connect(**kwargs):
+            return MockConnection()
+
+        import asyncpg
+
+        monkeypatch.setattr(asyncpg, "connect", fake_connect)
         mock_manager.is_degraded = lambda: False
         mock_manager.get_warnings = lambda: []
         app.state.manager = mock_manager

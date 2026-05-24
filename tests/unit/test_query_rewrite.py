@@ -78,6 +78,11 @@ class TestQueryPlannerFilters:
                         "date_from": "2024-01-01",
                         "date_to": "2024-12-31",
                     },
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {"field": "doc_author", "evidence_span": "张三"},
+                        {"field": "date", "evidence_span": "2024年"},
+                    ],
                 }
             )
         )
@@ -95,6 +100,10 @@ class TestQueryPlannerFilters:
                 {
                     "standalone_query": "summarize annual-report.pdf",
                     "filters": {"filename": "annual-report.pdf"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {"field": "filename", "evidence_span": "annual-report.pdf"}
+                    ],
                 }
             )
         )
@@ -136,12 +145,17 @@ class TestQueryPlannerMerge:
                 {
                     "standalone_query": "revenue insights",
                     "filters": {"doc_author": "LLM Author", "file_extension": "pdf"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {"field": "doc_author", "evidence_span": "LLM Author"},
+                        {"field": "file_extension", "evidence_span": "pdf"},
+                    ],
                 }
             )
         )
         planner = QueryPlanner(llm_func=llm)
         explicit = MetadataFilter(doc_author="Explicit Author")
-        plan = await planner.plan("revenue insights", explicit_filter=explicit)
+        plan = await planner.plan("LLM Author pdf revenue insights", explicit_filter=explicit)
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.doc_author == "Explicit Author"
         # LLM-only field preserved

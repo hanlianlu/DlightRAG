@@ -65,9 +65,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["local", "global", "hybrid", "naive", "mix"],
+                        "enum": ["mix"],
                         "default": "mix",
-                        "description": "Retrieval mode",
+                        "description": "Retrieval mode. Only mix is supported.",
                     },
                     "top_k": {
                         "type": "integer",
@@ -157,9 +157,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "mode": {
                         "type": "string",
-                        "enum": ["local", "global", "hybrid", "naive", "mix"],
+                        "enum": ["mix"],
                         "default": "mix",
-                        "description": "Retrieval mode",
+                        "description": "Retrieval mode. Only mix is supported.",
                     },
                     "top_k": {
                         "type": "integer",
@@ -224,6 +224,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
         if name == "retrieve":
             manager = await _ensure_manager()
+            mode = arguments.get("mode", "mix")
+            if mode != "mix":
+                raise ValueError("Only mode='mix' is supported")
             kwargs: dict[str, Any] = {}
             if arguments.get("filters"):
                 from dlightrag.core.retrieval.models import MetadataFilter
@@ -232,7 +235,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await manager.aretrieve(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
-                mode=arguments.get("mode", "mix"),
+                mode=mode,
                 top_k=arguments.get("top_k"),
                 **kwargs,
             )
@@ -253,10 +256,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         if name == "answer":
             manager = await _ensure_manager()
+            mode = arguments.get("mode", "mix")
+            if mode != "mix":
+                raise ValueError("Only mode='mix' is supported")
             result = await manager.aanswer(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
-                mode=arguments.get("mode", "mix"),
+                mode=mode,
                 top_k=arguments.get("top_k"),
             )
             # Build cited-only sources via CitationProcessor

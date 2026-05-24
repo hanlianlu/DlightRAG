@@ -4,7 +4,22 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
+from dlightrag.config import (
+    DlightragConfig,
+    EmbeddingConfig,
+    LLMConfig,
+    LLMRolesConfig,
+    ModelConfig,
+)
+
+
+def _embedding_config() -> EmbeddingConfig:
+    return EmbeddingConfig(
+        provider="voyage",
+        model="voyage-multimodal-3.5",
+        api_key="sk-test",
+        startup_probe=False,
+    )
 
 
 class TestMakeCompletionFunc:
@@ -39,8 +54,10 @@ class TestGetChatModelFunc:
         from dlightrag.models.llm import get_chat_model_func
 
         config = DlightragConfig(
-            chat=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test"),
-            embedding=EmbeddingConfig(api_key="sk-test"),
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test")
+            ),
+            embedding=_embedding_config(),
         )
         func = get_chat_model_func(config)
         assert callable(func)
@@ -51,19 +68,25 @@ class TestGetIngestModelFunc:
         from dlightrag.models.llm import get_ingest_model_func
 
         config = DlightragConfig(
-            chat=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat"),
-            embedding=EmbeddingConfig(api_key="sk-test"),
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat")
+            ),
+            embedding=_embedding_config(),
         )
         func = get_ingest_model_func(config)
         assert callable(func)
 
-    def test_explicit_ingest(self):
+    def test_explicit_extract_role(self):
         from dlightrag.models.llm import get_ingest_model_func
 
         config = DlightragConfig(
-            chat=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat"),
-            ingest=ModelConfig(provider="anthropic", model="claude-3-5-sonnet"),
-            embedding=EmbeddingConfig(api_key="sk-test"),
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat"),
+                roles=LLMRolesConfig(
+                    extract=ModelConfig(provider="anthropic", model="claude-3-5-sonnet")
+                ),
+            ),
+            embedding=_embedding_config(),
         )
         func = get_ingest_model_func(config)
         assert callable(func)
@@ -89,9 +112,11 @@ class TestGetRerankFunc:
         monkeypatch.setattr("dlightrag.models.rerank.build_rerank_func", fake_build_rerank_func)
 
         config = DlightragConfig(
-            chat=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
-            vlm=ModelConfig(provider="openai", model="vlm-model"),
-            embedding=EmbeddingConfig(api_key="sk-test"),
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+                roles=LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
+            ),
+            embedding=_embedding_config(),
         )
 
         result = llm.get_rerank_func(config)
@@ -106,8 +131,10 @@ class TestGetEmbeddingFunc:
         from dlightrag.models.llm import get_embedding_func
 
         config = DlightragConfig(
-            chat=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test"),
-            embedding=EmbeddingConfig(api_key="sk-test", dim=1024),
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test")
+            ),
+            embedding=_embedding_config(),
         )
         emb = get_embedding_func(config)
         assert emb.embedding_dim == 1024

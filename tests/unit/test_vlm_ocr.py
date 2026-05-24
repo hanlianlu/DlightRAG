@@ -96,37 +96,3 @@ class TestParseVlmResponse:
 
     def test_valid_json_without_blocks_key_returns_none(self) -> None:
         assert parse_vlm_response('{"data": [1, 2, 3]}') is None
-
-
-# ---------------------------------------------------------------------------
-# TestDescribePageHappyPath
-# ---------------------------------------------------------------------------
-
-
-class TestDescribePageStructuredOcr:
-    """_describe_page with valid JSON exercises the full OCR → blocks → text path."""
-
-    async def test_structured_json_converted_to_text(self) -> None:
-        """VLM returns valid structured JSON → blocks_to_text produces formatted text."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from dlightrag.unifiedrepresent.extractor import EntityExtractor
-
-        vlm_response = json.dumps(
-            {
-                "blocks": [
-                    {"type": "heading", "level": 1, "text": "Introduction"},
-                    {"type": "text", "text": "This paper presents novel findings."},
-                    {"type": "table", "html": "<table><tr><td>A</td></tr></table>"},
-                ]
-            }
-        )
-        vision_fn = AsyncMock(return_value=vlm_response)
-
-        lightrag = MagicMock()
-        ext = EntityExtractor(lightrag, ["person"], vision_fn)
-        result = await ext._describe_page(MagicMock(), page_index=0)
-
-        assert "# Introduction" in result
-        assert "This paper presents novel findings." in result
-        assert "<table>" in result

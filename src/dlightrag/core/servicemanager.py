@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
+from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
@@ -217,10 +218,18 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.aget_metadata(doc_id)
 
-    async def aupdate_metadata(self, workspace: str, doc_id: str, data: dict[str, Any]) -> None:
+    async def aupdate_metadata(
+        self,
+        workspace: str,
+        doc_id: str,
+        data: dict[str, Any],
+        *,
+        mode: Literal["merge", "replace"] = "merge",
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> None:
         """Update (merge) document metadata."""
         svc = await self._get_service(workspace)
-        await svc.aupdate_metadata(doc_id, data)
+        await svc.aupdate_metadata(doc_id, data, mode=mode, metadata_policy=metadata_policy)
 
     async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
@@ -328,8 +337,8 @@ class RAGServiceManager:
                 for structured filtering.
         """
         effective_query = plan.standalone_query if plan else query
-        if plan and plan.metadata_filter is not None:
-            kwargs.setdefault("filters", plan.metadata_filter)
+        if plan is not None:
+            kwargs.setdefault("_plan", plan)
         ws_list = workspaces or [workspace or self._config.workspace]
         from dlightrag.observability import trace_pipeline
 
@@ -455,48 +464,30 @@ class RAGServiceManager:
         """Internal: discover all workspaces regardless of compatibility."""
         config = self._config
 
-        if config.kv_storage.startswith("PG"):
+        try:
+            import asyncpg
+
+            conn = await asyncpg.connect(
+                host=config.postgres_host,
+                port=config.postgres_port,
+                user=config.postgres_user,
+                password=config.postgres_password,
+                database=config.postgres_database,
+            )
             try:
-                import asyncpg
-
-                conn = await asyncpg.connect(
-                    host=config.postgres_host,
-                    port=config.postgres_port,
-                    user=config.postgres_user,
-                    password=config.postgres_password,
-                    database=config.postgres_database,
+                rows = await conn.fetch(
+                    "SELECT DISTINCT workspace FROM dlightrag_file_hashes ORDER BY workspace"
                 )
-                try:
-                    rows = await conn.fetch(
-                        "SELECT DISTINCT workspace FROM dlightrag_file_hashes ORDER BY workspace"
-                    )
-                    workspaces = [row["workspace"] for row in rows]
-                    return workspaces if workspaces else [config.workspace]
-                finally:
-                    await conn.close()
-            except Exception as exc:
-                logger.warning("Failed to list workspaces from PG: %s", exc)
-                return [config.workspace]
-
-        _fs_backends = {
-            "JsonKVStorage",
-            "JsonDocStatusStorage",
-            "NanoVectorDBStorage",
-            "NetworkXStorage",
-            "FaissVectorDBStorage",
-        }
-        if config.kv_storage in _fs_backends or config.vector_storage in _fs_backends:
-            return self._discover_filesystem_workspaces()
-
-        cached = list(self._services.keys())
-        if config.workspace not in cached:
-            cached.append(config.workspace)
-        return sorted(cached)
+                workspaces = [row["workspace"] for row in rows]
+                return workspaces if workspaces else [config.workspace]
+            finally:
+                await conn.close()
+        except Exception as exc:
+            logger.warning("Failed to list workspaces from PG: %s", exc)
+            return [config.workspace]
 
     async def _filter_compatible(self, workspaces: list[str]) -> list[str]:
         """Filter workspaces to those using the same embedding model."""
-        if not self._config.kv_storage.startswith("PG"):
-            return workspaces  # non-PG: no metadata, all compatible
         compatible = []
         try:
             import asyncpg
@@ -522,24 +513,6 @@ class RAGServiceManager:
             logger.debug("workspace compatibility filter failed, returning all", exc_info=True)
             return workspaces
         return compatible
-
-    def _discover_filesystem_workspaces(self) -> list[str]:
-        """Scan working_dir for subdirectories containing LightRAG data files."""
-        working_dir = self._config.working_dir_path
-        if not working_dir.exists():
-            return [self._config.workspace]
-        workspaces = []
-        for entry in working_dir.iterdir():
-            if not entry.is_dir() or entry.name.startswith("."):
-                continue
-            if (
-                any(entry.glob("kv_store_*.json"))
-                or any(entry.glob("vdb_*.json"))
-                or any(entry.glob("graph_*.graphml"))
-                or any(entry.glob("file_content_hashes.json"))
-            ):
-                workspaces.append(entry.name)
-        return sorted(workspaces) if workspaces else [self._config.workspace]
 
     async def close(self) -> None:
         """Close all managed RAGService instances."""

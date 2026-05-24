@@ -250,6 +250,24 @@ class TestCascadeDelete:
         assert stats["docs_deleted"] == 1
         assert stats["errors"] == []
 
+    async def test_cascade_delete_clears_artifacts_and_chunk_provenance(self) -> None:
+        ctx = _make_ctx(doc_ids={"doc-1"})
+        lr = _make_lightrag_for_delete()
+        artifacts = MagicMock()
+        artifacts.delete_doc = AsyncMock(return_value=None)
+        provenance = MagicMock()
+        provenance.delete_doc = AsyncMock(return_value=None)
+
+        await cascade_delete(
+            ctx=ctx,
+            lightrag=lr,
+            document_artifacts=artifacts,
+            chunk_provenance=provenance,
+        )
+
+        provenance.delete_doc.assert_awaited_once_with("doc-1")
+        artifacts.delete_doc.assert_awaited_once_with("doc-1")
+
     async def test_cascade_delete_layer1_failure_continues(self) -> None:
         """Layer 1 failure is recorded but Layers 2-4 still execute."""
         ctx = _make_ctx(doc_ids={"doc-2"}, content_hashes={"sha256:bbb"})

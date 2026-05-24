@@ -8,142 +8,82 @@
 # ─────────────────────────────────────────────────────────────────
 # Models
 # ─────────────────────────────────────────────────────────────────
-# provider: "openai" (AsyncOpenAI SDK), "anthropic" (Anthropic SDK), or "gemini" (Google GenAI SDK)
-#   openai    — OpenAI, Azure OpenAI, Qwen, MiniMax, Ollama, Xinference, any OpenAI-compatible endpoint
-#   anthropic — Anthropic Claude models (native SDK)
-#   gemini    — Google Gemini models (native SDK)
-#
-# IMPORTANT: any role that receives image_url content must use a vision-capable
-# model. With default fallbacks, chat is used for RAGAnything captioning,
-# VLM parser, unified visual extraction, multimodal query enhancement, answer
-# generation, and chat_llm_reranker when no explicit vlm/query/rerank override
-# is set. The reranker does not consume the vlm role implicitly.
-#
-# ingest model (optional) is used for unified-mode structural context updates.
-# If unset, falls back to chat model. Reranker-specific model choices belong
-# under rerank.provider / rerank.model / rerank.base_url.
+# LLM roles follow LightRAG role names exactly:
+#   extract — entity/relationship extraction and ingest-time semantic projection
+#   keyword — LightRAG retrieval keyword extraction
+#   query   — answer generation and query planning
+#   vlm     — image/table/equation analysis
 
-# Default: Google's Gemini 2.5 Flash Lite (vision-capable) routed through
-# an OpenAI-compatible gateway. The base_url below is one such gateway —
-# substitute any other endpoint that hosts the model, or swap the whole
-# block for one of the provider examples at the bottom of this file.
-
-chat:
-  provider: openai
-  model: google/gemini-2.5-flash-lite
-  base_url: https://openrouter.ai/api/v1
-  temperature: 0.5
-  timeout: 120.0
-
-# Ingest model (optional — falls back to chat if not set).
-# Use a cheaper/faster model for structural context updates.
-
-# ingest:
-#   provider: openai
-#   model: gemma4:26b-a4b-it-q8_0
-#   base_url: http://host.docker.internal:11434/v1
-#   api_key: ollama
-
-# Model overrides (all optional, fallback to chat):
-#   extract  — LightRAG KG entity/relation extraction (heavy reasoning recommended)
-#   keywords — LightRAG keyword extraction during retrieval (cheap model recommended)
-#   query    — AnswerEngine + QueryPlanner + LightRAG query stage
-#   vlm      — DlightRAG-local visual paths: vlm_parser, multimodal_query, unified extractor
-#
-# extract:
-#   provider: anthropic
-#   model: claude-sonnet-4-20250514
-#
-# keywords:
-#   provider: openai
-#   model: gemma4:26b-a4b-it-q8_0
-#   base_url: http://host.docker.internal:11434/v1
-#   api_key: ollama
-#
-# query:
-#   provider: anthropic
-#   model: claude-opus-4-20250514
-#
-# vlm:
-#   provider: openai
-#   model: gemma4:26b-a4b-it-q8_0
-#   base_url: http://host.docker.internal:11434/v1
-#   api_key: ollama
+llm:
+  default:
+    provider: openai
+    model: google/gemini-2.5-flash-lite
+    base_url: https://openrouter.ai/api/v1
+    temperature: 0.5
+    timeout: 120.0
+  roles: {}
+  # roles:
+  #   extract:
+  #     provider: anthropic
+  #     model: claude-sonnet-4-20250514
+  #   keyword:
+  #     provider: openai
+  #     model: gpt-4.1-mini
+  #   query:
+  #     provider: openai
+  #     model: gpt-4.1
+  #   vlm:
+  #     provider: gemini
+  #     model: gemini-2.5-flash
 
 embedding:
+  provider: voyage
   model: voyage-multimodal-3.5
   base_url: https://api.voyageai.com/v1
   dim: 1024
+  max_token_size: 8192
+  asymmetric: auto
+  startup_probe: true
 
 rerank:
   enabled: true
-  strategy: chat_llm_reranker              # chat_llm_reranker, jina_reranker, aliyun_reranker, azure_cohere, local_reranker
-  # provider: openai                  # optional for chat_llm_reranker override
-  # model:                            # default: chat_llm_reranker→chat model, jina→jina-reranker-m0, aliyun→gte-rerank
-  # base_url:
+  strategy: chat_llm_reranker
   score_threshold: 0.5
 
-# Provider examples — uncomment one block to override chat above:
-
-# OpenAI (cloud):
-#
-#   chat:
-#     provider: openai
-#     model: gpt-4.1
-#     # base_url omitted — uses api.openai.com/v1 by default
-
-# Ollama (local, served via the OpenAI-compat shim — requires Ollama
-# running on the host with the model pulled. api_key is a non-empty
-# placeholder because the OpenAI SDK requires it; Ollama ignores the
-# value. host.docker.internal resolves to the Docker host inside Docker
-# Compose; on macOS with Docker Desktop installed it also works from
-# native Python):
-#
-#   chat:
-#     provider: openai
-#     model: gemma4:26b-a4b-it-q8_0
-#     base_url: http://host.docker.internal:11434/v1
-#     api_key: ollama
-#     timeout: 180.0
-
-# Anthropic (native SDK — requires: pip install dlightrag[anthropic]):
-#
-#   chat:
-#     provider: anthropic
-#     model: claude-sonnet-4-20250514
-
-# Azure OpenAI:
-#
-#   chat:
-#     provider: openai
-#     model: gpt-4.1
-#     base_url: https://your-resource.openai.azure.com/openai/v1
-
 # ─────────────────────────────────────────────────────────────────
-# RAG Pipeline
+# Unified LightRAG Main Ingestion
 # ─────────────────────────────────────────────────────────────────
 
-rag_mode: unified                     # caption or unified
 working_dir: ./dlightrag_storage
-parser: mineru                        # mineru, docling, vlm  (Unified mode doesn't use parser — the chat model handles everything)
-parse_method: auto                    # auto, ocr, txt
-page_render_dpi: 250                  # unified mode rendering DPI
+parser:
+  rules: "*:native-iteP,*:mineru-iteP,*:legacy-R"
+  native_images_bypass_lightrag: true
+  chunk_options: {}
 
-# Caption parser options
-# mineru_backend:                      # pipeline, vlm-auto-engine, vlm-http-client, hybrid-auto-engine, hybrid-http-client
-# mineru_timeout:                      # seconds; unset leaves MinerU unbounded
-# mineru_vlm_url:                      # remote VLM server for MinerU *-http-client backends
-# docling_table_mode: fast             # fast or accurate
-# docling_tables: true                 # table structure recognition
-# docling_allow_ocr: true              # OCR for scanned content
-# docling_artifacts_path:              # optional Docling model artifacts path
+extraction:
+  use_json: true
+  entity_type_prompt_file:
 
-# Content processing
-enable_image_processing: true
-enable_table_processing: true
-enable_equation_processing: false
+metadata:
+  enabled: true
+  allow_ad_hoc_json: true
+  default_ingest_policy: validate
+  unknown_filter_policy: ignore_with_warning
+  fields:
+    title:
+      type: text
+      filter: exact
+      normalize: lower_trim
+    author:
+      type: text
+      filter: exact
+      normalize: lower_trim
+    filename:
+      type: text
+      filter: exact_or_explicit_pattern
+      normalize: lower_trim
 
-# Chunking
+# Chunking and LightRAG query defaults.
 chunk_size: 512
 chunk_overlap: 52
 context_window: 2
@@ -151,18 +91,21 @@ context_filter_types: text,table
 max_context_tokens: 3000
 
 # ─────────────────────────────────────────────────────────────────
-# Storage Backends
+# PostgreSQL 18 Storage
 # ─────────────────────────────────────────────────────────────────
 
 workspace: default
+postgres_required_major: 18
+postgres_min_minor: "18.4"
 
-vector_storage: PGVectorStorage       # PGVectorStorage, MilvusVectorDBStorage, NanoVectorDBStorage, etc.
-graph_storage: PGGraphStorage         # PGGraphStorage, Neo4JStorage, NetworkXStorage, etc.
-kv_storage: PGKVStorage               # PGKVStorage, JsonKVStorage, RedisKVStorage, etc.
-doc_status_storage: PGDocStatusStorage # PGDocStatusStorage, JsonDocStatusStorage, etc.
+vector_storage: PGVectorStorage
+graph_storage: PGGraphStorage
+kv_storage: PGKVStorage
+doc_status_storage: PGDocStatusStorage
 
-# pgvector HNSW tuning
-pg_vector_index_type: HNSW            # HNSW, IVFFLAT, VCHORDRQ
+# LightRAG derives VECTOR/HALFVEC from POSTGRES_VECTOR_INDEX_TYPE.
+# HNSW uses VECTOR(dim); HNSW_HALFVEC is explicit opt-in.
+pg_vector_index_type: HNSW
 pg_hnsw_m: 32
 pg_hnsw_ef_construction: 256
 pg_hnsw_ef_search: 256
@@ -170,14 +113,13 @@ pg_hnsw_ef_search: 256
 # ─────────────────────────────────────────────────────────────────
 # Ingestion Performance
 # ─────────────────────────────────────────────────────────────────
-# For local models (Ollama, Xinference) set all to 1.
 
-max_concurrent_ingestion: 4           # files processed simultaneously
-max_parallel_insert: 2                # parallel document inserts
-max_async: 4                          # concurrent LLM calls
-embedding_func_max_async: 8           # concurrent embedding calls
-embedding_batch_num: 10               # texts per embedding batch
-embedding_request_timeout: 120        # seconds per embedding request
+max_concurrent_ingestion: 4
+max_parallel_insert: 2
+max_async: 4
+embedding_func_max_async: 8
+embedding_batch_num: 10
+embedding_request_timeout: 120
 
 # ─────────────────────────────────────────────────────────────────
 # Query
@@ -185,7 +127,13 @@ embedding_request_timeout: 120        # seconds per embedding request
 
 top_k: 60
 chunk_top_k: 30
-default_mode: mix                     # local, global, hybrid, naive, mix
+default_mode: mix
+bm25_enabled: true
+bm25_top_k: 40
+bm25_text_config: simple
+rrf_k: 60
+direct_visual_top_k: 20
+metadata_filter_exact_vector_threshold: 8192
 max_conversation_turns: 25
 max_conversation_tokens: 65536
 
@@ -209,10 +157,10 @@ kg_entity_types:
 # Security & Auth (Optional — best kept in .env)
 # ─────────────────────────────────────────────────────────────────
 
-# auth_mode: none                       # none, simple, jwt (set simple explicitly when api_auth_token is set)
-# api_auth_token: ""                    # Bearer token for auth_mode: simple
-# jwt_secret: ""                        # Required if auth_mode is jwt
-# jwt_algorithm: "HS256"                # Signature algorithm for JWT
+# auth_mode: simple
+# api_auth_token: ""
+# jwt_secret: ""
+# jwt_algorithm: "HS256"
 
 # ─────────────────────────────────────────────────────────────────
 # Observability (Optional — best kept in .env)
@@ -220,5 +168,5 @@ kg_entity_types:
 
 # langfuse_public_key:
 # langfuse_secret_key:
-# langfuse_host: http://localhost:3300  # Local self-host
-# langfuse_export_external_spans: false  # keep false to avoid double-counting auto GenAI spans
+# langfuse_host: http://localhost:3300
+# langfuse_export_external_spans: false

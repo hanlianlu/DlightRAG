@@ -12,7 +12,7 @@ class ChunkSnippet(BaseModel):
     chunk_idx: int | None = None
     page_idx: int | None = None
     content: str
-    image_data: str | None = None  # base64-encoded page image (unified mode)
+    image_data: str | None = None  # base64-encoded page/image data
     highlight_phrases: list[str] | None = None
 
     model_config = {"extra": "forbid"}

@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 import openpyxl
 import pytest
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
 from dlightrag.converters.office import LibreOfficeConverter, OfficeConverterError, PageSetup
 
 
@@ -43,31 +43,32 @@ class TestLibreOfficeConverter:
         """Test that excel_auto_convert_to_pdf=False disables conversion."""
         config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_path),
-            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
-            embedding=EmbeddingConfig(api_key="test-key"),
+            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test-key")),
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="test-key",
+                startup_probe=False,
+            ),
             excel_auto_convert_to_pdf=False,
-            kv_storage="JsonKVStorage",
-            doc_status_storage="JsonDocStatusStorage",
-            vector_storage="NanoVectorDBStorage",
-            graph_storage="NetworkXStorage",
         )
         converter = LibreOfficeConverter(config)
         assert not converter.should_convert(Path("test.xlsx"))
 
-    def test_docling_parser_skips_conversion(self, tmp_path: Path) -> None:
-        """Test that docling parser disables Excel conversion."""
+    def test_parser_rules_do_not_disable_explicit_excel_conversion(self, tmp_path: Path) -> None:
+        """Parser routing is owned by LightRAG; local Excel conversion uses its explicit flag."""
         config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_path),
-            chat=ModelConfig(model="gpt-4.1-mini", api_key="test-key"),
-            embedding=EmbeddingConfig(api_key="test-key"),
-            parser="docling",
-            kv_storage="JsonKVStorage",
-            doc_status_storage="JsonDocStatusStorage",
-            vector_storage="NanoVectorDBStorage",
-            graph_storage="NetworkXStorage",
+            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test-key")),
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="test-key",
+                startup_probe=False,
+            ),
         )
         converter = LibreOfficeConverter(config)
-        assert not converter.should_convert(Path("test.xlsx"))
+        assert converter.should_convert(Path("test.xlsx"))
 
     def test_is_safe_to_delete(self, test_config: DlightragConfig) -> None:
         """Test safety check for file deletion."""

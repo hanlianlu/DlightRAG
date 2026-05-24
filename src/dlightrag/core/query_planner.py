@@ -38,6 +38,9 @@ class QueryPlan:
     original_query: str  # User's raw input (before rewrite)
     standalone_query: str  # Rewritten standalone query (= original if no history)
     metadata_filter: MetadataFilter | None = None
+    metadata_filter_source: str | None = None
+    metadata_filter_confidence: str | None = None
+    metadata_filter_evidence: list[dict[str, Any]] | None = None
 
 
 # PG data_type -> human-readable short form
@@ -70,6 +73,45 @@ def _build_custom_keys_hint(schema: dict[str, Any] | None) -> str:
 
 def _is_empty_filter(f: MetadataFilter) -> bool:
     return f.is_empty()
+
+
+def _filter_proposal_has_evidence(
+    *,
+    query: str,
+    filters: dict[str, Any],
+    evidence: Any,
+) -> bool:
+    """Validate the LLM's evidence-carrying metadata filter contract."""
+    if not isinstance(evidence, list) or not evidence:
+        return False
+
+    q = query.casefold()
+    evidenced_fields: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        field = item.get("field")
+        span = item.get("evidence_span")
+        if not isinstance(field, str) or not isinstance(span, str):
+            continue
+        if not span.strip() or span.casefold() not in q:
+            continue
+        evidenced_fields.add(field)
+
+    required_fields = set(filters)
+    if "date_from" in required_fields or "date_to" in required_fields:
+        required_fields.discard("date_from")
+        required_fields.discard("date_to")
+        required_fields.add("date")
+    if "custom" in required_fields:
+        custom = filters.get("custom")
+        required_fields.discard("custom")
+        if isinstance(custom, dict):
+            required_fields.update(f"custom.{key}" for key in custom)
+        else:
+            required_fields.add("custom")
+
+    return required_fields.issubset(evidenced_fields)
 
 
 class QueryPlanner:
@@ -182,6 +224,8 @@ class QueryPlanner:
         # Merge explicit filter (explicit wins)
         if explicit_filter is not None and not _is_empty_filter(explicit_filter):
             plan.metadata_filter = self._merge_filters(explicit_filter, plan.metadata_filter)
+            plan.metadata_filter_source = "explicit"
+            plan.metadata_filter_confidence = "high"
 
         logger.info(
             "[Planner] result: standalone=%r, filter=%s",
@@ -203,9 +247,28 @@ class QueryPlanner:
 
         standalone = data.get("standalone_query", query)
         raw_filters = data.get("filters", {})
+        filter_confidence = str(data.get("filter_confidence") or "").lower() or None
+        filter_evidence = data.get("filter_evidence") or []
 
         # Validate filters
         clean = {k: v for k, v in raw_filters.items() if v is not None}
+        if clean and (
+            filter_confidence == "low"
+            or not _filter_proposal_has_evidence(
+                query=query,
+                filters=clean,
+                evidence=filter_evidence,
+            )
+        ):
+            logger.info("QueryPlanner: ignored metadata filter proposal without evidence contract")
+            return QueryPlan(
+                original_query=query,
+                standalone_query=standalone,
+                metadata_filter=None,
+                metadata_filter_source=None,
+                metadata_filter_confidence=filter_confidence or "low",
+                metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
+            )
 
         # Handle date fields specially
         metadata_filter: MetadataFilter | None = None
@@ -237,6 +300,9 @@ class QueryPlanner:
             original_query=query,
             standalone_query=standalone,
             metadata_filter=metadata_filter,
+            metadata_filter_source="llm_inferred" if metadata_filter is not None else None,
+            metadata_filter_confidence=filter_confidence,
+            metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
         )
 
     @staticmethod
@@ -258,7 +324,6 @@ class QueryPlanner:
             "doc_author",
             "date_from",
             "date_to",
-            "rag_mode",
             "custom",
         ]
         for field in filter_fields:

@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from dlightrag.config import DlightragConfig, EmbeddingConfig
 from dlightrag.models.embedding import httpx_embed
+from dlightrag.models.llm import get_embedding_func
 from dlightrag.models.providers.embed_providers import OpenAICompatEmbedProvider
 
 
@@ -74,3 +76,51 @@ class TestHttpxEmbed:
 
             call_kwargs = instance.post.call_args
             assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer sk-secret"
+
+
+def test_embedding_func_enables_asymmetric_by_default_for_capable_provider() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        )
+    )
+
+    embedding_func = get_embedding_func(cfg)
+
+    assert embedding_func.supports_asymmetric is True
+
+
+def test_embedding_func_uses_lightrag_symmetric_fallback_for_unsupported_auto() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="qwen_openai_compatible",
+            model="qwen3-vl-embedding-2b",
+            api_key="sk-test",
+            dim=2048,
+            startup_probe=False,
+        )
+    )
+
+    embedding_func = get_embedding_func(cfg)
+
+    assert embedding_func.supports_asymmetric is False
+
+
+def test_embedding_func_rejects_required_asymmetric_for_unsupported_provider() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="qwen_openai_compatible",
+            model="qwen3-vl-embedding-2b",
+            api_key="sk-test",
+            dim=2048,
+            asymmetric="require",
+            startup_probe=False,
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not support asymmetric"):
+        get_embedding_func(cfg)

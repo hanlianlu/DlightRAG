@@ -125,6 +125,8 @@ async def cascade_delete(
     visual_chunks: Any | None = None,
     hash_index: HashIndexProtocol | None = None,
     metadata_index: Any | None = None,
+    document_artifacts: Any | None = None,
+    chunk_provenance: Any | None = None,
 ) -> dict[str, Any]:
     """5-layer cascade deletion with per-layer fault isolation.
 
@@ -149,6 +151,20 @@ async def cascade_delete(
     stats: dict[str, Any] = {"docs_deleted": 0, "errors": []}
 
     for doc_id in ctx.doc_ids:
+        if chunk_provenance is not None:
+            try:
+                await chunk_provenance.delete_doc(doc_id)
+            except Exception as exc:
+                stats["errors"].append(f"Layer 0 chunk_provenance ({doc_id}): {exc}")
+                logger.warning("cascade_delete chunk_provenance failed for %s: %s", doc_id, exc)
+
+        if document_artifacts is not None:
+            try:
+                await document_artifacts.delete_doc(doc_id)
+            except Exception as exc:
+                stats["errors"].append(f"Layer 0 document_artifacts ({doc_id}): {exc}")
+                logger.warning("cascade_delete document_artifacts failed for %s: %s", doc_id, exc)
+
         # Layer 1: LightRAG (full_docs, doc_status, text_chunks, chunks_vdb, KG)
         try:
             await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)

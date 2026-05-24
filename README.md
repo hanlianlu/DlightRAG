@@ -12,9 +12,9 @@ From text-heavy reports to chart-filled presentations — it adapts to your docu
 
 ## Features
 
-- **Dual multimodal RAG modes** — Caption mode (parse → caption → embed) for pipeline-based multimodal paradigm; Unified mode (render → multimodal embed) for modern multimodal paradigm
-- **Knowledge graph + vector + visual retrieval** — Multi-strategy retrieval across knowledge graph and vector similarity [LightRAG](https://github.com/HKUDS/LightRAG), visual content, and dynamic metadata filters
-- **Multimodal ingestion** — PDF, Images, Office Documents from local filesystem, Azure Blob Storage etc.
+- **Single LightRAG-main multimodal path** — documents go through LightRAG parser sidecars; native and extracted images get direct multimodal embeddings
+- **Knowledge graph + vector + BM25 retrieval** — LightRAG `mix` mode, PostgreSQL vector in-filtering, pg_textsearch BM25, and RRF fusion
+- **Multimodal ingestion** — PDF, images, Office documents, Azure Blob Storage, and AWS S3 via one ingestion engine
 - **Broad LLM support** — Native SDKs for OpenAI, Anthropic, Gemini + any OpenAI-compatible endpoint
 - **Cross-workspace federation** — Query across embedding-compatible workspaces with well managed merging
 - **Citation and highlighting** — Inline citations with source, page, and highlighting attribution
@@ -63,7 +63,7 @@ cp .env.example .env    # set API keys in .env; edit config.yaml for models/prov
 docker compose up
 ```
 
-Includes PostgreSQL (pgvector + AGE), REST API (`:8100`), and MCP server (`:8101`, host-mapped to loopback by default — see [Deployment & auth](#deployment--auth) before exposing externally).
+Includes PostgreSQL 18 (pgvector + Apache AGE + pg_textsearch), REST API (`:8100`), and MCP server (`:8101`, host-mapped to loopback by default — see [Deployment & auth](#deployment--auth) before exposing externally).
 
 > **Local models (Ollama, Xinference, etc.):** use `host.docker.internal` instead of `localhost` in `base_url` settings.
 
@@ -116,7 +116,7 @@ async def main():
 asyncio.run(main())
 ```
 
-> Requires PostgreSQL with pgvector + AGE, or JSON fallback for development (see [Configuration](#configuration)).
+> Requires PostgreSQL 18 with pgvector, Apache AGE, and pg_textsearch. DlightRAG's core path is PostgreSQL-only.
 
 ### MCP Server (for AI Agents)
 
@@ -198,7 +198,7 @@ The same token guards both REST and MCP. The MCP server logs a multi-line warnin
 All write endpoints accept optional `workspace`; read endpoints accept `workspaces` list for cross-workspace federated search. See [Deployment & auth](#deployment--auth) for token setup.
 
 - **Request/response schema** — [`docs/response-schema.md`](docs/response-schema.md) for ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
-- **Retrieval & answer pipeline** — [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md) for unified vs caption mode, visual resolution, reranking, Step 1+2 merge.
+- **Retrieval & answer pipeline** — [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md) for LightRAG mix retrieval, direct image search, metadata in-filtering, BM25 fusion, reranking, and answer generation.
 
 
 ## Configuration
@@ -209,74 +209,46 @@ Configuration uses a hybrid system — structured app settings in [`config.yaml`
 
 See [`config.yaml`](config.yaml) for all application settings and [`.env.example`](.env.example) for secrets/deployment reference.
 
-> **Env var naming:** all variables use the `DLIGHTRAG_` prefix. Single underscore (`_`) is part of the field name (e.g. `DLIGHTRAG_POSTGRES_HOST` → `postgres_host`). Double underscore (`__`) means nested object (e.g. `DLIGHTRAG_CHAT__MODEL` → `chat.model`). See `.env.example` for details.
+> **Env var naming:** all variables use the `DLIGHTRAG_` prefix. Single underscore (`_`) is part of the field name (e.g. `DLIGHTRAG_POSTGRES_HOST` → `postgres_host`). Double underscore (`__`) means nested object (e.g. `DLIGHTRAG_LLM__DEFAULT__MODEL` → `llm.default.model`). See `.env.example` for details.
 
-### RAG Mode
+### Unified LightRAG-Main Path
 
-The first decision — determines your ingestion pipeline, model requirements, and retrieval behavior.
+DlightRAG now has one ingestion and retrieval path. Documents are enqueued
+through LightRAG main's parser routing; native images and parser-extracted
+image sidecars are additionally embedded directly with the configured
+multimodal embedding model.
 
-| Mode | Pipeline | Best for |
-|------|----------|----------|
-| `caption` | Document parsing → VLM captioning → text embedding → KG | Text-heavy documents, structured elements |
-| `unified` (default)| Page rendering → multimodal embedding → VLM entity extraction → KG | Visually rich documents (charts, diagrams, complex layouts) |
+The path is:
 
-**Caption mode parsers** (`parser` in config.yaml):
+1. LightRAG parser sidecars handle document text, tables, equations, and
+   document-derived images.
+2. LightRAG owns chunking, entity extraction, relationship extraction, graph
+   construction, and `mix` retrieval.
+3. DlightRAG records metadata, document artifacts, and chunk provenance in
+   PostgreSQL side tables.
+4. DlightRAG adds direct image vector search, metadata in-filtering, BM25, RRF
+   fusion, reranking, citations, and answer generation.
 
-| Parser | Description |
-|--------|-------------|
-| `mineru` (default) | MinerU PDF parser — fast, good for text-heavy documents |
-| `docling` | Docling parser — structure-aware parser with Docling JSON post-processing for headings and page metadata |
-| `vlm` | VLM-based OCR — renders pages and uses the visual model to extract structured content; no external parser dependency |
+`default_mode` remains `mix`. It is an invariant for LightRAG retrieval, not a
+public mode switch.
 
-Docling and VLM caption paths use Docling's HybridChunker for structure-aware
-chunking. MinerU uses LightRAG's default text chunking after DlightRAG's
-content policy filter removes parser noise.
+### Embeddings
 
-**Caption parser options:**
+The embedding model must be multimodal. Text chunks, native images, and
+parser-extracted images must share one vector space.
 
-| Setting | Applies to | Description |
-|---------|------------|-------------|
-| `mineru_backend` | MinerU | Parser backend (`pipeline`, `vlm-auto-engine`, `vlm-http-client`, `hybrid-auto-engine`, `hybrid-http-client`) |
-| `mineru_timeout` | MinerU | Optional parser timeout in seconds; unset leaves MinerU unbounded |
-| `mineru_vlm_url` | MinerU | Remote VLM server URL for `*-http-client` backends |
-| `docling_table_mode` | Docling | `fast` or `accurate` TableFormer mode |
-| `docling_tables` | Docling | Enable table structure recognition |
-| `docling_allow_ocr` | Docling | Allow OCR for scanned content |
-| `docling_artifacts_path` | Docling | Optional local Docling model artifacts path |
+| Provider | Example model | Notes |
+|---|---|---|
+| `voyage` | `voyage-multimodal-3.5` | Default provider; recommended dimension `1024` |
+| `dashscope_qwen` | `qwen3-vl-embedding-2b` | DashScope multimodal payloads |
+| `qwen_openai_compatible` | `qwen3-vl-embedding-2b` via LM Studio/vLLM | OpenAI-compatible local endpoint |
+| `gemini` | `gemini-embedding-2` | Uses symmetric fallback when task routing is unavailable |
+| `jina` | `jina-embeddings-v4` | Uses task routing when supported |
 
-**Model usage by stage:**
-
-Each stage resolves its model via the per-role overrides below; if a role is unset, it falls back to `chat`.
-
-| Stage | Caption | Unified | Role override |
-|-------|---------|---------|---------------|
-| Image captioning | chat (RAGAnything vision function) | — | `chat` |
-| Table / equation captioning | chat (RAGAnything vision function) | — | `chat` |
-| VLM OCR / visual page description | `vlm` override → chat | `vlm` override → chat | `vlm` |
-| Entity extraction | chat | chat | `extract` |
-| Embedding | embedding model | embedding model (multimodal) | (separate `embedding` block) |
-| Rerank (chat_llm_reranker) | rerank override → chat | rerank override → chat (vision-capable if page images are present) | `rerank.*` |
-| Rerank (API strategy) | jina_reranker / aliyun_reranker / azure_cohere / local_reranker | jina_reranker / aliyun_reranker / azure_cohere / local_reranker | (separate `rerank` block) |
-| Keyword extraction (per-query) | chat | chat | `keywords` |
-| Answer generation | chat | chat (VLM, sees text excerpts + page images) | `query` |
-
-> **Important:** Any role that receives `image_url` content must use a vision-capable model. With the default fallbacks, `chat` is used for RAGAnything captioning, VLM parser, unified visual extraction, multimodal query enhancement, answer generation, and `chat_llm_reranker` when no explicit `vlm`, `query`, or `rerank.*` override is set. The reranker does not consume the `vlm` role implicitly; reranker-specific model choices belong under `rerank.*`.
-
-For unified mode, set `rag_mode: unified` in `config.yaml` and use multimodal models:
-
-```yaml
-# config.yaml
-rag_mode: unified
-
-chat:
-  model: gemma4:26b-a4b-it-q8_0          # must support vision
-
-embedding:
-  model: Qwen3-VL-Embedding    # must be multimodal
-  dim: 4096
-```
-
-> **Limitations:** A workspace is locked to one mode after first ingestion. Page images ~3-7 MB/page at 250 DPI.
+`embedding.asymmetric: auto` enables provider task routing when the adapter
+supports it. Otherwise DlightRAG relies on LightRAG's symmetric fallback.
+Changing `embedding.dim` after data is indexed requires clearing the workspace
+and rebuilding vector indexes.
 
 ### Providers
 
@@ -292,80 +264,103 @@ All three SDKs ship in the base install; no extras to install.
 
 ```yaml
 # config.yaml — OpenAI-compatible (Ollama example)
-chat:
-  provider: openai
-  model: gemma4:26b-a4b-it-q8_0
-  base_url: http://localhost:11434/v1
+llm:
+  default:
+    provider: openai
+    model: gemma4:26b-a4b-it-q8_0
+    base_url: http://localhost:11434/v1
 
 # config.yaml — Anthropic (native SDK)
-chat:
-  provider: anthropic
-  model: claude-sonnet-4-20250514
+llm:
+  default:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
 
 # config.yaml — Google Gemini (native SDK)
-chat:
-  provider: gemini
-  model: gemini-2.5-pro
+llm:
+  default:
+    provider: gemini
+    model: gemini-2.5-pro
 ```
 
 API keys go in `.env`:
 ```bash
-DLIGHTRAG_CHAT__API_KEY=sk-...
+DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-...
 DLIGHTRAG_EMBEDDING__API_KEY=sk-...
 ```
 
 #### Per-role LLM Overrides
 
-LightRAG role overrides (`extract`, `keywords`, `query`) are built on
-LightRAG 1.5.0's role registry. DlightRAG also has a local `vlm` model block
-for its own visual paths. Each unset role falls back to `chat` — start with
-`chat` only, split out a role later when cost or quality needs it.
+LightRAG role overrides use LightRAG's role names: `extract`, `keyword`, and
+`query`. DlightRAG also wires `vlm` for image/table/equation analysis. Each
+unset role falls back to `llm.default`.
 
 | Role | What it drives | Recommended model class |
 |---|---|---|
-| `extract` | KG entity & relation extraction during ingest | Heavy reasoning (Claude Sonnet / GPT-5) |
-| `keywords` | Per-query keyword extraction | Cheap & fast (Haiku / Gemini Flash Lite) |
-| `query` | Answer generation + retrieval planning | Balanced–heavy (Claude Opus / GPT-5) |
-| `vlm` | DlightRAG-local visual paths: VLM OCR, multimodal query enhancement, unified extractor | Vision-strong (GPT-5-vision / Gemini 2.5 Flash) |
+| `extract` | KG entity & relationship extraction during ingest | Reliable extraction model |
+| `keyword` | LightRAG retrieval keyword extraction | Cheap and low-latency model |
+| `query` | Answer generation and query planning | Balanced to heavy model |
+| `vlm` | Visual analysis for image/table/equation sidecars | Vision-capable model |
 
 ```yaml
 # config.yaml
-extract:
-  provider: anthropic
-  model: claude-sonnet-4-20250514
-
-# Cheap local fallback for high-volume keyword extraction:
-keywords:
-  provider: openai
-  model: gemma4:26b-a4b-it-q8_0
-  base_url: http://host.docker.internal:11434/v1
-  api_key: ollama
+llm:
+  default:
+    provider: openai
+    model: google/gemini-2.5-flash-lite
+    base_url: https://openrouter.ai/api/v1
+  roles:
+    extract:
+      provider: anthropic
+      model: claude-sonnet-4-20250514
+    keyword:
+      provider: openai
+      model: gpt-4.1-mini
+    query:
+      provider: openai
+      model: gpt-4.1
+    vlm:
+      provider: gemini
+      model: gemini-2.5-flash
 ```
+
+### Metadata Filtering
+
+Metadata is explicit-schema first. Declared fields are normalized and can be
+used for exact filtering; undeclared enrichment is stored in JSONB but is not
+filterable by default.
+
+LLM intent-aware filtering is source-aware:
+
+- Explicit user/API filters are strict. If the filter resolves to an empty
+  candidate set, retrieval returns no matches instead of falling back to global
+  search.
+- LLM-inferred filters must carry evidence spans that appear in the query. If
+  an inferred filter resolves to an empty candidate set, retrieval falls back
+  to unfiltered search because the planner may have over-inferred intent.
+- Non-empty inferred candidate sets still constrain semantic and BM25 retrieval.
 
 ### Storage Backends
 
-Set in `config.yaml`:
+DlightRAG's supported core storage stack is PostgreSQL 18 only:
 
-| Setting | Default | Options |
-|---------|---------|---------|
-| `vector_storage` | `PGVectorStorage` | PGVectorStorage, MilvusVectorDBStorage, NanoVectorDBStorage, ... |
-| `graph_storage` | `PGGraphStorage` | PGGraphStorage, Neo4JStorage, NetworkXStorage, ... |
-| `kv_storage` | `PGKVStorage` | PGKVStorage, JsonKVStorage, RedisKVStorage, ... |
-| `doc_status_storage` | `PGDocStatusStorage` | PGDocStatusStorage, JsonDocStatusStorage, ... |
+| Component | Backend |
+|---|---|
+| Vector store | `PGVectorStorage` with pgvector |
+| Graph store | `PGGraphStorage` with Apache AGE |
+| KV store | `PGKVStorage` |
+| Document status | `PGDocStatusStorage` |
+| BM25 | pg_textsearch |
 
-> **Note:** When using PostgreSQL backends, LightRAG maps its internal namespace names to different table names (e.g. `text_chunks` → `LIGHTRAG_DOC_CHUNKS`, `full_docs` → `LIGHTRAG_DOC_FULL`). DlightRAG's unified mode adds a `visual_chunks` table via its own KV storage.
+Default vector indexing uses `pg_vector_index_type: HNSW` with `VECTOR(dim)`.
+`HNSW_HALFVEC` is explicit opt-in and should only be used after deciding the
+workspace's embedding dimension and rebuilding indexes.
 
 ### Workspaces
 
-Each workspace has its own knowledge graph, vector store, and document index. `workspace` in config.yaml (default: `default`) is automatically bridged to backend-specific env vars — no manual setup needed.
-
-| Backend type | Isolation mechanism |
-|---|---|
-| PostgreSQL (PG*) | `workspace` column / graph name in same database |
-| Neo4j / Memgraph | Label prefix |
-| Milvus / Qdrant | Collection prefix |
-| MongoDB / Redis | Collection scope |
-| JSON / Nano / NetworkX / Faiss | Subdirectory under `working_dir/<workspace>/` |
+Each workspace is isolated by PostgreSQL workspace columns and LightRAG graph
+namespace. Workspaces must use the same embedding model and dimension if they
+are queried together with federation.
 
 ### Reranking
 
@@ -380,7 +375,7 @@ Set in `config.yaml` under the `rerank:` block:
 
 | Strategy | Default model | API key |
 |---------|---------------|---------|
-| `chat_llm_reranker` | uses `rerank.provider/model` if set, otherwise `chat`; selected model must support images when reranking visual chunks | reuses chat key unless `DLIGHTRAG_RERANK__API_KEY` is set |
+| `chat_llm_reranker` | uses `rerank.provider/model` if set, otherwise the default LLM; selected model must support images when reranking visual chunks | reuses default LLM key unless `DLIGHTRAG_RERANK__API_KEY` is set |
 | `jina_reranker` | `jina-reranker-m0` | `DLIGHTRAG_RERANK__API_KEY` |
 | `aliyun_reranker` | `gte-rerank` | `DLIGHTRAG_RERANK__API_KEY` |
 | `azure_cohere` | `cohere-rerank-v3.5` | `DLIGHTRAG_RERANK__API_KEY` |

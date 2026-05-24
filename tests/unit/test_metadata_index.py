@@ -37,3 +37,26 @@ class TestMetadataSQL:
         sql = "\n".join(_CREATE_INDEXES)
 
         assert "ON dlightrag_doc_metadata (creation_date)" in sql
+
+    def test_upsert_sql_removes_legacy_processing_mode(self):
+        assert "rag" + "_mode" not in _UPSERT
+
+    def test_upsert_sql_has_lightrag_operational_fields(self):
+        assert "ingest_strategy" in _UPSERT
+        assert "parse_engine" in _UPSERT
+        assert "process_options" in _UPSERT
+        assert "artifact_status" in _UPSERT
+
+    def test_pg_metadata_index_does_not_query_lightrag_doc_status_metadata(self):
+        from dlightrag.storage import pg_metadata_index as module
+
+        source = "\n".join(
+            [
+                module._UPSERT,
+                module._CREATE_TABLE,
+                "\n".join(module._CREATE_INDEXES),
+            ]
+        )
+
+        assert "LIGHTRAG_DOC_STATUS.metadata" not in source
+        assert "doc_status.metadata" not in source

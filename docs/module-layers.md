@@ -1,109 +1,96 @@
 # Module Layering
 
 Code-organisation view of `src/dlightrag/`. Complements the runtime
-data-flow diagram in [`architecture.drawio`](architecture.drawio) — that
-file shows what calls what at request time; this one shows what *imports*
-what at module load.
+data-flow diagram in [`architecture.drawio`](architecture.drawio): that file
+shows request-time calls; this one shows import boundaries.
 
-## Layered structure
+## Layered Structure
 
-Modules sit on a single monotonically-decreasing dependency stack: a
-module at layer **N** may import from layers **0..N**, never from
-**N+1..9**. Cross-mode imports between `captionrag/` and
-`unifiedrepresent/` are forbidden — both pull from the shared layers
-below.
+Modules sit on a monotonically decreasing dependency stack: a module at layer
+N may import from layers 0..N, never from a higher layer. DlightRAG has one
+runtime RAG path based on LightRAG main; interfaces and orchestration depend
+on the shared lower layers, not on each other.
 
-```
-L9  api, mcp, web                                    ← interfaces
-L8  core.servicemanager                              ← multi-workspace coordinator
-L7  core.{service, reset, ingest_tasks}              ← per-workspace facade
-L6  captionrag.pipeline,                             ← per-mode top engines
-    unifiedrepresent.{engine, lifecycle},
-    core.{federation, answer, query_planner}
-L5  captionrag.{vlm_parser, retrieval},              ← mode-specific stages
-    unifiedrepresent.{extractor, retriever,
-                      multimodal_query},
-    core._lightrag_patches, core.compat_guard
-L4  models.{embedding, llm, rerank},                 ← model factories +
-    core.retrieval.{filtered_vdb,                      retrieval/ingestion impl
-                    metadata_path},
-    core.ingestion.{hash_index, cleanup,
-                    page_metadata},
-    captionrag.chunking,
-    unifiedrepresent.embedder,
+```text
+L9  api, mcp, web                                  interface adapters
+L8  core.servicemanager                            multi-workspace coordinator
+L7  core.{service, reset, ingest_tasks}            per-workspace facade
+L6  core.{answer, federation, query_planner}       query/answer orchestration
+    core.retrieval.{retriever, fusion,
+                    lightrag_backend}
+    core.ingestion.engine
+L5  core.{lightrag_stores, _lightrag_patches,
+          compat_guard}
+    core.ingestion.{lightrag_sidecar,
+                    direct_image,
+                    visual_semantics}
+    core.retrieval.{filtered_vdb, bm25}
+L4  models.{embedding, multimodal_embedding,
+            llm, llm_roles, rerank}
+    core.retrieval.{metadata_path}
+    core.ingestion.{hash_index, cleanup, policy}
     core.vlm_ocr
-L3  models.providers,                                ← backend impls + side-effect
-    storage, sourcing, converters, citations,         layers
-    core.retrieval.path_resolver,
-    core.ingestion.{policy, docling_postprocess,
-                    metadata_extract}
-L2  config,                                          ← settings + pure data types
+L3  models.providers                               provider implementations
+    storage                                        PostgreSQL domain stores
+    sourcing, converters, citations
+L2  config
     core.retrieval.{protocols, models,
                     metadata_fields}
-L1  observability,                                   ← cross-cutting, schema types
-    models.{schemas, prompts}
-L0  utils, prompts                                   ← pure helpers, no internal deps
+    models.{schemas, embedding_inputs}
+L1  observability                                  cross-cutting wrappers
+L0  prompts, utils                                 pure helpers
 ```
 
-## Why this matters
+## Why This Matters
 
-- **Lower layers don't know about higher ones.** `config` (L2) cannot
-  import `core.service` (L7). A breaking change in `service` cannot ripple
-  down to settings parsing.
-- **Two RAG modes are independent.** Caption and unified each consume
-  shared infrastructure (`models/`, `storage/`, `core.retrieval/`,
-  `converters/`) without seeing each other. You can delete one mode
-  without touching the other.
-- **The interface layer (L9) is leaf.** Nothing else imports from `api/`,
-  `mcp/`, or `web/` — they're consumers of the engine, not part of it.
-  Replacing or adding interfaces is a localised change.
+- Lower layers do not know about higher ones. `config` does not import
+  `core.service`, and storage primitives do not depend on API routes.
+- LightRAG integration is centralized. Parser sidecars, KG ingestion, vector
+  retrieval, direct image retrieval, BM25, and RRF are assembled by the core
+  orchestration layer instead of leaking into interface code.
+- PostgreSQL is the only supported core storage ecosystem. Backend-specific
+  behavior lives under `storage/` and the LightRAG store adapter, not in
+  request handlers or model providers.
 
-## Per-module quick reference
+## Per-Module Quick Reference
 
 | Module | Layer | Role |
-|---|---|---|
-| `prompts/`, `utils/` | L0 | Pure helpers, no internal deps |
+|---|---:|---|
+| `prompts/`, `utils/` | L0 | Pure helpers and prompt text |
 | `observability` | L1 | Langfuse wrappers; no-op when disabled |
-| `models/{schemas,prompts}` | L1 | Pydantic types, prompt strings |
-| `config` | L2 | `DlightragConfig` + env/yaml loader |
-| `core.retrieval.{protocols,models,metadata_fields}` | L2 | Retrieval data types + metadata schema registry |
-| `models.providers/` | L3 | Native SDK wrappers (OpenAI/Anthropic/Gemini) |
-| `storage/` | L3 | PG JSONB KV, metadata index, pool |
-| `sourcing/` | L3 | Local / Azure Blob / S3 data sources |
-| `converters/` | L3 | LibreOffice + page renderer (shared by both modes) |
-| `citations/` | L3 | Index, parser, processor, highlight, streaming |
-| `core.ingestion.{policy,docling_postprocess,metadata_extract}` | L3 | Pure transforms on parsed content |
-| `models/{embedding,llm,rerank}` | L4 | Build LightRAG-compatible callables from `ModelConfig` |
-| `core.retrieval.{filtered_vdb,metadata_path}` | L4 | VDB filter wrapper + metadata→chunk_ids resolver |
-| `core.ingestion.{hash_index,cleanup,page_metadata}` | L4 | Dedup, cascade delete, page-idx backfill |
-| `captionrag.chunking` | L4 | Docling HybridChunker for LightRAG |
-| `unifiedrepresent.embedder` | L4 | Visual embedding HTTP client |
-| `core.vlm_ocr` | L4 | Shared VLM OCR helpers |
-| `captionrag.{vlm_parser,retrieval}` | L5 | Caption mode stages |
-| `unifiedrepresent.{extractor,retriever,multimodal_query}` | L5 | Unified mode stages |
-| `core.{_lightrag_patches,compat_guard}` | L5 | LightRAG hardening |
-| `captionrag.pipeline` | L6 | Caption ingestion orchestrator |
-| `unifiedrepresent.{engine,lifecycle}` | L6 | Unified ingestion + retrieval orchestrator |
-| `core.{federation,answer,query_planner}` | L6 | Cross-cutting orchestrators |
-| `core.{service,reset,ingest_tasks}` | L7 | `RAGService` + workspace lifecycle |
-| `core.servicemanager` | L8 | Multi-workspace pool, federation entry |
+| `config` | L2 | `DlightragConfig` plus env/yaml loader |
+| `models.{schemas,embedding_inputs}` | L2 | Shared data types |
+| `core.retrieval.{protocols,models,metadata_fields}` | L2 | Retrieval contracts and metadata registry |
+| `models.providers` | L3 | OpenAI/Anthropic/Gemini and embedding provider wrappers |
+| `storage` | L3 | PostgreSQL pools, metadata index, artifact/provenance stores |
+| `sourcing` | L3 | Local, Azure Blob, and S3 source readers |
+| `converters` | L3 | Local document conversion helpers |
+| `citations` | L3 | Citation parsing, source building, highlights, streaming |
+| `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |
+| `core.retrieval.metadata_path` | L4 | Metadata-to-candidate resolver |
+| `core.ingestion.{hash_index,cleanup,policy}` | L4 | Deduplication, cascade cleanup, ingest policy |
+| `core.vlm_ocr` | L4 | VLM OCR block helpers |
+| `core.lightrag_stores` | L5 | LightRAG store and sidecar adapter |
+| `core.ingestion.{lightrag_sidecar,direct_image,visual_semantics}` | L5 | Parser sidecars, direct image embedding, visual KG projection |
+| `core.retrieval.{filtered_vdb,bm25}` | L5 | PostgreSQL in-filtering and pg_textsearch BM25 |
+| `core.ingestion.engine` | L6 | Unified ingest orchestration |
+| `core.retrieval.{retriever,fusion,lightrag_backend}` | L6 | LightRAG mix retrieval, BM25 fusion, direct image path |
+| `core.{answer,federation,query_planner}` | L6 | Answering, federation, filter planning |
+| `core.{service,reset,ingest_tasks}` | L7 | Workspace lifecycle and public service facade |
+| `core.servicemanager` | L8 | Multi-workspace pool |
 | `api/`, `mcp/`, `web/` | L9 | Interface adapters |
 
 ## Verification
 
-The layering is enforced by an AST audit, not runtime guards. To re-run
-it (e.g. before a release, or after large refactors):
+The layering is intended to be audited with an AST import check before large
+releases. A violation means a lower layer imported a higher layer or a request
+interface leaked into core runtime code.
 
 ```bash
 uv run python - <<'PY'
 import ast
 from collections import defaultdict
 from pathlib import Path
-
-# Layer table — keep in sync with this doc when adding modules.
-LAYER = {
-    # ... see commit 2b83c99 for the full table used during the audit
-}
 
 src_root = Path("src/dlightrag")
 graph: dict[str, set[str]] = defaultdict(set)
@@ -113,32 +100,21 @@ for py in src_root.rglob("*.py"):
     rel = py.relative_to(src_root.parent.parent / "src").with_suffix("")
     mod = ".".join(rel.parts).removesuffix(".__init__")
     tree = ast.parse(py.read_text())
-    for n in ast.walk(tree):
-        if isinstance(n, ast.ImportFrom) and n.module and n.module.startswith("dlightrag"):
-            graph[mod].add(n.module)
-        elif isinstance(n, ast.Import):
-            for a in n.names:
-                if a.name.startswith("dlightrag"):
-                    graph[mod].add(a.name)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("dlightrag"):
+            graph[mod].add(node.module)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("dlightrag"):
+                    graph[mod].add(alias.name)
 
-# ... resolve LAYER for src and dep, flag where src_layer < dep_layer ...
+print(f"audited {len(graph)} modules")
 PY
 ```
 
-Expected output: **0 layer violations, 0 cross-mode imports
-(`captionrag` ↔ `unifiedrepresent`)**, no top-level circular imports.
+## Adding A Module
 
-## When adding a module
-
-Decide its layer first by asking: *what's the highest layer this would
-need to import from?* Place the new module **one layer above** that.
-
-Common pitfalls:
-- Putting a "data type" file inside an impl directory (e.g.
-  `storage/metadata_fields.py` was a schema registry, not storage —
-  belongs in L2).
-- Putting a "wrapper that needs L3" into L1 (e.g. `models/streaming.py`
-  imported `citations/` — belongs in L3 next to citations).
-- A helper used by both `captionrag/` and `unifiedrepresent/` shouldn't
-  live in either; lift it to a shared layer (e.g. `converters/`,
-  `core.retrieval/`, `models/`).
+Decide its layer first by asking which existing layer it must import. Place it
+one layer above that dependency. If a helper is shared by ingestion, retrieval,
+and interfaces, keep it in a lower shared layer instead of attaching it to one
+orchestration path.

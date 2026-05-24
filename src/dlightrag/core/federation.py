@@ -205,7 +205,7 @@ async def federated_retrieve(
     workspaces: list[str],
     get_service: Callable[[str], Awaitable[Any]],
     *,
-    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix",
+    mode: Literal["mix"] = "mix",
     top_k: int | None = None,
     chunk_top_k: int | None = None,
     max_concurrency: int = 8,
@@ -220,7 +220,7 @@ async def federated_retrieve(
         query: The search query.
         workspaces: List of workspace names to search.
         get_service: Async callable that returns a RAGService for a workspace name.
-        mode: LightRAG query mode.
+        mode: LightRAG query mode. Only `mix` is supported.
         top_k: Per-workspace top_k for vector search.
         chunk_top_k: Final merged chunk count limit.
         max_concurrency: Maximum concurrent workspace queries (default 8).

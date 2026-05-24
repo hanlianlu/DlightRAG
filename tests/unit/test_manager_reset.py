@@ -12,7 +12,7 @@ def _make_manager() -> RAGServiceManager:
     """Create a manager with mocked config."""
     config = MagicMock()
     config.workspace = "default"
-    config.kv_storage = "JsonKVStorage"
+    config.kv_storage = "PGKVStorage"
     config.working_dir = "/tmp/dlightrag-test"
     config.request_timeout = 30
     manager = RAGServiceManager.__new__(RAGServiceManager)

@@ -8,7 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
+from dlightrag.config import (
+    DlightragConfig,
+    EmbeddingConfig,
+    LLMConfig,
+    ModelConfig,
+    set_config,
+)
 from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
@@ -17,13 +23,14 @@ from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailab
 def test_cfg(tmp_path) -> DlightragConfig:
     cfg = DlightragConfig(
         working_dir=str(tmp_path / "dlightrag_storage"),
-        chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
-        embedding=EmbeddingConfig(api_key="test"),
-        kv_storage="JsonKVStorage",
-        doc_status_storage="JsonDocStatusStorage",
-        vector_storage="NanoVectorDBStorage",
-        graph_storage="NetworkXStorage",
-    )  # type: ignore[call-arg]
+        llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test")),
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="test",
+            startup_probe=False,
+        ),
+    )
     set_config(cfg)
     return cfg
 
@@ -429,34 +436,26 @@ class TestClose:
 
 
 class TestWorkspaceDiscovery:
-    """Test list_workspaces with filesystem backend."""
+    """Test list_workspaces with PostgreSQL-backed metadata."""
 
-    async def test_filesystem_discovery(self, tmp_path, test_cfg) -> None:
-        working_dir = tmp_path / "dlightrag_storage"
-        working_dir.mkdir()
-        ws_a = working_dir / "project-a"
-        ws_a.mkdir()
-        (ws_a / "kv_store_full_docs.json").write_text("{}")
-        ws_b = working_dir / "project-b"
-        ws_b.mkdir()
-        (ws_b / "vdb_entities.json").write_text("{}")
-        ws_empty = working_dir / "empty-dir"
-        ws_empty.mkdir()
+    async def test_pg_discovery(self, monkeypatch: pytest.MonkeyPatch, test_cfg) -> None:
+        class MockConnection:
+            async def fetch(self, query: str) -> list[dict[str, str]]:
+                return [{"workspace": "project-a"}, {"workspace": "project-b"}]
 
-        cfg = DlightragConfig(
-            working_dir=str(working_dir),
-            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
-            embedding=EmbeddingConfig(api_key="test"),
-            kv_storage="JsonKVStorage",
-            doc_status_storage="JsonDocStatusStorage",
-            vector_storage="NanoVectorDBStorage",
-            graph_storage="NetworkXStorage",
-        )  # type: ignore[call-arg]
-        manager = RAGServiceManager(config=cfg)
+            async def close(self) -> None:
+                return None
+
+        async def fake_connect(**kwargs):
+            return MockConnection()
+
+        import asyncpg
+
+        monkeypatch.setattr(asyncpg, "connect", fake_connect)
+        manager = RAGServiceManager(config=test_cfg)
         result = await manager.list_workspaces()
         assert "project-a" in result
         assert "project-b" in result
-        assert "empty-dir" not in result
 
     async def test_fallback_returns_default(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)

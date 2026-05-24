@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from dlightrag.core.service import _STORAGE_ATTRS, RAGService
 
 
@@ -19,10 +21,10 @@ class _FakeLightRAG:
     pass
 
 
-def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test_ws") -> RAGService:
+def _make_service(*, workspace: str = "test_ws") -> RAGService:
     """Create a RAGService with mocked config and storages."""
     config = MagicMock()
-    config.kv_storage = kv_storage
+    config.kv_storage = "PGKVStorage"
     config.workspace = workspace
     config.working_dir = f"/tmp/dlightrag-test/{workspace}"
 
@@ -60,6 +62,28 @@ def _make_service(*, kv_storage: str = "JsonKVStorage", workspace: str = "test_w
     )
 
     return service
+
+
+@pytest.fixture(autouse=True)
+def _pg_cleanup_patches():
+    """Avoid real PostgreSQL cleanup calls in unit tests."""
+    with (
+        patch(
+            "dlightrag.core.reset._clean_orphan_tables",
+            new_callable=AsyncMock,
+            return_value=0,
+        ),
+        patch(
+            "dlightrag.core.reset._clean_workspace_meta",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "dlightrag.core.reset._drop_age_graphs",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
+        yield
 
 
 class TestAresetPhase0:
@@ -134,13 +158,8 @@ class TestAresetPhase2:
 class TestAresetPhase3:
     """Phase 3: PG orphan table cleanup."""
 
-    async def test_skips_on_non_pg_backend(self) -> None:
-        service = _make_service(kv_storage="JsonKVStorage")
-        result = await service.areset()
-        assert result["orphan_tables_cleaned"] == 0
-
     async def test_runs_on_pg_backend(self) -> None:
-        service = _make_service(kv_storage="PGKVStorage")
+        service = _make_service()
         with (
             patch(
                 "dlightrag.core.reset._clean_orphan_tables",
@@ -165,7 +184,7 @@ class TestAresetPhase4:
     """Phase 4: AGE graph schema drop."""
 
     async def test_runs_on_pg_backend(self) -> None:
-        service = _make_service(kv_storage="PGKVStorage")
+        service = _make_service()
         with (
             patch(
                 "dlightrag.core.reset._clean_orphan_tables",
@@ -184,12 +203,6 @@ class TestAresetPhase4:
         ):
             result = await service.areset()
         assert result["graphs_dropped"] == ["test_ws_chunk_entity_relation"]
-
-    async def test_skips_on_non_pg_backend(self) -> None:
-        service = _make_service(kv_storage="JsonKVStorage")
-        result = await service.areset()
-        assert result["graphs_dropped"] == []
-
 
 class TestAresetPhase5:
     """Phase 5: Local files."""

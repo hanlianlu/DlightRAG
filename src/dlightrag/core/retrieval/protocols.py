@@ -74,7 +74,7 @@ class RetrievalResult:
 
 @runtime_checkable
 class RetrievalBackend(Protocol):
-    """Unified retrieval interface for caption and unified RAG modes."""
+    """Retrieval interface for the LightRAG-main runtime path."""
 
     async def aretrieve(
         self,

@@ -12,20 +12,20 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
-def test_lightrag_dependency_has_no_upper_bound() -> None:
-    """LightRAG should be minimum-pinned for 1.5+ without an upper cap."""
+def test_lightrag_dependency_uses_github_main() -> None:
     dependencies = _dependencies()
     lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
 
-    assert lightrag_deps == ["lightrag-hku>=1.5.0rc1"]
+    assert lightrag_deps == [
+        "lightrag-hku @ git+https://github.com/HKUDS/LightRAG.git@main"
+    ]
 
 
-def test_raganything_dependency_has_no_upper_bound() -> None:
-    """RAGAnything should be minimum-pinned for 1.3+ without an upper cap."""
+def test_legacy_multimodal_dependency_removed() -> None:
     dependencies = _dependencies()
-    raganything_deps = [dep for dep in dependencies if dep.startswith("raganything")]
+    removed = "rag" + "anything"
 
-    assert raganything_deps == ["raganything[all]>=1.3.0"]
+    assert not any(dep.startswith(removed) for dep in dependencies)
 
 
 def test_langfuse_dependency_has_no_upper_bound() -> None:
@@ -36,11 +36,10 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     assert langfuse_deps == ["langfuse>=4.0.0"]
 
 
-def test_raganything_uses_registry_release_not_git_main() -> None:
-    """RAGAnything should not drift on the GitHub main branch."""
+def test_legacy_multimodal_source_removed() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
-    assert pyproject["tool"]["uv"].get("sources", {}).get("raganything") is None
+    assert pyproject["tool"]["uv"].get("sources", {}).get("rag" + "anything") is None
 
 
 def test_pg_trgm_removed_from_runtime_and_postgres_init() -> None:
@@ -76,3 +75,15 @@ def test_compose_preloads_postgres_extensions() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
     assert "shared_preload_libraries=age,pg_textsearch" in compose
+
+
+def test_runtime_imports_do_not_reference_removed_multimodal_package() -> None:
+    source_files = list(Path("src/dlightrag").rglob("*.py"))
+    removed = "rag" + "anything"
+    offenders = [
+        path
+        for path in source_files
+        if removed in path.read_text(encoding="utf-8").lower()
+    ]
+
+    assert offenders == []

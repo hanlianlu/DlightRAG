@@ -10,6 +10,13 @@ conversation history), produce a JSON response with these keys:
   standalone, return it unchanged. This is the primary search query -- keep it complete.
 - "filters": An object with applicable fields from the metadata schema below.
   Only include fields you are highly confident about. Leave out uncertain fields.
+- "filter_confidence": "high" only when the query explicitly asks to constrain
+  by metadata (filename, title, author, date, extension, declared custom field).
+  Use "low" when metadata interpretation is plausible but ambiguous.
+- "filter_evidence": A list of objects for every filter you include. Each object
+  must contain: field, value, evidence_span, intent_basis. evidence_span must be
+  an exact phrase from the user query or conversation that justifies treating
+  the value as a metadata constraint. Do not include filters without evidence.
 
 Filter fields (use null for unmentioned):
 - filename: exact normalized filename when the user gives a complete name with extension
@@ -28,19 +35,19 @@ produce a pattern.
 Examples:
 
 Query: "summarize the key findings in annual-report.pdf"
-{{"standalone_query": "summarize the key findings in annual-report.pdf", "filters": {{"filename": "annual-report.pdf"}}}}
+{{"standalone_query": "summarize the key findings in annual-report.pdf", "filters": {{"filename": "annual-report.pdf"}}, "filter_confidence": "high", "filter_evidence": [{{"field": "filename", "value": "annual-report.pdf", "evidence_span": "annual-report.pdf", "intent_basis": "filename_literal"}}]}}
 
 Query: "what are the main revenue trends"
-{{"standalone_query": "what are the main revenue trends", "filters": {{}}}}
+{{"standalone_query": "what are the main revenue trends", "filters": {{}}, "filter_confidence": "low", "filter_evidence": []}}
 
 Query: "what is in IMG 9551?"
-{{"standalone_query": "what is in IMG 9551?", "filters": {{"filename_pattern": "%IMG%9551%"}}}}
+{{"standalone_query": "what is in IMG 9551?", "filters": {{"filename_pattern": "%IMG%9551%"}}, "filter_confidence": "high", "filter_evidence": [{{"field": "filename_pattern", "value": "%IMG%9551%", "evidence_span": "IMG 9551", "intent_basis": "filename_pattern_literal"}}]}}
 
 Query: "show me slide deck 3"
-{{"standalone_query": "show me slide deck 3", "filters": {{"filename_pattern": "%slide%deck%3%"}}}}
+{{"standalone_query": "show me slide deck 3", "filters": {{"filename_pattern": "%slide%deck%3%"}}, "filter_confidence": "high", "filter_evidence": [{{"field": "filename_pattern", "value": "%slide%deck%3%", "evidence_span": "slide deck 3", "intent_basis": "filename_pattern_literal"}}]}}
 
 Query: "张三写的2024年财报分析"
-{{"standalone_query": "张三写的2024年财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}}}
+{{"standalone_query": "张三写的2024年财报分析", "filters": {{"doc_author": "张三", "date_from": "2024-01-01", "date_to": "2024-12-31"}}, "filter_confidence": "high", "filter_evidence": [{{"field": "doc_author", "value": "张三", "evidence_span": "张三写的", "intent_basis": "explicit_author_constraint"}}, {{"field": "date", "value": "2024", "evidence_span": "2024年", "intent_basis": "date_literal"}}]}}
 
 Return valid JSON only, no markdown fences."""
 

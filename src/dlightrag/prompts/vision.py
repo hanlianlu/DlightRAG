@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Vision and OCR related prompts."""
 
-# --- Smart Image Analysis (RAGAnything Ingestion) ---
+# --- Smart Image Analysis (LightRAG Ingestion) ---
 
 SMART_IMAGE_ANALYSIS_SYSTEM = (
     "You are an expert visual content analyst specializing in technical documents. "

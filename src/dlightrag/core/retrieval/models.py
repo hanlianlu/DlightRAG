@@ -21,7 +21,6 @@ class MetadataFilter(BaseModel):
     doc_author: str | None = None
     date_from: datetime | None = None
     date_to: datetime | None = None
-    rag_mode: str | None = None
     custom: dict[str, Any] | None = None
 
     @field_validator(
@@ -31,7 +30,6 @@ class MetadataFilter(BaseModel):
         "file_extension",
         "doc_title",
         "doc_author",
-        "rag_mode",
         mode="before",
     )
     @classmethod
