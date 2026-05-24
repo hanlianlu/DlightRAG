@@ -30,6 +30,8 @@
 
 The commonly remembered LightRAG PG requirement is PG18 plus two core extensions: `vector` and `age`. DlightRAG's architecture adds `pg_textsearch` for BM25. Metadata filtering is LLM-assisted but deterministic at the matching layer: normalized exact fields backed by `LOWER(field)` btree expression indexes, date ranges, JSONB containment, and explicit filename patterns only.
 
+Vector storage defaults mirror LightRAG main: `POSTGRES_VECTOR_INDEX_TYPE=HNSW`, pgvector `VECTOR(dim)` columns, and a cosine HNSW index over `content_vector vector_cosine_ops`. `HNSW_HALFVEC` is supported only as an explicit opt-in for large vectors; it changes the column type to `HALFVEC(dim)` and uses `halfvec_cosine_ops`. DlightRAG must not expose a separate `vector_value_type` setting because the value type is derived from the selected LightRAG index type.
+
 ## v1.5.0rc2 Cleanup Decisions
 
 - Use LightRAG parser-rule syntax and filename hints as the only parser selection surface. DlightRAG config exposes `parser.rules`, then calls upstream `lightrag.parser_routing.resolve_file_parser_directives()` before enqueue.
@@ -178,6 +180,10 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.extraction.use_json is True
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
+    assert cfg.pg_vector_index_type == "HNSW"
+    assert cfg.pg_hnsw_m == 32
+    assert cfg.pg_hnsw_ef_construction == 256
+    assert cfg.pg_hnsw_ef_search == 256
 
 
 @pytest.mark.parametrize(
@@ -204,6 +210,36 @@ def test_non_postgres_storage_rejected(field: str, value: str) -> None:
     }
     with pytest.raises(ValidationError):
         DlightragConfig(**kwargs)
+
+
+def test_pgvector_value_type_is_derived_from_index_type() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+    )
+
+    assert cfg.pg_vector_index_type == "HNSW"
+    assert not hasattr(cfg, "pg_vector_value_type")
+
+
+def test_halfvec_requires_explicit_index_type() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=3072,
+            startup_probe=False,
+        ),
+        pg_vector_index_type="HNSW_HALFVEC",
+    )
+
+    assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
 
 
 def test_role_config_uses_lightrag_role_names() -> None:
@@ -268,7 +304,12 @@ Create `tests/unit/test_postgres_version.py`:
 ```python
 import pytest
 
-from dlightrag.storage.postgres_version import parse_server_version_num, validate_postgres_major
+from dlightrag.storage.postgres_version import (
+    parse_pgvector_version,
+    parse_server_version_num,
+    validate_pgvector_halfvec,
+    validate_postgres_major,
+)
 
 
 @pytest.mark.parametrize(
@@ -291,6 +332,20 @@ def test_validate_postgres_major_accepts_pg18() -> None:
 def test_validate_postgres_major_rejects_pg17() -> None:
     with pytest.raises(RuntimeError, match="PostgreSQL 18"):
         validate_postgres_major("170010", required_major=18)
+
+
+def test_parse_pgvector_version() -> None:
+    assert parse_pgvector_version("0.8.2") == (0, 8, 2)
+    assert parse_pgvector_version("0.7.0") == (0, 7, 0)
+
+
+def test_validate_pgvector_halfvec_accepts_modern_pgvector() -> None:
+    validate_pgvector_halfvec("0.8.2")
+
+
+def test_validate_pgvector_halfvec_rejects_old_pgvector() -> None:
+    with pytest.raises(RuntimeError, match="halfvec"):
+        validate_pgvector_halfvec("0.6.2")
 ```
 
 - [ ] **Step 5: Run config/version tests and verify they fail**
@@ -301,7 +356,7 @@ Run:
 uv run pytest tests/unit/test_config.py::test_storage_backends_are_postgres_only tests/unit/test_config.py::test_non_postgres_storage_rejected tests/unit/test_config.py::test_role_config_uses_lightrag_role_names tests/unit/test_config.py::test_legacy_llm_fields_rejected tests/unit/test_postgres_version.py -v
 ```
 
-Expected: failures because the new role config classes, startup probe flag, PostgreSQL-only storage literals, and `postgres_version.py` do not exist yet.
+Expected: failures because the new role config classes, startup probe flag, PostgreSQL-only storage literals, pgvector halfvec validator, and `postgres_version.py` do not exist yet.
 
 - [ ] **Step 6: Update dependencies**
 
@@ -350,10 +405,33 @@ def validate_postgres_major(value: str | int, *, required_major: int = 18) -> No
         )
 
 
+def parse_pgvector_version(value: str) -> tuple[int, int, int]:
+    """Return pgvector extension version as a comparable tuple."""
+    major, minor, patch = (value.split(".") + ["0", "0"])[:3]
+    return int(major), int(minor), int(patch)
+
+
+def validate_pgvector_halfvec(value: str) -> None:
+    """Raise if the installed pgvector version cannot support halfvec."""
+    if parse_pgvector_version(value) < (0, 7, 0):
+        raise RuntimeError(
+            "POSTGRES_VECTOR_INDEX_TYPE=HNSW_HALFVEC requires pgvector halfvec "
+            "support from pgvector >= 0.7.0."
+        )
+
+
 async def ensure_postgres_major(conn: Any, *, required_major: int = 18) -> None:
     """Validate an asyncpg connection against the required PostgreSQL major."""
     value = await conn.fetchval("SHOW server_version_num")
     validate_postgres_major(value, required_major=required_major)
+
+
+async def ensure_pgvector_halfvec(conn: Any) -> None:
+    """Validate halfvec support before LightRAG creates vector stores."""
+    value = await conn.fetchval("SELECT extversion FROM pg_extension WHERE extname = 'vector'")
+    if value is None:
+        raise RuntimeError("pgvector extension is required for DlightRAG vector storage.")
+    validate_pgvector_halfvec(str(value))
 ```
 
 - [ ] **Step 8: Make config PG18-only, role-based, and provider-explicit**
@@ -433,9 +511,27 @@ kv_storage: Literal["PGKVStorage"] = Field(default="PGKVStorage")
 doc_status_storage: Literal["PGDocStatusStorage"] = Field(default="PGDocStatusStorage")
 postgres_required_major: int = Field(default=18)
 postgres_min_minor: str = Field(default="18.4")
+pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
+    default="HNSW"
+)
+pg_hnsw_m: int = Field(default=32)
+pg_hnsw_ef_construction: int = Field(default=256)
+pg_hnsw_ef_search: int = Field(default=256)
 ```
 
-Remove Neo4j, Milvus, Qdrant, Redis, Mongo, Json storage config blocks and remove non-PG env bridging in `model_post_init`.
+Do not add a separate `pg_vector_value_type` field. LightRAG derives the PostgreSQL column type from `pg_vector_index_type`: `HNSW`, `IVFFLAT`, and `VCHORDRQ` use `VECTOR(dim)`, while `HNSW_HALFVEC` uses `HALFVEC(dim)`.
+
+Remove Neo4j, Milvus, Qdrant, Redis, Mongo, Json storage config blocks and remove non-PG env bridging in `model_post_init`. Keep the PG env bridge for:
+
+```python
+{
+    "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
+    "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
+    "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
+}
+```
+
+Set `POSTGRES_SERVER_SETTINGS` to `hnsw.ef_search=<pg_hnsw_ef_search>` when the user has not supplied custom server settings. If `pg_vector_index_type == "HNSW_HALFVEC"`, startup validation must probe pgvector support for `halfvec` and fail before creating stores when unsupported.
 
 Replace top-level model fields:
 
@@ -549,13 +645,15 @@ def test_model_for_role_uses_override_then_default() -> None:
 In `src/dlightrag/core/service.py`, import:
 
 ```python
-from dlightrag.storage.postgres_version import ensure_postgres_major
+from dlightrag.storage.postgres_version import ensure_pgvector_halfvec, ensure_postgres_major
 ```
 
 In `_initialize_with_pg_lock()`, immediately after the `asyncpg.connect` call succeeds and returns `conn`:
 
 ```python
 await ensure_postgres_major(conn, required_major=self.config.postgres_required_major)
+if self.config.pg_vector_index_type == "HNSW_HALFVEC":
+    await ensure_pgvector_halfvec(conn)
 ```
 
 Remove the branch that proceeds without the distributed lock when PostgreSQL is unavailable. In PG-only mode, connection failure should raise:
@@ -670,6 +768,18 @@ parser:
   rules: "*:native-iteP,*:mineru-iteP,*:legacy-R"
   native_images_bypass_lightrag: true
   chunk_options: {}
+
+storage:
+  postgres_major: 18
+  postgres_min_minor: "18.4"
+  vector: PGVectorStorage
+  pg_vector_index_type: HNSW
+  pg_hnsw_m: 32
+  pg_hnsw_ef_construction: 256
+  pg_hnsw_ef_search: 256
+  graph: PGGraphStorage
+  kv: PGKVStorage
+  doc_status: PGDocStatusStorage
 
 extraction:
   use_json: true
@@ -1697,6 +1807,9 @@ class LightRAGStores:
         if not hasattr(chunks_vdb, "table_name") or not hasattr(chunks_vdb, "db"):
             raise RuntimeError("Direct image vector writes require PGVectorStorage")
 
+        # The content_vector column type is owned by LightRAG setup_table().
+        # HNSW uses VECTOR(dim); HNSW_HALFVEC uses HALFVEC(dim). Do not add
+        # a DlightRAG-side cast that can drift from LightRAG's table config.
         current_time = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         sql = f"""
             INSERT INTO {chunks_vdb.table_name} (

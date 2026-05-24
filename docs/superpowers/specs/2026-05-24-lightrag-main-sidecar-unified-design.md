@@ -22,6 +22,7 @@ Hard decisions:
 - There is no `caption` path and no old `unified` page-render path.
 - There is one ingestion engine, one retrieval engine, and one LightRAG instance per workspace.
 - PostgreSQL 18 is the only supported storage ecosystem for the core product path. Development, CI, Docker, and production docs should track the current PG18 minor release; as of this design pass, that is PostgreSQL 18.4.
+- PostgreSQL vector storage defaults to pgvector `vector` columns with an HNSW cosine index. `halfvec` is not the default; it is only enabled by the explicit LightRAG `HNSW_HALFVEC` index type.
 - LightRAG query mode is always `mix`.
 - DlightRAG hybrid retrieval means `LightRAG mix + BM25 + RRF`, not LightRAG's `hybrid` query mode.
 - Embedding configuration is provider-aware and multimodal. Query/document asymmetric embedding defaults to `auto`: enable it for providers with documented task routing, otherwise use LightRAG's symmetric fallback.
@@ -44,6 +45,16 @@ PostgreSQL extension requirements are layered:
 | DlightRAG BM25 hybrid | `pg_textsearch` | BM25 index/operator used by DlightRAG lexical retrieval. |
 
 The "two plugins plus PG18" memory applies to LightRAG's core PG storage (`vector` + `age`). DlightRAG's BM25 hybrid makes `pg_textsearch` a third required extension for our target runtime. Metadata filtering remains LLM-assisted and intent-aware, but the matching layer is deterministic: exact normalized fields, date ranges, JSONB containment, and explicit filename patterns only. DlightRAG should not require or install fuzzy metadata extensions.
+
+Vector storage policy:
+
+- Default `pg_vector_index_type` is `HNSW`, matching LightRAG main's `POSTGRES_VECTOR_INDEX_TYPE=HNSW` fallback.
+- Default column type is pgvector `VECTOR(dim)`, not `HALFVEC(dim)`.
+- `HNSW` creates a cosine HNSW index over `content_vector vector_cosine_ops`.
+- `HNSW_HALFVEC` is an explicit opt-in for large vectors when the operator accepts reduced precision. It changes the column type to `HALFVEC(dim)` and creates an HNSW index over `content_vector halfvec_cosine_ops`.
+- DlightRAG should not expose an independent `vector_value_type` knob because `vector` versus `halfvec` is derived from the LightRAG index type. Independent knobs would allow invalid combinations such as `halfvec` with IVFFLAT.
+- Switching embedding provider, embedding dimension, or vector value type requires clearing/rebuilding the affected LightRAG vector tables and indexes. DlightRAG should fail startup on detected mismatch instead of attempting silent live conversion.
+- `HNSW_HALFVEC` requires a startup pgvector capability check. If pgvector does not support `halfvec`, startup must fail with a direct configuration error.
 
 ---
 
@@ -603,6 +614,11 @@ storage:
   postgres_major: 18
   postgres_min_minor: "18.4"
   vector: PGVectorStorage
+  pg_vector_index_type: HNSW       # default: VECTOR(dim) + hnsw/vector_cosine_ops
+  pg_hnsw_m: 32
+  pg_hnsw_ef_construction: 256
+  pg_hnsw_ef_search: 256
+  # HNSW_HALFVEC is explicit opt-in for large vectors; it changes storage to HALFVEC(dim)
   graph: PGGraphStorage
   kv: PGKVStorage
   doc_status: PGDocStatusStorage
