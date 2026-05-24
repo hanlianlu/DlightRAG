@@ -4,11 +4,11 @@
 
 **Goal:** Replace DlightRAG's RAGAnything/caption path and legacy page-render unified path with one PostgreSQL 18 + LightRAG-main sidecar pipeline that supports metadata, strict in-filtering, direct image embeddings, and BM25+RRF retrieval.
 
-**Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using `teP` by default; native images and parser-extracted drawing/image assets are embedded directly through DlightRAG's multimodal embedding provider. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
+**Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using `teP` by default; native images and parser-extracted drawing/image assets are embedded directly through DlightRAG's provider-aware multimodal embedding layer. LLM config is canonicalized as `llm.default` plus `llm.roles.extract|keyword|query|vlm`, and LightRAG receives matching `role_llm_configs`. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
 
 **Sidecar Boundary:** LightRAG sidecar files are the canonical parser artifacts. DlightRAG must not create a second filesystem sidecar format. It reads LightRAG sidecars through an adapter and stores only PostgreSQL artifact references, metadata, chunk provenance, and direct-image chunk mappings.
 
-**Tech Stack:** Python 3.12, LightRAG from `HKUDS/LightRAG@main`, PostgreSQL 18.4 baseline, pgvector, Apache AGE `PG18`, pg_textsearch, asyncpg, httpx, pytest.
+**Tech Stack:** Python 3.12, LightRAG from `HKUDS/LightRAG@main`, PostgreSQL 18.4 baseline, pgvector, Apache AGE `PG18`, pg_textsearch, asyncpg, httpx, provider-native embedding APIs, pytest.
 
 ---
 
@@ -37,7 +37,9 @@ Create:
 - `src/dlightrag/core/lightrag_stores.py` centralizes LightRAG private storage access and precomputed vector writes.
 - `src/dlightrag/storage/document_artifacts.py` stores document-level LightRAG sidecar URI/path references in PostgreSQL.
 - `src/dlightrag/storage/chunk_provenance.py` stores chunk-level sidecar references, modality, asset, page, and bbox provenance in PostgreSQL.
-- `src/dlightrag/models/multimodal_embedding.py` provides text/image embedding over the existing provider registry.
+- `src/dlightrag/models/embedding_inputs.py` defines provider-neutral text, image, and multimodal embedding inputs.
+- `src/dlightrag/models/multimodal_embedding.py` provides context-aware text/image embedding over the provider registry.
+- `src/dlightrag/models/llm_roles.py` maps DlightRAG role config to LightRAG `RoleLLMConfig`.
 - `src/dlightrag/core/ingestion/lightrag_sidecar.py` adapts canonical LightRAG sidecar files into typed references without writing DlightRAG sidecar files.
 - `src/dlightrag/core/ingestion/direct_image.py` builds direct-image chunk specs and vectors.
 - `src/dlightrag/core/ingestion/engine.py` becomes the single ingestion orchestrator.
@@ -55,6 +57,10 @@ Modify:
 - `postgres/init.sql`
 - `docker-compose.yml`
 - `src/dlightrag/config.py`
+- `src/dlightrag/models/embedding.py`
+- `src/dlightrag/models/llm.py`
+- `src/dlightrag/models/providers/embed_base.py`
+- `src/dlightrag/models/providers/embed_providers.py`
 - `src/dlightrag/core/service.py`
 - `src/dlightrag/core/compat_guard.py`
 - `src/dlightrag/core/retrieval/filtered_vdb.py`
@@ -86,7 +92,7 @@ Keep and move where useful:
 
 ---
 
-### Task 1: PostgreSQL 18, Dependency, And Config Gates
+### Task 1: PostgreSQL 18, Dependency, Role, And Embedding Config Gates
 
 **Files:**
 - Modify: `pyproject.toml`
@@ -96,10 +102,13 @@ Keep and move where useful:
 - Modify: `postgres/init.sql`
 - Modify: `docker-compose.yml`
 - Modify: `src/dlightrag/config.py`
+- Create: `src/dlightrag/models/llm_roles.py`
+- Modify: `src/dlightrag/models/llm.py`
 - Create: `src/dlightrag/storage/postgres_version.py`
 - Modify: `src/dlightrag/core/service.py`
 - Test: `tests/unit/test_dependency_constraints.py`
 - Test: `tests/unit/test_config.py`
+- Test: `tests/unit/test_llm_roles.py`
 - Test: `tests/unit/test_postgres_version.py`
 
 - [ ] **Step 1: Write failing dependency policy tests**
@@ -140,9 +149,11 @@ Add these tests to `tests/unit/test_config.py`:
 def test_storage_backends_are_postgres_only() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
-            model="qwen3-vl-embedding-2b",
+            provider="voyage",
+            model="voyage-multimodal-3.5",
             api_key="sk-test",
-            capabilities={"multimodal": True},
+            dim=1024,
+            startup_probe=False,
         ),
     )
 
@@ -166,12 +177,55 @@ def test_storage_backends_are_postgres_only() -> None:
 def test_non_postgres_storage_rejected(field: str, value: str) -> None:
     kwargs = {
         "embedding": EmbeddingConfig(
-            model="qwen3-vl-embedding-2b",
+            provider="voyage",
+            model="voyage-multimodal-3.5",
             api_key="sk-test",
-            capabilities={"multimodal": True},
+            dim=1024,
+            startup_probe=False,
         ),
         field: value,
     }
+    with pytest.raises(ValidationError):
+        DlightragConfig(**kwargs)
+
+
+def test_role_config_uses_lightrag_role_names() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        llm=LLMConfig(
+            default=ModelConfig(provider="openai", model="gpt-4.1"),
+            roles=LLMRolesConfig(
+                extract=ModelConfig(provider="openai", model="gpt-4.1-mini"),
+                keyword=ModelConfig(provider="openai", model="gpt-4.1-mini"),
+                query=ModelConfig(provider="openai", model="gpt-4.1"),
+                vlm=ModelConfig(provider="gemini", model="gemini-2.5-flash"),
+            ),
+        ),
+    )
+
+    assert cfg.llm.roles.keyword is not None
+    assert cfg.llm.roles.keyword.model == "gpt-4.1-mini"
+
+
+@pytest.mark.parametrize("legacy_field", ["ingest", "keywords"])
+def test_legacy_llm_fields_rejected(legacy_field: str) -> None:
+    kwargs = {
+        "embedding": {
+            "provider": "voyage",
+            "model": "voyage-multimodal-3.5",
+            "api_key": "sk-test",
+            "dim": 1024,
+            "startup_probe": False,
+        },
+        legacy_field: {"provider": "openai", "model": "gpt-4.1-mini"},
+    }
+
     with pytest.raises(ValidationError):
         DlightragConfig(**kwargs)
 ```
@@ -213,10 +267,10 @@ def test_validate_postgres_major_rejects_pg17() -> None:
 Run:
 
 ```bash
-uv run pytest tests/unit/test_config.py::test_storage_backends_are_postgres_only tests/unit/test_config.py::test_non_postgres_storage_rejected tests/unit/test_postgres_version.py -v
+uv run pytest tests/unit/test_config.py::test_storage_backends_are_postgres_only tests/unit/test_config.py::test_non_postgres_storage_rejected tests/unit/test_config.py::test_role_config_uses_lightrag_role_names tests/unit/test_config.py::test_legacy_llm_fields_rejected tests/unit/test_postgres_version.py -v
 ```
 
-Expected: failures because `EmbeddingConfig.capabilities` and `postgres_version.py` do not exist yet, and non-PG storage literals still validate.
+Expected: failures because the new role config classes, startup probe flag, PostgreSQL-only storage literals, and `postgres_version.py` do not exist yet.
 
 - [ ] **Step 6: Update dependencies**
 
@@ -271,31 +325,51 @@ async def ensure_postgres_major(conn: Any, *, required_major: int = 18) -> None:
     validate_postgres_major(value, required_major=required_major)
 ```
 
-- [ ] **Step 8: Make config PG18-only and multimodal-required**
+- [ ] **Step 8: Make config PG18-only, role-based, and provider-explicit**
 
-In `src/dlightrag/config.py`, add:
-
-```python
-class EmbeddingCapabilities(BaseModel):
-    """Embedding model capability declaration."""
-
-    multimodal: bool = False
-```
-
-Update `EmbeddingConfig`:
+In `src/dlightrag/config.py`, update `EmbeddingConfig`:
 
 ```python
 class EmbeddingConfig(BaseModel):
     """Embedding-specific configuration."""
 
-    provider: str | None = None
-    model: str = "qwen3-vl-embedding-2b"
+    provider: Literal[
+        "voyage",
+        "dashscope_qwen",
+        "qwen_openai_compatible",
+        "gemini",
+        "jina",
+        "openai_compatible",
+        "ollama",
+    ]
+    model: str
     api_key: str | None = None
     base_url: str | None = None
     dim: int = 1024
     max_token_size: int = 8192
-    capabilities: EmbeddingCapabilities = Field(default_factory=EmbeddingCapabilities)
     startup_probe: bool = True
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
+```
+
+Add canonical LLM role config:
+
+```python
+class LLMRolesConfig(BaseModel):
+    """Role-specific LLM overrides aligned with LightRAG role names."""
+
+    extract: ModelConfig | None = None
+    keyword: ModelConfig | None = None
+    query: ModelConfig | None = None
+    vlm: ModelConfig | None = None
+
+
+class LLMConfig(BaseModel):
+    """Default model plus LightRAG-compatible role overrides."""
+
+    default: ModelConfig = Field(
+        default_factory=lambda: ModelConfig(provider="openai", model="gpt-4.1", temperature=0.5)
+    )
+    roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
 ```
 
 Replace storage literals:
@@ -311,17 +385,112 @@ postgres_min_minor: str = Field(default="18.4")
 
 Remove Neo4j, Milvus, Qdrant, Redis, Mongo, Json storage config blocks and remove non-PG env bridging in `model_post_init`.
 
-Add an embedding validator:
+Replace top-level model fields:
 
 ```python
-@model_validator(mode="after")
-def _validate_embedding_capabilities(self):
-    if not self.embedding.capabilities.multimodal:
-        raise ValueError("embedding.capabilities.multimodal=true is required")
-    return self
+llm: LLMConfig = Field(default_factory=LLMConfig)
+embedding: EmbeddingConfig
+rerank: RerankConfig = Field(default_factory=RerankConfig)
 ```
 
-- [ ] **Step 9: Validate PG18 during service initialization**
+Remove top-level `chat`, `ingest`, `extract`, `keywords`, `query`, and `vlm` fields. DlightRAG-local callers should use `config.llm.default` or `config.llm.roles.<role>`.
+
+- [ ] **Step 9: Route LLM factories through canonical roles**
+
+Create `src/dlightrag/models/llm_roles.py`:
+
+```python
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Canonical role accessors for DlightRAG and LightRAG LLM calls."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from dlightrag.config import DlightragConfig, ModelConfig
+
+RoleName = Literal["extract", "keyword", "query", "vlm"]
+LIGHTRAG_ROLE_NAMES: tuple[RoleName, ...] = ("extract", "keyword", "query", "vlm")
+
+
+def model_for_role(config: DlightragConfig, role: RoleName) -> ModelConfig:
+    role_cfg = getattr(config.llm.roles, role)
+    return role_cfg or config.llm.default
+```
+
+Update `src/dlightrag/models/llm.py` so:
+
+```python
+def get_chat_model_func(config: DlightragConfig) -> Callable:
+    return _make_completion_func(config.llm.default)
+
+
+def get_extract_model_func(config: DlightragConfig) -> Callable:
+    return _make_completion_func(model_for_role(config, "extract"), fallback_api_key=config.llm.default.api_key)
+
+
+def get_query_model_func(config: DlightragConfig) -> Callable:
+    return _make_completion_func(model_for_role(config, "query"), fallback_api_key=config.llm.default.api_key)
+
+
+def get_vlm_model_func(config: DlightragConfig) -> Callable:
+    return _make_completion_func(model_for_role(config, "vlm"), fallback_api_key=config.llm.default.api_key)
+```
+
+Replace `_DLIGHTRAG_TO_LIGHTRAG_ROLE` with the LightRAG role names directly:
+
+```python
+def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
+    from lightrag import RoleLLMConfig
+
+    overrides: dict[str, Any] = {}
+    for role in LIGHTRAG_ROLE_NAMES:
+        role_cfg: ModelConfig | None = getattr(config.llm.roles, role)
+        if role_cfg is None:
+            continue
+        completion = _make_completion_func(role_cfg, fallback_api_key=config.llm.default.api_key)
+        overrides[role] = RoleLLMConfig(
+            func=_adapt_for_lightrag(completion),
+            timeout=int(role_cfg.timeout),
+        )
+    return overrides or None
+```
+
+Add `tests/unit/test_llm_roles.py`:
+
+```python
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, LLMRolesConfig, ModelConfig
+from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
+
+
+def _cfg() -> DlightragConfig:
+    return DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        llm=LLMConfig(
+            default=ModelConfig(provider="openai", model="gpt-4.1"),
+            roles=LLMRolesConfig(keyword=ModelConfig(provider="openai", model="gpt-4.1-mini")),
+        ),
+    )
+
+
+def test_lightrag_role_names_are_canonical() -> None:
+    assert LIGHTRAG_ROLE_NAMES == ("extract", "keyword", "query", "vlm")
+
+
+def test_model_for_role_uses_override_then_default() -> None:
+    cfg = _cfg()
+
+    assert model_for_role(cfg, "keyword").model == "gpt-4.1-mini"
+    assert model_for_role(cfg, "query").model == "gpt-4.1"
+```
+
+- [ ] **Step 10: Validate PG18 during service initialization**
 
 In `src/dlightrag/core/service.py`, import:
 
@@ -344,7 +513,7 @@ except Exception as e:
     ) from e
 ```
 
-- [ ] **Step 10: Update Docker PostgreSQL image**
+- [ ] **Step 11: Update Docker PostgreSQL image**
 
 Edit `postgres/Dockerfile`:
 
@@ -390,7 +559,7 @@ Edit `docker-compose.yml` PostgreSQL command:
 - "io_method=worker"
 ```
 
-- [ ] **Step 11: Update sample config**
+- [ ] **Step 12: Update sample config**
 
 In `config.yaml`, replace storage comments:
 
@@ -407,28 +576,43 @@ Replace embedding sample:
 
 ```yaml
 embedding:
-  provider: openai
-  model: qwen3-vl-embedding-2b
-  base_url: http://host.docker.internal:1234/v1
-  dim: 2048
-  capabilities:
-    multimodal: true
+  provider: voyage
+  model: voyage-multimodal-3.5
+  dim: 1024
+  startup_probe: true
+  model_kwargs: {}
+
+llm:
+  default:
+    provider: openai
+    model: gpt-4.1
+    temperature: 0.5
+  roles:
+    extract:
+      model: gpt-4.1-mini
+    keyword:
+      model: gpt-4.1-mini
+    query:
+      model: gpt-4.1
+    vlm:
+      provider: gemini
+      model: gemini-2.5-flash
 ```
 
-- [ ] **Step 12: Run Task 1 tests**
+- [ ] **Step 13: Run Task 1 tests**
 
 Run:
 
 ```bash
-uv run pytest tests/unit/test_dependency_constraints.py tests/unit/test_config.py tests/unit/test_postgres_version.py -v
+uv run pytest tests/unit/test_dependency_constraints.py tests/unit/test_config.py tests/unit/test_llm_roles.py tests/unit/test_postgres_version.py -v
 ```
 
 Expected: all selected tests pass.
 
-- [ ] **Step 13: Commit Task 1**
+- [ ] **Step 14: Commit Task 1**
 
 ```bash
-git add pyproject.toml config.yaml .env.example postgres/Dockerfile postgres/init.sql docker-compose.yml src/dlightrag/config.py src/dlightrag/storage/postgres_version.py src/dlightrag/core/service.py tests/unit/test_dependency_constraints.py tests/unit/test_config.py tests/unit/test_postgres_version.py
+git add pyproject.toml config.yaml .env.example postgres/Dockerfile postgres/init.sql docker-compose.yml src/dlightrag/config.py src/dlightrag/models/llm.py src/dlightrag/models/llm_roles.py src/dlightrag/storage/postgres_version.py src/dlightrag/core/service.py tests/unit/test_dependency_constraints.py tests/unit/test_config.py tests/unit/test_llm_roles.py tests/unit/test_postgres_version.py
 git commit -m "chore: require postgres 18 and lightrag main"
 ```
 
@@ -560,90 +744,350 @@ git commit -m "refactor: remove raganything mode"
 
 ---
 
-### Task 3: Multimodal Embedding Provider For Text And Images
+### Task 3: Provider-Aware Multimodal Embedding For Text And Images
 
 **Files:**
+- Create: `src/dlightrag/models/embedding_inputs.py`
+- Modify: `src/dlightrag/models/providers/embed_base.py`
+- Modify: `src/dlightrag/models/providers/embed_providers.py`
 - Create: `src/dlightrag/models/multimodal_embedding.py`
+- Modify: `src/dlightrag/models/embedding.py`
 - Modify: `src/dlightrag/models/llm.py`
-- Modify: `src/dlightrag/unifiedrepresent/embedder.py` or move logic into the new file
+- Modify: `src/dlightrag/core/service.py`
 - Test: `tests/unit/test_multimodal_embedding.py`
+- Test: `tests/unit/test_embed_providers.py`
 - Test: `tests/unit/test_embedding_func.py`
 
-- [ ] **Step 1: Write multimodal embedding tests**
+- [ ] **Step 1: Write provider matrix tests**
+
+Create or replace the provider-specific tests in `tests/unit/test_embed_providers.py`:
+
+```python
+from dlightrag.models.embedding_inputs import ImageEmbeddingInput, TextEmbeddingInput
+from dlightrag.models.providers.embed_providers import (
+    DashScopeQwenEmbedProvider,
+    GeminiEmbedProvider,
+    JinaEmbedProvider,
+    QwenOpenAICompatEmbedProvider,
+    VoyageEmbedProvider,
+)
+
+
+def test_voyage_payload_sets_input_type_from_context() -> None:
+    payload = VoyageEmbedProvider().build_payload(
+        "voyage-multimodal-3.5",
+        [TextEmbeddingInput(text="hello")],
+        context="query",
+        output_dimension=1024,
+    )
+
+    assert payload["input_type"] == "query"
+    assert payload["inputs"][0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_dashscope_qwen_payload_sets_dimension_and_image() -> None:
+    payload = DashScopeQwenEmbedProvider().build_payload(
+        "qwen3-vl-embedding",
+        [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
+        context="document",
+        output_dimension=2048,
+    )
+
+    assert payload["parameters"]["dimension"] == 2048
+    assert payload["input"]["contents"] == [{"image": "data:image/png;base64,abc"}]
+
+
+def test_gemini_payload_sets_output_dimension_and_task() -> None:
+    payload = GeminiEmbedProvider().build_payload(
+        "gemini-embedding-2",
+        [TextEmbeddingInput(text="needle")],
+        context="document",
+        output_dimension=1536,
+    )
+
+    assert payload["output_dimensionality"] == 1536
+    assert payload["task_type"] == "RETRIEVAL_DOCUMENT"
+
+
+def test_jina_payload_maps_context_to_retrieval_task() -> None:
+    payload = JinaEmbedProvider().build_payload(
+        "jina-embeddings-v4",
+        [ImageEmbeddingInput(data_uri="data:image/jpeg;base64,abc")],
+        context="query",
+        output_dimension=2048,
+    )
+
+    assert payload["task"] == "retrieval.query"
+    assert payload["input"] == [{"image": "data:image/jpeg;base64,abc"}]
+
+
+def test_qwen_openai_compat_payload_preserves_image_data_uri() -> None:
+    payload = QwenOpenAICompatEmbedProvider().build_payload(
+        "qwen3-vl-embedding-2b",
+        [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
+        context="document",
+        output_dimension=2048,
+    )
+
+    assert payload["input"] == ["data:image/png;base64,abc"]
+    assert payload["encoding_format"] == "float"
+```
 
 Create `tests/unit/test_multimodal_embedding.py`:
 
 ```python
+import pytest
 from PIL import Image
 
 from dlightrag.models.multimodal_embedding import MultimodalEmbedder
-from dlightrag.models.providers.embed_providers import OpenAICompatEmbedProvider, VoyageEmbedProvider
+from dlightrag.models.providers.embed_providers import VoyageEmbedProvider
 
 
-def test_openai_compat_image_payload_is_data_uri() -> None:
-    embedder = MultimodalEmbedder(
-        model="qwen3-vl-embedding-2b",
-        base_url="http://localhost:1234/v1",
-        api_key="",
-        dim=3,
-        provider=OpenAICompatEmbedProvider(),
-    )
-    image = Image.new("RGB", (1, 1), "white")
-
-    payload = embedder.build_image_payload_for_test(image)
-
-    assert payload["model"] == "qwen3-vl-embedding-2b"
-    assert payload["input"].startswith("data:image/png;base64,")
-    assert payload["encoding_format"] == "float"
-
-
-def test_voyage_image_payload_uses_multimodal_inputs() -> None:
+def test_visual_embedder_uses_document_context_for_images() -> None:
+    provider = VoyageEmbedProvider()
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
         api_key="key",
-        dim=3,
+        dim=1024,
+        provider=provider,
+    )
+
+    payload = embedder.build_image_payload_for_test(Image.new("RGB", (1, 1), "white"), context="document")
+
+    assert payload["input_type"] == "document"
+    assert payload["inputs"][0]["content"][0]["type"] == "image_base64"
+
+
+def test_dimension_mismatch_raises() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=1024,
         provider=VoyageEmbedProvider(),
     )
-    image = Image.new("RGB", (1, 1), "white")
 
-    payload = embedder.build_image_payload_for_test(image)
-
-    assert payload["inputs"][0]["content"][0]["type"] == "image_base64"
+    with pytest.raises(ValueError, match="Expected embedding dim 1024"):
+        embedder.validate_vectors_for_test([[0.1, 0.2, 0.3]])
 ```
 
-- [ ] **Step 2: Run tests and verify they fail**
+- [ ] **Step 2: Add LightRAG asymmetric wrapper test**
+
+Add to `tests/unit/test_embedding_func.py`:
+
+```python
+from dlightrag.config import DlightragConfig, EmbeddingConfig
+from dlightrag.models.llm import get_embedding_func
+
+
+def test_embedding_func_declares_supports_asymmetric() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        )
+    )
+
+    embedding_func = get_embedding_func(cfg)
+
+    assert embedding_func.supports_asymmetric is True
+```
+
+- [ ] **Step 3: Run tests and verify they fail**
 
 Run:
 
 ```bash
-uv run pytest tests/unit/test_multimodal_embedding.py -v
+uv run pytest tests/unit/test_embed_providers.py tests/unit/test_multimodal_embedding.py tests/unit/test_embedding_func.py::test_embedding_func_declares_supports_asymmetric -v
 ```
 
-Expected: import failure because `dlightrag.models.multimodal_embedding` does not exist.
+Expected: failures because the normalized input classes, provider matrix, context-aware embedder, and `supports_asymmetric` wrapper are not implemented yet.
 
-- [ ] **Step 3: Create unified multimodal embedder**
+- [ ] **Step 4: Create normalized embedding inputs**
+
+Create `src/dlightrag/models/embedding_inputs.py`:
+
+```python
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Provider-neutral embedding input records."""
+
+from __future__ import annotations
+
+import base64
+import io
+from dataclasses import dataclass
+from typing import TypeAlias
+
+from PIL import Image
+
+
+@dataclass(frozen=True)
+class TextEmbeddingInput:
+    text: str
+
+
+@dataclass(frozen=True)
+class ImageEmbeddingInput:
+    data_uri: str | None = None
+    path: str | None = None
+    url: str | None = None
+
+    @classmethod
+    def from_pil(cls, image: Image.Image) -> "ImageEmbeddingInput":
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return cls(data_uri=f"data:image/png;base64,{encoded}")
+
+    def as_payload_value(self) -> str:
+        if self.data_uri:
+            return self.data_uri
+        if self.url:
+            return self.url
+        if self.path:
+            return self.path
+        raise ValueError("ImageEmbeddingInput requires data_uri, url, or path")
+
+
+@dataclass(frozen=True)
+class MultimodalEmbeddingInput:
+    parts: list["TextEmbeddingInput | ImageEmbeddingInput"]
+
+
+EmbeddingInput: TypeAlias = TextEmbeddingInput | ImageEmbeddingInput | MultimodalEmbeddingInput
+```
+
+- [ ] **Step 5: Update provider protocol and provider matrix**
+
+In `src/dlightrag/models/providers/embed_base.py`, replace `build_payload()` with:
+
+```python
+class EmbedProvider(ABC):
+    endpoint: str
+    supports_images: bool = False
+    supports_asymmetric: bool = False
+    default_dim: int | None = None
+    known_dims: frozenset[int] | None = None
+
+    @abstractmethod
+    def build_payload(
+        self,
+        model: str,
+        inputs: list[EmbeddingInput],
+        *,
+        context: Literal["query", "document"],
+        output_dimension: int | None = None,
+    ) -> dict:
+        raise NotImplementedError
+```
+
+In `src/dlightrag/models/providers/embed_providers.py`, implement provider classes with these invariants:
+
+```python
+class VoyageEmbedProvider(EmbedProvider):
+    endpoint = "/multimodalembeddings"
+    supports_images = True
+    supports_asymmetric = True
+    default_dim = 1024
+    known_dims = frozenset({1024})
+
+    def build_payload(self, model, inputs, *, context, output_dimension=None):
+        return {
+            "model": model,
+            "input_type": context,
+            "inputs": [_to_voyage_item(item) for item in inputs],
+        }
+
+
+class DashScopeQwenEmbedProvider(EmbedProvider):
+    endpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
+    supports_images = True
+    supports_asymmetric = True
+    default_dim = 2560
+    known_dims = frozenset({2560, 2048, 1536, 1024, 768, 512, 256})
+
+    def build_payload(self, model, inputs, *, context, output_dimension=None):
+        payload = {"model": model, "input": {"contents": [_to_dashscope_item(item) for item in inputs]}}
+        if output_dimension is not None:
+            payload["parameters"] = {"dimension": output_dimension}
+        return payload
+
+
+class QwenOpenAICompatEmbedProvider(OpenAICompatEmbedProvider):
+    supports_images = True
+    supports_asymmetric = True
+    default_dim = 2048
+    known_dims = None
+
+
+class GeminiEmbedProvider(EmbedProvider):
+    endpoint = "/models/{model}:embedContent"
+    supports_images = True
+    supports_asymmetric = True
+    default_dim = 3072
+    known_dims = frozenset({3072, 1536, 768})
+
+    def build_payload(self, model, inputs, *, context, output_dimension=None):
+        task_type = "RETRIEVAL_QUERY" if context == "query" else "RETRIEVAL_DOCUMENT"
+        payload = {"model": model, "task_type": task_type, "content": [_to_gemini_part(item) for item in inputs]}
+        if output_dimension is not None:
+            payload["output_dimensionality"] = output_dimension
+        return payload
+
+
+class JinaEmbedProvider(EmbedProvider):
+    endpoint = "/v1/embeddings"
+    supports_images = True
+    supports_asymmetric = True
+    default_dim = 2048
+
+    def build_payload(self, model, inputs, *, context, output_dimension=None):
+        task = "retrieval.query" if context == "query" else "retrieval.passage"
+        return {"model": model, "task": task, "input": [_to_jina_item(item) for item in inputs]}
+```
+
+Keep `OpenAICompatEmbedProvider` for explicit `openai_compatible` local/proxy servers, but mark `supports_asymmetric=False` unless config or a startup probe proves task routing. Keep `OllamaEmbedProvider` text-only by default; it must not pass service startup for the multimodal architecture unless a future provider-specific image probe is added.
+
+Provider registry keys are:
+
+```python
+_EMBED_REGISTRY = {
+    "voyage": VoyageEmbedProvider,
+    "dashscope_qwen": DashScopeQwenEmbedProvider,
+    "qwen_openai_compatible": QwenOpenAICompatEmbedProvider,
+    "gemini": GeminiEmbedProvider,
+    "jina": JinaEmbedProvider,
+    "openai_compatible": OpenAICompatEmbedProvider,
+    "ollama": OllamaEmbedProvider,
+}
+```
+
+- [ ] **Step 6: Create context-aware multimodal embedder**
 
 Create `src/dlightrag/models/multimodal_embedding.py`:
 
 ```python
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Text and image embedding over DlightRAG's multimodal provider registry."""
+"""Context-aware text and image embedding over DlightRAG's provider registry."""
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import logging
+from typing import Literal
 
 import httpx
 from PIL import Image
 
+from dlightrag.models.embedding_inputs import ImageEmbeddingInput, TextEmbeddingInput
 from dlightrag.models.providers.embed_base import EmbedProvider
-from dlightrag.models.providers.embed_providers import VoyageEmbedProvider
 
 logger = logging.getLogger(__name__)
+EmbeddingContext = Literal["query", "document"]
 
 
 class MultimodalEmbedder:
@@ -660,10 +1104,13 @@ class MultimodalEmbedder:
         batch_size: int = 4,
         timeout: float = 120.0,
     ) -> None:
+        if not provider.supports_images:
+            raise ValueError(f"{provider.__class__.__name__} does not support image embeddings")
         self.model = model
         self.base_url = base_url.rstrip("/") if base_url else "https://api.openai.com"
         self.dim = dim
         self.provider = provider
+        self.supports_asymmetric = provider.supports_asymmetric
         self.batch_size = batch_size
         self._client = httpx.AsyncClient(
             timeout=timeout,
@@ -674,23 +1121,31 @@ class MultimodalEmbedder:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+    async def embed_texts(self, texts: list[str], *, context: EmbeddingContext) -> list[list[float]]:
         if not texts:
             return []
-        payload = self.provider.build_payload(self.model, texts)
+        inputs = [TextEmbeddingInput(text=text) for text in texts]
+        payload = self.provider.build_payload(
+            self.model,
+            inputs,
+            context=context,
+            output_dimension=self.dim,
+        )
         data = await self._post(payload)
         vectors = self.provider.parse_response(data)
         self._validate_vectors(vectors)
         return vectors
 
-    async def embed_images(self, images: list[Image.Image]) -> list[list[float]]:
+    async def embed_images(
+        self, images: list[Image.Image], *, context: EmbeddingContext
+    ) -> list[list[float]]:
         if not images:
             return []
         sem = asyncio.Semaphore(self.batch_size)
 
         async def one(image: Image.Image) -> list[float]:
             async with sem:
-                payload = self._build_image_payload(image)
+                payload = self._build_image_payload(image, context=context)
                 data = await self._post(payload)
                 vectors = self.provider.parse_response(data)
                 self._validate_vectors(vectors)
@@ -699,10 +1154,13 @@ class MultimodalEmbedder:
         return await asyncio.gather(*(one(image) for image in images))
 
     async def probe_image_embedding(self) -> None:
-        await self.embed_images([Image.new("RGB", (1, 1), "white")])
+        await self.embed_images([Image.new("RGB", (1, 1), "white")], context="document")
 
-    def build_image_payload_for_test(self, image: Image.Image) -> dict:
-        return self._build_image_payload(image)
+    def build_image_payload_for_test(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
+        return self._build_image_payload(image, context=context)
+
+    def validate_vectors_for_test(self, vectors: list[list[float]]) -> None:
+        self._validate_vectors(vectors)
 
     async def _post(self, payload: dict) -> dict:
         url = f"{self.base_url}{self.provider.endpoint}"
@@ -710,28 +1168,21 @@ class MultimodalEmbedder:
         response.raise_for_status()
         return response.json()
 
-    def _build_image_payload(self, image: Image.Image) -> dict:
-        image_uri = self._image_to_data_uri(image)
-        if isinstance(self.provider, VoyageEmbedProvider):
-            return {
-                "model": self.model,
-                "inputs": [{"content": [{"type": "image_base64", "image_base64": image_uri}]}],
-            }
-        return {"model": self.model, "input": image_uri, "encoding_format": "float"}
+    def _build_image_payload(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
+        return self.provider.build_payload(
+            self.model,
+            [ImageEmbeddingInput.from_pil(image)],
+            context=context,
+            output_dimension=self.dim,
+        )
 
     def _validate_vectors(self, vectors: list[list[float]]) -> None:
         if vectors and len(vectors[0]) != self.dim:
             raise ValueError(f"Expected embedding dim {self.dim}, got {len(vectors[0])}")
 
-    @staticmethod
-    def _image_to_data_uri(image: Image.Image) -> str:
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return f"data:image/png;base64,{encoded}"
 ```
 
-- [ ] **Step 4: Route LightRAG text embeddings through the multimodal embedder**
+- [ ] **Step 7: Route LightRAG text embeddings through the multimodal embedder**
 
 In `src/dlightrag/models/llm.py`, update `get_embedding_func()` to create one `MultimodalEmbedder` and use `embed_texts`:
 
@@ -754,8 +1205,9 @@ embedder = MultimodalEmbedder(
     timeout=float(config.embedding_request_timeout),
 )
 
-async def embed_func(texts: list[str]) -> np.ndarray:
-    result = await embedder.embed_texts(texts)
+async def embed_func(texts: list[str], *, context: str = "document") -> np.ndarray:
+    embed_context = "query" if context == "query" else "document"
+    result = await embedder.embed_texts(texts, context=embed_context)
     return np.array(result)
 ```
 
@@ -777,7 +1229,19 @@ def get_multimodal_embedder(config: DlightragConfig) -> MultimodalEmbedder:
     )
 ```
 
-- [ ] **Step 5: Add startup probe in service**
+Return LightRAG's wrapper with asymmetric support:
+
+```python
+return EmbeddingFunc(
+    embedding_dim=cfg.dim,
+    max_token_size=cfg.max_token_size,
+    func=traced_embed_func,
+    model_name=cfg.model,
+    supports_asymmetric=embedder.supports_asymmetric,
+)
+```
+
+- [ ] **Step 8: Add startup probe in service**
 
 In `src/dlightrag/core/service.py`, after building the multimodal embedder:
 
@@ -788,7 +1252,7 @@ if config.embedding.startup_probe:
 
 When adding service tests for this branch, patch `MultimodalEmbedder.probe_image_embedding` with `AsyncMock(return_value=None)` before calling `RAGService.initialize()`.
 
-- [ ] **Step 6: Run Task 3 tests**
+- [ ] **Step 9: Run Task 3 tests**
 
 Run:
 
@@ -798,11 +1262,11 @@ uv run pytest tests/unit/test_multimodal_embedding.py tests/unit/test_embedding_
 
 Expected: all selected tests pass.
 
-- [ ] **Step 7: Commit Task 3**
+- [ ] **Step 10: Commit Task 3**
 
 ```bash
-git add src/dlightrag/models tests/unit/test_multimodal_embedding.py tests/unit/test_embedding_func.py
-git commit -m "feat: require multimodal embedding provider"
+git add src/dlightrag/models src/dlightrag/core/service.py tests/unit/test_multimodal_embedding.py tests/unit/test_embed_providers.py tests/unit/test_embedding_func.py
+git commit -m "feat: add provider-aware multimodal embeddings"
 ```
 
 ---
@@ -1301,7 +1765,7 @@ async def build_direct_image_chunk(
     if ref.asset_path is None:
         raise ValueError(f"{ref.sidecar_type}:{ref.sidecar_id} has no asset_path")
     image = Image.open(ref.asset_path).convert("RGB")
-    vector = (await embedder.embed_images([image]))[0]
+    vector = (await embedder.embed_images([image], context="document"))[0]
     chunk_id = direct_image_chunk_id(workspace, full_doc_id, ref)
     row = {
         "content": text_content,
@@ -1777,6 +2241,8 @@ chunks = rrf_fuse([lightrag_chunks, bm25_chunks, visual_chunks], k=self._rrf_k)[
 
 Set `query_param = QueryParam(mode="mix", top_k=self._top_k, chunk_top_k=self._chunk_top_k)` and never expose LightRAG `hybrid` mode.
 
+Implement `_direct_visual()` so every query image is decoded and embedded with `embedder.embed_images(images, context="query")`; apply `candidate_ids` before returning ranked chunks.
+
 - [ ] **Step 7: Wire BM25 into service startup**
 
 After LightRAG storages initialize:
@@ -2048,10 +2514,11 @@ git commit -m "test: verify lightrag sidecar unified path"
 - Spec section 4, clean module boundaries: Tasks 2, 4, 5, 7, 8.
 - Spec section 5, unified ingestion flow: Task 5.
 - Spec section 6, metadata and sidecar provenance: Tasks 4, 6, 8.
-- Spec section 7, multimodal embedding requirement: Tasks 1 and 3.
-- Spec section 8, retrieval architecture: Tasks 6 and 7.
-- Spec section 9, config changes: Task 1.
-- Spec section 10, deletion lifecycle: Task 8.
-- Spec section 12, test strategy: Tasks 1 through 9.
+- Spec section 7, provider-aware multimodal embedding: Tasks 1 and 3.
+- Spec section 8, role-based LLM configuration: Task 1.
+- Spec section 9, retrieval architecture: Tasks 6 and 7.
+- Spec section 10, config changes: Task 1.
+- Spec section 11, deletion lifecycle: Task 8.
+- Spec section 13, test strategy: Tasks 1 through 9.
 
 No implementation task should preserve a product runtime path for RAGAnything, text-only embeddings, non-PostgreSQL storage, LightRAG non-`mix` query modes, or old page-render-first unified ingestion.

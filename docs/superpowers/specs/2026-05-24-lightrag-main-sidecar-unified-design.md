@@ -1,7 +1,7 @@
 # LightRAG Main Sidecar Unified Architecture
 
 **Date:** 2026-05-24  
-**Status:** Design spec for review before implementation planning  
+**Status:** Design spec for holistic refactor planning
 **Scope:** Replace DlightRAG's two ingestion/retrieval paths with one LightRAG-main-based multimodal path, while preserving PostgreSQL-backed metadata, in-filtering, direct image embedding, and DlightRAG-level BM25 hybrid retrieval.
 
 ---
@@ -23,7 +23,10 @@ Hard decisions:
 - PostgreSQL 18 is the only supported storage ecosystem for the core product path. Development, CI, Docker, and production docs should track the current PG18 minor release; as of this design pass, that is PostgreSQL 18.4.
 - LightRAG query mode is always `mix`.
 - DlightRAG hybrid retrieval means `LightRAG mix + BM25 + RRF`, not LightRAG's `hybrid` query mode.
-- Embedding configuration must prove multimodal capability at startup; text-only embedding models are invalid for this architecture.
+- Embedding configuration is provider-aware, multimodal, and task-aware. DlightRAG must expose LightRAG an `EmbeddingFunc` with `supports_asymmetric=True` when the provider supports query/document task routing.
+- Embedding provider/model/dimension are a storage contract. Changing any dimension-affecting setting requires clearing vector data and rebuilding indexes.
+- Text-only embedding models are invalid for this architecture.
+- LLM configuration is role-based and aligned to LightRAG's current `role_llm_configs` surface: `extract`, `keyword`, `query`, and `vlm`.
 - Document tables and equations use LightRAG's own multimodal document handling.
 - Native images and document-extracted image sidecar assets use direct multimodal image embedding.
 - LightRAG sidecar files are the canonical parse artifacts. DlightRAG must not write a second filesystem sidecar format; it only stores adapter-normalized references, metadata, and chunk provenance in PostgreSQL.
@@ -85,6 +88,10 @@ New or retained modules should be arranged around DlightRAG concerns, not histor
 | `core/retrieval/bm25.py` | PostgreSQL BM25 search and score normalization. |
 | `core/retrieval/filtered_vdb.py` | In-filter wrapper around LightRAG vector queries with strict empty-filter semantics. |
 | `core/retrieval/fusion.py` | RRF and post-merge score handling. |
+| `models/embedding_inputs.py` | Typed text, image, and multimodal embedding input records independent of provider payload shape. |
+| `models/multimodal_embedding.py` | Shared text/image embedder used by LightRAG text embeddings and DlightRAG direct-image retrieval. |
+| `models/providers/embed_providers.py` | Provider-specific task, payload, endpoint, response, image-support, and dimension rules. |
+| `models/llm_roles.py` or `models/llm.py` | Canonical DlightRAG-to-LightRAG role mapping and role-specific model callables. |
 
 Modules to delete or collapse after migration:
 
@@ -275,36 +282,120 @@ Rules:
 
 ---
 
-## 7. Multimodal Embedding Requirement
+## 7. Provider-Aware Multimodal Embedding
 
-Startup validation must reject configurations where the embedding model is not known to support both text and image inputs.
+Startup validation must reject configurations where the provider/model pair cannot embed both text and images into one shared vector space. This must be enforced by provider metadata plus a startup probe, not by a loose user-supplied boolean.
 
-Provider examples that fit the requirement:
+### 7.1 Normalized Inputs and Context
 
-- LM Studio/OpenAI-compatible endpoints serving models such as `qwen3-vl-embedding-2b`
-- Voyage multimodal embeddings such as `voyage-multimodal-3.5`
-- Jina multimodal embedding models that support image inputs
+DlightRAG needs a provider-neutral input layer:
 
-Config should make this explicit:
-
-```yaml
-embedding:
-  provider: openai_compatible
-  model: qwen3-vl-embedding-2b
-  capabilities:
-    multimodal: true
+```python
+TextEmbeddingInput(text: str)
+ImageEmbeddingInput(data_uri: str | None = None, path: str | None = None, url: str | None = None)
+MultimodalEmbeddingInput(parts: list[TextEmbeddingInput | ImageEmbeddingInput])
 ```
+
+The public provider protocol should accept context:
+
+```python
+class EmbedProvider(Protocol):
+    endpoint: str
+    supports_images: bool
+    supports_asymmetric: bool
+    default_dim: int | None
+    known_dims: frozenset[int] | None
+
+    def build_payload(
+        self,
+        model: str,
+        inputs: list[EmbeddingInput],
+        *,
+        context: Literal["query", "document"],
+        output_dimension: int | None = None,
+    ) -> dict: ...
+```
+
+Context mapping is mandatory:
+
+- LightRAG document indexing calls text embedding with `context="document"`.
+- DlightRAG direct-image indexing calls image embedding with `context="document"`.
+- Text queries call embedding with `context="query"`.
+- Image queries call image embedding with `context="query"`.
+- LightRAG receives an `EmbeddingFunc(..., supports_asymmetric=True)` whenever the selected provider supports task-aware query/document routing.
+
+### 7.2 Provider Matrix
+
+| Provider | Target models | Context mapping | Image payload | Dimension policy |
+|---|---|---|---|---|
+| `voyage` | `voyage-multimodal-3.5` | `query`/`document` -> `input_type` | `/multimodalembeddings` `image_base64` content | default `1024`; validate returned dim. |
+| `dashscope_qwen` | `qwen3-vl-embedding` cloud API | provider task/instruction/fusion parameters where supported | DashScope multimodal `contents` with text/image items | cloud default `2560`; allow configured dimensions such as `2048`, `1536`, `1024`, `768`, `512`, `256`. |
+| `qwen_openai_compatible` | LM Studio/vLLM-style `qwen3-vl-embedding-2b` and `qwen3-vl-embedding-8b` | provider-specific instruction or explicit task mode when the server supports it | OpenAI-compatible `input` using text and image data URIs | validate returned dim; expected local model dims include `2048` for 2B and `4096` for 8B unless the serving stack documents projection. |
+| `gemini` | `gemini-embedding-2` | map query/document to the native retrieval task behavior | native Google multimodal embedding request | default `3072`; common configured dims `1536` or `768`. |
+| `jina` | Jina multimodal embeddings v4 | `query` -> `retrieval.query`, `document` -> `retrieval.passage` | Jina text/image input items | default dense `2048`; validate returned dim. |
+| `openai_compatible` | explicit local or proxy provider | only asymmetric if configured/probed as task-aware | data URI passthrough if the server accepts images | no hard default; startup probe and returned-dim validation are required. |
+| `ollama` | local embedding servers | text-only unless a specific server proves image support | provider-specific | not valid for this architecture unless image embedding probe passes. |
+
+Provider detection may use model-name heuristics as a convenience, but production config should prefer an explicit `embedding.provider`. The matching layer must never infer multimodal safety only from a string containing `vl` or `multimodal`.
+
+### 7.3 Startup Validation
 
 Validation policy:
 
-- `capabilities.multimodal` must be true.
-- Direct image embedding startup probe should run unless disabled for tests.
-- If the provider cannot accept image inputs, service initialization fails.
-- Text-only fallback is not supported in this architecture because it would silently break native images and extracted drawing assets.
+- `embedding.provider`, `embedding.model`, and `embedding.dim` are required for production config.
+- The provider must report `supports_images=True` or pass an image embedding probe.
+- Known text-only models fail startup before LightRAG initialization.
+- The returned vector length must equal `embedding.dim`.
+- If `supports_asymmetric=True`, both query and document probes should be exercised where provider cost allows; unit tests can mock this.
+- A provider/model/dimension change after indexing must fail fast unless the workspace is explicitly reset or vector indexes are rebuilt.
+
+Text-only fallback is not supported because it would silently break native images and parser-extracted drawing/image assets.
 
 ---
 
-## 8. Retrieval Architecture
+## 8. Role-Based LLM Configuration
+
+DlightRAG should clean up its current model configuration surface and align with LightRAG `main` role-based LLM configuration. The canonical shape is:
+
+```yaml
+llm:
+  default:
+    provider: openai
+    model: gpt-4.1
+    temperature: 0.5
+  roles:
+    extract:
+      model: gpt-4.1-mini
+    keyword:
+      model: gpt-4.1-mini
+    query:
+      model: gpt-4.1
+    vlm:
+      provider: gemini
+      model: gemini-2.5-flash
+```
+
+Role responsibilities:
+
+| Role | Owner | Uses |
+|---|---|---|
+| `extract` | LightRAG + DlightRAG | entity extraction, document metadata normalization, structured metadata extraction. |
+| `keyword` | LightRAG + DlightRAG | LightRAG keyword extraction and DlightRAG intent-aware metadata filter detection. |
+| `query` | LightRAG + DlightRAG | answer generation, query planning, citation-aware responses. |
+| `vlm` | LightRAG + DlightRAG | visual/multimodal analysis, parser/VLM calls, optional image descriptions. |
+
+Cleanup rules:
+
+- Remove product-level `ingest` as a separate LLM role; ingest-time calls map to `extract` or `vlm`.
+- Rename plural `keywords` to singular `keyword` to match LightRAG.
+- Pass `extract`, `keyword`, `query`, and `vlm` through LightRAG `role_llm_configs` when configured.
+- Keep `embedding` and `rerank` separate from LLM roles. The `vlm` role is not a reranker.
+- DlightRAG local metadata filter intent detection should use the `keyword` role, while deterministic metadata matching still happens in PostgreSQL.
+- Runtime role updates can later call LightRAG `aupdate_llm_role_config()`, but the first refactor milestone only needs clean init-time configuration.
+
+---
+
+## 9. Retrieval Architecture
 
 Retrieval has one orchestrator and three candidate-producing signals:
 
@@ -394,7 +485,7 @@ This preserves existing DlightRAG metadata UX while adding sidecar-specific cita
 
 ---
 
-## 9. Config Changes
+## 10. Config Changes
 
 Remove:
 
@@ -403,6 +494,7 @@ Remove:
 - caption-mode parser settings that only existed for RAGAnything
 - old page rendering settings that only existed to create page images for unified mode
 - user-selectable non-PostgreSQL LightRAG storage backends and their optional config blocks
+- legacy top-level `chat`, `ingest`, `extract`, `keywords`, `query`, and `vlm` fields
 
 Keep or add:
 
@@ -419,11 +511,37 @@ parser:
   engine: mineru
   process_options: teP
 
+llm:
+  default:
+    provider: openai
+    model: gpt-4.1
+    temperature: 0.5
+  roles:
+    extract:
+      model: gpt-4.1-mini
+    keyword:
+      model: gpt-4.1-mini
+    query:
+      model: gpt-4.1
+    vlm:
+      provider: gemini
+      model: gemini-2.5-flash
+
 embedding:
-  provider: openai_compatible
+  provider: voyage
+  model: voyage-multimodal-3.5
+  dim: 1024
+  startup_probe: true
+  model_kwargs: {}
+
+# Other valid embedding providers include dashscope_qwen,
+# qwen_openai_compatible, gemini, jina, openai_compatible, and ollama
+# only when image support is explicitly proven.
+embedding_local_qwen_example:
+  provider: qwen_openai_compatible
   model: qwen3-vl-embedding-2b
-  capabilities:
-    multimodal: true
+  base_url: http://host.docker.internal:1234/v1
+  dim: 2048
 
 retrieval:
   lightrag_mode: mix   # internal invariant; not a public mode selector
@@ -451,7 +569,7 @@ The exact dependency syntax can follow the package manager in use, but it must t
 
 ---
 
-## 10. Deletion and Re-Ingest Semantics
+## 11. Deletion and Re-Ingest Semantics
 
 Deletion must cascade through all layers:
 
@@ -469,7 +587,7 @@ Existing stored data from the old `caption` and `unified` paths should be treate
 
 ---
 
-## 11. ArtRAG Lessons Adopted
+## 12. ArtRAG Lessons Adopted
 
 Adopted:
 
@@ -493,7 +611,7 @@ The point is to reuse architectural lessons, not to make DlightRAG a genericized
 
 ---
 
-## 12. Test Strategy
+## 13. Test Strategy
 
 Required test groups:
 
@@ -504,50 +622,64 @@ Required test groups:
 2. **Config validation**
    - text-only embedding config fails startup.
    - multimodal embedding config passes startup.
+   - provider/model/dimension mismatch fails startup.
+   - LightRAG embedding wrapper declares `supports_asymmetric=True` for task-aware providers.
    - LightRAG query mode cannot be changed away from `mix`.
    - PostgreSQL server version below 18 fails startup.
    - non-PostgreSQL LightRAG storage choices fail startup.
+   - `llm.roles.extract`, `llm.roles.keyword`, `llm.roles.query`, and `llm.roles.vlm` map to LightRAG `role_llm_configs`.
+   - legacy `ingest` and plural `keywords` fields are rejected.
 
-3. **Document ingest golden fixture**
+3. **Embedding provider matrix**
+   - Voyage maps context to `input_type`.
+   - Qwen/DashScope passes image content and configured dimension.
+   - Qwen OpenAI-compatible validates returned dimensions for local models.
+   - Gemini passes output dimension and retrieval task behavior.
+   - Jina maps context to `retrieval.query` / `retrieval.passage`.
+   - Direct image indexing uses document context; image query uses query context.
+
+4. **Document ingest golden fixture**
    - LightRAG parser pipeline is called with default `teP`.
    - table/equation sidecars become LightRAG-owned text chunks.
    - drawing/image sidecars become DlightRAG-owned direct image chunks.
    - `document_artifacts` and `chunk_provenance` are written.
 
-4. **Native image ingest**
+5. **Native image ingest**
    - native image bypasses LightRAG document multimodal analysis.
    - image bytes are embedded directly.
    - uniform metadata, artifact, doc status, and chunk provenance are written.
 
-5. **Metadata in-filtering**
+6. **Metadata in-filtering**
    - no filter means no restriction.
    - matching filter restricts all retrieval paths to candidate ids.
    - empty filter returns empty results before LightRAG/BM25/vector calls.
 
-6. **BM25 hybrid retrieval**
+7. **BM25 hybrid retrieval**
    - BM25 path ranks lexical matches.
    - BM25 applies workspace and candidate filters.
    - RRF merges BM25, LightRAG mix, and direct visual results deterministically.
 
-7. **Deletion lifecycle**
+8. **Deletion lifecycle**
    - delete removes LightRAG records, DlightRAG direct image chunks, artifact rows, chunk provenance rows, metadata rows, and hash rows.
 
-8. **Compatibility guard**
+9. **Compatibility guard**
    - missing LightRAG parser/storage surfaces fail with a clear startup error.
 
 ---
 
-## 13. Implementation Order After Review
+## 14. Implementation Order After Review
 
 After this design is reviewed, the implementation plan should be split into small vertical slices:
 
 1. Dependency/PostgreSQL-only config cleanup and startup validation.
-2. LightRAG store adapter and compatibility guard.
-3. Artifact and chunk provenance storage.
-4. Unified document ingest using LightRAG parser sidecars.
-5. Native image and extracted-image direct embedding.
-6. Strict in-filter retrieval.
-7. BM25 + RRF hybrid retrieval.
-8. Deletion lifecycle and old module removal.
+2. Role-based LLM config cleanup aligned to LightRAG `role_llm_configs`.
+3. Provider-aware multimodal embedding contract, task context mapping, and dimension probes.
+4. LightRAG store adapter and compatibility guard.
+5. Artifact and chunk provenance storage.
+6. Unified document ingest using LightRAG parser sidecars.
+7. Native image and extracted-image direct embedding.
+8. Strict in-filter retrieval.
+9. BM25 + RRF hybrid retrieval.
+10. Deletion lifecycle and old module removal.
 
 The first implementation milestone should prove one document fixture containing text, table, equation, and extracted image sidecars plus one native image fixture. That is the smallest testable slice that exercises the new architecture instead of only renaming the old paths.
