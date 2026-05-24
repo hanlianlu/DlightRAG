@@ -53,7 +53,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
 
     application = FastAPI(
         title="dlightrag",
-        description="DlightRAG - Dual-mode (Caption based & Unified representation based) multi-modal RAG service",
+        description="DlightRAG - LightRAG-main unified multimodal RAG service",
         version=__import__("dlightrag").__version__,
         lifespan=lifespan,
     )
