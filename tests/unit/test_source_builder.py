@@ -95,8 +95,8 @@ class TestBuildSources:
         }
         sources = build_sources(contexts)
 
-        assert sources[0].chunks[0].chunk_idx == 0
-        assert sources[0].chunks[1].chunk_idx == 1
+        assert sources[0].chunks[0].chunk_idx == 1
+        assert sources[0].chunks[1].chunk_idx == 2
 
     def test_none_page_idx_sorted_last(self) -> None:
         contexts = {

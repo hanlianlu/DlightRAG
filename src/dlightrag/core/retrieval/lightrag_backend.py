@@ -13,6 +13,7 @@ from typing import Any, cast
 from lightrag import QueryParam
 from PIL import Image
 
+from dlightrag.core.retrieval import canonicalize_reference_ids
 from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -68,6 +69,7 @@ class LightRAGMixBackend:
 
         await self._resolve_visual_chunks(chunks)
         chunks = await self._rerank(query, chunks, top_k=limit)
+        chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
 
         return RetrievalResult(
             contexts={

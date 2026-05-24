@@ -27,6 +27,7 @@ async def test_backend_always_queries_lightrag_mix() -> None:
                 "chunks": [{"id": "txt1", "content": "alpha", "file_path": "/docs/a.pdf"}],
                 "entities": [{"entity_name": "Alpha"}],
                 "relationships": [],
+                "references": [{"reference_id": "3", "file_path": "/docs/a.pdf"}],
             }
         }
     )
@@ -43,6 +44,7 @@ async def test_backend_always_queries_lightrag_mix() -> None:
     assert param.mode == "mix"
     assert result.contexts["entities"] == [{"entity_name": "Alpha"}]
     assert result.contexts["chunks"][0]["chunk_id"] == "txt1"
+    assert result.contexts["chunks"][0]["reference_id"] == "3"
     assert result.contexts["chunks"][0]["image_data"] == "page-bytes"
     assert result.contexts["chunks"][0]["page_idx"] == 2
 

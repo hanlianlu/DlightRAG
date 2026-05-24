@@ -101,7 +101,7 @@ class TestAnswerEngineGenerate:
 
     @pytest.mark.asyncio
     async def test_generate_with_freetext_response(self) -> None:
-        """generate() parses freetext response with ### References."""
+        """generate() validates inline citations and returns cited references."""
         raw = "AI is artificial intelligence [1-1].\n\n### References\n- [1] AI Overview"
         model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
@@ -116,6 +116,17 @@ class TestAnswerEngineGenerate:
         assert "messages" in call_kwargs
         # Must NOT pass response_format (unified freetext prompt)
         assert "response_format" not in call_kwargs
+
+    @pytest.mark.asyncio
+    async def test_generate_preserves_citation_reference_ids(self) -> None:
+        model_func = AsyncMock(return_value="The other document applies here [2-1].")
+        engine = AnswerEngine(model_func=model_func)
+
+        result = await engine.generate("Which document applies?", _multi_doc_contexts())
+
+        assert len(result.references) == 1
+        assert result.references[0].id == "2"
+        assert result.references[0].title == "other.pdf"
 
     @pytest.mark.asyncio
     async def test_generate_no_model_func(self) -> None:
@@ -573,9 +584,9 @@ class TestAnswerEngineFreetextReferences:
         assert "Revenue grew 15%" in answer
         assert "### References" not in answer
         assert len(refs) == 2
-        assert refs[0].id == 1
+        assert refs[0].id == "1"
         assert refs[0].title == "report.pdf"
-        assert refs[1].id == 2
+        assert refs[1].id == "2"
         assert refs[1].title == "quarterly_report.pdf"
 
     def test_no_references_section_returns_empty(self) -> None:

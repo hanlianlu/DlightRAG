@@ -3,14 +3,19 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Reference(BaseModel):
     """A document-level reference cited in the answer."""
 
-    id: int = Field(description="Reference number matching [n] in inline citations")
+    id: str = Field(description="Reference id matching [n] in inline citations")
     title: str = Field(description="Document title/filename")
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_id(cls, value: object) -> str:
+        return str(value)
 
 
 class StructuredAnswer(BaseModel):

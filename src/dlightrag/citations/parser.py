@@ -148,7 +148,7 @@ def parse_freetext_references(raw: str) -> tuple[str, list[Reference]]:
 
     refs: list[Reference] = []
     for match in _REF_LINE_RE.finditer(ref_section):
-        ref_id = int(match.group(1) or match.group(2))
+        ref_id = str(match.group(1) or match.group(2))
         title = match.group(3).strip().rstrip(".")
         refs.append(Reference(id=ref_id, title=title))
 

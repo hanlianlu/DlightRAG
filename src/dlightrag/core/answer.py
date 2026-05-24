@@ -121,7 +121,7 @@ class AnswerEngine:
         from dlightrag.models.schemas import Reference
 
         references = [
-            Reference(id=i + 1, title=s.title or s.path) for i, s in enumerate(processed.sources)
+            Reference(id=s.id, title=s.title or s.path) for s in processed.sources
         ]
 
         return RetrievalResult(

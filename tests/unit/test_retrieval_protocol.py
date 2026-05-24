@@ -124,6 +124,35 @@ class TestCanonicalizeReferenceIds:
         assert out[3]["reference_id"] not in {out[0]["reference_id"], out[1]["reference_id"]}
         assert out[3]["reference_id"] != ""
 
+    def test_preserves_existing_lightrag_ids_when_filling_missing(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [
+            {"chunk_id": "b1", "file_path": "/B.pdf", "reference_id": "1"},
+            {"chunk_id": "a1", "file_path": "/A.pdf", "reference_id": "2"},
+            {"chunk_id": "a2", "file_path": "/A.pdf", "reference_id": ""},
+        ]
+        out = canonicalize_reference_ids(chunks)
+
+        assert out[0]["reference_id"] == "1"
+        assert out[1]["reference_id"] == "2"
+        assert out[2]["reference_id"] == "2"
+
+    def test_uses_lightrag_reference_list_as_seed(self) -> None:
+        from dlightrag.core.retrieval import canonicalize_reference_ids
+
+        chunks = [
+            {"chunk_id": "x1", "file_path": "/X.pdf", "reference_id": ""},
+            {"chunk_id": "y1", "file_path": "/Y.pdf", "reference_id": ""},
+        ]
+        refs = [
+            {"reference_id": "7", "file_path": "/X.pdf"},
+        ]
+        out = canonicalize_reference_ids(chunks, references=refs)
+
+        assert out[0]["reference_id"] == "7"
+        assert out[1]["reference_id"] == "8"
+
     def test_empty_file_path_keeps_empty_ref_id(self) -> None:
         from dlightrag.core.retrieval import canonicalize_reference_ids
 

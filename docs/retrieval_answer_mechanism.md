@@ -118,10 +118,16 @@ The answer prompt receives:
 
 - chunk text excerpts
 - KG entities and relationships from LightRAG `mix`
+- LightRAG's doc-level `reference_id`/`references` mapping as the seed for
+  source numbering
 - document/source metadata
 - inline page or image data when available
 - user-supplied `query_images` when the answer model should reason over them
 
-Structured-output-capable providers return `answer` plus validated
-`references`. Other providers return markdown that is parsed for citation
-references.
+DlightRAG does not use LightRAG `aquery_llm()` for final answer generation
+because post-LightRAG context can include BM25 results, direct image matches,
+metadata-path injections, federated chunks, and reranked multimodal pages.
+Instead, it uses LightRAG `aquery_data()` as the base context and reference
+seed, then validates inline `[n]` and `[n-m]` citations against the final
+post-fusion context. Invalid citations are stripped; returned `sources` contain
+only cited documents and chunks.
