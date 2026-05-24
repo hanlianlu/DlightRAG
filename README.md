@@ -109,7 +109,7 @@ Full request and response details live in
   <img src="docs/architecture.svg" alt="DlightRAG Architecture" width="1080" />
 </p>
 
-<sub>Source: <a href="docs/architecture.mmd">docs/architecture.mmd</a> (runtime flow) and <a href="docs/module-layers.md">docs/module-layers.md</a> (module layers).</sub>
+<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a> (runtime flow) and <a href="docs/module-layers.md">docs/module-layers.md</a> (module layers).</sub>
 
 ### Mental Model
 
