@@ -1,7 +1,7 @@
 # Module Layering
 
 Code-organisation view of `src/dlightrag/`. Complements the runtime
-data-flow diagram in [`architecture.mmd`](architecture.mmd): that file
+data-flow diagram in [`architecture.drawio`](architecture.drawio): that file
 shows request-time calls; this one shows import boundaries.
 
 ## Layered Structure
