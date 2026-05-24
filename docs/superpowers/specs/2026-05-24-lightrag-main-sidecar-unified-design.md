@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-24  
 **Status:** Design spec for review before implementation planning  
-**Scope:** Replace DlightRAG's two ingestion/retrieval paths with one LightRAG-main-based multimodal path, while preserving metadata, in-filtering, direct image embedding, and DlightRAG-level BM25 hybrid retrieval.
+**Scope:** Replace DlightRAG's two ingestion/retrieval paths with one LightRAG-main-based multimodal path, while preserving PostgreSQL-backed metadata, in-filtering, direct image embedding, and DlightRAG-level BM25 hybrid retrieval.
 
 ---
 
@@ -19,6 +19,7 @@ Hard decisions:
 
 - There is no `caption` path and no old `unified` page-render path.
 - There is one ingestion engine, one retrieval engine, and one LightRAG instance per workspace.
+- PostgreSQL is the only supported storage ecosystem for the core product path.
 - LightRAG query mode is always `mix`.
 - DlightRAG hybrid retrieval means `LightRAG mix + BM25 + RRF`, not LightRAG's `hybrid` query mode.
 - Embedding configuration must prove multimodal capability at startup; text-only embedding models are invalid for this architecture.
@@ -50,7 +51,7 @@ LightRAG `main` currently provides the pieces DlightRAG should treat as upstream
 - `analyze_multimodal()` and sidecar chunk construction for LightRAG-owned multimodal text chunks.
 - `LightRAG.aquery_data()` with `mode="mix"` for structured retrieval data.
 
-DlightRAG should depend on these surfaces through one adapter module so upstream private storage changes fail fast and locally.
+DlightRAG should depend on these surfaces through one adapter module so upstream private storage changes fail fast and locally. The supported LightRAG storage configuration is PostgreSQL-based: `PGVectorStorage`, `PGGraphStorage`, `PGKVStorage`, and `PGDocStatusStorage`.
 
 ---
 
@@ -65,10 +66,10 @@ New or retained modules should be arranged around DlightRAG concerns, not histor
 | `core/ingestion/engine.py` | Single ingestion orchestrator for documents, native images, metadata, dedup, and deletion hooks. |
 | `core/ingestion/sidecar.py` | Reads and normalizes LightRAG/MinerU/Docling sidecars into DlightRAG sidecar units. |
 | `core/ingestion/direct_image.py` | Creates direct image embedding chunk specs for native images and extracted drawing/image assets. |
-| `storage/document_artifacts.py` | Stores document-level parse/artifact locations and parser provenance. |
-| `storage/chunk_metadata.py` | Stores chunk-to-document and chunk-to-sidecar provenance. |
+| `storage/document_artifacts.py` | PostgreSQL table for document-level parse/artifact locations and parser provenance. |
+| `storage/chunk_metadata.py` | PostgreSQL table for chunk-to-document and chunk-to-sidecar provenance. |
 | `core/retrieval/retriever.py` | Single retrieval orchestrator: metadata filter, LightRAG mix, BM25, direct image query, RRF, rerank, enrichment. |
-| `core/retrieval/bm25.py` | DlightRAG BM25 backend and score normalization. |
+| `core/retrieval/bm25.py` | PostgreSQL BM25 search and score normalization. |
 | `core/retrieval/filtered_vdb.py` | In-filter wrapper around LightRAG vector queries with strict empty-filter semantics. |
 | `core/retrieval/fusion.py` | RRF and post-merge score handling. |
 
@@ -79,6 +80,7 @@ Modules to delete or collapse after migration:
 - old `rag_mode` branching in service/config/API layers
 - the old page-render-as-primary-ingest path in `unifiedrepresent/*`
 - the custom `visual_chunks` KV concept if its only purpose is page-render output storage
+- `storage/json_metadata_index.py` and any storage abstraction whose only product purpose is non-PostgreSQL fallback
 
 Reusable provider code from `unifiedrepresent` can be moved, but the old mode boundary should not survive.
 
@@ -184,13 +186,15 @@ DlightRAG keeps metadata management as a first-class feature. The sidecar layer 
 
 ### 6.1 Document Metadata
 
-Existing `MetadataIndexProtocol` remains the document-level filter source. It continues to store:
+Existing `PGMetadataIndex` remains the document-level filter source. It continues to store:
 
 - system metadata such as filename, extension, size, title, author, dates, and content hash;
 - user metadata;
 - parser metadata such as `parse_engine`, `process_options`, `artifact_status`, and source kind.
 
 The old `rag_mode` metadata should be removed. If a field is needed for observability, use `ingest_strategy="lightrag_sidecar_unified"`.
+
+A protocol may remain for test doubles, but not as a product promise for non-PostgreSQL metadata backends.
 
 ### 6.2 Document Artifacts
 
@@ -216,7 +220,7 @@ CREATE TABLE dlightrag_document_artifacts (
 );
 ```
 
-JSON fallback should store the same shape under the working directory for non-PG users.
+There is no file-backed alternative target for this table. Development and production both use PostgreSQL so metadata, chunk provenance, vector search, KG storage, and BM25 share one consistent transactional substrate.
 
 ### 6.3 Chunk Metadata
 
@@ -326,10 +330,11 @@ The filtered vector wrapper applies candidate chunk ids inside `chunks_vdb.query
 
 BM25 is a DlightRAG retrieval signal, not a LightRAG query mode.
 
-First implementation target:
+Implementation target:
 
-- PG storage: use a BM25-capable index over LightRAG document chunks, scoped by `workspace`.
-- Non-PG storage: use a local BM25 index over `text_chunks` for correctness, with explicit performance limits.
+- Use a PostgreSQL BM25-capable index over LightRAG document chunks, scoped by `workspace`.
+- Prefer `pg_textsearch`/ParadeDB-style BM25 when available.
+- If the BM25 extension is unavailable, fail startup when BM25 is enabled rather than silently degrading to a different backend.
 
 Fusion uses reciprocal rank fusion:
 
@@ -374,10 +379,17 @@ Remove:
 - all `raganything` configuration
 - caption-mode parser settings that only existed for RAGAnything
 - old page rendering settings that only existed to create page images for unified mode
+- user-selectable non-PostgreSQL LightRAG storage backends and their optional config blocks
 
 Keep or add:
 
 ```yaml
+storage:
+  vector: PGVectorStorage
+  graph: PGGraphStorage
+  kv: PGKVStorage
+  doc_status: PGDocStatusStorage
+
 parser:
   engine: mineru
   process_options: teP
@@ -401,6 +413,8 @@ retrieval:
 metadata:
   enabled: true
 ```
+
+The storage values are operational facts, not product-mode switches. Config validation should reject `Neo4JStorage`, `MilvusVectorDBStorage`, `QdrantVectorDBStorage`, `JsonKVStorage`, `NetworkXStorage`, and other non-PostgreSQL storage choices in the core path.
 
 Dependency policy:
 
@@ -466,6 +480,7 @@ Required test groups:
    - text-only embedding config fails startup.
    - multimodal embedding config passes startup.
    - LightRAG query mode cannot be changed away from `mix`.
+   - non-PostgreSQL LightRAG storage choices fail startup.
 
 3. **Document ingest golden fixture**
    - LightRAG parser pipeline is called with default `teP`.
@@ -500,7 +515,7 @@ Required test groups:
 
 After this design is reviewed, the implementation plan should be split into small vertical slices:
 
-1. Dependency/config cleanup and startup validation.
+1. Dependency/PostgreSQL-only config cleanup and startup validation.
 2. LightRAG store adapter and compatibility guard.
 3. Artifact and chunk metadata storage.
 4. Unified document ingest using LightRAG parser sidecars.
