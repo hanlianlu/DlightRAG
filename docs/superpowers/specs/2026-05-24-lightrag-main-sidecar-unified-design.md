@@ -85,7 +85,7 @@ New or retained modules should be arranged around DlightRAG concerns, not histor
 | Module | Responsibility |
 |---|---|
 | `core/service.py` | Owns workspace lifecycle, LightRAG creation, config validation, storage initialization, and public APIs. |
-| `core/lightrag_stores.py` | The only module allowed to touch LightRAG internals such as `chunks_vdb`, `text_chunks`, `full_docs`, and `doc_status`. |
+| `core/lightrag_stores.py` | The only module allowed to touch LightRAG internals such as `chunks_vdb`, `text_chunks`, `full_docs`, and `doc_status`. It also owns the PG-only precomputed vector writer used for direct image embeddings. |
 | `core/ingestion/engine.py` | Single ingestion orchestrator for documents, native images, metadata mirrors, and deletion hooks. Parser routing and document dedup authority stay upstream in LightRAG. |
 | `core/ingestion/lightrag_sidecar.py` | `LightRAGSidecarAdapter`: resolves canonical LightRAG sidecar files and yields typed references for DlightRAG indexing/direct-image embedding. It does not write DlightRAG sidecar files. |
 | `core/ingestion/direct_image.py` | Creates direct image embedding chunk specs for native images and extracted drawing/image assets. |
@@ -175,6 +175,14 @@ This means document-extracted images have two intentional representations:
 3. `chunk_provenance` links both representations back to the same sidecar item.
 
 The direct image vector remains the visual identity used for image similarity search. LightRAG `i` output is the KG/BM25/citation bridge; it must not replace the image vector.
+
+LightRAG's current public vector-store flow is text-first: `PGVectorStorage.upsert()` reads row `content` and calls `embedding_func(batch, context="document")`; it does not expose a stable public upsert API for a caller-supplied per-row image vector. Querying is more flexible: `PGVectorStorage.query()` accepts a precomputed `query_embedding`. Therefore DlightRAG must own direct image indexing through the `LightRAGStores` adapter:
+
+1. Compute image vectors through `MultimodalEmbedder.embed_index_images()` from image bytes/PIL images, not from VLM captions.
+2. Upsert a companion display/citation text row into LightRAG `text_chunks`.
+3. Upsert the same chunk id into LightRAG's PostgreSQL chunk vector table with `content_vector` set to the precomputed image vector.
+4. Never call LightRAG's normal `chunks_vdb.upsert()` for direct image vectors, because that would embed the text `content` instead of the image.
+5. For image queries, compute `embed_query_images()` and pass the vector through LightRAG's `chunks_vdb.query(query_embedding=...)`.
 
 Document ingest steps:
 

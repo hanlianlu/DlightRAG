@@ -1594,13 +1594,17 @@ Create `src/dlightrag/core/lightrag_stores.py`:
 from __future__ import annotations
 
 import asyncio
+import datetime
 from typing import Any, ClassVar
-
-from lightrag.utils import EmbeddingFunc
 
 
 class LightRAGStores:
-    """Typed accessor for LightRAG storage attributes DlightRAG writes directly."""
+    """Typed accessor for LightRAG storage attributes DlightRAG writes directly.
+
+    LightRAG vector upsert is text-first: chunks_vdb.upsert() embeds row
+    content. Direct image chunks must bypass that path and write their
+    precomputed image vectors into the PG vector table explicitly.
+    """
 
     _REQUIRED: ClassVar[frozenset[str]] = frozenset(
         {
@@ -1649,24 +1653,59 @@ class LightRAGStores:
         embedding_dim: int,
         max_token_size: int,
     ) -> None:
-        """Write chunk rows while reusing precomputed image vectors."""
+        """Write direct-image chunks while preserving precomputed image vectors."""
         if not rows:
             return
 
-        async def cached_embed(texts: list[str]) -> list[list[float]]:
-            return [vectors[text] for text in texts]
+        # Keep LightRAG's text chunk store populated for citations, deletion,
+        # BM25, and display. This does not generate vectors.
+        await self.raw.text_chunks.upsert(rows)
+
+        chunks_vdb = self.raw.chunks_vdb
+        if not hasattr(chunks_vdb, "table_name") or not hasattr(chunks_vdb, "db"):
+            raise RuntimeError("Direct image vector writes require PGVectorStorage")
+
+        current_time = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        sql = f"""
+            INSERT INTO {chunks_vdb.table_name} (
+                workspace, id, tokens, chunk_order_index, full_doc_id,
+                content, content_vector, file_path, create_time, update_time
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ON CONFLICT (workspace,id) DO UPDATE
+            SET tokens=EXCLUDED.tokens,
+                chunk_order_index=EXCLUDED.chunk_order_index,
+                full_doc_id=EXCLUDED.full_doc_id,
+                content=EXCLUDED.content,
+                content_vector=EXCLUDED.content_vector,
+                file_path=EXCLUDED.file_path,
+                update_time=EXCLUDED.update_time
+        """
+        values = []
+        for chunk_id, row in rows.items():
+            vector = vectors[chunk_id]
+            if len(vector) != embedding_dim:
+                raise ValueError(
+                    f"{chunk_id} vector dimension {len(vector)} != {embedding_dim}"
+                )
+            values.append(
+                (
+                    chunks_vdb.workspace,
+                    chunk_id,
+                    int(row.get("tokens") or 0),
+                    int(row.get("chunk_order_index") or 0),
+                    str(row["full_doc_id"]),
+                    str(row["content"]),
+                    vector,
+                    row.get("file_path"),
+                    current_time,
+                    current_time,
+                )
+            )
 
         async with self._vector_write_lock:
-            original = self.raw.chunks_vdb.embedding_func
-            self.raw.chunks_vdb.embedding_func = EmbeddingFunc(
-                embedding_dim=embedding_dim,
-                max_token_size=max_token_size,
-                func=cached_embed,
-            )
-            try:
-                await self.raw.chunks_vdb.upsert(rows)
-            finally:
-                self.raw.chunks_vdb.embedding_func = original
+            async with chunks_vdb.db.pool.acquire() as connection:
+                await connection.executemany(sql, values)
 ```
 
 - [ ] **Step 5: Create PG document artifacts store**
@@ -2028,8 +2067,14 @@ async def build_direct_image_chunk(
     vector = (await embedder.embed_index_images([image]))[0]
     chunk_id = direct_image_chunk_id(workspace, full_doc_id, ref)
     row = {
+        "full_doc_id": full_doc_id,
+        "tokens": 0,
+        "chunk_order_index": 0,
         "content": text_content,
         "file_path": str(ref.asset_path),
+        "heading": {},
+        "sidecar": {"type": ref.sidecar_type, "id": ref.sidecar_id},
+        "llm_cache_list": [],
     }
     return chunk_id, row, vector
 
