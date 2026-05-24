@@ -6,7 +6,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-_script_path = Path(__file__).resolve().parents[2] / "scripts" / "langfuse_stack.py"
+_script_path = Path(__file__).resolve().parents[2] / "scripts" / "langfuse" / "stack.py"
 _spec = importlib.util.spec_from_file_location("langfuse_stack", _script_path)
 _langfuse_stack = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_langfuse_stack)

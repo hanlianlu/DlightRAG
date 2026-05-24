@@ -11,6 +11,7 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+MINERU_SCRIPTS = ROOT / "scripts" / "mineru"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -35,8 +36,8 @@ def test_makefile_delegates_mineru_defaults_to_scripts() -> None:
     assert "MINERU_API_HOST ?=" not in makefile
     assert "MINERU_API_PORT ?=" not in makefile
     assert "MINERU_SERVICE_VENV ?=" not in makefile
-    assert "\nmineru-install:\n\tscripts/install_mineru_service.sh\n" in makefile
-    assert "\nmineru-api:\n\tscripts/start_mineru_api.sh\n" in makefile
+    assert "\nmineru-install:\n\tscripts/mineru/install.sh\n" in makefile
+    assert "\nmineru-api:\n\tscripts/mineru/api.sh\n" in makefile
 
 
 def test_makefile_targets_are_thin_script_wrappers() -> None:
@@ -55,12 +56,12 @@ def test_makefile_targets_are_thin_script_wrappers() -> None:
         check=True,
     )
 
-    assert install.stdout.strip() == "scripts/install_mineru_service.sh"
-    assert api.stdout.strip() == "scripts/start_mineru_api.sh"
+    assert install.stdout.strip() == "scripts/mineru/install.sh"
+    assert api.stdout.strip() == "scripts/mineru/api.sh"
 
 
 def test_mineru_helper_defaults_to_separate_env_file() -> None:
-    env_script = (ROOT / "scripts" / "mineru_env.sh").read_text(encoding="utf-8")
+    env_script = (MINERU_SCRIPTS / "env.sh").read_text(encoding="utf-8")
 
     assert 'mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env.mineru}"' in env_script
 
@@ -77,12 +78,19 @@ def test_mineru_env_example_documents_install_extras() -> None:
 def test_makefile_exposes_mineru_launch_agent_targets() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
-    assert "\nmineru-service-install:\n\tscripts/mineru_launch_agent.sh install\n" in makefile
-    assert "\nmineru-service-start:\n\tscripts/mineru_launch_agent.sh start\n" in makefile
-    assert "\nmineru-service-stop:\n\tscripts/mineru_launch_agent.sh stop\n" in makefile
-    assert "\nmineru-service-status:\n\tscripts/mineru_launch_agent.sh status\n" in makefile
-    assert "\nmineru-service-logs:\n\tscripts/mineru_launch_agent.sh logs\n" in makefile
-    assert "\nmineru-service-uninstall:\n\tscripts/mineru_launch_agent.sh uninstall\n" in makefile
+    assert "\nmineru-service-install:\n\tscripts/mineru/launch_agent.sh install\n" in makefile
+    assert "\nmineru-service-start:\n\tscripts/mineru/launch_agent.sh start\n" in makefile
+    assert "\nmineru-service-stop:\n\tscripts/mineru/launch_agent.sh stop\n" in makefile
+    assert "\nmineru-service-status:\n\tscripts/mineru/launch_agent.sh status\n" in makefile
+    assert "\nmineru-service-logs:\n\tscripts/mineru/launch_agent.sh logs\n" in makefile
+    assert "\nmineru-service-uninstall:\n\tscripts/mineru/launch_agent.sh uninstall\n" in makefile
+
+
+def test_legacy_top_level_mineru_helpers_are_removed() -> None:
+    assert not (ROOT / "scripts" / "install_mineru_service.sh").exists()
+    assert not (ROOT / "scripts" / "start_mineru_api.sh").exists()
+    assert not (ROOT / "scripts" / "mineru_launch_agent.sh").exists()
+    assert not (ROOT / "scripts" / "mineru_env.sh").exists()
 
 
 def test_makefile_passes_command_line_overrides_to_scripts(tmp_path: Path) -> None:
@@ -137,7 +145,7 @@ def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:
     env.pop("MINERU_INSTALL_EXTRAS", None)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "install_mineru_service.sh")],
+        [str(MINERU_SCRIPTS / "install.sh")],
         cwd=ROOT,
         env=env,
         check=True,
@@ -178,7 +186,7 @@ def test_mineru_installer_defaults_to_mlx_on_apple_silicon(tmp_path: Path) -> No
     env.pop("MINERU_INSTALL_EXTRAS", None)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "install_mineru_service.sh")],
+        [str(MINERU_SCRIPTS / "install.sh")],
         cwd=ROOT,
         env=env,
         check=True,
@@ -214,7 +222,7 @@ def test_mineru_installer_defaults_to_core_off_apple_silicon(tmp_path: Path) -> 
     env.pop("MINERU_INSTALL_EXTRAS", None)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "install_mineru_service.sh")],
+        [str(MINERU_SCRIPTS / "install.sh")],
         cwd=ROOT,
         env=env,
         check=True,
@@ -252,7 +260,7 @@ def test_mineru_installer_reads_mineru_values_from_env_file(tmp_path: Path) -> N
     env.pop("MINERU_INSTALL_EXTRAS", None)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "install_mineru_service.sh")],
+        [str(MINERU_SCRIPTS / "install.sh")],
         cwd=ROOT,
         env=env,
         check=True,
@@ -281,7 +289,7 @@ def test_mineru_launcher_uses_default_port_and_passes_args(tmp_path: Path) -> No
     env.pop("MINERU_API_HOST", None)
     env.pop("MINERU_API_PORT", None)
 
-    script = ROOT / "scripts" / "start_mineru_api.sh"
+    script = MINERU_SCRIPTS / "api.sh"
     subprocess.run(
         [str(script), "--enable-vlm-preload", "true"],
         cwd=ROOT,
@@ -316,7 +324,7 @@ def test_mineru_launcher_allows_host_and_port_override(tmp_path: Path) -> None:
     env["MINERU_API_HOST"] = "0.0.0.0"
     env["MINERU_API_PORT"] = "9001"
 
-    script = ROOT / "scripts" / "start_mineru_api.sh"
+    script = MINERU_SCRIPTS / "api.sh"
     subprocess.run([str(script)], cwd=ROOT, env=env, check=True)
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
@@ -354,7 +362,7 @@ def test_mineru_launcher_reads_mineru_values_from_env_file(tmp_path: Path) -> No
     env.pop("MINERU_API_PORT", None)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "start_mineru_api.sh")],
+        [str(MINERU_SCRIPTS / "api.sh")],
         cwd=ROOT,
         env=env,
         check=True,
@@ -390,7 +398,7 @@ def test_mineru_launch_agent_install_writes_plist_and_bootstraps(tmp_path: Path)
     env["MINERU_LAUNCHD_HOME"] = str(home)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "mineru_launch_agent.sh"), "install"],
+        [str(MINERU_SCRIPTS / "launch_agent.sh"), "install"],
         cwd=ROOT,
         env=env,
         check=True,
@@ -401,7 +409,7 @@ def test_mineru_launch_agent_install_writes_plist_and_bootstraps(tmp_path: Path)
     plist = plistlib.loads(plist_path.read_bytes())
 
     assert plist["Label"] == label
-    assert plist["ProgramArguments"] == [str(ROOT / "scripts" / "start_mineru_api.sh")]
+    assert plist["ProgramArguments"] == [str(MINERU_SCRIPTS / "api.sh")]
     assert plist["WorkingDirectory"] == str(ROOT)
     assert plist["RunAtLoad"] is True
     assert plist["KeepAlive"] is True
@@ -435,7 +443,7 @@ def test_mineru_launch_agent_stop_unloads_by_label(tmp_path: Path) -> None:
     env["MINERU_LAUNCHD_HOME"] = str(home)
 
     subprocess.run(
-        [str(ROOT / "scripts" / "mineru_launch_agent.sh"), "stop"],
+        [str(MINERU_SCRIPTS / "launch_agent.sh"), "stop"],
         cwd=ROOT,
         env=env,
         check=True,

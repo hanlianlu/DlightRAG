@@ -77,8 +77,9 @@ not enter DlightRAG's runtime environment. With no explicit
 `MINERU_INSTALL_EXTRAS`, the installer uses `mineru[core,mlx]` on Apple
 Silicon and `mineru[core]` elsewhere. `.env.mineru.example` defaults to
 `core,mlx` for this local development setup. Keep DlightRAG runtime parser
-settings in `config.yaml`. On GPU servers, prefer MinerU's official Docker
-Compose `api` or `router` profile; set
+settings in `config.yaml`. The Makefile targets are the stable public entry
+points; the implementation lives under `scripts/mineru/`. On GPU servers,
+prefer MinerU's official Docker Compose `api` or `router` profile; set
 `parser_sidecars.mineru.local_endpoint` to that service, usually
 `http://127.0.0.1:8000` or `http://127.0.0.1:8002`.
 
@@ -387,7 +388,9 @@ MINERU_API_PORT=8210
 Those keys affect only `make mineru-install`, `make mineru-api`, and the macOS
 LaunchAgent helper. They do not change DlightRAG parser behavior; align
 `parser_sidecars.mineru.local_endpoint` in `config.yaml` if you change the
-host or port.
+host or port. If you update from an older local checkout that already installed
+the LaunchAgent, run `make mineru-service-install` once so launchd points at
+the current `scripts/mineru/api.sh` helper.
 
 ### Model Providers
 
@@ -514,7 +517,9 @@ make langfuse-down
 ```
 
 The helper keeps the Langfuse stack outside this repo at `../langfuse-local`
-and writes matching local project keys into both env files.
+and writes matching local project keys into both env files. Its local-only
+implementation is grouped under `scripts/langfuse/`; use the Makefile targets
+instead of calling those helpers directly.
 
 ## API Surface
 

@@ -3,8 +3,8 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd "$script_dir/.." && pwd)"
-source "$script_dir/mineru_env.sh"
+repo_root="$(cd "$script_dir/../.." && pwd)"
+source "$script_dir/env.sh"
 
 load_mineru_env_key MINERU_LAUNCHD_LABEL
 load_mineru_env_key MINERU_LAUNCHD_HOME
@@ -41,7 +41,7 @@ write_plist() {
   mkdir -p "$launch_agents_dir" "$log_dir"
 
   local start_script env_file stdout_path stderr_path
-  start_script="$repo_root/scripts/start_mineru_api.sh"
+  start_script="$repo_root/scripts/mineru/api.sh"
   env_file="$mineru_env_file"
   stdout_path="$log_dir/mineru-api.out.log"
   stderr_path="$log_dir/mineru-api.err.log"
@@ -104,7 +104,7 @@ stop_service() {
 
 usage() {
   cat <<EOF
-Usage: scripts/mineru_launch_agent.sh <command>
+Usage: scripts/mineru/launch_agent.sh <command>
 
 Commands:
   install    Write the LaunchAgent plist and start MinerU API
