@@ -24,6 +24,7 @@ Install the dedicated local MinerU service env first:
   make mineru-install
 
 Override MinerU install extras when the machine needs them:
+  MINERU_INSTALL_EXTRAS=core,mlx make mineru-install
   MINERU_INSTALL_EXTRAS=core,vllm make mineru-install
   MINERU_INSTALL_EXTRAS=core,lmdeploy make mineru-install
 EOF
