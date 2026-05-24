@@ -24,7 +24,6 @@ class TestRAGServiceAingest:
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(return_value={"status": "success"})
-        service._hash_index = None
         service.rag = MagicMock()
         service.retrieval = MagicMock()
         return service
@@ -33,6 +32,12 @@ class TestRAGServiceAingest:
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.aingest(source_type="local", path="/tmp/f.pdf")
+
+    async def test_aingest_query_role_rejected(self, test_config: DlightragConfig) -> None:
+        test_config.runtime_role = "query"
+        service = self._make_initialized_service(test_config)
+        with pytest.raises(PermissionError, match="runtime_role='query'"):
+            await service.aingest(source_type="local", path="/tmp/file.pdf")
 
     async def test_aingest_replace_default_from_config(self, test_config: DlightragConfig) -> None:
         test_config.ingestion_replace_default = True
@@ -155,26 +160,42 @@ class TestRAGServiceFileManagement:
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.adelete_files(filenames=["a.pdf"])
 
-    async def test_alist_delegates_to_ingestion(self, test_config):
+    async def test_adelete_query_role_rejected(self, test_config):
+        test_config.runtime_role = "query"
         service = RAGService(config=test_config)
         service._initialized = True
-        service._hash_index = MagicMock()
-        service._hash_index.list_all = AsyncMock(return_value=[{"doc_id": "d1"}])
+        with pytest.raises(PermissionError, match="runtime_role='query'"):
+            await service.adelete_files(filenames=["a.pdf"])
+
+    async def test_alist_reads_lightrag_doc_status(self, test_config):
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._lightrag = MagicMock()
+        service._lightrag.doc_status = MagicMock()
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+            return_value={"d1": MagicMock(file_path="/tmp/a.pdf", updated_at="now")}
+        )
         result = await service.alist_ingested_files()
-        assert result == [{"doc_id": "d1"}]
-        service._hash_index.list_all.assert_awaited_once()
+        assert result == [
+            {
+                "doc_id": "d1",
+                "file_path": "/tmp/a.pdf",
+                "status": "processed",
+                "updated_at": "now",
+            }
+        ]
+        service._lightrag.doc_status.get_docs_by_status.assert_awaited_once()
 
     async def test_adelete_uses_cascade_pipeline(self, test_config):
         service = RAGService(config=test_config)
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
-        service._hash_index = MagicMock()
-        service._hash_index.find_by_name = AsyncMock(
-            return_value=("d1", "sha256:abc", "/tmp/a.pdf")
+        service._lightrag.doc_status = MagicMock()
+        service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+            return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
         )
-        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
-        service._hash_index.remove = AsyncMock(return_value=True)
         result = await service.adelete_files(filenames=["a.pdf"])
         assert result[0]["status"] == "deleted"
         assert result[0]["docs_deleted"] == 1
@@ -239,19 +260,10 @@ class TestBuildAddonParams:
 class TestRAGServiceLightRAGMainPath:
     """Test LightRAG-main path behavior in RAGService."""
 
-    @staticmethod
-    def _mock_hash_index() -> MagicMock:
-        """Return a mock HashIndex that never skips (dedup pass-through)."""
-        hi = MagicMock()
-        hi.should_skip_file = AsyncMock(return_value=(False, "fakehash", None))
-        hi.register = AsyncMock()
-        return hi
-
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
         """Downloads a single blob and ingests through the unified engine."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._hash_index = self._mock_hash_index()
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 2, "file_path": "/tmp/report.pdf"}
@@ -274,7 +286,6 @@ class TestRAGServiceLightRAGMainPath:
         """Batch-ingests blobs by prefix."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._hash_index = self._mock_hash_index()
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 1, "file_path": "/tmp/f.pdf"}
@@ -298,7 +309,6 @@ class TestRAGServiceLightRAGMainPath:
         """S3 downloads an object and ingests via engine.aingest."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._hash_index = self._mock_hash_index()
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "status": "success"}
@@ -320,7 +330,6 @@ class TestRAGServiceLightRAGMainPath:
         """Temp directory is cleaned up even if unified.aingest fails."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service._hash_index = self._mock_hash_index()
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(side_effect=RuntimeError("render failed"))
 
@@ -351,7 +360,6 @@ class TestRAGServiceLightRAGMainPath:
 
         service = RAGService(config=test_config)
         service._initialized = True
-        service._hash_index = self._mock_hash_index()
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 3, "file_path": str(fake_pdf)}
@@ -396,50 +404,6 @@ class TestRAGServiceLightRAGMainPath:
         service._visual_chunks.finalize.assert_awaited_once()
         service._lightrag.finalize_storages.assert_awaited_once()
 
-    # -- Deduplication --
-
-    async def test_aingest_unified_dedup_skips_duplicate(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        """Ingestion skips when file hash already exists."""
-        fake_pdf = tmp_path / "f.pdf"
-        fake_pdf.write_bytes(b"%PDF-fake")
-
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock()
-        service._hash_index = AsyncMock()
-        service._hash_index.should_skip_file = AsyncMock(
-            return_value=(True, "sha256:abc", "Duplicate of doc-1")
-        )
-
-        result = await service.aingest(source_type="local", path=str(fake_pdf))
-
-        assert result["status"] == "skipped"
-        service._ingestion_engine.aingest_file.assert_not_called()
-
-    async def test_aingest_unified_registers_hash_on_success(
-        self, test_config: DlightragConfig, tmp_path: Path
-    ) -> None:
-        """Registers content hash after successful ingestion."""
-        fake_pdf = tmp_path / "f.pdf"
-        fake_pdf.write_bytes(b"%PDF-fake")
-
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            return_value={"doc_id": "d1", "page_count": 2, "file_path": str(fake_pdf)}
-        )
-        service._hash_index = AsyncMock()
-        service._hash_index.should_skip_file = AsyncMock(return_value=(False, "sha256:abc", None))
-
-        result = await service.aingest(source_type="local", path=str(fake_pdf))
-
-        assert result["doc_id"] == "d1"
-        service._hash_index.register.assert_awaited_once_with("sha256:abc", "d1", str(fake_pdf))
-
     # -- File deletion --
 
     async def test_adelete_files_unified(self, test_config: DlightragConfig) -> None:
@@ -452,13 +416,9 @@ class TestRAGServiceLightRAGMainPath:
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
-        service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
-        service._hash_index = MagicMock()
-        service._hash_index.find_by_name = AsyncMock(
-            return_value=("d1", "sha256:abc", "/tmp/a.pdf")
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+            return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
         )
-        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
-        service._hash_index.remove = AsyncMock(return_value=True)
         service._metadata_index = MagicMock()
         service._metadata_index.get = AsyncMock(return_value={"page_count": 3})
         service._metadata_index.delete = AsyncMock()
@@ -468,21 +428,17 @@ class TestRAGServiceLightRAGMainPath:
         assert len(results) == 1
         assert results[0]["status"] == "deleted"
         service._lightrag.adelete_by_doc_id.assert_awaited_once()
-        service._hash_index.remove.assert_awaited_once_with("sha256:abc")
         service._metadata_index.delete.assert_awaited_once_with("d1")
         service._visual_chunks.delete.assert_awaited_once()
 
     async def test_adelete_files_unified_not_found(self, test_config: DlightragConfig) -> None:
-        """Deletion returns not_found when doc is not in the hash index."""
+        """Deletion returns not_found when doc is not in doc_status or metadata."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
         service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
-        service._hash_index = MagicMock()
-        service._hash_index.find_by_name = AsyncMock(return_value=(None, None, None))
-        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
 
         results = await service.adelete_files(filenames=["nonexistent.pdf"])
 
@@ -500,13 +456,9 @@ class TestRAGServiceLightRAGMainPath:
         service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=RuntimeError("LightRAG down"))
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
-        service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
-        service._hash_index = MagicMock()
-        service._hash_index.find_by_name = AsyncMock(
-            return_value=("d1", "sha256:abc", "/tmp/a.pdf")
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+            return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
         )
-        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
-        service._hash_index.remove = AsyncMock(return_value=True)
         service._metadata_index = MagicMock()
         service._metadata_index.get = AsyncMock(return_value={"page_count": 2})
         service._metadata_index.delete = AsyncMock()
@@ -516,7 +468,6 @@ class TestRAGServiceLightRAGMainPath:
         assert results[0]["status"] == "deleted_with_errors"
         # Layers 2 and 3 ran despite Layer 1 failure
         service._visual_chunks.delete.assert_awaited_once()
-        service._hash_index.remove.assert_awaited_once_with("sha256:abc")
         service._metadata_index.delete.assert_awaited_once_with("d1")
 
 

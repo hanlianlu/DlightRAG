@@ -34,7 +34,7 @@ def _make_mock_service(workspace: str = "default") -> MagicMock:
             "workspace": workspace,
             "pending_tasks_cancelled": 0,
             "lightrag_storages_dropped": 12,
-            "domain_stores_dropped": ["hash_index"],
+            "domain_stores_dropped": ["metadata_index"],
             "orphan_tables_cleaned": 0,
             "graphs_dropped": [],
             "local_files_removed": 5,

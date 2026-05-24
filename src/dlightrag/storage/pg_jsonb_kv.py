@@ -103,11 +103,14 @@ class PGJsonbKVStorage(BaseKVStorage):
             raise RuntimeError("PGJsonbKVStorage not initialized — call initialize() first")
         return self._pool
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, read_only: bool = False) -> None:
         if self._pool is None:
             from dlightrag.storage.pool import pg_pool
 
             self._pool = await pg_pool.get()
+        if read_only:
+            await self._verify_table()
+            return
         await self._ensure_table()
 
     async def _ensure_table(self) -> None:
@@ -123,6 +126,18 @@ class PGJsonbKVStorage(BaseKVStorage):
                     logger.info(
                         "Migrated %s blob_field='%s': %s", self.namespace, self.blob_field, result
                     )
+
+    async def _verify_table(self) -> None:
+        async with self._get_pool().acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = $1"
+                ")",
+                TABLE,
+            )
+            if not exists:
+                raise RuntimeError(f"{TABLE} is missing; initialize it on the primary first")
 
     async def finalize(self) -> None:
         # Pool is owned by pg_pool singleton — don't close it here.

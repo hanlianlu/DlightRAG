@@ -48,7 +48,6 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["docs_format"] == "pending_parse"
     assert kwargs["parse_engine"] == "mineru"
     assert kwargs["process_options"] == "iteP"
-    assert not hasattr(engine, "_hash_index")
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     deps["document_artifacts"].upsert.assert_awaited_once()
     deps["chunk_provenance"].upsert_many.assert_awaited_once()

@@ -137,8 +137,8 @@ async def serve_file(
 
 async def _stream_file(path: Path, chunk_size: int = 64 * 1024) -> AsyncIterator[bytes]:
     """Stream a file in chunks to avoid loading it entirely into memory."""
-    import aiofiles
+    import asyncio
 
-    async with aiofiles.open(path, "rb") as f:
-        while chunk := await f.read(chunk_size):
+    with path.open("rb") as f:
+        while chunk := await asyncio.to_thread(f.read, chunk_size):
             yield chunk

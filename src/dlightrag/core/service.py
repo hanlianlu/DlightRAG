@@ -18,7 +18,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
@@ -146,7 +145,6 @@ class RAGService:
         self.unified: Any = None  # Removed legacy slot; kept for compatibility tests.
         self._lightrag: Any = None  # Direct LightRAG reference
         self._visual_chunks: Any = None  # Visual chunks KV store
-        self._hash_index: Any = None  # Content-hash deduplication index
         self._metadata_index: MetadataIndexProtocol | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
         self._metadata_registry: Any = None
@@ -227,14 +225,9 @@ class RAGService:
         except ImportError:
             raise RuntimeError("asyncpg is required for DlightRAG PostgreSQL storage") from None
 
+        pg_target = self.config.pg_target_for_runtime()
         try:
-            conn = await asyncpg.connect(
-                host=self.config.postgres_host,
-                port=self.config.postgres_port,
-                user=self.config.postgres_user,
-                password=self.config.postgres_password,
-                database=self.config.postgres_database,
-            )
+            conn = await asyncpg.connect(**self.config.pg_connection_kwargs(pg_target))
         except Exception as e:
             raise RuntimeError(
                 "PostgreSQL is required for DlightRAG startup and could not be reached"
@@ -247,6 +240,11 @@ class RAGService:
             )
             if self.config.pg_vector_index_type == "HNSW_HALFVEC":
                 await ensure_pgvector_halfvec(conn)
+
+            if self.config.is_query_role is True:
+                logger.info("Initializing RAG pipelines in read-only query role")
+                await self._do_initialize()
+                return
 
             acquired = await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY)
 
@@ -279,6 +277,7 @@ class RAGService:
         """Create one LightRAG-backed unified pipeline."""
         from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
 
+        self.config.apply_lightrag_backend_env(force=True)
         apply_lightrag_patches()
         await self._do_initialize_unified()
 
@@ -333,9 +332,13 @@ class RAGService:
             kg_chunk_pick_method=config.kg_chunk_pick_method,
             addon_params=self._build_addon_params(config),
         )
-        await lightrag.initialize_storages()
+        read_only = config.is_query_role is True
+        if read_only:
+            await self._initialize_lightrag_storages_read_only(lightrag)
+        else:
+            await lightrag.initialize_storages()
         self._lightrag = lightrag
-        logger.info("LightRAG storages initialized")
+        logger.info("LightRAG storages initialized%s", " (read-only attach)" if read_only else "")
 
         from dlightrag.core.lightrag_stores import LightRAGStores
         from dlightrag.storage.chunk_provenance import PGChunkProvenance
@@ -344,8 +347,8 @@ class RAGService:
         self._lightrag_stores = LightRAGStores(lightrag)
         self._document_artifacts = PGDocumentArtifacts(workspace=config.workspace)
         self._chunk_provenance = PGChunkProvenance(workspace=config.workspace)
-        await self._document_artifacts.initialize()
-        await self._chunk_provenance.initialize()
+        await self._document_artifacts.initialize(read_only=read_only)
+        await self._chunk_provenance.initialize(read_only=read_only)
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
@@ -362,7 +365,8 @@ class RAGService:
         # Post-init verification: ensure AGE graph labels actually exist.
         # Catches stale/corrupted graphs left by previous failed inits
         # (e.g., schema created but vlabels missing due to uncaught errors).
-        await self._verify_graph_labels(lightrag)
+        if not read_only:
+            await self._verify_graph_labels(lightrag)
 
         # Create visual_chunks KV store.
         # LightRAG's PGKVStorage only supports 7 hardcoded namespaces; custom ones
@@ -378,7 +382,7 @@ class RAGService:
             "blob_field": "image_data",
         }
         visual_chunks = PGJsonbKVStorage(**kv_kwargs)
-        await visual_chunks.initialize()
+        await visual_chunks.initialize(read_only=read_only)
         self._visual_chunks = visual_chunks
         logger.info("Visual chunks KV store initialized (PGJsonbKVStorage)")
 
@@ -392,11 +396,8 @@ class RAGService:
         )
         self.retrieval = self._backend
 
-        # Create hash index for deduplication.
-        self._hash_index = await self._create_hash_index(config)
-
         # Initialize metadata index
-        self._metadata_index = await self._create_metadata_index(config)
+        self._metadata_index = await self._create_metadata_index(config, read_only=read_only)
         from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
         from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
@@ -427,7 +428,10 @@ class RAGService:
                 workspace=config.workspace,
                 top_k=config.bm25_top_k,
             )
-            await self._bm25.ensure_index(text_config=config.bm25_text_config)
+            if read_only:
+                await self._bm25.verify_index()
+            else:
+                await self._bm25.ensure_index(text_config=config.bm25_text_config)
 
         from dlightrag.core.retrieval.retriever import UnifiedRetriever
 
@@ -441,25 +445,173 @@ class RAGService:
 
         logger.info("LightRAG main runtime path ready")
 
-    async def _create_hash_index(self, config: DlightragConfig) -> HashIndexProtocol:
-        """Create the PostgreSQL hash index backend."""
-        from dlightrag.core.ingestion.hash_index import PGHashIndex
+    async def _initialize_lightrag_storages_read_only(self, lightrag: Any) -> None:
+        """Attach LightRAG PostgreSQL storages to an existing read-only schema.
 
-        idx = PGHashIndex(workspace=config.workspace)
-        await idx.initialize()
-        logger.info("Hash index: PGHashIndex (PostgreSQL via shared pool)")
-        return idx
+        LightRAG's upstream PG initialization creates extensions, tables, AGE
+        labels, and indexes. Query workers connected to hot standby replicas
+        must not run that path, so we attach the already-constructed storage
+        objects to a read-only PostgreSQLDB pool and verify required tables.
+        """
+        import asyncpg
+        from lightrag.kg.postgres_impl import ClientManager, PostgreSQLDB, namespace_to_table_name
+        from lightrag.lightrag import StoragesStatus
+
+        try:
+            from pgvector.asyncpg import register_vector
+        except ImportError:  # pragma: no cover - pgvector is a runtime dependency here
+            register_vector = None  # type: ignore[assignment]
+
+        db_config = ClientManager.get_config(vector_storage=self.config.vector_storage)
+        db = PostgreSQLDB(db_config)
+
+        async def _init_connection(connection: asyncpg.Connection) -> None:
+            if db.enable_vector and register_vector is not None:
+                await register_vector(connection)
+
+        pool_kwargs: dict[str, Any] = {
+            "user": db.user,
+            "password": db.password,
+            "database": db.database,
+            "host": db.host,
+            "port": db.port,
+            "min_size": 1,
+            "max_size": db.max,
+        }
+        if db.statement_cache_size is not None:
+            pool_kwargs["statement_cache_size"] = int(db.statement_cache_size)
+        ssl_context = db._create_ssl_context()
+        if ssl_context is not None:
+            pool_kwargs["ssl"] = ssl_context
+        elif db.ssl_mode:
+            ssl_mode = str(db.ssl_mode).lower()
+            if ssl_mode in {"require", "prefer"}:
+                pool_kwargs["ssl"] = True
+            elif ssl_mode == "disable":
+                pool_kwargs["ssl"] = False
+        if db.server_settings:
+            settings = {}
+            for pair in str(db.server_settings).split("&"):
+                if "=" in pair:
+                    key, value = pair.split("=", 1)
+                    settings[key] = value
+            if settings:
+                pool_kwargs["server_settings"] = settings
+
+        db.pool = await asyncpg.create_pool(**pool_kwargs, init=_init_connection)
+
+        storages = [
+            lightrag.full_docs,
+            lightrag.text_chunks,
+            lightrag.full_entities,
+            lightrag.full_relations,
+            lightrag.entity_chunks,
+            lightrag.relation_chunks,
+            lightrag.entities_vdb,
+            lightrag.relationships_vdb,
+            lightrag.chunks_vdb,
+            lightrag.chunk_entity_relation_graph,
+            lightrag.llm_response_cache,
+            lightrag.doc_status,
+        ]
+        active_storages = [storage for storage in storages if storage is not None]
+
+        for storage in active_storages:
+            storage.db = db
+            if db.workspace:
+                storage.workspace = db.workspace
+            elif not getattr(storage, "workspace", None):
+                storage.workspace = self.config.workspace
+            if hasattr(storage, "_get_workspace_graph_name"):
+                storage.graph_name = storage._get_workspace_graph_name()
+
+        await self._verify_lightrag_read_only_schema(
+            db=db,
+            storages=active_storages,
+            namespace_to_table_name=namespace_to_table_name,
+        )
+
+        ClientManager._instances["db"] = db
+        ClientManager._instances["ref_count"] = len(active_storages)
+        ClientManager._instances["vector_signature"] = ClientManager._build_vector_signature(
+            db_config,
+            self.config.vector_storage,
+        )
+        lightrag._storages_status = StoragesStatus.INITIALIZED
+
+    async def _verify_lightrag_read_only_schema(
+        self,
+        *,
+        db: Any,
+        storages: list[Any],
+        namespace_to_table_name: Any,
+    ) -> None:
+        """Verify LightRAG read-only attach targets exist without DDL."""
+        if db.pool is None:
+            raise RuntimeError("LightRAG read-only PostgreSQL pool was not created")
+
+        tables: set[str] = set()
+        graph_names: set[str] = set()
+        for storage in storages:
+            table_name = getattr(storage, "table_name", None)
+            if isinstance(table_name, str) and table_name:
+                tables.add(table_name)
+                continue
+            namespace = getattr(storage, "namespace", None)
+            if namespace:
+                mapped = namespace_to_table_name(namespace)
+                if mapped:
+                    tables.add(mapped)
+            graph_name = getattr(storage, "graph_name", None)
+            if isinstance(graph_name, str) and graph_name:
+                graph_names.add(graph_name)
+
+        async with db.pool.acquire() as conn:
+            for table in sorted(tables):
+                try:
+                    await conn.fetchval(f"SELECT 1 FROM {table} LIMIT 1")
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"LightRAG table {table} is missing or unreadable; "
+                        "initialize it on the primary first"
+                    ) from exc
+
+            for graph_name in sorted(graph_names):
+                base_exists = await conn.fetchval(
+                    "SELECT EXISTS("
+                    "  SELECT 1 FROM pg_tables"
+                    "  WHERE schemaname = $1 AND tablename = 'base'"
+                    ")",
+                    graph_name,
+                )
+                directed_exists = await conn.fetchval(
+                    "SELECT EXISTS("
+                    "  SELECT 1 FROM pg_tables"
+                    "  WHERE schemaname = $1 AND tablename = 'DIRECTED'"
+                    ")",
+                    graph_name,
+                )
+                if not base_exists or not directed_exists:
+                    raise RuntimeError(
+                        f"LightRAG AGE graph {graph_name} is missing labels; "
+                        "initialize it on the primary first"
+                    )
 
     async def _create_metadata_index(
         self,
         config: DlightragConfig,
+        *,
+        read_only: bool = False,
     ) -> MetadataIndexProtocol:
         """Create the PostgreSQL metadata index backend."""
         from dlightrag.storage.pg_metadata_index import PGMetadataIndex
 
         idx = PGMetadataIndex(workspace=config.workspace)
-        await idx.initialize()
-        logger.info("Metadata index: PGMetadataIndex (PostgreSQL)")
+        await idx.initialize(read_only=read_only)
+        logger.info(
+            "Metadata index: PGMetadataIndex (PostgreSQL%s)",
+            ", read-only attach" if read_only else "",
+        )
         return idx
 
     def _ensure_initialized(self) -> None:
@@ -467,6 +619,15 @@ class RAGService:
         if not self._initialized:
             raise RuntimeError(
                 "RAGService not initialized. Use 'await RAGService.create()' instead."
+            )
+
+    def _ensure_writable(self, operation: str) -> None:
+        """Raise when a mutating operation is called in query runtime role."""
+        config = getattr(self, "config", None)
+        if config is not None and config.is_query_role is True:
+            raise PermissionError(
+                f"{operation} is not available when runtime_role='query'; "
+                "run it through an ingest/admin worker connected to primary PostgreSQL"
             )
 
     # -- Graph verification ----------------------------------------------------
@@ -583,6 +744,7 @@ class RAGService:
 
         Delegates to the dedicated 6-phase reset module (``dlightrag.core.reset``).
         """
+        self._ensure_writable("reset")
         from dlightrag.core.reset import areset
 
         return await areset(self, keep_files=keep_files, dry_run=dry_run)
@@ -617,6 +779,8 @@ class RAGService:
         Self-initializing: creates the table idempotently if it doesn't exist.
         No advisory lock needed — all DDL is IF NOT EXISTS.
         """
+        if self.config.is_query_role is True:
+            return
         try:
             from dlightrag.storage.pool import pg_pool
 
@@ -664,20 +828,6 @@ class RAGService:
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
 
-        indexed_path = stored_file_path or str(file_path)
-        content_hash: str | None = None
-        if self._hash_index is not None:
-            should_skip, content_hash, reason = await self._hash_index.should_skip_file(
-                file_path, replace=replace
-            )
-            if should_skip:
-                return {
-                    "status": "skipped",
-                    "reason": reason,
-                    "content_hash": content_hash,
-                    "file_path": indexed_path,
-                }
-
         result = await self._ingestion_engine.aingest_file(
             file_path,
             replace=replace,
@@ -689,10 +839,6 @@ class RAGService:
         if hasattr(result, "model_dump"):
             result = result.model_dump()
 
-        if self._hash_index is not None and content_hash and isinstance(result, dict):
-            doc_id = result.get("doc_id")
-            if doc_id:
-                await self._hash_index.register(content_hash, doc_id, indexed_path)
         return result
 
     def _remote_local_path(self, source_type: str, namespace: str, key: str) -> Path:
@@ -866,6 +1012,7 @@ class RAGService:
                 s3: bucket, key, prefix, replace
         """
         self._ensure_initialized()
+        self._ensure_writable("ingest")
         await self._upsert_workspace_meta()
         replace = self._resolve_replace(kwargs.get("replace"))
 
@@ -1122,6 +1269,7 @@ class RAGService:
         """Update (merge) document metadata."""
         from dlightrag.core.retrieval.metadata_fields import normalize_user_metadata
 
+        self._ensure_writable("metadata update")
         if self._metadata_index is None:
             raise RuntimeError("Metadata index not initialized")
         normalized = normalize_user_metadata(
@@ -1149,11 +1297,28 @@ class RAGService:
     # === FILE MANAGEMENT API ===
 
     async def alist_ingested_files(self) -> list[dict[str, Any]]:
-        """List all ingested files."""
+        """List all processed files from LightRAG doc_status."""
         self._ensure_initialized()
-        if self._hash_index is not None:
-            return await self._hash_index.list_all()
-        return []
+        if self._lightrag is None:
+            return []
+
+        from lightrag.base import DocStatus
+
+        try:
+            processed = await self._lightrag.doc_status.get_docs_by_status(DocStatus.PROCESSED)
+        except Exception as exc:
+            logger.warning("Failed to query PROCESSED docs: %s", exc)
+            return []
+
+        return [
+            {
+                "doc_id": doc_id,
+                "file_path": getattr(info, "file_path", "") or "",
+                "status": "processed",
+                "updated_at": str(getattr(info, "updated_at", "")),
+            }
+            for doc_id, info in (processed or {}).items()
+        ]
 
     async def alist_failed_docs(self) -> list[dict[str, Any]]:
         """Return all documents currently in DocStatus.FAILED for this workspace."""
@@ -1186,16 +1351,14 @@ class RAGService:
         :func:`dlightrag.sourcing.uri.parse_remote_uri` to dispatch the right
         ``aingest()`` source type.
 
-        FAILED docs typically aren't registered in ``hash_index`` (the
-        post-ingest ``register()`` call never ran), so the
-        ``purge_stale_for_hash`` short-circuits inside ``replace=True``.
-        To make this endpoint actually drain the FAILED list, we
-        explicitly call ``adelete_by_doc_id`` *before* re-ingest — that
-        drops the FAILED doc_status row and any partial chunks/entities
-        it may have left behind.
+        To make this endpoint actually drain the FAILED list, we explicitly
+        call ``adelete_by_doc_id`` before re-ingest. That drops the FAILED
+        doc_status row and any partial chunks/entities it may have left
+        behind.
 
         Returns a summary dict with counts and per-doc outcomes.
         """
+        self._ensure_writable("retry failed docs")
         from dlightrag.sourcing.uri import parse_remote_uri
 
         failed = await self.alist_failed_docs()
@@ -1220,9 +1383,8 @@ class RAGService:
                 continue
 
             # Drop the FAILED doc_status row before re-ingesting so the next
-            # alist_failed_docs() call no longer returns this doc_id even when
-            # hash_index has no matching entry for purge_stale_for_hash to act
-            # on. Best-effort: a missing doc_id is a no-op upstream.
+            # alist_failed_docs() call no longer returns this doc_id.
+            # Best-effort: a missing doc_id is a no-op upstream.
             if lr is not None:
                 try:
                     await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
@@ -1257,6 +1419,7 @@ class RAGService:
     ) -> list[dict[str, Any]]:
         """Unified file deletion."""
         self._ensure_initialized()
+        self._ensure_writable("delete files")
         del delete_source
         from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
 
@@ -1265,7 +1428,6 @@ class RAGService:
         for identifier in identifiers:
             ctx = await collect_deletion_context(
                 identifier=identifier,
-                hash_index=self._hash_index,
                 lightrag=self._lightrag,
                 metadata_index=self._metadata_index,
             )
@@ -1273,7 +1435,6 @@ class RAGService:
                 ctx=ctx,
                 lightrag=self._lightrag,
                 visual_chunks=self._visual_chunks,
-                hash_index=self._hash_index,
                 metadata_index=self._metadata_index,
                 document_artifacts=self._document_artifacts,
                 chunk_provenance=self._chunk_provenance,

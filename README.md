@@ -199,6 +199,7 @@ All write endpoints accept optional `workspace`; read endpoints accept `workspac
 
 - **Request/response schema** — [`docs/response-schema.md`](docs/response-schema.md) for ingestion parameters, retrieval contexts, sources, media, SSE streaming, citations, and multimodal queries.
 - **Retrieval & answer pipeline** — [`docs/retrieval_answer_mechanism.md`](docs/retrieval_answer_mechanism.md) for LightRAG mix retrieval, direct image search, metadata in-filtering, BM25 fusion, reranking, and answer generation.
+- **Database roles** — [`docs/database-role-architecture.md`](docs/database-role-architecture.md) for primary/replica process roles and read-only query workers.
 
 
 ## Configuration
@@ -355,6 +356,18 @@ DlightRAG's supported core storage stack is PostgreSQL 18 only:
 Default vector indexing uses `pg_vector_index_type: HNSW` with `VECTOR(dim)`.
 `HNSW_HALFVEC` is explicit opt-in and should only be used after deciding the
 workspace's embedding dimension and rebuilding indexes.
+
+For production concurrency, run separate process roles:
+
+```text
+Ingest/admin workers -> primary PostgreSQL
+Query workers        -> hot standby / read replica PostgreSQL
+```
+
+Set `runtime_role: query` on read-only API workers and configure
+`postgres_replica_*`. Query role attaches to existing LightRAG/DlightRAG schema
+without DDL and rejects ingest, delete, metadata update, retry, and reset
+operations. Ingest/admin roles remain primary-only for migrations and writes.
 
 ### Workspaces
 

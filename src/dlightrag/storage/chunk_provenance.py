@@ -43,10 +43,13 @@ class PGChunkProvenance:
         self._workspace = workspace
         self._pool = None
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, read_only: bool = False) -> None:
         from dlightrag.storage.pool import pg_pool
 
         self._pool = await pg_pool.get()
+        if read_only:
+            await self._verify_table()
+            return
         await self._pool.execute(
             f"""
             CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
@@ -68,6 +71,18 @@ class PGChunkProvenance:
         await self._pool.execute(
             f"CREATE INDEX IF NOT EXISTS idx_{TABLE_NAME}_doc ON {TABLE_NAME}(workspace, full_doc_id)"
         )
+
+    async def _verify_table(self) -> None:
+        pool = self._require_pool()
+        exists = await pool.fetchval(
+            "SELECT EXISTS ("
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_name = $1"
+            ")",
+            TABLE_NAME,
+        )
+        if not exists:
+            raise RuntimeError(f"{TABLE_NAME} is missing; initialize it on the primary first")
 
     async def upsert_many(self, records: list[Mapping[str, Any]]) -> None:
         for record in records:

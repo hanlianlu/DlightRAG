@@ -50,9 +50,6 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
     service._lightrag = lightrag
 
     # Mock DlightRAG stores
-    service._hash_index = MagicMock()
-    service._hash_index.clear = AsyncMock()
-
     service._metadata_index = MagicMock()
     service._metadata_index.clear = AsyncMock()
 
@@ -126,11 +123,6 @@ class TestAresetPhase1:
 
 class TestAresetPhase2:
     """Phase 2: DlightRAG domain stores."""
-
-    async def test_clears_hash_index(self) -> None:
-        service = _make_service()
-        await service.areset()
-        service._hash_index.clear.assert_awaited_once()
 
     async def test_clears_metadata_index(self) -> None:
         service = _make_service()
@@ -242,7 +234,7 @@ class TestAresetDryRun:
         assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
         for attr in ("full_docs", "text_chunks"):
             getattr(service._lightrag, attr).drop.assert_not_awaited()
-        service._hash_index.clear.assert_not_awaited()
+        service._metadata_index.clear.assert_not_awaited()
 
 
 class TestAresetErrorHandling:
@@ -255,12 +247,12 @@ class TestAresetErrorHandling:
         result = await service.areset()
 
         # Phase 2 still ran
-        service._hash_index.clear.assert_awaited_once()
+        service._metadata_index.clear.assert_awaited_once()
         assert len(result["errors"]) >= 1
 
     async def test_phase2_error_continues(self) -> None:
         service = _make_service()
-        service._hash_index.clear = AsyncMock(side_effect=RuntimeError("boom"))
+        service._metadata_index.clear = AsyncMock(side_effect=RuntimeError("boom"))
 
         result = await service.areset()
 

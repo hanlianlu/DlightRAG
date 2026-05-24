@@ -118,6 +118,14 @@ class RAGServiceManager:
             return f"{msg}. Check API keys or database credentials."
         return msg
 
+    def _ensure_writable(self, operation: str) -> None:
+        """Fail fast when a mutating API is invoked by a query-role process."""
+        if self._config.is_query_role is True:
+            raise PermissionError(
+                f"{operation} is not available when runtime_role='query'; "
+                "route it to an ingest/admin worker connected to primary PostgreSQL"
+            )
+
     async def _get_service(self, workspace: str) -> RAGService:
         """Get or create a RAGService for a specific workspace. Async-safe.
 
@@ -184,6 +192,7 @@ class RAGServiceManager:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Ingest documents into a specific workspace."""
+        self._ensure_writable("ingest")
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 svc = await self._get_service(workspace)
@@ -200,6 +209,7 @@ class RAGServiceManager:
 
     async def delete_files(self, workspace: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Delete files from a specific workspace."""
+        self._ensure_writable("delete files")
         svc = await self._get_service(workspace)
         return await svc.adelete_files(**kwargs)
 
@@ -210,6 +220,7 @@ class RAGServiceManager:
 
     async def retry_failed_docs(self, workspace: str) -> dict[str, Any]:
         """Retry all FAILED documents in a specific workspace via re-ingest."""
+        self._ensure_writable("retry failed docs")
         svc = await self._get_service(workspace)
         return await svc.aretry_failed_docs()
 
@@ -228,6 +239,7 @@ class RAGServiceManager:
         metadata_policy: MetadataIngestPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
+        self._ensure_writable("metadata update")
         svc = await self._get_service(workspace)
         await svc.aupdate_metadata(doc_id, data, mode=mode, metadata_policy=metadata_policy)
 
@@ -249,6 +261,7 @@ class RAGServiceManager:
         removes local files. After reset, the service is closed and evicted
         from cache.
         """
+        self._ensure_writable("reset")
         if workspace is not None:
             known = await self.list_workspaces()
             if workspace not in known and workspace not in self._services:
@@ -467,16 +480,10 @@ class RAGServiceManager:
         try:
             import asyncpg
 
-            conn = await asyncpg.connect(
-                host=config.postgres_host,
-                port=config.postgres_port,
-                user=config.postgres_user,
-                password=config.postgres_password,
-                database=config.postgres_database,
-            )
+            conn = await asyncpg.connect(**config.pg_connection_kwargs())
             try:
                 rows = await conn.fetch(
-                    "SELECT DISTINCT workspace FROM dlightrag_file_hashes ORDER BY workspace"
+                    "SELECT DISTINCT workspace FROM dlightrag_workspace_meta ORDER BY workspace"
                 )
                 workspaces = [row["workspace"] for row in rows]
                 return workspaces if workspaces else [config.workspace]
@@ -492,13 +499,7 @@ class RAGServiceManager:
         try:
             import asyncpg
 
-            conn = await asyncpg.connect(
-                host=self._config.postgres_host,
-                port=self._config.postgres_port,
-                user=self._config.postgres_user,
-                password=self._config.postgres_password,
-                database=self._config.postgres_database,
-            )
+            conn = await asyncpg.connect(**self._config.pg_connection_kwargs())
             try:
                 for ws in workspaces:
                     row = await conn.fetchrow(

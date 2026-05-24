@@ -28,7 +28,7 @@ L5  core.{lightrag_stores, _lightrag_patches,
 L4  models.{embedding, multimodal_embedding,
             llm, llm_roles, rerank}
     core.retrieval.{metadata_path}
-    core.ingestion.{hash_index, cleanup, policy}
+    core.ingestion.{cleanup, policy}
     core.vlm_ocr
 L3  models.providers                               provider implementations
     storage                                        PostgreSQL domain stores
@@ -68,7 +68,7 @@ L0  prompts, utils                                 pure helpers
 | `citations` | L3 | Citation parsing, source building, highlights, streaming |
 | `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |
 | `core.retrieval.metadata_path` | L4 | Metadata-to-candidate resolver |
-| `core.ingestion.{hash_index,cleanup,policy}` | L4 | Deduplication, cascade cleanup, ingest policy |
+| `core.ingestion.{cleanup,policy}` | L4 | Cascade cleanup and ingest policy |
 | `core.vlm_ocr` | L4 | VLM OCR block helpers |
 | `core.lightrag_stores` | L5 | LightRAG store and sidecar adapter |
 | `core.ingestion.{lightrag_sidecar,direct_image,visual_semantics}` | L5 | Parser sidecars, direct image embedding, visual KG projection |

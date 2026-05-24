@@ -101,16 +101,32 @@ class PGMetadataIndex:
         self._workspace = workspace
         self._pool: Any = None
 
-    async def initialize(self) -> None:
+    async def initialize(self, *, read_only: bool = False) -> None:
         """Create table and indexes. Call once during service startup."""
         from dlightrag.storage.pool import pg_pool
 
         pool = await pg_pool.get()
         self._pool = pool
+        if read_only:
+            await self._verify_table()
+            return
         async with self._pool.acquire() as conn:
             await conn.execute(_CREATE_TABLE)
             for idx_sql in _CREATE_INDEXES:
                 await conn.execute(idx_sql)
+
+    async def _verify_table(self) -> None:
+        async with self._pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT EXISTS ("
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = 'public' AND table_name = 'dlightrag_doc_metadata'"
+                ")"
+            )
+            if not exists:
+                raise RuntimeError(
+                    "dlightrag_doc_metadata is missing; initialize it on the primary first"
+                )
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""

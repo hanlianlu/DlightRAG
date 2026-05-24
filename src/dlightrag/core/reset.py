@@ -102,7 +102,6 @@ async def areset(
 
     # Phase 2: DlightRAG domain stores -- registry
     for name, store, method in (
-        ("hash_index", getattr(service, "_hash_index", None), "clear"),
         ("metadata_index", getattr(service, "_metadata_index", None), "clear"),
         ("document_artifacts", getattr(service, "_document_artifacts", None), "clear"),
         ("chunk_provenance", getattr(service, "_chunk_provenance", None), "clear"),
@@ -286,7 +285,7 @@ async def _list_all_workspaces() -> list[str]:
             return []
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT DISTINCT workspace FROM dlightrag_file_hashes ORDER BY workspace"
+                "SELECT DISTINCT workspace FROM dlightrag_workspace_meta ORDER BY workspace"
             )
         return [r["workspace"] for r in rows]
     except Exception:

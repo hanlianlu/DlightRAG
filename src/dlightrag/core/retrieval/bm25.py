@@ -44,6 +44,16 @@ class PostgresBM25:
                 f"WITH (text_config='{text_config}')"
             )
 
+    async def verify_index(self) -> None:
+        """Verify the BM25 index exists without attempting DDL."""
+        async with self._pool.acquire() as conn:
+            exists = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
+                BM25_INDEX,
+            )
+            if not exists:
+                raise RuntimeError(f"{BM25_INDEX} is missing; create it on the primary first")
+
     async def search(
         self,
         query: str,

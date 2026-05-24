@@ -158,6 +158,8 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.pg_hnsw_m == 32
     assert cfg.pg_hnsw_ef_construction == 256
     assert cfg.pg_hnsw_ef_search == 256
+    assert cfg.runtime_role == "ingest"
+    assert cfg.pg_target_for_runtime() == "primary"
 
 
 @pytest.mark.parametrize(
@@ -236,6 +238,57 @@ def test_role_config_uses_lightrag_role_names() -> None:
 
     assert cfg.llm.roles.keyword is not None
     assert cfg.llm.roles.keyword.model == "gpt-4.1-mini"
+
+
+def test_pg_connection_kwargs_uses_primary_compat_fields_by_default() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        postgres_host="primary",
+        postgres_port=6543,
+        postgres_user="writer",
+        postgres_password="writer-pass",
+        postgres_database="dlight",
+    )
+
+    assert cfg.pg_connection_kwargs() == {
+        "host": "primary",
+        "port": 6543,
+        "user": "writer",
+        "password": "writer-pass",
+        "database": "dlight",
+    }
+
+
+def test_query_runtime_uses_replica_with_primary_fallback() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        runtime_role="query",
+        postgres_host="primary",
+        postgres_user="writer",
+        postgres_replica_host="replica",
+        postgres_replica_user="reader",
+    )
+
+    assert cfg.pg_target_for_runtime() == "replica"
+    assert cfg.pg_connection_kwargs() == {
+        "host": "replica",
+        "port": cfg.postgres_port,
+        "user": "reader",
+        "password": cfg.postgres_password,
+        "database": cfg.postgres_database,
+    }
 
 
 @pytest.mark.parametrize("legacy_field", ["ingest", "keywords"])
