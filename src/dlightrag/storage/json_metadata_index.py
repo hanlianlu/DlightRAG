@@ -22,19 +22,6 @@ logger = logging.getLogger(__name__)
 # Fields excluded from get_field_schema output — structural, not user-filterable
 _SCHEMA_EXCLUDE = frozenset({"custom_metadata", "ingested_at", "workspace", "doc_id"})
 
-# Trigram fields → case-insensitive substring match in JSON fallback
-_TRIGRAM_FIELDS = frozenset(f.field_id for f in METADATA_FIELDS if f.trigram)
-
-# Exact match fields (btree string columns) → case-insensitive exact match
-_EXACT_FIELDS = frozenset(
-    f.field_id
-    for f in METADATA_FIELDS
-    if f.filterable
-    and not f.trigram
-    and f.field_id not in {"creation_date", "rag_mode", "custom_metadata"}
-)
-
-
 class JsonMetadataIndex:
     """JSON file-based document metadata index.
 
@@ -128,9 +115,8 @@ class JsonMetadataIndex:
         """Return doc_ids matching the given filters.
 
         Match strategy mirrors PGMetadataIndex:
-        - Trigram fields (filename, filename_stem, doc_title) → case-insensitive substring
-        - Exact fields (file_extension, doc_author) → case-insensitive exact
-        - filename_pattern → strip ``%`` wildcards, substring match
+        - Exact fields → case-insensitive exact
+        - filename_pattern → explicit pattern, implemented as case-insensitive substring
         - Date range → Python datetime comparison
         - rag_mode → exact match
         - custom → dict containment check
@@ -147,19 +133,8 @@ class JsonMetadataIndex:
 
     def _matches(self, row: dict[str, Any], filters: MetadataFilter) -> bool:  # noqa: C901
         """Check whether a single row satisfies all filter criteria."""
-        # Trigram fields — case-insensitive substring
-        for attr in ("filename", "filename_stem", "doc_title"):
-            value = getattr(filters, attr, None)
-            if value is None:
-                continue
-            stored = row.get(attr)
-            if stored is None:
-                return False
-            if value.lower() not in stored.lower():
-                return False
-
         # Exact match fields — case-insensitive exact
-        for attr in ("file_extension", "doc_author"):
+        for attr in ("filename", "filename_stem", "file_extension", "doc_title", "doc_author"):
             value = getattr(filters, attr, None)
             if value is None:
                 continue

@@ -16,8 +16,6 @@ from dlightrag.core.retrieval.models import MetadataFilter
 
 logger = logging.getLogger(__name__)
 
-_TRIGRAM_THRESHOLD = 0.3
-
 
 def _build_create_table() -> str:
     cols = [
@@ -35,18 +33,30 @@ _CREATE_TABLE = _build_create_table()
 
 def _build_create_indexes() -> list[str]:
     indexes = []
-    idx_mapping = {
-        "gin_trgm": " USING gin ({field} gin_trgm_ops)",
-        "btree": " ({field})",
-        "gin": " USING gin ({field})",
-    }
     for f in METADATA_FIELDS:
-        if f.index_type and f.index_type in idx_mapping:
+        idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
+        if idx_clause is not None:
             indexes.append(
                 f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
-                f"ON dlightrag_doc_metadata{idx_mapping[f.index_type].format(field=f.field_id)}"
+                f"ON dlightrag_doc_metadata{idx_clause}"
             )
     return indexes
+
+
+def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | None:
+    if index_type == "gin":
+        return f" USING gin ({field_id})"
+    if index_type != "btree":
+        return None
+
+    if _is_string_pg_type(pg_type):
+        return f" (LOWER({field_id}))"
+    return f" ({field_id})"
+
+
+def _is_string_pg_type(pg_type: str) -> bool:
+    normalized = pg_type.upper()
+    return normalized.startswith(("TEXT", "VARCHAR", "CHAR", "CHARACTER"))
 
 
 _CREATE_INDEXES = _build_create_indexes()
@@ -75,7 +85,7 @@ class PGMetadataIndex:
     """PostgreSQL-backed document metadata index.
 
     Stores system-extracted and user-defined metadata per document.
-    Supports exact match, fuzzy match (pg_trgm), range, and JSONB queries.
+    Supports exact match, explicit pattern, range, and JSONB queries.
     """
 
     def __init__(self, workspace: str = "default") -> None:
@@ -91,13 +101,7 @@ class PGMetadataIndex:
         async with self._pool.acquire() as conn:
             await conn.execute(_CREATE_TABLE)
             for idx_sql in _CREATE_INDEXES:
-                try:
-                    await conn.execute(idx_sql)
-                except Exception:
-                    logger.warning(
-                        "Index creation skipped (pg_trgm may not be available): %s",
-                        idx_sql[:60],
-                    )
+                await conn.execute(idx_sql)
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
@@ -127,12 +131,11 @@ class PGMetadataIndex:
         """Query for doc_ids matching the given filters.
 
         Match strategy per field type:
-        - trigram fields: similarity() > threshold (fuzzy, handles typos/variants)
-        - btree string fields: exact match (case-insensitive)
+        - string fields: exact match (case-insensitive)
         - integer fields: exact match
         - date fields: range queries (from/to)
         - JSONB: containment (@>)
-        - filename_pattern: ILIKE with user-provided wildcards
+        - filename_pattern: explicit ILIKE with user/LLM-provided wildcards
         """
         conditions: list[str] = ["workspace = $1"]
         params: list[Any] = [self._workspace]
@@ -146,14 +149,11 @@ class PGMetadataIndex:
             fdef = field_by_id(attr)
             if fdef is None:
                 continue
-            if fdef.trigram:
-                conditions.append(f"similarity({attr}, ${idx}) > {_TRIGRAM_THRESHOLD}")
-                params.append(value)
-            elif fdef.pg_type.upper() in {"INTEGER", "BIGINT", "SMALLINT", "INT"}:
+            if fdef.pg_type.upper() in {"INTEGER", "BIGINT", "SMALLINT", "INT"}:
                 conditions.append(f"{attr} = ${idx}")
                 params.append(value)
             else:
-                # btree / non-trigram string: exact case-insensitive
+                # Deterministic metadata matching: exact case-insensitive.
                 conditions.append(f"LOWER({attr}) = LOWER(${idx})")
                 params.append(value)
             idx += 1
@@ -191,38 +191,6 @@ class PGMetadataIndex:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
 
-        doc_ids = [r["doc_id"] for r in rows]
-
-        # Fallback: if strict trigram/exact returned 0, retry with ILIKE
-        if not doc_ids and len(conditions) > 1:
-            doc_ids = await self._fallback_ilike_query(filters)
-
-        return doc_ids
-
-    async def _fallback_ilike_query(self, filters: MetadataFilter) -> list[str]:
-        """Relaxed fallback: retry text fields with ILIKE instead of trigram/exact."""
-        conditions: list[str] = ["workspace = $1"]
-        params: list[Any] = [self._workspace]
-        idx = 2
-
-        for attr in ("filename", "doc_title", "doc_author"):
-            value = getattr(filters, attr, None)
-            if value is None:
-                continue
-            conditions.append(f"{attr} ILIKE ${idx}")
-            params.append(f"%{value}%")
-            idx += 1
-
-        if len(conditions) <= 1:
-            return []
-
-        where = " AND ".join(conditions)
-        sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
-
-        if rows:
-            logger.info("Metadata fallback (ILIKE): %d doc(s) found", len(rows))
         return [r["doc_id"] for r in rows]
 
     async def get(self, doc_id: str) -> dict[str, Any] | None:

@@ -81,21 +81,30 @@ class TestCRUD:
 
 class TestQuery:
     @pytest.mark.asyncio
-    async def test_query_by_filename_substring(self, index: JsonMetadataIndex) -> None:
-        """Trigram fields use case-insensitive substring matching."""
+    async def test_query_by_filename_exact(self, index: JsonMetadataIndex) -> None:
+        """Structured filename filters use case-insensitive exact matching."""
         await index.upsert("doc1", {"filename": "Annual_Report_2025.pdf"})
         await index.upsert("doc2", {"filename": "budget.xlsx"})
 
-        result = await index.query(MetadataFilter(filename="report"))
+        result = await index.query(MetadataFilter(filename="annual_report_2025.pdf"))
         assert result == ["doc1"]
 
     @pytest.mark.asyncio
-    async def test_query_by_filename_stem_substring(self, index: JsonMetadataIndex) -> None:
+    async def test_query_by_filename_stem_exact(self, index: JsonMetadataIndex) -> None:
         await index.upsert("doc1", {"filename_stem": "Annual_Report_2025"})
         await index.upsert("doc2", {"filename_stem": "budget"})
 
-        result = await index.query(MetadataFilter(filename_stem="report"))
+        result = await index.query(MetadataFilter(filename_stem="annual_report_2025"))
         assert result == ["doc1"]
+
+    @pytest.mark.asyncio
+    async def test_structured_filename_filter_does_not_substring_match(
+        self, index: JsonMetadataIndex
+    ) -> None:
+        await index.upsert("doc1", {"filename": "Annual_Report_2025.pdf"})
+
+        result = await index.query(MetadataFilter(filename="report"))
+        assert result == []
 
     @pytest.mark.asyncio
     async def test_query_by_exact_extension(self, index: JsonMetadataIndex) -> None:
@@ -108,7 +117,7 @@ class TestQuery:
     @pytest.mark.asyncio
     async def test_query_case_insensitive(self, index: JsonMetadataIndex) -> None:
         await index.upsert("doc1", {"filename": "Report.PDF"})
-        result = await index.query(MetadataFilter(filename="report"))
+        result = await index.query(MetadataFilter(filename="report.pdf"))
         assert result == ["doc1"]
 
     @pytest.mark.asyncio

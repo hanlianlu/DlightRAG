@@ -27,6 +27,16 @@ Hard decisions:
 - Document tables and equations use LightRAG's own multimodal document handling.
 - Native images and document-extracted image sidecar assets use direct multimodal image embedding.
 
+PostgreSQL extension requirements are layered:
+
+| Layer | Extension | Reason |
+|---|---|---|
+| LightRAG vector storage | `vector` / pgvector | `PGVectorStorage` vector columns and HNSW search. |
+| LightRAG graph storage | `age` / Apache AGE | `PGGraphStorage` knowledge graph storage. |
+| DlightRAG BM25 hybrid | `pg_textsearch` | BM25 index/operator used by DlightRAG lexical retrieval. |
+
+The "two plugins plus PG18" memory applies to LightRAG's core PG storage (`vector` + `age`). DlightRAG's BM25 hybrid makes `pg_textsearch` a third required extension for our target runtime. Metadata filtering remains LLM-assisted and intent-aware, but the matching layer is deterministic: exact normalized fields, date ranges, JSONB containment, and explicit filename patterns only. DlightRAG should not require or install fuzzy metadata extensions.
+
 ---
 
 ## 2. Why This Changes the Architecture
@@ -192,6 +202,8 @@ Existing `PGMetadataIndex` remains the document-level filter source. It continue
 - system metadata such as filename, extension, size, title, author, dates, and content hash;
 - user metadata;
 - parser metadata such as `parse_engine`, `process_options`, `artifact_status`, and source kind.
+
+The LLM may infer structured filters from natural language, but storage executes them deterministically. String filters use normalized case-insensitive exact matching backed by `LOWER(field)` btree expression indexes; partial file references must be represented explicitly as filename patterns.
 
 The old `rag_mode` metadata should be removed. If a field is needed for observability, use `ingest_strategy="lightrag_sidecar_unified"`.
 

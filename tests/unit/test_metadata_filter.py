@@ -29,6 +29,21 @@ class TestMetadataFilter:
         f = MetadataFilter(file_extension=".png")
         assert not f.is_empty()
 
+    def test_file_extension_is_normalized(self) -> None:
+        f = MetadataFilter(file_extension=" .PDF ")
+        assert f.file_extension == "pdf"
+
+    def test_text_filters_are_trimmed(self) -> None:
+        f = MetadataFilter(
+            filename=" report.pdf ",
+            doc_title=" Annual Report ",
+            doc_author=" Zhang San ",
+        )
+
+        assert f.filename == "report.pdf"
+        assert f.doc_title == "Annual Report"
+        assert f.doc_author == "Zhang San"
+
     def test_date_range_makes_non_empty(self) -> None:
         f = MetadataFilter(date_from=datetime(2024, 1, 1))
         assert not f.is_empty()
