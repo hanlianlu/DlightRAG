@@ -6,6 +6,8 @@
 
 **Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using `teP` by default; native images and parser-extracted drawing/image assets are embedded directly through DlightRAG's multimodal embedding provider. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
 
+**Sidecar Boundary:** LightRAG sidecar files are the canonical parser artifacts. DlightRAG must not create a second filesystem sidecar format. It reads LightRAG sidecars through an adapter and stores only PostgreSQL artifact references, metadata, chunk provenance, and direct-image chunk mappings.
+
 **Tech Stack:** Python 3.12, LightRAG from `HKUDS/LightRAG@main`, PostgreSQL 18.4 baseline, pgvector, Apache AGE `PG18`, pg_textsearch, asyncpg, httpx, pytest.
 
 ---
@@ -33,10 +35,10 @@ Create:
 
 - `src/dlightrag/storage/postgres_version.py` validates PostgreSQL server version.
 - `src/dlightrag/core/lightrag_stores.py` centralizes LightRAG private storage access and precomputed vector writes.
-- `src/dlightrag/storage/document_artifacts.py` stores document-level sidecar artifact locations in PostgreSQL.
-- `src/dlightrag/storage/chunk_metadata.py` stores chunk-level sidecar and modality provenance in PostgreSQL.
+- `src/dlightrag/storage/document_artifacts.py` stores document-level LightRAG sidecar URI/path references in PostgreSQL.
+- `src/dlightrag/storage/chunk_provenance.py` stores chunk-level sidecar references, modality, asset, page, and bbox provenance in PostgreSQL.
 - `src/dlightrag/models/multimodal_embedding.py` provides text/image embedding over the existing provider registry.
-- `src/dlightrag/core/ingestion/sidecar.py` normalizes LightRAG/MinerU/Docling sidecar files.
+- `src/dlightrag/core/ingestion/lightrag_sidecar.py` adapts canonical LightRAG sidecar files into typed references without writing DlightRAG sidecar files.
 - `src/dlightrag/core/ingestion/direct_image.py` builds direct-image chunk specs and vectors.
 - `src/dlightrag/core/ingestion/engine.py` becomes the single ingestion orchestrator.
 - `src/dlightrag/core/retrieval/bm25.py` implements PostgreSQL BM25 search.
@@ -810,11 +812,11 @@ git commit -m "feat: require multimodal embedding provider"
 **Files:**
 - Create: `src/dlightrag/core/lightrag_stores.py`
 - Create: `src/dlightrag/storage/document_artifacts.py`
-- Create: `src/dlightrag/storage/chunk_metadata.py`
+- Create: `src/dlightrag/storage/chunk_provenance.py`
 - Modify: `src/dlightrag/core/compat_guard.py`
 - Test: `tests/unit/test_lightrag_stores.py`
 - Test: `tests/unit/test_document_artifacts.py`
-- Test: `tests/unit/test_chunk_metadata.py`
+- Test: `tests/unit/test_chunk_provenance.py`
 
 - [ ] **Step 1: Write adapter contract tests**
 
@@ -861,16 +863,16 @@ def test_lightrag_stores_reports_missing_surfaces() -> None:
 
 - [ ] **Step 2: Write PG store shape tests**
 
-Create `tests/unit/test_chunk_metadata.py` with pure validation tests:
+Create `tests/unit/test_chunk_provenance.py` with pure validation tests:
 
 ```python
 import pytest
 
-from dlightrag.storage.chunk_metadata import validate_chunk_metadata_record
+from dlightrag.storage.chunk_provenance import validate_chunk_provenance_record
 
 
-def test_chunk_metadata_accepts_native_image() -> None:
-    validate_chunk_metadata_record(
+def test_chunk_provenance_accepts_native_image() -> None:
+    validate_chunk_provenance_record(
         {
             "chunk_id": "chunk-native-1",
             "full_doc_id": "doc-1",
@@ -880,9 +882,9 @@ def test_chunk_metadata_accepts_native_image() -> None:
     )
 
 
-def test_chunk_metadata_rejects_unknown_kind() -> None:
+def test_chunk_provenance_rejects_unknown_kind() -> None:
     with pytest.raises(ValueError, match="embedding_input_kind"):
-        validate_chunk_metadata_record(
+        validate_chunk_provenance_record(
             {
                 "chunk_id": "chunk-1",
                 "full_doc_id": "doc-1",
@@ -896,7 +898,7 @@ def test_chunk_metadata_rejects_unknown_kind() -> None:
 Run:
 
 ```bash
-uv run pytest tests/unit/test_lightrag_stores.py tests/unit/test_chunk_metadata.py -v
+uv run pytest tests/unit/test_lightrag_stores.py tests/unit/test_chunk_provenance.py -v
 ```
 
 Expected: import failures for the new modules.
@@ -983,7 +985,7 @@ class LightRAGStores:
 
 - [ ] **Step 5: Create PG document artifacts store**
 
-Create `src/dlightrag/storage/document_artifacts.py` using the DDL from the spec. The class must expose these methods with working PostgreSQL implementations:
+Create `src/dlightrag/storage/document_artifacts.py` using the DDL from the spec. This is a registry of LightRAG sidecar locations and parser provenance; it must not copy or rewrite sidecar files. The class must expose these methods with working PostgreSQL implementations:
 
 ```python
 class PGDocumentArtifacts:
@@ -1018,9 +1020,9 @@ class PGDocumentArtifacts:
 
 Replace the method bodies above with the SQL-backed body in the same step. Use `dlightrag.storage.pool.pg_pool` for the pool and table name `dlightrag_document_artifacts`.
 
-- [ ] **Step 6: Create PG chunk metadata store**
+- [ ] **Step 6: Create PG chunk provenance store**
 
-Create `src/dlightrag/storage/chunk_metadata.py` with constants:
+Create `src/dlightrag/storage/chunk_provenance.py` with constants:
 
 ```python
 EMBEDDING_INPUT_KINDS = frozenset({"text", "image", "multimodal"})
@@ -1030,7 +1032,7 @@ SIDECAR_TYPES = frozenset({"block", "drawing", "table", "equation", "native_imag
 Expose:
 
 ```python
-def validate_chunk_metadata_record(record: Mapping[str, Any]) -> None:
+def validate_chunk_provenance_record(record: Mapping[str, Any]) -> None:
     kind = record.get("embedding_input_kind")
     if kind not in EMBEDDING_INPUT_KINDS:
         raise ValueError(f"embedding_input_kind must be one of {sorted(EMBEDDING_INPUT_KINDS)}")
@@ -1042,7 +1044,7 @@ def validate_chunk_metadata_record(record: Mapping[str, Any]) -> None:
     if not record.get("full_doc_id"):
         raise ValueError("full_doc_id is required")
 
-class PGChunkMetadata:
+class PGChunkProvenance:
     def __init__(self, workspace: str = "default") -> None:
         self._workspace = workspace
         self._pool = None
@@ -1054,7 +1056,7 @@ class PGChunkMetadata:
 
     async def upsert_many(self, records: list[Mapping[str, Any]]) -> None:
         for record in records:
-            validate_chunk_metadata_record(record)
+            validate_chunk_provenance_record(record)
 
     async def get_batch(self, chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
         return {}
@@ -1068,7 +1070,7 @@ class PGChunkMetadata:
 
     async def clear(self) -> None:
         if self._pool is None:
-            raise RuntimeError("PGChunkMetadata is not initialized")
+            raise RuntimeError("PGChunkProvenance is not initialized")
 ```
 
 - [ ] **Step 7: Wire stores into service**
@@ -1078,7 +1080,7 @@ In `src/dlightrag/core/service.py`, add instance fields:
 ```python
 self._lightrag_stores: LightRAGStores | None = None
 self._document_artifacts: PGDocumentArtifacts | None = None
-self._chunk_metadata: PGChunkMetadata | None = None
+self._chunk_provenance: PGChunkProvenance | None = None
 ```
 
 After `await lightrag.initialize_storages()`:
@@ -1086,9 +1088,9 @@ After `await lightrag.initialize_storages()`:
 ```python
 self._lightrag_stores = LightRAGStores(lightrag)
 self._document_artifacts = PGDocumentArtifacts(workspace=config.workspace)
-self._chunk_metadata = PGChunkMetadata(workspace=config.workspace)
+self._chunk_provenance = PGChunkProvenance(workspace=config.workspace)
 await self._document_artifacts.initialize()
-await self._chunk_metadata.initialize()
+await self._chunk_provenance.initialize()
 ```
 
 - [ ] **Step 8: Run Task 4 tests**
@@ -1096,7 +1098,7 @@ await self._chunk_metadata.initialize()
 Run:
 
 ```bash
-uv run pytest tests/unit/test_lightrag_stores.py tests/unit/test_document_artifacts.py tests/unit/test_chunk_metadata.py tests/unit/test_compat_guard.py -v
+uv run pytest tests/unit/test_lightrag_stores.py tests/unit/test_document_artifacts.py tests/unit/test_chunk_provenance.py tests/unit/test_compat_guard.py -v
 ```
 
 Expected: selected tests pass.
@@ -1104,53 +1106,53 @@ Expected: selected tests pass.
 - [ ] **Step 9: Commit Task 4**
 
 ```bash
-git add src/dlightrag/core/lightrag_stores.py src/dlightrag/storage/document_artifacts.py src/dlightrag/storage/chunk_metadata.py src/dlightrag/core/service.py src/dlightrag/core/compat_guard.py tests/unit/test_lightrag_stores.py tests/unit/test_document_artifacts.py tests/unit/test_chunk_metadata.py
+git add src/dlightrag/core/lightrag_stores.py src/dlightrag/storage/document_artifacts.py src/dlightrag/storage/chunk_provenance.py src/dlightrag/core/service.py src/dlightrag/core/compat_guard.py tests/unit/test_lightrag_stores.py tests/unit/test_document_artifacts.py tests/unit/test_chunk_provenance.py
 git commit -m "feat: add lightrag store adapter and provenance stores"
 ```
 
 ---
 
-### Task 5: Unified Sidecar Ingestion
+### Task 5: Unified LightRAG Sidecar Ingestion
 
 **Files:**
-- Create: `src/dlightrag/core/ingestion/sidecar.py`
+- Create: `src/dlightrag/core/ingestion/lightrag_sidecar.py`
 - Create: `src/dlightrag/core/ingestion/direct_image.py`
 - Create: `src/dlightrag/core/ingestion/engine.py`
 - Modify: `src/dlightrag/core/service.py`
 - Modify: `src/dlightrag/core/ingestion/hash_index.py`
-- Test: `tests/unit/test_sidecar.py`
+- Test: `tests/unit/test_lightrag_sidecar.py`
 - Test: `tests/unit/test_unified_ingestion_engine.py`
 - Test: `tests/unit/test_direct_image_ingest.py`
 
-- [ ] **Step 1: Write sidecar normalization tests**
+- [ ] **Step 1: Write LightRAG sidecar adapter tests**
 
-Create `tests/unit/test_sidecar.py`:
+Create `tests/unit/test_lightrag_sidecar.py`:
 
 ```python
 import json
 
-from dlightrag.core.ingestion.sidecar import collect_sidecar_units
+from dlightrag.core.ingestion.lightrag_sidecar import collect_sidecar_refs
 
 
-def test_collects_drawing_table_equation_units(tmp_path) -> None:
+def test_collects_drawing_table_equation_refs(tmp_path) -> None:
     artifact_dir = tmp_path / "doc"
     artifact_dir.mkdir()
-    (artifact_dir / "drawings.json").write_text(
+    (artifact_dir / "sample.drawings.json").write_text(
         json.dumps([{"id": "fig-1", "asset_path": "media/fig.png", "page": 2}]),
         encoding="utf-8",
     )
-    (artifact_dir / "tables.json").write_text(
+    (artifact_dir / "sample.tables.json").write_text(
         json.dumps([{"id": "table-1", "llm_analyze_result": {"status": "success"}}]),
         encoding="utf-8",
     )
-    (artifact_dir / "equations.json").write_text(
+    (artifact_dir / "sample.equations.json").write_text(
         json.dumps([{"id": "eq-1", "llm_analyze_result": {"status": "success"}}]),
         encoding="utf-8",
     )
 
-    units = collect_sidecar_units(artifact_dir)
+    refs = collect_sidecar_refs(artifact_dir)
 
-    assert [(u.sidecar_type, u.sidecar_id) for u in units] == [
+    assert [(r.sidecar_type, r.sidecar_id) for r in refs] == [
         ("drawing", "fig-1"),
         ("table", "table-1"),
         ("equation", "eq-1"),
@@ -1185,7 +1187,7 @@ async def test_document_ingest_uses_lightrag_pending_parse_teP(tmp_path: Path) -
         stores=stores,
         metadata_index=metadata,
         document_artifacts=artifacts,
-        chunk_metadata=chunks,
+        chunk_provenance=chunks,
         hash_index=hash_index,
         multimodal_embedder=AsyncMock(),
         workspace="default",
@@ -1206,18 +1208,18 @@ async def test_document_ingest_uses_lightrag_pending_parse_teP(tmp_path: Path) -
 Run:
 
 ```bash
-uv run pytest tests/unit/test_sidecar.py tests/unit/test_unified_ingestion_engine.py -v
+uv run pytest tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py -v
 ```
 
 Expected: import failures for the new ingestion modules.
 
-- [ ] **Step 4: Create sidecar normalization module**
+- [ ] **Step 4: Create LightRAG sidecar adapter module**
 
-Create `src/dlightrag/core/ingestion/sidecar.py`:
+Create `src/dlightrag/core/ingestion/lightrag_sidecar.py`:
 
 ```python
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Normalize LightRAG parser sidecars into DlightRAG sidecar units."""
+"""Read canonical LightRAG parser sidecars into typed references."""
 
 from __future__ import annotations
 
@@ -1228,7 +1230,7 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class SidecarUnit:
+class LightRAGSidecarRef:
     sidecar_type: str
     sidecar_id: str
     asset_path: Path | None = None
@@ -1237,35 +1239,33 @@ class SidecarUnit:
     payload: dict[str, Any] | None = None
 
 
-def collect_sidecar_units(artifact_dir: Path) -> list[SidecarUnit]:
-    units: list[SidecarUnit] = []
-    for sidecar_type, filename in (
-        ("drawing", "drawings.json"),
-        ("table", "tables.json"),
-        ("equation", "equations.json"),
+def collect_sidecar_refs(artifact_dir: Path) -> list[LightRAGSidecarRef]:
+    refs: list[LightRAGSidecarRef] = []
+    for sidecar_type, pattern in (
+        ("drawing", "*.drawings.json"),
+        ("table", "*.tables.json"),
+        ("equation", "*.equations.json"),
     ):
-        path = artifact_dir / filename
-        if not path.exists():
-            continue
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            items = data.get("items", [])
-        else:
-            items = data
-        for index, item in enumerate(items):
-            sidecar_id = str(item.get("id") or item.get("uid") or f"{sidecar_type}-{index}")
-            raw_asset = item.get("asset_path") or item.get("image_path")
-            units.append(
-                SidecarUnit(
-                    sidecar_type=sidecar_type,
-                    sidecar_id=sidecar_id,
-                    asset_path=(artifact_dir / raw_asset).resolve() if raw_asset else None,
-                    page_number=item.get("page") or item.get("page_number"),
-                    bbox=item.get("bbox"),
-                    payload=item,
+        for path in sorted(artifact_dir.glob(pattern)):
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                items = data.get("items", [])
+            else:
+                items = data
+            for index, item in enumerate(items):
+                sidecar_id = str(item.get("id") or item.get("uid") or f"{sidecar_type}-{index}")
+                raw_asset = item.get("asset_path") or item.get("image_path")
+                refs.append(
+                    LightRAGSidecarRef(
+                        sidecar_type=sidecar_type,
+                        sidecar_id=sidecar_id,
+                        asset_path=(artifact_dir / raw_asset).resolve() if raw_asset else None,
+                        page_number=item.get("page") or item.get("page_number"),
+                        bbox=item.get("bbox"),
+                        payload=item,
+                    )
                 )
-            )
-    return units
+    return refs
 ```
 
 - [ ] **Step 5: Create direct image helper**
@@ -1283,35 +1283,35 @@ from typing import Any
 
 from PIL import Image
 
-from dlightrag.core.ingestion.sidecar import SidecarUnit
+from dlightrag.core.ingestion.lightrag_sidecar import LightRAGSidecarRef
 
 
-def direct_image_chunk_id(workspace: str, full_doc_id: str, unit: SidecarUnit) -> str:
-    return f"{workspace}:{full_doc_id}:sidecar:{unit.sidecar_type}:{unit.sidecar_id}"
+def direct_image_chunk_id(workspace: str, full_doc_id: str, ref: LightRAGSidecarRef) -> str:
+    return f"{workspace}:{full_doc_id}:sidecar:{ref.sidecar_type}:{ref.sidecar_id}"
 
 
 async def build_direct_image_chunk(
     *,
     workspace: str,
     full_doc_id: str,
-    unit: SidecarUnit,
+    ref: LightRAGSidecarRef,
     embedder: Any,
     text_content: str,
 ) -> tuple[str, dict[str, Any], list[float]]:
-    if unit.asset_path is None:
-        raise ValueError(f"{unit.sidecar_type}:{unit.sidecar_id} has no asset_path")
-    image = Image.open(unit.asset_path).convert("RGB")
+    if ref.asset_path is None:
+        raise ValueError(f"{ref.sidecar_type}:{ref.sidecar_id} has no asset_path")
+    image = Image.open(ref.asset_path).convert("RGB")
     vector = (await embedder.embed_images([image]))[0]
-    chunk_id = direct_image_chunk_id(workspace, full_doc_id, unit)
+    chunk_id = direct_image_chunk_id(workspace, full_doc_id, ref)
     row = {
         "content": text_content,
-        "file_path": str(unit.asset_path),
+        "file_path": str(ref.asset_path),
     }
     return chunk_id, row, vector
 
 
-def native_image_unit(path: Path) -> SidecarUnit:
-    return SidecarUnit(
+def native_image_ref(path: Path) -> LightRAGSidecarRef:
+    return LightRAGSidecarRef(
         sidecar_type="native_image",
         sidecar_id=path.stem,
         asset_path=path.resolve(),
@@ -1347,7 +1347,7 @@ After processing:
 ```python
 doc_status = await self._lightrag.doc_status.get_by_id(doc_id)
 light_chunks = doc_status.get("chunks_list", []) if doc_status else []
-await self._chunk_metadata.upsert_many(
+await self._chunk_provenance.upsert_many(
     [
         {
             "chunk_id": chunk_id,
@@ -1360,7 +1360,7 @@ await self._chunk_metadata.upsert_many(
 )
 ```
 
-For drawing units, use `build_direct_image_chunk()` and `stores.upsert_chunks_with_vectors()`.
+For drawing refs, use `build_direct_image_chunk()` and `stores.upsert_chunks_with_vectors()`.
 
 - [ ] **Step 7: Wire engine into service**
 
@@ -1374,7 +1374,7 @@ self._backend = UnifiedIngestionEngine(
     stores=self._lightrag_stores,
     metadata_index=self._metadata_index,
     document_artifacts=self._document_artifacts,
-    chunk_metadata=self._chunk_metadata,
+    chunk_provenance=self._chunk_provenance,
     hash_index=self._hash_index,
     multimodal_embedder=multimodal_embedder,
     workspace=config.workspace,
@@ -1390,7 +1390,7 @@ Rename config `parser_process_options` if the implementation chooses a flat fiel
 Run:
 
 ```bash
-uv run pytest tests/unit/test_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py -v
+uv run pytest tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py -v
 ```
 
 Expected: selected tests pass.
@@ -1398,7 +1398,7 @@ Expected: selected tests pass.
 - [ ] **Step 9: Commit Task 5**
 
 ```bash
-git add src/dlightrag/core/ingestion src/dlightrag/core/service.py tests/unit/test_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py
+git add src/dlightrag/core/ingestion src/dlightrag/core/service.py tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py
 git commit -m "feat: ingest through lightrag sidecars"
 ```
 
@@ -1433,7 +1433,7 @@ async def test_none_candidate_set_is_no_filter() -> None:
         assert _active_filter.get() is None
 ```
 
-- [ ] **Step 2: Write metadata path chunk metadata test**
+- [ ] **Step 2: Write metadata path chunk provenance test**
 
 Update `tests/unit/test_metadata_path.py`:
 
@@ -1442,15 +1442,15 @@ from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
-async def test_metadata_retrieve_uses_chunk_metadata() -> None:
+async def test_metadata_retrieve_uses_chunk_provenance() -> None:
     metadata_index = AsyncMock()
     metadata_index.query.return_value = ["doc-1"]
-    chunk_metadata = AsyncMock()
-    chunk_metadata.chunk_ids_for_docs.return_value = ["chunk-a", "chunk-b"]
+    chunk_provenance = AsyncMock()
+    chunk_provenance.chunk_ids_for_docs.return_value = ["chunk-a", "chunk-b"]
 
     result = await metadata_retrieve(
         metadata_index=metadata_index,
-        chunk_metadata=chunk_metadata,
+        chunk_provenance=chunk_provenance,
         filters=MetadataFilter(filename="x.pdf"),
     )
 
@@ -1525,13 +1525,13 @@ Replace `metadata_retrieve()` signature:
 async def metadata_retrieve(
     *,
     metadata_index: PGMetadataIndex,
-    chunk_metadata: PGChunkMetadata,
+    chunk_provenance: PGChunkProvenance,
     filters: MetadataFilter,
 ) -> list[str]:
     doc_ids = await metadata_index.query(filters)
     if not doc_ids:
         return []
-    return await chunk_metadata.chunk_ids_for_docs(doc_ids)
+    return await chunk_provenance.chunk_ids_for_docs(doc_ids)
 ```
 
 - [ ] **Step 7: Run Task 6 tests**
@@ -1733,7 +1733,7 @@ class UnifiedRetriever:
             candidate_ids = set(
                 await metadata_retrieve(
                     metadata_index=self._metadata_index,
-                    chunk_metadata=self._chunk_metadata,
+                    chunk_provenance=self._chunk_provenance,
                     filters=metadata_filter,
                 )
             )
@@ -1757,7 +1757,7 @@ if metadata_filter is not None and not metadata_filter.is_empty():
     candidate_ids = set(
         await metadata_retrieve(
             metadata_index=self._metadata_index,
-            chunk_metadata=self._chunk_metadata,
+            chunk_provenance=self._chunk_provenance,
             filters=metadata_filter,
         )
     )
@@ -1837,10 +1837,10 @@ git commit -m "feat: add postgres bm25 retrieval fusion"
 Update `tests/unit/test_cleanup.py`:
 
 ```python
-async def test_delete_cascades_to_artifacts_and_chunk_metadata() -> None:
+async def test_delete_cascades_to_artifacts_and_chunk_provenance() -> None:
     service = _make_service(kv_storage="PGKVStorage")
     service._document_artifacts = AsyncMock()
-    service._chunk_metadata = AsyncMock()
+    service._chunk_provenance = AsyncMock()
     service._hash_index = AsyncMock()
     service._metadata_index = AsyncMock()
     service._lightrag = AsyncMock()
@@ -1848,7 +1848,7 @@ async def test_delete_cascades_to_artifacts_and_chunk_metadata() -> None:
 
     await delete_files(service, ["doc-1"])
 
-    service._chunk_metadata.delete_doc.assert_awaited_with("doc-1")
+    service._chunk_provenance.delete_doc.assert_awaited_with("doc-1")
     service._document_artifacts.delete_doc.assert_awaited_with("doc-1")
 ```
 
@@ -1857,7 +1857,7 @@ async def test_delete_cascades_to_artifacts_and_chunk_metadata() -> None:
 Run:
 
 ```bash
-uv run pytest tests/unit/test_cleanup.py::test_delete_cascades_to_artifacts_and_chunk_metadata -v
+uv run pytest tests/unit/test_cleanup.py::test_delete_cascades_to_artifacts_and_chunk_provenance -v
 ```
 
 Expected: failure because cleanup does not know about the new stores.
@@ -1867,8 +1867,8 @@ Expected: failure because cleanup does not know about the new stores.
 In `src/dlightrag/core/ingestion/cleanup.py`, delete in this order for each full document id:
 
 ```python
-if service._chunk_metadata is not None:
-    await service._chunk_metadata.delete_doc(doc_id)
+if service._chunk_provenance is not None:
+    await service._chunk_provenance.delete_doc(doc_id)
 if service._document_artifacts is not None:
     artifact = await service._document_artifacts.delete_doc(doc_id)
 else:
@@ -1888,7 +1888,7 @@ In `src/dlightrag/core/reset.py`, include:
 
 ```python
 ("document_artifacts", service._document_artifacts),
-("chunk_metadata", service._chunk_metadata),
+("chunk_provenance", service._chunk_provenance),
 ```
 
 in the store clear loop. Remove JSON metadata/hash fallback reset branches.
@@ -1982,7 +1982,7 @@ assert result["source_kind"] in {"document", "native_image"}
 assert result["ingest_strategy"] == "lightrag_sidecar_unified"
 ```
 
-For the native image path, create a 2x2 PNG fixture with Pillow and assert `PGChunkMetadata.get_batch()` returns `embedding_input_kind == "image"`.
+For the native image path, create a 2x2 PNG fixture with Pillow and assert `PGChunkProvenance.get_batch()` returns `embedding_input_kind == "image"`.
 
 - [ ] **Step 3: Update docs**
 

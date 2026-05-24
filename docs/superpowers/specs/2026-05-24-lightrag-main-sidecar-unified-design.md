@@ -26,6 +26,7 @@ Hard decisions:
 - Embedding configuration must prove multimodal capability at startup; text-only embedding models are invalid for this architecture.
 - Document tables and equations use LightRAG's own multimodal document handling.
 - Native images and document-extracted image sidecar assets use direct multimodal image embedding.
+- LightRAG sidecar files are the canonical parse artifacts. DlightRAG must not write a second filesystem sidecar format; it only stores adapter-normalized references, metadata, and chunk provenance in PostgreSQL.
 
 PostgreSQL extension requirements are layered:
 
@@ -57,12 +58,13 @@ LightRAG `main` currently provides the pieces DlightRAG should treat as upstream
 
 - `apipeline_enqueue_documents()` and `apipeline_process_enqueue_documents()` for queued document processing.
 - `parse_native`, `parse_mineru`, and `parse_docling` parser routes.
-- Parser sidecar files such as blocks, drawings, tables, equations, and extracted assets.
+- `lightrag.sidecar` writer output, `sidecar_location`, `*.blocks.jsonl`, per-modality JSON files, and extracted assets.
+- Chunk-level `sidecar` references for LightRAG-built multimodal chunks.
 - Multimodal process options where `i` targets images/drawings, `t` targets tables, `e` targets equations, `!` skips KG, and `P` selects paragraph semantic chunking.
 - `analyze_multimodal()` and sidecar chunk construction for LightRAG-owned multimodal text chunks.
 - `LightRAG.aquery_data()` with `mode="mix"` for structured retrieval data.
 
-DlightRAG should depend on these surfaces through one adapter module so upstream private storage changes fail fast and locally. The supported LightRAG storage configuration is PostgreSQL 18 based: `PGVectorStorage`, `PGGraphStorage`, `PGKVStorage`, and `PGDocStatusStorage`.
+DlightRAG should depend on these surfaces through one adapter module so upstream private storage changes fail fast and locally. The adapter is read-only with respect to LightRAG sidecar files: it resolves and validates sidecar references, but does not translate them into another sidecar format. The supported LightRAG storage configuration is PostgreSQL 18 based: `PGVectorStorage`, `PGGraphStorage`, `PGKVStorage`, and `PGDocStatusStorage`.
 
 ---
 
@@ -75,10 +77,10 @@ New or retained modules should be arranged around DlightRAG concerns, not histor
 | `core/service.py` | Owns workspace lifecycle, LightRAG creation, config validation, storage initialization, and public APIs. |
 | `core/lightrag_stores.py` | The only module allowed to touch LightRAG internals such as `chunks_vdb`, `text_chunks`, `full_docs`, and `doc_status`. |
 | `core/ingestion/engine.py` | Single ingestion orchestrator for documents, native images, metadata, dedup, and deletion hooks. |
-| `core/ingestion/sidecar.py` | Reads and normalizes LightRAG/MinerU/Docling sidecars into DlightRAG sidecar units. |
+| `core/ingestion/lightrag_sidecar.py` | `LightRAGSidecarAdapter`: resolves canonical LightRAG sidecar files and yields typed references for DlightRAG indexing/direct-image embedding. It does not write DlightRAG sidecar files. |
 | `core/ingestion/direct_image.py` | Creates direct image embedding chunk specs for native images and extracted drawing/image assets. |
-| `storage/document_artifacts.py` | PostgreSQL table for document-level parse/artifact locations and parser provenance. |
-| `storage/chunk_metadata.py` | PostgreSQL table for chunk-to-document and chunk-to-sidecar provenance. |
+| `storage/document_artifacts.py` | `DocumentArtifactRegistry`: PostgreSQL table for document-level LightRAG sidecar URI/path references and parser provenance. |
+| `storage/chunk_provenance.py` | `ChunkProvenanceIndex`: PostgreSQL table for chunk-to-document, chunk-to-sidecar, modality, asset, page, and bbox provenance. |
 | `core/retrieval/retriever.py` | Single retrieval orchestrator: metadata filter, LightRAG mix, BM25, direct image query, RRF, rerank, enrichment. |
 | `core/retrieval/bm25.py` | PostgreSQL BM25 search and score normalization. |
 | `core/retrieval/filtered_vdb.py` | In-filter wrapper around LightRAG vector queries with strict empty-filter semantics. |
@@ -106,9 +108,9 @@ flowchart TD
     A["Source file"] --> B["Hash + system metadata"]
     B --> C{"Source kind"}
     C -->|"Document-like"| D["LightRAG parser pipeline"]
-    C -->|"Native image"| E["DlightRAG direct image sidecar"]
+    C -->|"Native image"| E["DlightRAG native-image artifact"]
     D --> F["LightRAG chunks, KG, doc_status"]
-    D --> G["DlightRAG sidecar collector"]
+    D --> G["LightRAG sidecar adapter"]
     G --> H["Direct image chunks for drawing/image assets"]
     E --> H
     F --> I["Metadata + artifact stores"]
@@ -151,11 +153,11 @@ Document ingest steps:
 2. Enqueue/process through LightRAG with `docs_format=FULL_DOCS_FORMAT_PENDING_PARSE`, configured parser engine (`mineru` by default where supported), and process options defaulting to `teP`.
 3. Let LightRAG write its normal document chunks, KG records, and `doc_status`.
 4. Read parser sidecar locations from LightRAG document status and artifact metadata.
-5. Persist a DlightRAG document artifact row that records source path, parse engine, process options, sidecar directory, blocks path, drawings path, tables path, equations path, and LightRAG full document id.
-6. Normalize sidecars into DlightRAG sidecar units.
-7. For drawing/image sidecar units only, write direct image embedding chunk rows through the LightRAG store adapter.
-8. Persist chunk metadata for both LightRAG-owned text chunks and DlightRAG-owned direct image chunks.
-9. Finalize metadata and hash registration only after both LightRAG and DlightRAG sidecar writes succeed.
+5. Persist a document artifact registry row that records source path, parse engine, process options, LightRAG sidecar URI/directory, blocks path, drawings path, tables path, equations path, and LightRAG full document id.
+6. Use `LightRAGSidecarAdapter` to resolve LightRAG sidecar items into typed references.
+7. For drawing/image sidecar references only, write direct image embedding chunk rows through the LightRAG store adapter.
+8. Persist chunk provenance for both LightRAG-owned text chunks and DlightRAG-owned direct image chunks.
+9. Finalize metadata and hash registration only after LightRAG writes and DlightRAG registry/provenance/direct-image writes succeed.
 
 If upstream LightRAG later exposes stable sidecar ids on its own chunks, DlightRAG should update direct image chunks in place when possible. If that mapping is not stable, DlightRAG-owned direct image chunk ids are the canonical fallback:
 
@@ -167,11 +169,11 @@ This keeps deletion, in-filtering, and retrieval enrichment deterministic.
 
 ### 5.3 Native Images
 
-Native image ingest does not use LightRAG document multimodal analysis. It creates a minimal DlightRAG sidecar unit:
+Native image ingest does not use LightRAG document multimodal analysis. It creates a native-image artifact/provenance record, not a DlightRAG sidecar file:
 
 ```json
 {
-  "sidecar_type": "native_image",
+  "source_kind": "native_image",
   "source_path": "...",
   "asset_path": "...",
   "page": null,
@@ -185,15 +187,22 @@ The direct image path writes:
 - a multimodal image vector into LightRAG's chunk vector store;
 - a text chunk containing either user-provided description, configured VLM caption, or a concise file-derived fallback;
 - a `doc_status`/`full_docs` record so deletion and retrieval provenance remain uniform;
-- `document_artifacts` and `chunk_metadata` rows.
+- `document_artifacts` and `chunk_provenance` rows.
 
 The vector identity is always the image itself. Captions are retrieval support material for BM25, KG, display, and citation context; they are not a substitute for image embedding.
 
 ---
 
-## 6. Sidecar + Metadata Model
+## 6. LightRAG Sidecar + Metadata Model
 
-DlightRAG keeps metadata management as a first-class feature. The sidecar layer extends metadata to chunk provenance instead of replacing document metadata.
+DlightRAG keeps metadata management as a first-class feature. LightRAG sidecars remain upstream-owned parse artifacts; DlightRAG extends them with PostgreSQL artifact references and chunk provenance instead of replacing document metadata or duplicating sidecar files.
+
+The boundary is strict:
+
+- LightRAG writes and owns `*.parsed/`, `*.blocks.jsonl`, modality JSON files, assets, and sidecar refs on LightRAG chunks.
+- DlightRAG reads those artifacts through `LightRAGSidecarAdapter`.
+- DlightRAG stores only relational references, normalized metadata, and direct-image chunk provenance.
+- DlightRAG may create direct-image chunk records for native images and extracted assets, but those records point back to native source files or LightRAG sidecar items.
 
 ### 6.1 Document Metadata
 
@@ -211,7 +220,7 @@ A protocol may remain for test doubles, but not as a product promise for non-Pos
 
 ### 6.2 Document Artifacts
 
-`DocumentArtifactIndex` stores parse and sidecar provenance:
+`DocumentArtifactRegistry` stores LightRAG sidecar references and parser provenance:
 
 ```sql
 CREATE TABLE dlightrag_document_artifacts (
@@ -235,12 +244,12 @@ CREATE TABLE dlightrag_document_artifacts (
 
 There is no file-backed alternative target for this table. Development and production both use PostgreSQL 18 so metadata, chunk provenance, vector search, KG storage, and BM25 share one consistent transactional substrate.
 
-### 6.3 Chunk Metadata
+### 6.3 Chunk Provenance
 
-`ChunkMetadataIndex` is the bridge from document filters to retrieval filters:
+`ChunkProvenanceIndex` is the bridge from document filters to retrieval filters:
 
 ```sql
-CREATE TABLE dlightrag_chunk_metadata (
+CREATE TABLE dlightrag_chunk_provenance (
     workspace TEXT NOT NULL,
     chunk_id TEXT NOT NULL,
     full_doc_id TEXT NOT NULL,
@@ -261,7 +270,7 @@ Rules:
 
 - LightRAG-owned blocks/tables/equations are indexed as `embedding_input_kind="text"` unless upstream provides a true multimodal vector for that chunk.
 - DlightRAG-owned native images and drawing/image sidecar assets are indexed as `embedding_input_kind="image"`.
-- A chunk may carry sidecar metadata even when the visible retrieval text came from LightRAG.
+- A chunk may carry sidecar provenance even when the visible retrieval text came from LightRAG.
 - Metadata filters resolve document ids first, then chunk ids through this table.
 
 ---
@@ -376,7 +385,7 @@ When no query images are supplied, this path is skipped.
 
 Every returned chunk should be enriched from:
 
-- `chunk_metadata`: sidecar type, asset path, page number, bounding box, embedding input kind;
+- `chunk_provenance`: sidecar type, asset path, page number, bounding box, embedding input kind;
 - document metadata: filename, user metadata, source fields;
 - `document_artifacts`: sidecar directory and original parser provenance;
 - LightRAG result data: entity/relation/chunk context from `aquery_data()`.
@@ -449,10 +458,10 @@ Deletion must cascade through all layers:
 1. metadata index row;
 2. hash index row;
 3. document artifact row;
-4. chunk metadata rows;
+4. chunk provenance rows;
 5. DlightRAG-owned direct image chunks in LightRAG stores;
-6. LightRAG-owned document chunks, entities, relationships, full docs, and doc status;
-7. sidecar/artifact files when DlightRAG owns the local artifact directory.
+6. LightRAG-owned document chunks, entities, relationships, full docs, doc status, and parser artifact directory cleanup through the LightRAG lifecycle;
+7. DlightRAG-owned native-image temp/copy artifacts, if any.
 
 Re-ingest with `replace=True` should delete the old full document first, then insert fresh LightRAG and DlightRAG records. This avoids stale sidecar ids and stale candidate filters.
 
@@ -503,12 +512,12 @@ Required test groups:
    - LightRAG parser pipeline is called with default `teP`.
    - table/equation sidecars become LightRAG-owned text chunks.
    - drawing/image sidecars become DlightRAG-owned direct image chunks.
-   - `document_artifacts` and `chunk_metadata` are written.
+   - `document_artifacts` and `chunk_provenance` are written.
 
 4. **Native image ingest**
    - native image bypasses LightRAG document multimodal analysis.
    - image bytes are embedded directly.
-   - uniform metadata, artifact, doc status, and chunk metadata are written.
+   - uniform metadata, artifact, doc status, and chunk provenance are written.
 
 5. **Metadata in-filtering**
    - no filter means no restriction.
@@ -521,7 +530,7 @@ Required test groups:
    - RRF merges BM25, LightRAG mix, and direct visual results deterministically.
 
 7. **Deletion lifecycle**
-   - delete removes LightRAG records, DlightRAG direct image chunks, artifact rows, chunk metadata rows, metadata rows, and hash rows.
+   - delete removes LightRAG records, DlightRAG direct image chunks, artifact rows, chunk provenance rows, metadata rows, and hash rows.
 
 8. **Compatibility guard**
    - missing LightRAG parser/storage surfaces fail with a clear startup error.
@@ -534,7 +543,7 @@ After this design is reviewed, the implementation plan should be split into smal
 
 1. Dependency/PostgreSQL-only config cleanup and startup validation.
 2. LightRAG store adapter and compatibility guard.
-3. Artifact and chunk metadata storage.
+3. Artifact and chunk provenance storage.
 4. Unified document ingest using LightRAG parser sidecars.
 5. Native image and extracted-image direct embedding.
 6. Strict in-filter retrieval.
