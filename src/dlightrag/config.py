@@ -160,6 +160,26 @@ class RerankConfig(BaseModel):
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
+class CitationHighlightConfig(BaseModel):
+    """Optional semantic highlighting for cited source snippets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    timeout: float = 5.0
+    max_concurrency: int = 4
+    max_input_chars: int = 4096
+    cache_size: int = 500
+
+
+class CitationsConfig(BaseModel):
+    """Citation validation and UI enrichment configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    highlights: CitationHighlightConfig = Field(default_factory=CitationHighlightConfig)
+
+
 class DlightragConfig(BaseSettings):
     """DlightRAG configuration.
 
@@ -284,6 +304,7 @@ class DlightragConfig(BaseSettings):
     parser: ParserConfig = Field(default_factory=ParserConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     metadata: MetadataConfig = Field(default_factory=MetadataConfig)
+    citations: CitationsConfig = Field(default_factory=CitationsConfig)
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")

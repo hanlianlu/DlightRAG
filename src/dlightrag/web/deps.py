@@ -119,8 +119,8 @@ def _citation_badges(text: str) -> Markup:
     Handles both [ref_id-chunk_idx] and [n] doc-level formats.
     Renders Markdown first, then injects badges while protecting code blocks.
 
-    The LLM-generated ``### References`` section is preserved — it provides
-    a document-level citation overview without opening the sources panel.
+    Source data is rendered separately in the hidden source panel; the answer
+    body should only contain validated inline citation markers.
     """
     from dlightrag.citations.parser import DOC_CITATION_PATTERN
 

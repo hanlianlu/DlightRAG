@@ -129,5 +129,7 @@ because post-LightRAG context can include BM25 results, direct image matches,
 metadata-path injections, federated chunks, and reranked multimodal pages.
 Instead, it uses LightRAG `aquery_data()` as the base context and reference
 seed, then validates inline `[n]` and `[n-m]` citations against the final
-post-fusion context. Invalid citations are stripped; returned `sources` contain
-only cited documents and chunks.
+post-fusion context. Generated `### References` tails are stripped at the
+output boundary; returned `sources` contain only cited documents and chunks.
+Streaming callers receive tokens immediately and a final normalized answer plus
+cited sources after validation.

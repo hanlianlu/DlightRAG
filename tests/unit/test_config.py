@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.config import (
+    CitationHighlightConfig,
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
@@ -76,6 +77,14 @@ class TestRerankConfig:
     def test_jina_strategy(self):
         cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-m0", api_key="key")
         assert cfg.strategy == "jina_reranker"
+
+
+class TestCitationHighlightConfig:
+    def test_defaults_disabled_for_latency(self):
+        cfg = CitationHighlightConfig()
+        assert cfg.enabled is False
+        assert cfg.timeout == 5.0
+        assert cfg.max_concurrency == 4
 
 
 class TestDlightragConfigNested:
@@ -160,6 +169,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.pg_hnsw_ef_search == 256
     assert cfg.runtime_role == "ingest"
     assert cfg.pg_target_for_runtime() == "primary"
+    assert cfg.citations.highlights.enabled is False
 
 
 @pytest.mark.parametrize(

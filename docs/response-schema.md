@@ -123,7 +123,7 @@ async for token in token_iter:
 | `mode` | `str` | `"mix"` | Only `mix` is supported. This is kept for API compatibility. |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
-| `stream` | `bool` | required for REST `/answer` | `false` returns JSON; `true` returns SSE |
+| `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Up to 3 images for direct visual retrieval |
 | `query_images` | `list[str \| dict]` | `None` | User-attached images inlined into the answer LLM call as `image_url` blocks (URL strings or pre-built dict blocks). Capped at 10. Distinct from `multimodal_content`: this only affects answer generation, not retrieval. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
@@ -136,15 +136,15 @@ curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "key findings", "mode": "mix"}'
 
-# Answer
+# Answer as one JSON response
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{"query": "key findings", "stream": false}'
 
-# Streaming answer
+# Streaming answer (default)
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
-  -d '{"query": "key findings", "stream": true}'
+  -d '{"query": "key findings"}'
 ```
 
 **Non-streaming response:**
@@ -165,7 +165,7 @@ curl -X POST http://localhost:8100/answer \
 | `context` | `{type, data}` | Full contexts, sent first |
 | `token` | `{type, content}` | LLM answer token (repeats) |
 | `sources` | `{type, data}` | Validated cited sources, after all tokens and before done |
-| `done` | `{type}` | Stream complete |
+| `done` | `{type, answer}` | Stream complete; `answer` is the final normalized answer body after citation validation |
 | `error` | `{type, message}` | Error mid-stream |
 
 ```
@@ -177,7 +177,7 @@ data: {"type":"token","content":" are..."}
 
 data: {"type":"sources","data":[{"id":"1","title":"report.pdf","path":"/data/report.pdf","chunks":[...]}]}
 
-data: {"type":"done"}
+data: {"type":"done","answer":"The key findings are..."}
 ```
 
 REST uses the same fields as the Python manager methods. `retrieve` and
@@ -273,7 +273,10 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 
 ## Sources
 
-Sources are document-level groupings derived from chunks via `build_sources()`. They appear in REST/MCP responses and drive the Web UI's source panel.
+Sources are document-level groupings derived from chunks via `build_sources()`.
+They appear in REST/MCP responses and drive the Web UI's source panel. Cited
+answer paths use the same citation indexer as answer validation, so chunk order
+matches `[ref_id-chunk_idx]` markers instead of page sorting.
 
 ```json
 {
@@ -282,6 +285,7 @@ Sources are document-level groupings derived from chunks via `build_sources()`. 
   "path": "/data/dlightrag_storage/docs/report.pdf",
   "type": "file",
   "url": "/api/files/docs/report.pdf",
+  "cited_chunk_ids": ["abc123", "def456"],
   "chunks": [
     {
       "chunk_id": "abc123",
@@ -308,7 +312,8 @@ Sources are document-level groupings derived from chunks via `build_sources()`. 
 | `path` | string | Source file path |
 | `type` | string \| null | File type |
 | `url` | string \| null | Resolved download URL (via PathResolver) |
-| `chunks` | list | Chunk snippets sorted by `page_idx` |
+| `cited_chunk_ids` | list \| null | Cited chunk IDs for answer responses; null when returning all retrieved sources |
+| `chunks` | list | Chunk snippets in citation-index order |
 
 Each **chunk snippet** within a source:
 
@@ -326,9 +331,9 @@ Each **chunk snippet** within a source:
 
 The `answer` response includes a `references` array containing document-level
 references cited in the answer. DlightRAG derives this from validated inline
-citations, not from provider-specific structured output. The richer `sources`
-array is the same cited subset with paths, chunks, pages, images, and optional
-highlights.
+citations, not from provider-specific structured output or generated
+`### References` tails. The richer `sources` array is the same cited subset
+with paths, chunks, pages, images, and optional highlights.
 
 ```json
 {

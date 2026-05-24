@@ -50,6 +50,14 @@ rerank:
   strategy: chat_llm_reranker
   score_threshold: 0.5
 
+citations:
+  highlights:
+    enabled: false
+    timeout: 5.0
+    max_concurrency: 4
+    max_input_chars: 4096
+    cache_size: 500
+
 # ─────────────────────────────────────────────────────────────────
 # Unified LightRAG Main Ingestion
 # ─────────────────────────────────────────────────────────────────

@@ -12,8 +12,7 @@ and optional ``stream=`` keyword arguments.  Images are inlined as
 provider decides how to handle multimodal content.
 
 Both streaming and non-streaming paths use the same freetext system prompt.
-References are extracted from the ``### References`` section in the LLM
-output.
+Sources are projected from validated inline citation markers.
 """
 
 from __future__ import annotations
@@ -39,8 +38,8 @@ class AnswerEngine:
     content blocks -- no separate VLM routing is needed.
 
     Both ``generate()`` and ``generate_stream()`` use the same unified
-    freetext system prompt.  References are always extracted from the
-    ``### References`` markdown section.
+    freetext system prompt.  Sources are projected from validated inline
+    ``[n]`` and ``[n-m]`` markers.
     """
 
     def __init__(
@@ -64,7 +63,7 @@ class AnswerEngine:
 
         Returns a :class:`RetrievalResult` with ``answer``, ``contexts``,
         and ``references`` populated.  Uses the same freetext prompt as
-        streaming; references are extracted from ``### References``.
+        streaming; references are derived from validated inline markers.
 
         ``query_images`` are user-attached images (URLs or base64 data URIs)
         inlined as OpenAI ``image_url`` content blocks ahead of the
@@ -101,8 +100,8 @@ class AnswerEngine:
             repr(raw[:200]) if isinstance(raw, str) else repr(raw),
         )
 
-        # Extract references programmatically via CitationProcessor
-        # (not from LLM-generated ### References section)
+        # Extract references programmatically via CitationProcessor, not
+        # from model-generated reference-section text.
         from dlightrag.citations.processor import CitationProcessor
         from dlightrag.citations.source_builder import build_sources
 
@@ -462,7 +461,7 @@ class AnswerEngine:
 
     # _parse_response removed: references are now extracted programmatically
     # by CitationProcessor from inline [n]/[n-m] markers, not from
-    # LLM-generated ### References sections.
+    # model-generated reference-section text.
 
 
 def _build_image_label(

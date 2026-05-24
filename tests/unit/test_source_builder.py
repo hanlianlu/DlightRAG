@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dlightrag.citations.source_builder import build_sources
+from dlightrag.citations.schemas import SourceReference
+from dlightrag.citations.source_builder import build_sources, build_sources_from_chunks
 
 
 def _chunk(
@@ -43,7 +44,7 @@ class TestBuildSources:
         assert sources[1].id == "ref-2"
         assert len(sources[1].chunks) == 1
 
-    def test_chunks_sorted_by_page_idx(self) -> None:
+    def test_chunks_keep_citation_index_order(self) -> None:
         contexts = {
             "chunks": [
                 _chunk("c2", "ref-1", page_idx=3),
@@ -53,8 +54,8 @@ class TestBuildSources:
         }
         sources = build_sources(contexts)
 
-        page_order = [c.page_idx for c in sources[0].chunks]
-        assert page_order == [1, 2, 3]
+        assert [c.chunk_id for c in sources[0].chunks] == ["c2", "c1", "c3"]
+        assert [c.chunk_idx for c in sources[0].chunks] == [1, 2, 3]
 
     def test_source_title_from_filename(self) -> None:
         contexts = {"chunks": [_chunk("c1", "ref-1", file_path="/long/path/report.pdf")]}
@@ -98,7 +99,7 @@ class TestBuildSources:
         assert sources[0].chunks[0].chunk_idx == 1
         assert sources[0].chunks[1].chunk_idx == 2
 
-    def test_none_page_idx_sorted_last(self) -> None:
+    def test_none_page_idx_does_not_reorder_citation_index(self) -> None:
         contexts = {
             "chunks": [
                 _chunk("c1", "ref-1", page_idx=None),
@@ -107,8 +108,44 @@ class TestBuildSources:
         }
         sources = build_sources(contexts)
 
-        assert sources[0].chunks[0].page_idx == 1
-        assert sources[0].chunks[1].page_idx is None
+        assert [c.chunk_id for c in sources[0].chunks] == ["c1", "c2"]
+        assert [c.chunk_idx for c in sources[0].chunks] == [1, 2]
+
+    def test_page_idx_falls_back_to_metadata(self) -> None:
+        chunk = _chunk("c1", "ref-1", page_idx=None)
+        chunk["metadata"]["page_idx"] = 7
+        sources = build_sources({"chunks": [chunk]})
+
+        assert sources[0].chunks[0].page_idx == 7
+
+    def test_cited_subset_preserves_source_catalog_fields(self) -> None:
+        chunks = [
+            _chunk("c1", "ref-1", file_path="/raw/report.pdf"),
+            _chunk("c2", "ref-1", file_path="/raw/report.pdf"),
+        ]
+        catalog = [
+            SourceReference(
+                id="ref-1",
+                path="/resolved/report.pdf",
+                title="Resolved Report",
+                type="pdf",
+                url="/files/report.pdf",
+            )
+        ]
+
+        sources = build_sources_from_chunks(
+            chunks,
+            cited_chunks={"ref-1": ["c2"]},
+            source_catalog=catalog,
+        )
+
+        assert len(sources) == 1
+        assert sources[0].title == "Resolved Report"
+        assert sources[0].path == "/resolved/report.pdf"
+        assert sources[0].type == "pdf"
+        assert sources[0].url == "/files/report.pdf"
+        assert sources[0].cited_chunk_ids == ["c2"]
+        assert [c.chunk_id for c in sources[0].chunks] == ["c2"]
 
     def test_with_path_resolver(self) -> None:
         contexts = {"chunks": [_chunk("c1", "ref-1", file_path="/data/report.pdf")]}

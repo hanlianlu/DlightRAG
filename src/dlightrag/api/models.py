@@ -81,7 +81,7 @@ class RetrieveRequest(BaseModel):
 class AnswerRequest(BaseModel):
     query: str
     mode: Literal["mix"] = "mix"
-    stream: bool
+    stream: bool = True
     top_k: int | None = None
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None

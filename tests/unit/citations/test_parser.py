@@ -5,6 +5,7 @@ from dlightrag.citations.parser import (
     clean_invalid_citations,
     extract_citation_keys,
     extract_cited_chunks,
+    strip_generated_references_section,
 )
 
 
@@ -132,3 +133,15 @@ class TestCleanInvalidCitationsDocLevel:
         )
         cleaned = clean_invalid_citations(indexer, "See [99].")
         assert "[99]" not in cleaned
+
+
+class TestStripGeneratedReferencesSection:
+    def test_strips_trailing_markdown_references(self):
+        answer = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
+
+        assert strip_generated_references_section(answer) == "Revenue grew 15% [1-1]."
+
+    def test_preserves_body_text_that_mentions_references(self):
+        answer = "The References Act is discussed in the document [1-1]."
+
+        assert strip_generated_references_section(answer) == answer

@@ -703,6 +703,7 @@ class TestAnswerStreamMode:
         assert events[0]["type"] == "context"
         assert events[0]["data"] == {"chunks": [{"id": "c1"}]}
         assert events[-1]["type"] == "done"
+        assert events[-1]["answer"] == "Hi there"
         token_events = [e for e in events if e["type"] == "token"]
         assert len(token_events) == 2
         assert token_events[0]["content"] == "Hi"
@@ -751,10 +752,16 @@ class TestAnswerStreamMode:
         assert "answer" in body
         assert body["answer"] == "The answer is 42"
 
-    async def test_missing_stream_is_validation_error(
+    async def test_missing_stream_defaults_to_streaming(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        """REST clients must choose JSON or SSE explicitly."""
+        """REST /answer streams by default; stream=false opts into JSON."""
+        async def mock_tokens():
+            yield "Hello"
+
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "test"})
-        assert resp.status_code == 422
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        mock_manager.aanswer_stream.assert_awaited_once()

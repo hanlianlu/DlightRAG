@@ -65,7 +65,7 @@ L0  prompts, utils                                 pure helpers
 | `storage` | L3 | PostgreSQL pools, metadata index, artifact/provenance stores |
 | `sourcing` | L3 | Local, Azure Blob, and S3 source readers |
 | `converters` | L3 | Local document conversion helpers |
-| `citations` | L3 | Citation parsing, source building, highlights, streaming |
+| `citations` | L3 | Inline citation validation, source projection, optional highlights, streaming normalization |
 | `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |
 | `core.retrieval.metadata_path` | L4 | Metadata-to-candidate resolver |
 | `core.ingestion.{cleanup,policy}` | L4 | Cascade cleanup and ingest policy |

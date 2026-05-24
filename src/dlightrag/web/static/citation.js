@@ -459,7 +459,8 @@ async function submitQuery(query) {
                             // Token data is JSON-encoded; decode for history
                             try { fullAnswer += JSON.parse(data); } catch (_) { fullAnswer += data; }
                         }
-                        handleSSEData(sseEvent, data, contentDiv, aiDiv, chatArea, firstToken);
+                        const handled = handleSSEData(sseEvent, data, contentDiv, aiDiv, chatArea, firstToken);
+                        if (handled && handled.finalAnswer) fullAnswer = handled.finalAnswer;
                         if (sseEvent === 'token' && firstToken) firstToken = false;
                     }
                     sseEvent = '';
@@ -515,9 +516,20 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
         chatArea.scrollTop = chatArea.scrollHeight;
     } else if (eventType === 'done') {
         // Trusted server-rendered enriched HTML with citation badges + source data.
-        // Data is JSON-encoded; decode to get raw HTML.
+        // Data is a JSON object with final canonical answer text and HTML.
         let html;
-        try { html = JSON.parse(data); } catch (_) { html = data; }
+        let finalAnswer = null;
+        try {
+            const payload = JSON.parse(data);
+            if (typeof payload === 'string') {
+                html = payload;
+            } else {
+                html = payload.html;
+                finalAnswer = payload.answer || null;
+            }
+        } catch (_) {
+            html = data;
+        }
 
         const tmp = document.createElement('div');
         tmp.innerHTML = html;  // eslint-disable-line -- trusted server content
@@ -550,6 +562,7 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
                 throwOnError: false,
             });
         }
+        return finalAnswer ? {finalAnswer: finalAnswer} : null;
     } else if (eventType === 'highlights') {
         // Async highlight update — replace source panel with highlighted version.
         // Data is JSON-encoded HTML of the updated source_panel.html partial.
@@ -588,6 +601,7 @@ function handleSSEData(eventType, data, contentDiv, aiDiv, chatArea, firstToken)
         contentDiv.textContent = data;
         contentDiv.classList.add('text-error');
     }
+    return null;
 }
 
 // === Query Form ===

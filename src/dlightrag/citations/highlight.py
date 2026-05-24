@@ -17,12 +17,13 @@ from pydantic import BaseModel, Field
 
 from dlightrag.prompts import HIGHLIGHT_SYSTEM_PROMPT, HIGHLIGHT_USER_PROMPT
 
+from .parser import strip_generated_references_section
 from .schemas import SourceReference
 
 logger = logging.getLogger(__name__)
 
-_MAX_CONCURRENT_HIGHLIGHTS = 15
 _MAX_INPUT_CHARS = 4096
+_MAX_CONCURRENT_HIGHLIGHTS = 4
 
 
 class HighlightPhrases(BaseModel):
@@ -39,6 +40,7 @@ _CITATION_RE = re.compile(r"\[\w+-\d+\]|\[\d+\](?![\w-])")
 
 def extract_all_citing_sentences(answer_text: str) -> dict[str, list[str]]:
     """Extract all sentences that contain each citation."""
+    answer_text = strip_generated_references_section(answer_text)
     sentences = _SENTENCE_SPLIT_RE.split(answer_text)
     sentences = [s.strip() for s in sentences if s.strip()]
 
@@ -60,10 +62,12 @@ class HighlightExtractor:
         self,
         llm_func: Callable[..., Awaitable[str]],
         cache_size: int = 500,
+        max_input_chars: int = _MAX_INPUT_CHARS,
     ) -> None:
         self._llm_func = llm_func
         self._cache: OrderedDict[str, HighlightPhrases] = OrderedDict()
         self._cache_size = cache_size
+        self._max_input_chars = max_input_chars
 
     def _cache_key(self, citing_sentence: str, chunk_id: str) -> str:
         raw = f"{citing_sentence}||{chunk_id}"
@@ -94,8 +98,8 @@ class HighlightExtractor:
         if cached is not None:
             return cached
 
-        citing_sentence = citing_sentence[:_MAX_INPUT_CHARS]
-        chunk_content = chunk_content[:_MAX_INPUT_CHARS]
+        citing_sentence = citing_sentence[: self._max_input_chars]
+        chunk_content = chunk_content[: self._max_input_chars]
 
         user_prompt = HIGHLIGHT_USER_PROMPT.format(
             citing_sentence=citing_sentence,
@@ -139,11 +143,19 @@ async def extract_highlights_for_sources(
     sources: list[SourceReference],
     answer_text: str,
     llm_func: Callable[..., Awaitable[str]],
+    *,
+    max_concurrency: int = _MAX_CONCURRENT_HIGHLIGHTS,
+    max_input_chars: int = _MAX_INPUT_CHARS,
+    cache_size: int = 500,
 ) -> list[SourceReference]:
     """Extract highlights for all sources in parallel."""
-    extractor = HighlightExtractor(llm_func=llm_func)
+    extractor = HighlightExtractor(
+        llm_func=llm_func,
+        cache_size=cache_size,
+        max_input_chars=max_input_chars,
+    )
     citing_sentences = extract_all_citing_sentences(answer_text)
-    semaphore = asyncio.Semaphore(_MAX_CONCURRENT_HIGHLIGHTS)
+    semaphore = asyncio.Semaphore(max_concurrency)
 
     async def _extract_one(
         chunk_id: str, chunk_content: str, sentence: str
