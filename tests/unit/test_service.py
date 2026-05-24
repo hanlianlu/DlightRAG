@@ -371,6 +371,51 @@ class TestRAGServiceLightRAGMainPath:
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
 
+    async def test_aingest_replace_purges_existing_doc_before_ingest(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """replace=True removes the previous doc through the cascade before ingesting."""
+        fake_pdf = tmp_path / "f.pdf"
+        fake_pdf.write_bytes(b"%PDF-fake")
+        events: list[str] = []
+
+        async def delete_doc(*args: object, **kwargs: object) -> None:
+            events.append("delete")
+
+        async def ingest_file(*args: object, **kwargs: object) -> dict[str, object]:
+            events.append("ingest")
+            return {"doc_id": "new-doc", "page_count": 1, "file_path": str(fake_pdf)}
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(side_effect=ingest_file)
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=delete_doc)
+        service._lightrag.doc_status = MagicMock()
+        service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(
+            return_value={"id": "old-doc", "file_path": str(fake_pdf)}
+        )
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
+        service._metadata_index = MagicMock()
+        service._metadata_index.get = AsyncMock(return_value={"page_count": 0})
+        service._metadata_index.delete = AsyncMock()
+        service._document_artifacts = MagicMock()
+        service._document_artifacts.delete_doc = AsyncMock()
+        service._chunk_provenance = MagicMock()
+        service._chunk_provenance.delete_doc = AsyncMock()
+
+        result = await service.aingest(source_type="local", path=str(fake_pdf), replace=True)
+
+        assert events == ["delete", "ingest"]
+        assert result["doc_id"] == "new-doc"
+        service._lightrag.adelete_by_doc_id.assert_awaited_once_with(
+            "old-doc", delete_llm_cache=True
+        )
+        service._document_artifacts.delete_doc.assert_awaited_once_with("old-doc")
+        service._chunk_provenance.delete_doc.assert_awaited_once_with("old-doc")
+        service._metadata_index.delete.assert_awaited_once_with("old-doc")
+
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
         """aretrieve delegates directly to the retrieval backend."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
