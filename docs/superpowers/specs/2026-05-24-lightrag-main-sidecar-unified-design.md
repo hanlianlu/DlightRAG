@@ -255,12 +255,52 @@ The LLM may infer structured filters from natural language, but storage executes
 
 DlightRAG should expose a user metadata contract, but it should not delegate that contract to LightRAG:
 
-- Ingest APIs accept `metadata: Mapping[str, Any]` plus optional typed system fields such as `title`, `author`, and dates.
+- Metadata fields are declared at workspace/config level through `metadata.fields`, or through an equivalent workspace-admin registry API that writes the same field specs. Field specs include `type`, `normalizer`, `filter_ops`, `indexed`, and optional `required` settings.
+- Ingest APIs accept a per-call `metadata: Mapping[str, Any]` payload plus optional typed system convenience fields such as `title`, `author`, and dates. Top-level convenience fields map to DlightRAG system columns; the payload is caller-provided business metadata, not LightRAG parser metadata. Supplying the same logical field in both places is a validation error.
+- Per-call `metadata_policy` supports `validate`, `reject_unknown`, and `store_only`. `validate` is the default: declared fields are normalized into the filterable path, unknown fields follow `allow_ad_hoc_json`. `reject_unknown` rejects undeclared keys. `store_only` stores the payload for enrichment but does not promote even declared keys into the filterable path for that ingest call.
 - Config may declare metadata fields with `type`, `normalizer`, `filter_ops`, and `indexed` settings. Supported matching operators are exact, `IN`, range, JSONB containment, and explicit pattern for selected string fields.
 - Unknown user metadata may be stored in JSONB for enrichment. It is not filterable through the normal exact/range/pattern path until declared in the field registry.
 - LLM intent-aware detection may mention an unknown metadata key, but it cannot make that key filterable by itself. The planner must either ignore it as an untrusted filter with a traceable warning, ask the caller to declare the field, or use an explicitly declared `metadata_json` field whose `filter_ops` includes `contains`.
-- Reserved namespaces are immutable: `sys.*` for DlightRAG system metadata, `lightrag.*` for mirrored LightRAG provenance, and `user.*` for caller-provided metadata.
+- Reserved namespaces are immutable: `sys.*` for DlightRAG system metadata, `lightrag.*` for mirrored LightRAG provenance, and `user.*` for caller-provided metadata. External ingest payload keys are unprefixed; DlightRAG applies the `user.*` namespace internally.
 - Metadata updates affect filtering and enrichment immediately, but do not mutate LightRAG chunks, KG, or vectors. If a metadata field should become semantic content, the caller must request re-ingest or explicit KG projection.
+
+The public ingest contract should be explicit:
+
+```python
+await rag.aingest_file(
+    path="notes.pdf",
+    title="Analytical Engine notes",
+    metadata={
+        "author": "Ada Lovelace",
+        "published_at": "1843-01-01",
+        "tags": ["math", "notes"],
+        "project": "Analytical Engine",
+    },
+    metadata_policy="validate",
+)
+```
+
+The REST contract mirrors the same shape:
+
+```json
+{
+  "path": "notes.pdf",
+  "title": "Analytical Engine notes",
+  "metadata": {
+    "author": "Ada Lovelace",
+    "published_at": "1843-01-01",
+    "tags": ["math", "notes"],
+    "project": "Analytical Engine"
+  },
+  "metadata_policy": "validate"
+}
+```
+
+For the default config above, `author`, `published_at`, and `tags` become normalized filterable fields. `project` is stored in JSONB enrichment only, unless it is later declared in `metadata.fields` or the caller uses a declared `metadata_json contains` filter. Invalid values for declared fields reject the ingest with a validation error. User payload keys under `sys.*`, `lightrag.*`, or `user.*` are rejected.
+
+Metadata updates use an explicit API such as `aupdate_metadata(doc_id, patch, mode="merge")` or `aupdate_metadata(doc_id, replacement, mode="replace")`. Updates run through the same registry and policy checks as ingest. They update PostgreSQL filter/enrichment state and retrieval eligibility immediately, but they do not rewrite LightRAG text chunks, regenerate KG entities, or recompute embeddings unless the caller requests re-ingest or semantic projection.
+
+Query-time explicit metadata filters are authoritative user input. LLM intent-aware filters are additive only after validation against the same registry; they must not override an explicit caller filter and must not promote undeclared enrichment keys into executable filters.
 
 The LightRAG bridge is by identifier and provenance, not by making LightRAG own user metadata. DlightRAG reads LightRAG `doc_status` / `full_docs` operational fields such as `sidecar_location`, `parse_engine`, `process_options`, `chunk_options`, `content_hash`, and `chunks_list`, then mirrors them into PostgreSQL. Retrieval resolves user metadata filters to document ids, maps them to chunk ids through `ChunkProvenanceIndex`, and applies those candidate ids to LightRAG vector search, BM25, and direct visual search. DlightRAG should not write arbitrary user metadata into LightRAG `doc_status.metadata` or depend on it for filtering, because that field is used by LightRAG pipeline lifecycle and is not a stable filter API.
 
@@ -623,6 +663,7 @@ retrieval:
 metadata:
   enabled: true
   allow_ad_hoc_json: true
+  default_ingest_policy: validate       # validate | reject_unknown | store_only
   unknown_filter_policy: ignore_with_warning  # reject | ignore_with_warning | allow_declared_json_contains
   fields:
     title:

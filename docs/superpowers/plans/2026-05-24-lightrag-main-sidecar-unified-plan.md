@@ -176,6 +176,8 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.embedding.asymmetric == "auto"
     assert cfg.parser.rules == "*:native-iteP,*:mineru-iteP,*:legacy-R"
     assert cfg.extraction.use_json is True
+    assert cfg.metadata.default_ingest_policy == "validate"
+    assert cfg.metadata.allow_ad_hoc_json is True
 
 
 @pytest.mark.parametrize(
@@ -676,6 +678,7 @@ extraction:
 metadata:
   enabled: true
   allow_ad_hoc_json: true
+  default_ingest_policy: validate
   unknown_filter_policy: ignore_with_warning
   fields:
     title:
@@ -1992,6 +1995,60 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["parse_engine"] == "mineru"
     assert kwargs["process_options"] == "iteP"
     assert not hasattr(engine, "_hash_index")
+
+
+async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) -> None:
+    from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
+
+    lightrag = AsyncMock()
+    lightrag.apipeline_enqueue_documents.return_value = "track-1"
+    stores = AsyncMock()
+    stores.get_doc_status.return_value = {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc"}
+    stores.get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": "file:///tmp/sample.parsed/",
+    }
+    metadata = AsyncMock()
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"%PDF-1.4")
+
+    engine = UnifiedIngestionEngine(
+        lightrag=lightrag,
+        stores=stores,
+        metadata_index=metadata,
+        document_artifacts=AsyncMock(),
+        chunk_provenance=AsyncMock(),
+        multimodal_embedder=AsyncMock(),
+        workspace="default",
+        parser_rules="*:native-iteP,*:mineru-iteP,*:legacy-R",
+        chunk_options={},
+        metadata_registry=MetadataFieldRegistry.from_config(
+            {
+                "author": {
+                    "type": "string",
+                    "normalizer": "casefold_trim",
+                    "filter_ops": ["exact"],
+                    "indexed": True,
+                }
+            }
+        ),
+        allow_ad_hoc_metadata=True,
+        default_metadata_policy="validate",
+    )
+
+    await engine.aingest_file(
+        source,
+        replace=False,
+        metadata={"author": " Ada Lovelace ", "project": "Analytical Engine"},
+        metadata_policy="validate",
+    )
+
+    _, saved = metadata.upsert.await_args.args
+    assert saved["user_metadata"]["author"] == " Ada Lovelace "
+    assert saved["metadata_filterable"]["author"] == "ada lovelace"
+    assert saved["metadata_json"]["project"] == "Analytical Engine"
 ```
 
 - [ ] **Step 3: Run tests and verify they fail**
@@ -2168,6 +2225,56 @@ Unit tests should assert deterministic ids, asset-path validation, and that the 
 
 Create `src/dlightrag/core/ingestion/engine.py` with `UnifiedIngestionEngine.aingest_file()`, `UnifiedIngestionEngine._ingest_document()`, and `UnifiedIngestionEngine._ingest_native_image()`. `aingest_file()` must dispatch by suffix and return a dictionary containing `doc_id`, `source_kind`, `chunks`, and `ingest_strategy`.
 
+The public ingest signature must carry explicit metadata args:
+
+```python
+async def aingest_file(
+    self,
+    path: str | Path,
+    *,
+    replace: bool = False,
+    title: str | None = None,
+    author: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    metadata_policy: MetadataIngestPolicy | None = None,
+) -> dict[str, Any]:
+    ...
+```
+
+At the start of ingest, normalize the caller payload through the DlightRAG metadata registry. Do not pass user metadata into LightRAG `doc_status.metadata`:
+
+```python
+if title is not None and metadata and "title" in metadata:
+    raise ValueError("title supplied both as top-level field and metadata")
+if author is not None and metadata and "author" in metadata:
+    raise ValueError("author supplied both as top-level field and metadata")
+
+normalized_metadata = normalize_user_metadata(
+    metadata,
+    self._metadata_registry,
+    metadata_policy=metadata_policy or self._default_metadata_policy,
+    allow_ad_hoc_json=self._allow_ad_hoc_metadata,
+)
+system_metadata = extract_system_metadata(
+    path,
+    ingest_strategy="lightrag_sidecar_unified",
+)
+if title is not None:
+    system_metadata["doc_title"] = title
+if author is not None:
+    system_metadata["doc_author"] = author
+
+await self._metadata_index.upsert(
+    doc_id,
+    {
+        **system_metadata,
+        "user_metadata": dict(metadata or {}),
+        "metadata_filterable": normalized_metadata.filterable,
+        "metadata_json": normalized_metadata.raw_json,
+    },
+)
+```
+
 The engine must not implement a custom parser resolver or DlightRAG hash dedup layer. For document-like files, call `lightrag.parser_routing.resolve_file_parser_directives(file_path, parser_rules=self._parser_rules)` and pass the resolved `parse_engine` / `process_options` to LightRAG. After processing, mirror `parse_engine`, `process_options`, `chunk_options`, `sidecar_location`, and `content_hash` from LightRAG `full_docs` / `doc_status` into DlightRAG PostgreSQL metadata and artifact tables through `LightRAGStores`.
 
 The document enqueue call must be:
@@ -2199,6 +2306,17 @@ After processing:
 doc_status = await self._stores.get_doc_status(doc_id)
 full_doc = await self._stores.get_full_doc(doc_id)
 light_chunks = doc_status.get("chunks_list", []) if doc_status else []
+await self._metadata_index.upsert(
+    doc_id,
+    {
+        "lightrag.parse_engine": (full_doc or {}).get("parse_engine"),
+        "lightrag.process_options": (full_doc or {}).get("process_options"),
+        "lightrag.chunk_options": (full_doc or {}).get("chunk_options") or {},
+        "lightrag.content_hash": (doc_status or {}).get("content_hash")
+        or (full_doc or {}).get("content_hash"),
+        "lightrag.sidecar_location": (full_doc or {}).get("sidecar_location"),
+    },
+)
 await self._document_artifacts.upsert(
     {
         "full_doc_id": doc_id,
@@ -2262,6 +2380,9 @@ self._backend = UnifiedIngestionEngine(
     workspace=config.workspace,
     parser_rules=config.parser.rules,
     chunk_options=config.parser.chunk_options,
+    metadata_registry=self._metadata_registry,
+    allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,
+    default_metadata_policy=config.metadata.default_ingest_policy,
 )
 ```
 
@@ -2374,17 +2495,58 @@ def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
 def test_unknown_metadata_is_stored_but_not_filterable() -> None:
     registry = MetadataFieldRegistry.from_config({})
 
-    normalized = normalize_user_metadata({"project": "Analytical Engine"}, registry)
+    normalized = normalize_user_metadata(
+        {"project": "Analytical Engine"},
+        registry,
+        metadata_policy="validate",
+        allow_ad_hoc_json=True,
+    )
 
     assert normalized.raw_json["project"] == "Analytical Engine"
     assert "project" not in normalized.filterable
 
 
-def test_lightrag_namespace_is_reserved_for_user_metadata() -> None:
+def test_reject_unknown_metadata_policy_blocks_undeclared_key() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    with pytest.raises(ValueError, match="undeclared"):
+        normalize_user_metadata(
+            {"project": "Analytical Engine"},
+            registry,
+            metadata_policy="reject_unknown",
+            allow_ad_hoc_json=True,
+        )
+
+
+def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {
+            "author": {
+                "type": "string",
+                "normalizer": "casefold_trim",
+                "filter_ops": ["exact"],
+                "indexed": True,
+            }
+        }
+    )
+
+    normalized = normalize_user_metadata(
+        {"author": " Ada Lovelace "},
+        registry,
+        metadata_policy="store_only",
+        allow_ad_hoc_json=True,
+    )
+
+    assert normalized.raw_json["author"] == " Ada Lovelace "
+    assert normalized.filterable == {}
+
+
+@pytest.mark.parametrize("key", ["sys.filename", "lightrag.content_hash", "user.author"])
+def test_reserved_namespaces_are_rejected_for_user_metadata(key: str) -> None:
     registry = MetadataFieldRegistry.from_config({})
 
     with pytest.raises(ValueError, match="reserved"):
-        normalize_user_metadata({"lightrag.content_hash": "x"}, registry)
+        normalize_user_metadata({key: "x"}, registry)
 
 
 def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
@@ -2410,6 +2572,40 @@ async def test_pg_metadata_filter_uses_dlightrag_rows_not_lightrag_metadata() ->
     # Use a mocked pool/connection or existing PGMetadataIndex test helper.
     # The assertion should verify generated SQL reads DlightRAG metadata tables
     # and never references LIGHTRAG_DOC_STATUS.metadata for user filters.
+
+
+async def test_metadata_update_revalidates_without_reindexing() -> None:
+    from unittest.mock import AsyncMock
+
+    from dlightrag.core.service import RAGService
+    from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
+
+    service = object.__new__(RAGService)
+    service._metadata_index = AsyncMock()
+    service._metadata_registry = MetadataFieldRegistry.from_config(
+        {
+            "author": {
+                "type": "string",
+                "normalizer": "casefold_trim",
+                "filter_ops": ["exact"],
+                "indexed": True,
+            }
+        }
+    )
+    service._allow_ad_hoc_metadata = True
+    service._default_metadata_policy = "validate"
+    service._lightrag = AsyncMock()
+
+    await service.aupdate_metadata(
+        "doc-1",
+        {"author": " Ada Lovelace "},
+        mode="merge",
+        metadata_policy="validate",
+    )
+
+    _, saved = service._metadata_index.upsert.await_args.args
+    assert saved["metadata_filterable"]["author"] == "ada lovelace"
+    service._lightrag.apipeline_enqueue_documents.assert_not_called()
 ```
 
 - [ ] **Step 4: Run tests and verify they fail**
@@ -2465,6 +2661,7 @@ class MetadataFieldSpec:
     normalizer: Literal["none", "casefold_trim"] = "none"
     filter_ops: frozenset[str] = frozenset({"exact"})
     indexed: bool = False
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -2477,13 +2674,28 @@ class MetadataFieldRegistry:
     @classmethod
     def from_config(cls, fields: Mapping[str, Mapping[str, Any]]) -> "MetadataFieldRegistry": ...
     def get(self, field: str) -> MetadataFieldSpec | None: ...
+    def filter_spec(self, field: str) -> MetadataFieldSpec | None: ...
+
+
+MetadataIngestPolicy = Literal["validate", "reject_unknown", "store_only"]
+
+
+def normalize_user_metadata(
+    metadata: Mapping[str, Any] | None,
+    registry: MetadataFieldRegistry,
+    *,
+    metadata_policy: MetadataIngestPolicy = "validate",
+    allow_ad_hoc_json: bool = True,
+) -> NormalizedUserMetadata: ...
 ```
 
 Normalization rules:
 
-- reject caller-provided keys beginning with `sys.` or `lightrag.`;
-- keep unknown fields in `raw_json` only;
-- expose only declared fields in `filterable`;
+- reject caller-provided keys beginning with `sys.`, `lightrag.`, or `user.`; external ingest payload keys are unprefixed and DlightRAG applies `user.*` internally;
+- with `metadata_policy="validate"`, keep unknown fields in `raw_json` only when `allow_ad_hoc_json=True`;
+- with `metadata_policy="reject_unknown"`, reject any undeclared user key even when ad-hoc JSON is enabled;
+- with `metadata_policy="store_only"`, keep all payload keys in `raw_json` and leave `filterable` empty;
+- expose only declared fields in `filterable` for the default `validate` policy;
 - support exact/range/JSONB/pattern operators only when declared in `filter_ops`;
 - LLM intent-aware detection can propose filters only against registered fields. Unknown fields are ignored with warning, rejected, or mapped to a declared `metadata_json contains` filter according to `metadata.unknown_filter_policy`; they are never silently promoted to indexed filters.
 - never add fuzzy/trigram behavior.
@@ -2493,6 +2705,36 @@ LightRAG bridge rule:
 - read LightRAG operational fields into reserved `lightrag.*` metadata during ingest;
 - do not write arbitrary user metadata to LightRAG `doc_status.metadata`;
 - do not query `LIGHTRAG_DOC_STATUS.metadata` for user filters.
+
+Update `RAGService.aupdate_metadata()` and the metadata route to accept:
+
+```python
+async def aupdate_metadata(
+    self,
+    doc_id: str,
+    data: Mapping[str, Any],
+    *,
+    mode: Literal["merge", "replace"] = "merge",
+    metadata_policy: MetadataIngestPolicy | None = None,
+) -> None:
+    normalized = normalize_user_metadata(
+        data,
+        self._metadata_registry,
+        metadata_policy=metadata_policy or self._default_metadata_policy,
+        allow_ad_hoc_json=self._allow_ad_hoc_metadata,
+    )
+    await self._metadata_index.upsert(
+        doc_id,
+        {
+            "metadata_update_mode": mode,
+            "user_metadata": dict(data),
+            "metadata_filterable": normalized.filterable,
+            "metadata_json": normalized.raw_json,
+        },
+    )
+```
+
+This method updates only PostgreSQL metadata and chunk eligibility. It must not call LightRAG enqueue/process methods, mutate KG records, or recompute embeddings.
 
 - [ ] **Step 7: Remove `rag_mode` metadata filter**
 
