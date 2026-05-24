@@ -262,9 +262,7 @@ async def federated_retrieve(
         try:
             from dlightrag.core.query_planner import QueryPlanner
 
-            lr = first_svc._lightrag or (
-                getattr(first_svc.rag, "lightrag", None) if first_svc.rag else None
-            )
+            lr = first_svc.lightrag
             llm_func = getattr(lr, "llm_model_func", None) if lr else None
 
             # Provider for schema refresh

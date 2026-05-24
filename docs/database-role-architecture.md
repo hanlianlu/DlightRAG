@@ -38,12 +38,16 @@ postgres_user: dlightrag
 postgres_replica_host: replica.internal
 postgres_replica_user: dlightrag_reader
 read_after_write_mode: eventual
+read_after_write_timeout: 15.0
 ```
 
 ## Tradeoffs
 
-- Read-after-write is eventually consistent unless the caller waits for replica
-  replay or explicitly uses an ingest/admin surface.
+- Read-after-write is eventually consistent by default. With
+  `read_after_write_mode: wait_for_replay`, ingest/admin write acknowledgements
+  wait until the replica has replayed the current primary WAL LSN. DlightRAG
+  does not dynamically route query workers to primary; strong reads that cannot
+  wait should call an ingest/admin surface explicitly.
 - Hot standby queries can be canceled by WAL replay conflicts. PostgreSQL
   `max_standby_streaming_delay` and `hot_standby_feedback` are operational
   tradeoffs, not application toggles.

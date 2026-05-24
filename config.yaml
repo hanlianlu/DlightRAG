@@ -96,7 +96,8 @@ max_context_tokens: 3000
 
 workspace: default
 runtime_role: ingest   # ingest | admin | query
-read_after_write_mode: eventual  # eventual | wait_for_replay | primary_route
+read_after_write_mode: eventual  # eventual | wait_for_replay
+read_after_write_timeout: 15.0
 postgres_required_major: 18
 postgres_min_minor: "18.4"
 

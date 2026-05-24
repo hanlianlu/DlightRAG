@@ -136,7 +136,8 @@ def _citation_badges(text: str) -> Markup:
         chunk_idx = m.group(2)
         return (
             f'<span class="citation-badge" data-ref="{ref_id}" '
-            f'data-chunk="{chunk_idx}" onclick="filterSource(this)">'
+            f'data-chunk="{chunk_idx}" data-action="filter-source" '
+            f'role="button" tabindex="0">'
             f"[{ref_id}-{chunk_idx}]</span>"
         )
 
@@ -147,7 +148,7 @@ def _citation_badges(text: str) -> Markup:
         ref_id = m.group(1)
         return (
             f'<span class="citation-badge" data-ref="{ref_id}" '
-            f'onclick="filterSource(this)">'
+            f'data-action="filter-source" role="button" tabindex="0">'
             f"[{ref_id}]</span>"
         )
 

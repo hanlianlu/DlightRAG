@@ -49,12 +49,12 @@
     </div>
 
     <!-- Hidden file input for image upload -->
-    <input type="file" id="image-input" accept="image/*" multiple style="display:none">
+    <input class="visually-hidden" type="file" id="image-input" accept="image/*" multiple>
 
     <aside class="panel" id="panel">
         <div class="panel-header">
             <span id="panel-title">SOURCES</span>
-            <button class="panel-close" id="panel-close-btn">&#10005;</button>
+            <button class="panel-close" id="panel-close-btn" aria-label="Close panel">&#10005;</button>
         </div>
         <div id="panel-content" class="panel-content"></div>
     </aside>

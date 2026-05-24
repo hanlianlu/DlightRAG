@@ -63,6 +63,11 @@ class RAGServiceManager:
         self._answer_engine: AnswerEngine | None = None
         self._query_planner: QueryPlanner | None = None
 
+    @property
+    def config(self) -> DlightragConfig:
+        """Read-only access to the manager configuration for UI/API adapters."""
+        return self._config
+
     @classmethod
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
         """Async factory — creates manager, warms up all known workspaces in parallel."""
@@ -125,6 +130,21 @@ class RAGServiceManager:
                 f"{operation} is not available when runtime_role='query'; "
                 "route it to an ingest/admin worker connected to primary PostgreSQL"
             )
+
+    async def _wait_after_write(self) -> str | None:
+        """Apply configured read-after-write barrier for primary-backed writes."""
+        if self._config.read_after_write_mode != "wait_for_replay":
+            return None
+
+        from dlightrag.storage.replication import wait_for_current_wal_replay
+
+        try:
+            return await wait_for_current_wal_replay(
+                self._config,
+                timeout=self._config.read_after_write_timeout,
+            )
+        except TimeoutError as exc:
+            raise RAGServiceUnavailableError(detail=str(exc)) from exc
 
     async def _get_service(self, workspace: str) -> RAGService:
         """Get or create a RAGService for a specific workspace. Async-safe.
@@ -196,11 +216,21 @@ class RAGServiceManager:
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 svc = await self._get_service(workspace)
-                return await svc.aingest(source_type=source_type, **kwargs)
+                result = await svc.aingest(source_type=source_type, **kwargs)
+                replay_lsn = await self._wait_after_write()
+                if replay_lsn is not None and isinstance(result, dict):
+                    result["replica_replay_lsn"] = replay_lsn
+                return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from e
+
+    async def acreate_workspace(self, workspace: str) -> None:
+        """Initialize a workspace through the public manager API."""
+        self._ensure_writable("create workspace")
+        await self._get_service(workspace)
+        await self._wait_after_write()
 
     async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""
@@ -211,7 +241,9 @@ class RAGServiceManager:
         """Delete files from a specific workspace."""
         self._ensure_writable("delete files")
         svc = await self._get_service(workspace)
-        return await svc.adelete_files(**kwargs)
+        result = await svc.adelete_files(**kwargs)
+        await self._wait_after_write()
+        return result
 
     async def list_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
         """List FAILED documents in a specific workspace."""
@@ -222,7 +254,9 @@ class RAGServiceManager:
         """Retry all FAILED documents in a specific workspace via re-ingest."""
         self._ensure_writable("retry failed docs")
         svc = await self._get_service(workspace)
-        return await svc.aretry_failed_docs()
+        result = await svc.aretry_failed_docs()
+        await self._wait_after_write()
+        return result
 
     async def aget_metadata(self, workspace: str, doc_id: str) -> dict[str, Any]:
         """Get document metadata by ID."""
@@ -242,6 +276,7 @@ class RAGServiceManager:
         self._ensure_writable("metadata update")
         svc = await self._get_service(workspace)
         await svc.aupdate_metadata(doc_id, data, mode=mode, metadata_policy=metadata_policy)
+        await self._wait_after_write()
 
     async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
@@ -292,6 +327,9 @@ class RAGServiceManager:
                     logger.warning("Failed to close service for '%s'", ws, exc_info=True)
                 del self._services[ws]
 
+        if results:
+            await self._wait_after_write()
+
         return {"workspaces": results, "total_errors": total_errors}
 
     def _get_answer_engine(self) -> AnswerEngine:
@@ -330,6 +368,36 @@ class RAGServiceManager:
         from dlightrag.models.llm import get_chat_model_func
 
         return get_chat_model_func(self._config)
+
+    async def aplan_query(
+        self,
+        query: str,
+        *,
+        conversation_history: list[dict[str, str]] | None = None,
+    ) -> QueryPlan:
+        """Plan a query using the manager-owned planner and config limits."""
+        planner = self._get_query_planner()
+        return await planner.plan(
+            query,
+            conversation_history=conversation_history,
+            max_turns=self._config.max_conversation_turns,
+            max_tokens=self._config.max_conversation_tokens,
+        )
+
+    async def agenerate_stream_from_contexts(
+        self,
+        query: str,
+        contexts: RetrievalContexts,
+        *,
+        query_images: list[str | dict[str, Any]] | None = None,
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        """Generate a streaming answer from already-retrieved contexts."""
+        engine = self._get_answer_engine()
+        return await engine.generate_stream(
+            query,
+            contexts,
+            query_images=query_images,
+        )
 
     # --- Read operations (single or federated) ---
 
@@ -392,14 +460,10 @@ class RAGServiceManager:
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 async with trace_pipeline("answer_pipeline", workspaces=ws_list, query=query):
-                    planner = self._get_query_planner()
-                    plan = await planner.plan(
+                    plan = await self.aplan_query(
                         query,
                         conversation_history=conversation_history,
-                        max_turns=self._config.max_conversation_turns,
-                        max_tokens=self._config.max_conversation_tokens,
                     )
-
                     retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
                     engine = self._get_answer_engine()
                     return await engine.generate(
@@ -434,12 +498,9 @@ class RAGServiceManager:
                 async with trace_pipeline(
                     "answer_stream_pipeline", workspaces=ws_list, query=query
                 ):
-                    planner = self._get_query_planner()
-                    plan = await planner.plan(
+                    plan = await self.aplan_query(
                         query,
                         conversation_history=conversation_history,
-                        max_turns=self._config.max_conversation_turns,
-                        max_tokens=self._config.max_conversation_tokens,
                     )
                     logger.info(
                         "Query plan: original=%r, standalone=%r",
@@ -448,8 +509,7 @@ class RAGServiceManager:
                     )
 
                     retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
-                    engine = self._get_answer_engine()
-                    return await engine.generate_stream(
+                    return await self.agenerate_stream_from_contexts(
                         plan.standalone_query,
                         retrieval.contexts,
                         query_images=query_images,

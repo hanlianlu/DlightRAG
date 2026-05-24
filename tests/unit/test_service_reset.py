@@ -31,8 +31,6 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
     service = RAGService.__new__(RAGService)
     service.config = config
     service._initialized = True
-    service.rag = None
-    service.unified = None
     service.ingestion = None
     service.retrieval = None
     service._backend = None
@@ -195,6 +193,7 @@ class TestAresetPhase4:
         ):
             result = await service.areset()
         assert result["graphs_dropped"] == ["test_ws_chunk_entity_relation"]
+
 
 class TestAresetPhase5:
     """Phase 5: Local files."""

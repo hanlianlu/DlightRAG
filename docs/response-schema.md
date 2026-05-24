@@ -46,6 +46,10 @@ curl -X POST http://localhost:8100/ingest \
 | `key` | `string` | s3 | S3 object key |
 | `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
+| `title` | `string` | — | User-declared document title stored in metadata |
+| `author` | `string` | — | User-declared document author stored in metadata |
+| `metadata` | `object` | — | Declared/custom ingest metadata |
+| `metadata_policy` | `string` | — | `validate`, `reject_unknown`, or `store_only` |
 
 ### MCP Server
 
@@ -74,6 +78,7 @@ Same parameters as REST API, passed as tool arguments.
 | `total_files` | `int` | Total files found |
 | `skipped_files` | `list` | Names of skipped files |
 | `error` | `string` | Error message (only when `status: "error"`) |
+| `replica_replay_lsn` | `string` | Present when `read_after_write_mode: wait_for_replay` waited for replica WAL replay |
 
 
 ## Retrieval & Answer
@@ -175,7 +180,9 @@ data: {"type":"references","data":[{"id":1,"title":"report.pdf"}]}
 data: {"type":"done"}
 ```
 
-**Additional REST parameters:** `workspaces` (list, for federated search).
+REST uses the same fields as the Python manager methods. `retrieve` and
+`answer` both accept `filters`; `retrieve`, `answer`, and Web image queries can
+also pass `multimodal_content` for direct visual retrieval.
 
 ### MCP Server
 

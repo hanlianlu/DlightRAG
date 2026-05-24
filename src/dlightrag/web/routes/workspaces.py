@@ -104,7 +104,7 @@ async def create_workspace(
 
     # Initialize workspace (creates the RAGService)
     try:
-        await manager._get_service(ws)
+        await manager.acreate_workspace(ws)
     except Exception:
         logger.exception("Workspace creation failed")
         return HTMLResponse(

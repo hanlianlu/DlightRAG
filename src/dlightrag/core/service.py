@@ -139,10 +139,8 @@ class RAGService:
         self._cancel_checker = cancel_checker
 
         # Direct LightRAG + DlightRAG multimodal wrappers.
-        self.rag: Any = None  # Backward-compatible alias slot; unused by new runtime.
         self.ingestion: Any = None
         self.retrieval: Any = None
-        self.unified: Any = None  # Removed legacy slot; kept for compatibility tests.
         self._lightrag: Any = None  # Direct LightRAG reference
         self._visual_chunks: Any = None  # Visual chunks KV store
         self._metadata_index: MetadataIndexProtocol | None = None
@@ -161,24 +159,18 @@ class RAGService:
         self._multimodal_embedder: Any = None
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
-        # Explicitly wired by _do_initialize / _do_initialize_unified;
-        # falls back to self.unified or self.retrieval so tests that set
-        # those attributes directly (without going through initialize) still work.
+        # Explicitly wired by the unified LightRAG initialization path.
         self._backend: Any = None
 
     @property
     def _effective_backend(self) -> Any:
         """Return the active retrieval backend, with lazy fallback."""
-        return self._backend or self.unified or self.retrieval
+        return self._backend or self.retrieval
 
     @property
     def lightrag(self) -> Any:
-        """Return the underlying LightRAG instance regardless of mode.
-
-        - New runtime: ``self._lightrag`` (created directly)
-        - Compatibility tests may still attach ``self.rag.lightrag``
-        """
-        return self._lightrag or getattr(self.rag, "lightrag", None)
+        """Return the underlying LightRAG instance for the unified runtime."""
+        return self._lightrag
 
     @staticmethod
     def _build_vector_db_kwargs(config: DlightragConfig) -> dict[str, Any]:
@@ -708,12 +700,6 @@ class RAGService:
         # tasks that block asyncio.run() from exiting.
         await self._shutdown_worker_pools()
 
-        if self.rag is not None:
-            try:
-                await self.rag.finalize_storages()
-            except Exception:  # noqa: BLE001
-                logger.warning("Failed to finalize storages", exc_info=True)
-
         if self._visual_chunks is not None:
             try:
                 await self._visual_chunks.finalize()
@@ -898,8 +884,8 @@ class RAGService:
         if not parts:
             raise ValueError("remote object key is empty")
         safe_namespace = namespace.replace("/", "_").replace("\\", "_") or "default"
-        return self.config.working_dir_path / "sources" / source_type / safe_namespace / Path(
-            *parts
+        return (
+            self.config.working_dir_path / "sources" / source_type / safe_namespace / Path(*parts)
         )
 
     async def _download_remote_to_local(
@@ -1154,9 +1140,7 @@ class RAGService:
                         filters=effective_filters,
                     )
                     candidate_ids = set(chunk_ids)
-                    logger.info(
-                        "In-filter: %d candidate chunks from metadata", len(candidate_ids)
-                    )
+                    logger.info("In-filter: %d candidate chunks from metadata", len(candidate_ids))
                 except Exception as exc:
                     logger.warning("Metadata candidate resolution failed; failing closed: %s", exc)
                     candidate_ids = set()

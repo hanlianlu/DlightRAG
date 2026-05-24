@@ -24,7 +24,6 @@ class TestRAGServiceAingest:
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(return_value={"status": "success"})
-        service.rag = MagicMock()
         service.retrieval = MagicMock()
         return service
 
@@ -78,7 +77,9 @@ class TestRAGServiceAingest:
     async def test_aingest_azure_calls_aclose_on_error(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called even when ingestion raises."""
         service = self._make_initialized_service(test_config)
-        service._ingestion_engine.aingest_file = AsyncMock(side_effect=RuntimeError("ingestion failed"))
+        service._ingestion_engine.aingest_file = AsyncMock(
+            side_effect=RuntimeError("ingestion failed")
+        )
         mock_source = AsyncMock()
         mock_source.alist_documents = AsyncMock(return_value=["f.pdf"])
         mock_source.aload_document = AsyncMock(return_value=b"%PDF")
@@ -98,8 +99,8 @@ class TestRAGServiceClose:
     async def test_close_handles_errors(self, test_config: DlightragConfig) -> None:
         service = RAGService(config=test_config)
         service._initialized = True
-        service.rag = MagicMock()
-        service.rag.finalize_storages = AsyncMock(side_effect=RuntimeError("cleanup failed"))
+        service._lightrag = MagicMock()
+        service._lightrag.finalize_storages = AsyncMock(side_effect=RuntimeError("cleanup failed"))
         service.ingestion = None
         service.retrieval = None
 
@@ -120,7 +121,6 @@ class TestRAGServiceRetrieve:
         service._initialized = True
         service.retrieval = MagicMock()
         service.retrieval.aretrieve = AsyncMock(return_value=MagicMock())
-        service.rag = MagicMock()
         service.ingestion = MagicMock()
         return service
 
@@ -331,7 +331,9 @@ class TestRAGServiceLightRAGMainPath:
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(side_effect=RuntimeError("render failed"))
+        service._ingestion_engine.aingest_file = AsyncMock(
+            side_effect=RuntimeError("render failed")
+        )
 
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
@@ -440,7 +442,6 @@ class TestRAGServiceLightRAGMainPath:
         """close() calls finalize on visual_chunks and LightRAG storages."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service.rag = None
         service._visual_chunks = AsyncMock()
         service._lightrag = AsyncMock()
 
