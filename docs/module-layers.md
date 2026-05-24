@@ -29,10 +29,9 @@ L4  models.{embedding, multimodal_embedding,
             llm, llm_roles, rerank}
     core.retrieval.{metadata_path}
     core.ingestion.{cleanup, policy}
-    core.vlm_ocr
 L3  models.providers                               provider implementations
     storage                                        PostgreSQL domain stores
-    sourcing, converters, citations
+    sourcing, citations
 L2  config
     core.retrieval.{protocols, models,
                     metadata_fields}
@@ -64,12 +63,10 @@ L0  prompts, utils                                 pure helpers
 | `models.providers` | L3 | OpenAI/Anthropic/Gemini and embedding provider wrappers |
 | `storage` | L3 | PostgreSQL pools, metadata index, artifact/provenance stores |
 | `sourcing` | L3 | Local, Azure Blob, and S3 source readers |
-| `converters` | L3 | Local document conversion helpers |
 | `citations` | L3 | Inline citation validation, source projection, optional highlights, streaming normalization |
 | `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |
 | `core.retrieval.metadata_path` | L4 | Metadata-to-candidate resolver |
 | `core.ingestion.{cleanup,policy}` | L4 | Cascade cleanup and ingest policy |
-| `core.vlm_ocr` | L4 | VLM OCR block helpers |
 | `core.lightrag_stores` | L5 | LightRAG store and sidecar adapter |
 | `core.ingestion.{lightrag_sidecar,direct_image,visual_semantics}` | L5 | Parser sidecars, direct image embedding, visual KG projection |
 | `core.retrieval.{filtered_vdb,bm25}` | L5 | PostgreSQL in-filtering and pg_textsearch BM25 |

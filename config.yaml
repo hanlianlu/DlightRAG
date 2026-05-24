@@ -64,8 +64,7 @@ citations:
 
 working_dir: ./dlightrag_storage
 parser:
-  rules: "*:native-iteP,*:mineru-iteP,*:legacy-R"
-  native_images_bypass_lightrag: true
+  rules: "docx:native-iteP,*:mineru-iteP"
   chunk_options: {}
 
 extraction:

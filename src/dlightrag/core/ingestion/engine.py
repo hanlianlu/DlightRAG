@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
-from lightrag.constants import FULL_DOCS_FORMAT_PENDING_PARSE, FULL_DOCS_FORMAT_RAW
+from lightrag.constants import (
+    FULL_DOCS_FORMAT_PENDING_PARSE,
+    FULL_DOCS_FORMAT_RAW,
+    PARSER_ENGINE_LEGACY,
+)
 from lightrag.parser.routing import resolve_file_parser_directives
 from lightrag.utils import compute_mdhash_id
 
@@ -141,6 +145,11 @@ class UnifiedIngestionEngine:
             parser_rules=self._parser_rules,
             require_external_endpoint=False,
         )
+        if parse_engine == PARSER_ENGINE_LEGACY:
+            raise ValueError(
+                "No LightRAG parser route matched this file. Configure parser.rules or "
+                "use a filename parser hint for a supported LightRAG parser."
+            )
         await self._lightrag.apipeline_enqueue_documents(
             input="",
             ids=[doc_id],

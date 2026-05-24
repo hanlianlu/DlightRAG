@@ -20,10 +20,10 @@ conversation history), produce a JSON response with these keys:
 
 Filter fields (use null for unmentioned):
 - filename: exact normalized filename when the user gives a complete name with extension
-- filename_pattern: SQL ILIKE pattern (% wildcards) when the reference is partial, \
-abbreviated, missing extension, or uses spaces/different separators. Be generous — \
-any token that looks like a file identifier (codes, numbers, abbreviations) should \
-produce a pattern.
+- filename_stem: exact normalized filename without extension only when explicitly requested
+- filename_pattern: SQL ILIKE pattern (% wildcards) only when the user explicitly gives \
+a partial file identifier, wildcard-style pattern, camera/code identifier, or asks for \
+a filename/title pattern rather than a broad topical search.
 - file_extension: e.g. "pdf", "png" (lowercase, no dot)
 - doc_title: exact normalized document title only when highly confident
 - doc_author: exact normalized author name only when highly confident

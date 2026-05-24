@@ -48,6 +48,121 @@ class TestMakeCompletionFunc:
         func = _make_completion_func(cfg, fallback_api_key="sk-fallback")
         assert callable(func)
 
+    @pytest.mark.asyncio
+    async def test_structured_output_uses_openai_json_schema(self, monkeypatch):
+        from pydantic import BaseModel, ConfigDict
+
+        from dlightrag.models import llm
+        from dlightrag.models.structured import StructuredOutput
+
+        class DemoPlan(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+            answer: str
+
+        seen: dict[str, object] = {}
+
+        class FakeProvider:
+            async def complete(self, **kwargs):
+                seen.update(kwargs)
+                return '{"answer": "ok"}'
+
+            def stream(self, **kwargs):  # pragma: no cover - not used
+                raise AssertionError("stream should not be called")
+
+        monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: FakeProvider())
+        func = llm._make_completion_func(
+            ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test")
+        )
+
+        await func(
+            messages=[{"role": "user", "content": "hi"}],
+            structured_output=StructuredOutput(name="demo_plan", schema=DemoPlan),
+        )
+
+        response_format = seen["response_format"]
+        assert isinstance(response_format, dict)
+        assert response_format["type"] == "json_schema"
+        assert response_format["json_schema"]["name"] == "demo_plan"
+        assert response_format["json_schema"]["strict"] is True
+        assert "extra_body" not in seen
+
+    @pytest.mark.asyncio
+    async def test_structured_output_falls_back_to_json_object_for_non_openai(self, monkeypatch):
+        from pydantic import BaseModel, ConfigDict
+
+        from dlightrag.models import llm
+        from dlightrag.models.structured import StructuredOutput
+
+        class DemoPlan(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+            answer: str
+
+        seen: dict[str, object] = {}
+
+        class FakeProvider:
+            async def complete(self, **kwargs):
+                seen.update(kwargs)
+                return '{"answer": "ok"}'
+
+            def stream(self, **kwargs):  # pragma: no cover - not used
+                raise AssertionError("stream should not be called")
+
+        monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: FakeProvider())
+        func = llm._make_completion_func(
+            ModelConfig(provider="anthropic", model="claude-sonnet-4", api_key="sk-test")
+        )
+
+        await func(
+            messages=[{"role": "user", "content": "hi"}],
+            structured_output=StructuredOutput(name="demo_plan", schema=DemoPlan),
+        )
+
+        assert seen["response_format"] == {"type": "json_object"}
+        assert "extra_body" not in seen
+
+    @pytest.mark.asyncio
+    async def test_openai_structured_output_retries_json_object_when_strict_fails(
+        self, monkeypatch
+    ):
+        from pydantic import BaseModel, ConfigDict
+
+        from dlightrag.models import llm
+        from dlightrag.models.structured import StructuredOutput
+
+        class DemoPlan(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+
+            answer: str
+
+        seen: list[dict[str, object]] = []
+
+        class FakeProvider:
+            async def complete(self, **kwargs):
+                seen.append(kwargs)
+                if kwargs["response_format"]["type"] == "json_schema":
+                    raise RuntimeError("strict schemas unsupported")
+                return '{"answer": "ok"}'
+
+            def stream(self, **kwargs):  # pragma: no cover - not used
+                raise AssertionError("stream should not be called")
+
+        monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: FakeProvider())
+        func = llm._make_completion_func(
+            ModelConfig(provider="openai", model="local-openai-compatible", api_key="sk-test")
+        )
+
+        await func(
+            messages=[{"role": "user", "content": "hi"}],
+            structured_output=StructuredOutput(name="demo_plan", schema=DemoPlan),
+        )
+
+        assert [call["response_format"]["type"] for call in seen] == [
+            "json_schema",
+            "json_object",
+        ]
+
 
 class TestGetChatModelFunc:
     def test_returns_callable(self):
