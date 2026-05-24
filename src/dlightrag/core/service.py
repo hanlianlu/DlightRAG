@@ -181,7 +181,7 @@ class RAGService:
 
     @staticmethod
     def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
-        """Build LightRAG 1.5+ addon_params without legacy entity_types."""
+        """Build LightRAG 1.5+ addon_params from the active config."""
         params: dict[str, Any] = {"language": "English"}
         if config.kg_entity_types:
             params["entity_types_guidance"] = (
@@ -307,7 +307,7 @@ class RAGService:
             llm_model_func=chat_func_lr,
             embedding_func=embedding_func,
             workspace=config.workspace,
-            default_llm_timeout=int(config.chat.timeout),
+            default_llm_timeout=int(config.llm.default.timeout),
             default_embedding_timeout=config.embedding_request_timeout,
             chunk_token_size=config.chunk_size,
             chunk_overlap_token_size=config.chunk_overlap,
@@ -1080,7 +1080,6 @@ class RAGService:
         self,
         query: str,
         multimodal_content: list[dict[str, Any]] | None = None,
-        mode: Literal["mix"] | None = "mix",
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         is_reretrieve: bool = False,

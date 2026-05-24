@@ -257,10 +257,6 @@ class GeminiEmbedProvider(EmbedProvider):
         return super().parse_response(data)
 
 
-class DashScopeEmbedProvider(DashScopeQwenEmbedProvider):
-    """Backward-compatible alias for DashScope Qwen embeddings."""
-
-
 class OllamaEmbedProvider(EmbedProvider):
     """POST /api/embed for text-only local Ollama embeddings."""
 
@@ -289,12 +285,10 @@ class OllamaEmbedProvider(EmbedProvider):
 _EMBED_REGISTRY: dict[str, type[EmbedProvider]] = {
     "voyage": VoyageEmbedProvider,
     "dashscope_qwen": DashScopeQwenEmbedProvider,
-    "dashscope": DashScopeQwenEmbedProvider,
     "qwen_openai_compatible": QwenOpenAICompatEmbedProvider,
     "gemini": GeminiEmbedProvider,
     "jina": JinaEmbedProvider,
     "openai_compatible": OpenAICompatEmbedProvider,
-    "openai": OpenAICompatEmbedProvider,
     "ollama": OllamaEmbedProvider,
 }
 

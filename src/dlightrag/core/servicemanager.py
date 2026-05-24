@@ -521,20 +521,12 @@ class RAGServiceManager:
 
     # --- Management ---
 
-    async def list_workspaces(self, *, compatible_only: bool = False) -> list[str]:
-        """Discover available workspaces.
-
-        Args:
-            compatible_only: If True, filter to workspaces whose embedding
-                model matches the current global config (PG-only).
-        """
-        all_ws = await self._list_all_workspaces()
-        if not compatible_only:
-            return all_ws
-        return await self._filter_compatible(all_ws)
+    async def list_workspaces(self) -> list[str]:
+        """Discover available workspaces."""
+        return await self._list_all_workspaces()
 
     async def _list_all_workspaces(self) -> list[str]:
-        """Internal: discover all workspaces regardless of compatibility."""
+        """Internal: discover all workspaces."""
         config = self._config
 
         try:
@@ -552,28 +544,6 @@ class RAGServiceManager:
         except Exception as exc:
             logger.warning("Failed to list workspaces from PG: %s", exc)
             return [config.workspace]
-
-    async def _filter_compatible(self, workspaces: list[str]) -> list[str]:
-        """Filter workspaces to those using the same embedding model."""
-        compatible = []
-        try:
-            import asyncpg
-
-            conn = await asyncpg.connect(**self._config.pg_connection_kwargs())
-            try:
-                for ws in workspaces:
-                    row = await conn.fetchrow(
-                        "SELECT embedding_model FROM dlightrag_workspace_meta WHERE workspace = $1",
-                        ws,
-                    )
-                    if row is None or row["embedding_model"] == self._config.embedding.model:
-                        compatible.append(ws)
-            finally:
-                await conn.close()
-        except Exception:
-            logger.debug("workspace compatibility filter failed, returning all", exc_info=True)
-            return workspaces
-        return compatible
 
     async def close(self) -> None:
         """Close all managed RAGService instances."""

@@ -15,15 +15,27 @@ DLIGHTRAG_* → backend env vars so both modes work seamlessly.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
 PostgresTarget = Literal["primary", "replica"]
+_LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(
+    {
+        "VLM_PROCESS_ENABLE",
+        "VLM_MAX_IMAGE_BYTES",
+        "SURROUNDING_LEADING_MAX_TOKENS",
+        "SURROUNDING_TRAILING_MAX_TOKENS",
+        "LIGHTRAG_FORCE_REPARSE_MINERU",
+    }
+)
+_LIGHTRAG_SIDECAR_ENV_PREFIXES = ("MINERU_",)
 
 
 def _find_env_file() -> Path | None:
@@ -38,6 +50,30 @@ def _find_yaml_config() -> Path | None:
     if cwd.is_file():
         return cwd
     return None
+
+
+def _iter_env_files(env_file: Any) -> Iterable[Path]:
+    if env_file is None:
+        return ()
+    if isinstance(env_file, (str, Path)):
+        return (Path(env_file),)
+    return tuple(Path(path) for path in env_file if path is not None)
+
+
+def _is_lightrag_sidecar_env_key(key: str) -> bool:
+    return key in _LIGHTRAG_SIDECAR_ENV_KEYS or key.startswith(_LIGHTRAG_SIDECAR_ENV_PREFIXES)
+
+
+def _load_lightrag_sidecar_env(env_file: Any, *, force: bool = False) -> None:
+    """Load declared upstream LightRAG sidecar env vars from .env."""
+    for path in _iter_env_files(env_file):
+        if not path.is_file():
+            continue
+        for key, value in dotenv_values(path).items():
+            if not value or not _is_lightrag_sidecar_env_key(key):
+                continue
+            if force or key not in os.environ:
+                os.environ[key] = value
 
 
 class ModelConfig(BaseModel):
@@ -197,11 +233,10 @@ class DlightragConfig(BaseSettings):
         env_nested_delimiter="__",
         env_file=_find_env_file(),
         env_file_encoding="utf-8",
+        dotenv_filtering="match_prefix",
         case_sensitive=False,
-        # Reject any unknown DLIGHTRAG_* env var, .env entry, or
-        # config.yaml key. Catches typos AND old flat-schema fields
-        # (openai_api_key, llm_provider, etc.) without hardcoding a
-        # finite legacy list.
+        # Reject any unknown DLIGHTRAG_* env var, .env entry, or config.yaml key.
+        # Catches typos and removed flat-schema fields without hardcoding a finite list.
         extra="forbid",
     )
 
@@ -229,11 +264,6 @@ class DlightragConfig(BaseSettings):
     postgres_user: str = Field(default="dlightrag")
     postgres_password: str = Field(default="dlightrag")
     postgres_database: str = Field(default="dlightrag")
-    postgres_primary_host: str | None = Field(default=None)
-    postgres_primary_port: int | None = Field(default=None)
-    postgres_primary_user: str | None = Field(default=None)
-    postgres_primary_password: str | None = Field(default=None)
-    postgres_primary_database: str | None = Field(default=None)
     postgres_replica_host: str | None = Field(default=None)
     postgres_replica_port: int | None = Field(default=None)
     postgres_replica_user: str | None = Field(default=None)
@@ -345,8 +375,6 @@ class DlightragConfig(BaseSettings):
     max_entity_tokens: int = Field(default=6000)
     max_relation_tokens: int = Field(default=8000)
     max_total_tokens: int = Field(default=40000)
-    default_mode: Literal["mix"] = Field(default="mix")
-
     max_conversation_turns: int = Field(default=50)
     max_conversation_tokens: int = Field(default=150000)
 
@@ -383,9 +411,10 @@ class DlightragConfig(BaseSettings):
         default="127.0.0.1",
         description="MCP streamable-http bind address. Default 127.0.0.1 (loopback only) "
         "because MCP exposes ingest/answer/delete_files with no native auth — exposing "
-        "to a network without auth would let any reachable client wipe data. Set to "
-        "0.0.0.0 only when api_auth_token is set with an explicit auth_mode; "
-        "the bearer-token middleware then guards the transport.",
+        "to a network without auth would let any reachable client wipe data. Use "
+        "0.0.0.0 only behind a loopback host-port mapping/trusted network, or when "
+        "api_auth_token is set with an explicit auth_mode so bearer-token middleware "
+        "guards the transport.",
     )
     mcp_port: int = Field(default=8101)
 
@@ -467,31 +496,6 @@ class DlightragConfig(BaseSettings):
     # ===== Computed Properties =====
 
     @property
-    def chat(self) -> ModelConfig:
-        """Compatibility accessor for old callers; config input must use llm.default."""
-        return self.llm.default
-
-    @property
-    def extract(self) -> ModelConfig | None:
-        """Compatibility accessor for old callers; config input must use llm.roles.extract."""
-        return self.llm.roles.extract
-
-    @property
-    def keywords(self) -> ModelConfig | None:
-        """Compatibility accessor for old callers; config input must use llm.roles.keyword."""
-        return self.llm.roles.keyword
-
-    @property
-    def query(self) -> ModelConfig | None:
-        """Compatibility accessor for old callers; config input must use llm.roles.query."""
-        return self.llm.roles.query
-
-    @property
-    def vlm(self) -> ModelConfig | None:
-        """Compatibility accessor for old callers; config input must use llm.roles.vlm."""
-        return self.llm.roles.vlm
-
-    @property
     def working_dir_path(self) -> Path:
         return Path(self.working_dir).resolve()
 
@@ -516,8 +520,7 @@ class DlightragConfig(BaseSettings):
 
     def _pg_endpoint_value(self, target: PostgresTarget, field: str) -> Any:
         if target == "primary":
-            value = getattr(self, f"postgres_primary_{field}")
-            return value if value is not None else getattr(self, f"postgres_{field}")
+            return getattr(self, f"postgres_{field}")
 
         value = getattr(self, f"postgres_replica_{field}")
         if value is not None:
@@ -559,6 +562,7 @@ class DlightragConfig(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
+        _load_lightrag_sidecar_env(self.__class__.model_config.get("env_file"), force=False)
         self.apply_lightrag_backend_env(force=False)
 
         # Resolve working_dir to absolute path
@@ -571,6 +575,14 @@ class DlightragConfig(BaseSettings):
 _config: DlightragConfig | None = None
 
 
+def load_config(env_file: str | Path | None = None, **overrides: Any) -> DlightragConfig:
+    """Build config from an optional .env file without globally loading dotenv."""
+    if env_file is not None:
+        _load_lightrag_sidecar_env(env_file, force=False)
+        return DlightragConfig(_env_file=env_file, **overrides)  # type: ignore[call-arg]
+    return DlightragConfig(**overrides)
+
+
 def get_config() -> DlightragConfig:
     """Get global dlightrag configuration (singleton).
 
@@ -579,7 +591,7 @@ def get_config() -> DlightragConfig:
     """
     global _config
     if _config is None:
-        _config = DlightragConfig()  # type: ignore[call-arg]
+        _config = load_config()
     return _config
 
 

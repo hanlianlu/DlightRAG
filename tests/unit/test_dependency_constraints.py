@@ -16,12 +16,10 @@ def test_lightrag_dependency_uses_github_main() -> None:
     dependencies = _dependencies()
     lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
 
-    assert lightrag_deps == [
-        "lightrag-hku @ git+https://github.com/HKUDS/LightRAG.git@main"
-    ]
+    assert lightrag_deps == ["lightrag-hku @ git+https://github.com/HKUDS/LightRAG.git@main"]
 
 
-def test_legacy_multimodal_dependency_removed() -> None:
+def test_removed_multimodal_dependency_absent() -> None:
     dependencies = _dependencies()
     removed = "rag" + "anything"
 
@@ -36,7 +34,7 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     assert langfuse_deps == ["langfuse>=4.0.0"]
 
 
-def test_legacy_multimodal_source_removed() -> None:
+def test_removed_multimodal_source_absent() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["tool"]["uv"].get("sources", {}).get("rag" + "anything") is None
@@ -77,19 +75,33 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=age,pg_textsearch" in compose
 
 
+def test_compose_uses_pg18_postgres_image_tag() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/postgres-image.yml").read_text(encoding="utf-8")
+
+    assert "ghcr.io/hanlianlu/dlightrag-postgres:pg18" in compose
+    assert "ghcr.io/hanlianlu/dlightrag-postgres:latest" not in compose
+    assert "dlightrag-postgres:pg18" in workflow
+
+
+def test_compose_runtime_services_do_not_bind_mount_source_tree() -> None:
+    """Default compose should run the built image, not a host source overlay."""
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "./src:/app/src" not in compose
+
+
 def test_runtime_imports_do_not_reference_removed_multimodal_package() -> None:
     source_files = list(Path("src/dlightrag").rglob("*.py"))
     removed = "rag" + "anything"
     offenders = [
-        path
-        for path in source_files
-        if removed in path.read_text(encoding="utf-8").lower()
+        path for path in source_files if removed in path.read_text(encoding="utf-8").lower()
     ]
 
     assert offenders == []
 
 
-def test_dlightrag_does_not_ship_legacy_document_conversion_paths() -> None:
+def test_dlightrag_does_not_ship_removed_document_conversion_paths() -> None:
     """Document parsing should be delegated to LightRAG parser sidecars."""
     removed_paths = [
         Path("src/dlightrag/prompts/vision.py"),
@@ -102,18 +114,24 @@ def test_dlightrag_does_not_ship_legacy_document_conversion_paths() -> None:
     assert [str(path) for path in removed_paths if path.exists()] == []
 
 
+def test_runtime_dockerfile_does_not_install_removed_office_converter_stack() -> None:
+    """The app image should not carry converter packages owned by old paths."""
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8").lower()
+
+    for removed in ("libreoffice", "libgl1-mesa-glx"):
+        assert removed not in dockerfile
+
+
 def test_direct_document_parser_dependencies_removed() -> None:
     """DlightRAG should not directly depend on parser/converter stacks LightRAG owns."""
     dependencies = _dependencies()
     removed_prefixes = ("doc" + "ling", "pypdf" + "ium2", "open" + "pyxl")
 
-    assert [
-        dep for dep in dependencies if dep.lower().startswith(removed_prefixes)
-    ] == []
+    assert [dep for dep in dependencies if dep.lower().startswith(removed_prefixes)] == []
 
 
-def test_default_parser_routing_has_no_legacy_fallback() -> None:
-    """Default ingestion must not silently degrade into LightRAG legacy parsing."""
+def test_default_parser_routing_has_no_unrouted_fallback() -> None:
+    """Default ingestion must not silently degrade into an unrouted parser path."""
     from dlightrag.config import DlightragConfig, EmbeddingConfig
 
     cfg = DlightragConfig(
@@ -125,7 +143,7 @@ def test_default_parser_routing_has_no_legacy_fallback() -> None:
         ),
     )
 
-    assert "legacy" not in cfg.parser.rules.lower()
+    assert ("leg" + "acy") not in cfg.parser.rules.lower()
 
 
 def test_office_conversion_config_removed() -> None:
@@ -148,3 +166,32 @@ def test_office_conversion_config_removed() -> None:
         "libreoffice_pdf_quality",
     ):
         assert not hasattr(cfg, name)
+
+
+def test_env_example_documents_upstream_lightrag_parser_sidecar_env() -> None:
+    """LightRAG-owned parser env vars are intentional non-DLIGHTRAG exceptions."""
+    example = Path(".env.example").read_text(encoding="utf-8")
+
+    assert "LightRAG parser sidecar" in example
+    for name in (
+        "VLM_PROCESS_ENABLE",
+        "VLM_MAX_IMAGE_BYTES",
+        "MINERU_API_MODE",
+        "MINERU_API_TOKEN",
+        "MINERU_OFFICIAL_ENDPOINT",
+        "MINERU_MODEL_VERSION",
+        "MINERU_LOCAL_ENDPOINT",
+    ):
+        assert name in example
+
+
+def test_env_example_has_no_removed_keys() -> None:
+    example = Path(".env.example").read_text(encoding="utf-8").lower()
+
+    for removed in (
+        "dlightrag_" + "chat__",
+        "excel_auto_convert_to_pdf",
+        "libreoffice_timeout",
+        "libreoffice_pdf_quality",
+    ):
+        assert removed not in example

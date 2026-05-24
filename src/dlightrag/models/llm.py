@@ -138,15 +138,6 @@ def get_extract_model_func(config: DlightragConfig) -> Callable:
     )
 
 
-def get_ingest_model_func(config: DlightragConfig) -> Callable:
-    """Compatibility alias for ingest-time structural calls.
-
-    Product-level ingest model config is removed; ingest-time text extraction
-    uses the LightRAG-aligned ``extract`` role.
-    """
-    return get_extract_model_func(config)
-
-
 def get_query_model_func(config: DlightragConfig) -> Callable:
     """Messages-first query callable for AnswerEngine and QueryPlanner.
 
@@ -298,7 +289,6 @@ __all__ = [
     "get_chat_model_func_for_lightrag",
     "get_embedding_func",
     "get_extract_model_func",
-    "get_ingest_model_func",
     "get_multimodal_embedder",
     "get_query_model_func",
     "get_rerank_func",

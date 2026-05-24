@@ -17,14 +17,9 @@ LABEL maintainer="HanlianLyu"
 
 WORKDIR /app
 
-# LibreOffice + MinerU system dependencies
+# Runtime utilities for Git-based dependencies and TLS.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ca-certificates \
-    libreoffice-writer libreoffice-calc libreoffice-impress \
-    fonts-dejavu-core \
-    libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender1 \
-    fonts-noto-core fonts-noto-cjk fontconfig \
-    && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user BEFORE copying files to avoid chown layer duplication

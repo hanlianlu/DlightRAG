@@ -119,9 +119,7 @@ class AnswerEngine:
         # Convert sources to Reference objects for RetrievalResult
         from dlightrag.models.schemas import Reference
 
-        references = [
-            Reference(id=s.id, title=s.title or s.path) for s in processed.sources
-        ]
+        references = [Reference(id=s.id, title=s.title or s.path) for s in processed.sources]
 
         return RetrievalResult(
             answer=processed.answer,

@@ -11,7 +11,8 @@ from urllib.parse import unquote, urlparse
 from lightrag.constants import (
     FULL_DOCS_FORMAT_PENDING_PARSE,
     FULL_DOCS_FORMAT_RAW,
-    PARSER_ENGINE_LEGACY,
+    PARSER_ENGINE_MINERU,
+    PARSER_ENGINE_NATIVE,
 )
 from lightrag.parser.routing import resolve_file_parser_directives
 from lightrag.utils import compute_mdhash_id
@@ -30,6 +31,10 @@ from dlightrag.core.retrieval.metadata_fields import (
 )
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+_LIGHTRAG_DOCUMENT_PARSER_ENGINES = {
+    PARSER_ENGINE_MINERU,
+    PARSER_ENGINE_NATIVE,
+}
 
 
 class UnifiedIngestionEngine:
@@ -145,7 +150,7 @@ class UnifiedIngestionEngine:
             parser_rules=self._parser_rules,
             require_external_endpoint=False,
         )
-        if parse_engine == PARSER_ENGINE_LEGACY:
+        if parse_engine not in _LIGHTRAG_DOCUMENT_PARSER_ENGINES:
             raise ValueError(
                 "No LightRAG parser route matched this file. Configure parser.rules or "
                 "use a filename parser hint for a supported LightRAG parser."
@@ -247,7 +252,9 @@ class UnifiedIngestionEngine:
             await self._stores.upsert_chunks_with_vectors(
                 rows,
                 vectors,
-                embedding_dim=getattr(self._multimodal_embedder, "dim", len(next(iter(vectors.values())))),
+                embedding_dim=getattr(
+                    self._multimodal_embedder, "dim", len(next(iter(vectors.values())))
+                ),
                 max_token_size=8192,
             )
         return {"chunk_ids": list(rows), "provenance": provenance}

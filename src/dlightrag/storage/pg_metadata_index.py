@@ -132,7 +132,9 @@ class PGMetadataIndex:
         """Insert or update document metadata."""
         sys_fields = system_field_ids()
         system = {k: metadata.get(k) for k in sys_fields}
-        system["parse_engine"] = metadata.get("parse_engine") or metadata.get("lightrag.parse_engine")
+        system["parse_engine"] = metadata.get("parse_engine") or metadata.get(
+            "lightrag.parse_engine"
+        )
         system["process_options"] = metadata.get("process_options") or metadata.get(
             "lightrag.process_options"
         )

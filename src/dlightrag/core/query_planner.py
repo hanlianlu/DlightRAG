@@ -313,7 +313,9 @@ class QueryPlanner:
                 metadata_filter=None,
                 metadata_filter_source=None,
                 metadata_filter_confidence=filter_confidence or "low",
-                metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
+                metadata_filter_evidence=filter_evidence
+                if isinstance(filter_evidence, list)
+                else None,
             )
 
         # Handle date fields specially

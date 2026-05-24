@@ -25,7 +25,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
-      - ./src:/app/src:ro
       - ./config.yaml:/app/config.yaml:ro
     depends_on:
       postgres:
@@ -35,12 +34,9 @@ services:
   dlightrag-mcp:
     restart: unless-stopped
     build: .
-    # SECURITY: MCP streamable-http exposes ingest / delete_files / answer
-    # without per-tool auth, so the transport-level bearer token is
-    # mandatory when bound to 0.0.0.0. Bind to 127.0.0.1 here means MCP
-    # is only reachable from within the compose network; map a host port
-    # below only after setting DLIGHTRAG_AUTH_MODE=simple and
-    # DLIGHTRAG_API_AUTH_TOKEN in .env.
+    # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
+    # This maps the host port to 127.0.0.1 only; set DLIGHTRAG_AUTH_MODE=simple
+    # + DLIGHTRAG_API_AUTH_TOKEN before exposing it on a non-loopback network.
     ports:
       - "127.0.0.1:8101:8101"
     environment:
@@ -53,7 +49,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - dlightrag_data:/app/dlightrag_storage
-      - ./src:/app/src:ro
       - ./config.yaml:/app/config.yaml:ro
     depends_on:
       postgres:
@@ -62,7 +57,7 @@ services:
 
   postgres:
     restart: unless-stopped
-    image: ghcr.io/hanlianlu/dlightrag-postgres:latest
+    image: ghcr.io/hanlianlu/dlightrag-postgres:pg18
     # build: postgres/  # uncomment to build the image locally
     ports:
       - "5432:5432"

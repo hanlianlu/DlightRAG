@@ -55,11 +55,7 @@ def pg_conn_kwargs_from_env(env: Mapping[str, str] | None = None) -> dict[str, A
 
 def missing_preload_libraries(setting: str) -> list[str]:
     """Return required libraries missing from shared_preload_libraries."""
-    loaded = {
-        item.strip().strip('"').strip("'")
-        for item in setting.split(",")
-        if item.strip()
-    }
+    loaded = {item.strip().strip('"').strip("'") for item in setting.split(",") if item.strip()}
     return [name for name in REQUIRED_PRELOAD_LIBRARIES if name not in loaded]
 
 
@@ -203,7 +199,9 @@ class FakeMultimodalEmbedder:
     async def probe_image_embedding(self) -> None:
         return None
 
-    async def embed_texts(self, texts: list[str], *, context: str = "document") -> list[list[float]]:
+    async def embed_texts(
+        self, texts: list[str], *, context: str = "document"
+    ) -> list[list[float]]:
         return [stable_vector(f"{context}:{text}", dim=self.dim) for text in texts]
 
     async def embed_index_images(self, images: list[Image.Image]) -> list[list[float]]:
@@ -255,7 +253,9 @@ def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMulti
     monkeypatch.setattr(service_module, "get_vlm_model_func", lambda _config: fake_vlm_func)
     monkeypatch.setattr(service_module, "get_rerank_func", lambda _config: None)
     monkeypatch.setattr(service_module, "build_role_llm_configs", lambda _config: None)
-    monkeypatch.setattr(service_module, "get_embedding_func", lambda _config: fake_embedding_func(dim=dim))
+    monkeypatch.setattr(
+        service_module, "get_embedding_func", lambda _config: fake_embedding_func(dim=dim)
+    )
     monkeypatch.setattr(
         service_module,
         "get_multimodal_embedder",

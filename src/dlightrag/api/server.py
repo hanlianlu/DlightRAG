@@ -138,18 +138,18 @@ def main() -> None:
     import argparse
 
     import uvicorn
-    from dotenv import load_dotenv
 
-    from dlightrag.config import get_config
+    from dlightrag.config import get_config, load_config, set_config
 
     parser = argparse.ArgumentParser(description="dlightrag REST API server")
     parser.add_argument("--env-file", help="Path to .env configuration file")
     args = parser.parse_args()
 
     if args.env_file:
-        load_dotenv(args.env_file, override=True)
-
-    config = get_config()
+        config = load_config(args.env_file)
+        set_config(config)
+    else:
+        config = get_config()
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s",

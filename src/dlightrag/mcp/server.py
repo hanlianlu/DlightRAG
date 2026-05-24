@@ -19,7 +19,7 @@ from mcp.types import TextContent, Tool
 
 from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
-from dlightrag.config import DlightragConfig, get_config
+from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
@@ -62,12 +62,6 @@ async def list_tools() -> list[Tool]:
                     "query": {
                         "type": "string",
                         "description": "The search query",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["mix"],
-                        "default": "mix",
-                        "description": "Retrieval mode. Only mix is supported.",
                     },
                     "top_k": {
                         "type": "integer",
@@ -155,12 +149,6 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "The question to answer",
                     },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["mix"],
-                        "default": "mix",
-                        "description": "Retrieval mode. Only mix is supported.",
-                    },
                     "top_k": {
                         "type": "integer",
                         "description": "Number of top results to retrieve",
@@ -224,9 +212,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     try:
         if name == "retrieve":
             manager = await _ensure_manager()
-            mode = arguments.get("mode", "mix")
-            if mode != "mix":
-                raise ValueError("Only mode='mix' is supported")
+            if "mode" in arguments:
+                raise ValueError("MCP retrieve does not accept 'mode'; DlightRAG always uses mix")
             kwargs: dict[str, Any] = {}
             if arguments.get("filters"):
                 from dlightrag.core.retrieval.models import MetadataFilter
@@ -235,7 +222,6 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await manager.aretrieve(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
-                mode=mode,
                 top_k=arguments.get("top_k"),
                 **kwargs,
             )
@@ -256,13 +242,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         if name == "answer":
             manager = await _ensure_manager()
-            mode = arguments.get("mode", "mix")
-            if mode != "mix":
-                raise ValueError("Only mode='mix' is supported")
+            if "mode" in arguments:
+                raise ValueError("MCP answer does not accept 'mode'; DlightRAG always uses mix")
             result = await manager.aanswer(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
-                mode=mode,
                 top_k=arguments.get("top_k"),
             )
             # Build cited-only sources via CitationProcessor
@@ -497,16 +481,15 @@ def main() -> None:
     """Entry point for dlightrag-mcp."""
     import argparse
 
-    from dotenv import load_dotenv
-
     parser = argparse.ArgumentParser(description="dlightrag MCP server")
     parser.add_argument("--env-file", help="Path to .env configuration file")
     args = parser.parse_args()
 
     if args.env_file:
-        load_dotenv(args.env_file, override=True)
-
-    config = _get_config()
+        config = load_config(args.env_file)
+        set_config(config)
+    else:
+        config = _get_config()
 
     logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
 
