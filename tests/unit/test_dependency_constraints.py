@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -183,6 +184,30 @@ def test_env_example_documents_upstream_lightrag_parser_sidecar_env() -> None:
         "MINERU_LOCAL_ENDPOINT",
     ):
         assert name in example
+
+
+def test_env_example_defaults_mineru_to_local_sidecar() -> None:
+    example = Path(".env.example").read_text(encoding="utf-8")
+
+    assert re.search(r"(?m)^MINERU_API_MODE=local$", example)
+    assert re.search(r"(?m)^MINERU_LOCAL_ENDPOINT=http://127\.0\.0\.1:8210$", example)
+    assert re.search(r"(?m)^MINERU_LOCAL_BACKEND=hybrid-auto-engine$", example)
+    assert re.search(r"(?m)^MINERU_LOCAL_PARSE_METHOD=auto$", example)
+    assert re.search(r"(?m)^MINERU_LOCAL_IMAGE_ANALYSIS=true$", example)
+    assert re.search(r"(?m)^MINERU_ENABLE_TABLE=true$", example)
+    assert re.search(r"(?m)^MINERU_ENABLE_FORMULA=true$", example)
+    assert not re.search(r"(?m)^MINERU_API_TOKEN=", example)
+    assert not re.search(r"(?m)^MINERU_OFFICIAL_ENDPOINT=", example)
+    assert re.search(r"(?m)^# MINERU_API_TOKEN=your-api-key$", example)
+    assert re.search(r"(?m)^# MINERU_OFFICIAL_ENDPOINT=https://mineru\.net$", example)
+
+
+def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert (
+        "MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}"
+    ) in compose
 
 
 def test_env_example_has_no_removed_keys() -> None:

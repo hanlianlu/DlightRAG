@@ -376,11 +376,11 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
                 "VLM_PROCESS_ENABLE=true",
                 "VLM_MAX_IMAGE_BYTES=5242880",
-                "MINERU_API_MODE=official",
-                "MINERU_API_TOKEN=mineru-token",
-                "MINERU_OFFICIAL_ENDPOINT=https://mineru.net",
-                "MINERU_MODEL_VERSION=vlm",
-                "MINERU_IS_OCR=false",
+                "MINERU_API_MODE=local",
+                "MINERU_LOCAL_ENDPOINT=http://127.0.0.1:8210",
+                "MINERU_LOCAL_BACKEND=hybrid-auto-engine",
+                "MINERU_LOCAL_PARSE_METHOD=auto",
+                "MINERU_LOCAL_IMAGE_ANALYSIS=true",
             ]
         ),
         encoding="utf-8",
@@ -389,10 +389,10 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
         "VLM_PROCESS_ENABLE",
         "VLM_MAX_IMAGE_BYTES",
         "MINERU_API_MODE",
-        "MINERU_API_TOKEN",
-        "MINERU_OFFICIAL_ENDPOINT",
-        "MINERU_MODEL_VERSION",
-        "MINERU_IS_OCR",
+        "MINERU_LOCAL_ENDPOINT",
+        "MINERU_LOCAL_BACKEND",
+        "MINERU_LOCAL_PARSE_METHOD",
+        "MINERU_LOCAL_IMAGE_ANALYSIS",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
@@ -409,7 +409,8 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
     assert cfg.llm.default.api_key == "sk-env"
     assert "vlm_process_enable" not in cfg.model_fields_set
     assert os.environ["VLM_PROCESS_ENABLE"] == "true"
-    assert os.environ["MINERU_API_TOKEN"] == "mineru-token"
+    assert os.environ["MINERU_API_MODE"] == "local"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
 
 
 def test_dotenv_rejects_unknown_dlightrag_keys(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -438,15 +439,15 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-explicit",
                 "DLIGHTRAG_API_PORT=9900",
-                "MINERU_API_MODE=official",
-                "MINERU_API_TOKEN=mineru-token",
+                "MINERU_API_MODE=local",
+                "MINERU_LOCAL_ENDPOINT=http://127.0.0.1:8210",
             ]
         ),
         encoding="utf-8",
     )
     monkeypatch.delenv("DLIGHTRAG_API_PORT", raising=False)
     monkeypatch.delenv("MINERU_API_MODE", raising=False)
-    monkeypatch.delenv("MINERU_API_TOKEN", raising=False)
+    monkeypatch.delenv("MINERU_LOCAL_ENDPOINT", raising=False)
 
     cfg = load_config(
         env_file,
@@ -460,8 +461,8 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
 
     assert cfg.api_port == 9900
     assert cfg.llm.default.api_key == "sk-explicit"
-    assert os.environ["MINERU_API_MODE"] == "official"
-    assert os.environ["MINERU_API_TOKEN"] == "mineru-token"
+    assert os.environ["MINERU_API_MODE"] == "local"
+    assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
 
 
 def test_blank_sidecar_values_are_not_exported(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -470,14 +471,14 @@ def test_blank_sidecar_values_are_not_exported(tmp_path, monkeypatch: pytest.Mon
         "\n".join(
             [
                 "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-env",
-                "MINERU_API_MODE=official",
-                "MINERU_API_TOKEN=",
+                "MINERU_API_MODE=local",
+                "MINERU_LOCAL_ENDPOINT=",
             ]
         ),
         encoding="utf-8",
     )
     monkeypatch.delenv("MINERU_API_MODE", raising=False)
-    monkeypatch.delenv("MINERU_API_TOKEN", raising=False)
+    monkeypatch.delenv("MINERU_LOCAL_ENDPOINT", raising=False)
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
 
     DlightragConfig(
@@ -489,5 +490,5 @@ def test_blank_sidecar_values_are_not_exported(tmp_path, monkeypatch: pytest.Mon
         ),
     )
 
-    assert os.environ["MINERU_API_MODE"] == "official"
-    assert "MINERU_API_TOKEN" not in os.environ
+    assert os.environ["MINERU_API_MODE"] == "local"
+    assert "MINERU_LOCAL_ENDPOINT" not in os.environ

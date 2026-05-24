@@ -9,6 +9,10 @@ x-common-env: &common-env
   DLIGHTRAG_POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
   DLIGHTRAG_WORKSPACE: ${DLIGHTRAG_WORKSPACE:-default}
   DLIGHTRAG_WORKING_DIR: /app/dlightrag_storage
+  # .env defaults to a native host sidecar at 127.0.0.1:8210. Inside a
+  # DlightRAG container, 127.0.0.1 is the app container itself, so route local
+  # MinerU through Docker's host alias unless explicitly overridden.
+  MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}
 
 services:
   dlightrag-api:

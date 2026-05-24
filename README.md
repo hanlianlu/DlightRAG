@@ -33,6 +33,8 @@ Browser / curl / Python / MCP client
 - Model credentials for the providers configured in [`config.yaml`](config.yaml).
 - A multimodal embedding model. The checked-in default is
   `voyage-multimodal-3.5`.
+- A local MinerU HTTP sidecar for PDF, PPTX, XLSX, and other non-DOCX
+  document parsing.
 
 If you do not use Docker, provide PostgreSQL 18 with `pgvector`, Apache AGE,
 and `pg_textsearch` installed and preloaded as required by [`docs/PG.md`](docs/PG.md).
@@ -55,11 +57,36 @@ DLIGHTRAG_EMBEDDING__API_KEY=...
 ```
 
 The default document route uses LightRAG native parsing for DOCX and MinerU
-for other document types. For PDFs and similar inputs, either set
-`MINERU_API_TOKEN` for the official MinerU API or switch the MinerU block in
-`.env` to a local `MINERU_LOCAL_ENDPOINT`.
+for other document types. `.env.example` is local-first:
 
-2. Start the service stack:
+```bash
+MINERU_API_MODE=local
+MINERU_LOCAL_ENDPOINT=http://127.0.0.1:8210
+```
+
+2. Start a local MinerU sidecar for document parsing:
+
+```bash
+make mineru-install
+make mineru-api
+```
+
+The helper creates a dedicated `.venv-mineru` so MinerU's ML dependencies do
+not enter DlightRAG's runtime environment. The default install extra is
+`mineru[core]`, matching MinerU's cross-platform core install. On GPU servers,
+prefer MinerU's official Docker Compose `api` or `router` profile; set
+`MINERU_LOCAL_ENDPOINT` to that service, usually `http://127.0.0.1:8000` or
+`http://127.0.0.1:8002`.
+
+On macOS, you can keep the sidecar running through launchd:
+
+```bash
+make mineru-service-install
+make mineru-service-status
+make mineru-service-logs
+```
+
+3. Start the service stack:
 
 ```bash
 docker compose up -d
@@ -75,7 +102,13 @@ curl http://localhost:8100/health
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
 | `postgres` | PostgreSQL 18 + pgvector + AGE + pg_textsearch | `5432` |
 
-3. Open the Web UI:
+When DlightRAG itself runs in Docker, compose maps
+`MINERU_LOCAL_ENDPOINT` inside the app containers to
+`http://host.docker.internal:8210` by default. Override
+`MINERU_DOCKER_LOCAL_ENDPOINT` when the MinerU API is attached to a Docker
+network, for example `http://mineru-api:8000`.
+
+4. Open the Web UI:
 
 ```text
 http://localhost:8100/web/
@@ -308,6 +341,33 @@ DLIGHTRAG_RERANK__API_KEY=...
 LightRAG parser sidecar settings intentionally keep upstream names, for
 example `VLM_PROCESS_ENABLE`, `MINERU_API_MODE`, and `MINERU_API_TOKEN`.
 These are documented in [`.env.example`](.env.example).
+
+### MinerU Local Sidecar
+
+DlightRAG delegates MinerU parsing to LightRAG main. It does not ship a
+separate MinerU client or parser path. The local contract is the MinerU HTTP
+API used by LightRAG:
+
+```text
+POST /tasks
+GET  /tasks/{task_id}
+GET  /tasks/{task_id}/result
+GET  /health
+```
+
+Recommended defaults:
+
+| Setting | Default | Why |
+|---|---|---|
+| `MINERU_API_MODE` | `local` | Keeps document parsing local by default. |
+| `MINERU_LOCAL_ENDPOINT` | `http://127.0.0.1:8210` | Matches `make mineru-api` for native runs. |
+| `MINERU_LOCAL_BACKEND` | `hybrid-auto-engine` | Uses MinerU's local hybrid parser when the service supports it. |
+| `MINERU_LOCAL_PARSE_METHOD` | `auto` | Lets MinerU choose text-layer extraction vs OCR per page. |
+| `MINERU_ENABLE_TABLE` / `MINERU_ENABLE_FORMULA` | `true` | Preserves table and equation extraction for LightRAG ingest. |
+
+The official MinerU API remains available by explicitly changing
+`MINERU_API_MODE=official` and setting `MINERU_API_TOKEN`; it is not the
+checked-in default.
 
 ### Model Providers
 
