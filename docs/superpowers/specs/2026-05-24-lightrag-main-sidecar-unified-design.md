@@ -32,7 +32,7 @@ Hard decisions:
 - Parser selection uses LightRAG's parser-routing model: `LIGHTRAG_PARSER`-style rules plus filename hints, resolved through upstream `lightrag.parser_routing`. DlightRAG should not keep a separate product-level `parser.engine` / `parser.process_options` branch.
 - Document deduplication uses LightRAG's canonical basename and `content_hash` fields in `doc_status` / `full_docs`. A separate DlightRAG hash index should be deleted from the runtime path.
 - Document tables and equations use LightRAG's own multimodal document handling.
-- Native images and document-extracted image sidecar assets use direct multimodal image embedding.
+- Document-extracted image sidecar assets use LightRAG `i` for VLM-generated text chunks and KG participation, plus DlightRAG direct multimodal image embedding for visual recall. Native images use DlightRAG direct multimodal image embedding plus a LightRAG text/KG projection because they are not primarily document-parser inputs.
 - LightRAG sidecar files are the canonical parse artifacts. DlightRAG must not write a second filesystem sidecar format; it only stores adapter-normalized references, metadata, and chunk provenance in PostgreSQL.
 
 PostgreSQL extension requirements are layered:
@@ -89,6 +89,7 @@ New or retained modules should be arranged around DlightRAG concerns, not histor
 | `core/ingestion/engine.py` | Single ingestion orchestrator for documents, native images, metadata mirrors, and deletion hooks. Parser routing and document dedup authority stay upstream in LightRAG. |
 | `core/ingestion/lightrag_sidecar.py` | `LightRAGSidecarAdapter`: resolves canonical LightRAG sidecar files and yields typed references for DlightRAG indexing/direct-image embedding. It does not write DlightRAG sidecar files. |
 | `core/ingestion/direct_image.py` | Creates direct image embedding chunk specs for native images and extracted drawing/image assets. |
+| `core/ingestion/visual_semantics.py` | Creates VLM-generated text projections for native images and for parser backends that cannot produce LightRAG `i` analysis, then inserts them through LightRAG so image entities/relationships enter the KG. |
 | `storage/document_artifacts.py` | `DocumentArtifactRegistry`: PostgreSQL table for document-level LightRAG sidecar URI/path references and parser provenance. |
 | `storage/chunk_provenance.py` | `ChunkProvenanceIndex`: PostgreSQL table for chunk-to-document, chunk-to-sidecar, modality, asset, page, and bbox provenance. |
 | `core/retrieval/retriever.py` | Single retrieval orchestrator: metadata filter, LightRAG mix, BM25, direct image query, RRF, rerank, enrichment. |
@@ -128,9 +129,11 @@ flowchart TD
     D --> G["LightRAG sidecar adapter"]
     G --> H["Direct image chunks for drawing/image assets"]
     E --> H
+    H --> K["Native/fallback visual semantic projection docs"]
+    K --> F
     F --> I["Metadata + artifact stores"]
     H --> I
-    I --> J["Hash index registration"]
+    I --> J["Workspace registration"]
 ```
 
 ### 5.1 Source Classification
@@ -147,23 +150,31 @@ LightRAG supports some image formats through parser engines, but DlightRAG shoul
 Default document parser rules should use LightRAG's own routing syntax and be resolved with upstream `lightrag.parser_routing`, not with a DlightRAG parser switch:
 
 ```text
-*:native-teP,*:mineru-teP,*:legacy-R
+*:native-iteP,*:mineru-iteP,*:legacy-R
 ```
 
 Meaning:
 
-- `native-teP`: prefer native structured parsing where LightRAG supports it, currently strongest for DOCX.
-- `mineru-teP`: use MinerU for parser-supported document formats that native does not cover.
+- `native-iteP`: prefer native structured parsing where LightRAG supports it, currently strongest for DOCX, with image/table/equation VLM analysis enabled.
+- `mineru-iteP`: use MinerU for parser-supported document formats that native does not cover, with image/table/equation VLM analysis enabled.
 - `legacy-R`: retain LightRAG's legacy text extractor and recursive chunking fallback for formats not handled by native/MinerU.
+- `i`: let LightRAG analyze document-extracted images/drawings into text chunks for KG, BM25, and citations.
 - `t`: let LightRAG handle tables.
 - `e`: let LightRAG handle equations.
 - `P`: use paragraph semantic chunking by default.
 - no `!`: KG extraction remains enabled.
-- no default `i`: document-extracted images are handled by DlightRAG direct embedding, not by LightRAG image-analysis chunks.
 
-This default can be configurable as parser rules, but the default should express the product decision: tables/equations are LightRAG-owned; drawings/images are direct-embedding-owned. File-level overrides should use LightRAG filename hints such as `report.[mineru-R].pdf` or `memo.[-!].docx`.
+This default can be configurable as parser rules, but the default should express the product decision: document-extracted tables/equations/images get LightRAG semantic text/KG treatment, while drawings/images also receive DlightRAG direct image vectors for visual recall. File-level overrides should use LightRAG filename hints such as `report.[mineru-R].pdf` or `memo.[-!].docx`.
 
-The direct image collector must read parser-emitted drawing/image assets, not LightRAG image-analysis chunks. In LightRAG v1.5.0rc2, `i/t/e` gates VLM analysis, not parser extraction: sidecar files are written by the parser when content exists. Therefore DlightRAG should keep `i` off by default, still read `drawings.json`, and use direct image embedding for those assets.
+The direct image collector must read parser-emitted drawing/image assets, not LightRAG image-analysis chunks. In LightRAG v1.5.0rc2, `i/t/e` gates VLM analysis, not parser extraction or embedding: sidecar files are written by the parser when content exists. Therefore DlightRAG should enable `i` for document-like ingestion so LightRAG creates image semantic text chunks, and still read `drawings.json` to direct-embed the original image assets.
+
+This means document-extracted images have two intentional representations:
+
+1. LightRAG `i` uses the `vlm` role to analyze drawings/images and produces text chunks that participate in BM25, entity extraction, relationship extraction, and citations.
+2. DlightRAG direct image embedding indexes the original image bytes in the same multimodal vector space for visual similarity search.
+3. `chunk_provenance` links both representations back to the same sidecar item.
+
+The direct image vector remains the visual identity used for image similarity search. LightRAG `i` output is the KG/BM25/citation bridge; it must not replace the image vector.
 
 Document ingest steps:
 
@@ -173,9 +184,10 @@ Document ingest steps:
 4. Read parser sidecar locations, `parse_engine`, `process_options`, `chunk_options`, `content_hash`, and canonical basename from LightRAG `doc_status` / `full_docs`.
 5. Persist a document artifact registry row that records source path, canonical basename, parse engine, process options, chunk options snapshot, content hash, LightRAG sidecar URI/directory, blocks path, drawings path, tables path, equations path, and LightRAG full document id.
 6. Use `LightRAGSidecarAdapter` to resolve LightRAG sidecar items into typed references.
-7. For drawing/image sidecar references only, write direct image embedding chunk rows through the LightRAG store adapter.
-8. Persist chunk provenance for both LightRAG-owned text chunks and DlightRAG-owned direct image chunks.
-9. Finalize metadata only after LightRAG writes and DlightRAG registry/provenance/direct-image writes succeed.
+7. For drawing/image sidecar references only, write direct image embedding chunk rows through the LightRAG store adapter. LightRAG `i` has already produced the corresponding semantic text chunks when image analysis succeeds.
+8. Persist chunk provenance for LightRAG-owned document chunks, LightRAG-owned multimodal image/table/equation text chunks, and DlightRAG-owned direct image chunks.
+9. For parser backends or retry cases where LightRAG `i` analysis is unavailable, create DlightRAG visual semantic projection documents as a fallback so image-derived entities and relationships still enter the KG.
+10. Finalize metadata only after LightRAG writes and DlightRAG registry/provenance/direct-image/visual-semantic writes succeed.
 
 If upstream LightRAG later exposes stable sidecar ids on its own chunks, DlightRAG should update direct image chunks in place when possible. If that mapping is not stable, DlightRAG-owned direct image chunk ids are the canonical fallback:
 
@@ -203,11 +215,12 @@ Native image ingest does not use LightRAG document multimodal analysis. It creat
 The direct image path writes:
 
 - a multimodal image vector into LightRAG's chunk vector store;
-- a text chunk containing either user-provided description, configured VLM caption, or a concise file-derived fallback;
+- a direct-image text chunk containing either user-provided description, configured VLM caption, or a concise file-derived fallback;
+- a visual semantic projection document inserted through LightRAG with KG extraction enabled, using the `vlm` role for image understanding and the `extract` role for entity/relation extraction;
 - a `doc_status`/`full_docs` record so deletion and retrieval provenance remain uniform;
 - `document_artifacts` and `chunk_provenance` rows.
 
-The vector identity is always the image itself. Captions are retrieval support material for BM25, KG, display, and citation context; they are not a substitute for image embedding.
+The vector identity is always the image itself. Captions and visual semantic projections are retrieval support material for BM25, KG, display, and citation context; they are not a substitute for image embedding.
 
 ---
 
@@ -295,6 +308,7 @@ Rules:
 
 - LightRAG-owned blocks/tables/equations are indexed as `embedding_input_kind="text"` unless upstream provides a true multimodal vector for that chunk.
 - DlightRAG-owned native images and drawing/image sidecar assets are indexed as `embedding_input_kind="image"`.
+- LightRAG `i` image-analysis chunks and DlightRAG fallback visual semantic projection chunks are indexed as `embedding_input_kind="text"` and carry `semantic_projection_of_chunk_id` in provenance metadata when they correspond to a direct-image chunk.
 - A chunk may carry sidecar provenance even when the visible retrieval text came from LightRAG.
 - Metadata filters resolve document ids first, then chunk ids through this table.
 
@@ -409,7 +423,7 @@ Role responsibilities:
 | `extract` | LightRAG + DlightRAG | entity extraction, document metadata normalization, structured metadata extraction. |
 | `keyword` | LightRAG + DlightRAG | LightRAG keyword extraction and DlightRAG intent-aware metadata filter detection. |
 | `query` | LightRAG + DlightRAG | answer generation, query planning, citation-aware responses. |
-| `vlm` | LightRAG + DlightRAG | visual/multimodal analysis, parser/VLM calls, optional image descriptions. |
+| `vlm` | LightRAG + DlightRAG | visual/multimodal analysis, parser/VLM calls, image descriptions, and structured visual semantic projections for KG insertion. |
 
 Cleanup rules:
 
@@ -535,7 +549,7 @@ storage:
   doc_status: PGDocStatusStorage
 
 parser:
-  rules: "*:native-teP,*:mineru-teP,*:legacy-R"
+  rules: "*:native-iteP,*:mineru-iteP,*:legacy-R"
   native_images_bypass_lightrag: true
   chunk_options: {}   # optional per-workspace overrides passed to LightRAG enqueue; normally empty
 
@@ -674,16 +688,17 @@ Required test groups:
    - Direct image indexing uses document context and image query uses query context at DlightRAG call sites; provider payloads use task routing only when asymmetric resolves active.
 
 4. **Document ingest golden fixture**
-   - LightRAG parser directives are resolved from `*:native-teP,*:mineru-teP,*:legacy-R` plus filename hints.
+   - LightRAG parser directives are resolved from `*:native-iteP,*:mineru-iteP,*:legacy-R` plus filename hints.
    - `chunk_options` is snapshotted and persisted with document artifacts.
    - document dedup uses LightRAG canonical basename and `content_hash`, not a DlightRAG hash index.
    - table/equation sidecars become LightRAG-owned text chunks.
-   - drawing/image sidecars become DlightRAG-owned direct image chunks.
+   - drawing/image sidecars become LightRAG-owned image-analysis text chunks through `i` and DlightRAG-owned direct image chunks through direct embedding.
    - `document_artifacts` and `chunk_provenance` are written.
 
 5. **Native image ingest**
    - native image bypasses LightRAG document multimodal analysis.
    - image bytes are embedded directly.
+   - VLM-generated visual semantic projection enters LightRAG KG extraction.
    - uniform metadata, artifact, doc status, and chunk provenance are written.
 
 6. **Metadata in-filtering**

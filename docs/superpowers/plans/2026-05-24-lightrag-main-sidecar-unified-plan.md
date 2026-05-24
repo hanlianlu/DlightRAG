@@ -4,7 +4,7 @@
 
 **Goal:** Replace DlightRAG's RAGAnything/caption path and legacy page-render unified path with one PostgreSQL 18 + LightRAG-main sidecar pipeline that supports metadata, strict in-filtering, direct image embeddings, and BM25+RRF retrieval.
 
-**Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using LightRAG parser-rule syntax (`*:native-teP,*:mineru-teP,*:legacy-R`) plus filename hints; native images and parser-extracted drawing/image assets are embedded directly through DlightRAG's provider-aware multimodal embedding layer. LLM config is canonicalized as `llm.default` plus `llm.roles.extract|keyword|query|vlm`, and LightRAG receives matching `role_llm_configs`. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
+**Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using LightRAG parser-rule syntax (`*:native-iteP,*:mineru-iteP,*:legacy-R`) plus filename hints; document-extracted images use LightRAG `i` for VLM semantic text/KG participation and DlightRAG direct multimodal embedding for visual recall. Native images are embedded directly and receive a LightRAG text/KG projection because they are not primarily document-parser inputs. LLM config is canonicalized as `llm.default` plus `llm.roles.extract|keyword|query|vlm`, and LightRAG receives matching `role_llm_configs`. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
 
 **Sidecar Boundary:** LightRAG sidecar files are the canonical parser artifacts. DlightRAG must not create a second filesystem sidecar format. It reads LightRAG sidecars through an adapter and stores only PostgreSQL artifact references, metadata, chunk provenance, and direct-image chunk mappings.
 
@@ -36,7 +36,7 @@ The commonly remembered LightRAG PG requirement is PG18 plus two core extensions
 - Do not keep a DlightRAG hash index in the runtime path. LightRAG `doc_status.content_hash`, canonical basename lookup, and enqueue serialization lock are the dedup authority.
 - Persist LightRAG `chunk_options` snapshots and parser provenance in `document_artifacts`; do not create a second DlightRAG chunker config model.
 - Read LightRAG sidecars in their actual v1.5.0rc2 shape: modality JSON files contain `drawings` / `tables` / `equations` dictionaries, not a DlightRAG-owned sidecar schema.
-- Keep `i` off by default. LightRAG parsers still write sidecars; `i/t/e` only controls VLM analysis. DlightRAG reads `drawings.json` for direct image embeddings while LightRAG handles table/equation analysis through `t/e`.
+- Turn `i` on for document-like ingestion. `i/t/e` only controls VLM analysis and multimodal text chunks, not embedding. DlightRAG still reads `drawings.json` for direct image embeddings while LightRAG handles image/table/equation semantic text through `i/t/e`.
 - Enable structured entity/relation extraction by default where the LLM binding supports it, and replace `ENTITY_TYPES` with `ENTITY_TYPE_PROMPT_FILE`.
 - Rely on LightRAG pipeline status, request-pending, resume, and enqueue serialization semantics. DlightRAG direct-image post-processing must be idempotent and keyed by deterministic chunk ids instead of adding a second queue/status machine.
 
@@ -53,6 +53,7 @@ Create:
 - `src/dlightrag/models/llm_roles.py` maps DlightRAG role config to LightRAG `RoleLLMConfig`.
 - `src/dlightrag/core/ingestion/lightrag_sidecar.py` adapts canonical LightRAG sidecar files into typed references without writing DlightRAG sidecar files.
 - `src/dlightrag/core/ingestion/direct_image.py` builds direct-image chunk specs and vectors.
+- `src/dlightrag/core/ingestion/visual_semantics.py` builds native-image and fallback visual semantic text projections for LightRAG KG insertion.
 - `src/dlightrag/core/ingestion/engine.py` becomes the single ingestion orchestrator.
 - `src/dlightrag/core/retrieval/bm25.py` implements PostgreSQL BM25 search.
 - `src/dlightrag/core/retrieval/fusion.py` implements RRF.
@@ -173,7 +174,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
     assert cfg.embedding.asymmetric == "auto"
-    assert cfg.parser.rules == "*:native-teP,*:mineru-teP,*:legacy-R"
+    assert cfg.parser.rules == "*:native-iteP,*:mineru-iteP,*:legacy-R"
     assert cfg.extraction.use_json is True
 
 
@@ -409,7 +410,7 @@ class ParserConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    rules: str = "*:native-teP,*:mineru-teP,*:legacy-R"
+    rules: str = "*:native-iteP,*:mineru-iteP,*:legacy-R"
     native_images_bypass_lightrag: bool = True
     chunk_options: dict[str, Any] = Field(default_factory=dict)
 
@@ -664,7 +665,7 @@ llm:
       model: gemini-2.5-flash
 
 parser:
-  rules: "*:native-teP,*:mineru-teP,*:legacy-R"
+  rules: "*:native-iteP,*:mineru-iteP,*:legacy-R"
   native_images_bypass_lightrag: true
   chunk_options: {}
 
@@ -1802,11 +1803,13 @@ git commit -m "feat: add lightrag store adapter and provenance stores"
 **Files:**
 - Create: `src/dlightrag/core/ingestion/lightrag_sidecar.py`
 - Create: `src/dlightrag/core/ingestion/direct_image.py`
+- Create: `src/dlightrag/core/ingestion/visual_semantics.py`
 - Create: `src/dlightrag/core/ingestion/engine.py`
 - Modify: `src/dlightrag/core/service.py`
 - Test: `tests/unit/test_lightrag_sidecar.py`
 - Test: `tests/unit/test_unified_ingestion_engine.py`
 - Test: `tests/unit/test_direct_image_ingest.py`
+- Test: `tests/unit/test_visual_semantics.py`
 
 - [ ] **Step 1: Write LightRAG sidecar adapter tests**
 
@@ -1892,7 +1895,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     stores.get_doc_status.return_value = {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc"}
     stores.get_full_doc.return_value = {
         "parse_engine": "mineru",
-        "process_options": "teP",
+        "process_options": "iteP",
         "chunk_options": {"paragraph_semantic": {"chunk_token_size": 2000}},
         "sidecar_location": "file:///tmp/sample.parsed/",
     }
@@ -1910,7 +1913,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
         chunk_provenance=chunks,
         multimodal_embedder=AsyncMock(),
         workspace="default",
-        parser_rules="*:native-teP,*:mineru-teP,*:legacy-R",
+        parser_rules="*:native-iteP,*:mineru-iteP,*:legacy-R",
         chunk_options={},
     )
 
@@ -1919,7 +1922,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     kwargs = lightrag.apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["docs_format"] == "pending_parse"
     assert kwargs["parse_engine"] == "mineru"
-    assert kwargs["process_options"] == "teP"
+    assert kwargs["process_options"] == "iteP"
     assert not hasattr(engine, "_hash_index")
 ```
 
@@ -2042,7 +2045,52 @@ def native_image_ref(path: Path) -> LightRAGSidecarRef:
     )
 ```
 
-- [ ] **Step 6: Create unified ingestion engine**
+- [ ] **Step 6: Create visual semantic projection helper**
+
+Create `src/dlightrag/core/ingestion/visual_semantics.py` for native images and fallback-only image KG projection:
+
+```python
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+"""Visual semantic text projections for native image KG insertion."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from dlightrag.core.ingestion.lightrag_sidecar import LightRAGSidecarRef
+
+
+def visual_semantic_doc_id(workspace: str, source_doc_id: str, ref: LightRAGSidecarRef) -> str:
+    return f"{workspace}:{source_doc_id}:visual-semantic:{ref.sidecar_type}:{ref.sidecar_id}"
+
+
+async def build_visual_semantic_projection(
+    *,
+    workspace: str,
+    source_doc_id: str,
+    ref: LightRAGSidecarRef,
+    vlm_func: Any,
+) -> tuple[str, str]:
+    """Return deterministic LightRAG text input for native/fallback image KG."""
+    if ref.asset_path is None:
+        raise ValueError(f"{ref.sidecar_type}:{ref.sidecar_id} has no asset_path")
+    doc_id = visual_semantic_doc_id(workspace, source_doc_id, ref)
+    description = await vlm_func(
+        prompt="Describe visible entities, relationships, text, scene attributes, and uncertainty.",
+        image_path=str(ref.asset_path),
+    )
+    text = (
+        f"[Visual Semantic Projection]\n"
+        f"Source image id: {ref.sidecar_id}\n"
+        f"Source image type: {ref.sidecar_type}\n"
+        f"Description:\n{description}"
+    )
+    return doc_id, text
+```
+
+Unit tests should assert deterministic ids, asset-path validation, and that the output contains source id/type plus the VLM description.
+
+- [ ] **Step 7: Create unified ingestion engine**
 
 Create `src/dlightrag/core/ingestion/engine.py` with `UnifiedIngestionEngine.aingest_file()`, `UnifiedIngestionEngine._ingest_document()`, and `UnifiedIngestionEngine._ingest_native_image()`. `aingest_file()` must dispatch by suffix and return a dictionary containing `doc_id`, `source_kind`, `chunks`, and `ingest_strategy`.
 
@@ -2103,7 +2151,27 @@ await self._chunk_provenance.upsert_many(
 
 For drawing refs, use `build_direct_image_chunk()` and `stores.upsert_chunks_with_vectors()`.
 
-- [ ] **Step 7: Wire engine into service**
+Do not create DlightRAG semantic projection documents for document-extracted drawings when LightRAG `i` analysis succeeds. Those semantic chunks are upstream-owned LightRAG multimodal chunks derived from `llm_analyze_result`. DlightRAG should only add direct image vectors and provenance rows for the same sidecar refs.
+
+For native images, or for explicit fallback when a parser backend cannot produce LightRAG `i` analysis, use `visual_semantics.py` to generate deterministic text and enqueue it through LightRAG with `docs_format=FULL_DOCS_FORMAT_RAW`, `process_options="P"`, and no `!`, so KG extraction remains enabled:
+
+```python
+semantic_doc_id, semantic_text = await build_visual_semantic_projection(
+    source_doc_id=doc_id,
+    ref=ref,
+    vlm_func=self._vlm_func,
+)
+await self._lightrag.apipeline_enqueue_documents(
+    input=semantic_text,
+    ids=[semantic_doc_id],
+    file_paths=[str(ref.asset_path or file_path)],
+    docs_format=FULL_DOCS_FORMAT_RAW,
+    process_options="P",
+)
+await self._lightrag.apipeline_process_enqueue_documents()
+```
+
+- [ ] **Step 8: Wire engine into service**
 
 In `src/dlightrag/core/service.py`, replace the `UnifiedRepresentEngine` construction with:
 
@@ -2125,20 +2193,20 @@ self._backend = UnifiedIngestionEngine(
 
 Reject legacy `parser.engine` and `parser.process_options` config. Parser selection belongs to LightRAG parser-rule syntax and filename hints; DlightRAG only provides the rule string and optional `chunk_options`.
 
-- [ ] **Step 8: Run Task 5 tests**
+- [ ] **Step 9: Run Task 5 tests**
 
 Run:
 
 ```bash
-uv run pytest tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py -v
+uv run pytest tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py tests/unit/test_visual_semantics.py -v
 ```
 
 Expected: selected tests pass.
 
-- [ ] **Step 9: Commit Task 5**
+- [ ] **Step 10: Commit Task 5**
 
 ```bash
-git add src/dlightrag/core/ingestion src/dlightrag/core/service.py tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py
+git add src/dlightrag/core/ingestion src/dlightrag/core/service.py tests/unit/test_lightrag_sidecar.py tests/unit/test_unified_ingestion_engine.py tests/unit/test_direct_image_ingest.py tests/unit/test_visual_semantics.py
 git commit -m "feat: ingest through lightrag sidecars"
 ```
 
