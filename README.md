@@ -73,10 +73,10 @@ make mineru-api
 ```
 
 The helper creates a dedicated `.venv-mineru` so MinerU's ML dependencies do
-not enter DlightRAG's runtime environment. The default install extra is
-`mineru[core]`, matching MinerU's cross-platform core install. Configure local
-installer extras such as `core,mlx`, `core,vllm`, or `core,lmdeploy` in
-`.env.mineru` through `MINERU_INSTALL_EXTRAS`; keep DlightRAG runtime parser
+not enter DlightRAG's runtime environment. With no explicit
+`MINERU_INSTALL_EXTRAS`, the installer uses `mineru[core,mlx]` on Apple
+Silicon and `mineru[core]` elsewhere. `.env.mineru.example` defaults to
+`core,mlx` for this local development setup. Keep DlightRAG runtime parser
 settings in `config.yaml`. On GPU servers, prefer MinerU's official Docker
 Compose `api` or `router` profile; set
 `parser_sidecars.mineru.local_endpoint` to that service, usually

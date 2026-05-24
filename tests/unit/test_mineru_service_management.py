@@ -68,8 +68,8 @@ def test_mineru_helper_defaults_to_separate_env_file() -> None:
 def test_mineru_env_example_documents_install_extras() -> None:
     example = (ROOT / ".env.mineru.example").read_text(encoding="utf-8")
 
-    assert "MINERU_INSTALL_EXTRAS=core" in example
     assert "MINERU_INSTALL_EXTRAS=core,mlx" in example
+    assert "# MINERU_INSTALL_EXTRAS=core" in example
     assert "MINERU_SERVICE_VENV=.venv-mineru" in example
     assert "MINERU_API_PORT=8210" in example
 
@@ -133,6 +133,84 @@ def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["MINERU_CAPTURE"] = str(capture)
     env["MINERU_SERVICE_VENV"] = str(service_env)
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
+    env.pop("MINERU_INSTALL_EXTRAS", None)
+
+    subprocess.run(
+        [str(ROOT / "scripts" / "install_mineru_service.sh")],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+
+    default_extras = (
+        "core,mlx"
+        if os.uname().sysname == "Darwin" and os.uname().machine in {"arm64", "aarch64"}
+        else "core"
+    )
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        f"venv {service_env}",
+        f"pip install --python {service_env}/bin/python -U mineru[{default_extras}]",
+    ]
+
+
+def test_mineru_installer_defaults_to_mlx_on_apple_silicon(tmp_path: Path) -> None:
+    capture = tmp_path / "uv.txt"
+    bin_dir = tmp_path / "bin"
+    service_env = tmp_path / "mineru-env"
+    bin_dir.mkdir()
+    fake_uv = bin_dir / "uv"
+    fake_uname = bin_dir / "uname"
+    _write_executable(
+        fake_uv,
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MINERU_CAPTURE"\n',
+    )
+    _write_executable(
+        fake_uname,
+        '#!/usr/bin/env bash\nif [[ "$1" == "-s" ]]; then echo Darwin; else echo arm64; fi\n',
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MINERU_CAPTURE"] = str(capture)
+    env["MINERU_SERVICE_VENV"] = str(service_env)
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
+    env.pop("MINERU_INSTALL_EXTRAS", None)
+
+    subprocess.run(
+        [str(ROOT / "scripts" / "install_mineru_service.sh")],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        f"venv {service_env}",
+        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]",
+    ]
+
+
+def test_mineru_installer_defaults_to_core_off_apple_silicon(tmp_path: Path) -> None:
+    capture = tmp_path / "uv.txt"
+    bin_dir = tmp_path / "bin"
+    service_env = tmp_path / "mineru-env"
+    bin_dir.mkdir()
+    fake_uv = bin_dir / "uv"
+    fake_uname = bin_dir / "uname"
+    _write_executable(
+        fake_uv,
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MINERU_CAPTURE"\n',
+    )
+    _write_executable(
+        fake_uname,
+        '#!/usr/bin/env bash\nif [[ "$1" == "-s" ]]; then echo Linux; else echo x86_64; fi\n',
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MINERU_CAPTURE"] = str(capture)
+    env["MINERU_SERVICE_VENV"] = str(service_env)
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
     env.pop("MINERU_INSTALL_EXTRAS", None)
 
     subprocess.run(
