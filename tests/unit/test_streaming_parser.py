@@ -24,8 +24,8 @@ class TestAnswerStream:
             parts.append(token)
         assert "".join(parts) == "Hello world."
 
-    async def test_answer_preserves_full_text(self) -> None:
-        """Post-stream .answer contains the full accumulated text."""
+    async def test_answer_strips_generated_references_tail(self) -> None:
+        """Post-stream .answer contains the normalized answer body."""
 
         async def fake_stream():
             yield "Growth is 15% [1].\n\n"
@@ -35,7 +35,7 @@ class TestAnswerStream:
         stream = AnswerStream(fake_stream())
         async for _ in stream:
             pass
-        assert stream.answer == "Growth is 15% [1].\n\n### References\n- [1] report.pdf"
+        assert stream.answer == "Growth is 15% [1]."
 
     async def test_no_references_attr(self) -> None:
         """AnswerStream no longer exposes .references."""

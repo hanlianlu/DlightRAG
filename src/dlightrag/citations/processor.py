@@ -1,7 +1,4 @@
-"""Citation processor — orchestrates parse, validate, build sources.
-
-Simplified from sandbox_agent: no VLM/tool citations, no MediaReference.
-"""
+"""Citation processor -- validates inline markers and projects cited sources."""
 
 from __future__ import annotations
 
@@ -10,9 +7,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .indexer import CitationIndexer
-from .parser import clean_invalid_citations, extract_cited_chunks
-from .schemas import ChunkSnippet, SourceReference
-from .utils import filter_content_for_display
+from .parser import (
+    clean_invalid_citations,
+    extract_cited_chunks,
+    strip_generated_references_section,
+)
+from .schemas import SourceReference
+from .source_builder import build_sources_from_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,8 @@ class CitationProcessor:
 
     def process(self, answer_text: str) -> CitationResult:
         """Clean citations, extract chunks, build source references."""
-        cleaned = clean_invalid_citations(self._indexer, answer_text)
+        answer_body = strip_generated_references_section(answer_text)
+        cleaned = clean_invalid_citations(self._indexer, answer_body)
         cited_chunks = extract_cited_chunks(self._indexer, cleaned)
         sources = self._filter_cited_sources(cited_chunks)
 
@@ -56,50 +58,13 @@ class CitationProcessor:
         if not cited_chunks or not self._available_sources:
             return []
 
-        source_lookup = {s.id: s for s in self._available_sources}
-        chunk_lookup: dict[str, dict[str, Any]] = {}
-        for ctx in self._enriched_contexts:
-            cid = ctx.get("chunk_id")
-            if cid:
-                chunk_lookup[cid] = ctx
-
-        result: list[SourceReference] = []
-        for ref_id, chunk_ids in cited_chunks.items():
-            src = source_lookup.get(ref_id)
-            if src is None:
-                logger.warning("Cited ref_id=%s not in available_sources", ref_id)
-                continue
-
-            chunks: list[ChunkSnippet] = []
-            for cid in chunk_ids:
-                ctx = chunk_lookup.get(cid)
-                if ctx is None:
-                    logger.warning("Cited chunk_id=%s not found in contexts", cid)
-                    continue
-
-                content = filter_content_for_display(ctx.get("content", ""))
-                metadata = ctx.get("metadata", {})
-                page_idx = ctx.get("page_idx") or metadata.get("page_idx")
-                chunks.append(
-                    ChunkSnippet(
-                        chunk_id=cid,
-                        chunk_idx=ctx.get("chunk_idx"),
-                        page_idx=page_idx,
-                        content=content,
-                        image_data=ctx.get("image_data"),
-                    )
-                )
-
-            result.append(
-                SourceReference(
-                    id=ref_id,
-                    title=src.title,
-                    path=src.path,
-                    type=src.type,
-                    url=src.url,
-                    cited_chunk_ids=chunk_ids,
-                    chunks=chunks if chunks else None,
-                )
-            )
-
-        return result
+        sources = build_sources_from_chunks(
+            self._enriched_contexts,
+            indexer=self._indexer,
+            cited_chunks=cited_chunks,
+            source_catalog=self._available_sources,
+        )
+        missing = set(cited_chunks) - {source.id for source in sources}
+        for ref_id in sorted(missing):
+            logger.warning("Cited ref_id=%s not in available_sources or contexts", ref_id)
+        return sources

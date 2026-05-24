@@ -121,6 +121,7 @@ class TestWebAnswer:
 
         assert resp.status_code == 200
         assert "event: done" in resp.text
+        assert '"answer": "Answer"' in resp.text
         assert "Service error" not in resp.text
         manager.aplan_query.assert_awaited_once()
         manager.agenerate_stream_from_contexts.assert_awaited_once()

@@ -44,6 +44,12 @@ def test_extract_citing_sentences_mixed_levels():
     assert "1" in result
 
 
+def test_extract_citing_sentences_ignores_generated_references_section():
+    text = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
+    result = extract_all_citing_sentences(text)
+    assert result == {"1-1": ["Revenue grew 15% [1-1]."]}
+
+
 def test_extract_citing_sentences_empty():
     assert extract_all_citing_sentences("no citations here") == {}
 

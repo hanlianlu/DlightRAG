@@ -76,6 +76,66 @@ def test_cited_chunks_populated():
     assert "c1" in result.cited_chunks["1"]
 
 
+def test_doc_level_and_chunk_level_sources_follow_inline_order():
+    contexts = _make_contexts()
+    sources = _make_sources()
+    proc = CitationProcessor(contexts=contexts, available_sources=sources)
+    result = proc.process("Overall trend is positive [2]. Growth was strong [1-1].")
+
+    assert [s.id for s in result.sources] == ["2", "1"]
+
+
+def test_image_only_chunk_is_citable():
+    contexts = [
+        {
+            "chunk_id": "img1",
+            "reference_id": "1",
+            "content": "",
+            "image_data": "base64-page-image",
+            "file_path": "/data/chart.pdf",
+            "page_idx": 4,
+            "metadata": {"file_name": "chart.pdf"},
+        }
+    ]
+    sources = [SourceReference(id="1", path="/data/chart.pdf", title="chart.pdf")]
+
+    proc = CitationProcessor(contexts=contexts, available_sources=sources)
+    result = proc.process("The chart shows the trend [1-1].")
+
+    assert result.answer == "The chart shows the trend [1-1]."
+    assert result.sources[0].chunks is not None
+    assert result.sources[0].chunks[0].image_data == "base64-page-image"
+
+
+def test_source_catalog_metadata_is_preserved():
+    contexts = [
+        {
+            "chunk_id": "c1",
+            "reference_id": "1",
+            "content": "Evidence.",
+            "file_path": "/raw/doc.pdf",
+            "metadata": {"file_name": "raw.pdf", "file_type": "raw"},
+        }
+    ]
+    sources = [
+        SourceReference(
+            id="1",
+            path="/resolved/doc.pdf",
+            title="Catalog title",
+            type="pdf",
+            url="/files/doc.pdf",
+        )
+    ]
+
+    proc = CitationProcessor(contexts=contexts, available_sources=sources)
+    result = proc.process("Evidence [1-1].")
+
+    assert result.sources[0].title == "Catalog title"
+    assert result.sources[0].path == "/resolved/doc.pdf"
+    assert result.sources[0].type == "pdf"
+    assert result.sources[0].url == "/files/doc.pdf"
+
+
 class TestCitationProcessorFlatPageIdx:
     """Test that page_idx is read from flat context field (not nested metadata)."""
 

@@ -439,8 +439,8 @@ and writes matching local project keys into both env files.
 | `GET` | `/health` | Health and storage status. |
 
 All write endpoints accept optional `workspace`. Read endpoints accept
-`workspaces` for federated search. `/answer` requires explicit `stream: true`
-or `stream: false`.
+`workspaces` for federated search. `/answer` streams by default; pass
+`stream: false` only when a single JSON response is required.
 
 ## Development
 

@@ -165,21 +165,19 @@ async def answer_stream(
             )
             result = processor.process(clean_answer)
 
-            if result.sources:
-                ref_lines = [f"[{s.id}] {s.title}" for s in result.sources]
-                result.answer += "\n\n### References\n" + "\n".join(ref_lines)
-
             done_html = _render_partial(
                 "partials/answer_done.html",
                 answer=result.answer,
                 sources=result.sources,
             )
-            yield f"event: done\ndata: {json.dumps(done_html)}\n\n"
+            done_payload = {"html": done_html, "answer": result.answer}
+            yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
+            highlight_cfg = cfg.citations.highlights
             has_text_chunks = any(
                 chunk.content for src in result.sources if src.chunks for chunk in src.chunks
             )
-            if has_text_chunks:
+            if highlight_cfg.enabled and has_text_chunks:
                 try:
                     from dlightrag.models.llm import get_chat_model_func
 
@@ -189,8 +187,11 @@ async def answer_stream(
                             sources=result.sources,
                             answer_text=result.answer,
                             llm_func=llm_func,
+                            max_concurrency=highlight_cfg.max_concurrency,
+                            max_input_chars=highlight_cfg.max_input_chars,
+                            cache_size=highlight_cfg.cache_size,
                         ),
-                        timeout=5.0,
+                        timeout=highlight_cfg.timeout,
                     )
                     highlights_html = _render_partial(
                         "partials/source_panel.html",
@@ -198,7 +199,10 @@ async def answer_stream(
                     )
                     yield f"event: highlights\ndata: {json.dumps(highlights_html)}\n\n"
                 except TimeoutError:
-                    logger.warning("Highlight extraction timed out (5s), skipping")
+                    logger.warning(
+                        "Highlight extraction timed out (%.1fs), skipping",
+                        highlight_cfg.timeout,
+                    )
                 except Exception:
                     logger.warning("Highlight extraction failed", exc_info=True)
 

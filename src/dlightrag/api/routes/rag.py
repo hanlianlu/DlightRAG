@@ -134,15 +134,17 @@ async def answer(
             if isinstance(items, list):
                 flat_contexts.extend(items)
         all_sources = build_sources(result.contexts)
+        answer_text = result.answer
         if result.answer and flat_contexts:
             processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
             cited = processor.process(result.answer)
+            answer_text = cited.answer
             sources = cited.sources
         else:
             sources = []
         cited_refs = [{"id": s.id, "title": s.title} for s in sources]
         return {
-            "answer": result.answer,
+            "answer": answer_text,
             "contexts": result.contexts,
             "references": cited_refs,
             "sources": [s.model_dump() for s in sources],
@@ -179,15 +181,17 @@ async def answer(
                 if isinstance(items, list):
                     flat_contexts.extend(items)
             all_sources = build_sources(contexts)
+            final_answer = clean_answer
             if clean_answer and flat_contexts:
                 processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
                 cited = processor.process(clean_answer)
+                final_answer = cited.answer
                 sources = cited.sources
             else:
                 sources = []
 
             yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'answer': final_answer}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             logger.debug("Client disconnected during SSE streaming")
             raise

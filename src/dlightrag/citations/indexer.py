@@ -34,7 +34,7 @@ class CitationIndexer:
         valid_chunk_ids: set[str] = set()
         for ctx in contexts:
             cid = ctx.get("chunk_id")
-            if cid and ctx.get("content"):
+            if cid and (ctx.get("content") or ctx.get("image_data")):
                 valid_chunk_ids.add(cid)
 
         ref_chunks: dict[str, list[str]] = {}

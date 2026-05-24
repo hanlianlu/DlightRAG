@@ -110,6 +110,7 @@ class TestAnswerEngineGenerate:
         result = await engine.generate("What is AI?", contexts)
 
         assert "AI is artificial intelligence" in result.answer
+        assert "### References" not in result.answer
         assert len(result.references) == 1
         model_func.assert_called_once()
         call_kwargs = model_func.call_args.kwargs
@@ -179,8 +180,8 @@ class TestAnswerEngineGenerate:
         assert result.contexts["entities"] == contexts["entities"]
 
     @pytest.mark.asyncio
-    async def test_generate_freetext_references(self) -> None:
-        """generate() extracts references from ### References section."""
+    async def test_generate_strips_model_generated_references_tail(self) -> None:
+        """generate() ignores generated References tails and trusts inline markers."""
         raw = "Growth is 15% [1-1].\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
         engine = AnswerEngine(model_func=model_func)
@@ -188,6 +189,7 @@ class TestAnswerEngineGenerate:
         result = await engine.generate("query", _text_contexts())
 
         assert "Growth is 15%" in result.answer
+        assert "### References" not in result.answer
         assert len(result.references) == 1
         assert result.references[0].title == "report.pdf"
 
@@ -561,49 +563,6 @@ class TestAnswerEngineHelpers:
         indexer = AnswerEngine._build_citation_indexer(contexts)
         ref_list = indexer.format_reference_list()
         assert "report.pdf" in ref_list
-
-
-# ---------------------------------------------------------------------------
-# TestAnswerEngine -- Freetext reference parsing
-# ---------------------------------------------------------------------------
-
-
-class TestAnswerEngineFreetextReferences:
-    """Test parse_freetext_references extracts references from LLM output."""
-
-    def test_parses_references_section(self) -> None:
-        from dlightrag.citations.parser import parse_freetext_references
-
-        raw = (
-            "Revenue grew 15% [1-1].\n\n"
-            "### References\n"
-            "- [1] report.pdf\n"
-            "- [2] quarterly_report.pdf\n"
-        )
-        answer, refs = parse_freetext_references(raw)
-        assert "Revenue grew 15%" in answer
-        assert "### References" not in answer
-        assert len(refs) == 2
-        assert refs[0].id == "1"
-        assert refs[0].title == "report.pdf"
-        assert refs[1].id == "2"
-        assert refs[1].title == "quarterly_report.pdf"
-
-    def test_no_references_section_returns_empty(self) -> None:
-        from dlightrag.citations.parser import parse_freetext_references
-
-        raw = "Just a plain answer with no references section."
-        answer, refs = parse_freetext_references(raw)
-        assert answer == raw
-        assert refs == []
-
-    def test_case_insensitive_heading(self) -> None:
-        from dlightrag.citations.parser import parse_freetext_references
-
-        raw = "Answer text.\n\n## references\n[1] doc.pdf"
-        answer, refs = parse_freetext_references(raw)
-        assert len(refs) == 1
-        assert refs[0].title == "doc.pdf"
 
 
 # ---------------------------------------------------------------------------
