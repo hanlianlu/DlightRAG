@@ -12,14 +12,14 @@ conversation history), produce a JSON response with these keys:
   Only include fields you are highly confident about. Leave out uncertain fields.
 
 Filter fields (use null for unmentioned):
-- filename: exact filename when the user gives a complete name with extension
+- filename: exact normalized filename when the user gives a complete name with extension
 - filename_pattern: SQL ILIKE pattern (% wildcards) when the reference is partial, \
 abbreviated, missing extension, or uses spaces/different separators. Be generous — \
 any token that looks like a file identifier (codes, numbers, abbreviations) should \
 produce a pattern.
 - file_extension: e.g. "pdf", "png" (lowercase, no dot)
-- doc_title: document title reference
-- doc_author: author name
+- doc_title: exact normalized document title only when highly confident
+- doc_author: exact normalized author name only when highly confident
 - date_from / date_to: ISO 8601 dates for time ranges
 - custom: {{"key": "value"}} for custom metadata
 

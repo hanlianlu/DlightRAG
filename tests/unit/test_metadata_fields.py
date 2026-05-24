@@ -48,14 +48,18 @@ class TestMetadataFields:
         ids = [f.field_id for f in METADATA_FIELDS]
         assert "filename" in ids
 
-    def test_filename_filterable_gin_trgm(self) -> None:
+    def test_filename_filterable_btree(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
         fn = next(f for f in METADATA_FIELDS if f.field_id == "filename")
         assert fn.filterable is True
         assert fn.searchable is True
-        assert fn.trigram is True
-        assert fn.index_type == "gin_trgm"
+        assert fn.index_type == "btree"
+
+    def test_no_trigram_metadata_fields(self) -> None:
+        from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
+
+        assert all(f.index_type != "gin_trgm" for f in METADATA_FIELDS)
 
     def test_custom_metadata_gin_indexed(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS

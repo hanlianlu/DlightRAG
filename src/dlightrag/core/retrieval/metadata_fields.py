@@ -16,8 +16,7 @@ class MetadataFieldDef:
         pg_type: PostgreSQL column type (e.g. ``VARCHAR(512)``, ``JSONB DEFAULT '{}'``).
         filterable: Whether this field can be used in query filters.
         searchable: Whether this field is eligible for query-time text matching.
-        trigram: Use pg_trgm similarity() for fuzzy matching (requires gin_trgm index).
-        index_type: PostgreSQL index type (``gin_trgm``, ``btree``, ``gin``, or None).
+        index_type: PostgreSQL index type (``btree``, ``gin``, or None).
         filter_hint: Human-readable hint describing how to filter on this field.
     """
 
@@ -25,7 +24,6 @@ class MetadataFieldDef:
     pg_type: str
     filterable: bool = False
     searchable: bool = False
-    trigram: bool = False
     index_type: str | None = None
     filter_hint: str | None = None
 
@@ -36,18 +34,16 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         "VARCHAR(512)",
         filterable=True,
         searchable=True,
-        trigram=True,
-        index_type="gin_trgm",
-        filter_hint="Fuzzy match on the original file name (e.g. 'report.pdf').",
+        index_type="btree",
+        filter_hint="Exact match on the original file name (e.g. 'report.pdf').",
     ),
     MetadataFieldDef(
         "filename_stem",
         "VARCHAR(512)",
         filterable=True,
         searchable=True,
-        trigram=True,
-        index_type="gin_trgm",
-        filter_hint="Fuzzy match on the file name without extension (e.g. 'report').",
+        index_type="btree",
+        filter_hint="Exact match on the file name without extension (e.g. 'report').",
     ),
     MetadataFieldDef("file_path", "TEXT"),
     MetadataFieldDef(
@@ -63,9 +59,8 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         "TEXT",
         filterable=True,
         searchable=True,
-        trigram=True,
-        index_type="gin_trgm",
-        filter_hint="Fuzzy match on the document title.",
+        index_type="btree",
+        filter_hint="Exact match on the document title.",
     ),
     MetadataFieldDef(
         "doc_author",

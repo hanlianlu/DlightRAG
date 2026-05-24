@@ -41,3 +41,38 @@ def test_raganything_uses_registry_release_not_git_main() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["tool"]["uv"].get("sources", {}).get("raganything") is None
+
+
+def test_pg_trgm_removed_from_runtime_and_postgres_init() -> None:
+    """Metadata filtering should not depend on pg_trgm or trigram similarity."""
+    runtime_files = list(Path("src/dlightrag").rglob("*.py")) + [Path("postgres/init.sql")]
+    offenders = []
+    for path in runtime_files:
+        text = path.read_text(encoding="utf-8").lower()
+        if "pg_trgm" in text or "gin_trgm" in text or "similarity(" in text:
+            offenders.append(str(path))
+
+    assert offenders == []
+
+
+def test_postgres_init_uses_required_pg18_extensions() -> None:
+    init_sql = Path("postgres/init.sql").read_text(encoding="utf-8")
+
+    assert "CREATE EXTENSION IF NOT EXISTS vector;" in init_sql
+    assert "CREATE EXTENSION IF NOT EXISTS age;" in init_sql
+    assert "CREATE EXTENSION IF NOT EXISTS pg_textsearch;" in init_sql
+
+
+def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
+    dockerfile = Path("postgres/Dockerfile").read_text(encoding="utf-8")
+
+    assert "pgvector/pgvector:pg18" in dockerfile
+    assert "postgresql-server-dev-18" in dockerfile
+    assert "--branch PG18" in dockerfile
+    assert "pg_textsearch" in dockerfile
+
+
+def test_compose_preloads_postgres_extensions() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "shared_preload_libraries=age,pg_textsearch" in compose

@@ -85,7 +85,7 @@ async def list_tools() -> list[Tool]:
                             "filename": {"type": "string"},
                             "filename_pattern": {
                                 "type": "string",
-                                "description": "SQL ILIKE pattern",
+                                "description": "Explicit SQL ILIKE pattern",
                             },
                             "file_extension": {"type": "string"},
                             "doc_title": {"type": "string"},
