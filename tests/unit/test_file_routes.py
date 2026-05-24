@@ -12,8 +12,6 @@ from fastapi.testclient import TestClient
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
 
-app = create_app(include_web=False)
-
 
 def _embedding_config() -> EmbeddingConfig:
     return EmbeddingConfig(
@@ -40,9 +38,11 @@ def client(tmp_working_dir: Path) -> TestClient:
         embedding=_embedding_config(),
     )
     with (
+        patch("dlightrag.config.get_config", return_value=config),
         patch("dlightrag.api.routes.files.get_config", return_value=config),
         patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
     ):
+        app = create_app(include_web=False)
         with TestClient(app) as c:
             yield c
 
@@ -85,9 +85,11 @@ class TestFileEndpointAzureRedirect:
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
         with (
+            patch("dlightrag.config.get_config", return_value=config),
             patch("dlightrag.api.routes.files.get_config", return_value=config),
             patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
         ):
+            app = create_app(include_web=False)
             with TestClient(app, follow_redirects=False) as c:
                 resp = c.get("/api/files/azure://mycontainer/doc.pdf")
                 assert resp.status_code == 302

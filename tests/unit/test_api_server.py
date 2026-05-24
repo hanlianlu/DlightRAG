@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import jwt
 import pytest
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.auth import UserContext, get_current_user
@@ -21,15 +22,26 @@ from dlightrag.core.servicemanager import RAGServiceUnavailableError
 # ---------------------------------------------------------------------------
 
 _ANON = UserContext(user_id="anonymous", auth_mode="none")
-app = create_app(include_web=False)
+app: FastAPI
 
 
 @pytest.fixture
-def mock_config(test_config: DlightragConfig):
+def _api_app(test_config: DlightragConfig) -> FastAPI:
+    """Create the API app after test_config has installed the singleton."""
+    global app
+    app = create_app(include_web=False)
+    yield app
+    app.dependency_overrides.clear()
+    if hasattr(app.state, "manager"):
+        del app.state.manager
+
+
+@pytest.fixture
+def mock_config(_api_app: FastAPI, test_config: DlightragConfig):
     """Override auth dependency to allow all requests (auth_mode=none)."""
-    app.dependency_overrides[get_current_user] = lambda: _ANON
+    _api_app.dependency_overrides[get_current_user] = lambda: _ANON
     yield test_config
-    app.dependency_overrides.pop(get_current_user, None)
+    _api_app.dependency_overrides.pop(get_current_user, None)
 
 
 @pytest.fixture
@@ -73,18 +85,18 @@ def mock_manager(mock_service):
 
 
 @pytest.fixture
-def _patch_manager(mock_manager):
+def _patch_manager(_api_app: FastAPI, mock_manager):
     """Set mock manager on app.state."""
-    app.state.manager = mock_manager
+    _api_app.state.manager = mock_manager
     yield
-    if hasattr(app.state, "manager"):
-        del app.state.manager
+    if hasattr(_api_app.state, "manager"):
+        del _api_app.state.manager
 
 
 @pytest.fixture
-async def client():
+async def client(_api_app: FastAPI):
     """Create httpx async client for testing."""
-    transport = ASGITransport(app=app)
+    transport = ASGITransport(app=_api_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
