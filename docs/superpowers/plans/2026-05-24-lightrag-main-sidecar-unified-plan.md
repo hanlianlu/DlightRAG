@@ -4,7 +4,7 @@
 
 **Goal:** Replace DlightRAG's RAGAnything/caption path and legacy page-render unified path with one PostgreSQL 18 + LightRAG-main sidecar pipeline that supports metadata, strict in-filtering, direct image embeddings, and BM25+RRF retrieval.
 
-**Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using `teP` by default; native images and parser-extracted drawing/image assets are embedded directly through DlightRAG's provider-aware multimodal embedding layer. LLM config is canonicalized as `llm.default` plus `llm.roles.extract|keyword|query|vlm`, and LightRAG receives matching `role_llm_configs`. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
+**Architecture:** `RAGService` owns one LightRAG instance per workspace, with PG18 storage only. Documents are ingested through LightRAG `main` parser pipeline using LightRAG parser-rule syntax (`*:native-teP,*:mineru-teP,*:legacy-R`) plus filename hints; native images and parser-extracted drawing/image assets are embedded directly through DlightRAG's provider-aware multimodal embedding layer. LLM config is canonicalized as `llm.default` plus `llm.roles.extract|keyword|query|vlm`, and LightRAG receives matching `role_llm_configs`. Retrieval always uses LightRAG `mix`, adds PostgreSQL BM25, applies metadata candidate filters before every path, and fuses results with RRF.
 
 **Sidecar Boundary:** LightRAG sidecar files are the canonical parser artifacts. DlightRAG must not create a second filesystem sidecar format. It reads LightRAG sidecars through an adapter and stores only PostgreSQL artifact references, metadata, chunk provenance, and direct-image chunk mappings.
 
@@ -15,6 +15,7 @@
 ## Verified Upstream Baseline
 
 - LightRAG main target: `a9b9079` from `HKUDS/LightRAG` `origin/main`, checked on 2026-05-24.
+- LightRAG release checkpoint: `v1.5.0rc2` at `b62c260`, reviewed for parser routing, unified sidecar writer, chunk option snapshots, structured extraction, task-aware embeddings, role-specific LLM config, and pipeline concurrency semantics.
 - PostgreSQL target: major `18`, current minor `18.4` as of 2026-05-24. Official references: [PostgreSQL 18.4 release announcement](https://www.postgresql.org/about/news/postgresql-184-1710-1614-1518-and-1423-released-3297/) and [PostgreSQL versioning policy](https://www.postgresql.org/support/versioning/).
 - Apache AGE has a `PG18` branch.
 - Docker Hub has `pgvector/pgvector:pg18` and `pgvector/pgvector:0.8.2-pg18` tags.
@@ -28,6 +29,16 @@
 | DlightRAG BM25 hybrid | `pg_textsearch` | Required by `PostgresBM25` for `USING bm25(content)` and `to_bm25query`. |
 
 The commonly remembered LightRAG PG requirement is PG18 plus two core extensions: `vector` and `age`. DlightRAG's architecture adds `pg_textsearch` for BM25. Metadata filtering is LLM-assisted but deterministic at the matching layer: normalized exact fields backed by `LOWER(field)` btree expression indexes, date ranges, JSONB containment, and explicit filename patterns only.
+
+## v1.5.0rc2 Cleanup Decisions
+
+- Use LightRAG parser-rule syntax and filename hints as the only parser selection surface. DlightRAG config exposes `parser.rules`, then calls upstream `lightrag.parser_routing.resolve_file_parser_directives()` before enqueue.
+- Do not keep a DlightRAG hash index in the runtime path. LightRAG `doc_status.content_hash`, canonical basename lookup, and enqueue serialization lock are the dedup authority.
+- Persist LightRAG `chunk_options` snapshots and parser provenance in `document_artifacts`; do not create a second DlightRAG chunker config model.
+- Read LightRAG sidecars in their actual v1.5.0rc2 shape: modality JSON files contain `drawings` / `tables` / `equations` dictionaries, not a DlightRAG-owned sidecar schema.
+- Keep `i` off by default. LightRAG parsers still write sidecars; `i/t/e` only controls VLM analysis. DlightRAG reads `drawings.json` for direct image embeddings while LightRAG handles table/equation analysis through `t/e`.
+- Enable structured entity/relation extraction by default where the LLM binding supports it, and replace `ENTITY_TYPES` with `ENTITY_TYPE_PROMPT_FILE`.
+- Rely on LightRAG pipeline status, request-pending, resume, and enqueue serialization semantics. DlightRAG direct-image post-processing must be idempotent and keyed by deterministic chunk ids instead of adding a second queue/status machine.
 
 ## File Structure
 
@@ -67,7 +78,6 @@ Modify:
 - `src/dlightrag/core/retrieval/metadata_path.py`
 - `src/dlightrag/core/retrieval/models.py`
 - `src/dlightrag/core/retrieval/metadata_fields.py`
-- `src/dlightrag/core/ingestion/hash_index.py`
 - `src/dlightrag/core/ingestion/cleanup.py`
 - `src/dlightrag/core/reset.py`
 - `src/dlightrag/api/routes/status.py`
@@ -80,6 +90,7 @@ Delete after replacements are green:
 - `src/dlightrag/unifiedrepresent/engine.py`
 - `src/dlightrag/unifiedrepresent/retriever.py`
 - `src/dlightrag/unifiedrepresent/lifecycle.py`
+- `src/dlightrag/core/ingestion/hash_index.py`
 - `src/dlightrag/storage/json_metadata_index.py`
 - tests that only validate removed non-PG or old-mode behavior.
 
@@ -162,6 +173,8 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
     assert cfg.embedding.asymmetric == "auto"
+    assert cfg.parser.rules == "*:native-teP,*:mineru-teP,*:legacy-R"
+    assert cfg.extraction.use_json is True
 
 
 @pytest.mark.parametrize(
@@ -229,6 +242,20 @@ def test_legacy_llm_fields_rejected(legacy_field: str) -> None:
 
     with pytest.raises(ValidationError):
         DlightragConfig(**kwargs)
+
+
+def test_legacy_parser_engine_process_options_rejected() -> None:
+    with pytest.raises(ValidationError):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            parser={"engine": "mineru", "process_options": "teP"},
+        )
 ```
 
 - [ ] **Step 4: Add PostgreSQL version parser tests**
@@ -374,6 +401,26 @@ class LLMConfig(BaseModel):
     roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
 ```
 
+Add LightRAG-aligned parser and extraction config:
+
+```python
+class ParserConfig(BaseModel):
+    """LightRAG parser routing rules and optional chunker snapshot overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rules: str = "*:native-teP,*:mineru-teP,*:legacy-R"
+    native_images_bypass_lightrag: bool = True
+    chunk_options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExtractionConfig(BaseModel):
+    """Entity/relation extraction stability controls."""
+
+    use_json: bool = True
+    entity_type_prompt_file: str | None = None
+```
+
 Replace storage literals:
 
 ```python
@@ -392,6 +439,8 @@ Replace top-level model fields:
 ```python
 llm: LLMConfig = Field(default_factory=LLMConfig)
 embedding: EmbeddingConfig
+parser: ParserConfig = Field(default_factory=ParserConfig)
+extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
 rerank: RerankConfig = Field(default_factory=RerankConfig)
 ```
 
@@ -515,6 +564,19 @@ except Exception as e:
     ) from e
 ```
 
+When constructing `LightRAG`, pass:
+
+```python
+entity_extraction_use_json=config.extraction.use_json,
+addon_params={
+    **existing_addon_params,
+    "entity_type_prompt_file": config.extraction.entity_type_prompt_file or "",
+},
+role_llm_configs=build_role_llm_configs(config),
+```
+
+Also call LightRAG's `validate_parser_routing_config(config.parser.rules)` during startup so malformed rules fail before the first ingest.
+
 - [ ] **Step 11: Update Docker PostgreSQL image**
 
 Edit `postgres/Dockerfile`:
@@ -600,6 +662,15 @@ llm:
     vlm:
       provider: gemini
       model: gemini-2.5-flash
+
+parser:
+  rules: "*:native-teP,*:mineru-teP,*:legacy-R"
+  native_images_bypass_lightrag: true
+  chunk_options: {}
+
+extraction:
+  use_json: true
+  entity_type_prompt_file: null
 ```
 
 - [ ] **Step 13: Run Task 1 tests**
@@ -1563,6 +1634,12 @@ class LightRAGStores:
     def build_global_config(self) -> dict[str, Any]:
         return self.raw._build_global_config()
 
+    async def get_doc_status(self, doc_id: str) -> dict[str, Any] | None:
+        return await self.raw.doc_status.get_by_id(doc_id)
+
+    async def get_full_doc(self, doc_id: str) -> dict[str, Any] | None:
+        return await self.raw.full_docs.get_by_id(doc_id)
+
     async def upsert_chunks_with_vectors(
         self,
         rows: dict[str, dict[str, Any]],
@@ -1727,7 +1804,6 @@ git commit -m "feat: add lightrag store adapter and provenance stores"
 - Create: `src/dlightrag/core/ingestion/direct_image.py`
 - Create: `src/dlightrag/core/ingestion/engine.py`
 - Modify: `src/dlightrag/core/service.py`
-- Modify: `src/dlightrag/core/ingestion/hash_index.py`
 - Test: `tests/unit/test_lightrag_sidecar.py`
 - Test: `tests/unit/test_unified_ingestion_engine.py`
 - Test: `tests/unit/test_direct_image_ingest.py`
@@ -1746,15 +1822,46 @@ def test_collects_drawing_table_equation_refs(tmp_path) -> None:
     artifact_dir = tmp_path / "doc"
     artifact_dir.mkdir()
     (artifact_dir / "sample.drawings.json").write_text(
-        json.dumps([{"id": "fig-1", "asset_path": "media/fig.png", "page": 2}]),
+        json.dumps(
+            {
+                "version": "1.0",
+                "drawings": {
+                    "fig-1": {
+                        "id": "fig-1",
+                        "path": "sample.blocks.assets/fig.png",
+                        "page": 2,
+                    }
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (artifact_dir / "sample.tables.json").write_text(
-        json.dumps([{"id": "table-1", "llm_analyze_result": {"status": "success"}}]),
+        json.dumps(
+            {
+                "version": "1.0",
+                "tables": {
+                    "table-1": {
+                        "id": "table-1",
+                        "llm_analyze_result": {"status": "success"},
+                    }
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (artifact_dir / "sample.equations.json").write_text(
-        json.dumps([{"id": "eq-1", "llm_analyze_result": {"status": "success"}}]),
+        json.dumps(
+            {
+                "version": "1.0",
+                "equations": {
+                    "eq-1": {
+                        "id": "eq-1",
+                        "llm_analyze_result": {"status": "success"},
+                    }
+                },
+            }
+        ),
         encoding="utf-8",
     )
 
@@ -1778,15 +1885,20 @@ from unittest.mock import AsyncMock
 from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
 
 
-async def test_document_ingest_uses_lightrag_pending_parse_teP(tmp_path: Path) -> None:
+async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) -> None:
     lightrag = AsyncMock()
     lightrag.apipeline_enqueue_documents.return_value = "track-1"
-    lightrag.doc_status.get_by_id.return_value = {"chunks_list": ["chunk-a"]}
     stores = AsyncMock()
+    stores.get_doc_status.return_value = {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc"}
+    stores.get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "teP",
+        "chunk_options": {"paragraph_semantic": {"chunk_token_size": 2000}},
+        "sidecar_location": "file:///tmp/sample.parsed/",
+    }
     metadata = AsyncMock()
     artifacts = AsyncMock()
     chunks = AsyncMock()
-    hash_index = AsyncMock()
     source = tmp_path / "sample.pdf"
     source.write_bytes(b"%PDF-1.4")
 
@@ -1796,11 +1908,10 @@ async def test_document_ingest_uses_lightrag_pending_parse_teP(tmp_path: Path) -
         metadata_index=metadata,
         document_artifacts=artifacts,
         chunk_provenance=chunks,
-        hash_index=hash_index,
         multimodal_embedder=AsyncMock(),
         workspace="default",
-        parser_engine="mineru",
-        process_options="teP",
+        parser_rules="*:native-teP,*:mineru-teP,*:legacy-R",
+        chunk_options={},
     )
 
     await engine.aingest_file(source, replace=False)
@@ -1809,6 +1920,7 @@ async def test_document_ingest_uses_lightrag_pending_parse_teP(tmp_path: Path) -
     assert kwargs["docs_format"] == "pending_parse"
     assert kwargs["parse_engine"] == "mineru"
     assert kwargs["process_options"] == "teP"
+    assert not hasattr(engine, "_hash_index")
 ```
 
 - [ ] **Step 3: Run tests and verify they fail**
@@ -1849,20 +1961,21 @@ class LightRAGSidecarRef:
 
 def collect_sidecar_refs(artifact_dir: Path) -> list[LightRAGSidecarRef]:
     refs: list[LightRAGSidecarRef] = []
-    for sidecar_type, pattern in (
-        ("drawing", "*.drawings.json"),
-        ("table", "*.tables.json"),
-        ("equation", "*.equations.json"),
+    for sidecar_type, pattern, item_key in (
+        ("drawing", "*.drawings.json", "drawings"),
+        ("table", "*.tables.json", "tables"),
+        ("equation", "*.equations.json", "equations"),
     ):
         for path in sorted(artifact_dir.glob(pattern)):
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                items = data.get("items", [])
+                raw_items = data.get(item_key) or data.get("items") or []
             else:
-                items = data
+                raw_items = data
+            items = raw_items.values() if isinstance(raw_items, dict) else raw_items
             for index, item in enumerate(items):
                 sidecar_id = str(item.get("id") or item.get("uid") or f"{sidecar_type}-{index}")
-                raw_asset = item.get("asset_path") or item.get("image_path")
+                raw_asset = item.get("path") or item.get("asset_path") or item.get("image_path")
                 refs.append(
                     LightRAGSidecarRef(
                         sidecar_type=sidecar_type,
@@ -1933,19 +2046,27 @@ def native_image_ref(path: Path) -> LightRAGSidecarRef:
 
 Create `src/dlightrag/core/ingestion/engine.py` with `UnifiedIngestionEngine.aingest_file()`, `UnifiedIngestionEngine._ingest_document()`, and `UnifiedIngestionEngine._ingest_native_image()`. `aingest_file()` must dispatch by suffix and return a dictionary containing `doc_id`, `source_kind`, `chunks`, and `ingest_strategy`.
 
+The engine must not implement a custom parser resolver or DlightRAG hash dedup layer. For document-like files, call `lightrag.parser_routing.resolve_file_parser_directives(file_path, parser_rules=self._parser_rules)` and pass the resolved `parse_engine` / `process_options` to LightRAG. After processing, mirror `parse_engine`, `process_options`, `chunk_options`, `sidecar_location`, and `content_hash` from LightRAG `full_docs` / `doc_status` into DlightRAG PostgreSQL metadata and artifact tables through `LightRAGStores`.
+
 The document enqueue call must be:
 
 ```python
 from lightrag.constants import FULL_DOCS_FORMAT_PENDING_PARSE
+from lightrag.parser_routing import resolve_file_parser_directives
 
+parse_engine, process_options = resolve_file_parser_directives(
+    file_path,
+    parser_rules=self._parser_rules,
+)
 track_id = await self._lightrag.apipeline_enqueue_documents(
     input="",
     ids=[doc_id],
     file_paths=[str(file_path)],
     docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
     lightrag_document_paths=[str(file_path)],
-    parse_engine=self._parser_engine,
-    process_options=self._process_options,
+    parse_engine=parse_engine,
+    process_options=process_options,
+    chunk_options=self._chunk_options or None,
 )
 await self._lightrag.apipeline_process_enqueue_documents()
 ```
@@ -1953,8 +2074,20 @@ await self._lightrag.apipeline_process_enqueue_documents()
 After processing:
 
 ```python
-doc_status = await self._lightrag.doc_status.get_by_id(doc_id)
+doc_status = await self._stores.get_doc_status(doc_id)
+full_doc = await self._stores.get_full_doc(doc_id)
 light_chunks = doc_status.get("chunks_list", []) if doc_status else []
+await self._document_artifacts.upsert(
+    {
+        "full_doc_id": doc_id,
+        "parse_engine": (full_doc or {}).get("parse_engine"),
+        "process_options": (full_doc or {}).get("process_options"),
+        "chunk_options": (full_doc or {}).get("chunk_options") or {},
+        "content_hash": (doc_status or {}).get("content_hash")
+        or (full_doc or {}).get("content_hash"),
+        "sidecar_location": (full_doc or {}).get("sidecar_location"),
+    }
+)
 await self._chunk_provenance.upsert_many(
     [
         {
@@ -1983,15 +2116,14 @@ self._backend = UnifiedIngestionEngine(
     metadata_index=self._metadata_index,
     document_artifacts=self._document_artifacts,
     chunk_provenance=self._chunk_provenance,
-    hash_index=self._hash_index,
     multimodal_embedder=multimodal_embedder,
     workspace=config.workspace,
-    parser_engine=config.parser,
-    process_options=config.parser_process_options,
+    parser_rules=config.parser.rules,
+    chunk_options=config.parser.chunk_options,
 )
 ```
 
-Rename config `parser_process_options` if the implementation chooses a flat field; keep default `"teP"`.
+Reject legacy `parser.engine` and `parser.process_options` config. Parser selection belongs to LightRAG parser-rule syntax and filename hints; DlightRAG only provides the rule string and optional `chunk_options`.
 
 - [ ] **Step 8: Run Task 5 tests**
 
@@ -2451,7 +2583,6 @@ async def test_delete_cascades_to_artifacts_and_chunk_provenance() -> None:
     service = _make_service(kv_storage="PGKVStorage")
     service._document_artifacts = AsyncMock()
     service._chunk_provenance = AsyncMock()
-    service._hash_index = AsyncMock()
     service._metadata_index = AsyncMock()
     service._lightrag = AsyncMock()
     service._lightrag.doc_status.get_by_id.return_value = {"chunks_list": ["chunk-a"]}
@@ -2486,11 +2617,9 @@ else:
 await _delete_lightrag_document(service.lightrag, doc_id)
 if service._metadata_index is not None:
     await service._metadata_index.delete(doc_id)
-if service._hash_index is not None:
-    await service._hash_index.remove_by_doc_id(doc_id)
 ```
 
-If `PGHashIndex` lacks `remove_by_doc_id`, add it and update `HashIndexProtocol`.
+Do not update or preserve a DlightRAG hash index in the new runtime path. LightRAG `doc_status.content_hash` and canonical basename lookup are the document dedup authority.
 
 - [ ] **Step 4: Update reset**
 

@@ -11,6 +11,7 @@
 DlightRAG should move to a single unified architecture built on the current `HKUDS/LightRAG` `main` branch, not on the latest PyPI release. The verified upstream target for this design pass is:
 
 - `HKUDS/LightRAG` `origin/main`: `a9b9079` checked on `2026-05-24`
+- `HKUDS/LightRAG` `v1.5.0rc2`: `b62c260`, reviewed as the release note checkpoint for parser routing, multimodal sidecars, role LLMs, task-aware embeddings, and pipeline status semantics.
 - PostgreSQL major version: `18`; current official minor checked for this design is `18.4`, released on `2026-05-14`.
 - MinerU upstream checked at `1d15485` on `origin/master`; current license is `LicenseRef-MinerU-Open-Source-License`, based on Apache 2.0 with additional terms, and no longer AGPL.
 
@@ -27,6 +28,9 @@ Hard decisions:
 - Embedding provider/model/dimension/asymmetric settings are a storage contract. Changing any vector-affecting setting requires clearing vector data and rebuilding indexes.
 - Text-only embedding models are invalid for this architecture.
 - LLM configuration is role-based and aligned to LightRAG's current `role_llm_configs` surface: `extract`, `keyword`, `query`, and `vlm`.
+- Entity/relation extraction should use LightRAG's structured JSON output support by default where the chosen LLM binding supports it. `ENTITY_TYPES` must not survive; domain guidance moves to `ENTITY_TYPE_PROMPT_FILE`.
+- Parser selection uses LightRAG's parser-routing model: `LIGHTRAG_PARSER`-style rules plus filename hints, resolved through upstream `lightrag.parser_routing`. DlightRAG should not keep a separate product-level `parser.engine` / `parser.process_options` branch.
+- Document deduplication uses LightRAG's canonical basename and `content_hash` fields in `doc_status` / `full_docs`. A separate DlightRAG hash index should be deleted from the runtime path.
 - Document tables and equations use LightRAG's own multimodal document handling.
 - Native images and document-extracted image sidecar assets use direct multimodal image embedding.
 - LightRAG sidecar files are the canonical parse artifacts. DlightRAG must not write a second filesystem sidecar format; it only stores adapter-normalized references, metadata, and chunk provenance in PostgreSQL.
@@ -61,9 +65,12 @@ LightRAG `main` currently provides the pieces DlightRAG should treat as upstream
 
 - `apipeline_enqueue_documents()` and `apipeline_process_enqueue_documents()` for queued document processing.
 - `parse_native`, `parse_mineru`, and `parse_docling` parser routes.
+- `lightrag.parser_routing` parser-rule and filename-hint resolution, including strict startup validation for invalid engines/options and missing external parser endpoints.
 - `lightrag.sidecar` writer output, `sidecar_location`, `*.blocks.jsonl`, per-modality JSON files, and extracted assets.
 - Chunk-level `sidecar` references for LightRAG-built multimodal chunks.
 - Multimodal process options where `i` targets images/drawings, `t` targets tables, `e` targets equations, `!` skips KG, and `P` selects paragraph semantic chunking.
+- Per-document `chunk_options` snapshots stored in `full_docs`, so reprocessing uses the enqueue-time chunker parameters instead of whatever the environment later becomes.
+- `doc_status` / `full_docs` parser provenance, canonical filename handling, and `content_hash` deduplication.
 - `analyze_multimodal()` and sidecar chunk construction for LightRAG-owned multimodal text chunks.
 - `LightRAG.aquery_data()` with `mode="mix"` for structured retrieval data.
 
@@ -79,7 +86,7 @@ New or retained modules should be arranged around DlightRAG concerns, not histor
 |---|---|
 | `core/service.py` | Owns workspace lifecycle, LightRAG creation, config validation, storage initialization, and public APIs. |
 | `core/lightrag_stores.py` | The only module allowed to touch LightRAG internals such as `chunks_vdb`, `text_chunks`, `full_docs`, and `doc_status`. |
-| `core/ingestion/engine.py` | Single ingestion orchestrator for documents, native images, metadata, dedup, and deletion hooks. |
+| `core/ingestion/engine.py` | Single ingestion orchestrator for documents, native images, metadata mirrors, and deletion hooks. Parser routing and document dedup authority stay upstream in LightRAG. |
 | `core/ingestion/lightrag_sidecar.py` | `LightRAGSidecarAdapter`: resolves canonical LightRAG sidecar files and yields typed references for DlightRAG indexing/direct-image embedding. It does not write DlightRAG sidecar files. |
 | `core/ingestion/direct_image.py` | Creates direct image embedding chunk specs for native images and extracted drawing/image assets. |
 | `storage/document_artifacts.py` | `DocumentArtifactRegistry`: PostgreSQL table for document-level LightRAG sidecar URI/path references and parser provenance. |
@@ -100,6 +107,7 @@ Modules to delete or collapse after migration:
 - old `rag_mode` branching in service/config/API layers
 - the old page-render-as-primary-ingest path in `unifiedrepresent/*`
 - the custom `visual_chunks` KV concept if its only purpose is page-render output storage
+- `core/ingestion/hash_index.py` and related service wiring
 - `storage/json_metadata_index.py` and any storage abstraction whose only product purpose is non-PostgreSQL fallback
 
 Reusable provider code from `unifiedrepresent` can be moved, but the old mode boundary should not survive.
@@ -136,35 +144,38 @@ LightRAG supports some image formats through parser engines, but DlightRAG shoul
 
 ### 5.2 Document-Like Files
 
-Default document process options should be:
+Default document parser rules should use LightRAG's own routing syntax and be resolved with upstream `lightrag.parser_routing`, not with a DlightRAG parser switch:
 
 ```text
-teP
+*:native-teP,*:mineru-teP,*:legacy-R
 ```
 
 Meaning:
 
+- `native-teP`: prefer native structured parsing where LightRAG supports it, currently strongest for DOCX.
+- `mineru-teP`: use MinerU for parser-supported document formats that native does not cover.
+- `legacy-R`: retain LightRAG's legacy text extractor and recursive chunking fallback for formats not handled by native/MinerU.
 - `t`: let LightRAG handle tables.
 - `e`: let LightRAG handle equations.
 - `P`: use paragraph semantic chunking by default.
 - no `!`: KG extraction remains enabled.
 - no default `i`: document-extracted images are handled by DlightRAG direct embedding, not by LightRAG image-analysis chunks.
 
-This default can be configurable, but the default should express the product decision: tables/equations are LightRAG-owned; drawings/images are direct-embedding-owned.
+This default can be configurable as parser rules, but the default should express the product decision: tables/equations are LightRAG-owned; drawings/images are direct-embedding-owned. File-level overrides should use LightRAG filename hints such as `report.[mineru-R].pdf` or `memo.[-!].docx`.
 
-The direct image collector must read parser-emitted drawing/image assets, not LightRAG image-analysis chunks. If a parser backend only emits those assets when its image extraction switch is enabled, DlightRAG may enable parser-side extraction but must still suppress LightRAG-owned image analysis as the default retrieval representation for those assets.
+The direct image collector must read parser-emitted drawing/image assets, not LightRAG image-analysis chunks. In LightRAG v1.5.0rc2, `i/t/e` gates VLM analysis, not parser extraction: sidecar files are written by the parser when content exists. Therefore DlightRAG should keep `i` off by default, still read `drawings.json`, and use direct image embedding for those assets.
 
 Document ingest steps:
 
-1. Compute content hash and write a pending metadata skeleton.
-2. Enqueue/process through LightRAG with `docs_format=FULL_DOCS_FORMAT_PENDING_PARSE`, configured parser engine (`mineru` by default where supported), and process options defaulting to `teP`.
+1. Write a pending metadata skeleton keyed by the intended source document id; do not treat DlightRAG as the document dedup authority.
+2. Resolve parser directives with LightRAG parser-rule syntax plus filename hints, then enqueue/process through LightRAG with `docs_format=FULL_DOCS_FORMAT_PENDING_PARSE`, the resolved `parse_engine`, and resolved `process_options`.
 3. Let LightRAG write its normal document chunks, KG records, and `doc_status`.
-4. Read parser sidecar locations from LightRAG document status and artifact metadata.
-5. Persist a document artifact registry row that records source path, parse engine, process options, LightRAG sidecar URI/directory, blocks path, drawings path, tables path, equations path, and LightRAG full document id.
+4. Read parser sidecar locations, `parse_engine`, `process_options`, `chunk_options`, `content_hash`, and canonical basename from LightRAG `doc_status` / `full_docs`.
+5. Persist a document artifact registry row that records source path, canonical basename, parse engine, process options, chunk options snapshot, content hash, LightRAG sidecar URI/directory, blocks path, drawings path, tables path, equations path, and LightRAG full document id.
 6. Use `LightRAGSidecarAdapter` to resolve LightRAG sidecar items into typed references.
 7. For drawing/image sidecar references only, write direct image embedding chunk rows through the LightRAG store adapter.
 8. Persist chunk provenance for both LightRAG-owned text chunks and DlightRAG-owned direct image chunks.
-9. Finalize metadata and hash registration only after LightRAG writes and DlightRAG registry/provenance/direct-image writes succeed.
+9. Finalize metadata only after LightRAG writes and DlightRAG registry/provenance/direct-image writes succeed.
 
 If upstream LightRAG later exposes stable sidecar ids on its own chunks, DlightRAG should update direct image chunks in place when possible. If that mapping is not stable, DlightRAG-owned direct image chunk ids are the canonical fallback:
 
@@ -215,7 +226,7 @@ The boundary is strict:
 
 Existing `PGMetadataIndex` remains the document-level filter source. It continues to store:
 
-- system metadata such as filename, extension, size, title, author, dates, and content hash;
+- system metadata such as filename, canonical basename, extension, size, title, author, dates, and LightRAG content hash;
 - user metadata;
 - parser metadata such as `parse_engine`, `process_options`, `artifact_status`, and source kind.
 
@@ -235,14 +246,21 @@ CREATE TABLE dlightrag_document_artifacts (
     full_doc_id TEXT NOT NULL,
     source_uri TEXT,
     local_source_path TEXT,
+    canonical_basename TEXT,
     source_kind TEXT NOT NULL,
+    parse_format TEXT,
     parse_engine TEXT,
     process_options TEXT,
+    chunk_options JSONB DEFAULT '{}',
+    content_hash TEXT,
+    sidecar_location TEXT,
     artifact_dir TEXT,
+    lightrag_document_path TEXT,
     blocks_path TEXT,
     drawings_path TEXT,
     tables_path TEXT,
     equations_path TEXT,
+    duplicate_kind TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (workspace, full_doc_id)
@@ -517,8 +535,13 @@ storage:
   doc_status: PGDocStatusStorage
 
 parser:
-  engine: mineru
-  process_options: teP
+  rules: "*:native-teP,*:mineru-teP,*:legacy-R"
+  native_images_bypass_lightrag: true
+  chunk_options: {}   # optional per-workspace overrides passed to LightRAG enqueue; normally empty
+
+extraction:
+  use_json: true
+  entity_type_prompt_file: null  # optional LightRAG profile file; replaces ENTITY_TYPES
 
 llm:
   default:
@@ -585,12 +608,11 @@ The exact dependency syntax can follow the package manager in use, but it must t
 Deletion must cascade through all layers:
 
 1. metadata index row;
-2. hash index row;
-3. document artifact row;
-4. chunk provenance rows;
-5. DlightRAG-owned direct image chunks in LightRAG stores;
-6. LightRAG-owned document chunks, entities, relationships, full docs, doc status, and parser artifact directory cleanup through the LightRAG lifecycle;
-7. DlightRAG-owned native-image temp/copy artifacts, if any.
+2. document artifact row;
+3. chunk provenance rows;
+4. DlightRAG-owned direct image chunks in LightRAG stores;
+5. LightRAG-owned document chunks, entities, relationships, full docs, doc status, and parser artifact directory cleanup through the LightRAG lifecycle;
+6. DlightRAG-owned native-image temp/copy artifacts, if any.
 
 Re-ingest with `replace=True` should delete the old full document first, then insert fresh LightRAG and DlightRAG records. This avoids stale sidecar ids and stale candidate filters.
 
@@ -652,7 +674,9 @@ Required test groups:
    - Direct image indexing uses document context and image query uses query context at DlightRAG call sites; provider payloads use task routing only when asymmetric resolves active.
 
 4. **Document ingest golden fixture**
-   - LightRAG parser pipeline is called with default `teP`.
+   - LightRAG parser directives are resolved from `*:native-teP,*:mineru-teP,*:legacy-R` plus filename hints.
+   - `chunk_options` is snapshotted and persisted with document artifacts.
+   - document dedup uses LightRAG canonical basename and `content_hash`, not a DlightRAG hash index.
    - table/equation sidecars become LightRAG-owned text chunks.
    - drawing/image sidecars become DlightRAG-owned direct image chunks.
    - `document_artifacts` and `chunk_provenance` are written.
@@ -673,7 +697,7 @@ Required test groups:
    - RRF merges BM25, LightRAG mix, and direct visual results deterministically.
 
 8. **Deletion lifecycle**
-   - delete removes LightRAG records, DlightRAG direct image chunks, artifact rows, chunk provenance rows, metadata rows, and hash rows.
+   - delete removes LightRAG records, DlightRAG direct image chunks, artifact rows, chunk provenance rows, and metadata rows.
 
 9. **Compatibility guard**
    - missing LightRAG parser/storage surfaces fail with a clear startup error.
