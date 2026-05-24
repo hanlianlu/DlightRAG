@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import asyncpg
 
@@ -57,15 +58,22 @@ class PGPool:
             min_size = getattr(config, "postgres_pool_min_size", _DEFAULT_MIN_SIZE)
             max_size = getattr(config, "postgres_pool_max_size", _DEFAULT_MAX_SIZE)
             endpoint = config.pg_connection_kwargs(resolved_target)
-            pool = await asyncpg.create_pool(
-                host=endpoint["host"],
-                port=endpoint["port"],
-                user=endpoint["user"],
-                password=endpoint["password"],
-                database=endpoint["database"],
-                min_size=min_size,
-                max_size=max_size,
-            )
+            pool_kwargs: dict[str, Any] = {
+                "host": endpoint["host"],
+                "port": endpoint["port"],
+                "user": endpoint["user"],
+                "password": endpoint["password"],
+                "database": endpoint["database"],
+                "min_size": min_size,
+                "max_size": max_size,
+            }
+            statement_cache_size = getattr(config, "postgres_statement_cache_size", None)
+            if statement_cache_size is not None:
+                pool_kwargs["statement_cache_size"] = int(statement_cache_size)
+            server_settings = config.postgres_server_settings_dict()
+            if server_settings:
+                pool_kwargs["server_settings"] = server_settings
+            pool = await asyncpg.create_pool(**pool_kwargs)
             self._pools[resolved_target] = pool
             logger.info(
                 "DlightRAG %s domain store pool created (min=%d, max=%d)",

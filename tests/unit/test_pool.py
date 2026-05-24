@@ -27,6 +27,8 @@ class TestPGPoolGet:
         mock_config.postgres_database = "testdb"
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_server_settings_dict.return_value = {}
         mock_config.pg_target_for_runtime.return_value = "primary"
         mock_config.pg_connection_kwargs.return_value = {
             "host": "testhost",
@@ -69,6 +71,8 @@ class TestPGPoolGet:
         mock_config.postgres_user = "u"
         mock_config.postgres_password = "p"
         mock_config.postgres_database = "db"
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_server_settings_dict.return_value = {}
         mock_config.pg_target_for_runtime.return_value = "primary"
         mock_config.pg_connection_kwargs.return_value = {
             "host": "localhost",
@@ -129,6 +133,8 @@ class TestPGPoolGet:
         mock_config.postgres_user = "u"
         mock_config.postgres_password = "p"
         mock_config.postgres_database = "db"
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_server_settings_dict.return_value = {}
         mock_config.pg_target_for_runtime.return_value = "primary"
         mock_config.pg_connection_kwargs.return_value = {
             "host": "localhost",
@@ -164,6 +170,8 @@ class TestPGPoolGet:
         mock_config = MagicMock()
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_server_settings_dict.return_value = {}
         mock_config.pg_target_for_runtime.return_value = "replica"
         mock_config.pg_connection_kwargs.return_value = {
             "host": "replica",
@@ -191,4 +199,53 @@ class TestPGPoolGet:
             database="dlightrag",
             min_size=2,
             max_size=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_applies_session_settings_and_statement_cache(self) -> None:
+        """Domain store pools should use the same PG session tuning as LightRAG."""
+        from dlightrag.storage.pool import PGPool
+
+        mock_pool = MagicMock()
+        pool = PGPool()
+
+        mock_config = MagicMock()
+        mock_config.postgres_pool_min_size = 2
+        mock_config.postgres_pool_max_size = 10
+        mock_config.postgres_statement_cache_size = 128
+        mock_config.postgres_server_settings_dict.return_value = {
+            "hnsw.ef_search": "384",
+            "application_name": "dlightrag",
+        }
+        mock_config.pg_target_for_runtime.return_value = "primary"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "primary",
+            "port": 5432,
+            "user": "writer",
+            "password": "secret",
+            "database": "dlightrag",
+        }
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+            ) as mock_create,
+            patch("dlightrag.config.get_config", return_value=mock_config),
+        ):
+            result = await pool.get()
+
+        assert result is mock_pool
+        mock_create.assert_called_once_with(
+            host="primary",
+            port=5432,
+            user="writer",
+            password="secret",
+            database="dlightrag",
+            min_size=2,
+            max_size=10,
+            statement_cache_size=128,
+            server_settings={
+                "hnsw.ef_search": "384",
+                "application_name": "dlightrag",
+            },
         )

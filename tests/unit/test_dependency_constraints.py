@@ -176,11 +176,9 @@ def test_env_example_documents_upstream_lightrag_parser_sidecar_env() -> None:
     assert "LightRAG parser sidecar" in example
     for name in (
         "VLM_PROCESS_ENABLE",
-        "VLM_MAX_IMAGE_BYTES",
         "MINERU_API_MODE",
         "MINERU_API_TOKEN",
         "MINERU_OFFICIAL_ENDPOINT",
-        "MINERU_MODEL_VERSION",
         "MINERU_LOCAL_ENDPOINT",
     ):
         assert name in example
@@ -188,18 +186,38 @@ def test_env_example_documents_upstream_lightrag_parser_sidecar_env() -> None:
 
 def test_env_example_defaults_mineru_to_local_sidecar() -> None:
     example = Path(".env.example").read_text(encoding="utf-8")
+    config = Path("config.yaml").read_text(encoding="utf-8")
 
-    assert re.search(r"(?m)^MINERU_API_MODE=local$", example)
-    assert re.search(r"(?m)^MINERU_LOCAL_ENDPOINT=http://127\.0\.0\.1:8210$", example)
-    assert re.search(r"(?m)^MINERU_LOCAL_BACKEND=hybrid-auto-engine$", example)
-    assert re.search(r"(?m)^MINERU_LOCAL_PARSE_METHOD=auto$", example)
-    assert re.search(r"(?m)^MINERU_LOCAL_IMAGE_ANALYSIS=true$", example)
-    assert re.search(r"(?m)^MINERU_ENABLE_TABLE=true$", example)
-    assert re.search(r"(?m)^MINERU_ENABLE_FORMULA=true$", example)
+    assert "parser_sidecars:" in config
+    assert re.search(r"(?m)^    api_mode: local$", config)
+    assert re.search(r"(?m)^    local_endpoint: http://127\.0\.0\.1:8210$", config)
+    assert re.search(r"(?m)^    local_backend: hybrid-auto-engine$", config)
+    assert re.search(r"(?m)^    local_parse_method: auto$", config)
+    assert re.search(r"(?m)^    local_image_analysis: true$", config)
+    assert re.search(r"(?m)^    enable_table: true$", config)
+    assert re.search(r"(?m)^    enable_formula: true$", config)
+    for active_non_secret in (
+        "MINERU_API_MODE",
+        "MINERU_LOCAL_ENDPOINT",
+        "MINERU_LOCAL_BACKEND",
+        "MINERU_LOCAL_PARSE_METHOD",
+        "MINERU_LOCAL_IMAGE_ANALYSIS",
+        "MINERU_ENABLE_TABLE",
+        "MINERU_ENABLE_FORMULA",
+        "VLM_PROCESS_ENABLE",
+        "VLM_MAX_IMAGE_BYTES",
+    ):
+        assert not re.search(rf"(?m)^{active_non_secret}=", example)
     assert not re.search(r"(?m)^MINERU_API_TOKEN=", example)
     assert not re.search(r"(?m)^MINERU_OFFICIAL_ENDPOINT=", example)
     assert re.search(r"(?m)^# MINERU_API_TOKEN=your-api-key$", example)
     assert re.search(r"(?m)^# MINERU_OFFICIAL_ENDPOINT=https://mineru\.net$", example)
+
+
+def test_lightrag_constructor_receives_extraction_config() -> None:
+    source = Path("src/dlightrag/core/service.py").read_text(encoding="utf-8")
+
+    assert "entity_extraction_use_json=config.extraction.use_json" in source
 
 
 def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:

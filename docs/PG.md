@@ -19,6 +19,30 @@ Default vector storage is `VECTOR(dim)` with HNSW. `HNSW_HALFVEC` is an
 explicit opt-in index type for deployments that have chosen the precision
 tradeoff and rebuilt indexes accordingly.
 
+## Tuning Boundaries
+
+DlightRAG splits PostgreSQL tuning into two layers:
+
+- **Server-level settings** (`shared_buffers`, `work_mem`,
+  `maintenance_work_mem`, WAL settings, preload libraries) belong to the
+  PostgreSQL deployment. The checked-in Docker compose stack carries a local
+  single-node profile; production primary/replica deployments should tune
+  these in their own Postgres configuration.
+- **Session-level settings** belong to DlightRAG config. `pg_hnsw_ef_search`
+  becomes `hnsw.ef_search`, and `postgres_session_settings` can add additional
+  per-connection GUCs. DlightRAG applies the same session settings to both
+  LightRAG's PostgreSQL pool and the DlightRAG domain-store `pg_pool`.
+
+Example:
+
+```yaml
+pg_hnsw_ef_search: 256
+postgres_session_settings:
+  application_name: dlightrag
+  statement_timeout: "60000"
+postgres_statement_cache_size: 256
+```
+
 ## LightRAG Upstream Compatibility Patches
 
 DlightRAG keeps defensive monkey-patches around LightRAG PostgreSQL AGE graph

@@ -57,14 +57,11 @@ DLIGHTRAG_EMBEDDING__API_KEY=...
 ```
 
 The default document route uses LightRAG native parsing for DOCX and MinerU
-for other document types. `.env.example` is local-first:
+for other document types. `config.yaml` is local-first and points native
+DlightRAG at `http://127.0.0.1:8210`. If ArtRAG already has a MinerU service
+running on port `8210`, DlightRAG can reuse it.
 
-```bash
-MINERU_API_MODE=local
-MINERU_LOCAL_ENDPOINT=http://127.0.0.1:8210
-```
-
-2. Start a local MinerU sidecar for document parsing:
+2. Start a local MinerU sidecar for document parsing if one is not already running:
 
 ```bash
 make mineru-install
@@ -75,8 +72,8 @@ The helper creates a dedicated `.venv-mineru` so MinerU's ML dependencies do
 not enter DlightRAG's runtime environment. The default install extra is
 `mineru[core]`, matching MinerU's cross-platform core install. On GPU servers,
 prefer MinerU's official Docker Compose `api` or `router` profile; set
-`MINERU_LOCAL_ENDPOINT` to that service, usually `http://127.0.0.1:8000` or
-`http://127.0.0.1:8002`.
+`parser_sidecars.mineru.local_endpoint` to that service, usually
+`http://127.0.0.1:8000` or `http://127.0.0.1:8002`.
 
 On macOS, you can keep the sidecar running through launchd:
 
@@ -338,9 +335,10 @@ DLIGHTRAG_EMBEDDING__API_KEY=...
 DLIGHTRAG_RERANK__API_KEY=...
 ```
 
-LightRAG parser sidecar settings intentionally keep upstream names, for
-example `VLM_PROCESS_ENABLE`, `MINERU_API_MODE`, and `MINERU_API_TOKEN`.
-These are documented in [`.env.example`](.env.example).
+Parser sidecar defaults live in `config.yaml` under `parser_sidecars`.
+DlightRAG bridges those typed settings into LightRAG's upstream env names at
+startup. `.env.example` keeps only secrets and deployment overrides such as
+`MINERU_API_TOKEN`, `MINERU_LOCAL_ENDPOINT`, and `MINERU_DOCKER_LOCAL_ENDPOINT`.
 
 ### MinerU Local Sidecar
 
@@ -355,19 +353,19 @@ GET  /tasks/{task_id}/result
 GET  /health
 ```
 
-Recommended defaults:
+Recommended defaults in `config.yaml`:
 
 | Setting | Default | Why |
 |---|---|---|
-| `MINERU_API_MODE` | `local` | Keeps document parsing local by default. |
-| `MINERU_LOCAL_ENDPOINT` | `http://127.0.0.1:8210` | Matches `make mineru-api` for native runs. |
-| `MINERU_LOCAL_BACKEND` | `hybrid-auto-engine` | Uses MinerU's local hybrid parser when the service supports it. |
-| `MINERU_LOCAL_PARSE_METHOD` | `auto` | Lets MinerU choose text-layer extraction vs OCR per page. |
-| `MINERU_ENABLE_TABLE` / `MINERU_ENABLE_FORMULA` | `true` | Preserves table and equation extraction for LightRAG ingest. |
+| `parser_sidecars.mineru.api_mode` | `local` | Keeps document parsing local by default. |
+| `parser_sidecars.mineru.local_endpoint` | `http://127.0.0.1:8210` | Reuses ArtRAG or DlightRAG's local `make mineru-api` sidecar. |
+| `parser_sidecars.mineru.local_backend` | `hybrid-auto-engine` | Uses MinerU's local hybrid parser when the service supports it. |
+| `parser_sidecars.mineru.local_parse_method` | `auto` | Lets MinerU choose text-layer extraction vs OCR per page. |
+| `parser_sidecars.mineru.enable_table` / `enable_formula` | `true` | Preserves table and equation extraction for LightRAG ingest. |
 
 The official MinerU API remains available by explicitly changing
-`MINERU_API_MODE=official` and setting `MINERU_API_TOKEN`; it is not the
-checked-in default.
+`parser_sidecars.mineru.api_mode: official` and setting `MINERU_API_TOKEN`;
+it is not the checked-in default.
 
 ### Model Providers
 
@@ -435,6 +433,11 @@ DlightRAG's supported core storage stack is PostgreSQL 18 only:
 Default vector indexing uses `pg_vector_index_type: HNSW` with `VECTOR(dim)`.
 `HNSW_HALFVEC` is explicit opt-in and should only be used after deciding the
 workspace embedding dimension and rebuilding indexes.
+
+`pg_hnsw_ef_search` and `postgres_session_settings` are applied to both the
+LightRAG PostgreSQL pool and DlightRAG's domain-store pool. Server-level
+PostgreSQL memory and WAL settings remain deployment configuration in
+`docker-compose.yml` or your managed Postgres service.
 
 More PostgreSQL notes: [`docs/PG.md`](docs/PG.md).
 
