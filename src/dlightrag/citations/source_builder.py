@@ -56,7 +56,7 @@ def build_sources(
         snippets = [
             ChunkSnippet(
                 chunk_id=c["chunk_id"],
-                chunk_idx=idx,
+                chunk_idx=idx + 1,
                 page_idx=c.get("page_idx"),
                 content=filter_content_for_display(c.get("content", "")),
                 image_data=c.get("image_data"),

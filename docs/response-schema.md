@@ -104,7 +104,7 @@ result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "rel
 result = await manager.aanswer(query="What are the key findings?")
 result.answer      # "The key findings are... [1-1] [2-3]"
 result.contexts    # same structure as retrieve
-result.references  # [Reference(id=1, title="report.pdf"), ...] with structured-output providers
+result.references  # validated cited documents, derived from inline citations
 
 # Streaming answer
 contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
@@ -153,7 +153,7 @@ curl -X POST http://localhost:8100/answer \
 {
   "answer": "The key findings are... [1-1] [2-3]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
-  "references": [{"id": 1, "title": "report.pdf"}, {"id": 2, "title": "spec.pdf"}],
+  "references": [{"id": "1", "title": "report.pdf"}, {"id": "2", "title": "spec.pdf"}],
   "sources": [...]
 }
 ```
@@ -162,9 +162,9 @@ curl -X POST http://localhost:8100/answer \
 
 | Event | Payload | Description |
 |---|---|---|
-| `context` | `{type, data, sources}` | Full contexts + sources (sent first) |
+| `context` | `{type, data}` | Full contexts, sent first |
 | `token` | `{type, content}` | LLM answer token (repeats) |
-| `references` | `{type, data}` | Structured references (after all tokens, before done) |
+| `sources` | `{type, data}` | Validated cited sources, after all tokens and before done |
 | `done` | `{type}` | Stream complete |
 | `error` | `{type, message}` | Error mid-stream |
 
@@ -175,7 +175,7 @@ data: {"type":"token","content":"The key findings"}
 
 data: {"type":"token","content":" are..."}
 
-data: {"type":"references","data":[{"id":1,"title":"report.pdf"}]}
+data: {"type":"sources","data":[{"id":"1","title":"report.pdf","path":"/data/report.pdf","chunks":[...]}]}
 
 data: {"type":"done"}
 ```
@@ -192,7 +192,7 @@ MCP tools return JSON text with `sources` at top level:
 {
   "answer": "The key findings are... [1-1]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
-  "references": [{"id": 1, "title": "report.pdf"}],
+  "references": [{"id": "1", "title": "report.pdf"}],
   "sources": [...]
 }
 ```
@@ -285,14 +285,14 @@ Sources are document-level groupings derived from chunks via `build_sources()`. 
   "chunks": [
     {
       "chunk_id": "abc123",
-      "chunk_idx": 0,
+      "chunk_idx": 1,
       "page_idx": 2,
       "content": "First 200 characters of content...",
       "image_data": null
     },
     {
       "chunk_id": "def456",
-      "chunk_idx": 1,
+      "chunk_idx": 2,
       "page_idx": 5,
       "content": "Another chunk...",
       "image_data": "iVBORw0KGgo..."
@@ -315,7 +315,7 @@ Each **chunk snippet** within a source:
 | Field | Type | Description |
 |---|---|---|
 | `chunk_id` | string | Unique chunk identifier |
-| `chunk_idx` | int | 0-based position within this source |
+| `chunk_idx` | int | 1-based position within this source; matches `[ref_id-chunk_idx]` citations |
 | `page_idx` | int \| null | 1-based page number |
 | `content` | string | Filtered display content |
 | `image_data` | string \| null | Base64 page or image data |
@@ -324,23 +324,27 @@ Each **chunk snippet** within a source:
 
 ## References
 
-When the answer provider supports structured output, the `answer` response includes a `references` array containing document-level references cited in the answer. This is a validated subset of `sources` - only documents actually cited by the LLM appear here.
+The `answer` response includes a `references` array containing document-level
+references cited in the answer. DlightRAG derives this from validated inline
+citations, not from provider-specific structured output. The richer `sources`
+array is the same cited subset with paths, chunks, pages, images, and optional
+highlights.
 
 ```json
 {
-  "id": 1,
+  "id": "1",
   "title": "report.pdf"
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | int | Reference number matching `[n]` in inline citations |
+| `id` | string | Reference ID matching `[n]` in inline citations |
 | `title` | string | Document title/filename |
 
-**Relationship to `sources`:** `sources` contains all documents from retrieval; `references` contains only those the LLM cited. For providers that don't support structured output (Ollama, Xinference), `references` is an empty array.
-
-**Supported providers:** OpenAI, Azure OpenAI, Anthropic, Google Gemini, Qwen, Minimax, and any OpenAI-compatible gateway hosting a structured-output-capable model.
+**Relationship to `sources`:** `retrieve` returns all retrieved sources. `answer`
+returns only cited sources after citation validation. `references` is a compact
+document-level projection of that cited `sources` list.
 
 
 ## Citations

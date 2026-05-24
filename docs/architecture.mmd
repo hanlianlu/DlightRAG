@@ -1,0 +1,72 @@
+%%{init: {"theme": "base", "flowchart": {"curve": "linear", "nodeSpacing": 42, "rankSpacing": 58}}}%%
+flowchart TB
+  interfaces["Python SDK / REST API / Web UI / MCP"]
+  manager["RAGServiceManager<br/>workspace routing and federation"]
+
+  interfaces --> manager
+
+  subgraph ingest_lane["Ingest and admin role: writable primary"]
+    sources["local / Azure Blob / S3"]
+    ingest["UnifiedIngestionEngine"]
+    parser["LightRAG parser sidecars<br/>text, tables, equations, extracted images"]
+    lr_ingest["LightRAG ingest<br/>chunks, KG, vectors, doc_status, references"]
+    direct["Direct multimodal image embedding<br/>native images and extracted images"]
+    visualkg["VLM semantic projection<br/>image entities and relationships"]
+    sidewrites["DlightRAG side tables<br/>metadata, artifacts, provenance, visual chunks"]
+  end
+
+  subgraph query_lane["Query role: read-only attach"]
+    planner["QueryPlanner<br/>intent-aware metadata filter"]
+    candidates["metadata candidate set<br/>strict explicit filters, inferred fallback"]
+    filtered["FilteredVectorDB<br/>semantic in-filter"]
+    lrmix["LightRAGMixBackend<br/>aquery_data(mode=mix)"]
+    bm25node["pg_textsearch BM25<br/>same candidate scope"]
+    visualquery["direct image query path<br/>multimodal embedding"]
+    fusion["RRF fusion and rerank<br/>mix + BM25 + visual"]
+    answer["AnswerEngine<br/>multimodal prompt over final context"]
+    cite["CitationProcessor<br/>validate [n] and [n-m], build cited sources"]
+  end
+
+  subgraph lightrag_boundary["LightRAG main boundary"]
+    lrdata["LightRAG raw data<br/>entities, relationships, chunks, references"]
+  end
+
+  subgraph pg["PostgreSQL 18 ecosystem"]
+    primary["primary<br/>DDL, ingest, metadata writes"]
+    replica["hot standby replica<br/>query reads only"]
+    stores["replicated storage surface<br/>pgvector HNSW, Apache AGE,<br/>pg_textsearch BM25, JSONB side tables"]
+  end
+
+  manager --> ingest
+  manager --> planner
+
+  sources --> ingest
+  ingest --> parser
+  parser --> lr_ingest
+  parser --> direct
+  ingest --> visualkg
+  direct --> sidewrites
+  visualkg --> lr_ingest
+  sidewrites --> primary
+  lr_ingest --> primary
+
+  planner --> candidates
+  candidates --> filtered
+  filtered --> lrmix
+  lrmix --> lrdata
+  lrdata --> fusion
+  candidates --> bm25node
+  bm25node --> fusion
+  visualquery --> fusion
+  fusion --> answer
+  lrdata --> cite
+  answer --> cite
+
+  lrmix --> replica
+  bm25node --> replica
+  visualquery --> replica
+  candidates --> replica
+
+  primary -. streaming replication .-> replica
+  primary --> stores
+  replica --> stores
