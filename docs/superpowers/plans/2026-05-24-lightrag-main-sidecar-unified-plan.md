@@ -14,7 +14,7 @@
 
 ## Verified Upstream Baseline
 
-- LightRAG main target: `cfcba71` from `HKUDS/LightRAG` `origin/main`.
+- LightRAG main target: `a9b9079` from `HKUDS/LightRAG` `origin/main`, checked on 2026-05-24.
 - PostgreSQL target: major `18`, current minor `18.4` as of 2026-05-24. Official references: [PostgreSQL 18.4 release announcement](https://www.postgresql.org/about/news/postgresql-184-1710-1614-1518-and-1423-released-3297/) and [PostgreSQL versioning policy](https://www.postgresql.org/support/versioning/).
 - Apache AGE has a `PG18` branch.
 - Docker Hub has `pgvector/pgvector:pg18` and `pgvector/pgvector:0.8.2-pg18` tags.
@@ -161,6 +161,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.graph_storage == "PGGraphStorage"
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
+    assert cfg.embedding.asymmetric is False
 
 
 @pytest.mark.parametrize(
@@ -347,6 +348,7 @@ class EmbeddingConfig(BaseModel):
     base_url: str | None = None
     dim: int = 1024
     max_token_size: int = 8192
+    asymmetric: bool = False
     startup_probe: bool = True
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 ```
@@ -579,6 +581,7 @@ embedding:
   provider: voyage
   model: voyage-multimodal-3.5
   dim: 1024
+  asymmetric: false
   startup_probe: true
   model_kwargs: {}
 
@@ -773,16 +776,29 @@ from dlightrag.models.providers.embed_providers import (
 )
 
 
-def test_voyage_payload_sets_input_type_from_context() -> None:
+def test_voyage_payload_omits_input_type_in_symmetric_mode() -> None:
     payload = VoyageEmbedProvider().build_payload(
         "voyage-multimodal-3.5",
         [TextEmbeddingInput(text="hello")],
         context="query",
+        asymmetric=False,
+        output_dimension=1024,
+    )
+
+    assert "input_type" not in payload
+    assert payload["inputs"][0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_voyage_payload_sets_input_type_only_when_asymmetric() -> None:
+    payload = VoyageEmbedProvider().build_payload(
+        "voyage-multimodal-3.5",
+        [TextEmbeddingInput(text="hello")],
+        context="query",
+        asymmetric=True,
         output_dimension=1024,
     )
 
     assert payload["input_type"] == "query"
-    assert payload["inputs"][0]["content"] == [{"type": "text", "text": "hello"}]
 
 
 def test_dashscope_qwen_payload_sets_dimension_and_image() -> None:
@@ -790,6 +806,7 @@ def test_dashscope_qwen_payload_sets_dimension_and_image() -> None:
         "qwen3-vl-embedding",
         [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
         context="document",
+        asymmetric=False,
         output_dimension=2048,
     )
 
@@ -797,26 +814,44 @@ def test_dashscope_qwen_payload_sets_dimension_and_image() -> None:
     assert payload["input"]["contents"] == [{"image": "data:image/png;base64,abc"}]
 
 
-def test_gemini_payload_sets_output_dimension_and_task() -> None:
+def test_gemini_payload_uses_task_only_when_asymmetric() -> None:
+    symmetric_payload = GeminiEmbedProvider().build_payload(
+        "gemini-embedding-2",
+        [TextEmbeddingInput(text="needle")],
+        context="document",
+        asymmetric=False,
+        output_dimension=1536,
+    )
     payload = GeminiEmbedProvider().build_payload(
         "gemini-embedding-2",
         [TextEmbeddingInput(text="needle")],
         context="document",
+        asymmetric=True,
         output_dimension=1536,
     )
 
+    assert "task_type" not in symmetric_payload
     assert payload["output_dimensionality"] == 1536
     assert payload["task_type"] == "RETRIEVAL_DOCUMENT"
 
 
-def test_jina_payload_maps_context_to_retrieval_task() -> None:
+def test_jina_payload_maps_context_only_when_asymmetric() -> None:
+    symmetric_payload = JinaEmbedProvider().build_payload(
+        "jina-embeddings-v4",
+        [ImageEmbeddingInput(data_uri="data:image/jpeg;base64,abc")],
+        context="query",
+        asymmetric=False,
+        output_dimension=2048,
+    )
     payload = JinaEmbedProvider().build_payload(
         "jina-embeddings-v4",
         [ImageEmbeddingInput(data_uri="data:image/jpeg;base64,abc")],
         context="query",
+        asymmetric=True,
         output_dimension=2048,
     )
 
+    assert "task" not in symmetric_payload
     assert payload["task"] == "retrieval.query"
     assert payload["input"] == [{"image": "data:image/jpeg;base64,abc"}]
 
@@ -827,6 +862,7 @@ def test_qwen_openai_compat_payload_preserves_image_data_uri_without_task_hint()
         "qwen3-vl-embedding-2b",
         [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
         context="document",
+        asymmetric=True,
         output_dimension=2048,
     )
 
@@ -846,7 +882,7 @@ from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 from dlightrag.models.providers.embed_providers import VoyageEmbedProvider
 
 
-def test_image_embedder_uses_separate_index_and_query_contexts() -> None:
+def test_image_embedder_defaults_to_symmetric_payloads() -> None:
     provider = VoyageEmbedProvider()
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -854,6 +890,26 @@ def test_image_embedder_uses_separate_index_and_query_contexts() -> None:
         api_key="key",
         dim=1024,
         provider=provider,
+        asymmetric=False,
+    )
+
+    image = Image.new("RGB", (1, 1), "white")
+    index_payload = embedder.build_image_payload_for_test(image, context="document")
+    query_payload = embedder.build_image_payload_for_test(image, context="query")
+
+    assert "input_type" not in index_payload
+    assert "input_type" not in query_payload
+    assert index_payload["inputs"][0]["content"][0]["type"] == "image_base64"
+
+
+def test_image_embedder_uses_separate_index_and_query_contexts_when_asymmetric() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=1024,
+        provider=VoyageEmbedProvider(),
+        asymmetric=True,
     )
 
     image = Image.new("RGB", (1, 1), "white")
@@ -862,7 +918,6 @@ def test_image_embedder_uses_separate_index_and_query_contexts() -> None:
 
     assert index_payload["input_type"] == "document"
     assert query_payload["input_type"] == "query"
-    assert index_payload["inputs"][0]["content"][0]["type"] == "image_base64"
 
 
 def test_dimension_mismatch_raises() -> None:
@@ -887,13 +942,30 @@ from dlightrag.config import DlightragConfig, EmbeddingConfig
 from dlightrag.models.llm import get_embedding_func
 
 
-def test_embedding_func_declares_supports_asymmetric() -> None:
+def test_embedding_func_uses_lightrag_symmetric_fallback_by_default() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
             api_key="sk-test",
             dim=1024,
+            startup_probe=False,
+        )
+    )
+
+    embedding_func = get_embedding_func(cfg)
+
+    assert embedding_func.supports_asymmetric is False
+
+
+def test_embedding_func_declares_supports_asymmetric_when_enabled() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            asymmetric=True,
             startup_probe=False,
         )
     )
@@ -908,10 +980,10 @@ def test_embedding_func_declares_supports_asymmetric() -> None:
 Run:
 
 ```bash
-uv run pytest tests/unit/test_embed_providers.py tests/unit/test_multimodal_embedding.py tests/unit/test_embedding_func.py::test_embedding_func_declares_supports_asymmetric -v
+uv run pytest tests/unit/test_embed_providers.py tests/unit/test_multimodal_embedding.py tests/unit/test_embedding_func.py::test_embedding_func_uses_lightrag_symmetric_fallback_by_default tests/unit/test_embedding_func.py::test_embedding_func_declares_supports_asymmetric_when_enabled -v
 ```
 
-Expected: failures because the normalized input classes, provider matrix, context-aware embedder, and `supports_asymmetric` wrapper are not implemented yet.
+Expected: failures because the normalized input classes, provider matrix, context-aware symmetric fallback, and active asymmetric wrapper are not implemented yet.
 
 - [ ] **Step 4: Create normalized embedding inputs**
 
@@ -975,7 +1047,7 @@ In `src/dlightrag/models/providers/embed_base.py`, replace `build_payload()` wit
 class EmbedProvider(ABC):
     endpoint: str
     supports_images: bool = False
-    supports_asymmetric: bool = False
+    supports_asymmetric: bool = False  # capability, not active runtime mode
     default_dim: int | None = None
     known_dims: frozenset[int] | None = None
 
@@ -986,6 +1058,7 @@ class EmbedProvider(ABC):
         inputs: list[EmbeddingInput],
         *,
         context: Literal["query", "document"],
+        asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
         raise NotImplementedError
@@ -1001,22 +1074,24 @@ class VoyageEmbedProvider(EmbedProvider):
     default_dim = 1024
     known_dims = frozenset({1024})
 
-    def build_payload(self, model, inputs, *, context, output_dimension=None):
-        return {
+    def build_payload(self, model, inputs, *, context, asymmetric=False, output_dimension=None):
+        payload = {
             "model": model,
-            "input_type": context,
             "inputs": [_to_voyage_item(item) for item in inputs],
         }
+        if asymmetric:
+            payload["input_type"] = context
+        return payload
 
 
 class DashScopeQwenEmbedProvider(EmbedProvider):
     endpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
     supports_images = True
-    supports_asymmetric = True
+    supports_asymmetric = False
     default_dim = 2560
     known_dims = frozenset({2560, 2048, 1536, 1024, 768, 512, 256})
 
-    def build_payload(self, model, inputs, *, context, output_dimension=None):
+    def build_payload(self, model, inputs, *, context, asymmetric=False, output_dimension=None):
         payload = {"model": model, "input": {"contents": [_to_dashscope_item(item) for item in inputs]}}
         if output_dimension is not None:
             payload["parameters"] = {"dimension": output_dimension}
@@ -1037,9 +1112,10 @@ class GeminiEmbedProvider(EmbedProvider):
     default_dim = 3072
     known_dims = frozenset({3072, 1536, 768})
 
-    def build_payload(self, model, inputs, *, context, output_dimension=None):
-        task_type = "RETRIEVAL_QUERY" if context == "query" else "RETRIEVAL_DOCUMENT"
-        payload = {"model": model, "task_type": task_type, "content": [_to_gemini_part(item) for item in inputs]}
+    def build_payload(self, model, inputs, *, context, asymmetric=False, output_dimension=None):
+        payload = {"model": model, "content": [_to_gemini_part(item) for item in inputs]}
+        if asymmetric:
+            payload["task_type"] = "RETRIEVAL_QUERY" if context == "query" else "RETRIEVAL_DOCUMENT"
         if output_dimension is not None:
             payload["output_dimensionality"] = output_dimension
         return payload
@@ -1051,9 +1127,11 @@ class JinaEmbedProvider(EmbedProvider):
     supports_asymmetric = True
     default_dim = 2048
 
-    def build_payload(self, model, inputs, *, context, output_dimension=None):
-        task = "retrieval.query" if context == "query" else "retrieval.passage"
-        return {"model": model, "task": task, "input": [_to_jina_item(item) for item in inputs]}
+    def build_payload(self, model, inputs, *, context, asymmetric=False, output_dimension=None):
+        payload = {"model": model, "input": [_to_jina_item(item) for item in inputs]}
+        if asymmetric:
+            payload["task"] = "retrieval.query" if context == "query" else "retrieval.passage"
+        return payload
 ```
 
 Keep `QwenOpenAICompatEmbedProvider` and `OpenAICompatEmbedProvider` image-capable where the server accepts image data URIs, but mark `supports_asymmetric=False` by default. OpenAI compatibility proves payload shape, not query/document task support. Enable asymmetric behavior only through a separate configured adapter when the serving stack documents a task parameter or instruction strategy. Keep `OllamaEmbedProvider` text-only by default; it must not pass service startup for the multimodal architecture unless a future provider-specific image probe is added.
@@ -1107,6 +1185,7 @@ class MultimodalEmbedder:
         api_key: str,
         dim: int,
         provider: EmbedProvider,
+        asymmetric: bool = False,
         batch_size: int = 4,
         timeout: float = 120.0,
     ) -> None:
@@ -1116,7 +1195,8 @@ class MultimodalEmbedder:
         self.base_url = base_url.rstrip("/") if base_url else "https://api.openai.com"
         self.dim = dim
         self.provider = provider
-        self.supports_asymmetric = provider.supports_asymmetric
+        self.asymmetric = asymmetric and provider.supports_asymmetric
+        self.supports_asymmetric = self.asymmetric
         self.batch_size = batch_size
         self._client = httpx.AsyncClient(
             timeout=timeout,
@@ -1135,6 +1215,7 @@ class MultimodalEmbedder:
             self.model,
             inputs,
             context=context,
+            asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
         data = await self._post(payload)
@@ -1179,6 +1260,7 @@ class MultimodalEmbedder:
             self.model,
             [ImageEmbeddingInput.from_pil(image)],
             context=context,
+            asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
 
@@ -1218,6 +1300,7 @@ embedder = MultimodalEmbedder(
     base_url=cfg.base_url or "",
     dim=cfg.dim,
     provider=embed_provider,
+    asymmetric=cfg.asymmetric,
     batch_size=config.embedding_func_max_async,
     timeout=float(config.embedding_request_timeout),
 )
@@ -1241,12 +1324,13 @@ def get_multimodal_embedder(config: DlightragConfig) -> MultimodalEmbedder:
         base_url=cfg.base_url or "",
         dim=cfg.dim,
         provider=detect_embed_provider(cfg.model, provider=cfg.provider, base_url=cfg.base_url),
+        asymmetric=cfg.asymmetric,
         batch_size=config.embedding_func_max_async,
         timeout=float(config.embedding_request_timeout),
     )
 ```
 
-Return LightRAG's wrapper with asymmetric support:
+Return LightRAG's wrapper with active asymmetric support only when explicitly enabled. This delegates symmetric fallback to LightRAG's own `EmbeddingFunc`: if `supports_asymmetric=False`, LightRAG strips the `context` kwarg before calling the function.
 
 ```python
 return EmbeddingFunc(
