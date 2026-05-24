@@ -253,6 +253,16 @@ Existing `PGMetadataIndex` remains the document-level filter source. It continue
 
 The LLM may infer structured filters from natural language, but storage executes them deterministically. String filters use normalized case-insensitive exact matching backed by `LOWER(field)` btree expression indexes; partial file references must be represented explicitly as filename patterns.
 
+DlightRAG should expose a user metadata contract, but it should not delegate that contract to LightRAG:
+
+- Ingest APIs accept `metadata: Mapping[str, Any]` plus optional typed system fields such as `title`, `author`, and dates.
+- Config may declare metadata fields with `type`, `normalizer`, `filter_ops`, and `indexed` settings. Supported matching operators are exact, `IN`, range, JSONB containment, and explicit pattern for selected string fields.
+- Unknown user metadata may be stored in JSONB for enrichment, but it is not filterable until declared in the field registry.
+- Reserved namespaces are immutable: `sys.*` for DlightRAG system metadata, `lightrag.*` for mirrored LightRAG provenance, and `user.*` for caller-provided metadata.
+- Metadata updates affect filtering and enrichment immediately, but do not mutate LightRAG chunks, KG, or vectors. If a metadata field should become semantic content, the caller must request re-ingest or explicit KG projection.
+
+The LightRAG bridge is by identifier and provenance, not by making LightRAG own user metadata. DlightRAG reads LightRAG `doc_status` / `full_docs` operational fields such as `sidecar_location`, `parse_engine`, `process_options`, `chunk_options`, `content_hash`, and `chunks_list`, then mirrors them into PostgreSQL. Retrieval resolves user metadata filters to document ids, maps them to chunk ids through `ChunkProvenanceIndex`, and applies those candidate ids to LightRAG vector search, BM25, and direct visual search. DlightRAG should not write arbitrary user metadata into LightRAG `doc_status.metadata` or depend on it for filtering, because that field is used by LightRAG pipeline lifecycle and is not a stable filter API.
+
 The old `rag_mode` metadata should be removed. If a field is needed for observability, use `ingest_strategy="lightrag_sidecar_unified"`.
 
 A protocol may remain for test doubles, but not as a product promise for non-PostgreSQL metadata backends.
@@ -611,6 +621,27 @@ retrieval:
 
 metadata:
   enabled: true
+  allow_ad_hoc_json: true
+  fields:
+    title:
+      type: string
+      normalizer: casefold_trim
+      filter_ops: [exact, pattern]
+      indexed: true
+    author:
+      type: string
+      normalizer: casefold_trim
+      filter_ops: [exact]
+      indexed: true
+    published_at:
+      type: date
+      filter_ops: [range]
+      indexed: true
+    tags:
+      type: string_array
+      normalizer: casefold_trim
+      filter_ops: [contains]
+      indexed: true
 ```
 
 The storage values are operational facts, not product-mode switches. Config validation should reject PostgreSQL servers older than major version 18, and should reject `Neo4JStorage`, `MilvusVectorDBStorage`, `QdrantVectorDBStorage`, `JsonKVStorage`, `NetworkXStorage`, and other non-PostgreSQL storage choices in the core path.

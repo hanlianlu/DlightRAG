@@ -672,6 +672,30 @@ parser:
 extraction:
   use_json: true
   entity_type_prompt_file: null
+
+metadata:
+  enabled: true
+  allow_ad_hoc_json: true
+  fields:
+    title:
+      type: string
+      normalizer: casefold_trim
+      filter_ops: [exact, pattern]
+      indexed: true
+    author:
+      type: string
+      normalizer: casefold_trim
+      filter_ops: [exact]
+      indexed: true
+    published_at:
+      type: date
+      filter_ops: [range]
+      indexed: true
+    tags:
+      type: string_array
+      normalizer: casefold_trim
+      filter_ops: [contains]
+      indexed: true
 ```
 
 - [ ] **Step 13: Run Task 1 tests**
@@ -2263,10 +2287,12 @@ git commit -m "feat: ingest through lightrag sidecars"
 - Modify: `src/dlightrag/core/retrieval/filtered_vdb.py`
 - Modify: `src/dlightrag/core/retrieval/metadata_path.py`
 - Modify: `src/dlightrag/core/retrieval/models.py`
+- Modify: `src/dlightrag/core/retrieval/metadata_fields.py`
 - Modify: `src/dlightrag/storage/pg_metadata_index.py`
 - Test: `tests/unit/test_filtered_vdb.py`
 - Test: `tests/unit/test_metadata_path.py`
 - Test: `tests/unit/test_metadata_filter.py`
+- Test: `tests/unit/test_metadata_fields.py`
 
 - [ ] **Step 1: Write strict empty-filter tests**
 
@@ -2310,17 +2336,73 @@ async def test_metadata_retrieve_uses_chunk_provenance() -> None:
     assert result == ["chunk-a", "chunk-b"]
 ```
 
-- [ ] **Step 3: Run tests and verify they fail**
+- [ ] **Step 3: Write user metadata contract tests**
+
+Create or update `tests/unit/test_metadata_fields.py`:
+
+```python
+import pytest
+
+from dlightrag.core.retrieval.metadata_fields import (
+    MetadataFieldRegistry,
+    normalize_user_metadata,
+)
+
+
+def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {
+            "author": {
+                "type": "string",
+                "normalizer": "casefold_trim",
+                "filter_ops": ["exact"],
+                "indexed": True,
+            }
+        }
+    )
+
+    normalized = normalize_user_metadata({"author": " Ada Lovelace "}, registry)
+
+    assert normalized.filterable["author"] == "ada lovelace"
+
+
+def test_unknown_metadata_is_stored_but_not_filterable() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    normalized = normalize_user_metadata({"project": "Analytical Engine"}, registry)
+
+    assert normalized.raw_json["project"] == "Analytical Engine"
+    assert "project" not in normalized.filterable
+
+
+def test_lightrag_namespace_is_reserved_for_user_metadata() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    with pytest.raises(ValueError, match="reserved"):
+        normalize_user_metadata({"lightrag.content_hash": "x"}, registry)
+```
+
+Add a PG metadata test that asserts DlightRAG does not use LightRAG `doc_status.metadata` as the filter authority:
+
+```python
+async def test_pg_metadata_filter_uses_dlightrag_rows_not_lightrag_metadata() -> None:
+    metadata_index = PGMetadataIndex(workspace="default")
+    # Use a mocked pool/connection or existing PGMetadataIndex test helper.
+    # The assertion should verify generated SQL reads DlightRAG metadata tables
+    # and never references LIGHTRAG_DOC_STATUS.metadata for user filters.
+```
+
+- [ ] **Step 4: Run tests and verify they fail**
 
 Run:
 
 ```bash
-uv run pytest tests/unit/test_filtered_vdb.py tests/unit/test_metadata_path.py -v
+uv run pytest tests/unit/test_filtered_vdb.py tests/unit/test_metadata_path.py tests/unit/test_metadata_fields.py -v
 ```
 
-Expected: failures because empty set is treated as no filter and `metadata_retrieve` still accepts `rag_mode`.
+Expected: failures because empty set is treated as no filter, `metadata_retrieve` still accepts `rag_mode`, and the user metadata registry/normalizer does not exist yet.
 
-- [ ] **Step 4: Make filter scope strict**
+- [ ] **Step 5: Make filter scope strict**
 
 In `src/dlightrag/core/retrieval/filtered_vdb.py`, replace:
 
@@ -2351,7 +2433,47 @@ if active_ids is None:
     return []
 ```
 
-- [ ] **Step 5: Remove `rag_mode` metadata filter**
+- [ ] **Step 6: Add user metadata field registry**
+
+In `src/dlightrag/core/retrieval/metadata_fields.py`, keep system field definitions but add a user metadata registry:
+
+```python
+@dataclass(frozen=True)
+class MetadataFieldSpec:
+    name: str
+    type: Literal["string", "string_array", "number", "date", "bool", "json"]
+    normalizer: Literal["none", "casefold_trim"] = "none"
+    filter_ops: frozenset[str] = frozenset({"exact"})
+    indexed: bool = False
+
+
+@dataclass(frozen=True)
+class NormalizedUserMetadata:
+    raw_json: dict[str, Any]
+    filterable: dict[str, Any]
+
+
+class MetadataFieldRegistry:
+    @classmethod
+    def from_config(cls, fields: Mapping[str, Mapping[str, Any]]) -> "MetadataFieldRegistry": ...
+    def get(self, field: str) -> MetadataFieldSpec | None: ...
+```
+
+Normalization rules:
+
+- reject caller-provided keys beginning with `sys.` or `lightrag.`;
+- keep unknown fields in `raw_json` only;
+- expose only declared fields in `filterable`;
+- support exact/range/JSONB/pattern operators only when declared in `filter_ops`;
+- never add fuzzy/trigram behavior.
+
+LightRAG bridge rule:
+
+- read LightRAG operational fields into reserved `lightrag.*` metadata during ingest;
+- do not write arbitrary user metadata to LightRAG `doc_status.metadata`;
+- do not query `LIGHTRAG_DOC_STATUS.metadata` for user filters.
+
+- [ ] **Step 7: Remove `rag_mode` metadata filter**
 
 In `src/dlightrag/core/retrieval/models.py`, remove:
 
@@ -2370,7 +2492,7 @@ artifact_status TEXT
 
 Update upsert values to store these fields.
 
-- [ ] **Step 6: Rewrite metadata chunk resolution**
+- [ ] **Step 8: Rewrite metadata chunk resolution**
 
 Replace `metadata_retrieve()` signature:
 
@@ -2387,20 +2509,20 @@ async def metadata_retrieve(
     return await chunk_provenance.chunk_ids_for_docs(doc_ids)
 ```
 
-- [ ] **Step 7: Run Task 6 tests**
+- [ ] **Step 9: Run Task 6 tests**
 
 Run:
 
 ```bash
-uv run pytest tests/unit/test_filtered_vdb.py tests/unit/test_metadata_path.py tests/unit/test_metadata_filter.py tests/unit/test_metadata_index.py -v
+uv run pytest tests/unit/test_filtered_vdb.py tests/unit/test_metadata_path.py tests/unit/test_metadata_filter.py tests/unit/test_metadata_fields.py tests/unit/test_metadata_index.py -v
 ```
 
 Expected: selected tests pass.
 
-- [ ] **Step 8: Commit Task 6**
+- [ ] **Step 10: Commit Task 6**
 
 ```bash
-git add src/dlightrag/core/retrieval src/dlightrag/storage/pg_metadata_index.py tests/unit/test_filtered_vdb.py tests/unit/test_metadata_path.py tests/unit/test_metadata_filter.py tests/unit/test_metadata_index.py
+git add src/dlightrag/core/retrieval src/dlightrag/storage/pg_metadata_index.py tests/unit/test_filtered_vdb.py tests/unit/test_metadata_path.py tests/unit/test_metadata_filter.py tests/unit/test_metadata_fields.py tests/unit/test_metadata_index.py
 git commit -m "fix: enforce strict postgres metadata filtering"
 ```
 
