@@ -102,9 +102,11 @@ async def areset(
 
     # Phase 2: DlightRAG domain stores -- registry
     for name, store, method in (
-        ("hash_index", service._hash_index, "clear"),
-        ("metadata_index", service._metadata_index, "clear"),
-        ("visual_chunks", service._visual_chunks, "drop"),
+        ("hash_index", getattr(service, "_hash_index", None), "clear"),
+        ("metadata_index", getattr(service, "_metadata_index", None), "clear"),
+        ("document_artifacts", getattr(service, "_document_artifacts", None), "clear"),
+        ("chunk_provenance", getattr(service, "_chunk_provenance", None), "clear"),
+        ("visual_chunks", getattr(service, "_visual_chunks", None), "drop"),
     ):
         if store is None:
             continue
@@ -117,35 +119,32 @@ async def areset(
             logger.warning("areset Phase 2 failed for %s: %s", name, exc)
 
     # Phase 3: Orphan PG table scan (safety net)
-    is_pg = service.config.kv_storage.startswith("PG")
-    if is_pg:
-        try:
-            orphans = await _clean_orphan_tables(workspace, dry_run=dry_run)
-            stats["orphan_tables_cleaned"] = orphans
-        except Exception as exc:
-            errors.append(f"Phase 3 (orphan tables): {exc}")
-            logger.warning("areset Phase 3 failed: %s", exc)
+    try:
+        orphans = await _clean_orphan_tables(workspace, dry_run=dry_run)
+        stats["orphan_tables_cleaned"] = orphans
+    except Exception as exc:
+        errors.append(f"Phase 3 (orphan tables): {exc}")
+        logger.warning("areset Phase 3 failed: %s", exc)
 
-        # Also clean workspace metadata
-        try:
-            if not dry_run:
-                await _clean_workspace_meta(workspace)
-        except Exception as exc:
-            errors.append(f"Phase 3 (workspace meta): {exc}")
-            logger.warning("areset Phase 3 workspace meta failed: %s", exc)
+    # Also clean workspace metadata
+    try:
+        if not dry_run:
+            await _clean_workspace_meta(workspace)
+    except Exception as exc:
+        errors.append(f"Phase 3 (workspace meta): {exc}")
+        logger.warning("areset Phase 3 workspace meta failed: %s", exc)
 
     # Phase 4: AGE graph schema drop
-    if is_pg:
-        try:
-            dropped = await _drop_age_graphs(
-                workspace,
-                collected_graph_names,
-                dry_run=dry_run,
-            )
-            stats["graphs_dropped"] = dropped
-        except Exception as exc:
-            errors.append(f"Phase 4 (AGE graphs): {exc}")
-            logger.warning("areset Phase 4 failed: %s", exc)
+    try:
+        dropped = await _drop_age_graphs(
+            workspace,
+            collected_graph_names,
+            dry_run=dry_run,
+        )
+        stats["graphs_dropped"] = dropped
+    except Exception as exc:
+        errors.append(f"Phase 4 (AGE graphs): {exc}")
+        logger.warning("areset Phase 4 failed: %s", exc)
 
     # Phase 5: File system cleanup
     if not keep_files:

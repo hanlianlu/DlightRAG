@@ -15,10 +15,7 @@ from dlightrag.core.retrieval.models import MetadataFilter
 
 @runtime_checkable
 class MetadataIndexProtocol(Protocol):
-    """Common interface for all metadata index backends.
-
-    Implementors: PGMetadataIndex, JsonMetadataIndex (planned).
-    """
+    """Common interface for PGMetadataIndex and test doubles."""
 
     async def initialize(self) -> None: ...
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None: ...
@@ -32,10 +29,7 @@ class MetadataIndexProtocol(Protocol):
 
 @runtime_checkable
 class HashIndexProtocol(Protocol):
-    """Common interface for all hash index backends.
-
-    Implemented by HashIndex (JSON) and PGHashIndex.
-    """
+    """Common interface for PGHashIndex and test doubles."""
 
     async def check_exists(self, content_hash: str) -> tuple[bool, str | None]: ...
     async def register(self, content_hash: str, doc_id: str, file_path: str) -> None: ...

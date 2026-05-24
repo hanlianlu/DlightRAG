@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from dlightrag.models.embedding_inputs import TextEmbeddingInput
+
 _MAX_RETRIES = 3
 
 
@@ -25,20 +27,16 @@ def create_embed_client(api_key: str, timeout: float = 120.0) -> httpx.AsyncClie
 async def _post_with_retry(
     url: str,
     payload: dict,
-    api_key: str,
     *,
+    headers: dict[str, str] | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> dict:
     """POST with 429 retry. Reuses client if provided, else creates ephemeral one."""
     import asyncio
 
-    headers: dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
     async def _do_post(c: httpx.AsyncClient) -> dict:
         for attempt in range(_MAX_RETRIES):
-            resp = await c.post(url, json=payload, headers=headers)
+            resp = await c.post(url, json=payload, headers=headers or {})
             if resp.status_code == 429 and attempt < _MAX_RETRIES - 1:
                 retry_after = float(resp.headers.get("retry-after", 2 ** (attempt + 1)))
                 await asyncio.sleep(retry_after)
@@ -72,9 +70,22 @@ async def httpx_embed(
         return []
 
     prov = provider
-    url = (base_url.rstrip("/") if base_url else "https://api.openai.com") + prov.endpoint
-    payload = prov.build_payload(model, texts)
-    data = await _post_with_retry(url, payload, api_key, client=client)
+    url = (
+        (base_url.rstrip("/") if base_url else "https://api.openai.com/v1")
+        + prov.endpoint_for_model(model)
+    )
+    payload = prov.build_payload(
+        model,
+        [TextEmbeddingInput(text=text) for text in texts],
+        context="document",
+        asymmetric=False,
+    )
+    data = await _post_with_retry(
+        url,
+        payload,
+        headers=prov.request_headers(api_key),
+        client=client,
+    )
     return prov.parse_response(data)
 
 

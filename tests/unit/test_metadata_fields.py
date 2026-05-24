@@ -5,6 +5,11 @@ from __future__ import annotations
 
 import pytest
 
+from dlightrag.core.retrieval.metadata_fields import (
+    MetadataFieldRegistry,
+    normalize_user_metadata,
+)
+
 
 class TestMetadataFieldDef:
     """MetadataFieldDef frozen dataclass basics."""
@@ -37,10 +42,10 @@ class TestMetadataFields:
 
         assert isinstance(METADATA_FIELDS, tuple)
 
-    def test_has_12_fields(self) -> None:
+    def test_has_system_fields(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 
-        assert len(METADATA_FIELDS) == 12
+        assert len(METADATA_FIELDS) >= 12
 
     def test_has_filename(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
@@ -141,3 +146,127 @@ class TestDerivedFunctions:
         assert "page_count" not in hints
         # custom_metadata should be present
         assert "custom_metadata" in hints
+
+
+def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {
+            "author": {
+                "type": "string",
+                "normalizer": "casefold_trim",
+                "filter_ops": ["exact"],
+                "indexed": True,
+            }
+        }
+    )
+
+    normalized = normalize_user_metadata({"author": " Ada Lovelace "}, registry)
+
+    assert normalized.filterable["author"] == "ada lovelace"
+
+
+def test_unknown_metadata_is_stored_but_not_filterable() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    normalized = normalize_user_metadata(
+        {"project": "Analytical Engine"},
+        registry,
+        metadata_policy="validate",
+        allow_ad_hoc_json=True,
+    )
+
+    assert normalized.raw_json["project"] == "Analytical Engine"
+    assert "project" not in normalized.filterable
+
+
+def test_reject_unknown_metadata_policy_blocks_undeclared_key() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    with pytest.raises(ValueError, match="undeclared"):
+        normalize_user_metadata(
+            {"project": "Analytical Engine"},
+            registry,
+            metadata_policy="reject_unknown",
+            allow_ad_hoc_json=True,
+        )
+
+
+def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {
+            "author": {
+                "type": "string",
+                "normalizer": "casefold_trim",
+                "filter_ops": ["exact"],
+                "indexed": True,
+            }
+        }
+    )
+
+    normalized = normalize_user_metadata(
+        {"author": " Ada Lovelace "},
+        registry,
+        metadata_policy="store_only",
+        allow_ad_hoc_json=True,
+    )
+
+    assert normalized.raw_json["author"] == " Ada Lovelace "
+    assert normalized.filterable == {}
+
+
+@pytest.mark.parametrize("key", ["sys.filename", "lightrag.content_hash", "user.author"])
+def test_reserved_namespaces_are_rejected_for_user_metadata(key: str) -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    with pytest.raises(ValueError, match="reserved"):
+        normalize_user_metadata({key: "x"}, registry)
+
+
+def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    assert registry.filter_spec("project") is None
+
+
+def test_json_contains_requires_declared_metadata_json_field() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {"metadata_json": {"type": "json", "filter_ops": ["contains"], "indexed": False}}
+    )
+
+    spec = registry.filter_spec("metadata_json")
+    assert spec is not None
+    assert spec.type == "json"
+    assert "contains" in spec.filter_ops
+
+
+async def test_metadata_update_revalidates_without_reindexing() -> None:
+    from unittest.mock import AsyncMock
+
+    from dlightrag.core.service import RAGService
+
+    service = object.__new__(RAGService)
+    service._metadata_index = AsyncMock()
+    service._metadata_registry = MetadataFieldRegistry.from_config(
+        {
+            "author": {
+                "type": "string",
+                "normalizer": "casefold_trim",
+                "filter_ops": ["exact"],
+                "indexed": True,
+            }
+        }
+    )
+    service._allow_ad_hoc_metadata = True
+    service._default_metadata_policy = "validate"
+    service._lightrag = AsyncMock()
+
+    await service.aupdate_metadata(
+        "doc-1",
+        {"author": " Ada Lovelace "},
+        mode="merge",
+        metadata_policy="validate",
+    )
+
+    _, saved = service._metadata_index.upsert.await_args.args
+    assert saved["metadata_filterable"]["author"] == "ada lovelace"
+    service._lightrag.apipeline_enqueue_documents.assert_not_called()

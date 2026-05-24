@@ -99,7 +99,7 @@ result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "rel
 result = await manager.aanswer(query="What are the key findings?")
 result.answer      # "The key findings are... [1-1] [2-3]"
 result.contexts    # same structure as retrieve
-result.references  # [Reference(id=1, title="report.pdf"), ...] (unified mode with structured output)
+result.references  # [Reference(id=1, title="report.pdf"), ...] with structured-output providers
 
 # Streaming answer
 contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
@@ -115,13 +115,13 @@ async for token in token_iter:
 | `query` | `str` | required | Search query |
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
-| `mode` | `str` | `"mix"` | `local`, `global`, `hybrid`, `naive`, `mix` |
+| `mode` | `str` | `"mix"` | Only `mix` is supported. This is kept for API compatibility. |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
 | `stream` | `bool` | required for REST `/answer` | `false` returns JSON; `true` returns SSE |
-| `multimodal_content` | `list[dict]` | `None` | Up to 3 images for visual retrieval (unified mode only) |
+| `multimodal_content` | `list[dict]` | `None` | Up to 3 images for direct visual retrieval |
 | `query_images` | `list[str \| dict]` | `None` | User-attached images inlined into the answer LLM call as `image_url` blocks (URL strings or pre-built dict blocks). Capped at 10. Distinct from `multimodal_content`: this only affects answer generation, not retrieval. |
-| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports `filename`, `filename_stem`, `filename_pattern`, extension, title, author, dates, mode, and custom metadata |
+| `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
 
 ### REST API
 
@@ -220,7 +220,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 | `file_path` | string | yes | Source file path |
 | `content` | string | yes | Chunk text content |
 | `page_idx` | int \| null | no | **1-based** page number |
-| `image_data` | string \| null | no | Base64-encoded page image (unified mode only) |
+| `image_data` | string \| null | no | Base64-encoded page or image data |
 | `relevance_score` | float \| null | no | 0–1 relevance score (when reranking is enabled) |
 | `metadata` | object | no | Extra metadata (`file_name`, `file_type`, etc.) |
 | `_workspace` | string | no | Source workspace (federated queries only) |
@@ -311,13 +311,13 @@ Each **chunk snippet** within a source:
 | `chunk_idx` | int | 0-based position within this source |
 | `page_idx` | int \| null | 1-based page number |
 | `content` | string | Filtered display content |
-| `image_data` | string \| null | Base64 page image (unified mode) |
+| `image_data` | string \| null | Base64 page or image data |
 | `highlight_phrases` | list \| null | Semantic highlight phrases (when available) |
 
 
 ## References
 
-When using unified mode with a provider that supports structured output, the `answer` response includes a `references` array containing document-level references cited in the answer. This is a validated subset of `sources` — only documents actually cited by the LLM appear here.
+When the answer provider supports structured output, the `answer` response includes a `references` array containing document-level references cited in the answer. This is a validated subset of `sources` - only documents actually cited by the LLM appear here.
 
 ```json
 {
@@ -331,7 +331,7 @@ When using unified mode with a provider that supports structured output, the `an
 | `id` | int | Reference number matching `[n]` in inline citations |
 | `title` | string | Document title/filename |
 
-**Relationship to `sources`:** `sources` contains all documents from retrieval; `references` contains only those the LLM cited. For providers that don't support structured output (Ollama, Xinference) or caption mode, `references` is an empty array.
+**Relationship to `sources`:** `sources` contains all documents from retrieval; `references` contains only those the LLM cited. For providers that don't support structured output (Ollama, Xinference), `references` is an empty array.
 
 **Supported providers:** OpenAI, Azure OpenAI, Anthropic, Google Gemini, Qwen, Minimax, and any OpenAI-compatible gateway hosting a structured-output-capable model.
 
@@ -359,7 +359,7 @@ To trace `[1-2]` back to source material:
 5. Use `file_path` or source `url` to access the original file via `GET /api/files/{path}`
 
 
-## Multimodal Queries (Unified Mode)
+## Multimodal Queries
 
 Upload images alongside a text query for visual similarity search:
 
@@ -394,4 +394,4 @@ curl -X POST http://localhost:8100/answer \
   }'
 ```
 
-Maximum 3 images per query. Only available in unified mode.
+Maximum 3 images per query. These images drive direct visual retrieval; use `query_images` when the answer model should also see user-supplied images.

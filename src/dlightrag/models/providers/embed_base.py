@@ -4,22 +4,42 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Literal
+
+from dlightrag.models.embedding_inputs import EmbeddingInput
+
+EmbeddingContext = Literal["query", "document"]
+EmbedContext = EmbeddingContext
 
 
 class EmbedProvider(ABC):
-    """Strategy for multimodal embedding API protocols.
+    """Strategy for provider-specific multimodal embedding API protocols."""
 
-    Inputs to build_payload are text strings or ``data:image/...;base64,...`` URIs.
-    """
-
-    @property
-    @abstractmethod
-    def endpoint(self) -> str:
-        """API endpoint path relative to base_url."""
+    endpoint: str = ""
+    supports_images: bool = False
+    supports_asymmetric: bool = False
+    default_dim: int | None = None
+    known_dims: frozenset[int] | None = None
 
     @abstractmethod
-    def build_payload(self, model: str, inputs: list[str]) -> dict:
+    def build_payload(
+        self,
+        model: str,
+        inputs: list[EmbeddingInput],
+        *,
+        context: EmbeddingContext,
+        asymmetric: bool = False,
+        output_dimension: int | None = None,
+    ) -> dict:
         """Build request payload for the embedding API."""
+
+    def endpoint_for_model(self, model: str) -> str:
+        """Return endpoint path relative to base_url."""
+        return self.endpoint.format(model=model)
+
+    def request_headers(self, api_key: str) -> dict[str, str]:
+        """Return provider-specific auth headers."""
+        return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     @property
     def max_images_per_request(self) -> int:
@@ -27,5 +47,5 @@ class EmbedProvider(ABC):
         return 128
 
     def parse_response(self, data: dict) -> list[list[float]]:
-        """Extract vectors from JSON response."""
+        """Extract vectors from OpenAI-compatible JSON response."""
         return [item["embedding"] for item in data["data"]]

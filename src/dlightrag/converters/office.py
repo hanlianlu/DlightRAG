@@ -56,7 +56,7 @@ class LibreOfficeConverter:
     """Converts Office documents (Excel) to PDF using LibreOffice.
 
     Runs during the ingestion copy stage, transforming Excel files to PDFs
-    with preserved layout before RAGAnything processes them.
+    with preserved layout before LightRAG processes them.
     """
 
     def __init__(self, config: DlightragConfig) -> None:
@@ -77,8 +77,6 @@ class LibreOfficeConverter:
     def should_convert(self, file_path: Path) -> bool:
         """Check if file should be converted to PDF."""
         if not self.config.excel_auto_convert_to_pdf:
-            return False
-        if self.config.parser == "docling":
             return False
         suffix = file_path.suffix.lower()
         if suffix in SKIP_CONVERSION_EXTENSIONS:

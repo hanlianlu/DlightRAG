@@ -4,11 +4,11 @@
 All strategies accept chunks with text content + optional image_data
 and return chunks with rerank_score added, sorted descending.
 
-Unified interface:
+Runtime interface:
     async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]
 
-For LightRAG caption-mode compatibility, use ``build_lightrag_rerank_adapter``
-to wrap the multimodal reranker into LightRAG's (query, documents) signature.
+Use ``build_lightrag_rerank_adapter`` to wrap the multimodal reranker into
+LightRAG's (query, documents) signature.
 """
 
 from __future__ import annotations
@@ -359,8 +359,8 @@ def build_rerank_func(
             url = url.rstrip("/") + "/rerank"
         if needs_key and not rc.api_key:
             raise ValueError(f"{strategy} requires api_key")
-        # Pool the httpx client across calls — caption mode reranks every
-        # query, so per-call client construction wastes connection setup.
+        # Pool the httpx client across calls; per-call client construction
+        # wastes connection setup.
         client = httpx.AsyncClient(timeout=60.0)
         fn = partial(
             _http_rerank,

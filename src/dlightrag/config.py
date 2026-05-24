@@ -18,23 +18,24 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 
-from dotenv import find_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _YAML_FILE = "config.yaml"
+_ENV_FILE = ".env"
+
+
+def _find_env_file() -> Path | None:
+    """Locate .env in the current working directory only."""
+    candidate = Path(_ENV_FILE)
+    return candidate if candidate.is_file() else None
 
 
 def _find_yaml_config() -> Path | None:
-    """Locate config.yaml: cwd first, then next to .env, then None."""
+    """Locate config.yaml in the current working directory."""
     cwd = Path(_YAML_FILE)
     if cwd.is_file():
         return cwd
-    dotenv_path = find_dotenv(usecwd=True)
-    if dotenv_path:
-        candidate = Path(dotenv_path).parent / _YAML_FILE
-        if candidate.is_file():
-            return candidate
     return None
 
 
@@ -54,12 +55,86 @@ class ModelConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     """Embedding-specific configuration."""
 
-    provider: str | None = None  # None = auto-detect from model/base_url
-    model: str = "text-embedding-3-large"
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal[
+        "voyage",
+        "dashscope_qwen",
+        "qwen_openai_compatible",
+        "gemini",
+        "jina",
+        "openai_compatible",
+        "ollama",
+    ]
+    model: str
     api_key: str | None = None
     base_url: str | None = None
     dim: int = 1024
     max_token_size: int = 8192
+    asymmetric: Literal["auto", "require", "disable"] = "auto"
+    startup_probe: bool = True
+    model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMRolesConfig(BaseModel):
+    """Role-specific LLM overrides aligned with LightRAG role names."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    extract: ModelConfig | None = None
+    keyword: ModelConfig | None = None
+    query: ModelConfig | None = None
+    vlm: ModelConfig | None = None
+
+
+class LLMConfig(BaseModel):
+    """Default model plus LightRAG-compatible role overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    default: ModelConfig = Field(
+        default_factory=lambda: ModelConfig(
+            provider="openai",
+            model="gpt-4.1",
+            temperature=0.5,
+        )
+    )
+    roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
+
+
+class ParserConfig(BaseModel):
+    """LightRAG parser routing rules and optional chunker snapshot overrides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rules: str = "*:native-iteP,*:mineru-iteP,*:legacy-R"
+    native_images_bypass_lightrag: bool = True
+    chunk_options: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExtractionConfig(BaseModel):
+    """Entity/relation extraction stability controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    use_json: bool = True
+    entity_type_prompt_file: str | None = None
+
+
+class MetadataConfig(BaseModel):
+    """Metadata registry and ingest policy controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    allow_ad_hoc_json: bool = True
+    default_ingest_policy: Literal["validate", "reject_unknown", "store_only"] = "validate"
+    unknown_filter_policy: Literal[
+        "reject",
+        "ignore_with_warning",
+        "allow_declared_json_contains",
+    ] = "ignore_with_warning"
+    fields: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
 class RerankConfig(BaseModel):
@@ -100,7 +175,7 @@ class DlightragConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="DLIGHTRAG_",
         env_nested_delimiter="__",
-        env_file=find_dotenv(usecwd=True),
+        env_file=_find_env_file(),
         env_file_encoding="utf-8",
         case_sensitive=False,
         # Reject any unknown DLIGHTRAG_* env var, .env entry, or
@@ -138,10 +213,13 @@ class DlightragConfig(BaseSettings):
     )
     workspace: str = Field(default="default")
 
-    # pgvector HNSW index configuration
-    pg_vector_index_type: str = Field(
+    postgres_required_major: int = Field(default=18)
+    postgres_min_minor: str = Field(default="18.4")
+
+    # pgvector index configuration. LightRAG derives VECTOR/HALFVEC from this.
+    pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
         default="HNSW",
-        description="pgvector index type — case-sensitive (HNSW, IVFFLAT, VCHORDRQ)",
+        description="pgvector index type — case-sensitive (HNSW, HNSW_HALFVEC, IVFFLAT, VCHORDRQ)",
     )
     pg_hnsw_m: int = Field(default=32, description="HNSW M parameter (connections per node)")
     pg_hnsw_ef_construction: int = Field(
@@ -154,49 +232,19 @@ class DlightragConfig(BaseSettings):
         "is actually ef_construction despite the misleading name.",
     )
 
-    # ===== Storage Backends (configurable, default PostgreSQL) =====
-    vector_storage: Literal[
-        "PGVectorStorage",
-        "MilvusVectorDBStorage",
-        "NanoVectorDBStorage",
-        "ChromaVectorDBStorage",
-        "FaissVectorDBStorage",
-        "QdrantVectorDBStorage",
-    ] = Field(default="PGVectorStorage", description="LightRAG vector storage backend.")
-    graph_storage: Literal[
-        "PGGraphStorage",
-        "Neo4JStorage",
-        "NetworkXStorage",
-        "MemgraphStorage",
-    ] = Field(default="PGGraphStorage", description="LightRAG graph storage backend.")
-    kv_storage: Literal[
-        "PGKVStorage",
-        "JsonKVStorage",
-        "RedisKVStorage",
-        "MongoKVStorage",
-    ] = Field(default="PGKVStorage", description="LightRAG KV storage backend.")
-    doc_status_storage: Literal[
-        "PGDocStatusStorage",
-        "JsonDocStatusStorage",
-        "RedisDocStatusStorage",
-        "MongoDocStatusStorage",
-    ] = Field(default="PGDocStatusStorage", description="LightRAG doc status backend.")
-
-    # ===== Optional: Neo4j (if graph_storage=Neo4JStorage) =====
-    neo4j_uri: str = Field(default="bolt://localhost:7687")
-    neo4j_username: str = Field(default="neo4j")
-    neo4j_password: str = Field(default="neo4j")
-
-    # ===== Optional: Milvus (if vector_storage=MilvusVectorDBStorage) =====
-    milvus_uri: str = Field(default="http://localhost:19530")
-    milvus_user: str = Field(default="")
-    milvus_password: str = Field(default="")
-    milvus_token: str | None = Field(default=None)
-    milvus_db_name: str = Field(default="default")
-
-    # ===== Optional: Qdrant (if vector_storage=QdrantVectorDBStorage) =====
-    qdrant_url: str = Field(default="http://localhost:6333")
-    qdrant_api_key: str | None = Field(default=None)
+    # ===== Storage Backends (PostgreSQL-only core path) =====
+    vector_storage: Literal["PGVectorStorage"] = Field(
+        default="PGVectorStorage", description="LightRAG vector storage backend."
+    )
+    graph_storage: Literal["PGGraphStorage"] = Field(
+        default="PGGraphStorage", description="LightRAG graph storage backend."
+    )
+    kv_storage: Literal["PGKVStorage"] = Field(
+        default="PGKVStorage", description="LightRAG KV storage backend."
+    )
+    doc_status_storage: Literal["PGDocStatusStorage"] = Field(
+        default="PGDocStatusStorage", description="LightRAG doc status backend."
+    )
 
     # ===== Vector DB Backend Kwargs (passthrough to LightRAG) =====
     vector_db_kwargs: dict[str, Any] = Field(
@@ -207,66 +255,15 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== Model config =====
-    chat: ModelConfig = Field(default_factory=lambda: ModelConfig(model="gpt-4.1", temperature=0.5))
-    ingest: ModelConfig | None = None
-    # Optional model overrides. extract/keywords/query are routed through
-    # LightRAG 1.5.0+ role_llm_configs; vlm is DlightRAG-local for visual
-    # paths (vlm_parser, multimodal query, unified extractor).
-    extract: ModelConfig | None = None
-    keywords: ModelConfig | None = None
-    query: ModelConfig | None = None
-    vlm: ModelConfig | None = None
+    llm: LLMConfig = Field(default_factory=LLMConfig)
     embedding: EmbeddingConfig  # required, no default
     rerank: RerankConfig = Field(default_factory=RerankConfig)
+    parser: ParserConfig = Field(default_factory=ParserConfig)
+    extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
+    metadata: MetadataConfig = Field(default_factory=MetadataConfig)
 
     # ===== RAG Processing =====
-    rag_mode: Literal["caption", "unified"] = Field(
-        default="caption",
-        description="RAG mode. 'caption': RAGAnything caption-based pipeline. "
-        "'unified': visual page embedding pipeline (requires multimodal models).",
-    )
-    page_render_dpi: int = Field(
-        default=250,
-        description="Page rendering DPI for unified mode. Higher = better quality but larger images.",
-    )
     working_dir: str = Field(default="./dlightrag_storage")
-    parser: Literal["mineru", "docling", "vlm"] = Field(default="mineru")
-    parse_method: Literal["auto", "ocr", "txt"] = Field(default="auto")
-    mineru_backend: str | None = Field(
-        default=None,
-        description="MinerU parsing backend. If None, auto-detects: CUDA GPU → hybrid-auto-engine, "
-        "otherwise → pipeline. "
-        "Valid values: pipeline, vlm-auto-engine, vlm-http-client, hybrid-auto-engine, hybrid-http-client.",
-    )
-    mineru_timeout: int | None = Field(
-        default=None,
-        description="Optional MinerU subprocess timeout in seconds. None leaves MinerU unbounded.",
-    )
-    mineru_vlm_url: str | None = Field(
-        default=None,
-        description="Remote MinerU VLM server URL for vlm-http-client or hybrid-http-client backends.",
-    )
-    docling_table_mode: Literal["fast", "accurate"] = Field(
-        default="fast",
-        description="Docling TableFormer mode.",
-    )
-    docling_tables: bool = Field(
-        default=True,
-        description="Enable Docling table structure recognition.",
-    )
-    docling_allow_ocr: bool = Field(
-        default=True,
-        description="Allow Docling OCR for scanned content.",
-    )
-    docling_artifacts_path: str | None = Field(
-        default=None,
-        description="Optional Docling model artifacts path.",
-    )
-    enable_image_processing: bool = Field(default=True)
-    enable_table_processing: bool = Field(default=True)
-    enable_equation_processing: bool = Field(default=False)
-    display_content_stats: bool = Field(default=False)
-    use_full_path: bool = Field(default=True)
     chunk_size: int = Field(default=512)
     chunk_overlap: int = Field(default=52)
     context_window: int = Field(default=2)
@@ -293,10 +290,19 @@ class DlightragConfig(BaseSettings):
     # ===== Query Configuration =====
     top_k: int = Field(default=60)
     chunk_top_k: int = Field(default=30)
+    bm25_enabled: bool = Field(default=True)
+    bm25_top_k: int = Field(default=40)
+    bm25_text_config: Literal["simple", "english"] = Field(default="simple")
+    rrf_k: int = Field(default=60)
+    direct_visual_top_k: int = Field(default=20)
+    metadata_filter_exact_vector_threshold: int = Field(
+        default=8192,
+        description="Use exact vector scoring inside metadata candidates at or below this size.",
+    )
     max_entity_tokens: int = Field(default=6000)
     max_relation_tokens: int = Field(default=8000)
     max_total_tokens: int = Field(default=40000)
-    default_mode: Literal["local", "global", "hybrid", "naive", "mix"] = Field(default="mix")
+    default_mode: Literal["mix"] = Field(default="mix")
 
     max_conversation_turns: int = Field(default=50)
     max_conversation_tokens: int = Field(default=150000)
@@ -424,6 +430,31 @@ class DlightragConfig(BaseSettings):
     # ===== Computed Properties =====
 
     @property
+    def chat(self) -> ModelConfig:
+        """Compatibility accessor for old callers; config input must use llm.default."""
+        return self.llm.default
+
+    @property
+    def extract(self) -> ModelConfig | None:
+        """Compatibility accessor for old callers; config input must use llm.roles.extract."""
+        return self.llm.roles.extract
+
+    @property
+    def keywords(self) -> ModelConfig | None:
+        """Compatibility accessor for old callers; config input must use llm.roles.keyword."""
+        return self.llm.roles.keyword
+
+    @property
+    def query(self) -> ModelConfig | None:
+        """Compatibility accessor for old callers; config input must use llm.roles.query."""
+        return self.llm.roles.query
+
+    @property
+    def vlm(self) -> ModelConfig | None:
+        """Compatibility accessor for old callers; config input must use llm.roles.vlm."""
+        return self.llm.roles.vlm
+
+    @property
     def working_dir_path(self) -> Path:
         return Path(self.working_dir).resolve()
 
@@ -437,87 +468,24 @@ class DlightragConfig(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
-        # Bridge PostgreSQL env vars for LightRAG (only when PG backends are used)
-        _storage_fields = (
-            self.vector_storage,
-            self.graph_storage,
-            self.kv_storage,
-            self.doc_status_storage,
-        )
-        _uses_pg = any(s.startswith("PG") for s in _storage_fields)
-
-        if _uses_pg:
-            pg_env_map = {
-                "POSTGRES_HOST": self.postgres_host,
-                "POSTGRES_PORT": str(self.postgres_port),
-                "POSTGRES_USER": self.postgres_user,
-                "POSTGRES_PASSWORD": self.postgres_password,
-                "POSTGRES_DATABASE": self.postgres_database,
-                "POSTGRES_WORKSPACE": self.workspace,
-                "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
-                "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
-                # NB: LightRAG's POSTGRES_HNSW_EF is actually ef_construction
-                # (used in CREATE INDEX ... WITH (ef_construction = ...)),
-                # not ef_search. The name is misleading in LightRAG.
-                "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
-            }
-            for key, value in pg_env_map.items():
-                if key not in os.environ:
-                    os.environ[key] = value
-
-            # ef_search is a session-level GUC, not an index build param.
-            # LightRAG has no native support for it, so we inject it via
-            # POSTGRES_SERVER_SETTINGS → asyncpg create_pool(server_settings=...).
-            if "POSTGRES_SERVER_SETTINGS" not in os.environ:
-                os.environ["POSTGRES_SERVER_SETTINGS"] = f"hnsw.ef_search={self.pg_hnsw_ef_search}"
-
-        # Bridge workspace env vars for non-PG backends that override constructor
-        _WORKSPACE_ENV_MAP = {
-            "Neo4J": "NEO4J_WORKSPACE",
-            "Memgraph": "MEMGRAPH_WORKSPACE",
-            "Mongo": "MONGODB_WORKSPACE",
-            "Redis": "REDIS_WORKSPACE",
+        pg_env_map = {
+            "POSTGRES_HOST": self.postgres_host,
+            "POSTGRES_PORT": str(self.postgres_port),
+            "POSTGRES_USER": self.postgres_user,
+            "POSTGRES_PASSWORD": self.postgres_password,
+            "POSTGRES_DATABASE": self.postgres_database,
+            "POSTGRES_WORKSPACE": self.workspace,
+            "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
+            "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
+            # LightRAG's POSTGRES_HNSW_EF is used as ef_construction.
+            "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
         }
-        for prefix, env_key in _WORKSPACE_ENV_MAP.items():
-            if any(s.startswith(prefix) for s in _storage_fields):
-                if env_key not in os.environ:
-                    os.environ[env_key] = self.workspace
+        for key, value in pg_env_map.items():
+            if key not in os.environ:
+                os.environ[key] = value
 
-        # Bridge Neo4j connection env vars if using Neo4JStorage
-        if self.graph_storage == "Neo4JStorage":
-            neo4j_env_map = {
-                "NEO4J_URI": self.neo4j_uri,
-                "NEO4J_USERNAME": self.neo4j_username,
-                "NEO4J_PASSWORD": self.neo4j_password,
-            }
-            for key, value in neo4j_env_map.items():
-                if key not in os.environ:
-                    os.environ[key] = value
-
-        # Bridge Milvus env vars if using MilvusVectorDBStorage
-        if self.vector_storage == "MilvusVectorDBStorage":
-            milvus_env_map: dict[str, str] = {
-                "MILVUS_URI": self.milvus_uri,
-                "MILVUS_DB_NAME": self.milvus_db_name,
-            }
-            if self.milvus_user:
-                milvus_env_map["MILVUS_USER"] = self.milvus_user
-            if self.milvus_password:
-                milvus_env_map["MILVUS_PASSWORD"] = self.milvus_password
-            if self.milvus_token:
-                milvus_env_map["MILVUS_TOKEN"] = self.milvus_token
-            for key, value in milvus_env_map.items():
-                if key not in os.environ:
-                    os.environ[key] = value
-
-        # Bridge Qdrant env vars if using QdrantVectorDBStorage
-        if self.vector_storage == "QdrantVectorDBStorage":
-            qdrant_env_map: dict[str, str] = {"QDRANT_URL": self.qdrant_url}
-            if self.qdrant_api_key:
-                qdrant_env_map["QDRANT_API_KEY"] = self.qdrant_api_key
-            for key, value in qdrant_env_map.items():
-                if key not in os.environ:
-                    os.environ[key] = value
+        if "POSTGRES_SERVER_SETTINGS" not in os.environ:
+            os.environ["POSTGRES_SERVER_SETTINGS"] = f"hnsw.ef_search={self.pg_hnsw_ef_search}"
 
         # Resolve working_dir to absolute path
         path = Path(self.working_dir)

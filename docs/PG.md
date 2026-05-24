@@ -1,55 +1,50 @@
 # PostgreSQL Maintenance Notes
 
-## LightRAG Upstream Bug Patches
+DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 
-DlightRAG maintains monkey-patches for two critical LightRAG PostgreSQL bugs
-that remain unfixed in the currently supported baseline,
-**LightRAG v1.5.0rc1**. The patches self-disable via source inspection if
-upstream adds the equivalent fixes.
+- `pgvector` for vector search
+- Apache AGE for LightRAG graph storage
+- `pg_textsearch` for BM25
 
-### Bug 1: `configure_age()` missing `DuplicateSchemaError`
+`pg_trgm` is intentionally not required. Metadata filtering is normalized
+exact/pattern matching over declared fields, not fuzzy matching.
 
-**Location:** `lightrag/kg/postgres_impl.py`, `configure_age()` static method
+## Required Version
 
-**Problem:** When Apache AGE's `create_graph()` is called on an
-already-existing graph, it raises `asyncpg.exceptions.DuplicateSchemaError`.
-LightRAG's `configure_age()` only catches `InvalidSchemaNameError` and
-`UniqueViolationError` — `DuplicateSchemaError` is in a completely different
-exception hierarchy (`SyntaxOrAccessError`, not `InvalidSchemaNameError`).
+Startup checks require PostgreSQL 18 or newer. Workspaces should not mix
+embedding models or dimensions after data has been indexed; changing
+`embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
-**Impact:** `configure_age()` is called on EVERY query via `_run_with_retry()`.
-After the first successful `create_graph()`, all subsequent calls crash with
-the uncaught exception. This aborts graph label creation (`create_vlabel`,
-`create_elabel`), leaving the graph in a half-initialized state. Ingestion
-then fails with `UndefinedTableError: relation "<workspace>.base" does not
-exist`.
+Default vector storage is `VECTOR(dim)` with HNSW. `HNSW_HALFVEC` is an
+explicit opt-in index type for deployments that have chosen the precision
+tradeoff and rebuilt indexes accordingly.
 
-**Our fix (`_lightrag_patches.py`):**
-- Pre-check `ag_catalog.ag_graph` before calling `create_graph()` — avoids
-  both the exception and PG ERROR log spam on normal startups
-- Catch `DuplicateSchemaError` for race conditions (another worker creates
-  the graph between check and create)
-- Wrap `execute()` to also catch `DuplicateSchemaError` (defense-in-depth)
+## LightRAG Upstream Compatibility Patches
 
-### Bug 2: `execute()._operation` missing `DuplicateSchemaError`
+DlightRAG keeps defensive monkey-patches around LightRAG PostgreSQL AGE graph
+initialization. They self-disable through source inspection if upstream adds
+equivalent handling.
 
-**Location:** `lightrag/kg/postgres_impl.py`, `execute()` method, inner
-`_operation` closure
+### Patch 1: `configure_age()` and Existing Graphs
 
-**Problem:** The exception tuple in `_operation` catches
-`UniqueViolationError`, `DuplicateTableError`, `DuplicateObjectError`, and
-`InvalidSchemaNameError` — but NOT `DuplicateSchemaError`. When
-`ignore_if_exists=True` or `upsert=True`, `DuplicateSchemaError` propagates
-instead of being silently handled.
+**Location:** `lightrag/kg/postgres_impl.py`, `PostgreSQLDB.configure_age()`
 
-**Our fix:** Wrap `execute()` to catch `DuplicateSchemaError` at the outer
-level, respecting `ignore_if_exists` and `upsert` flags.
+Apache AGE can raise `asyncpg.exceptions.DuplicateSchemaError` when
+`create_graph()` races with an existing graph. The patch pre-checks
+`ag_catalog.ag_graph`, catches `DuplicateSchemaError` for races, and avoids
+normal startup error noise.
 
-### Auto-detection
+### Patch 2: `execute()` and Idempotent DDL
 
-Both patches use `inspect.getsource()` to check the exact upstream method they
-wrap. If LightRAG adds the pre-check and exception handling, the corresponding
-patch automatically skips itself:
+**Location:** `lightrag/kg/postgres_impl.py`, `PostgreSQLDB.execute()`
+
+The patch wraps idempotent DDL calls so `DuplicateSchemaError` is handled when
+`ignore_if_exists=True` or `upsert=True`.
+
+### Auto-Detection
+
+Both patches inspect the upstream methods and skip themselves when the required
+checks are present:
 
 ```python
 def _configure_age_needs_patch(method):
@@ -64,35 +59,26 @@ def _execute_needs_patch(method):
     return "DuplicateSchemaError" not in source
 ```
 
-### Post-Init Graph Verification
-
-In addition to the patches, `RAGService._verify_graph_labels()` runs after
-`initialize_storages()` to detect corrupted graphs (schema exists but
-`base` vlabel table missing). If found, it drops the graph and re-runs
-initialization. This handles stale state from previous failed inits.
-
 ## PG Pool Architecture
 
-DlightRAG uses **two independent asyncpg pools**:
+DlightRAG uses two asyncpg pools:
 
-| Pool | Owner | Purpose | Sizing |
-|------|-------|---------|--------|
-| LightRAG ClientManager pool | LightRAG | KV, vector, graph, doc_status storage | LightRAG defaults |
-| `pg_pool` singleton | DlightRAG (`storage/pool.py`) | Domain stores (visual_chunks via PGJsonbKV) | min=2, max=10 |
+| Pool | Owner | Purpose |
+|---|---|---|
+| LightRAG ClientManager pool | LightRAG | KV, vector, graph, doc status |
+| `pg_pool` singleton | DlightRAG | Metadata registry, document artifacts, chunk provenance, visual side tables |
 
-The dedicated pool avoids contention between LightRAG's internal operations
-and DlightRAG's domain store writes (especially visual_chunks with large
-BYTEA blobs).
+The dedicated DlightRAG pool avoids contention between LightRAG internals and
+domain side-table writes.
 
 ## Version Compatibility Log
 
-| Date | LightRAG Version | Patches Needed | Notes |
-|------|-----------------|----------------|-------|
-| 2026-03-23 | 1.4.11rc2 | Yes (both bugs) | Initial patch created |
-| 2026-03-24 | 1.4.11 | Yes (both bugs) | Verified: upstream unchanged |
-| 2026-05-06 | 1.5.0rc1 | Yes (both bugs) | Verified after RAGAnything 1.3.0 upgrade |
+| Date | LightRAG Baseline | Patches Needed | Notes |
+|---|---|---|---|
+| 2026-05-24 | `main` commit `9d1910bb63dd5f492844fef9bf91ed228e88a4f7` | Yes, defensive | Locked through `uv.lock`; verify again before release |
 
-Update this table when LightRAG releases new versions. Check by running:
+Check upstream by running:
+
 ```bash
 uv run python -c "
 from lightrag.kg.postgres_impl import PostgreSQLDB
@@ -105,4 +91,5 @@ print('execute DuplicateSchemaError:', 'DuplicateSchemaError' in execute)
 "
 ```
 
-If all three checks print `True`, the patches can be removed.
+If all three checks print `True`, the patches can be removed after the unit
+tests covering graph initialization are updated.

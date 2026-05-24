@@ -1,9 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared VLM OCR extraction utilities.
 
-Used by both caption mode (:mod:`dlightrag.core.ingestion.vlm_parser`) and
-unified mode (:mod:`dlightrag.unifiedrepresent.extractor`) for consistent,
-high-quality page content extraction via a vision language model.
+Used by visual semantic projection helpers for consistent, high-quality page
+content extraction via a vision language model.
 """
 
 from __future__ import annotations
@@ -65,8 +64,8 @@ def parse_vlm_response(raw: str) -> list[dict] | None:
 def blocks_to_text(blocks: list[dict]) -> str:
     """Convert structured OCR blocks to plain text.
 
-    Used by unified mode to feed VLM-extracted content into LightRAG's
-    entity extraction pipeline.
+    Used to feed VLM-extracted content into LightRAG's entity extraction
+    pipeline.
     """
     parts: list[str] = []
     for block in blocks:

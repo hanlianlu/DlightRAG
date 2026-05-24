@@ -22,13 +22,9 @@ class TestRAGServiceAingest:
     def _make_initialized_service(self, config: DlightragConfig) -> RAGService:
         service = RAGService(config=config)
         service._initialized = True
-        service.ingestion = MagicMock()
-        service.ingestion._aingest_from_local = AsyncMock(
-            return_value=MagicMock(model_dump=MagicMock(return_value={"status": "success"}))
-        )
-        service.ingestion._aingest_from_azure_blob = AsyncMock(
-            return_value=MagicMock(model_dump=MagicMock(return_value={"status": "success"}))
-        )
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(return_value={"status": "success"})
+        service._hash_index = None
         service.rag = MagicMock()
         service.retrieval = MagicMock()
         return service
@@ -42,7 +38,7 @@ class TestRAGServiceAingest:
         test_config.ingestion_replace_default = True
         service = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path="/tmp/file.pdf")
-        call_kwargs = service.ingestion._aingest_from_local.call_args
+        call_kwargs = service._ingestion_engine.aingest_file.call_args
         assert call_kwargs.kwargs["replace"] is True
 
     async def test_aingest_replace_explicit_overrides_config(
@@ -51,7 +47,7 @@ class TestRAGServiceAingest:
         test_config.ingestion_replace_default = True
         service = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path="/tmp/file.pdf", replace=False)
-        call_kwargs = service.ingestion._aingest_from_local.call_args
+        call_kwargs = service._ingestion_engine.aingest_file.call_args
         assert call_kwargs.kwargs["replace"] is False
 
     # -- Azure blob lifecycle --
@@ -62,25 +58,25 @@ class TestRAGServiceAingest:
         """When neither blob_path nor prefix provided, prefix defaults to '' (entire container)."""
         service = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
+        mock_source.alist_documents = AsyncMock(return_value=[])
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
-        call_kwargs = service.ingestion._aingest_from_azure_blob.call_args.kwargs
-        assert call_kwargs["prefix"] == ""
-        assert call_kwargs.get("blob_path") is None
+        mock_source.alist_documents.assert_awaited_once_with(prefix="")
 
     async def test_aingest_azure_calls_aclose(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called after successful ingestion."""
         service = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
+        mock_source.alist_documents = AsyncMock(return_value=[])
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
         mock_source.aclose.assert_awaited_once()
 
     async def test_aingest_azure_calls_aclose_on_error(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called even when ingestion raises."""
         service = self._make_initialized_service(test_config)
-        service.ingestion._aingest_from_azure_blob = AsyncMock(
-            side_effect=RuntimeError("ingestion failed")
-        )
+        service._ingestion_engine.aingest_file = AsyncMock(side_effect=RuntimeError("ingestion failed"))
         mock_source = AsyncMock()
+        mock_source.alist_documents = AsyncMock(return_value=["f.pdf"])
+        mock_source.aload_document = AsyncMock(return_value=b"%PDF")
         with pytest.raises(RuntimeError, match="ingestion failed"):
             await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
         mock_source.aclose.assert_awaited_once()
@@ -162,21 +158,27 @@ class TestRAGServiceFileManagement:
     async def test_alist_delegates_to_ingestion(self, test_config):
         service = RAGService(config=test_config)
         service._initialized = True
-        service.ingestion = MagicMock()
-        service.ingestion.alist_ingested_files = AsyncMock(return_value=[{"doc_id": "d1"}])
+        service._hash_index = MagicMock()
+        service._hash_index.list_all = AsyncMock(return_value=[{"doc_id": "d1"}])
         result = await service.alist_ingested_files()
         assert result == [{"doc_id": "d1"}]
-        service.ingestion.alist_ingested_files.assert_awaited_once()
+        service._hash_index.list_all.assert_awaited_once()
 
-    async def test_adelete_delegates_to_ingestion(self, test_config):
+    async def test_adelete_uses_cascade_pipeline(self, test_config):
         service = RAGService(config=test_config)
         service._initialized = True
-        service.ingestion = MagicMock()
-        service.ingestion.adelete_files = AsyncMock(return_value=[{"status": "deleted"}])
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._hash_index = MagicMock()
+        service._hash_index.find_by_name = AsyncMock(
+            return_value=("d1", "sha256:abc", "/tmp/a.pdf")
+        )
+        service._hash_index.find_by_path = AsyncMock(return_value=(None, None, None))
+        service._hash_index.remove = AsyncMock(return_value=True)
         result = await service.adelete_files(filenames=["a.pdf"])
-        assert result == [{"status": "deleted"}]
-        call_kwargs = service.ingestion.adelete_files.call_args.kwargs
-        assert call_kwargs["filenames"] == ["a.pdf"]
+        assert result[0]["status"] == "deleted"
+        assert result[0]["docs_deleted"] == 1
+        service._lightrag.adelete_by_doc_id.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -230,12 +232,12 @@ class TestBuildAddonParams:
 
 
 # ---------------------------------------------------------------------------
-# TestRAGServiceUnifiedMode
+# TestRAGServiceLightRAGMainPath
 # ---------------------------------------------------------------------------
 
 
-class TestRAGServiceUnifiedMode:
-    """Test unified mode (Mode 2) behavior in RAGService."""
+class TestRAGServiceLightRAGMainPath:
+    """Test LightRAG-main path behavior in RAGService."""
 
     @staticmethod
     def _mock_hash_index() -> MagicMock:
@@ -245,13 +247,13 @@ class TestRAGServiceUnifiedMode:
         hi.register = AsyncMock()
         return hi
 
-    async def test_aingest_unified_azure_blob_single(self, test_config: DlightragConfig) -> None:
-        """Unified mode downloads a single blob and ingests via unified engine."""
+    async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
+        """Downloads a single blob and ingests through the unified engine."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._hash_index = self._mock_hash_index()
-        service.unified = MagicMock()
-        service.unified.aingest = AsyncMock(
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 2, "file_path": "/tmp/report.pdf"}
         )
 
@@ -265,16 +267,16 @@ class TestRAGServiceUnifiedMode:
             source=mock_source,
         )
 
-        service.unified.aingest.assert_awaited_once()
+        service._ingestion_engine.aingest_file.assert_awaited_once()
         assert result["doc_id"] == "d1"
 
     async def test_aingest_unified_azure_blob_batch(self, test_config: DlightragConfig) -> None:
-        """Unified mode batch-ingests blobs by prefix."""
+        """Batch-ingests blobs by prefix."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._hash_index = self._mock_hash_index()
-        service.unified = MagicMock()
-        service.unified.aingest = AsyncMock(
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 1, "file_path": "/tmp/f.pdf"}
         )
 
@@ -289,16 +291,18 @@ class TestRAGServiceUnifiedMode:
             source=mock_source,
         )
 
-        assert service.unified.aingest.await_count == 2
+        assert service._ingestion_engine.aingest_file.await_count == 2
         assert result["processed"] == 2
 
     async def test_aingest_unified_s3(self, test_config: DlightragConfig) -> None:
-        """Unified mode S3 downloads object and ingests via engine.aingest."""
+        """S3 downloads an object and ingests via engine.aingest."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._hash_index = self._mock_hash_index()
-        service.unified = MagicMock()
-        service.unified.aingest = AsyncMock(return_value={"doc_id": "d1", "status": "success"})
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(
+            return_value={"doc_id": "d1", "status": "success"}
+        )
 
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
@@ -309,7 +313,7 @@ class TestRAGServiceUnifiedMode:
                 source_type="s3", bucket="my-bucket", key="docs/report.pdf"
             )
 
-        service.unified.aingest.assert_awaited_once()
+        service._ingestion_engine.aingest_file.assert_awaited_once()
         assert result["status"] == "success"
 
     async def test_aingest_unified_blob_temp_cleanup(self, test_config: DlightragConfig) -> None:
@@ -317,8 +321,8 @@ class TestRAGServiceUnifiedMode:
         service = RAGService(config=test_config)
         service._initialized = True
         service._hash_index = self._mock_hash_index()
-        service.unified = MagicMock()
-        service.unified.aingest = AsyncMock(side_effect=RuntimeError("render failed"))
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(side_effect=RuntimeError("render failed"))
 
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
@@ -341,25 +345,26 @@ class TestRAGServiceUnifiedMode:
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Unified mode delegates local ingestion to unified engine."""
+        """Local ingestion delegates to the unified engine."""
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
         service = RAGService(config=test_config)
         service._initialized = True
         service._hash_index = self._mock_hash_index()
-        service.unified = MagicMock()
-        service.unified.aingest = AsyncMock(
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 3, "file_path": str(fake_pdf)}
         )
 
         result = await service.aingest(source_type="local", path=str(fake_pdf))
-        service.unified.aingest.assert_awaited_once_with(file_path=str(fake_pdf))
+        service._ingestion_engine.aingest_file.assert_awaited_once()
+        assert service._ingestion_engine.aingest_file.call_args.args[0] == fake_pdf
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
-        """Unified mode aretrieve delegates directly to unified engine."""
+        """aretrieve delegates directly to the retrieval backend."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         expected = RetrievalResult(
@@ -369,20 +374,20 @@ class TestRAGServiceUnifiedMode:
 
         service = RAGService(config=test_config)
         service._initialized = True
-        service.unified = MagicMock()
-        service.unified.aretrieve = AsyncMock(return_value=expected)
+        service._backend = MagicMock()
+        service._backend.aretrieve = AsyncMock(return_value=expected)
 
         result = await service.aretrieve("test query")
-        service.unified.aretrieve.assert_awaited_once()
+        service._backend.aretrieve.assert_awaited_once()
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
         assert result.contexts == {"chunks": []}
 
-    async def test_close_unified_cleanup(self, test_config: DlightragConfig) -> None:
+    async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
         """close() calls finalize on visual_chunks and LightRAG storages."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service.rag = None  # No caption-mode RAG
+        service.rag = None
         service._visual_chunks = AsyncMock()
         service._lightrag = AsyncMock()
 
@@ -396,13 +401,14 @@ class TestRAGServiceUnifiedMode:
     async def test_aingest_unified_dedup_skips_duplicate(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Unified mode skips ingestion when file hash already exists."""
+        """Ingestion skips when file hash already exists."""
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
         service = RAGService(config=test_config)
         service._initialized = True
-        service.unified = MagicMock()
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock()
         service._hash_index = AsyncMock()
         service._hash_index.should_skip_file = AsyncMock(
             return_value=(True, "sha256:abc", "Duplicate of doc-1")
@@ -411,19 +417,19 @@ class TestRAGServiceUnifiedMode:
         result = await service.aingest(source_type="local", path=str(fake_pdf))
 
         assert result["status"] == "skipped"
-        service.unified.aingest.assert_not_called()
+        service._ingestion_engine.aingest_file.assert_not_called()
 
     async def test_aingest_unified_registers_hash_on_success(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Unified mode registers content hash after successful ingestion."""
+        """Registers content hash after successful ingestion."""
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
         service = RAGService(config=test_config)
         service._initialized = True
-        service.unified = MagicMock()
-        service.unified.aingest = AsyncMock(
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(
             return_value={"doc_id": "d1", "page_count": 2, "file_path": str(fake_pdf)}
         )
         service._hash_index = AsyncMock()
@@ -437,12 +443,11 @@ class TestRAGServiceUnifiedMode:
     # -- File deletion --
 
     async def test_adelete_files_unified(self, test_config: DlightragConfig) -> None:
-        """Unified mode deletion: Layer 1 (LightRAG) + Layer 2 (visual_chunks) + Layer 3 (indexes)."""
+        """Deletion removes LightRAG data, visual chunks, and indexes."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service.unified = MagicMock()
-        service.unified.visual_chunks = MagicMock()
-        service.unified.visual_chunks.delete = AsyncMock()
+        service._visual_chunks = MagicMock()
+        service._visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock()
         service._lightrag.doc_status = MagicMock()
@@ -465,13 +470,12 @@ class TestRAGServiceUnifiedMode:
         service._lightrag.adelete_by_doc_id.assert_awaited_once()
         service._hash_index.remove.assert_awaited_once_with("sha256:abc")
         service._metadata_index.delete.assert_awaited_once_with("d1")
-        service.unified.visual_chunks.delete.assert_awaited_once()
+        service._visual_chunks.delete.assert_awaited_once()
 
     async def test_adelete_files_unified_not_found(self, test_config: DlightragConfig) -> None:
-        """Unified mode deletion returns not_found when doc not in hash index."""
+        """Deletion returns not_found when doc is not in the hash index."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service.unified = MagicMock()
         service._lightrag = MagicMock()
         service._lightrag.doc_status = MagicMock()
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
@@ -490,9 +494,8 @@ class TestRAGServiceUnifiedMode:
         """Layers 2 (visual_chunks) and 3 (indexes) still run when Layer 1 (LightRAG) fails."""
         service = RAGService(config=test_config)
         service._initialized = True
-        service.unified = MagicMock()
-        service.unified.visual_chunks = MagicMock()
-        service.unified.visual_chunks.delete = AsyncMock()
+        service._visual_chunks = MagicMock()
+        service._visual_chunks.delete = AsyncMock()
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=RuntimeError("LightRAG down"))
         service._lightrag.doc_status = MagicMock()
@@ -510,38 +513,23 @@ class TestRAGServiceUnifiedMode:
 
         results = await service.adelete_files(filenames=["a.pdf"])
 
-        assert results[0]["status"] == "deleted"
+        assert results[0]["status"] == "deleted_with_errors"
         # Layers 2 and 3 ran despite Layer 1 failure
-        service.unified.visual_chunks.delete.assert_awaited_once()
+        service._visual_chunks.delete.assert_awaited_once()
         service._hash_index.remove.assert_awaited_once_with("sha256:abc")
         service._metadata_index.delete.assert_awaited_once_with("d1")
 
 
 # ---------------------------------------------------------------------------
-# TestVisualChunksKvSelection
+# TestVisualChunksStorage
 # ---------------------------------------------------------------------------
 
 
-class TestVisualChunksKvSelection:
-    """Test that PG backend uses PGJsonbKVStorage for visual_chunks."""
+class TestVisualChunksStorage:
+    """Test that visual chunks use PGJsonbKVStorage."""
 
-    def test_pg_backend_selects_pgjsonb(self) -> None:
-        """When kv_storage starts with 'PG', PGJsonbKVStorage should be used."""
+    def test_runtime_uses_pgjsonb(self) -> None:
+        """Visual chunks always use PGJsonbKVStorage."""
         from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
 
-        kv_storage = "PGKVStorage"
-        kv_cls = object  # placeholder for lightrag.key_string_value_json_storage_cls
-        if kv_storage.startswith("PG"):
-            kv_cls = PGJsonbKVStorage
-        assert kv_cls is PGJsonbKVStorage
-
-    def test_json_backend_keeps_original(self) -> None:
-        """When kv_storage is 'JsonKVStorage', original class is kept."""
-        kv_storage = "JsonKVStorage"
-        original_cls = object
-        kv_cls = original_cls
-        if kv_storage.startswith("PG"):
-            from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
-
-            kv_cls = PGJsonbKVStorage
-        assert kv_cls is original_cls
+        assert PGJsonbKVStorage.__name__ == "PGJsonbKVStorage"

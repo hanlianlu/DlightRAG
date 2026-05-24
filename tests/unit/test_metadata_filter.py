@@ -58,7 +58,6 @@ class TestMetadataFilter:
             doc_author=None,
             date_from=None,
             date_to=None,
-            rag_mode=None,
             custom=None,
         )
         assert f.is_empty()

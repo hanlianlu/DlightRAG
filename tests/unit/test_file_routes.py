@@ -10,9 +10,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
 
 app = create_app(include_web=False)
+
+
+def _embedding_config() -> EmbeddingConfig:
+    return EmbeddingConfig(
+        provider="voyage",
+        model="voyage-multimodal-3.5",
+        api_key="test",
+        startup_probe=False,
+    )
 
 
 @pytest.fixture()
@@ -27,8 +36,8 @@ def tmp_working_dir(tmp_path: Path) -> Path:
 def client(tmp_working_dir: Path) -> TestClient:
     config = DlightragConfig(  # type: ignore[call-arg]
         working_dir=str(tmp_working_dir),
-        chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
-        embedding=EmbeddingConfig(api_key="test"),
+        llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test")),
+        embedding=_embedding_config(),
     )
     with (
         patch("dlightrag.api.routes.files.get_config", return_value=config),
@@ -71,8 +80,8 @@ class TestFileEndpointAzureRedirect:
         """Azure blobs get 302 redirect to SAS URL — no data proxied."""
         config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_working_dir),
-            chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
-            embedding=EmbeddingConfig(api_key="test"),
+            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test")),
+            embedding=_embedding_config(),
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
         with (

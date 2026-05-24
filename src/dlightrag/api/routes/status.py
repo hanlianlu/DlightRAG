@@ -26,7 +26,6 @@ async def health(request: Request) -> dict[str, Any]:
     status: dict[str, Any] = {
         "status": "degraded" if is_degraded else "healthy",
         "rag_initialized": manager.is_ready(),
-        "rag_mode": config.rag_mode,
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {
@@ -38,24 +37,23 @@ async def health(request: Request) -> dict[str, Any]:
     if warnings:
         status["warnings"] = warnings
 
-    # Check PostgreSQL connectivity if using PG backends
-    if config.kv_storage.startswith("PG"):
-        try:
-            import asyncpg
+    # Check PostgreSQL connectivity.
+    try:
+        import asyncpg
 
-            conn = await asyncpg.connect(
-                host=config.postgres_host,
-                port=config.postgres_port,
-                user=config.postgres_user,
-                password=config.postgres_password,
-                database=config.postgres_database,
-            )
-            await conn.fetchval("SELECT 1")
-            await conn.close()
-            status["postgres"] = "connected"
-        except Exception as e:
-            status["postgres"] = f"error: {e}"
-            status["status"] = "degraded"
+        conn = await asyncpg.connect(
+            host=config.postgres_host,
+            port=config.postgres_port,
+            user=config.postgres_user,
+            password=config.postgres_password,
+            database=config.postgres_database,
+        )
+        await conn.fetchval("SELECT 1")
+        await conn.close()
+        status["postgres"] = "connected"
+    except Exception as e:
+        status["postgres"] = f"error: {e}"
+        status["status"] = "degraded"
 
     return status
 

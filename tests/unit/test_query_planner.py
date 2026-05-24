@@ -117,6 +117,21 @@ class TestPlanWithLLM:
                 {
                     "standalone_query": "find report.pdf",
                     "filters": {"filename": "report.pdf", "file_extension": "pdf"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {
+                            "field": "filename",
+                            "value": "report.pdf",
+                            "evidence_span": "report.pdf",
+                            "intent_basis": "filename_literal",
+                        },
+                        {
+                            "field": "file_extension",
+                            "value": "pdf",
+                            "evidence_span": "report.pdf",
+                            "intent_basis": "extension_literal",
+                        },
+                    ],
                 }
             )
         )
@@ -132,6 +147,15 @@ class TestPlanWithLLM:
                 {
                     "standalone_query": "2024 reports",
                     "filters": {"date_from": "2024-01-01", "date_to": "2024-12-31"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {
+                            "field": "date",
+                            "value": "2024",
+                            "evidence_span": "2024",
+                            "intent_basis": "date_literal",
+                        }
+                    ],
                 }
             )
         )
@@ -147,14 +171,44 @@ class TestPlanWithLLM:
                 {
                     "standalone_query": "query",
                     "filters": {"date_from": "not-a-date", "doc_author": "Auth"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {
+                            "field": "doc_author",
+                            "value": "Auth",
+                            "evidence_span": "written by Auth",
+                            "intent_basis": "explicit_author_constraint",
+                        },
+                        {
+                            "field": "date",
+                            "value": "not-a-date",
+                            "evidence_span": "not-a-date",
+                            "intent_basis": "date_literal",
+                        },
+                    ],
                 }
             )
         )
         planner = QueryPlanner(llm_func=llm)
-        plan = await planner.plan("query")
+        plan = await planner.plan("query written by Auth not-a-date")
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.date_from is None
         assert plan.metadata_filter.doc_author == "Auth"
+
+    async def test_low_confidence_llm_filter_is_ignored(self):
+        llm = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "standalone_query": "tell me about Ada's ideas",
+                    "filters": {"doc_author": "Ada"},
+                    "filter_confidence": "low",
+                }
+            )
+        )
+        planner = QueryPlanner(llm_func=llm)
+        plan = await planner.plan("tell me about Ada's ideas")
+        assert plan.metadata_filter is None
+        assert plan.metadata_filter_confidence == "low"
 
 
 class TestPlanFallback:
@@ -196,12 +250,27 @@ class TestFilterMerge:
                 {
                     "standalone_query": "q",
                     "filters": {"doc_author": "LLM", "file_extension": "pdf"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {
+                            "field": "doc_author",
+                            "value": "LLM",
+                            "evidence_span": "written by LLM",
+                            "intent_basis": "explicit_author_constraint",
+                        },
+                        {
+                            "field": "file_extension",
+                            "value": "pdf",
+                            "evidence_span": "pdf",
+                            "intent_basis": "extension_literal",
+                        },
+                    ],
                 }
             )
         )
         planner = QueryPlanner(llm_func=llm)
         explicit = MetadataFilter(doc_author="Explicit")
-        plan = await planner.plan("q", explicit_filter=explicit)
+        plan = await planner.plan("q pdf written by LLM", explicit_filter=explicit)
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.doc_author == "Explicit"
         assert plan.metadata_filter.file_extension == "pdf"
@@ -213,12 +282,21 @@ class TestFilterMerge:
                 {
                     "standalone_query": "q",
                     "filters": {"doc_author": "LLM"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {
+                            "field": "doc_author",
+                            "value": "LLM",
+                            "evidence_span": "written by LLM",
+                            "intent_basis": "explicit_author_constraint",
+                        }
+                    ],
                 }
             )
         )
         planner = QueryPlanner(llm_func=llm)
         explicit = MetadataFilter()  # all None
-        plan = await planner.plan("q", explicit_filter=explicit)
+        plan = await planner.plan("q written by LLM", explicit_filter=explicit)
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.doc_author == "LLM"
 

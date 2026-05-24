@@ -7,7 +7,7 @@ through as literal text for client-side KaTeX rendering.
 Two renderers are provided:
 - ``render_markdown``: For answer content (``html: False`` — escapes raw HTML).
 - ``render_chunk_content``: For source chunks (``html: True`` — allows HTML
-  passthrough for tables from RAGAnything).
+  passthrough for tables from LightRAG parsers).
 """
 
 from __future__ import annotations

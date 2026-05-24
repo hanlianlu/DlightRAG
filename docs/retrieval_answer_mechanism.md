@@ -1,201 +1,127 @@
 # Retrieval & Answer Mechanism
 
-DlightRAG supports two RAG modes: **unified** and **caption**. Both expose the
-same public API (`aretrieve`, `aanswer`, `aanswer_stream`) via `RAGService`,
-but their internal pipelines differ significantly.
+DlightRAG exposes one runtime path: LightRAG main is the base graph/vector
+engine, always queried in `mix` mode, while DlightRAG adds metadata
+management, direct multimodal image search, PostgreSQL BM25, RRF fusion,
+reranking, citations, and answer generation.
 
----
+## Ingestion Shape
 
-## Common Pipeline
-
-All queries share the same two-step pipeline at the `RAGService` level:
-
-```
-RAGService.aretrieve / aanswer(query, multimodal_content)
-    │
-    Step 1  Mode-specific primary retrieval
-    │         unified → VisualRetriever
-    │         caption → RetrievalEngine (RAGAnything → LightRAG)
-    │
-    Step 2  MetadataPath — supplementary retrieval
-    │         QueryAnalyzer → filename filter → scoped vector search
-    │         _resolve_chunk_contexts (text lookup + visual enrichment)
-    │
-    Merge   _merge_round_robin(Step 1, Step 2) → dedup → top_k
-    │
-    Answer  Mode-specific answer generation
+```text
+source file
+  -> LightRAG parser sidecars
+       text, tables, equations, document-derived images
+  -> LightRAG ingest
+       chunks, entities, relationships, graph, text vectors
+  -> DlightRAG side tables
+       metadata registry, document artifacts, chunk provenance
+  -> direct image embedding
+       native images and parser-extracted image sidecars
+  -> visual semantic projection
+       VLM text for entity and relationship extraction over images
 ```
 
-**Step 2** runs identically for all query types and modes. PostgreSQL backends
-use `PGMetadataIndex`; local/file backends use `JsonMetadataIndex` as a
-fallback. Step 2 supplements Step 1 with document-level precision when
-metadata filters (e.g. filename) are available or auto-detected from the query.
+Tables, equations, and document-derived image sidecars stay aligned with the
+LightRAG document record. Native images use the same metadata and provenance
+contract, but their visual similarity path stores direct image embeddings
+instead of embedding VLM captions.
 
----
+## Query Pipeline
 
-## Unified Mode
-
-### Step 1: VisualRetriever
-
-```
-VisualRetriever._retrieve()
-  Phase 1  LightRAG mix mode (KG traversal + vector search, internal round-robin)
-  Phase 2  Visual resolution (chunk_id → page image via visual_chunks KV)
-             Text-only chunks (no visual data) are kept with their text content
-  Phase 3  Visual reranking (LLM/VLM listwise or API reranker)
-```
-
-### Query Types
-
-#### Pure Text Query
-
-```
-query → LightRAG mix mode (KG + vector search, returns chunks with text)
-          │
-          ├─ entities/relationships (source_id → chunk_ids, joined by LightRAG)
-          └─ chunks (text vector match)
-                  │
-             Visual Resolve: chunk_id → page image (visual_chunks KV)
-                  │
-             Reranker: VLM scores "text query vs page image"
-```
-
-- No visual embedding search — text embedding already covers chunk retrieval.
-- LightRAG's `aquery_data()` Stage 3 (Merge Chunks) already joins
-  entity/relationship `source_id` back to chunk text content; DlightRAG
-  no longer maintains its own text "backfill" path.
-- Visual resolve maps chunk_ids to page images for VLM consumption — this
-  is the *only* lookup DlightRAG performs against `visual_chunks` (image
-  data only; text is handled inside LightRAG).
-
-#### Image + Text Query (Dual-Path)
-
-```
-                     ┌─ Text Path ─────────────────────────┐
-query + images ──┬──>│ VLM describes images → enhanced_query │──> LightRAG
-                 │   └─────────────────────────────────────┘
-                 │   ┌─ Visual Path ───────────────────────┐
-                 └──>│ Image embedding → chunks_vdb search  │──> visual chunks
-                     └─────────────────────────────────────┘
-                                      │
-                             Round-robin merge
-                                      │
-                             Visual Resolve + Rerank
+```text
+RAGService.aretrieve / aanswer(query, multimodal_content, filters)
+  |
+  |-- QueryPlanner
+  |     declared metadata fields only
+  |     explicit filters are strict
+  |     LLM-inferred empty candidates fall back to unfiltered retrieval
+  |
+  |-- LightRAGMixBackend
+  |     QueryParam(mode="mix")
+  |     KG entities + relationships + text chunks
+  |
+  |-- Direct image path
+  |     query images -> multimodal embedding -> image/vector chunks
+  |
+  |-- BM25 path
+  |     pg_textsearch over candidate-scoped chunks
+  |
+  |-- RRF fusion + dedup + top_k
+  |
+  |-- Rerank
+  |     multimodal listwise or external reranker
+  |
+  `-- AnswerEngine
+        text excerpts, KG context, source metadata, optional images
 ```
 
-- **Text path**: `enhance_query_with_images()` calls VLM to describe each
-  image, concatenates descriptions with original query, feeds into LightRAG.
-- **Visual path**: Images are embedded via `VisualEmbedder.embed_pages()` and
-  queried directly against `chunks_vdb`. The embedding model is multimodal
-  (text and images share the same vector space).
-- **Merge**: Results from both paths are round-robin interleaved, capped at
-  `chunk_top_k`, then visually resolved and reranked.
-- **Reranker**: Receives `enhanced_query` (includes image descriptions).
+LightRAG's `hybrid` mode is not used as a public downgrade path. The
+DlightRAG hybrid layer is the combination of LightRAG `mix` retrieval,
+pg_textsearch BM25, direct image retrieval, and RRF fusion.
 
-#### Pure Image Query (No Text)
+## Metadata In-Filtering
 
-Same as image + text, but `query=""`. The `enhanced_query` consists solely of
-VLM-generated image descriptions. Retrieval and reranking work normally;
-answer generation uses the image descriptions as the question context.
+Metadata filtering is explicit-schema first:
 
-### Reranking
+- Declared fields are normalized and filterable.
+- Undeclared metadata can be stored as JSONB enrichment, but is not filterable
+  by default.
+- User/API filters are strict. If they resolve to zero candidate documents or
+  chunks, retrieval returns no matches.
+- LLM-inferred filters include `filter_confidence` and evidence spans from the
+  query. If an inferred filter resolves to zero candidates, DlightRAG retries
+  without that inferred filter because the planner may have over-inferred.
+- Non-empty inferred candidate sets constrain semantic search and BM25.
 
-Two strategy classes, configured via `rerank.strategy`:
+For semantic search, `FilteredVectorDB` applies the candidate set before
+ranking. Empty strict candidates return immediately. Small candidate sets use
+exact vector scoring in a materialized candidate CTE; larger candidate sets
+use pgvector HNSW with iterative scan settings.
+
+## Multimodal Queries
+
+Text queries go through LightRAG `mix`, BM25, and reranking. Image-bearing
+queries add a direct image vector path:
+
+```text
+query + images
+  |-- text query -> LightRAG mix + BM25
+  `-- images -> multimodal embedding(context="query") -> visual chunks
+```
+
+Document and sidecar images are embedded with document context at ingestion.
+Query images are embedded with query context when the provider supports
+asymmetric embeddings. If the provider does not expose task-aware routing,
+LightRAG's symmetric fallback is used.
+
+Images also produce VLM semantic text for entity and relationship extraction.
+That semantic projection feeds the graph, but visual similarity search uses
+direct image embeddings.
+
+## Reranking
+
+`rerank.strategy` chooses the post-fusion ranker:
 
 | Strategy | How it works |
-|---------|-------------|
-| `chat_llm_reranker` (default) | Batched listwise scoring via `rerank.provider/model` when set, otherwise `chat`. The selected model must support image inputs when chunks include page images. Batch parallelism is capped by `rerank.max_concurrency`; per-call batch size is `rerank.batch_size`. |
-| `jina_reranker` / `aliyun_reranker` / `local_reranker` | Calls an external OpenAI-compatible `/rerank` endpoint (managed cloud or self-hosted via `local_reranker` + `rerank.base_url`). Unified mode sends image documents when page images are available; caption mode sends text documents through LightRAG's adapter. |
-| `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents only. |
+|---|---|
+| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or the default LLM when no rerank model is set. The selected model must support images when retrieved chunks include page/image data. |
+| `jina_reranker` / `aliyun_reranker` / `local_reranker` | Calls an OpenAI-compatible `/rerank` endpoint with text documents. |
+| `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. |
 
-Post-rerank filtering removes chunks below `rerank.score_threshold` (default
-0.5). If every scored chunk falls below the threshold, DlightRAG keeps the
-top scored fallback set.
+Post-rerank filtering removes chunks below `rerank.score_threshold`. If all
+chunks fall below the threshold, DlightRAG keeps the top scored fallback set
+instead of returning an accidental empty answer context.
 
-Listwise score parsing (`_parse_listwise_scores`) expects a JSON array such
-as `[0.82, 0.41]`, with a numeric regex fallback for less strict models.
+## Answer Generation
 
-### Answer Generation
+The answer prompt receives:
 
-- **System prompt**: `_ANSWER_CORE` + structured suffix (JSON output for
-  providers supporting `response_schema`) or core-only (freetext providers).
-  Instructs the LLM to answer based on document text excerpts, page images
-  (when available), and knowledge graph context.
-- **User prompt**: KG context + document text excerpts + reference list +
-  question. `FREETEXT_REMINDER` is appended at end for freetext providers
-  to maximize instruction adherence.
-- **Messages**: OpenAI multimodal format with inline base64 page images from
-  retrieved chunks. The LLM receives both chunk text content (in the user
-  prompt as "Document Excerpts") and page images (as `image_url` content
-  blocks), providing dual-channel context.
+- chunk text excerpts
+- KG entities and relationships from LightRAG `mix`
+- document/source metadata
+- inline page or image data when available
+- user-supplied `query_images` when the answer model should reason over them
 
-Structured providers return `StructuredAnswer` (JSON with `answer` +
-`references` array). Freetext providers return markdown with a
-`### References` section parsed by the caller.
-
----
-
-## Caption Mode
-
-### Step 1: RetrievalEngine
-
-```
-RetrievalEngine (captionrag/retrieval.py)
-  wraps RAGAnything → LightRAG
-  Retrieval handled by LightRAG; reranking is invoked through LightRAG's
-  rerank_model_func adapter when rerank.enabled=true
-```
-
-### Query Types
-
-#### Pure Text Query
-
-```
-query → LightRAG.aquery_data()
-          │
-          ├─ KG traversal (entities/relationships)
-          └─ Chunk vector search (text embedding)
-          │
-          Reranking: LightRAG rerank_model_func adapter (if rerank.enabled=true)
-```
-
-- No visual resolution — caption mode stores OCR captions as text chunks,
-  not page images.
-- Reranking receives text documents from LightRAG. Even when the configured
-  strategy is `chat_llm_reranker`, caption mode does not provide page images
-  to that adapter.
-
-#### Multimodal Query (Image + Text)
-
-```
-query + multimodal_content
-          │
-          RAGAnything._process_multimodal_query_content()
-          │
-          enhanced_query (text with image descriptions)
-          │
-          LightRAG retrieval (same as pure text)
-```
-
-- Images are converted to text descriptions by RAGAnything's internal VLM.
-- No visual embedding path — only text-path retrieval.
-- No dual-path merging.
-- Retrieval uses the enhanced query. Answer generation is handled by
-  DlightRAG's `AnswerEngine`; user-supplied images must be passed through
-  `query_images` when the answer model itself should see them.
-
----
-
-## Key Differences
-
-| Aspect | Unified | Caption |
-|--------|---------|---------|
-| Page representation | Original page images (base64) | OCR text captions |
-| Visual vector search | Yes (multimodal embedding) | No |
-| Visual resolution | chunk_id → page image via KV (text-only chunks kept) | N/A |
-| Reranking | chat_llm_reranker (LLM/VLM listwise) or external API | LightRAG adapter receives text documents |
-| Answer model | VLM (sees text excerpts + page images) | LLM (text-only) |
-| Dual-path retrieval | Yes (text + visual embedding) | No (text only) |
-| Structured output | Provider-dependent JSON schema | N/A (LightRAG controls) |
-| Citation format | `[n-m]` page-level inline | LightRAG default |
-| Step 2 (MetadataPath) | PG or JSON metadata index | PG or JSON metadata index |
+Structured-output-capable providers return `answer` plus validated
+`references`. Other providers return markdown that is parsed for citation
+references.

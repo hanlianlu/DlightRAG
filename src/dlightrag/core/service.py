@@ -1,27 +1,25 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Per-workspace RAG service facade for ingestion and retrieval.
+"""Per-workspace LightRAG service facade for ingestion and retrieval.
 
-Caption mode composes one RAGAnything instance with DlightRAG ingestion and
-retrieval adapters. Unified mode creates LightRAG directly and adds visual
-embedding retrieval. PostgreSQL advisory locks coordinate first-time storage
-initialization across concurrent workers.
+DlightRAG owns one LightRAG instance per workspace and adds PostgreSQL
+metadata, direct visual embedding, and retrieval orchestration around it.
+PostgreSQL advisory locks coordinate first-time storage initialization across
+concurrent workers.
 """
 
 from __future__ import annotations
 
 import asyncio
-import atexit
 import logging
 import os
-import platform
 import sys
 from collections.abc import Awaitable, Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from dlightrag.captionrag.chunking import docling_hybrid_chunking_func
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.ingestion.hash_index import HashIndexProtocol
+from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
@@ -65,37 +63,6 @@ _STORAGE_ATTRS = (
 )
 
 
-def _detect_mineru_backend(manual_override: str | None = None) -> str:
-    """Detect optimal MinerU parsing backend based on hardware."""
-    if manual_override:
-        logger.info(f"MinerU backend: {manual_override} (manual override)")
-        return manual_override
-
-    try:
-        import torch
-
-        if torch.cuda.is_available():
-            device_name = torch.cuda.get_device_name(0)
-            logger.info(f"MinerU backend: hybrid-auto-engine (CUDA GPU detected: {device_name})")
-            return "hybrid-auto-engine"
-
-        if (
-            platform.system() == "Darwin"
-            and platform.machine() == "arm64"
-            and torch.backends.mps.is_available()
-        ):
-            logger.info("MinerU backend: Apple Silicon detected")
-            return "pipeline"  # Fallback to pipeline for now
-
-    except ImportError:
-        logger.debug("torch not available, skipping GPU detection")
-    except Exception as e:
-        logger.debug(f"GPU detection failed: {e}")
-
-    logger.info("MinerU backend: pipeline (fallback, no GPU acceleration detected)")
-    return "pipeline"
-
-
 def _ensure_venv_in_path() -> None:
     """Add venv bin to PATH for MinerU CLI."""
     venv_bin = Path(sys.executable).parent
@@ -106,29 +73,21 @@ def _ensure_venv_in_path() -> None:
 
 _ensure_venv_in_path()
 
-# Inject custom VLM prompts before importing RAGAnything
-from dlightrag.models.prompts import inject_custom_prompts  # noqa: E402
-
-inject_custom_prompts()
-
-from lightrag.utils import EmbeddingFunc  # noqa: E402
-from raganything import RAGAnything, RAGAnythingConfig  # noqa: E402
-
-from dlightrag.captionrag.pipeline import IngestionPipeline  # noqa: E402
-from dlightrag.captionrag.retrieval import RetrievalEngine  # noqa: E402
 from dlightrag.core.compat_guard import LightRAGCompatGuard  # noqa: E402
 from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
-from dlightrag.core.retrieval.path_resolver import PathResolver  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     build_role_llm_configs,
     get_chat_model_func_for_lightrag,
     get_embedding_func,
-    get_ingest_model_func,
+    get_multimodal_embedder,
     get_rerank_func,
     get_vlm_model_func,
 )
-from dlightrag.unifiedrepresent.lifecycle import unified_delete_files, unified_ingest  # noqa: E402
+from dlightrag.storage.postgres_version import (  # noqa: E402
+    ensure_pgvector_halfvec,
+    ensure_postgres_major,
+)
 
 
 class RAGService:
@@ -180,18 +139,28 @@ class RAGService:
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
 
-        # Caption mode (Mode 1): RAGAnything + composed pipelines
-        self.rag: Any = None  # RAGAnything (caption mode)
-        self.ingestion: IngestionPipeline | None = None
-        self.retrieval: RetrievalEngine | None = None
-
-        # Unified mode (Mode 2): direct LightRAG + UnifiedRepresentEngine
-        self.unified: Any = None  # UnifiedRepresentEngine
-        self._lightrag: Any = None  # Direct LightRAG reference (unified mode)
-        self._visual_chunks: Any = None  # Visual chunks KV store (unified mode)
+        # Direct LightRAG + DlightRAG multimodal wrappers.
+        self.rag: Any = None  # Backward-compatible alias slot; unused by new runtime.
+        self.ingestion: Any = None
+        self.retrieval: Any = None
+        self.unified: Any = None  # Removed legacy slot; kept for compatibility tests.
+        self._lightrag: Any = None  # Direct LightRAG reference
+        self._visual_chunks: Any = None  # Visual chunks KV store
         self._hash_index: Any = None  # Content-hash deduplication index
         self._metadata_index: MetadataIndexProtocol | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
+        self._metadata_registry: Any = None
+        self._allow_ad_hoc_metadata = self.config.metadata.allow_ad_hoc_json
+        self._default_metadata_policy: MetadataIngestPolicy = (
+            self.config.metadata.default_ingest_policy
+        )
+        self._lightrag_stores: Any = None
+        self._document_artifacts: Any = None
+        self._chunk_provenance: Any = None
+        self._ingestion_engine: Any = None
+        self._bm25: Any = None
+        self._retrieval_orchestrator: Any = None
+        self._multimodal_embedder: Any = None
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by _do_initialize / _do_initialize_unified;
@@ -208,8 +177,8 @@ class RAGService:
     def lightrag(self) -> Any:
         """Return the underlying LightRAG instance regardless of mode.
 
-        - Unified mode: ``self._lightrag`` (created directly)
-        - Caption mode: ``self.rag.lightrag`` (via RAGAnything)
+        - New runtime: ``self._lightrag`` (created directly)
+        - Compatibility tests may still attach ``self.rag.lightrag``
         """
         return self._lightrag or getattr(self.rag, "lightrag", None)
 
@@ -231,26 +200,16 @@ class RAGService:
             )
         return params
 
-    def _unregister_atexit_cleanup(self, rag_obj: Any) -> None:
-        """Prevent double-close logging errors by removing raganything atexit hooks."""
-        try:
-            atexit.unregister(rag_obj.close)
-        except Exception:  # noqa: BLE001
-            logger.debug("Unable to unregister atexit hook for %s", rag_obj)
-
     async def initialize(self) -> None:
         """Initialize LightRAG storages and caches (idempotent).
 
-        Uses PostgreSQL advisory lock for distributed coordination when
-        using PG storage backends, or proceeds directly otherwise.
+        Uses PostgreSQL advisory lock for distributed coordination. DlightRAG's
+        core runtime is PostgreSQL-only, so unavailable PG is a startup error.
         """
         if self._initialized:
             return
 
-        if self.config.kv_storage.startswith("PG"):
-            await self._initialize_with_pg_lock()
-        else:
-            await self._do_initialize()
+        await self._initialize_with_pg_lock()
 
         self._initialized = True
         logger.debug("RAGService initialized")
@@ -266,9 +225,7 @@ class RAGService:
         try:
             import asyncpg
         except ImportError:
-            logger.warning("asyncpg not available, proceeding without distributed lock")
-            await self._do_initialize()
-            return
+            raise RuntimeError("asyncpg is required for DlightRAG PostgreSQL storage") from None
 
         try:
             conn = await asyncpg.connect(
@@ -279,11 +236,18 @@ class RAGService:
                 database=self.config.postgres_database,
             )
         except Exception as e:
-            logger.warning(f"PostgreSQL unavailable for init lock, proceeding without: {e}")
-            await self._do_initialize()
-            return
+            raise RuntimeError(
+                "PostgreSQL is required for DlightRAG startup and could not be reached"
+            ) from e
 
         try:
+            await ensure_postgres_major(
+                conn,
+                required_major=self.config.postgres_required_major,
+            )
+            if self.config.pg_vector_index_type == "HNSW_HALFVEC":
+                await ensure_pgvector_halfvec(conn)
+
             acquired = await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY)
 
             if acquired:
@@ -312,166 +276,21 @@ class RAGService:
             await conn.close()
 
     async def _do_initialize(self) -> None:
-        """Create RAG backend and compose pipelines based on rag_mode."""
+        """Create one LightRAG-backed unified pipeline."""
         from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
 
         apply_lightrag_patches()
-
-        config = self.config
-        logger.info("RAG mode: %s", config.rag_mode)
-
-        if config.rag_mode == "unified":
-            await self._do_initialize_unified()
-            return
-
-        # --- Caption mode: RAGAnything composition ---
-        # Detect optimal MinerU backend based on hardware (only for mineru parser)
-        mineru_backend = None
-        if config.parser == "mineru":
-            mineru_backend = _detect_mineru_backend(config.mineru_backend)
-        else:
-            logger.info(f"Using {config.parser} parser, MinerU backend detection skipped")
-
-        # Configure RAGAnything
-        rag_config = RAGAnythingConfig(
-            working_dir=str(config.working_dir_path),
-            max_concurrent_files=config.max_concurrent_ingestion,
-            parser=config.parser,
-            parse_method=config.parse_method,
-            enable_image_processing=config.enable_image_processing,
-            enable_table_processing=config.enable_table_processing,
-            enable_equation_processing=config.enable_equation_processing,
-            display_content_stats=config.display_content_stats,
-            use_full_path=config.use_full_path,
-            context_window=config.context_window,
-            context_filter_content_types=config.context_filter_types.split(","),
-            max_context_tokens=config.max_context_tokens,
-        )
-
-        # Get model functions
-        chat_func_lr = get_chat_model_func_for_lightrag(config)
-        vlm_func = get_vlm_model_func(config)
-        embedding_func = get_embedding_func(config)
-        rerank_func = get_rerank_func(config)
-
-        # LightRAG needs (query, documents: list[str]) — wrap multimodal reranker
-        lightrag_rerank_func = None
-        if rerank_func is not None:
-            from dlightrag.models.rerank import build_lightrag_rerank_adapter
-
-            lightrag_rerank_func = build_lightrag_rerank_adapter(rerank_func)
-
-        # Create VLM OCR parser if configured
-        vlm_parser = None
-        if config.parser == "vlm":
-            from dlightrag.captionrag.vlm_parser import VlmOcrParser
-
-            vlm_parser = VlmOcrParser(
-                vision_model_func=vlm_func,
-                dpi=config.page_render_dpi,
-                max_concurrent=config.max_async,
-            )
-
-        # LightRAG configuration
-        lightrag_kwargs: dict[str, Any] = {
-            "workspace": config.workspace,
-            "default_llm_timeout": int(config.chat.timeout),
-            "default_embedding_timeout": config.embedding_request_timeout,
-            "chunk_token_size": config.chunk_size,
-            "chunk_overlap_token_size": config.chunk_overlap,
-            "max_parallel_insert": config.max_parallel_insert,
-            "llm_model_max_async": config.max_async,
-            "embedding_func_max_async": config.embedding_func_max_async,
-            "embedding_batch_num": config.embedding_batch_num,
-            "vector_storage": config.vector_storage,
-            "graph_storage": config.graph_storage,
-            "kv_storage": config.kv_storage,
-            "doc_status_storage": config.doc_status_storage,
-            "rerank_model_func": lightrag_rerank_func,
-            "vector_db_storage_cls_kwargs": self._build_vector_db_kwargs(config),
-            "kg_chunk_pick_method": config.kg_chunk_pick_method,
-            "addon_params": self._build_addon_params(config),
-        }
-
-        role_overrides = build_role_llm_configs(config)
-        if role_overrides is not None:
-            lightrag_kwargs["role_llm_configs"] = role_overrides
-            logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
-
-        # Only use our custom HybridChunker for parsers that benefit from it
-        if config.parser in ("docling", "vlm"):
-            lightrag_kwargs["chunking_func"] = docling_hybrid_chunking_func
-
-        # Single RAGAnything instance with LightRAG-adapted callables.
-        logger.info("Creating RAGAnything instance...")
-        self.rag = RAGAnything(
-            None,
-            chat_func_lr,
-            chat_func_lr,
-            embedding_func,
-            rag_config,
-            lightrag_kwargs,
-        )
-        self._unregister_atexit_cleanup(self.rag)
-
-        # Initialize LightRAG storages
-        if hasattr(self.rag, "_ensure_lightrag_initialized"):
-            init_result = await self.rag._ensure_lightrag_initialized()
-            if isinstance(init_result, dict) and not init_result.get("success", True):
-                error_msg = init_result.get("error", "LightRAG initialization failed")
-                logger.error(f"LightRAG initialization failed: {error_msg}")
-                raise RuntimeError(f"LightRAG initialization failed: {error_msg}")
-
-        # Wrap chunks_vdb for metadata in-filtering (caption mode)
-        lr = getattr(self.rag, "lightrag", None)
-        if lr is not None and getattr(lr, "chunks_vdb", None) is not None:
-            await LightRAGCompatGuard(lr).verify_all()
-
-            from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
-
-            lr.chunks_vdb = FilteredVectorStorage(
-                original=lr.chunks_vdb,
-                embedding_func=embedding_func,
-            )
-
-        # Auto-detect hash index backend based on storage config
-        hash_index = await self._create_hash_index(config)
-
-        # Initialize metadata index (best-effort — PG only for now)
-        self._metadata_index = await self._create_metadata_index(config)
-
-        # Compose pipelines
-        self.ingestion = IngestionPipeline(
-            self.rag,
-            config=config,
-            max_concurrent=config.max_concurrent_ingestion,
-            mineru_backend=mineru_backend,
-            cancel_checker=self._cancel_checker,
-            hash_index=hash_index,
-            vlm_parser=vlm_parser,
-            metadata_index=self._metadata_index,
-        )
-
-        self.retrieval = RetrievalEngine(rag=self.rag, config=config)
-        self._path_resolver = PathResolver(
-            working_dir=str(config.working_dir_path),
-        )
-        self.retrieval._path_resolver = self._path_resolver
-        self._backend = self.retrieval
-
-        logger.info("RAG pipelines initialized successfully (caption mode)")
+        await self._do_initialize_unified()
 
     async def _do_initialize_unified(self) -> None:
-        """Initialize unified representational RAG mode (Mode 2).
+        """Initialize the direct LightRAG multimodal runtime.
 
-        Creates LightRAG directly (no RAGAnything), sets up visual_chunks
-        KV store, and creates UnifiedRepresentEngine.
+        Creates LightRAG directly, sets up visual_chunks KV store, and creates
+        the DlightRAG visual retrieval wrapper.
         """
         import dataclasses
 
         from lightrag import LightRAG
-
-        from dlightrag.unifiedrepresent.engine import UnifiedRepresentEngine
 
         config = self.config
         logger.info("Initializing unified representational RAG mode...")
@@ -479,74 +298,18 @@ class RAGService:
         # Get model functions
         chat_func_lr = get_chat_model_func_for_lightrag(config)
         vlm_func = get_vlm_model_func(config)
-        ingest_func = get_ingest_model_func(config)
         rerank_func = get_rerank_func(config)
         role_overrides = build_role_llm_configs(config)
         if role_overrides is not None:
             logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
 
-        # Use httpx_text_embed instead of LightRAG's openai_embed for text
-        # embedding.  openai_embed uses encoding_format:"base64" and the openai
-        # Python client — both fail with Xinference VL models.
-        # partial() with plain strings is deepcopy-safe (LightRAG's __post_init__
-        # does asdict→deepcopy on embedding_func).
-        from dlightrag.models.embedding import create_embed_client, httpx_embed
-        from dlightrag.models.providers.embed_providers import (
-            OpenAICompatEmbedProvider,
-            VoyageEmbedProvider,
-        )
-        from dlightrag.unifiedrepresent.embedder import VisualEmbedder
+        embedding_func = get_embedding_func(config)
+        multimodal_embedder = get_multimodal_embedder(config)
+        self._multimodal_embedder = multimodal_embedder
+        if config.embedding.startup_probe:
+            await multimodal_embedder.probe_image_embedding()
 
-        emb_base_url = config.embedding.base_url or ""
-        emb_api_key = config.embedding.api_key or ""
-
-        if "voyage" in config.embedding.model.lower():
-            embed_provider = VoyageEmbedProvider()
-        else:
-            embed_provider = OpenAICompatEmbedProvider()
-
-        # Pooled client for connection reuse across LightRAG embed calls.
-        # Closure capture is deepcopy-safe in practice (LightRAG copies the
-        # EmbeddingFunc dataclass; the closure cell still references the
-        # original client).
-        embed_client = create_embed_client(
-            emb_api_key, timeout=float(config.embedding_request_timeout)
-        )
-
-        async def _embed_for_lightrag(texts: list[str]) -> Any:
-            result = await httpx_embed(
-                texts,
-                model=config.embedding.model,
-                base_url=emb_base_url,
-                api_key=emb_api_key,
-                provider=embed_provider,
-                timeout=float(config.embedding_request_timeout),
-                client=embed_client,
-            )
-            # LightRAG's EmbeddingFunc validates via result.size — requires numpy
-            import numpy as np
-
-            return np.array(result)
-
-        embedding_func = EmbeddingFunc(
-            embedding_dim=config.embedding.dim,
-            max_token_size=8192,
-            func=_embed_for_lightrag,
-            model_name=config.embedding.model,
-        )
-
-        # VisualEmbedder for image embedding (reuses persistent httpx client)
-        visual_embedder = VisualEmbedder(
-            model=config.embedding.model,
-            base_url=emb_base_url,
-            api_key=emb_api_key,
-            dim=config.embedding.dim,
-            batch_size=config.embedding_func_max_async,
-            timeout=float(config.embedding_request_timeout),
-            provider=embed_provider,
-        )
-
-        # LightRAG configuration (same storage backends as caption mode)
+        # LightRAG configuration.
         # Do NOT pass rerank_model_func — we handle reranking ourselves
         lightrag = LightRAG(
             working_dir=str(config.working_dir_path),
@@ -574,6 +337,16 @@ class RAGService:
         self._lightrag = lightrag
         logger.info("LightRAG storages initialized")
 
+        from dlightrag.core.lightrag_stores import LightRAGStores
+        from dlightrag.storage.chunk_provenance import PGChunkProvenance
+        from dlightrag.storage.document_artifacts import PGDocumentArtifacts
+
+        self._lightrag_stores = LightRAGStores(lightrag)
+        self._document_artifacts = PGDocumentArtifacts(workspace=config.workspace)
+        self._chunk_provenance = PGChunkProvenance(workspace=config.workspace)
+        await self._document_artifacts.initialize()
+        await self._chunk_provenance.initialize()
+
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
             await LightRAGCompatGuard(lightrag).verify_all()
@@ -583,6 +356,7 @@ class RAGService:
             lightrag.chunks_vdb = FilteredVectorStorage(  # type: ignore[assignment]
                 original=lightrag.chunks_vdb,
                 embedding_func=embedding_func,
+                exact_threshold=config.metadata_filter_exact_vector_threshold,
             )
 
         # Post-init verification: ensure AGE graph labels actually exist.
@@ -596,97 +370,96 @@ class RAGService:
         # See pg_jsonb_kv.py module docstring for details.
         from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
 
-        kv_cls = lightrag.key_string_value_json_storage_cls
-        if config.kv_storage.startswith("PG"):
-            kv_cls = PGJsonbKVStorage
         kv_kwargs: dict[str, Any] = {
             "namespace": "visual_chunks",
             "workspace": config.workspace,
             "global_config": dataclasses.asdict(lightrag),
             "embedding_func": embedding_func,
+            "blob_field": "image_data",
         }
-        if kv_cls is PGJsonbKVStorage:
-            kv_kwargs["blob_field"] = "image_data"
-        visual_chunks = kv_cls(**kv_kwargs)
+        visual_chunks = PGJsonbKVStorage(**kv_kwargs)
         await visual_chunks.initialize()
         self._visual_chunks = visual_chunks
-        logger.info("Visual chunks KV store initialized (%s)", kv_cls.__name__)
+        logger.info("Visual chunks KV store initialized (PGJsonbKVStorage)")
 
-        # Create PathResolver for unified mode
-        self._path_resolver = PathResolver(
-            working_dir=str(config.working_dir_path),
-        )
+        from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
 
-        # Create engine (pass pre-built embedder to avoid creating a duplicate)
-        self.unified = UnifiedRepresentEngine(
+        self._backend = LightRAGMixBackend(
             lightrag=lightrag,
             visual_chunks=visual_chunks,
-            config=config,
-            vision_model_func=vlm_func,
-            visual_embedder=visual_embedder,
-            path_resolver=self._path_resolver,
-            context_model_func=ingest_func,
+            embedder=multimodal_embedder,
             rerank_func=rerank_func,
         )
-        self._backend = self.unified
+        self.retrieval = self._backend
 
-        # Create hash index for deduplication (same backend as caption mode)
+        # Create hash index for deduplication.
         self._hash_index = await self._create_hash_index(config)
 
         # Initialize metadata index
         self._metadata_index = await self._create_metadata_index(config)
+        from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
+        from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
-        logger.info("Unified representational RAG mode ready")
+        self._metadata_registry = MetadataFieldRegistry.from_config(config.metadata.fields)
+        self._ingestion_engine = UnifiedIngestionEngine(
+            lightrag=lightrag,
+            stores=self._lightrag_stores,
+            metadata_index=self._metadata_index,
+            document_artifacts=self._document_artifacts,
+            chunk_provenance=self._chunk_provenance,
+            multimodal_embedder=multimodal_embedder,
+            vlm_func=vlm_func,
+            workspace=config.workspace,
+            parser_rules=config.parser.rules,
+            chunk_options=config.parser.chunk_options,
+            metadata_registry=self._metadata_registry,
+            allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,
+            default_metadata_policy=config.metadata.default_ingest_policy,
+        )
+
+        if config.bm25_enabled:
+            from dlightrag.core.retrieval.bm25 import PostgresBM25
+            from dlightrag.storage.pool import pg_pool
+
+            pool = await pg_pool.get()
+            self._bm25 = PostgresBM25(
+                pool=pool,
+                workspace=config.workspace,
+                top_k=config.bm25_top_k,
+            )
+            await self._bm25.ensure_index(text_config=config.bm25_text_config)
+
+        from dlightrag.core.retrieval.retriever import UnifiedRetriever
+
+        self._retrieval_orchestrator = UnifiedRetriever(
+            backend=self._backend,
+            bm25=self._bm25,
+            metadata_index=self._metadata_index,
+            chunk_provenance=self._chunk_provenance,
+            rrf_k=config.rrf_k,
+        )
+
+        logger.info("LightRAG main runtime path ready")
 
     async def _create_hash_index(self, config: DlightragConfig) -> HashIndexProtocol:
-        """Create the appropriate hash index backend.
+        """Create the PostgreSQL hash index backend."""
+        from dlightrag.core.ingestion.hash_index import PGHashIndex
 
-        PG when ``kv_storage`` is PostgreSQL, otherwise the JSON file fallback.
-        """
-        if config.kv_storage.startswith("PG"):
-            try:
-                from dlightrag.core.ingestion.hash_index import PGHashIndex
-
-                idx = PGHashIndex(workspace=config.workspace)
-                await idx.initialize()
-                logger.info("Hash index: PGHashIndex (PostgreSQL via shared pool)")
-                return idx
-            except ImportError:
-                logger.warning("asyncpg not available, falling back to JSON HashIndex")
-            except Exception as e:
-                logger.warning(f"PGHashIndex creation failed, falling back to JSON: {e}")
-
-        from dlightrag.core.ingestion.hash_index import HashIndex
-
-        logger.info("Hash index: HashIndex (JSON file)")
-        return HashIndex(config.working_dir_path, workspace=config.workspace)
+        idx = PGHashIndex(workspace=config.workspace)
+        await idx.initialize()
+        logger.info("Hash index: PGHashIndex (PostgreSQL via shared pool)")
+        return idx
 
     async def _create_metadata_index(
         self,
         config: DlightragConfig,
     ) -> MetadataIndexProtocol:
-        """Create the appropriate metadata index backend.
+        """Create the PostgreSQL metadata index backend."""
+        from dlightrag.storage.pg_metadata_index import PGMetadataIndex
 
-        PG backends use PGMetadataIndex; all others fall back to JsonMetadataIndex.
-        """
-        if config.kv_storage.startswith("PG"):
-            try:
-                from dlightrag.storage.pg_metadata_index import PGMetadataIndex
-
-                idx = PGMetadataIndex(workspace=config.workspace)
-                await idx.initialize()
-                logger.info("Metadata index: PGMetadataIndex (PostgreSQL)")
-                return idx
-            except ImportError:
-                logger.warning("asyncpg not available, falling back to JSON metadata index")
-            except Exception as e:
-                logger.warning("PGMetadataIndex creation failed, falling back to JSON: %s", e)
-
-        from dlightrag.storage.json_metadata_index import JsonMetadataIndex
-
-        idx = JsonMetadataIndex(config.working_dir_path, workspace=config.workspace)
+        idx = PGMetadataIndex(workspace=config.workspace)
         await idx.initialize()
-        logger.info("Metadata index: JsonMetadataIndex (JSON file fallback)")
+        logger.info("Metadata index: PGMetadataIndex (PostgreSQL)")
         return idx
 
     def _ensure_initialized(self) -> None:
@@ -780,17 +553,16 @@ class RAGService:
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize storages", exc_info=True)
 
-        # Unified mode cleanup
-        if self.unified is not None:
-            try:
-                await self.unified.aclose()
-            except Exception:  # noqa: BLE001
-                logger.warning("Failed to close unified engine", exc_info=True)
         if self._visual_chunks is not None:
             try:
                 await self._visual_chunks.finalize()
             except Exception:  # noqa: BLE001
                 logger.warning("Failed to finalize visual_chunks", exc_info=True)
+        if self._multimodal_embedder is not None:
+            try:
+                await self._multimodal_embedder.aclose()
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to close multimodal embedder", exc_info=True)
         if self._lightrag is not None:
             try:
                 await self._lightrag.finalize_storages()
@@ -845,8 +617,6 @@ class RAGService:
         Self-initializing: creates the table idempotently if it doesn't exist.
         No advisory lock needed — all DDL is IF NOT EXISTS.
         """
-        if not self.config.kv_storage.startswith("PG"):
-            return
         try:
             from dlightrag.storage.pool import pg_pool
 
@@ -874,6 +644,213 @@ class RAGService:
 
     # === INGESTION API ===
 
+    def _resolve_replace(self, explicit: Any) -> bool:
+        if explicit is None:
+            return self.config.ingestion_replace_default
+        return bool(explicit)
+
+    async def _aingest_local_file(
+        self,
+        file_path: Path,
+        *,
+        replace: bool,
+        stored_file_path: str | None = None,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        """Ingest one local file through the unified LightRAG path."""
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+
+        indexed_path = stored_file_path or str(file_path)
+        content_hash: str | None = None
+        if self._hash_index is not None:
+            should_skip, content_hash, reason = await self._hash_index.should_skip_file(
+                file_path, replace=replace
+            )
+            if should_skip:
+                return {
+                    "status": "skipped",
+                    "reason": reason,
+                    "content_hash": content_hash,
+                    "file_path": indexed_path,
+                }
+
+        result = await self._ingestion_engine.aingest_file(
+            file_path,
+            replace=replace,
+            title=title,
+            author=author,
+            metadata=metadata,
+            metadata_policy=metadata_policy,
+        )
+        if hasattr(result, "model_dump"):
+            result = result.model_dump()
+
+        if self._hash_index is not None and content_hash and isinstance(result, dict):
+            doc_id = result.get("doc_id")
+            if doc_id:
+                await self._hash_index.register(content_hash, doc_id, indexed_path)
+        return result
+
+    def _remote_local_path(self, source_type: str, namespace: str, key: str) -> Path:
+        """Return a managed local source-copy path for a remote object."""
+        parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
+        if not parts:
+            raise ValueError("remote object key is empty")
+        safe_namespace = namespace.replace("/", "_").replace("\\", "_") or "default"
+        return self.config.working_dir_path / "sources" / source_type / safe_namespace / Path(
+            *parts
+        )
+
+    async def _download_remote_to_local(
+        self,
+        *,
+        source: Any,
+        source_type: str,
+        namespace: str,
+        key: str,
+    ) -> Path:
+        content = await source.aload_document(key)
+        local_path = self._remote_local_path(source_type, namespace, key)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(local_path.write_bytes, content)
+        return local_path
+
+    async def _aingest_remote_key(
+        self,
+        *,
+        source: Any,
+        source_type: str,
+        namespace: str,
+        key: str,
+        source_uri: str,
+        replace: bool,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        local_path = await self._download_remote_to_local(
+            source=source,
+            source_type=source_type,
+            namespace=namespace,
+            key=key,
+        )
+        return await self._aingest_local_file(
+            local_path,
+            replace=replace,
+            stored_file_path=source_uri,
+            title=title,
+            author=author,
+            metadata=metadata,
+            metadata_policy=metadata_policy,
+        )
+
+    async def _aingest_azure_blob(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
+        container_name = kwargs.get("container_name")
+        source = kwargs.get("source")
+        if source is None:
+            if not container_name:
+                raise ValueError("'container_name' is required for azure_blob source_type")
+            from dlightrag.sourcing.azure_blob import AzureBlobDataSource
+
+            source = AzureBlobDataSource(
+                connection_string=self.config.blob_connection_string,
+                container_name=container_name,
+            )
+
+        close = getattr(source, "aclose", None)
+        try:
+            if kwargs.get("blob_path"):
+                key = str(kwargs["blob_path"])
+                return await self._aingest_remote_key(
+                    source=source,
+                    source_type="azure_blob",
+                    namespace=str(container_name or "default"),
+                    key=key,
+                    source_uri=f"azure://{container_name}/{key}",
+                    replace=replace,
+                    title=kwargs.get("title"),
+                    author=kwargs.get("author"),
+                    metadata=kwargs.get("metadata"),
+                    metadata_policy=kwargs.get("metadata_policy"),
+                )
+
+            prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
+            keys = await source.alist_documents(prefix=prefix)
+            results = [
+                await self._aingest_remote_key(
+                    source=source,
+                    source_type="azure_blob",
+                    namespace=str(container_name or "default"),
+                    key=str(key),
+                    source_uri=f"azure://{container_name}/{key}",
+                    replace=replace,
+                    title=kwargs.get("title"),
+                    author=kwargs.get("author"),
+                    metadata=kwargs.get("metadata"),
+                    metadata_policy=kwargs.get("metadata_policy"),
+                )
+                for key in keys
+            ]
+            return {"processed": len(results), "results": results}
+        finally:
+            if close is not None:
+                await close()
+
+    async def _aingest_s3(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
+        bucket = kwargs.get("bucket")
+        source = kwargs.get("source")
+        if source is None:
+            if not bucket:
+                raise ValueError("'bucket' is required for s3 source_type")
+            from dlightrag.sourcing.aws_s3 import S3DataSource
+
+            source = S3DataSource(bucket=str(bucket), region=kwargs.get("region", "us-east-1"))
+
+        close = getattr(source, "aclose", None)
+        try:
+            key = kwargs.get("key") or kwargs.get("blob_path")
+            if key:
+                key = str(key)
+                return await self._aingest_remote_key(
+                    source=source,
+                    source_type="s3",
+                    namespace=str(bucket or "default"),
+                    key=key,
+                    source_uri=f"s3://{bucket}/{key}",
+                    replace=replace,
+                    title=kwargs.get("title"),
+                    author=kwargs.get("author"),
+                    metadata=kwargs.get("metadata"),
+                    metadata_policy=kwargs.get("metadata_policy"),
+                )
+
+            prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
+            keys = await source.alist_documents(prefix=prefix)
+            results = [
+                await self._aingest_remote_key(
+                    source=source,
+                    source_type="s3",
+                    namespace=str(bucket or "default"),
+                    key=str(item),
+                    source_uri=f"s3://{bucket}/{item}",
+                    replace=replace,
+                    title=kwargs.get("title"),
+                    author=kwargs.get("author"),
+                    metadata=kwargs.get("metadata"),
+                    metadata_policy=kwargs.get("metadata_policy"),
+                )
+                for item in keys
+            ]
+            return {"processed": len(results), "results": results}
+        finally:
+            if close is not None:
+                await close()
+
     async def aingest(
         self,
         source_type: Literal["local", "azure_blob", "s3"],
@@ -890,103 +867,28 @@ class RAGService:
         """
         self._ensure_initialized()
         await self._upsert_workspace_meta()
+        replace = self._resolve_replace(kwargs.get("replace"))
 
-        # Unified mode
-        if self.unified is not None:
-            return await unified_ingest(
-                engine=self.unified,
-                config=self.config,
-                hash_index=self._hash_index,
-                source_type=source_type,
-                metadata_index=self._metadata_index,
-                **kwargs,
-            )
-
-        if not self.ingestion:
-            raise RuntimeError("Ingestion pipeline not initialized")
-
-        ingestion = self.ingestion
-
-        # Get replace default from config if not explicitly set
-        def get_replace_value() -> bool:
-            replace_arg = kwargs.get("replace")
-            if replace_arg is None:
-                return self.config.ingestion_replace_default
-            return bool(replace_arg)
-
-        if source_type == "local":
+        if self._ingestion_engine is not None and source_type == "local":
             path_str = kwargs.get("path")
             if not path_str:
                 raise ValueError("'path' is required for local source_type")
-            path = Path(path_str)
-            replace = get_replace_value()
-            user_metadata = kwargs.get("metadata")
-
-            logger.info(f"Ingesting from local path: {path}")
-
-            result = await ingestion._aingest_from_local(
-                path=path,
+            return await self._aingest_local_file(
+                Path(path_str),
                 replace=replace,
-                user_metadata=user_metadata,
+                title=kwargs.get("title"),
+                author=kwargs.get("author"),
+                metadata=kwargs.get("metadata"),
+                metadata_policy=kwargs.get("metadata_policy"),
             )
-            return result.model_dump(exclude_none=True)
 
-        if source_type == "azure_blob":
-            container_name = kwargs.get("container_name")
-            if not container_name:
-                raise ValueError("'container_name' is required for azure_blob source_type")
-            blob_path = kwargs.get("blob_path")
-            prefix = kwargs.get("prefix")
-            replace = get_replace_value()
-            source = kwargs.get("source")
+        if self._ingestion_engine is not None and source_type == "azure_blob":
+            return await self._aingest_azure_blob(replace=replace, **kwargs)
 
-            if source is None:
-                from dlightrag.sourcing.azure_blob import AzureBlobDataSource
+        if self._ingestion_engine is not None and source_type == "s3":
+            return await self._aingest_s3(replace=replace, **kwargs)
 
-                source = AzureBlobDataSource(
-                    container_name=container_name,
-                    connection_string=self.config.blob_connection_string,
-                )
-
-            # Default to entire container if neither blob_path nor prefix provided
-            if blob_path is None and prefix is None:
-                prefix = ""
-
-            try:
-                result = await ingestion._aingest_from_azure_blob(
-                    source=source,
-                    container_name=container_name,
-                    blob_path=blob_path,
-                    prefix=prefix,
-                    replace=replace,
-                )
-                return result.model_dump(exclude_none=True)
-            finally:
-                if hasattr(source, "aclose"):
-                    await source.aclose()
-
-        # source_type == "s3"
-        bucket = kwargs.get("bucket")
-        key = kwargs.get("key")
-        if not bucket or not key:
-            raise ValueError("S3 ingestion requires 'bucket' and 'key'")
-        from dlightrag.sourcing.aws_s3 import S3DataSource
-
-        source = S3DataSource(bucket=bucket)
-        try:
-            content = await source.aload_document(key)
-            # Write to temp file and ingest. S3 objects can be large — keep
-            # the write off the event loop.
-            tmp_dir = self.config.temp_dir / "s3"
-            await asyncio.to_thread(tmp_dir.mkdir, parents=True, exist_ok=True)
-            local_path = tmp_dir / Path(key).name
-            await asyncio.to_thread(local_path.write_bytes, content)
-
-            replace = kwargs.get("replace", self.config.ingestion_replace_default)
-            result = await ingestion._aingest_from_local(path=local_path, replace=replace)
-            return result.model_dump(exclude_none=True)
-        finally:
-            await source.aclose()
+        raise RuntimeError("Ingestion engine not initialized")
 
     # === RETRIEVAL API ===
 
@@ -994,7 +896,7 @@ class RAGService:
         self,
         query: str,
         multimodal_content: list[dict[str, Any]] | None = None,
-        mode: Literal["local", "global", "hybrid", "naive", "mix"] | None = "mix",
+        mode: Literal["mix"] | None = "mix",
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         is_reretrieve: bool = False,
@@ -1025,51 +927,60 @@ class RAGService:
         # --- Step 1: Resolve metadata filter → candidate chunk_ids ---
         candidate_ids: set[str] | None = None
         effective_filters = filters
+        filter_source = "explicit" if filters is not None else None
         if effective_filters is None and _plan is not None:
             effective_filters = getattr(_plan, "metadata_filter", None)
+            filter_source = getattr(_plan, "metadata_filter_source", None)
 
-        if effective_filters:
-            try:
-                from dlightrag.core.retrieval.metadata_path import metadata_retrieve
-
-                lr = self._lightrag or getattr(self.rag, "lightrag", None)
-                assert self._metadata_index is not None  # set by initialize()
-                chunk_ids = await metadata_retrieve(
-                    self._metadata_index,
-                    effective_filters,
-                    lr,
-                    self.config.rag_mode,
-                )
-                if chunk_ids:
-                    candidate_ids = set(chunk_ids)
-                    logger.info("In-filter: %d candidate chunks from metadata", len(candidate_ids))
-                else:
-                    logger.info("Metadata filter matched 0 candidates, proceeding unfiltered")
-            except Exception as exc:
-                logger.warning("Metadata candidate resolution failed (non-fatal): %s", exc)
-
-        # --- Step 2: KG retrieval with in-filtering scope ---
-        from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-
-        async with metadata_filter_scope(candidate_ids):
-            kg_result = await backend.aretrieve(
+        if self._retrieval_orchestrator is not None:
+            kg_result = await self._retrieval_orchestrator.aretrieve(
                 query,
                 multimodal_content=multimodal_content,
-                mode=mode,
+                metadata_filter=effective_filters,
+                metadata_filter_source=filter_source,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
                 is_reretrieve=is_reretrieve,
                 **kwargs,
             )
+        else:
+            if effective_filters:
+                try:
+                    from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 
-        # --- Step 2b: Force-inject metadata-resolved chunks if missing ---
-        # Unified mode handles this inside VisualRetriever._retrieve (pre-rerank).
-        # Caption mode needs it here (post-rerank, since LightRAG controls reranking).
-        if candidate_ids:
-            returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
-            missing = candidate_ids - returned_cids
-            if missing:
-                await self._inject_candidate_chunks(kg_result, sorted(missing))
+                    assert self._metadata_index is not None
+                    assert self._chunk_provenance is not None
+                    chunk_ids = await metadata_retrieve(
+                        metadata_index=self._metadata_index,
+                        chunk_provenance=self._chunk_provenance,
+                        filters=effective_filters,
+                    )
+                    candidate_ids = set(chunk_ids)
+                    logger.info(
+                        "In-filter: %d candidate chunks from metadata", len(candidate_ids)
+                    )
+                except Exception as exc:
+                    logger.warning("Metadata candidate resolution failed; failing closed: %s", exc)
+                    candidate_ids = set()
+
+            from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
+
+            async with metadata_filter_scope(candidate_ids):
+                kg_result = await backend.aretrieve(
+                    query,
+                    multimodal_content=multimodal_content,
+                    mode="mix",
+                    top_k=top_k,
+                    chunk_top_k=chunk_top_k,
+                    is_reretrieve=is_reretrieve,
+                    **kwargs,
+                )
+
+            if candidate_ids:
+                returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
+                missing = candidate_ids - returned_cids
+                if missing:
+                    await self._inject_candidate_chunks(kg_result, sorted(missing))
 
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)
@@ -1089,7 +1000,7 @@ class RAGService:
         """Force-inject metadata-resolved chunks missing from retrieval results.
 
         Uses the shared ``fetch_missing_chunks`` helper for base text_chunks
-        retrieval, then enriches with visual_chunks data in unified mode.
+        retrieval, then enriches with visual_chunks data when present.
         """
         from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 
@@ -1106,7 +1017,7 @@ class RAGService:
         if not injected:
             return
 
-        # Enrich with visual_chunks data (unified mode)
+        # Enrich with visual_chunks data when present.
         if self._visual_chunks is not None:
             inject_ids = [c["chunk_id"] for c in injected]
             raw_visuals = await self._visual_chunks.get_by_ids(inject_ids)
@@ -1137,7 +1048,6 @@ class RAGService:
                 "filename_stem",
                 "ingested_at",
                 "custom_metadata",
-                "rag_mode",
                 "page_count",
                 "original_format",
                 # doc_title/doc_author already injected into reranker content
@@ -1201,9 +1111,34 @@ class RAGService:
         result = await self._metadata_index.get(doc_id)  # type: ignore[union-attr]
         return result if result else {}
 
-    async def aupdate_metadata(self, doc_id: str, data: dict[str, Any]) -> None:
+    async def aupdate_metadata(
+        self,
+        doc_id: str,
+        data: dict[str, Any],
+        *,
+        mode: Literal["merge", "replace"] = "merge",
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> None:
         """Update (merge) document metadata."""
-        await self._metadata_index.upsert(doc_id, data)  # type: ignore[union-attr]
+        from dlightrag.core.retrieval.metadata_fields import normalize_user_metadata
+
+        if self._metadata_index is None:
+            raise RuntimeError("Metadata index not initialized")
+        normalized = normalize_user_metadata(
+            data,
+            self._metadata_registry,
+            metadata_policy=metadata_policy or self._default_metadata_policy,
+            allow_ad_hoc_json=self._allow_ad_hoc_metadata,
+        )
+        await self._metadata_index.upsert(
+            doc_id,
+            {
+                "metadata_update_mode": mode,
+                "user_metadata": dict(data),
+                "metadata_filterable": normalized.filterable,
+                "metadata_json": normalized.raw_json,
+            },
+        )
 
     async def asearch_metadata(self, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
@@ -1216,11 +1151,9 @@ class RAGService:
     async def alist_ingested_files(self) -> list[dict[str, Any]]:
         """List all ingested files."""
         self._ensure_initialized()
-        if self.unified is not None:
+        if self._hash_index is not None:
             return await self._hash_index.list_all()
-        if not self.ingestion:
-            raise RuntimeError("Ingestion pipeline not initialized")
-        return await self.ingestion.alist_ingested_files()
+        return []
 
     async def alist_failed_docs(self) -> list[dict[str, Any]]:
         """Return all documents currently in DocStatus.FAILED for this workspace."""
@@ -1324,22 +1257,35 @@ class RAGService:
     ) -> list[dict[str, Any]]:
         """Unified file deletion."""
         self._ensure_initialized()
-        if self.unified is not None:
-            return await unified_delete_files(
-                engine=self.unified,
+        del delete_source
+        from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
+
+        identifiers = [*(file_paths or []), *(filenames or [])]
+        results: list[dict[str, Any]] = []
+        for identifier in identifiers:
+            ctx = await collect_deletion_context(
+                identifier=identifier,
                 hash_index=self._hash_index,
                 lightrag=self._lightrag,
-                file_paths=file_paths,
-                filenames=filenames,
                 metadata_index=self._metadata_index,
             )
-        if not self.ingestion:
-            raise RuntimeError("Ingestion pipeline not initialized")
-        return await self.ingestion.adelete_files(
-            file_paths=file_paths,
-            filenames=filenames,
-            delete_source=delete_source,
-        )
+            stats = await cascade_delete(
+                ctx=ctx,
+                lightrag=self._lightrag,
+                visual_chunks=self._visual_chunks,
+                hash_index=self._hash_index,
+                metadata_index=self._metadata_index,
+                document_artifacts=self._document_artifacts,
+                chunk_provenance=self._chunk_provenance,
+            )
+            if not ctx.doc_ids:
+                status = "not_found"
+            elif stats.get("errors"):
+                status = "deleted_with_errors"
+            else:
+                status = "deleted"
+            results.append({"identifier": identifier, "status": status, **stats})
+        return results
 
 
 __all__ = ["RAGService"]

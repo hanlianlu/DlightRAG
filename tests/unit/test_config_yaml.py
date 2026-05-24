@@ -15,14 +15,20 @@ from dlightrag.config import DlightragConfig, _find_yaml_config
 def yaml_config_dir(tmp_path, monkeypatch):
     """Create a config.yaml in a temp dir and cd into it."""
     config_data = {
-        "chat": {
-            "provider": "openai",
-            "model": "gemma4:26b-a4b-it-q8_0",
-            "base_url": "http://localhost:11434/v1",
+        "llm": {
+            "default": {
+                "provider": "openai",
+                "model": "gemma4:26b-a4b-it-q8_0",
+                "base_url": "http://localhost:11434/v1",
+            }
         },
-        "embedding": {"model": "text-embedding-3-large", "dim": 512},
+        "embedding": {
+            "provider": "openai_compatible",
+            "model": "text-embedding-3-large",
+            "dim": 512,
+            "startup_probe": False,
+        },
         "rerank": {"enabled": False},
-        "rag_mode": "unified",
         "top_k": 100,
         "kg_entity_types": ["Person", "Company"],
     }
@@ -58,12 +64,11 @@ class TestYamlConfigLoading:
         assert config.chat.base_url == "http://localhost:11434/v1"
         assert config.embedding.dim == 512
         assert config.rerank.enabled is False
-        assert config.rag_mode == "unified"
         assert config.top_k == 100
         assert config.kg_entity_types == ["Person", "Company"]
 
     def test_env_overrides_yaml(self, yaml_config_dir, monkeypatch):
-        monkeypatch.setenv("DLIGHTRAG_CHAT__MODEL", "gpt-4.1")
+        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-4.1")
         monkeypatch.setenv("DLIGHTRAG_TOP_K", "200")
 
         config = DlightragConfig()
@@ -82,8 +87,13 @@ class TestBackwardCompat:
         """Pure .env users should not be affected."""
         monkeypatch.chdir(tmp_path)
         config = DlightragConfig(
-            embedding={"model": "text-embedding-3-large", "api_key": "test"},
-            chat={"model": "gpt-4.1-mini", "api_key": "test"},
+            embedding={
+                "provider": "openai_compatible",
+                "model": "text-embedding-3-large",
+                "api_key": "test",
+                "startup_probe": False,
+            },
+            llm={"default": {"model": "gpt-4.1-mini", "api_key": "test"}},
         )
         assert config.chat.model == "gpt-4.1-mini"
         assert config.embedding.model == "text-embedding-3-large"
@@ -91,11 +101,11 @@ class TestBackwardCompat:
     def test_env_vars_still_work_without_yaml(self, tmp_path, monkeypatch):
         """DLIGHTRAG_* env vars should work exactly as before."""
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("DLIGHTRAG_CHAT__MODEL", "gpt-4.1")
+        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-4.1")
+        monkeypatch.setenv("DLIGHTRAG_EMBEDDING__PROVIDER", "openai_compatible")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__MODEL", "text-embedding-3-large")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__API_KEY", "test")
-        monkeypatch.setenv("DLIGHTRAG_RAG_MODE", "unified")
+        monkeypatch.setenv("DLIGHTRAG_EMBEDDING__STARTUP_PROBE", "false")
 
         config = DlightragConfig()
         assert config.chat.model == "gpt-4.1"
-        assert config.rag_mode == "unified"

@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Metadata retrieval path — resolves metadata filters to chunk IDs."""
+"""Metadata retrieval path: resolve hard filters to provenance chunk IDs."""
 
 from __future__ import annotations
 
@@ -13,83 +13,21 @@ logger = logging.getLogger(__name__)
 
 
 async def metadata_retrieve(
+    *,
     metadata_index: MetadataIndexProtocol,
+    chunk_provenance: Any,
     filters: MetadataFilter,
-    lightrag: Any,
-    rag_mode: str,
 ) -> list[str]:
-    """Retrieve chunk_ids matching the given metadata filters.
-
-    Flow: MetadataIndex.query(filters) → doc_ids → resolve to chunk_ids.
-
-    Resolution strategy depends on rag_mode:
-    - caption: doc_status stores chunks_list per doc
-    - unified: chunk_ids are computed from doc_id + page_count
-      (page_count is read from dlightrag_doc_metadata, not LightRAG's
-      full_docs table which doesn't persist it)
-    """
+    """Resolve metadata filters to chunk IDs through DlightRAG provenance."""
     doc_ids = await metadata_index.query(filters)
     if not doc_ids:
+        logger.info("[MetadataPath] filters matched 0 documents")
         return []
 
+    chunk_ids = await chunk_provenance.chunk_ids_for_docs(doc_ids)
     logger.info(
-        "[MetadataPath] filters matched %d doc(s): %s",
+        "[MetadataPath] filters matched %d doc(s), resolved %d chunk(s)",
         len(doc_ids),
-        doc_ids[:5],
+        len(chunk_ids),
     )
-
-    chunk_ids: list[str] = []
-    for doc_id in doc_ids:
-        resolved = await _resolve_chunks_for_doc(doc_id, metadata_index, lightrag, rag_mode)
-        chunk_ids.extend(resolved)
-
-    logger.info("[MetadataPath] resolved %d chunk(s) total", len(chunk_ids))
-
-    return chunk_ids
-
-
-async def _resolve_chunks_for_doc(
-    doc_id: str,
-    metadata_index: MetadataIndexProtocol,
-    lightrag: Any,
-    rag_mode: str,
-) -> list[str]:
-    """Resolve a doc_id to its chunk_ids."""
-    if rag_mode == "unified":
-        return await _resolve_unified(doc_id, metadata_index)
-    return await _resolve_caption(doc_id, lightrag)
-
-
-async def _resolve_caption(doc_id: str, lightrag: Any) -> list[str]:
-    """Caption mode: read chunks_list from doc_status."""
-    try:
-        doc_info = await lightrag.doc_status.get_by_id(doc_id)
-        if doc_info:
-            return doc_info.get("chunks_list", [])
-    except Exception as exc:
-        logger.warning("[MetadataPath] caption chunk resolution failed for %s: %s", doc_id, exc)
-    return []
-
-
-async def _resolve_unified(doc_id: str, metadata_index: MetadataIndexProtocol) -> list[str]:
-    """Unified mode: compute chunk_ids from doc_id + page_count.
-
-    Reads page_count from dlightrag_doc_metadata (our table) rather than
-    LightRAG's full_docs table, which silently drops page_count on upsert.
-    """
-    try:
-        from lightrag.utils import compute_mdhash_id
-
-        doc_meta = await metadata_index.get(doc_id)
-        if not doc_meta:
-            logger.warning("[MetadataPath] metadata has no entry for %s", doc_id)
-            return []
-        page_count = doc_meta.get("page_count", 0)
-        if not isinstance(page_count, int) or page_count <= 0:
-            logger.warning("[MetadataPath] invalid page_count for %s: %r", doc_id, page_count)
-            return []
-        logger.info("[MetadataPath] doc %s: %d pages", doc_id[:20], page_count)
-        return [compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-") for i in range(page_count)]
-    except Exception as exc:
-        logger.warning("[MetadataPath] unified chunk resolution failed for %s: %s", doc_id, exc)
-    return []
+    return list(chunk_ids)

@@ -8,7 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, reset_config, set_config
+from dlightrag.config import (
+    DlightragConfig,
+    EmbeddingConfig,
+    LLMConfig,
+    ModelConfig,
+    reset_config,
+    set_config,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -36,18 +43,18 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
     """
     cfg = DlightragConfig(  # type: ignore[call-arg]
         working_dir=str(tmp_working_dir),
-        chat=ModelConfig(
-            model="gpt-4.1-mini",
-            api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+        llm=LLMConfig(
+            default=ModelConfig(
+                model="gpt-4.1-mini",
+                api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+            )
         ),
         embedding=EmbeddingConfig(
-            api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests")
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
+            startup_probe=False,
         ),
-        # Use JSON storage for unit tests (no PG dependency)
-        kv_storage="JsonKVStorage",
-        doc_status_storage="JsonDocStatusStorage",
-        vector_storage="NanoVectorDBStorage",
-        graph_storage="NetworkXStorage",
     )
     set_config(cfg)
     return cfg

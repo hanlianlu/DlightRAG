@@ -23,7 +23,6 @@ class MetadataFilterRequest(BaseModel):
     doc_author: str | None = None
     date_from: str | None = None
     date_to: str | None = None
-    rag_mode: str | None = None
     custom: dict[str, Any] | None = None
 
 
@@ -59,7 +58,7 @@ class IngestRequest(BaseModel):
 
 class RetrieveRequest(BaseModel):
     query: str
-    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix"
+    mode: Literal["mix"] = "mix"
     top_k: int | None = None
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
@@ -68,7 +67,7 @@ class RetrieveRequest(BaseModel):
 
 class AnswerRequest(BaseModel):
     query: str
-    mode: Literal["local", "global", "hybrid", "naive", "mix"] = "mix"
+    mode: Literal["mix"] = "mix"
     stream: bool
     top_k: int | None = None
     chunk_top_k: int | None = None
@@ -80,7 +79,7 @@ class AnswerRequest(BaseModel):
     OpenAI ``image_url`` content blocks. Each item is either a URL/data
     URI string or a pre-built ``{"type":"image_url","image_url":{...}}``
     dict. Distinct from ``multimodal_content`` (which drives visual
-    retrieval in unified mode); pass both if you want the same images
+    retrieval); pass both if you want the same images
     used for both retrieval and answer reasoning."""
 
     @field_validator("multimodal_content")
@@ -117,6 +116,8 @@ class ResetRequest(BaseModel):
 
 class MetadataUpdateRequest(BaseModel):
     metadata: dict[str, Any]
+    mode: Literal["merge", "replace"] = "merge"
+    metadata_policy: Literal["validate", "reject_unknown", "store_only"] | None = None
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -47,7 +47,13 @@ async def update_metadata(
 
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
-    await manager.aupdate_metadata(ws, doc_id, body.metadata)
+    await manager.aupdate_metadata(
+        ws,
+        doc_id,
+        body.metadata,
+        mode=body.mode,
+        metadata_policy=body.metadata_policy,
+    )
     return {"status": "success", "doc_id": doc_id}
 
 

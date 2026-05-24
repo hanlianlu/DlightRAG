@@ -3,95 +3,37 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+from unittest.mock import AsyncMock
 
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
-@pytest.fixture
-def mock_metadata_index():
-    idx = AsyncMock()
-    return idx
+async def test_metadata_retrieve_uses_chunk_provenance() -> None:
+    metadata_index = AsyncMock()
+    metadata_index.query.return_value = ["doc-1"]
+    chunk_provenance = AsyncMock()
+    chunk_provenance.chunk_ids_for_docs.return_value = ["chunk-a", "chunk-b"]
+
+    result = await metadata_retrieve(
+        metadata_index=metadata_index,
+        chunk_provenance=chunk_provenance,
+        filters=MetadataFilter(filename="x.pdf"),
+    )
+
+    assert result == ["chunk-a", "chunk-b"]
 
 
-@pytest.fixture
-def mock_lightrag():
-    lr = MagicMock()
-    lr.doc_status = AsyncMock()
-    lr.full_docs = AsyncMock()
-    return lr
+async def test_metadata_retrieve_empty_docs_short_circuits() -> None:
+    metadata_index = AsyncMock()
+    metadata_index.query.return_value = []
+    chunk_provenance = AsyncMock()
 
+    result = await metadata_retrieve(
+        metadata_index=metadata_index,
+        chunk_provenance=chunk_provenance,
+        filters=MetadataFilter(filename="missing.pdf"),
+    )
 
-class TestMetadataRetrieveCaption:
-    @pytest.mark.asyncio
-    async def test_resolves_caption_chunks(self, mock_metadata_index, mock_lightrag) -> None:
-        mock_metadata_index.query.return_value = ["doc-1"]
-        mock_lightrag.doc_status.get_by_id = AsyncMock(
-            return_value={"chunks_list": ["chunk-a", "chunk-b"]}
-        )
-        result = await metadata_retrieve(
-            mock_metadata_index,
-            MetadataFilter(filename="test.pdf"),
-            mock_lightrag,
-            rag_mode="caption",
-        )
-        assert result == ["chunk-a", "chunk-b"]
-
-    @pytest.mark.asyncio
-    async def test_no_matching_docs(self, mock_metadata_index, mock_lightrag) -> None:
-        mock_metadata_index.query.return_value = []
-        result = await metadata_retrieve(
-            mock_metadata_index,
-            MetadataFilter(filename="missing.pdf"),
-            mock_lightrag,
-            rag_mode="caption",
-        )
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_multiple_docs(self, mock_metadata_index, mock_lightrag) -> None:
-        mock_metadata_index.query.return_value = ["doc-1", "doc-2"]
-        mock_lightrag.doc_status.get_by_id = AsyncMock(
-            side_effect=[
-                {"chunks_list": ["chunk-a"]},
-                {"chunks_list": ["chunk-b", "chunk-c"]},
-            ]
-        )
-        result = await metadata_retrieve(
-            mock_metadata_index,
-            MetadataFilter(doc_author="Zhang San"),
-            mock_lightrag,
-            rag_mode="caption",
-        )
-        assert result == ["chunk-a", "chunk-b", "chunk-c"]
-
-
-class TestMetadataRetrieveUnified:
-    @pytest.mark.asyncio
-    async def test_resolves_unified_chunks(self, mock_metadata_index, mock_lightrag) -> None:
-        mock_metadata_index.query.return_value = ["doc-1"]
-        mock_metadata_index.get = AsyncMock(return_value={"page_count": 3})
-        with patch("lightrag.utils.compute_mdhash_id") as mock_hash:
-            mock_hash.side_effect = lambda s, prefix="": f"{prefix}{s}"
-            result = await metadata_retrieve(
-                mock_metadata_index,
-                MetadataFilter(filename="doc.pdf"),
-                mock_lightrag,
-                rag_mode="unified",
-            )
-        assert len(result) == 3
-
-    @pytest.mark.asyncio
-    async def test_unified_missing_doc(self, mock_metadata_index, mock_lightrag) -> None:
-        mock_metadata_index.query.return_value = ["doc-missing"]
-        mock_metadata_index.get = AsyncMock(return_value=None)
-        result = await metadata_retrieve(
-            mock_metadata_index,
-            MetadataFilter(filename="missing.pdf"),
-            mock_lightrag,
-            rag_mode="unified",
-        )
-        assert result == []
+    assert result == []
+    chunk_provenance.chunk_ids_for_docs.assert_not_called()

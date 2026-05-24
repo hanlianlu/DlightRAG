@@ -1,19 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Hash-based content deduplication for RAG ingestion.
 
-Provides content-addressable storage tracking via SHA256 hashes.
-Two backends: PGHashIndex (PostgreSQL via LightRAG's shared pool) for
-production, HashIndex (JSON file) as fallback for local/single-process
-deployments.
+Provides PostgreSQL-backed content-addressable storage tracking via SHA256
+hashes.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -156,155 +152,6 @@ def _hash_file_bytes(file_path: Path, chunk_size: int = 8192) -> str:
         for chunk in iter(lambda: f.read(chunk_size), b""):
             sha256_hash.update(chunk)
     return f"sha256:{sha256_hash.hexdigest()}"
-
-
-class HashIndex:
-    """JSON file-based content hash index for deduplication.
-
-    Used as fallback when PostgreSQL is not the storage backend.
-    For PostgreSQL, use PGHashIndex instead.
-    """
-
-    def __init__(self, working_dir: Path, workspace: str = "default") -> None:
-        self._workspace = workspace
-        if workspace:
-            self._working_dir = working_dir / workspace
-        else:
-            self._working_dir = working_dir
-        self._working_dir.mkdir(parents=True, exist_ok=True)
-        self._cache: dict[str, dict[str, Any]] | None = None
-
-    def _get_index_path(self) -> Path:
-        return self._working_dir / "file_content_hashes.json"
-
-    def _load(self) -> dict[str, dict[str, Any]]:
-        if self._cache is not None:
-            return self._cache
-
-        index_path = self._get_index_path()
-        if not index_path.exists():
-            self._cache = {}
-            return self._cache
-
-        try:
-            loaded: dict[str, dict[str, Any]] = json.loads(index_path.read_text())
-            self._cache = loaded
-        except Exception as exc:
-            logger.warning(f"Failed to load hash index: {exc}")
-            self._cache = {}
-
-        return self._cache or {}
-
-    def _save(self) -> None:
-        if self._cache is None:
-            return
-        index_path = self._get_index_path()
-        temp_path = index_path.with_suffix(".tmp")
-        try:
-            temp_path.write_text(json.dumps(self._cache, indent=2))
-            temp_path.replace(index_path)
-        except Exception as exc:
-            logger.warning(f"Failed to save hash index: {exc}")
-            if temp_path.exists():
-                temp_path.unlink()
-
-    def invalidate(self) -> None:
-        self._cache = None
-
-    async def clear(self) -> None:
-        """Remove all hash entries (used by reset)."""
-        self._cache = {}
-        index_path = self._get_index_path()
-        if index_path.exists():
-            index_path.unlink()
-        logger.info("HashIndex cleared")
-
-    async def check_exists(self, content_hash: str) -> tuple[bool, str | None]:
-        index = self._load()
-        entry = index.get(content_hash)
-        if entry:
-            return (True, entry.get("doc_id"))
-        return (False, None)
-
-    def lookup(self, content_hash: str) -> dict[str, Any] | None:
-        """Return the full entry dict for a content hash, or None."""
-        index = self._load()
-        return index.get(content_hash)
-
-    async def register(self, content_hash: str, doc_id: str, file_path: str) -> None:
-        index = self._load()
-        index[content_hash] = {
-            "doc_id": doc_id,
-            "file_path": file_path,
-            "created_at": datetime.now(UTC).isoformat(),
-        }
-        self._save()
-
-    async def remove(self, content_hash: str) -> bool:
-        index = self._load()
-        if content_hash in index:
-            del index[content_hash]
-            self._save()
-            return True
-        return False
-
-    async def should_skip_file(
-        self,
-        file_path: Path,
-        replace: bool,
-    ) -> tuple[bool, str | None, str | None]:
-        content_hash = await asyncio.to_thread(compute_file_hash, file_path)
-        if replace:
-            return (False, content_hash, None)
-        exists, doc_id = await self.check_exists(content_hash)
-        if exists:
-            logger.info(f"Skipping duplicate: {file_path.name} (hash matches doc_id={doc_id})")
-            return (True, content_hash, f"Duplicate of {doc_id}")
-        return (False, content_hash, None)
-
-    @staticmethod
-    def generate_doc_id_from_path(file_path: Path) -> str:
-        return file_path.stem
-
-    async def find_by_path(self, file_path: str) -> tuple[str | None, str | None, str | None]:
-        index = self._load()
-        for h, info in index.items():
-            if info.get("file_path") == file_path:
-                return (info.get("doc_id"), h, info.get("file_path"))
-        return (None, None, None)
-
-    async def find_by_name(self, filename: str) -> tuple[str | None, str | None, str | None]:
-        index = self._load()
-        for h, info in index.items():
-            stored_path = info.get("file_path", "")
-            if Path(stored_path).name == filename:
-                return (info.get("doc_id"), h, stored_path)
-        return (None, None, None)
-
-    async def find_by_hash(self, content_hash: str) -> tuple[str | None, str | None, str | None]:
-        info = self.lookup(content_hash)
-        if info is None:
-            return (None, None, None)
-        return (info.get("doc_id"), content_hash, info.get("file_path"))
-
-    async def list_all(self) -> list[dict[str, Any]]:
-        self.invalidate()
-        index = self._load()
-        results = []
-        for content_hash, info in index.items():
-            file_path = info.get("file_path", "")
-            source_type = derive_source_type(file_path)
-            results.append(
-                {
-                    "file_path": file_path,
-                    "doc_id": info.get("doc_id", ""),
-                    "source_type": source_type,
-                    "file_name": Path(file_path).name,
-                    "content_hash": content_hash,
-                    "created_at": info.get("created_at", ""),
-                }
-            )
-        return results
 
 
 class PGHashIndex:
@@ -480,7 +327,6 @@ class PGHashIndex:
 
 __all__ = [
     "HashIndexProtocol",
-    "HashIndex",
     "PGHashIndex",
     "compute_file_hash",
     "derive_source_type",
