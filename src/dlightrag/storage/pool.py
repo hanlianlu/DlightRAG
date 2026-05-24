@@ -22,6 +22,8 @@ import logging
 
 import asyncpg
 
+from dlightrag.config import PostgresTarget
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MIN_SIZE = 2
@@ -29,10 +31,10 @@ _DEFAULT_MAX_SIZE = 10
 
 
 class PGPool:
-    """Lazy-created asyncpg pool singleton with double-check locking."""
+    """Lazy-created asyncpg pools keyed by primary/replica target."""
 
     def __init__(self) -> None:
-        self._pool: asyncpg.Pool | None = None
+        self._pools: dict[PostgresTarget, asyncpg.Pool] = {}
         self._lock: asyncio.Lock | None = None
 
     def _get_lock(self) -> asyncio.Lock:
@@ -40,44 +42,53 @@ class PGPool:
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def get(self) -> asyncpg.Pool:
-        """Return the shared pool, creating it on first call."""
-        if self._pool is not None:
-            return self._pool
-        async with self._get_lock():
-            if self._pool is not None:
-                return self._pool
-            from dlightrag.config import get_config
+    async def get(self, target: PostgresTarget | None = None) -> asyncpg.Pool:
+        """Return a shared pool, creating it on first call."""
+        from dlightrag.config import get_config
 
-            config = get_config()
+        config = get_config()
+        resolved_target = target or config.pg_target_for_runtime()
+        if resolved_target in self._pools:
+            return self._pools[resolved_target]
+        async with self._get_lock():
+            if resolved_target in self._pools:
+                return self._pools[resolved_target]
+
             min_size = getattr(config, "postgres_pool_min_size", _DEFAULT_MIN_SIZE)
             max_size = getattr(config, "postgres_pool_max_size", _DEFAULT_MAX_SIZE)
-            self._pool = await asyncpg.create_pool(
-                host=config.postgres_host,
-                port=config.postgres_port,
-                user=config.postgres_user,
-                password=config.postgres_password,
-                database=config.postgres_database,
+            endpoint = config.pg_connection_kwargs(resolved_target)
+            pool = await asyncpg.create_pool(
+                host=endpoint["host"],
+                port=endpoint["port"],
+                user=endpoint["user"],
+                password=endpoint["password"],
+                database=endpoint["database"],
                 min_size=min_size,
                 max_size=max_size,
             )
+            self._pools[resolved_target] = pool
             logger.info(
-                "DlightRAG domain store pool created (min=%d, max=%d)",
+                "DlightRAG %s domain store pool created (min=%d, max=%d)",
+                resolved_target,
                 min_size,
                 max_size,
             )
-            return self._pool
+            return pool
 
-    async def close(self) -> None:
-        """Close the pool. Safe to call multiple times."""
-        if self._pool is not None:
+    async def close(self, target: PostgresTarget | None = None) -> None:
+        """Close one pool or all pools. Safe to call multiple times."""
+        targets: list[PostgresTarget] = [target] if target is not None else ["primary", "replica"]
+        for resolved_target in targets:
+            pool = self._pools.get(resolved_target)
+            if pool is None:
+                continue
             try:
-                await self._pool.close()
-                logger.info("DlightRAG domain store pool closed")
+                await pool.close()
+                logger.info("DlightRAG %s domain store pool closed", resolved_target)
             except Exception:
                 logger.warning("DlightRAG domain store pool close failed", exc_info=True)
             finally:
-                self._pool = None
+                self._pools.pop(resolved_target, None)
 
 
 pg_pool = PGPool()

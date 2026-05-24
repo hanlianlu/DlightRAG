@@ -26,6 +26,8 @@ async def health(request: Request) -> dict[str, Any]:
     status: dict[str, Any] = {
         "status": "degraded" if is_degraded else "healthy",
         "rag_initialized": manager.is_ready(),
+        "runtime_role": config.runtime_role,
+        "postgres_target": config.pg_target_for_runtime(),
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {
@@ -41,13 +43,7 @@ async def health(request: Request) -> dict[str, Any]:
     try:
         import asyncpg
 
-        conn = await asyncpg.connect(
-            host=config.postgres_host,
-            port=config.postgres_port,
-            user=config.postgres_user,
-            password=config.postgres_password,
-            database=config.postgres_database,
-        )
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
         await conn.fetchval("SELECT 1")
         await conn.close()
         status["postgres"] = "connected"

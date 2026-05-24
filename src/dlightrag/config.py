@@ -23,6 +23,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
+PostgresTarget = Literal["primary", "replica"]
 
 
 def _find_env_file() -> Path | None:
@@ -200,11 +201,29 @@ class DlightragConfig(BaseSettings):
         return tuple(sources)
 
     # ===== PostgreSQL (Default Storage Backend) =====
+    runtime_role: Literal["ingest", "admin", "query"] = Field(
+        default="ingest",
+        description="Process role. ingest/admin use primary PostgreSQL; query uses replica.",
+    )
     postgres_host: str = Field(default="localhost")
     postgres_port: int = Field(default=5432)
     postgres_user: str = Field(default="dlightrag")
     postgres_password: str = Field(default="dlightrag")
     postgres_database: str = Field(default="dlightrag")
+    postgres_primary_host: str | None = Field(default=None)
+    postgres_primary_port: int | None = Field(default=None)
+    postgres_primary_user: str | None = Field(default=None)
+    postgres_primary_password: str | None = Field(default=None)
+    postgres_primary_database: str | None = Field(default=None)
+    postgres_replica_host: str | None = Field(default=None)
+    postgres_replica_port: int | None = Field(default=None)
+    postgres_replica_user: str | None = Field(default=None)
+    postgres_replica_password: str | None = Field(default=None)
+    postgres_replica_database: str | None = Field(default=None)
+    read_after_write_mode: Literal["eventual", "wait_for_replay", "primary_route"] = Field(
+        default="eventual",
+        description="Replica read-after-write policy exposed to admin/query surfaces.",
+    )
     postgres_pool_min_size: int = Field(
         default=2, description="DlightRAG domain store pool min connections."
     )
@@ -466,14 +485,47 @@ class DlightragConfig(BaseSettings):
     def artifacts_dir(self) -> Path:
         return self.working_dir_path / "artifacts"
 
-    def model_post_init(self, __context) -> None:
-        """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
+    @property
+    def is_query_role(self) -> bool:
+        return self.runtime_role == "query"
+
+    @property
+    def is_writable_role(self) -> bool:
+        return self.runtime_role in {"ingest", "admin"}
+
+    def pg_target_for_runtime(self) -> PostgresTarget:
+        return "replica" if self.is_query_role else "primary"
+
+    def _pg_endpoint_value(self, target: PostgresTarget, field: str) -> Any:
+        if target == "primary":
+            value = getattr(self, f"postgres_primary_{field}")
+            return value if value is not None else getattr(self, f"postgres_{field}")
+
+        value = getattr(self, f"postgres_replica_{field}")
+        if value is not None:
+            return value
+        return self._pg_endpoint_value("primary", field)
+
+    def pg_connection_kwargs(self, target: PostgresTarget | None = None) -> dict[str, Any]:
+        """Return asyncpg connection kwargs for primary, replica, or current runtime role."""
+        resolved = target or self.pg_target_for_runtime()
+        return {
+            "host": self._pg_endpoint_value(resolved, "host"),
+            "port": self._pg_endpoint_value(resolved, "port"),
+            "user": self._pg_endpoint_value(resolved, "user"),
+            "password": self._pg_endpoint_value(resolved, "password"),
+            "database": self._pg_endpoint_value(resolved, "database"),
+        }
+
+    def apply_lightrag_backend_env(self, *, force: bool = False) -> None:
+        """Bridge this config's active PostgreSQL endpoint into LightRAG env vars."""
+        active_pg = self.pg_connection_kwargs()
         pg_env_map = {
-            "POSTGRES_HOST": self.postgres_host,
-            "POSTGRES_PORT": str(self.postgres_port),
-            "POSTGRES_USER": self.postgres_user,
-            "POSTGRES_PASSWORD": self.postgres_password,
-            "POSTGRES_DATABASE": self.postgres_database,
+            "POSTGRES_HOST": active_pg["host"],
+            "POSTGRES_PORT": str(active_pg["port"]),
+            "POSTGRES_USER": active_pg["user"],
+            "POSTGRES_PASSWORD": active_pg["password"],
+            "POSTGRES_DATABASE": active_pg["database"],
             "POSTGRES_WORKSPACE": self.workspace,
             "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
             "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
@@ -481,11 +533,15 @@ class DlightragConfig(BaseSettings):
             "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
         }
         for key, value in pg_env_map.items():
-            if key not in os.environ:
+            if force or key not in os.environ:
                 os.environ[key] = value
 
-        if "POSTGRES_SERVER_SETTINGS" not in os.environ:
+        if force or "POSTGRES_SERVER_SETTINGS" not in os.environ:
             os.environ["POSTGRES_SERVER_SETTINGS"] = f"hnsw.ef_search={self.pg_hnsw_ef_search}"
+
+    def model_post_init(self, __context) -> None:
+        """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
+        self.apply_lightrag_backend_env(force=False)
 
         # Resolve working_dir to absolute path
         path = Path(self.working_dir)

@@ -1,9 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""LightRAG deletion helpers.
-
-Provides doc_id lookup for the deletion pipeline. The actual data cleanup
-across all storage layers is handled by LightRAG's adelete_by_doc_id.
-"""
+"""LightRAG deletion helpers."""
 
 from __future__ import annotations
 
@@ -11,8 +7,6 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-from dlightrag.core.ingestion.hash_index import HashIndexProtocol
 
 logger = logging.getLogger(__name__)
 
@@ -26,43 +20,26 @@ class DeletionContext:
 
     identifier: str  # Original filename/path requested for deletion
     doc_ids: set[str] = field(default_factory=set)
-    content_hashes: set[str] = field(default_factory=set)
     file_paths: set[str] = field(default_factory=set)
     sources_used: list[str] = field(default_factory=list)  # For audit trail
 
 
 async def collect_deletion_context(
     identifier: str,
-    hash_index: HashIndexProtocol | None,
     lightrag: Any = None,
     metadata_index: Any = None,
 ) -> DeletionContext:
-    """Find doc_id(s) for a file using hash index, doc_status, and metadata index.
+    """Find doc_id(s) for a file using LightRAG doc_status and metadata index.
 
     Strategy order:
-    1. Hash index - authoritative source for content_hash -> doc_id
-    2. LightRAG doc_status - storage-agnostic lookup by file_path
-    3. Metadata index - filename-based lookup (PGMetadataIndex)
+    1. LightRAG doc_status - storage-agnostic lookup by file_path
+    2. Metadata index - filename-based lookup (PGMetadataIndex)
     """
     ctx = DeletionContext(identifier=identifier)
     basename = Path(identifier).name
     stem = Path(identifier).stem
 
-    # Strategy 1: Hash index lookup (fastest, authoritative)
-    if hash_index:
-        doc_id, content_hash, file_path = await hash_index.find_by_name(basename)
-        if not doc_id:
-            doc_id, content_hash, file_path = await hash_index.find_by_path(identifier)
-
-        if doc_id:
-            ctx.doc_ids.add(doc_id)
-            ctx.sources_used.append("hash_index")
-        if content_hash:
-            ctx.content_hashes.add(content_hash)
-        if file_path:
-            ctx.file_paths.add(file_path)
-
-    # Strategy 2: LightRAG doc_status lookup (storage-agnostic)
+    # Strategy 1: LightRAG doc_status lookup (storage-agnostic)
     if lightrag and hasattr(lightrag, "doc_status"):
         doc_status = lightrag.doc_status
         try:
@@ -99,7 +76,7 @@ async def collect_deletion_context(
         except Exception as e:
             logger.warning(f"LightRAG doc_status lookup failed for {identifier}: {e}")
 
-    # Strategy 3: Metadata index lookup (PGMetadataIndex by filename)
+    # Strategy 2: Metadata index lookup (PGMetadataIndex by filename)
     if metadata_index and not ctx.doc_ids:
         try:
             doc_ids = await metadata_index.find_by_filename(basename)
@@ -123,22 +100,20 @@ async def cascade_delete(
     ctx: DeletionContext,
     lightrag: Any,
     visual_chunks: Any | None = None,
-    hash_index: HashIndexProtocol | None = None,
     metadata_index: Any | None = None,
     document_artifacts: Any | None = None,
     chunk_provenance: Any | None = None,
 ) -> dict[str, Any]:
-    """5-layer cascade deletion with per-layer fault isolation.
+    """Cascade deletion with per-layer fault isolation.
 
     Each layer is wrapped in try/except so failures in one layer don't
     prevent cleanup in subsequent layers.
 
     Layers:
+        0. DlightRAG artifact/provenance sidecars
         1. LightRAG cross-backend cleanup (adelete_by_doc_id)
         2. Visual chunks (page images in PGJsonbKV, keyed by chunk_id)
         3. Metadata index entries
-        4. Hash index entries (by content_hash)
-        5. (Reserved for file source cleanup)
 
     Notes
     -----
@@ -203,90 +178,11 @@ async def cascade_delete(
                 stats["errors"].append(f"Layer 3 metadata ({doc_id}): {exc}")
                 logger.warning("cascade_delete Layer 3 failed for %s: %s", doc_id, exc)
 
-    # Layer 4: Hash index (by content_hash, not doc_id)
-    if hash_index is not None:
-        for h in ctx.content_hashes:
-            try:
-                await hash_index.remove(h)
-            except Exception as exc:
-                stats["errors"].append(f"Layer 4 hash ({h}): {exc}")
-                logger.warning("cascade_delete Layer 4 failed for hash %s: %s", h, exc)
-
     return stats
-
-
-async def purge_stale_for_hash(
-    *,
-    content_hash: str,
-    hash_index: HashIndexProtocol,
-    lightrag: Any,
-    visual_chunks: Any | None = None,
-    metadata_index: Any | None = None,
-) -> None:
-    """Cascade-delete the doc previously registered for ``content_hash``.
-
-    Used by ``replace=True`` ingest to purge a stale parallel record before
-    re-ingesting. Without this, ``replace`` semantics are incomplete: the new
-    ingest derives a fresh ``doc_id`` from its own path, so the second ingest
-    of the same bytes produces a *new* doc beside the old one — leaving stale
-    rows in chunks_vdb, KG, visual_chunks, metadata_index that diverge from
-    the latest content. Purging up front turns ``replace`` into a true upsert.
-
-    Best-effort: any failure is logged and skipped so the re-ingest still
-    proceeds. ``find_by_hash`` returning ``(None, None, None)`` is the no-op
-    case.
-    """
-    old_doc_id, _hash, old_path = await hash_index.find_by_hash(content_hash)
-    if not old_doc_id:
-        return
-
-    identifier = old_path or old_doc_id
-    try:
-        ctx = await collect_deletion_context(
-            identifier=identifier,
-            hash_index=hash_index,
-            lightrag=lightrag,
-            metadata_index=metadata_index,
-        )
-    except Exception:
-        logger.warning(
-            "Pre-replace purge: collect_deletion_context failed for hash=%s "
-            "(old_doc_id=%s); proceeding with re-ingest, stale record may remain",
-            content_hash,
-            old_doc_id,
-            exc_info=True,
-        )
-        return
-
-    if not ctx.doc_ids:
-        return
-
-    try:
-        await cascade_delete(
-            ctx=ctx,
-            lightrag=lightrag,
-            visual_chunks=visual_chunks,
-            hash_index=hash_index,
-            metadata_index=metadata_index,
-        )
-        logger.info(
-            "Pre-replace purge: cascaded %d stale doc_ids for hash=%s",
-            len(ctx.doc_ids),
-            content_hash,
-        )
-    except Exception:
-        logger.warning(
-            "Pre-replace purge: cascade_delete failed for hash=%s (doc_ids=%s); "
-            "proceeding with re-ingest, stale record may remain",
-            content_hash,
-            sorted(ctx.doc_ids),
-            exc_info=True,
-        )
 
 
 __all__ = [
     "DeletionContext",
     "cascade_delete",
     "collect_deletion_context",
-    "purge_stale_for_hash",
 ]

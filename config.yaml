@@ -95,8 +95,24 @@ max_context_tokens: 3000
 # ─────────────────────────────────────────────────────────────────
 
 workspace: default
+runtime_role: ingest   # ingest | admin | query
+read_after_write_mode: eventual  # eventual | wait_for_replay | primary_route
 postgres_required_major: 18
 postgres_min_minor: "18.4"
+
+# Backward-compatible primary endpoint fields.
+# Query workers use postgres_replica_* when runtime_role=query; omitted
+# replica fields fall back to the primary values for local/dev setups.
+# postgres_host: localhost
+# postgres_port: 5432
+# postgres_user: dlightrag
+# postgres_password: dlightrag
+# postgres_database: dlightrag
+# postgres_replica_host: replica.internal
+# postgres_replica_port: 5432
+# postgres_replica_user: dlightrag_reader
+# postgres_replica_password: ""
+# postgres_replica_database: dlightrag
 
 vector_storage: PGVectorStorage
 graph_storage: PGGraphStorage

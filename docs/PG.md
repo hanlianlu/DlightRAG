@@ -61,7 +61,25 @@ def _execute_needs_patch(method):
 
 ## PG Pool Architecture
 
-DlightRAG uses two asyncpg pools:
+DlightRAG uses role-aware PostgreSQL endpoints:
+
+```text
+dlightrag-ingest / admin API -> primary PostgreSQL
+dlightrag-query workers      -> hot standby / read replica PostgreSQL
+primary                      -> physical streaming replication -> replica
+```
+
+Set `runtime_role: ingest|admin|query`. Ingest/admin workers attach to the
+primary endpoint and may run DDL, write sidecar tables, update metadata, and
+perform resets. Query workers attach to `postgres_replica_*`, skip advisory
+locks and write-time initialization, verify that required LightRAG/DlightRAG
+tables already exist, and reject mutating APIs.
+
+This is process-level separation, not dynamic in-process read/write routing.
+Strong read-after-write flows should wait for replica replay or call an
+admin/ingest surface explicitly; ordinary query workers remain read-only.
+
+DlightRAG uses two asyncpg pools per process target:
 
 | Pool | Owner | Purpose |
 |---|---|---|
@@ -69,7 +87,19 @@ DlightRAG uses two asyncpg pools:
 | `pg_pool` singleton | DlightRAG | Metadata registry, document artifacts, chunk provenance, visual side tables |
 
 The dedicated DlightRAG pool avoids contention between LightRAG internals and
-domain side-table writes.
+domain side-table reads/writes. In query role, both pools attach to the replica
+and only read or verify schema.
+
+### Replica Requirements
+
+- PostgreSQL extension versions must match on primary and replica:
+  `pgvector`, Apache AGE, and `pg_textsearch`.
+- DDL and migrations run primary-only. Query workers never self-heal missing
+  tables or indexes.
+- `pg_textsearch` BM25 index creation is primary-only; query role verifies
+  `idx_lightrag_doc_chunks_bm25` exists.
+- Hot standby queries can conflict with WAL replay. Tune
+  `max_standby_streaming_delay` and `hot_standby_feedback` deliberately.
 
 ## Version Compatibility Log
 

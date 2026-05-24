@@ -27,6 +27,14 @@ class TestPGPoolGet:
         mock_config.postgres_database = "testdb"
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
+        mock_config.pg_target_for_runtime.return_value = "primary"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "testhost",
+            "port": 5432,
+            "user": "testuser",
+            "password": "testpass",
+            "database": "testdb",
+        }
 
         with (
             patch(
@@ -61,6 +69,14 @@ class TestPGPoolGet:
         mock_config.postgres_user = "u"
         mock_config.postgres_password = "p"
         mock_config.postgres_database = "db"
+        mock_config.pg_target_for_runtime.return_value = "primary"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "localhost",
+            "port": 5432,
+            "user": "u",
+            "password": "p",
+            "database": "db",
+        }
 
         with (
             patch(
@@ -82,12 +98,12 @@ class TestPGPoolGet:
 
         mock_pool = AsyncMock()
         pool = PGPool()
-        pool._pool = mock_pool  # inject directly, skip creation
+        pool._pools["primary"] = mock_pool  # inject directly, skip creation
 
         await pool.close()
 
         mock_pool.close.assert_called_once()
-        assert pool._pool is None
+        assert pool._pools == {}
 
     @pytest.mark.asyncio
     async def test_close_is_idempotent(self) -> None:
@@ -113,6 +129,14 @@ class TestPGPoolGet:
         mock_config.postgres_user = "u"
         mock_config.postgres_password = "p"
         mock_config.postgres_database = "db"
+        mock_config.pg_target_for_runtime.return_value = "primary"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "localhost",
+            "port": 5432,
+            "user": "u",
+            "password": "p",
+            "database": "db",
+        }
 
         with (
             patch(
@@ -128,3 +152,43 @@ class TestPGPoolGet:
         assert r1 is mock_pool1
         assert r2 is mock_pool2
         assert mock_create.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_query_runtime_uses_replica_pool(self) -> None:
+        """Query role resolves the default pool target to the configured replica."""
+        from dlightrag.storage.pool import PGPool
+
+        mock_pool = MagicMock()
+        pool = PGPool()
+
+        mock_config = MagicMock()
+        mock_config.postgres_pool_min_size = 2
+        mock_config.postgres_pool_max_size = 10
+        mock_config.pg_target_for_runtime.return_value = "replica"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "replica",
+            "port": 5433,
+            "user": "query_user",
+            "password": "query_pass",
+            "database": "dlightrag",
+        }
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+            ) as mock_create,
+            patch("dlightrag.config.get_config", return_value=mock_config),
+        ):
+            result = await pool.get()
+
+        assert result is mock_pool
+        mock_config.pg_connection_kwargs.assert_called_once_with("replica")
+        mock_create.assert_called_once_with(
+            host="replica",
+            port=5433,
+            user="query_user",
+            password="query_pass",
+            database="dlightrag",
+            min_size=2,
+            max_size=10,
+        )

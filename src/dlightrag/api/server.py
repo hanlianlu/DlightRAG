@@ -82,6 +82,14 @@ def create_app(*, include_web: bool = True) -> FastAPI:
         body = ErrorDetail(detail=exc.detail, error_type="unavailable")
         return JSONResponse(status_code=503, content=body.model_dump())
 
+    @application.exception_handler(PermissionError)
+    async def permission_error_handler(
+        request: Request,  # noqa: ARG001
+        exc: PermissionError,
+    ) -> JSONResponse:
+        body = ErrorDetail(detail=str(exc), error_type="validation")
+        return JSONResponse(status_code=409, content=body.model_dump())
+
     # -- API routes --
     application.include_router(router)
 

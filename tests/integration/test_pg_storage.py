@@ -5,8 +5,6 @@ Requires a running PostgreSQL instance with pgvector + AGE extensions.
 Skipped automatically if PostgreSQL is not available.
 
 Tests:
-- PGHashIndex CRUD
-- _ensure_pg_schema idempotent table/index creation
 - RAGServiceManager.list_workspaces() PG workspace discovery
 """
 
@@ -47,46 +45,6 @@ async def pg_check():
         pytest.skip("PostgreSQL not available")
 
 
-class TestPGHashIndex:
-    """Test PGHashIndex against real PostgreSQL."""
-
-    async def test_register_and_lookup(self, pg_check) -> None:
-        """Test register and lookup with real PostgreSQL."""
-        import asyncpg
-
-        from dlightrag.core.ingestion.hash_index import PGHashIndex
-
-        pool = await asyncpg.create_pool(
-            host="localhost",
-            port=5432,
-            user="dlightrag",
-            password="dlightrag",
-            database="dlightrag",
-        )
-        try:
-            index = PGHashIndex(pool=pool, workspace="test")
-            await index.initialize()
-
-            content_hash = "sha256:test_integration_hash"
-            await index.register(content_hash, "doc-int-001", "/test/file.pdf")
-
-            exists, doc_id = await index.check_exists(content_hash)
-            assert exists
-            assert doc_id == "doc-int-001"
-
-            # Cleanup
-            removed = await index.remove(content_hash)
-            assert removed
-            exists2, _ = await index.check_exists(content_hash)
-            assert not exists2
-        finally:
-            await pool.close()
-
-
-# ---------------------------------------------------------------------------
-# _ensure_pg_schema — idempotent table/index creation
-# ---------------------------------------------------------------------------
-
 _PG_CONN_KWARGS = dict(
     host="localhost",
     port=5432,
@@ -94,11 +52,6 @@ _PG_CONN_KWARGS = dict(
     password="dlightrag",
     database="dlightrag",
 )
-
-
-# TestEnsurePgSchema removed: _ensure_pg_schema() was eliminated in favor of
-# idempotent DDL in each store's initialize() method (ArtRAG parity).
-# Hash table creation is tested via PGHashIndex.initialize() tests.
 
 
 # ---------------------------------------------------------------------------
@@ -109,46 +62,44 @@ _PG_CONN_KWARGS = dict(
 class TestPGWorkspaceDiscovery:
     """Test workspace discovery via SELECT DISTINCT workspace."""
 
-    async def test_discovers_workspaces_from_hash_table(self, pg_check) -> None:
-        """list_workspaces() returns workspaces found in dlightrag_file_hashes."""
+    async def test_discovers_workspaces_from_workspace_meta(self, pg_check) -> None:
+        """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         import asyncpg
 
-        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
+        from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
 
         conn = await asyncpg.connect(**_PG_CONN_KWARGS)
         try:
-            # Ensure table exists
-            await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_file_hashes (
-                content_hash TEXT PRIMARY KEY,
-                doc_id TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                workspace TEXT NOT NULL DEFAULT 'default',
-                created_at TIMESTAMPTZ DEFAULT NOW()
+            await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
+                workspace TEXT PRIMARY KEY,
+                embedding_model TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
             )""")
 
             # Insert test rows for two workspaces
             await conn.execute(
-                "INSERT INTO dlightrag_file_hashes (content_hash, doc_id, file_path, workspace) "
-                "VALUES ($1, $2, $3, $4) ON CONFLICT (content_hash) DO NOTHING",
-                "sha256:ws_test_a",
-                "doc-a",
-                "/a.pdf",
+                "INSERT INTO dlightrag_workspace_meta (workspace, embedding_model) "
+                "VALUES ($1, $2) ON CONFLICT (workspace) DO UPDATE SET embedding_model = $2",
                 "project-alpha",
+                "voyage-multimodal-3.5",
             )
             await conn.execute(
-                "INSERT INTO dlightrag_file_hashes (content_hash, doc_id, file_path, workspace) "
-                "VALUES ($1, $2, $3, $4) ON CONFLICT (content_hash) DO NOTHING",
-                "sha256:ws_test_b",
-                "doc-b",
-                "/b.pdf",
+                "INSERT INTO dlightrag_workspace_meta (workspace, embedding_model) "
+                "VALUES ($1, $2) ON CONFLICT (workspace) DO UPDATE SET embedding_model = $2",
                 "project-beta",
+                "voyage-multimodal-3.5",
             )
 
             cfg = DlightragConfig(  # type: ignore[call-arg]
                 kv_storage="PGKVStorage",
-                chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
-                embedding=EmbeddingConfig(api_key="test"),
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="test",
+                    startup_probe=False,
+                ),
             )
             set_config(cfg)
 
@@ -160,37 +111,36 @@ class TestPGWorkspaceDiscovery:
         finally:
             # Cleanup test rows
             await conn.execute(
-                "DELETE FROM dlightrag_file_hashes WHERE content_hash IN ($1, $2)",
-                "sha256:ws_test_a",
-                "sha256:ws_test_b",
+                "DELETE FROM dlightrag_workspace_meta WHERE workspace IN ($1, $2)",
+                "project-alpha",
+                "project-beta",
             )
             await conn.close()
 
     async def test_empty_table_returns_default_workspace(self, pg_check) -> None:
-        """Empty hash table falls back to config.workspace."""
+        """Empty workspace metadata falls back to config.workspace."""
         import asyncpg
 
-        from dlightrag.config import DlightragConfig, EmbeddingConfig, ModelConfig, set_config
+        from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
 
         conn = await asyncpg.connect(**_PG_CONN_KWARGS)
         try:
-            # Ensure table exists but clear any test data
-            await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_file_hashes (
-                content_hash TEXT PRIMARY KEY,
-                doc_id TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                workspace TEXT NOT NULL DEFAULT 'default',
-                created_at TIMESTAMPTZ DEFAULT NOW()
+            await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
+                workspace TEXT PRIMARY KEY,
+                embedding_model TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
             )""")
-
-            # Count existing rows — only test if table is empty or we use unique prefix
-            # Use a unique workspace to avoid interference with real data
             cfg = DlightragConfig(  # type: ignore[call-arg]
                 kv_storage="PGKVStorage",
                 workspace="test-fallback-ws",
-                chat=ModelConfig(model="gpt-4.1-mini", api_key="test"),
-                embedding=EmbeddingConfig(api_key="test"),
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="test",
+                    startup_probe=False,
+                ),
             )
             set_config(cfg)
 
