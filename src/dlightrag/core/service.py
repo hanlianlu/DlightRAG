@@ -813,6 +813,51 @@ class RAGService:
             return self.config.ingestion_replace_default
         return bool(explicit)
 
+    async def _purge_existing_for_replace(
+        self,
+        *,
+        file_path: Path,
+        stored_file_path: str | None = None,
+    ) -> None:
+        """Delete an existing ingest target before replacing it."""
+        lightrag = self.lightrag
+        if lightrag is None:
+            return
+
+        from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
+
+        identifiers: list[str] = []
+        for candidate in (stored_file_path, str(file_path), file_path.name):
+            if candidate and candidate not in identifiers:
+                identifiers.append(candidate)
+
+        seen_doc_ids: set[str] = set()
+        for identifier in identifiers:
+            ctx = await collect_deletion_context(
+                identifier=identifier,
+                lightrag=lightrag,
+                metadata_index=self._metadata_index,
+            )
+            ctx.doc_ids.difference_update(seen_doc_ids)
+            if not ctx.doc_ids:
+                continue
+
+            stats = await cascade_delete(
+                ctx=ctx,
+                lightrag=lightrag,
+                visual_chunks=self._visual_chunks,
+                metadata_index=self._metadata_index,
+                document_artifacts=self._document_artifacts,
+                chunk_provenance=self._chunk_provenance,
+            )
+            seen_doc_ids.update(ctx.doc_ids)
+
+            errors = stats.get("errors") or []
+            if errors:
+                raise RuntimeError(
+                    f"replace cleanup failed for {identifier}: {'; '.join(map(str, errors))}"
+                )
+
     async def _aingest_local_file(
         self,
         file_path: Path,
@@ -827,6 +872,12 @@ class RAGService:
         """Ingest one local file through the unified LightRAG path."""
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
+
+        if replace:
+            await self._purge_existing_for_replace(
+                file_path=file_path,
+                stored_file_path=stored_file_path,
+            )
 
         result = await self._ingestion_engine.aingest_file(
             file_path,
