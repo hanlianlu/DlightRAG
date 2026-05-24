@@ -99,10 +99,7 @@ async def collect_deletion_context(
 async def cascade_delete(
     ctx: DeletionContext,
     lightrag: Any,
-    visual_chunks: Any | None = None,
     metadata_index: Any | None = None,
-    document_artifacts: Any | None = None,
-    chunk_provenance: Any | None = None,
 ) -> dict[str, Any]:
     """Cascade deletion with per-layer fault isolation.
 
@@ -110,36 +107,12 @@ async def cascade_delete(
     prevent cleanup in subsequent layers.
 
     Layers:
-        0. DlightRAG artifact/provenance sidecars
         1. LightRAG cross-backend cleanup (adelete_by_doc_id)
-        2. Visual chunks (page images in PGJsonbKV, keyed by chunk_id)
-        3. Metadata index entries
-
-    Notes
-    -----
-    ``visual_chunks`` (PGJsonbKVStorage) exposes ``delete(ids: list[str])``
-    but not ``delete_by_doc_id``.  Layer 2 therefore reads ``page_count``
-    from ``metadata_index`` to reconstruct the chunk IDs before calling
-    ``visual_chunks.delete()``.  This mirrors the logic that previously
-    lived inline in ``unified_delete_files()``.
+        2. DlightRAG metadata index entries
     """
     stats: dict[str, Any] = {"docs_deleted": 0, "errors": []}
 
     for doc_id in ctx.doc_ids:
-        if chunk_provenance is not None:
-            try:
-                await chunk_provenance.delete_doc(doc_id)
-            except Exception as exc:
-                stats["errors"].append(f"Layer 0 chunk_provenance ({doc_id}): {exc}")
-                logger.warning("cascade_delete chunk_provenance failed for %s: %s", doc_id, exc)
-
-        if document_artifacts is not None:
-            try:
-                await document_artifacts.delete_doc(doc_id)
-            except Exception as exc:
-                stats["errors"].append(f"Layer 0 document_artifacts ({doc_id}): {exc}")
-                logger.warning("cascade_delete document_artifacts failed for %s: %s", doc_id, exc)
-
         # Layer 1: LightRAG (full_docs, doc_status, text_chunks, chunks_vdb, KG)
         try:
             await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
@@ -148,35 +121,13 @@ async def cascade_delete(
             stats["errors"].append(f"Layer 1 LightRAG ({doc_id}): {exc}")
             logger.warning("cascade_delete Layer 1 failed for %s: %s", doc_id, exc)
 
-        # Layer 2: Visual chunks (reconstruct chunk_ids from metadata page_count)
-        if visual_chunks is not None and metadata_index is not None:
-            try:
-                from lightrag.utils import compute_mdhash_id
-
-                doc_meta = await metadata_index.get(doc_id)
-                page_count = (doc_meta or {}).get("page_count", 0)
-                if isinstance(page_count, int) and page_count > 0:
-                    chunk_ids = [
-                        compute_mdhash_id(f"{doc_id}:page:{i}", prefix="chunk-")
-                        for i in range(page_count)
-                    ]
-                    await visual_chunks.delete(chunk_ids)
-                    logger.info(
-                        "cascade_delete Layer 2: deleted %d visual_chunks for %s",
-                        len(chunk_ids),
-                        doc_id,
-                    )
-            except Exception as exc:
-                stats["errors"].append(f"Layer 2 visual_chunks ({doc_id}): {exc}")
-                logger.warning("cascade_delete Layer 2 failed for %s: %s", doc_id, exc)
-
-        # Layer 3: Metadata index
+        # Layer 2: DlightRAG metadata index
         if metadata_index is not None:
             try:
                 await metadata_index.delete(doc_id)
             except Exception as exc:
-                stats["errors"].append(f"Layer 3 metadata ({doc_id}): {exc}")
-                logger.warning("cascade_delete Layer 3 failed for %s: %s", doc_id, exc)
+                stats["errors"].append(f"Layer 2 metadata ({doc_id}): {exc}")
+                logger.warning("cascade_delete Layer 2 failed for %s: %s", doc_id, exc)
 
     return stats
 

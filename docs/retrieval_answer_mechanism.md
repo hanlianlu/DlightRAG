@@ -12,19 +12,19 @@ source file
   -> LightRAG parser sidecars
        text, tables, equations, document-derived images
   -> LightRAG ingest
-       chunks, entities, relationships, graph, text vectors
-  -> DlightRAG side tables
-       metadata registry, document artifacts, chunk provenance
+       chunks, entities, relationships, graph, text vectors, doc status
   -> direct image embedding
-       native images and parser-extracted image sidecars
+       native images and parser-extracted image sidecars into LightRAG chunks/vectors
+  -> DlightRAG metadata/BM25 layer
+       declared metadata index, in-filter scope, pg_textsearch BM25
   -> visual semantic projection
        VLM text for entity and relationship extraction over images
 ```
 
 Tables, equations, and document-derived image sidecars stay aligned with the
-LightRAG document record. Native images use the same metadata and provenance
-contract, but their visual similarity path stores direct image embeddings
-instead of embedding VLM captions.
+LightRAG document record. Native images create a LightRAG full-doc/doc-status
+parent and a direct image chunk, so deletion and metadata candidate resolution
+use the same LightRAG document/chunk authority as parsed documents.
 
 ## Query Pipeline
 
@@ -86,7 +86,7 @@ queries add a direct image vector path:
 ```text
 query + images
   |-- text query -> LightRAG mix + BM25
-  `-- images -> multimodal embedding(context="query") -> visual chunks
+  `-- images -> multimodal embedding(context="query") -> image chunks
 ```
 
 Document and sidecar images are embedded with document context at ingestion.

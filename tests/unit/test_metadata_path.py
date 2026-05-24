@@ -9,15 +9,15 @@ from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
-async def test_metadata_retrieve_uses_chunk_provenance() -> None:
+async def test_metadata_retrieve_uses_lightrag_text_chunks() -> None:
     metadata_index = AsyncMock()
     metadata_index.query.return_value = ["doc-1"]
-    chunk_provenance = AsyncMock()
-    chunk_provenance.chunk_ids_for_docs.return_value = ["chunk-a", "chunk-b"]
+    stores = AsyncMock()
+    stores.chunk_ids_for_docs.return_value = ["chunk-a", "chunk-b"]
 
     result = await metadata_retrieve(
         metadata_index=metadata_index,
-        chunk_provenance=chunk_provenance,
+        stores=stores,
         filters=MetadataFilter(filename="x.pdf"),
     )
 
@@ -27,13 +27,13 @@ async def test_metadata_retrieve_uses_chunk_provenance() -> None:
 async def test_metadata_retrieve_empty_docs_short_circuits() -> None:
     metadata_index = AsyncMock()
     metadata_index.query.return_value = []
-    chunk_provenance = AsyncMock()
+    stores = AsyncMock()
 
     result = await metadata_retrieve(
         metadata_index=metadata_index,
-        chunk_provenance=chunk_provenance,
+        stores=stores,
         filters=MetadataFilter(filename="missing.pdf"),
     )
 
     assert result == []
-    chunk_provenance.chunk_ids_for_docs.assert_not_called()
+    stores.chunk_ids_for_docs.assert_not_called()

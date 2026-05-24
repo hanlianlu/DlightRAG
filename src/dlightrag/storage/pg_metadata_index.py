@@ -69,9 +69,9 @@ _UPSERT = """\
 INSERT INTO dlightrag_doc_metadata
     (workspace, doc_id, filename, filename_stem, file_path, file_extension,
      doc_title, doc_author, creation_date, original_format,
-     page_count, ingest_strategy, parse_engine, process_options, artifact_status,
+     page_count, ingest_strategy, parse_engine, process_options,
      custom_metadata, metadata_json)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 ON CONFLICT (workspace, doc_id) DO UPDATE SET
     filename = COALESCE(EXCLUDED.filename, dlightrag_doc_metadata.filename),
     filename_stem = COALESCE(EXCLUDED.filename_stem, dlightrag_doc_metadata.filename_stem),
@@ -85,7 +85,6 @@ ON CONFLICT (workspace, doc_id) DO UPDATE SET
     ingest_strategy = COALESCE(EXCLUDED.ingest_strategy, dlightrag_doc_metadata.ingest_strategy),
     parse_engine = COALESCE(EXCLUDED.parse_engine, dlightrag_doc_metadata.parse_engine),
     process_options = COALESCE(EXCLUDED.process_options, dlightrag_doc_metadata.process_options),
-    artifact_status = COALESCE(EXCLUDED.artifact_status, dlightrag_doc_metadata.artifact_status),
     custom_metadata = dlightrag_doc_metadata.custom_metadata || EXCLUDED.custom_metadata,
     metadata_json = dlightrag_doc_metadata.metadata_json || EXCLUDED.metadata_json"""
 
@@ -138,7 +137,6 @@ class PGMetadataIndex:
         system["process_options"] = metadata.get("process_options") or metadata.get(
             "lightrag.process_options"
         )
-        system["artifact_status"] = metadata.get("artifact_status")
 
         filterable = metadata.get("metadata_filterable")
         if isinstance(filterable, dict):
@@ -173,7 +171,6 @@ class PGMetadataIndex:
                 system.get("ingest_strategy"),
                 system.get("parse_engine"),
                 _json_param(process_options),
-                system.get("artifact_status"),
                 json.dumps(custom),
                 json.dumps(metadata_json),
             )

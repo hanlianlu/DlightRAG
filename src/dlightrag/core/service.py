@@ -150,7 +150,6 @@ class RAGService:
         self.ingestion: Any = None
         self.retrieval: Any = None
         self._lightrag: Any = None  # Direct LightRAG reference
-        self._visual_chunks: Any = None  # Visual chunks KV store
         self._metadata_index: MetadataIndexProtocol | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
         self._metadata_registry: Any = None
@@ -159,8 +158,6 @@ class RAGService:
             self.config.metadata.default_ingest_policy
         )
         self._lightrag_stores: Any = None
-        self._document_artifacts: Any = None
-        self._chunk_provenance: Any = None
         self._ingestion_engine: Any = None
         self._bm25: Any = None
         self._retrieval_orchestrator: Any = None
@@ -286,11 +283,9 @@ class RAGService:
     async def _do_initialize_unified(self) -> None:
         """Initialize the direct LightRAG multimodal runtime.
 
-        Creates LightRAG directly, sets up visual_chunks KV store, and creates
-        the DlightRAG visual retrieval wrapper.
+        Creates LightRAG directly and wires DlightRAG's retrieval/metadata
+        orchestration around LightRAG's PostgreSQL stores.
         """
-        import dataclasses
-
         from lightrag import LightRAG
 
         config = self.config
@@ -344,14 +339,8 @@ class RAGService:
         logger.info("LightRAG storages initialized%s", " (read-only attach)" if read_only else "")
 
         from dlightrag.core.lightrag_stores import LightRAGStores
-        from dlightrag.storage.chunk_provenance import PGChunkProvenance
-        from dlightrag.storage.document_artifacts import PGDocumentArtifacts
 
         self._lightrag_stores = LightRAGStores(lightrag)
-        self._document_artifacts = PGDocumentArtifacts(workspace=config.workspace)
-        self._chunk_provenance = PGChunkProvenance(workspace=config.workspace)
-        await self._document_artifacts.initialize(read_only=read_only)
-        await self._chunk_provenance.initialize(read_only=read_only)
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
@@ -371,29 +360,10 @@ class RAGService:
         if not read_only:
             await self._verify_graph_labels(lightrag)
 
-        # Create visual_chunks KV store.
-        # LightRAG's PGKVStorage only supports 7 hardcoded namespaces; custom ones
-        # (like "visual_chunks") cause KeyError / silent no-op / SQL errors.
-        # See pg_jsonb_kv.py module docstring for details.
-        from dlightrag.storage.pg_jsonb_kv import PGJsonbKVStorage
-
-        kv_kwargs: dict[str, Any] = {
-            "namespace": "visual_chunks",
-            "workspace": config.workspace,
-            "global_config": dataclasses.asdict(lightrag),
-            "embedding_func": embedding_func,
-            "blob_field": "image_data",
-        }
-        visual_chunks = PGJsonbKVStorage(**kv_kwargs)
-        await visual_chunks.initialize(read_only=read_only)
-        self._visual_chunks = visual_chunks
-        logger.info("Visual chunks KV store initialized (PGJsonbKVStorage)")
-
         from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
 
         self._backend = LightRAGMixBackend(
             lightrag=lightrag,
-            visual_chunks=visual_chunks,
             embedder=multimodal_embedder,
             rerank_func=rerank_func,
         )
@@ -409,8 +379,6 @@ class RAGService:
             lightrag=lightrag,
             stores=self._lightrag_stores,
             metadata_index=self._metadata_index,
-            document_artifacts=self._document_artifacts,
-            chunk_provenance=self._chunk_provenance,
             multimodal_embedder=multimodal_embedder,
             vlm_func=vlm_func,
             workspace=config.workspace,
@@ -442,7 +410,7 @@ class RAGService:
             backend=self._backend,
             bm25=self._bm25,
             metadata_index=self._metadata_index,
-            chunk_provenance=self._chunk_provenance,
+            stores=self._lightrag_stores,
             rrf_k=config.rrf_k,
         )
 
@@ -707,11 +675,6 @@ class RAGService:
         # tasks that block asyncio.run() from exiting.
         await self._shutdown_worker_pools()
 
-        if self._visual_chunks is not None:
-            try:
-                await self._visual_chunks.finalize()
-            except Exception:  # noqa: BLE001
-                logger.warning("Failed to finalize visual_chunks", exc_info=True)
         if self._multimodal_embedder is not None:
             try:
                 await self._multimodal_embedder.aclose()
@@ -838,10 +801,7 @@ class RAGService:
             stats = await cascade_delete(
                 ctx=ctx,
                 lightrag=lightrag,
-                visual_chunks=self._visual_chunks,
                 metadata_index=self._metadata_index,
-                document_artifacts=self._document_artifacts,
-                chunk_provenance=self._chunk_provenance,
             )
             seen_doc_ids.update(ctx.doc_ids)
 
@@ -1139,10 +1099,10 @@ class RAGService:
                     from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 
                     assert self._metadata_index is not None
-                    assert self._chunk_provenance is not None
+                    assert self._lightrag_stores is not None
                     chunk_ids = await metadata_retrieve(
                         metadata_index=self._metadata_index,
-                        chunk_provenance=self._chunk_provenance,
+                        stores=self._lightrag_stores,
                         filters=effective_filters,
                     )
                     candidate_ids = set(chunk_ids)
@@ -1187,10 +1147,10 @@ class RAGService:
     async def _inject_candidate_chunks(self, result: RetrievalResult, chunk_ids: list[str]) -> None:
         """Force-inject metadata-resolved chunks missing from retrieval results.
 
-        Uses the shared ``fetch_missing_chunks`` helper for base text_chunks
-        retrieval, then enriches with visual_chunks data when present.
+        Uses the shared ``fetch_chunks_by_ids`` helper for base text_chunks
+        retrieval, then hydrates image bytes from LightRAG chunk sidecar data.
         """
-        from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
+        from dlightrag.core.retrieval.filtered_vdb import fetch_chunks_by_ids
 
         lr = self.lightrag
         if lr is None:
@@ -1199,21 +1159,16 @@ class RAGService:
         returned_cids: set[str] = {
             cid for c in result.contexts.get("chunks", []) if (cid := c.get("chunk_id"))
         }
-        injected = await fetch_missing_chunks(
-            lr.text_chunks, returned_cids, max_count=len(chunk_ids)
+        injected = await fetch_chunks_by_ids(
+            lr.text_chunks,
+            [c for c in chunk_ids if c not in returned_cids],
         )
         if not injected:
             return
 
-        # Enrich with visual_chunks data when present.
-        if self._visual_chunks is not None:
-            inject_ids = [c["chunk_id"] for c in injected]
-            raw_visuals = await self._visual_chunks.get_by_ids(inject_ids)
-            for chunk, vd in zip(injected, raw_visuals, strict=False):
-                if isinstance(vd, dict):
-                    chunk["file_path"] = vd.get("file_path", chunk.get("file_path", ""))
-                    chunk["image_data"] = vd.get("image_data")
-                    chunk["page_idx"] = (vd.get("page_index", 0) or 0) + 1
+        from dlightrag.core.retrieval.lightrag_backend import hydrate_image_chunks
+
+        await hydrate_image_chunks(lr, injected)
 
         chunks = result.contexts.get("chunks", [])
         result.contexts["chunks"] = chunks + injected
@@ -1238,8 +1193,6 @@ class RAGService:
                 "custom_metadata",
                 "page_count",
                 "original_format",
-                # doc_title/doc_author already injected into reranker content
-                # from visual_chunks — skip to avoid duplication in answer header.
                 "doc_title",
                 "doc_author",
             }
@@ -1475,10 +1428,7 @@ class RAGService:
             stats = await cascade_delete(
                 ctx=ctx,
                 lightrag=self._lightrag,
-                visual_chunks=self._visual_chunks,
                 metadata_index=self._metadata_index,
-                document_artifacts=self._document_artifacts,
-                chunk_provenance=self._chunk_provenance,
             )
             if not ctx.doc_ids:
                 status = "not_found"

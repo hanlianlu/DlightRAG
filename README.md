@@ -5,9 +5,9 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
 DlightRAG is a multimodal RAG service built on LightRAG main. It ingests
-documents and images into isolated workspaces, writes knowledge-graph,
-vector, BM25, metadata, artifact, and provenance state to PostgreSQL, and
-answers questions with cited text and image evidence.
+documents and images into isolated workspaces, lets LightRAG own parser
+sidecars, document status, chunks, knowledge graph, and vectors, and adds
+PostgreSQL metadata filtering, BM25, direct image retrieval, and cited answers.
 
 Use it as a Web UI, REST API, Python SDK, or MCP server for AI agents.
 
@@ -23,7 +23,7 @@ Browser / curl / Python / MCP client
   -> DlightRAG API + Web UI  (Docker or native, port 8100)
   -> PostgreSQL 18           (Docker, port 5432)
   -> LightRAG main           (parser sidecars, KG, vectors, doc status)
-  -> DlightRAG stores        (metadata, artifacts, provenance, visual chunks, BM25)
+  -> DlightRAG stores        (metadata index, BM25, workspace/role metadata)
 ```
 
 ### Prerequisites
@@ -164,10 +164,10 @@ source file
        text, tables, equations, document-derived images
   -> LightRAG ingest
        chunks, entities, relationships, graph, text vectors, doc status
-  -> DlightRAG side tables
-       metadata registry, document artifacts, chunk provenance
   -> direct image embedding
-       native images and parser-extracted image sidecars
+       native images and parser-extracted image sidecars into LightRAG chunks/vectors
+  -> DlightRAG metadata/BM25 layer
+       declared metadata index, in-filter scope, pg_textsearch BM25
   -> retrieval
        LightRAG mix + direct image vectors + BM25 + RRF + rerank + citations
 ```
@@ -179,8 +179,8 @@ Core responsibilities:
 | API, MCP, Web UI | Interface adapters, auth, uploads, streaming responses. |
 | `RAGServiceManager` | Multi-workspace routing, federation, health, read-after-write barriers. |
 | `RAGService` | Per-workspace lifecycle, ingest, retrieve, answer, reset. |
-| LightRAG | Parser routing, chunks, KG entities/relationships, vectors, doc status, `mix` retrieval. |
-| DlightRAG stores | Metadata, artifacts, provenance, visual chunks, BM25 state. |
+| LightRAG | Parser routing, sidecars, chunks, KG entities/relationships, vectors, doc status, `mix` retrieval. |
+| DlightRAG stores | Declared metadata index, BM25 state, workspace/role metadata. |
 | Model adapters | LLM, VLM, embedding, asymmetric task routing, reranking. |
 
 Long-form pipeline notes are in

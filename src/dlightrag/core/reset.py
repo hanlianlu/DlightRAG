@@ -103,9 +103,6 @@ async def areset(
     # Phase 2: DlightRAG domain stores -- registry
     for name, store, method in (
         ("metadata_index", getattr(service, "_metadata_index", None), "clear"),
-        ("document_artifacts", getattr(service, "_document_artifacts", None), "clear"),
-        ("chunk_provenance", getattr(service, "_chunk_provenance", None), "clear"),
-        ("visual_chunks", getattr(service, "_visual_chunks", None), "drop"),
     ):
         if store is None:
             continue

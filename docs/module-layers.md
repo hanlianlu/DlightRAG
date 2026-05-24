@@ -61,7 +61,7 @@ L0  prompts, utils                                 pure helpers
 | `models.{schemas,embedding_inputs}` | L2 | Shared data types |
 | `core.retrieval.{protocols,models,metadata_fields}` | L2 | Retrieval contracts and metadata registry |
 | `models.providers` | L3 | OpenAI/Anthropic/Gemini and embedding provider wrappers |
-| `storage` | L3 | PostgreSQL pools, metadata index, artifact/provenance stores |
+| `storage` | L3 | PostgreSQL pools, metadata index, version/replication helpers |
 | `sourcing` | L3 | Local, Azure Blob, and S3 source readers |
 | `citations` | L3 | Inline citation validation, source projection, optional highlights, streaming normalization |
 | `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |

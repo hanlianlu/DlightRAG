@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from dlightrag.core.ingestion.cleanup import (
     DeletionContext,
@@ -121,77 +121,39 @@ def _make_metadata_index(page_count: int = 0) -> MagicMock:
     return mi
 
 
-def _make_visual_chunks() -> MagicMock:
-    vc = MagicMock()
-    vc.delete = AsyncMock(return_value=None)
-    return vc
-
-
 class TestCascadeDelete:
     """Test cascade_delete with per-layer fault isolation."""
 
-    async def test_cascade_delete_all_layers_called(self) -> None:
+    async def test_cascade_delete_lightrag_and_metadata_called(self) -> None:
         ctx = _make_ctx(doc_ids={"doc-1"})
         lr = _make_lightrag_for_delete()
-        vc = _make_visual_chunks()
-        mi = _make_metadata_index(page_count=3)
+        mi = _make_metadata_index()
 
-        with patch(
-            "lightrag.utils.compute_mdhash_id",
-            side_effect=lambda s, prefix="": f"{prefix}{s}",
-        ):
-            stats = await cascade_delete(
-                ctx=ctx,
-                lightrag=lr,
-                visual_chunks=vc,
-                metadata_index=mi,
-            )
+        stats = await cascade_delete(
+            ctx=ctx,
+            lightrag=lr,
+            metadata_index=mi,
+        )
 
         lr.adelete_by_doc_id.assert_awaited_once_with("doc-1", delete_llm_cache=True)
-        vc.delete.assert_awaited_once()
         mi.delete.assert_awaited_once_with("doc-1")
         assert stats["docs_deleted"] == 1
         assert stats["errors"] == []
 
-    async def test_cascade_delete_clears_artifacts_and_chunk_provenance(self) -> None:
-        ctx = _make_ctx(doc_ids={"doc-1"})
-        lr = _make_lightrag_for_delete()
-        artifacts = MagicMock()
-        artifacts.delete_doc = AsyncMock(return_value=None)
-        provenance = MagicMock()
-        provenance.delete_doc = AsyncMock(return_value=None)
-
-        await cascade_delete(
-            ctx=ctx,
-            lightrag=lr,
-            document_artifacts=artifacts,
-            chunk_provenance=provenance,
-        )
-
-        provenance.delete_doc.assert_awaited_once_with("doc-1")
-        artifacts.delete_doc.assert_awaited_once_with("doc-1")
-
-    async def test_cascade_delete_layer1_failure_continues(self) -> None:
+    async def test_cascade_delete_lightrag_failure_continues_to_metadata(self) -> None:
         ctx = _make_ctx(doc_ids={"doc-2"})
         lr = _make_lightrag_for_delete()
         lr.adelete_by_doc_id = AsyncMock(side_effect=RuntimeError("connection lost"))
-        vc = _make_visual_chunks()
-        mi = _make_metadata_index(page_count=2)
+        mi = _make_metadata_index()
 
-        with patch(
-            "lightrag.utils.compute_mdhash_id",
-            side_effect=lambda s, prefix="": f"{prefix}{s}",
-        ):
-            stats = await cascade_delete(
-                ctx=ctx,
-                lightrag=lr,
-                visual_chunks=vc,
-                metadata_index=mi,
-            )
+        stats = await cascade_delete(
+            ctx=ctx,
+            lightrag=lr,
+            metadata_index=mi,
+        )
 
         assert any("Layer 1" in e for e in stats["errors"])
         assert stats["docs_deleted"] == 0
-        vc.delete.assert_awaited_once()
         mi.delete.assert_awaited_once_with("doc-2")
 
     async def test_cascade_delete_empty_context(self) -> None:

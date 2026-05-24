@@ -2,8 +2,8 @@
 """Centralized startup validation for LightRAG coupling assumptions.
 
 DlightRAG extends LightRAG through wrapping (FilteredVectorStorage), monkey
-patching (_lightrag_patches), and direct DB access (PGJsonbKVStorage,
-PGMetadataIndex, artifact/provenance stores). This guard validates all
+patching (_lightrag_patches), and direct DB access (PGMetadataIndex,
+LightRAG text_chunks/chunks_vdb/doc_status). This guard validates all
 coupling assumptions once at startup and fails fast with a complete error
 report if anything has drifted between LightRAG releases.
 

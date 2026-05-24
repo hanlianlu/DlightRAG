@@ -39,7 +39,13 @@ async def test_build_direct_image_chunk_embeds_original_image(tmp_path) -> None:
 
     assert chunk_id == "default:doc-1:sidecar:drawing:fig-1"
     assert row["content"] == "figure caption"
-    assert row["sidecar"] == {"type": "drawing", "id": "fig-1"}
+    assert row["sidecar"] == {
+        "type": "drawing",
+        "id": "fig-1",
+        "path": str(path),
+        "page_index": None,
+        "bbox": None,
+    }
     assert vector == [0.1, 0.2, 0.3]
     embedder.embed_index_images.assert_awaited_once()
 

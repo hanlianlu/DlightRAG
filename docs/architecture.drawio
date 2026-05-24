@@ -89,7 +89,7 @@
         <mxCell id="primary" value="&lt;b&gt;Primary Postgres&lt;/b&gt;&lt;br&gt;DDL, ingest, metadata writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
           <mxGeometry x="120" y="748" width="250" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;pgvector HNSW, Apache AGE, pg_textsearch BM25&lt;br&gt;metadata, artifacts, provenance, visual side tables" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;LightRAG chunks/doc status/KG/vectors&lt;br&gt;DlightRAG metadata index + pg_textsearch BM25" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="470" y="734" width="340" height="86" as="geometry"/>
         </mxCell>
         <mxCell id="replica" value="&lt;b&gt;Read Replica&lt;/b&gt;&lt;br&gt;query workers attach read-only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">

@@ -27,8 +27,6 @@ def _make_engine(**overrides):
         "lightrag": lightrag,
         "stores": stores,
         "metadata_index": AsyncMock(),
-        "document_artifacts": AsyncMock(),
-        "chunk_provenance": AsyncMock(),
         "multimodal_embedder": AsyncMock(),
         "vlm_func": AsyncMock(return_value="visual description"),
         "workspace": "default",
@@ -51,8 +49,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["parse_engine"] == "mineru"
     assert kwargs["process_options"] == "iteP"
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
-    deps["document_artifacts"].upsert.assert_awaited_once()
-    deps["chunk_provenance"].upsert_many.assert_awaited_once()
+    deps["metadata_index"].upsert.assert_awaited_once()
 
 
 async def test_document_ingest_rejects_unrouted_parser_fallback(tmp_path: Path) -> None:
@@ -111,6 +108,7 @@ async def test_native_image_ingest_adds_direct_vector_and_visual_semantic_doc(
     result = await engine.aingest_file(source)
 
     assert result["source_kind"] == "image"
+    deps["stores"].upsert_document_record.assert_awaited_once()
     deps["stores"].upsert_chunks_with_vectors.assert_awaited_once()
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["docs_format"] == "raw"

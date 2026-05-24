@@ -12,7 +12,7 @@ from dlightrag.models.schemas import Reference
 
 
 class ChunkContext(TypedDict):
-    """A single text/visual chunk from retrieval."""
+    """A single text or image chunk from retrieval."""
 
     chunk_id: str
     reference_id: str
