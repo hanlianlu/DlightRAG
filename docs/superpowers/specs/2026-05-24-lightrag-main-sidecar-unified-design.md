@@ -11,6 +11,7 @@
 DlightRAG should move to a single unified architecture built on the current `HKUDS/LightRAG` `main` branch, not on the latest PyPI release. The verified upstream target for this design pass is:
 
 - `HKUDS/LightRAG` `origin/main`: `cfcba71` (`2026-05-24T00:39:17+08:00`)
+- PostgreSQL major version: `18`; current official minor checked for this design is `18.4`, released on `2026-05-14`.
 - MinerU upstream checked at `1d15485` on `origin/master`; current license is `LicenseRef-MinerU-Open-Source-License`, based on Apache 2.0 with additional terms, and no longer AGPL.
 
 The new architecture deletes the `raganything` dependency entirely. ArtRAG is used as a research input because it has already learned how to work with the latest LightRAG sidecar model, but DlightRAG must not inherit ArtRAG domain concepts, copy ArtRAG class boundaries wholesale, or keep an ArtRAG-shaped artist/artwork hierarchy.
@@ -19,7 +20,7 @@ Hard decisions:
 
 - There is no `caption` path and no old `unified` page-render path.
 - There is one ingestion engine, one retrieval engine, and one LightRAG instance per workspace.
-- PostgreSQL is the only supported storage ecosystem for the core product path.
+- PostgreSQL 18 is the only supported storage ecosystem for the core product path. Development, CI, Docker, and production docs should track the current PG18 minor release; as of this design pass, that is PostgreSQL 18.4.
 - LightRAG query mode is always `mix`.
 - DlightRAG hybrid retrieval means `LightRAG mix + BM25 + RRF`, not LightRAG's `hybrid` query mode.
 - Embedding configuration must prove multimodal capability at startup; text-only embedding models are invalid for this architecture.
@@ -51,7 +52,7 @@ LightRAG `main` currently provides the pieces DlightRAG should treat as upstream
 - `analyze_multimodal()` and sidecar chunk construction for LightRAG-owned multimodal text chunks.
 - `LightRAG.aquery_data()` with `mode="mix"` for structured retrieval data.
 
-DlightRAG should depend on these surfaces through one adapter module so upstream private storage changes fail fast and locally. The supported LightRAG storage configuration is PostgreSQL-based: `PGVectorStorage`, `PGGraphStorage`, `PGKVStorage`, and `PGDocStatusStorage`.
+DlightRAG should depend on these surfaces through one adapter module so upstream private storage changes fail fast and locally. The supported LightRAG storage configuration is PostgreSQL 18 based: `PGVectorStorage`, `PGGraphStorage`, `PGKVStorage`, and `PGDocStatusStorage`.
 
 ---
 
@@ -220,7 +221,7 @@ CREATE TABLE dlightrag_document_artifacts (
 );
 ```
 
-There is no file-backed alternative target for this table. Development and production both use PostgreSQL so metadata, chunk provenance, vector search, KG storage, and BM25 share one consistent transactional substrate.
+There is no file-backed alternative target for this table. Development and production both use PostgreSQL 18 so metadata, chunk provenance, vector search, KG storage, and BM25 share one consistent transactional substrate.
 
 ### 6.3 Chunk Metadata
 
@@ -335,6 +336,7 @@ Implementation target:
 - Use a PostgreSQL BM25-capable index over LightRAG document chunks, scoped by `workspace`.
 - Prefer `pg_textsearch`/ParadeDB-style BM25 when available.
 - If the BM25 extension is unavailable, fail startup when BM25 is enabled rather than silently degrading to a different backend.
+- All BM25 DDL and extension checks target PostgreSQL 18.4 semantics first.
 
 Fusion uses reciprocal rank fusion:
 
@@ -385,6 +387,8 @@ Keep or add:
 
 ```yaml
 storage:
+  postgres_major: 18
+  postgres_min_minor: "18.4"
   vector: PGVectorStorage
   graph: PGGraphStorage
   kv: PGKVStorage
@@ -414,7 +418,7 @@ metadata:
   enabled: true
 ```
 
-The storage values are operational facts, not product-mode switches. Config validation should reject `Neo4JStorage`, `MilvusVectorDBStorage`, `QdrantVectorDBStorage`, `JsonKVStorage`, `NetworkXStorage`, and other non-PostgreSQL storage choices in the core path.
+The storage values are operational facts, not product-mode switches. Config validation should reject PostgreSQL servers older than major version 18, and should reject `Neo4JStorage`, `MilvusVectorDBStorage`, `QdrantVectorDBStorage`, `JsonKVStorage`, `NetworkXStorage`, and other non-PostgreSQL storage choices in the core path.
 
 Dependency policy:
 
@@ -480,6 +484,7 @@ Required test groups:
    - text-only embedding config fails startup.
    - multimodal embedding config passes startup.
    - LightRAG query mode cannot be changed away from `mix`.
+   - PostgreSQL server version below 18 fails startup.
    - non-PostgreSQL LightRAG storage choices fail startup.
 
 3. **Document ingest golden fixture**
