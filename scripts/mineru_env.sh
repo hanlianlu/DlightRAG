@@ -2,7 +2,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 mineru_repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env}"
+mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env.mineru}"
 if [[ "$mineru_env_file" != /* ]]; then
   mineru_env_file="$mineru_repo_root/$mineru_env_file"
 fi

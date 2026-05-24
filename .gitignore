@@ -32,6 +32,8 @@ Thumbs.db
 # Environment
 .env
 !.env.example
+.env.mineru
+!.env.mineru.example
 
 # Worktrees
 .worktrees/
@@ -52,4 +54,3 @@ dlightrag_storage/
 htmlcov/
 .coverage
 coverage.xml
-
