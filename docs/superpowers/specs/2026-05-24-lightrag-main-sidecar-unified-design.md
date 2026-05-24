@@ -23,7 +23,7 @@ Hard decisions:
 - PostgreSQL 18 is the only supported storage ecosystem for the core product path. Development, CI, Docker, and production docs should track the current PG18 minor release; as of this design pass, that is PostgreSQL 18.4.
 - LightRAG query mode is always `mix`.
 - DlightRAG hybrid retrieval means `LightRAG mix + BM25 + RRF`, not LightRAG's `hybrid` query mode.
-- Embedding configuration is provider-aware and multimodal. Query/document asymmetric embedding is optional and must follow LightRAG's explicit opt-in plus symmetric fallback model.
+- Embedding configuration is provider-aware and multimodal. Query/document asymmetric embedding defaults to `auto`: enable it for providers with documented task routing, otherwise use LightRAG's symmetric fallback.
 - Embedding provider/model/dimension/asymmetric settings are a storage contract. Changing any vector-affecting setting requires clearing vector data and rebuilding indexes.
 - Text-only embedding models are invalid for this architecture.
 - LLM configuration is role-based and aligned to LightRAG's current `role_llm_configs` surface: `extract`, `keyword`, `query`, and `vlm`.
@@ -323,7 +323,7 @@ Context propagation is mandatory, but asymmetric behavior is not:
 - DlightRAG direct-image indexing calls image embedding with `context="document"`.
 - Text queries call embedding with `context="query"`.
 - Image queries call image embedding with `context="query"`.
-- LightRAG receives `EmbeddingFunc(..., supports_asymmetric=True)` only when DlightRAG config explicitly enables asymmetric embedding and the selected provider can honor it.
+- LightRAG receives `EmbeddingFunc(..., supports_asymmetric=True)` when DlightRAG's asymmetric mode resolves active: `auto` plus a capable provider, or `require` plus a capable provider.
 - Otherwise DlightRAG relies on LightRAG's built-in symmetric fallback: `EmbeddingFunc.__call__()` strips the `context` parameter when `supports_asymmetric=False`, so the same provider payload shape is used for indexed content and queries.
 
 This context is an embedding-generation hint, not a vector-store query flag. The stored vectors are already produced with document/index semantics; query-time retrieval first produces a query vector with query semantics, then the vector store compares vectors normally. DlightRAG APIs should therefore avoid ambiguous names such as `embed_pages()` and instead expose separate indexing/query call sites such as `embed_index_images(..., context="document")` and `embed_query_images(..., context="query")`.
@@ -332,11 +332,11 @@ This context is an embedding-generation hint, not a vector-store query flag. The
 
 | Provider | Target models | Context mapping | Image payload | Dimension policy |
 |---|---|---|---|---|
-| `voyage` | `voyage-multimodal-3.5` | if `embedding.asymmetric=true`, `query`/`document` -> `input_type`; otherwise omit task hint and stay symmetric | `/multimodalembeddings` `image_base64` content | default `1024`; validate returned dim. |
-| `dashscope_qwen` | `qwen3-vl-embedding` cloud API | symmetric by default; provider task/instruction/fusion parameters only where documented and explicitly enabled | DashScope multimodal `contents` with text/image items | cloud default `2560`; allow configured dimensions such as `2048`, `1536`, `1024`, `768`, `512`, `256`. |
+| `voyage` | `voyage-multimodal-3.5` | `auto`/`require` -> `query`/`document` `input_type`; `disable` -> omit task hint | `/multimodalembeddings` `image_base64` content | default `1024`; validate returned dim. |
+| `dashscope_qwen` | `qwen3-vl-embedding` cloud API | `auto` falls back to symmetric until provider docs confirm task routing; `require` needs an explicit adapter | DashScope multimodal `contents` with text/image items | cloud default `2560`; allow configured dimensions such as `2048`, `1536`, `1024`, `768`, `512`, `256`. |
 | `qwen_openai_compatible` | LM Studio/vLLM-style `qwen3-vl-embedding-2b` and `qwen3-vl-embedding-8b` | no asymmetric mapping by default; use provider-specific instruction or explicit task mode only when the server documents it | OpenAI-compatible `input` using text and image data URIs | validate returned dim; expected local model dims include `2048` for 2B and `4096` for 8B unless the serving stack documents projection. |
-| `gemini` | `gemini-embedding-2` | if asymmetric is explicitly enabled, map query/document to the native retrieval task behavior; otherwise symmetric | native Google multimodal embedding request | default `3072`; common configured dims `1536` or `768`. |
-| `jina` | Jina multimodal embeddings v4 | if asymmetric is explicitly enabled, `query` -> `retrieval.query`, `document` -> `retrieval.passage`; otherwise symmetric | Jina text/image input items | default dense `2048`; validate returned dim. |
+| `gemini` | `gemini-embedding-2` | `auto`/`require` maps query/document to native retrieval task behavior; `disable` stays symmetric | native Google multimodal embedding request | default `3072`; common configured dims `1536` or `768`. |
+| `jina` | Jina multimodal embeddings v4 | `auto`/`require`: `query` -> `retrieval.query`, `document` -> `retrieval.passage`; `disable` stays symmetric | Jina text/image input items | default dense `2048`; validate returned dim. |
 | `openai_compatible` | explicit local or proxy provider | only asymmetric if configured/probed as task-aware | data URI passthrough if the server accepts images | no hard default; startup probe and returned-dim validation are required. |
 | `ollama` | local embedding servers | text-only unless a specific server proves image support | provider-specific | not valid for this architecture unless image embedding probe passes. |
 
@@ -350,8 +350,11 @@ Validation policy:
 - The provider must report `supports_images=True` or pass an image embedding probe.
 - Known text-only models fail startup before LightRAG initialization.
 - The returned vector length must equal `embedding.dim`.
-- `embedding.asymmetric` defaults to `false`. This is the symmetric fallback path and should be the normal default unless a model card or provider API says query/document task routing is required.
-- Active `supports_asymmetric=True` is allowed only when `embedding.asymmetric=true` and the provider has native task parameters or an explicit configured query/document instruction strategy. It must not be inferred from OpenAI compatibility alone.
+- `embedding.asymmetric` is a three-state mode: `auto`, `require`, or `disable`.
+- `auto` is the default and quality-first path: activate asymmetric routing for provider adapters with documented task parameters; otherwise use LightRAG's symmetric fallback.
+- `require` activates asymmetric routing and fails startup if the selected provider cannot honor it.
+- `disable` forces symmetric behavior even for capable providers.
+- Active `supports_asymmetric=True` is allowed only when the resolved mode is active and the provider has native task parameters or an explicit configured query/document instruction strategy. It must not be inferred from OpenAI compatibility alone.
 - If asymmetric embedding is active, both query and document probes should be exercised where provider cost allows; unit tests can mock this.
 - A provider/model/dimension/asymmetric-setting change after indexing must fail fast unless the workspace is explicitly reset or vector indexes are rebuilt.
 
@@ -537,7 +540,7 @@ embedding:
   provider: voyage
   model: voyage-multimodal-3.5
   dim: 1024
-  asymmetric: false  # symmetric fallback is the default; true requires provider/model docs
+  asymmetric: auto   # enable provider task routing when supported; otherwise LightRAG fallback
   startup_probe: true
   model_kwargs: {}
 
@@ -549,7 +552,7 @@ embedding_local_qwen_example:
   model: qwen3-vl-embedding-2b
   base_url: http://host.docker.internal:1234/v1
   dim: 2048
-  asymmetric: false
+  asymmetric: auto   # currently resolves to symmetric unless the local server documents a task adapter
 
 retrieval:
   lightrag_mode: mix   # internal invariant; not a public mode selector
@@ -631,8 +634,9 @@ Required test groups:
    - text-only embedding config fails startup.
    - multimodal embedding config passes startup.
    - provider/model/dimension mismatch fails startup.
-   - LightRAG embedding wrapper declares `supports_asymmetric=False` by default, even for providers that are capable of asymmetric routing.
-   - LightRAG embedding wrapper declares `supports_asymmetric=True` only when `embedding.asymmetric=true` and the provider supports task-aware routing.
+   - LightRAG embedding wrapper declares `supports_asymmetric=True` by default for providers where `embedding.asymmetric=auto` resolves to a documented task-aware route.
+   - LightRAG embedding wrapper declares `supports_asymmetric=False` when `auto` falls back for an unsupported provider or when `embedding.asymmetric=disable`.
+   - `embedding.asymmetric=require` fails startup for providers without a task-aware route.
    - LightRAG query mode cannot be changed away from `mix`.
    - PostgreSQL server version below 18 fails startup.
    - non-PostgreSQL LightRAG storage choices fail startup.
@@ -640,12 +644,12 @@ Required test groups:
    - legacy `ingest` and plural `keywords` fields are rejected.
 
 3. **Embedding provider matrix**
-   - Voyage omits `input_type` in symmetric mode and maps context to `input_type` only in asymmetric mode.
+   - Voyage maps context to `input_type` in `auto`/`require`, and omits `input_type` in `disable`.
    - Qwen/DashScope passes image content and configured dimension.
    - Qwen OpenAI-compatible validates returned dimensions for local models.
-   - Gemini passes output dimension and uses retrieval task behavior only in asymmetric mode.
-   - Jina maps context to `retrieval.query` / `retrieval.passage` only in asymmetric mode.
-   - Direct image indexing uses document context and image query uses query context at DlightRAG call sites, while provider payloads stay symmetric unless asymmetric is enabled.
+   - Gemini passes output dimension and uses retrieval task behavior when asymmetric resolves active.
+   - Jina maps context to `retrieval.query` / `retrieval.passage` when asymmetric resolves active.
+   - Direct image indexing uses document context and image query uses query context at DlightRAG call sites; provider payloads use task routing only when asymmetric resolves active.
 
 4. **Document ingest golden fixture**
    - LightRAG parser pipeline is called with default `teP`.
