@@ -108,8 +108,7 @@ class ParserConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    rules: str = "*:native-iteP,*:mineru-iteP,*:legacy-R"
-    native_images_bypass_lightrag: bool = True
+    rules: str = "docx:native-iteP,*:mineru-iteP"
     chunk_options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -373,12 +372,6 @@ class DlightragConfig(BaseSettings):
             "Event",
         ],
     )
-
-    # ===== LibreOffice Conversion =====
-    excel_auto_convert_to_pdf: bool = Field(default=True)
-    excel_pdf_delete_original: bool = Field(default=True)
-    libreoffice_timeout: int = Field(default=120)
-    libreoffice_pdf_quality: int = Field(default=90)
 
     # ===== Sourcing (Optional) =====
     blob_connection_string: str | None = Field(default=None)

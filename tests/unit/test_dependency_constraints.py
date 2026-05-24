@@ -87,3 +87,64 @@ def test_runtime_imports_do_not_reference_removed_multimodal_package() -> None:
     ]
 
     assert offenders == []
+
+
+def test_dlightrag_does_not_ship_legacy_document_conversion_paths() -> None:
+    """Document parsing should be delegated to LightRAG parser sidecars."""
+    removed_paths = [
+        Path("src/dlightrag/prompts/vision.py"),
+        Path("src/dlightrag/core") / ("vlm" + "_ocr.py"),
+        Path("src/dlightrag") / "converters" / "office.py",
+        Path("tests/unit") / ("test_vlm" + "_ocr.py"),
+        Path("tests/unit/test_office_converter.py"),
+    ]
+
+    assert [str(path) for path in removed_paths if path.exists()] == []
+
+
+def test_direct_document_parser_dependencies_removed() -> None:
+    """DlightRAG should not directly depend on parser/converter stacks LightRAG owns."""
+    dependencies = _dependencies()
+    removed_prefixes = ("doc" + "ling", "pypdf" + "ium2", "open" + "pyxl")
+
+    assert [
+        dep for dep in dependencies if dep.lower().startswith(removed_prefixes)
+    ] == []
+
+
+def test_default_parser_routing_has_no_legacy_fallback() -> None:
+    """Default ingestion must not silently degrade into LightRAG legacy parsing."""
+    from dlightrag.config import DlightragConfig, EmbeddingConfig
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    assert "legacy" not in cfg.parser.rules.lower()
+
+
+def test_office_conversion_config_removed() -> None:
+    """Office conversion settings belonged to the removed converter path."""
+    from dlightrag.config import DlightragConfig, EmbeddingConfig
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    for name in (
+        "excel_auto_convert_to_pdf",
+        "excel_pdf_delete_original",
+        "libreoffice_timeout",
+        "libreoffice_pdf_quality",
+    ):
+        assert not hasattr(cfg, name)

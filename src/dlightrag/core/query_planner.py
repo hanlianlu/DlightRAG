@@ -12,20 +12,21 @@ Consumers:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
     PLANNER_HISTORY_TEMPLATE,
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
 )
-from dlightrag.utils.text import extract_json
 from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,50 @@ class QueryPlan:
     metadata_filter_source: str | None = None
     metadata_filter_confidence: str | None = None
     metadata_filter_evidence: list[dict[str, Any]] | None = None
+
+
+class QueryPlannerFilterEvidence(BaseModel):
+    """Evidence attached to one LLM-proposed metadata filter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    value: str = ""
+    evidence_span: str
+    intent_basis: str = ""
+
+
+class QueryPlannerFilters(BaseModel):
+    """Structured filter proposal emitted by the planner LLM."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    filename: str | None = None
+    filename_stem: str | None = None
+    filename_pattern: str | None = None
+    file_extension: str | None = None
+    doc_title: str | None = None
+    doc_author: str | None = None
+    date_from: str | None = None
+    date_to: str | None = None
+    custom: dict[str, str | int | float | bool | None] | None = None
+
+
+class QueryPlannerStructuredResponse(BaseModel):
+    """Pydantic schema for planner structured-output calls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    standalone_query: str
+    filters: QueryPlannerFilters = Field(default_factory=QueryPlannerFilters)
+    filter_confidence: Literal["high", "low"] = "low"
+    filter_evidence: list[QueryPlannerFilterEvidence] = Field(default_factory=list)
+
+
+QUERY_PLAN_STRUCTURED_OUTPUT = StructuredOutput(
+    name="query_plan",
+    schema=QueryPlannerStructuredResponse,
+)
 
 
 # PG data_type -> human-readable short form
@@ -188,7 +233,8 @@ class QueryPlanner:
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": query},
-                    ]
+                    ],
+                    structured_output=QUERY_PLAN_STRUCTURED_OUTPUT,
                 )
                 logger.info(
                     "[Planner] LLM call: %.1fs (attempt %d)", time.monotonic() - t1, attempt
@@ -239,14 +285,14 @@ class QueryPlanner:
         if not response:
             return None
         try:
-            raw = extract_json(response)
-            data = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            logger.warning("QueryPlanner: invalid JSON for query: %r", query[:80])
+            parsed = QUERY_PLAN_STRUCTURED_OUTPUT.parse(response)
+        except (ValidationError, ValueError, TypeError):
+            logger.warning("QueryPlanner: invalid structured output for query: %r", query[:80])
             return None
 
+        data = parsed.model_dump()
         standalone = data.get("standalone_query", query)
-        raw_filters = data.get("filters", {})
+        raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
 

@@ -6,6 +6,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
+
 from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
 from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
@@ -30,7 +32,7 @@ def _make_engine(**overrides):
         "multimodal_embedder": AsyncMock(),
         "vlm_func": AsyncMock(return_value="visual description"),
         "workspace": "default",
-        "parser_rules": "*:native-iteP,*:mineru-iteP,*:legacy-R",
+        "parser_rules": "docx:native-iteP,*:mineru-iteP",
         "chunk_options": {},
     }
     defaults.update(overrides)
@@ -51,6 +53,17 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     deps["document_artifacts"].upsert.assert_awaited_once()
     deps["chunk_provenance"].upsert_many.assert_awaited_once()
+
+
+async def test_document_ingest_rejects_unrouted_legacy_parser_fallback(tmp_path: Path) -> None:
+    source = tmp_path / "notes.unsupported"
+    source.write_text("plain text")
+    engine, deps = _make_engine(parser_rules="docx:native-iteP,pdf:mineru-iteP")
+
+    with pytest.raises(ValueError, match="No LightRAG parser route"):
+        await engine.aingest_file(source, replace=False)
+
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
 async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) -> None:

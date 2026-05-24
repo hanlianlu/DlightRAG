@@ -17,6 +17,7 @@ import numpy as np
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
 from dlightrag.models.providers import get_provider
+from dlightrag.models.structured import StructuredOutput
 
 logger = logging.getLogger(__name__)
 
@@ -62,20 +63,55 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
 
     async def completion_wrapper(messages: list[dict[str, Any]], **kw: Any) -> Any:
         stream = kw.pop("stream", False)
+        response_format = kw.pop("response_format", None)
+        max_tokens = kw.pop("max_tokens", None)
+        structured_output = kw.pop("structured_output", None)
+        if structured_output is not None:
+            if not isinstance(structured_output, StructuredOutput):
+                raise TypeError("structured_output must be a StructuredOutput")
+            response_format = response_format or structured_output.response_format_for_provider(
+                cfg.provider
+            )
         model_kwargs = {**cfg.model_kwargs, **kw}
         if stream:
             return provider.stream(
                 messages=messages,
                 model=cfg.model,
                 temperature=cfg.temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
                 model_kwargs=model_kwargs,
             )
-        return await provider.complete(
-            messages=messages,
-            model=cfg.model,
-            temperature=cfg.temperature,
-            model_kwargs=model_kwargs,
-        )
+        try:
+            return await provider.complete(
+                messages=messages,
+                model=cfg.model,
+                temperature=cfg.temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                model_kwargs=model_kwargs,
+            )
+        except Exception:
+            if (
+                structured_output is not None
+                and cfg.provider == "openai"
+                and isinstance(response_format, dict)
+                and response_format.get("type") == "json_schema"
+            ):
+                logger.warning(
+                    "Strict structured output failed for %s; retrying with json_object",
+                    cfg.model,
+                    exc_info=True,
+                )
+                return await provider.complete(
+                    messages=messages,
+                    model=cfg.model,
+                    temperature=cfg.temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                    model_kwargs=model_kwargs,
+                )
+            raise
 
     from dlightrag.observability import wrap_chat_func
 

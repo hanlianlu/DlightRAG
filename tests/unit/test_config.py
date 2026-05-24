@@ -159,7 +159,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
     assert cfg.embedding.asymmetric == "auto"
-    assert cfg.parser.rules == "*:native-iteP,*:mineru-iteP,*:legacy-R"
+    assert cfg.parser.rules == "docx:native-iteP,*:mineru-iteP"
     assert cfg.extraction.use_json is True
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True

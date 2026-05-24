@@ -13,6 +13,7 @@ from dlightrag.core.query_planner import (
     _build_schema_section,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.models.structured import StructuredOutput
 
 # ---------------------------------------------------------------------------
 # _build_schema_section / _build_custom_keys_hint
@@ -92,6 +93,16 @@ class TestPlanWithLLM:
         plan = await planner.plan("what is X")
         assert plan.standalone_query == "what is X"
         assert plan.metadata_filter is None
+
+    async def test_llm_call_uses_structured_output_contract(self):
+        llm = AsyncMock(return_value=json.dumps({"standalone_query": "what is X", "filters": {}}))
+        planner = QueryPlanner(llm_func=llm)
+
+        await planner.plan("what is X")
+
+        structured_output = llm.await_args.kwargs["structured_output"]
+        assert isinstance(structured_output, StructuredOutput)
+        assert structured_output.name == "query_plan"
 
     async def test_rewrite_with_history(self):
         llm = AsyncMock(
