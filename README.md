@@ -41,7 +41,7 @@ and `pg_textsearch` installed and preloaded as required by [`docs/PG.md`](docs/P
 
 ### Recommended Local Setup
 
-1. Create `.env` and fill credentials:
+1. Create `.env` and fill credentials only:
 
 ```bash
 git clone https://github.com/hanlianlu/dlightrag.git
@@ -55,6 +55,9 @@ At minimum, set the LLM and embedding API keys needed by `config.yaml`:
 DLIGHTRAG_LLM__DEFAULT__API_KEY=...
 DLIGHTRAG_EMBEDDING__API_KEY=...
 ```
+
+Normal settings such as model names, parser routing, ports, logging,
+PostgreSQL endpoints, and retrieval knobs live in `config.yaml`.
 
 The default document route uses LightRAG native parsing for DOCX and MinerU
 for other document types. `config.yaml` is local-first and points native
@@ -318,7 +321,7 @@ Details: [`docs/database-role-architecture.md`](docs/database-role-architecture.
 ## Configuration
 
 Configuration uses structured app settings in [`config.yaml`](config.yaml) and
-secrets or machine-specific overrides in `.env`.
+secrets or deployment-only overrides in `.env`.
 
 Priority:
 
@@ -337,8 +340,9 @@ DLIGHTRAG_RERANK__API_KEY=...
 
 Parser sidecar defaults live in `config.yaml` under `parser_sidecars`.
 DlightRAG bridges those typed settings into LightRAG's upstream env names at
-startup. `.env.example` keeps only secrets and deployment overrides such as
-`MINERU_API_TOKEN`, `MINERU_LOCAL_ENDPOINT`, and `MINERU_DOCKER_LOCAL_ENDPOINT`.
+startup. `.env.example` keeps only secrets such as provider keys,
+PostgreSQL passwords, and `DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN`.
+Docker-only sidecar endpoint overrides use `MINERU_DOCKER_LOCAL_ENDPOINT`.
 
 ### MinerU Local Sidecar
 
@@ -364,8 +368,9 @@ Recommended defaults in `config.yaml`:
 | `parser_sidecars.mineru.enable_table` / `enable_formula` | `true` | Preserves table and equation extraction for LightRAG ingest. |
 
 The official MinerU API remains available by explicitly changing
-`parser_sidecars.mineru.api_mode: official` and setting `MINERU_API_TOKEN`;
-it is not the checked-in default.
+`parser_sidecars.mineru.api_mode: official` in `config.yaml` and setting
+`DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN` in `.env`; it is not the
+checked-in default.
 
 ### Model Providers
 
@@ -456,9 +461,10 @@ bearer auth:
 
 ```bash
 openssl rand -base64 32
-echo "DLIGHTRAG_AUTH_MODE=simple" >> .env
 echo "DLIGHTRAG_API_AUTH_TOKEN=<generated>" >> .env
 ```
+
+Set `auth_mode: simple` in `config.yaml`.
 
 Clients send:
 
@@ -476,9 +482,10 @@ Langfuse tracing is optional. If both keys are absent, tracing is a no-op.
 ```bash
 DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
 DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
-DLIGHTRAG_LANGFUSE_HOST=https://cloud.langfuse.com
-DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS=false
 ```
+
+Set `langfuse_host` and `langfuse_export_external_spans` in `config.yaml`
+when the defaults are not right for the deployment.
 
 For local self-hosted Langfuse:
 

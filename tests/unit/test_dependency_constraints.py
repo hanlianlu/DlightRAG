@@ -131,6 +131,23 @@ def test_direct_document_parser_dependencies_removed() -> None:
     assert [dep for dep in dependencies if dep.lower().startswith(removed_prefixes)] == []
 
 
+def test_docx_native_parser_runtime_dependency_is_direct() -> None:
+    """LightRAG native DOCX parsing needs python-docx available at DlightRAG runtime."""
+    dependencies = _dependencies()
+
+    assert any(dep.lower().startswith("python-docx") for dep in dependencies)
+
+
+def test_runtime_imports_do_not_reference_old_lightrag_docx_entrypoint() -> None:
+    source_files = list(Path("src/dlightrag").rglob("*.py")) + list(Path("tests").rglob("*.py"))
+    old_entrypoint = "lightrag.native_parser" + ".docx"
+    offenders = [
+        str(path) for path in source_files if old_entrypoint in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
+
+
 def test_default_parser_routing_has_no_unrouted_fallback() -> None:
     """Default ingestion must not silently degrade into an unrouted parser path."""
     from dlightrag.config import DlightragConfig, EmbeddingConfig
@@ -169,19 +186,13 @@ def test_office_conversion_config_removed() -> None:
         assert not hasattr(cfg, name)
 
 
-def test_env_example_documents_upstream_lightrag_parser_sidecar_env() -> None:
-    """LightRAG-owned parser env vars are intentional non-DLIGHTRAG exceptions."""
+def test_env_example_documents_config_first_parser_sidecar_policy() -> None:
     example = Path(".env.example").read_text(encoding="utf-8")
 
-    assert "LightRAG parser sidecar" in example
-    for name in (
-        "VLM_PROCESS_ENABLE",
-        "MINERU_API_MODE",
-        "MINERU_API_TOKEN",
-        "MINERU_OFFICIAL_ENDPOINT",
-        "MINERU_LOCAL_ENDPOINT",
-    ):
-        assert name in example
+    assert "parser_sidecars" in example
+    assert "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN" in example
+    for name in ("VLM_PROCESS_ENABLE", "MINERU_API_MODE", "MINERU_LOCAL_ENDPOINT"):
+        assert name not in example
 
 
 def test_env_example_defaults_mineru_to_local_sidecar() -> None:
@@ -208,10 +219,24 @@ def test_env_example_defaults_mineru_to_local_sidecar() -> None:
         "VLM_MAX_IMAGE_BYTES",
     ):
         assert not re.search(rf"(?m)^{active_non_secret}=", example)
-    assert not re.search(r"(?m)^MINERU_API_TOKEN=", example)
-    assert not re.search(r"(?m)^MINERU_OFFICIAL_ENDPOINT=", example)
-    assert re.search(r"(?m)^# MINERU_API_TOKEN=your-api-key$", example)
-    assert re.search(r"(?m)^# MINERU_OFFICIAL_ENDPOINT=https://mineru\.net$", example)
+    assert "MINERU_API_TOKEN" not in example
+    assert "MINERU_OFFICIAL_ENDPOINT" not in example
+
+
+def test_env_example_active_keys_are_credentials_only() -> None:
+    example = Path(".env.example").read_text(encoding="utf-8")
+    active_keys = []
+    for line in example.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        active_keys.append(stripped.split("=", 1)[0].strip())
+
+    assert active_keys == [
+        "DLIGHTRAG_LLM__DEFAULT__API_KEY",
+        "DLIGHTRAG_EMBEDDING__API_KEY",
+        "DLIGHTRAG_POSTGRES_PASSWORD",
+    ]
 
 
 def test_lightrag_constructor_receives_extraction_config() -> None:
