@@ -541,6 +541,21 @@ uv run pytest tests/integration     # integration tests (requires PostgreSQL)
 uv run ruff check src/ tests/ scripts/ --fix && uv run ruff format src/ tests/ scripts/
 ```
 
+Opt-in PG18 + LightRAG smoke:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build postgres
+DLIGHTRAG_RUN_E2E_PG18=1 \
+DLIGHTRAG_E2E_POSTGRES_PORT=55432 \
+uv run pytest tests/e2e -m e2e_pg18 -q
+```
+
+The E2E smoke expects PostgreSQL 18 with `pgvector`, Apache AGE, and
+`pg_textsearch` installed, and `age,pg_textsearch` in
+`shared_preload_libraries`. It uses deterministic local fake model functions by
+default, so it validates the storage/runtime path without external model API
+calls.
+
 
 ## License
 

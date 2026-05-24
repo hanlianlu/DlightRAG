@@ -102,4 +102,7 @@ reportIncompatibleMethodOverride = false
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=dlightrag --cov-report=term-missing"
-markers = ["integration: requires running PostgreSQL"]
+markers = [
+    "integration: requires running PostgreSQL",
+    "e2e_pg18: opt-in PostgreSQL 18 + LightRAG smoke tests",
+]
