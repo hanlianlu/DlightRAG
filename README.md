@@ -67,14 +67,18 @@ running on port `8210`, DlightRAG can reuse it.
 2. Start a local MinerU sidecar for document parsing if one is not already running:
 
 ```bash
+cp .env.mineru.example .env.mineru
 make mineru-install
 make mineru-api
 ```
 
 The helper creates a dedicated `.venv-mineru` so MinerU's ML dependencies do
 not enter DlightRAG's runtime environment. The default install extra is
-`mineru[core]`, matching MinerU's cross-platform core install. On GPU servers,
-prefer MinerU's official Docker Compose `api` or `router` profile; set
+`mineru[core]`, matching MinerU's cross-platform core install. Configure local
+installer extras such as `core,mlx`, `core,vllm`, or `core,lmdeploy` in
+`.env.mineru` through `MINERU_INSTALL_EXTRAS`; keep DlightRAG runtime parser
+settings in `config.yaml`. On GPU servers, prefer MinerU's official Docker
+Compose `api` or `router` profile; set
 `parser_sidecars.mineru.local_endpoint` to that service, usually
 `http://127.0.0.1:8000` or `http://127.0.0.1:8002`.
 
@@ -371,6 +375,19 @@ The official MinerU API remains available by explicitly changing
 `parser_sidecars.mineru.api_mode: official` in `config.yaml` and setting
 `DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN` in `.env`; it is not the
 checked-in default.
+
+Local MinerU service installation uses `.env.mineru`, not `.env`:
+
+```bash
+MINERU_INSTALL_EXTRAS=core,mlx
+MINERU_API_HOST=127.0.0.1
+MINERU_API_PORT=8210
+```
+
+Those keys affect only `make mineru-install`, `make mineru-api`, and the macOS
+LaunchAgent helper. They do not change DlightRAG parser behavior; align
+`parser_sidecars.mineru.local_endpoint` in `config.yaml` if you change the
+host or port.
 
 ### Model Providers
 

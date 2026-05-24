@@ -59,6 +59,21 @@ def test_makefile_targets_are_thin_script_wrappers() -> None:
     assert api.stdout.strip() == "scripts/start_mineru_api.sh"
 
 
+def test_mineru_helper_defaults_to_separate_env_file() -> None:
+    env_script = (ROOT / "scripts" / "mineru_env.sh").read_text(encoding="utf-8")
+
+    assert 'mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env.mineru}"' in env_script
+
+
+def test_mineru_env_example_documents_install_extras() -> None:
+    example = (ROOT / ".env.mineru.example").read_text(encoding="utf-8")
+
+    assert "MINERU_INSTALL_EXTRAS=core" in example
+    assert "MINERU_INSTALL_EXTRAS=core,mlx" in example
+    assert "MINERU_SERVICE_VENV=.venv-mineru" in example
+    assert "MINERU_API_PORT=8210" in example
+
+
 def test_makefile_exposes_mineru_launch_agent_targets() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
