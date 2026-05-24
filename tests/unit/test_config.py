@@ -291,6 +291,21 @@ def test_query_runtime_uses_replica_with_primary_fallback() -> None:
     }
 
 
+def test_read_after_write_primary_route_is_rejected() -> None:
+    kwargs: dict[str, object] = {
+        "embedding": EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        "read_after_write_mode": "primary_route",
+    }
+    with pytest.raises(ValidationError):
+        DlightragConfig(**kwargs)
+
+
 @pytest.mark.parametrize("legacy_field", ["ingest", "keywords"])
 def test_legacy_llm_fields_rejected(legacy_field: str) -> None:
     kwargs = {

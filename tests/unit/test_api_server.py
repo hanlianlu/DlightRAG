@@ -308,6 +308,28 @@ class TestIngestEndpoint:
         assert resp.status_code == 200
         mock_manager.aingest.assert_awaited_once()
 
+    async def test_ingest_forwards_metadata_contract(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "local",
+                "path": "/data/file.pdf",
+                "title": "Field Notes",
+                "author": "Ada",
+                "metadata": {"project": "apollo"},
+                "metadata_policy": "reject_unknown",
+            },
+        )
+        assert resp.status_code == 200
+        call_kwargs = mock_manager.aingest.call_args.kwargs
+        assert call_kwargs["title"] == "Field Notes"
+        assert call_kwargs["author"] == "Ada"
+        assert call_kwargs["metadata"] == {"project": "apollo"}
+        assert call_kwargs["metadata_policy"] == "reject_unknown"
+
     async def test_azure_blob_success(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -390,6 +412,18 @@ class TestRetrieveEndpoint:
         )
         assert resp.status_code == 422
         mock_manager.aretrieve.assert_not_called()
+
+    async def test_retrieve_forwards_multimodal_content(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        multimodal_content = [{"type": "image", "img_path": "/tmp/query.png"}]
+        resp = await client.post(
+            "/retrieve",
+            json={"query": "Find the matching drawing", "multimodal_content": multimodal_content},
+        )
+        assert resp.status_code == 200
+        assert mock_manager.aretrieve.call_args.kwargs["multimodal_content"] == multimodal_content
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +576,22 @@ class TestAnswerEndpoint:
         assert "sources" in body
         assert body["answer"] == "The answer is 42"
 
+    async def test_answer_forwards_explicit_filters(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "What did Ada write?",
+                "stream": False,
+                "filters": {"doc_author": "Ada"},
+            },
+        )
+        assert resp.status_code == 200
+        filters = mock_manager.aanswer.call_args.kwargs["filters"]
+        assert filters.doc_author == "Ada"
+
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -610,6 +660,26 @@ class TestAnswerStreamMode:
         resp = await client.post("/answer", json={"query": "test", "stream": True})
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
+
+    async def test_stream_forwards_explicit_filters(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        async def mock_tokens():
+            yield "Hello"
+
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "Stream filtered",
+                "stream": True,
+                "filters": {"doc_title": "Manual"},
+            },
+        )
+        assert resp.status_code == 200
+        filters = mock_manager.aanswer_stream.call_args.kwargs["filters"]
+        assert filters.doc_title == "Manual"
 
     async def test_stream_event_sequence(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

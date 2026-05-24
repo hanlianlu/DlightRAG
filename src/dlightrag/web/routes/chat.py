@@ -16,7 +16,6 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.citations import CitationProcessor, extract_highlights_for_sources
 from dlightrag.citations.source_builder import build_sources
-from dlightrag.config import get_config
 from dlightrag.web.deps import get_manager, get_workspace, templates
 from dlightrag.web.markdown import render_markdown
 
@@ -53,8 +52,6 @@ async def answer_stream(
 
     conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
 
-    cfg = get_config()
-
     # Extract images (base64 from frontend)
     images_b64: list[str] = body.get("images", [])
     multimodal_content: list[dict[str, Any]] | None = None
@@ -81,6 +78,7 @@ async def answer_stream(
     workspaces: list[str] | None = body.get("workspaces")
 
     manager = get_manager(request)
+    cfg = manager.config
 
     async def event_generator() -> AsyncIterator[str]:
         full_answer = ""
@@ -95,13 +93,10 @@ async def answer_stream(
             # --- Phase 1: Query planning ---
             yield f"event: progress\ndata: {json.dumps({'phase': 'planning'})}\n\n"
 
-            ws_list = workspaces or [workspace or manager._config.workspace]
-            planner = manager._get_query_planner()
-            plan = await planner.plan(
+            ws_list = workspaces or [workspace or manager.config.workspace]
+            plan = await manager.aplan_query(
                 query,
                 conversation_history=conversation_history,
-                max_turns=manager._config.max_conversation_turns,
-                max_tokens=manager._config.max_conversation_tokens,
             )
             t1 = time.monotonic()
             logger.info(
@@ -126,8 +121,7 @@ async def answer_stream(
             # --- Phase 3: Answer generation (streaming) ---
             yield f"event: progress\ndata: {json.dumps({'phase': 'generating'})}\n\n"
 
-            engine = manager._get_answer_engine()
-            contexts, token_iter = await engine.generate_stream(
+            contexts, token_iter = await manager.agenerate_stream_from_contexts(
                 plan.standalone_query,
                 retrieval.contexts,
             )

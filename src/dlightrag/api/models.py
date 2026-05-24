@@ -38,7 +38,10 @@ class IngestRequest(BaseModel):
     key: str | None = None
     replace: bool | None = None
     workspace: str | None = None
+    title: str | None = None
+    author: str | None = None
     metadata: dict[str, Any] | None = None
+    metadata_policy: Literal["validate", "reject_unknown", "store_only"] | None = None
 
     @model_validator(mode="after")
     def _validate_source_fields(self) -> IngestRequest:
@@ -63,6 +66,16 @@ class RetrieveRequest(BaseModel):
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
+    multimodal_content: list[dict[str, Any]] | None = None
+
+    @field_validator("multimodal_content")
+    @classmethod
+    def validate_multimodal_count(
+        cls, v: list[dict[str, Any]] | None
+    ) -> list[dict[str, Any]] | None:
+        if v and len(v) > 3:
+            raise ValueError("Maximum 3 multimodal items per query")
+        return v
 
 
 class AnswerRequest(BaseModel):
@@ -72,6 +85,7 @@ class AnswerRequest(BaseModel):
     top_k: int | None = None
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
+    filters: MetadataFilterRequest | None = None
     multimodal_content: list[dict[str, Any]] | None = None
     conversation_history: list[dict[str, str]] | None = None
     query_images: list[str | dict[str, Any]] | None = None

@@ -347,6 +347,41 @@ class TestDelegation:
         mock_svc.aingest.assert_awaited_once()
         assert result == {"status": "ok"}
 
+    @patch("dlightrag.storage.replication.wait_for_current_wal_replay", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aingest_waits_for_replica_when_configured(
+        self, mock_create, mock_wait, test_cfg
+    ) -> None:
+        mock_svc = AsyncMock()
+        mock_svc.aingest.return_value = {"status": "ok"}
+        mock_create.return_value = mock_svc
+        mock_wait.return_value = "0/42"
+        cfg = test_cfg.model_copy(
+            update={"read_after_write_mode": "wait_for_replay", "read_after_write_timeout": 2.5}
+        )
+
+        manager = RAGServiceManager(config=cfg)
+        result = await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
+
+        mock_wait.assert_awaited_once_with(cfg, timeout=2.5)
+        assert result == {"status": "ok", "replica_replay_lsn": "0/42"}
+
+    @patch("dlightrag.storage.replication.wait_for_current_wal_replay", new_callable=AsyncMock)
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aingest_surfaces_replica_wait_timeout(
+        self, mock_create, mock_wait, test_cfg
+    ) -> None:
+        mock_svc = AsyncMock()
+        mock_svc.aingest.return_value = {"status": "ok"}
+        mock_create.return_value = mock_svc
+        mock_wait.side_effect = TimeoutError("replica lag")
+        cfg = test_cfg.model_copy(update={"read_after_write_mode": "wait_for_replay"})
+
+        manager = RAGServiceManager(config=cfg)
+
+        with pytest.raises(RAGServiceUnavailableError, match="replica lag"):
+            await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
+
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_list_ingested_files_delegates(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()

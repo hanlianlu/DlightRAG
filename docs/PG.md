@@ -76,8 +76,10 @@ locks and write-time initialization, verify that required LightRAG/DlightRAG
 tables already exist, and reject mutating APIs.
 
 This is process-level separation, not dynamic in-process read/write routing.
-Strong read-after-write flows should wait for replica replay or call an
-admin/ingest surface explicitly; ordinary query workers remain read-only.
+Strong read-after-write flows can set `read_after_write_mode: wait_for_replay`
+on ingest/admin workers so write acknowledgements wait for replica WAL replay.
+Flows that cannot wait should call an admin/ingest surface explicitly; ordinary
+query workers remain read-only and never dynamically route to primary.
 
 DlightRAG uses two asyncpg pools per process target:
 

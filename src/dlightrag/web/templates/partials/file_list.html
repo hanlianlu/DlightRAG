@@ -6,7 +6,7 @@
           hx-swap="innerHTML"
           hx-encoding="multipart/form-data"
           hx-indicator="#upload-spinner"
-          style="display:none">
+          class="visually-hidden">
         <input type="file" id="file-input" name="files" multiple>
     </form>
 </div>
@@ -27,7 +27,7 @@
 </div>
 {% endfor %}
 {% else %}
-<div class="empty-state" style="padding:40px 0;font-size:13px;">
+<div class="empty-state file-empty-state">
     No files ingested in workspace "{{ workspace }}".
 </div>
 {% endif %}

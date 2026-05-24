@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from dlightrag.core.retrieval.protocols import RetrievalResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -72,6 +74,56 @@ class TestWebIndex:
         resp = await client.get("/web/")
         assert resp.status_code == 200
         assert "default" in resp.text
+
+    def test_web_markup_keeps_behavior_in_static_js(self) -> None:
+        web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"
+        checked = list((web_root / "templates").rglob("*.html")) + [web_root / "deps.py"]
+
+        offenders: list[str] = []
+        for path in checked:
+            text = path.read_text()
+            for marker in ("onclick=", "onchange=", "style="):
+                if marker in text:
+                    offenders.append(f"{path.relative_to(web_root)}:{marker}")
+
+        assert offenders == []
+
+
+class TestWebAnswer:
+    """Tests for POST /web/answer."""
+
+    async def test_answer_stream_uses_public_manager_methods(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        async def mock_tokens():
+            yield "Answer"
+
+        class PublicOnlyManager:
+            def __init__(self) -> None:
+                self.config = test_config
+                self.aplan_query = AsyncMock(
+                    return_value=MagicMock(original_query="hello", standalone_query="hello")
+                )
+                self.aretrieve = AsyncMock(
+                    return_value=RetrievalResult(answer=None, contexts={"chunks": []})
+                )
+                self.agenerate_stream_from_contexts = AsyncMock(
+                    return_value=({"chunks": []}, mock_tokens())
+                )
+
+        manager = PublicOnlyManager()
+        web_app.state.manager = manager
+
+        resp = await client.post("/web/answer", json={"query": "hello"})
+
+        assert resp.status_code == 200
+        assert "event: done" in resp.text
+        assert "Service error" not in resp.text
+        manager.aplan_query.assert_awaited_once()
+        manager.agenerate_stream_from_contexts.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +201,7 @@ class TestWebWorkspaceCreate:
     async def test_create_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager._get_service = AsyncMock()
+        mock_manager.acreate_workspace = AsyncMock()
         # First call (duplicate check): workspace does not exist yet
         # Second call (post-create list): includes the new workspace
         mock_manager.list_workspaces = AsyncMock(
@@ -161,7 +213,7 @@ class TestWebWorkspaceCreate:
         )
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
-        mock_manager._get_service.assert_awaited_once_with("new_workspace")
+        mock_manager.acreate_workspace.assert_awaited_once_with("new_workspace")
 
     async def test_create_workspace_empty_name(
         self, client: AsyncClient, test_config: DlightragConfig

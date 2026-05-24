@@ -368,6 +368,8 @@ Set `runtime_role: query` on read-only API workers and configure
 `postgres_replica_*`. Query role attaches to existing LightRAG/DlightRAG schema
 without DDL and rejects ingest, delete, metadata update, retry, and reset
 operations. Ingest/admin roles remain primary-only for migrations and writes.
+Set `read_after_write_mode: wait_for_replay` on ingest/admin workers when write
+acknowledgements must wait for replica WAL replay.
 
 ### Workspaces
 

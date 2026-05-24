@@ -11,7 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from dlightrag.api.auth import UserContext, get_current_user
-from dlightrag.api.models import AnswerRequest, IngestRequest, ResetRequest, RetrieveRequest
+from dlightrag.api.models import (
+    AnswerRequest,
+    IngestRequest,
+    MetadataFilterRequest,
+    ResetRequest,
+    RetrieveRequest,
+)
 from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
 
@@ -19,6 +25,15 @@ from .deps import get_manager, resolve_workspace
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _metadata_filter(body: MetadataFilterRequest | None) -> Any | None:
+    if body is None:
+        return None
+
+    from dlightrag.core.retrieval.models import MetadataFilter
+
+    return MetadataFilter(**body.model_dump(exclude_none=True))
 
 
 @router.post("/ingest")
@@ -48,8 +63,14 @@ async def ingest(
     elif body.source_type == "s3":
         kwargs["bucket"] = body.bucket
         kwargs["key"] = body.key
-    if body.metadata:
+    if body.title is not None:
+        kwargs["title"] = body.title
+    if body.author is not None:
+        kwargs["author"] = body.author
+    if body.metadata is not None:
         kwargs["metadata"] = body.metadata
+    if body.metadata_policy is not None:
+        kwargs["metadata_policy"] = body.metadata_policy
 
     return await manager.aingest(ws, source_type=body.source_type, **kwargs)
 
@@ -61,10 +82,11 @@ async def retrieve(
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
     kwargs: dict[str, Any] = {}
-    if body.filters:
-        from dlightrag.core.retrieval.models import MetadataFilter
-
-        kwargs["filters"] = MetadataFilter(**body.filters.model_dump(exclude_none=True))
+    filters = _metadata_filter(body.filters)
+    if filters is not None:
+        kwargs["filters"] = filters
+    if body.multimodal_content:
+        kwargs["multimodal_content"] = body.multimodal_content
 
     result = await manager.aretrieve(
         body.query,
@@ -89,6 +111,9 @@ async def answer(
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     manager = get_manager(request)
     kwargs: dict[str, Any] = {}
+    filters = _metadata_filter(body.filters)
+    if filters is not None:
+        kwargs["filters"] = filters
     if body.multimodal_content:
         kwargs["multimodal_content"] = body.multimodal_content
     if body.query_images:

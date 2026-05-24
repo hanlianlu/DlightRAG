@@ -220,9 +220,13 @@ class DlightragConfig(BaseSettings):
     postgres_replica_user: str | None = Field(default=None)
     postgres_replica_password: str | None = Field(default=None)
     postgres_replica_database: str | None = Field(default=None)
-    read_after_write_mode: Literal["eventual", "wait_for_replay", "primary_route"] = Field(
+    read_after_write_mode: Literal["eventual", "wait_for_replay"] = Field(
         default="eventual",
-        description="Replica read-after-write policy exposed to admin/query surfaces.",
+        description="Replica read-after-write policy for write acknowledgements.",
+    )
+    read_after_write_timeout: float = Field(
+        default=15.0,
+        description="Seconds to wait for replica WAL replay when read_after_write_mode='wait_for_replay'.",
     )
     postgres_pool_min_size: int = Field(
         default=2, description="DlightRAG domain store pool min connections."
