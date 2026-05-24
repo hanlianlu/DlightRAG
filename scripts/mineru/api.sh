@@ -2,7 +2,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mineru_env.sh"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
 load_mineru_env_key MINERU_API_HOST
 load_mineru_env_key MINERU_API_PORT

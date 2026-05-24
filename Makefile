@@ -3,34 +3,34 @@ LANGFUSE_PROJECT ?= langfuse
 LANGFUSE_HOST ?= http://localhost:3300
 PYTHON ?= python3
 LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(LANGFUSE_PROJECT) -f "$(LANGFUSE_LOCAL_DIR)/docker-compose.yml"
-LANGFUSE_STACK = $(PYTHON) scripts/langfuse_stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
-LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse_headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env" --host "$(LANGFUSE_HOST)"
+LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
+LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env" --host "$(LANGFUSE_HOST)"
 
 .PHONY: mineru-install mineru-api mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health
 
 mineru-install:
-	scripts/install_mineru_service.sh
+	scripts/mineru/install.sh
 
 mineru-api:
-	scripts/start_mineru_api.sh
+	scripts/mineru/api.sh
 
 mineru-service-install:
-	scripts/mineru_launch_agent.sh install
+	scripts/mineru/launch_agent.sh install
 
 mineru-service-start:
-	scripts/mineru_launch_agent.sh start
+	scripts/mineru/launch_agent.sh start
 
 mineru-service-stop:
-	scripts/mineru_launch_agent.sh stop
+	scripts/mineru/launch_agent.sh stop
 
 mineru-service-status:
-	scripts/mineru_launch_agent.sh status
+	scripts/mineru/launch_agent.sh status
 
 mineru-service-logs:
-	scripts/mineru_launch_agent.sh logs
+	scripts/mineru/launch_agent.sh logs
 
 mineru-service-uninstall:
-	scripts/mineru_launch_agent.sh uninstall
+	scripts/mineru/launch_agent.sh uninstall
 
 langfuse-stack:
 	$(LANGFUSE_STACK)
