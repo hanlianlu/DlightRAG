@@ -676,6 +676,7 @@ extraction:
 metadata:
   enabled: true
   allow_ad_hoc_json: true
+  unknown_filter_policy: ignore_with_warning
   fields:
     title:
       type: string
@@ -696,6 +697,10 @@ metadata:
       normalizer: casefold_trim
       filter_ops: [contains]
       indexed: true
+    metadata_json:
+      type: json
+      filter_ops: [contains]
+      indexed: false
 ```
 
 - [ ] **Step 13: Run Task 1 tests**
@@ -2380,6 +2385,21 @@ def test_lightrag_namespace_is_reserved_for_user_metadata() -> None:
 
     with pytest.raises(ValueError, match="reserved"):
         normalize_user_metadata({"lightrag.content_hash": "x"}, registry)
+
+
+def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
+    registry = MetadataFieldRegistry.from_config({})
+
+    assert registry.filter_spec("project") is None
+
+
+def test_json_contains_requires_declared_metadata_json_field() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {"metadata_json": {"type": "json", "filter_ops": ["contains"], "indexed": False}}
+    )
+
+    assert registry.filter_spec("metadata_json").type == "json"
+    assert "contains" in registry.filter_spec("metadata_json").filter_ops
 ```
 
 Add a PG metadata test that asserts DlightRAG does not use LightRAG `doc_status.metadata` as the filter authority:
@@ -2465,6 +2485,7 @@ Normalization rules:
 - keep unknown fields in `raw_json` only;
 - expose only declared fields in `filterable`;
 - support exact/range/JSONB/pattern operators only when declared in `filter_ops`;
+- LLM intent-aware detection can propose filters only against registered fields. Unknown fields are ignored with warning, rejected, or mapped to a declared `metadata_json contains` filter according to `metadata.unknown_filter_policy`; they are never silently promoted to indexed filters.
 - never add fuzzy/trigram behavior.
 
 LightRAG bridge rule:

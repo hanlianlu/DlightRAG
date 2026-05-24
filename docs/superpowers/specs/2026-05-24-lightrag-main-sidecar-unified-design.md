@@ -257,7 +257,8 @@ DlightRAG should expose a user metadata contract, but it should not delegate tha
 
 - Ingest APIs accept `metadata: Mapping[str, Any]` plus optional typed system fields such as `title`, `author`, and dates.
 - Config may declare metadata fields with `type`, `normalizer`, `filter_ops`, and `indexed` settings. Supported matching operators are exact, `IN`, range, JSONB containment, and explicit pattern for selected string fields.
-- Unknown user metadata may be stored in JSONB for enrichment, but it is not filterable until declared in the field registry.
+- Unknown user metadata may be stored in JSONB for enrichment. It is not filterable through the normal exact/range/pattern path until declared in the field registry.
+- LLM intent-aware detection may mention an unknown metadata key, but it cannot make that key filterable by itself. The planner must either ignore it as an untrusted filter with a traceable warning, ask the caller to declare the field, or use an explicitly declared `metadata_json` field whose `filter_ops` includes `contains`.
 - Reserved namespaces are immutable: `sys.*` for DlightRAG system metadata, `lightrag.*` for mirrored LightRAG provenance, and `user.*` for caller-provided metadata.
 - Metadata updates affect filtering and enrichment immediately, but do not mutate LightRAG chunks, KG, or vectors. If a metadata field should become semantic content, the caller must request re-ingest or explicit KG projection.
 
@@ -622,6 +623,7 @@ retrieval:
 metadata:
   enabled: true
   allow_ad_hoc_json: true
+  unknown_filter_policy: ignore_with_warning  # reject | ignore_with_warning | allow_declared_json_contains
   fields:
     title:
       type: string
@@ -642,6 +644,10 @@ metadata:
       normalizer: casefold_trim
       filter_ops: [contains]
       indexed: true
+    metadata_json:
+      type: json
+      filter_ops: [contains]
+      indexed: false   # explicit opt-in; enable only if broad JSONB containment is acceptable
 ```
 
 The storage values are operational facts, not product-mode switches. Config validation should reject PostgreSQL servers older than major version 18, and should reject `Neo4JStorage`, `MilvusVectorDBStorage`, `QdrantVectorDBStorage`, `JsonKVStorage`, `NetworkXStorage`, and other non-PostgreSQL storage choices in the core path.
