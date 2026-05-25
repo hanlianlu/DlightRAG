@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web routes for file management."""
 
+from __future__ import annotations
+
+import asyncio
 import logging
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +16,10 @@ from dlightrag.web.deps import get_manager, get_workspace, templates
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Track per-workspace background ingest tasks so the Upload button doesn't
+# launch a duplicate while an ingest is already running.
+_ingest_tasks: dict[str, asyncio.Task[Any] | None] = {}
 
 
 def _render_partial(name: str, **ctx: Any) -> str:
@@ -53,6 +59,21 @@ def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _staging_dir(workspace: str) -> Path:
+    """Persistent staging directory for this workspace's uploaded files."""
+    from dlightrag.config import get_config
+
+    cfg = get_config()
+    p = cfg.input_dir_path / workspace
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# ---------------------------------------------------------------------------
+# GET /web/files — file list panel content
+# ---------------------------------------------------------------------------
+
+
 @router.get("/files", response_class=HTMLResponse)
 async def file_list(
     request: Request,
@@ -71,11 +92,30 @@ async def _file_list_response(request: Request, workspace: str):
     except Exception:
         files = []
 
+    # Check whether an ingest is currently active so reopening the panel
+    # shows the progress bar again instead of stale state.
+    ingest_busy = _ingest_tasks.get(workspace) is not None
+    if ingest_busy:
+        try:
+            ps = await manager.get_pipeline_status(workspace)
+            ingest_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+        except Exception:
+            pass
+
     return templates.TemplateResponse(
         request,
         "partials/file_list.html",
-        {"files": files, "workspace": workspace},
+        {
+            "files": files,
+            "workspace": workspace,
+            "ingest_busy": ingest_busy,
+        },
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /web/files/upload — non-blocking upload + background ingest
+# ---------------------------------------------------------------------------
 
 
 @router.post("/files/upload", response_class=HTMLResponse)
@@ -85,14 +125,12 @@ async def upload_files(
     workspace_name: str | None = Form(default=None, alias="workspace"),
     workspace: str = Depends(get_workspace),
 ):
-    """Upload and ingest files."""
+    """Upload files and start background ingest.  Returns immediately."""
     from dlightrag.config import get_config
 
     cfg = get_config()
     max_bytes = cfg.max_upload_size_mb * 1024 * 1024
 
-    # Reject oversized requests up front (Content-Length header). This is a
-    # cheap pre-check; the per-file budget below catches malformed CL too.
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > max_bytes:
         return _error_response(
@@ -103,49 +141,113 @@ async def upload_files(
     manager = get_manager(request)
     selected_workspace = _resolve_workspace(workspace_name, workspace)
 
+    # Reject if an ingest is already running in this workspace.
+    existing = _ingest_tasks.get(selected_workspace)
+    if existing is not None and not existing.done():
+        return _error_response(
+            "An ingest is already in progress for this workspace. "
+            "Wait for it to finish before uploading more files.",
+            status_code=409,
+        )
+
     bytes_written = 0
     try:
-        with tempfile.TemporaryDirectory(prefix="dlightrag_upload_") as tmp:
-            tmp_dir = Path(tmp)
-            saved_files = 0
-            for f in files:
-                if not f.filename:
-                    continue
-                # Strip any path components from the user-supplied filename:
-                # tmp_dir / "../etc/passwd" would otherwise escape tmp_dir.
-                safe_name = Path(f.filename).name
-                if not safe_name or safe_name in (".", ".."):
-                    logger.warning("Rejected upload with unsafe filename: %r", f.filename)
-                    continue
-                dest = tmp_dir / safe_name
-                # Stream-copy with running budget so a missing or lying
-                # Content-Length cannot blow past max_bytes.
-                with open(dest, "wb") as out:
-                    while chunk := await f.read(1024 * 1024):
-                        bytes_written += len(chunk)
-                        if bytes_written > max_bytes:
-                            out.close()
-                            dest.unlink(missing_ok=True)
-                            return _error_response(
-                                f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
-                                status_code=413,
-                            )
-                        out.write(chunk)
-                saved_files += 1
+        dest_dir = _staging_dir(selected_workspace)
+        saved_files = 0
+        for f in files:
+            if not f.filename:
+                continue
+            safe_name = Path(f.filename).name
+            if not safe_name or safe_name in (".", ".."):
+                logger.warning("Rejected upload with unsafe filename: %r", f.filename)
+                continue
+            dest = dest_dir / safe_name
+            with open(dest, "wb") as out:
+                while chunk := await f.read(1024 * 1024):
+                    bytes_written += len(chunk)
+                    if bytes_written > max_bytes:
+                        out.close()
+                        dest.unlink(missing_ok=True)
+                        return _error_response(
+                            f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+                            status_code=413,
+                        )
+                    out.write(chunk)
+            saved_files += 1
 
-            if saved_files == 0:
-                return _error_response("No valid files selected")
+        if saved_files == 0:
+            return _error_response("No valid files selected")
 
+    except Exception as e:
+        logger.exception("Upload staging failed")
+        return _error_response(f"Upload failed: {e}", status_code=500)
+
+    # Fire-and-forget: schedule ingest, return immediately with progress UI.
+    async def _background_ingest() -> None:
+        try:
             await manager.aingest(
                 workspace=selected_workspace,
                 source_type="local",
-                path=str(tmp_dir),
+                path=str(dest_dir),
             )
-    except Exception as e:
-        logger.exception("Upload/ingestion failed")
-        return _error_response(f"Upload failed: {e}", status_code=500)
+        except Exception:
+            logger.exception("Background ingest failed for workspace %s", selected_workspace)
+        finally:
+            _ingest_tasks.pop(selected_workspace, None)
 
+    _ingest_tasks[selected_workspace] = asyncio.create_task(_background_ingest())
+
+    return templates.TemplateResponse(
+        request,
+        "partials/file_list.html",
+        {
+            "files": [],
+            "workspace": selected_workspace,
+            "ingest_busy": True,
+            "status": {"latest_message": "Starting ingest..."},
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /web/ingest-status — htmx polling endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get("/ingest-status", response_class=HTMLResponse)
+async def ingest_status(
+    request: Request,
+    workspace: str = Depends(get_workspace),
+    workspace_name: str | None = Query(default=None, alias="workspace"),
+):
+    """Return either a progress partial (while busy) or the file list (done)."""
+    selected_workspace = _resolve_workspace(workspace_name, workspace)
+    manager = get_manager(request)
+
+    try:
+        ps = await manager.get_pipeline_status(selected_workspace)
+    except Exception:
+        ps = {"busy": False, "latest_message": "Status unavailable"}
+
+    still_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+
+    if still_busy:
+        return HTMLResponse(
+            _render_partial(
+                "partials/ingest_progress.html",
+                workspace=selected_workspace,
+                status=ps,
+            )
+        )
+
+    # Ingest finished — clean up task tracker and return refreshed file list.
+    _ingest_tasks.pop(selected_workspace, None)
     return await _file_list_response(request, selected_workspace)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /web/files
+# ---------------------------------------------------------------------------
 
 
 @router.delete("/files", response_class=HTMLResponse)
@@ -154,7 +256,6 @@ async def delete_files(
     workspace: str = Depends(get_workspace),
 ):
     """Delete files from workspace."""
-    # htmx sends hx-vals as query params for DELETE requests
     file_path = request.query_params.get("file_path", "")
     file_paths = [file_path] if file_path else []
     manager = get_manager(request)

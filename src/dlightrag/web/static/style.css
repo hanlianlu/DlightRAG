@@ -877,6 +877,43 @@ body {
 .htmx-request .htmx-indicator,
 .htmx-request.htmx-indicator { display: block; }
 
+.spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--text-500);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.progress-bar-track {
+    margin: 8px 16px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+.progress-label {
+    padding: 0 16px 8px;
+    font-size: 11px;
+    color: var(--text-400);
+    text-align: center;
+}
+
+#ingest-progress {
+    border-bottom: 1px solid var(--border);
+}
+
 /* === Composer + Button === */
 
 .composer-plus {

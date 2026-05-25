@@ -133,6 +133,18 @@ export function setupPanel() {
         }
     });
 
+    // Apply progress-bar width from data-pct (avoids inline style= in templates).
+    document.body.addEventListener('htmx:afterSettle', function() {
+        const bar = document.getElementById('ingest-progress');
+        if (!bar) return;
+        const fill = bar.querySelector('.progress-bar-fill');
+        if (!fill) return;
+        const pct = fill.getAttribute('data-pct');
+        if (pct !== null) {
+            fill.style.width = Math.max(0, Math.min(100, parseInt(pct, 10) || 0)) + '%';
+        }
+    });
+
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
     panelContent.addEventListener('click', function(e) {

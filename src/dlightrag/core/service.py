@@ -1503,5 +1503,24 @@ class RAGService:
             results.append({"identifier": identifier, "status": status, **stats})
         return results
 
+    async def aget_pipeline_status(self) -> dict[str, Any]:
+        """Return LightRAG pipeline_status for progress reporting."""
+        from lightrag.kg.shared_storage import get_namespace_data
+
+        if self._lightrag is None:
+            return {"busy": False, "latest_message": "No LightRAG instance"}
+
+        ns = await get_namespace_data("pipeline_status", workspace=self.config.workspace)
+        return {
+            "busy": bool(ns.get("busy", False)),
+            "job_name": ns.get("job_name", ""),
+            "latest_message": ns.get("latest_message", ""),
+            "docs": ns.get("docs", 0),
+            "batchs": ns.get("batchs", 0),
+            "cur_batch": ns.get("cur_batch", 0),
+            "pending_enqueues": int(ns.get("pending_enqueues", 0) or 0),
+            "history_messages": list(ns.get("history_messages", [])[-10:]),
+        }
+
 
 __all__ = ["RAGService"]
