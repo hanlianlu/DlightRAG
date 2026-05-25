@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import sys
+import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -278,6 +280,7 @@ class RAGService:
         from dlightrag.core._lightrag_patches import apply as apply_lightrag_patches
 
         self.config.apply_lightrag_backend_env(force=True)
+        self.config.apply_lightrag_runtime_env(force=True)
         apply_lightrag_patches()
         await self._do_initialize_unified()
 
@@ -828,6 +831,7 @@ class RAGService:
                 stored_file_path=stored_file_path,
             )
 
+        file_path = self._stage_lightrag_input_file(file_path)
         result = await self._ingestion_engine.aingest_file(
             file_path,
             replace=replace,
@@ -857,6 +861,19 @@ class RAGService:
         if not files:
             raise ValueError(f"Local ingest directory contains no files: {path}")
         return files
+
+    def _stage_lightrag_input_file(self, file_path: Path) -> Path:
+        """Copy an ingest source into LightRAG's persistent input root."""
+        source = file_path.resolve()
+        target = self.config.input_dir_path / self.config.workspace / file_path.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists() and target.resolve() == source:
+            return target
+
+        tmp_target = target.with_name(f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+        shutil.copy2(source, tmp_target)
+        os.replace(tmp_target, target)
+        return target
 
     def _remote_local_path(self, source_type: str, namespace: str, key: str) -> Path:
         """Return a managed local source-copy path for a remote object."""

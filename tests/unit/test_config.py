@@ -187,6 +187,8 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.parser_sidecars.mineru.local_backend == "hybrid-auto-engine"
     assert cfg.parser_sidecars.mineru.enable_table is True
     assert cfg.parser_sidecars.mineru.enable_formula is True
+    assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
+    assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
     assert cfg.pg_vector_index_type == "HNSW"

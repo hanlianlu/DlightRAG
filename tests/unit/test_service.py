@@ -386,7 +386,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Local ingestion delegates to the unified engine."""
+        """Local ingestion stages parser sources before delegating to the unified engine."""
         fake_pdf = tmp_path / "f.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
 
@@ -399,7 +399,9 @@ class TestRAGServiceLightRAGMainPath:
 
         result = await service.aingest(source_type="local", path=str(fake_pdf))
         service._ingestion_engine.aingest_file.assert_awaited_once()
-        assert service._ingestion_engine.aingest_file.call_args.args[0] == fake_pdf
+        staged = test_config.input_dir_path / test_config.workspace / "f.pdf"
+        assert service._ingestion_engine.aingest_file.call_args.args[0] == staged
+        assert staged.read_bytes() == b"%PDF-fake"
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
 
@@ -427,11 +429,17 @@ class TestRAGServiceLightRAGMainPath:
 
         assert result["processed"] == 3
         assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
-        assert [call.args[0] for call in service._ingestion_engine.aingest_file.await_args_list] == [
-            docx,
-            pdf,
-            pptx,
+        staged_root = test_config.input_dir_path / test_config.workspace
+        assert [
+            call.args[0] for call in service._ingestion_engine.aingest_file.await_args_list
+        ] == [
+            staged_root / "a.docx",
+            staged_root / "b.pdf",
+            staged_root / "c.pptx",
         ]
+        assert (staged_root / "a.docx").read_bytes() == b"fake"
+        assert (staged_root / "b.pdf").read_bytes() == b"fake"
+        assert (staged_root / "c.pptx").read_bytes() == b"fake"
 
     async def test_aingest_replace_purges_existing_doc_before_ingest(
         self, test_config: DlightragConfig, tmp_path: Path
