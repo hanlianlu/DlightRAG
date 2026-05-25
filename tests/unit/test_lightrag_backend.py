@@ -146,9 +146,7 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
         ]
     )
     lightrag.full_docs = MagicMock()
-    lightrag.full_docs.get_by_id = AsyncMock(
-        return_value={"sidecar_location": parsed_dir.as_uri()}
-    )
+    lightrag.full_docs.get_by_id = AsyncMock(return_value={"sidecar_location": parsed_dir.as_uri()})
 
     backend = LightRAGMixBackend(lightrag=lightrag)
     result = await backend.aretrieve("question")

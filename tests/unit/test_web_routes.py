@@ -128,9 +128,7 @@ class TestWebAnswer:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
-                self.aanswer_stream = AsyncMock(
-                    return_value=({"chunks": []}, mock_tokens())
-                )
+                self.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
 
         manager = PublicOnlyManager()
         web_app.state.manager = manager
@@ -242,7 +240,7 @@ class TestWebFiles:
 
         assert resp.status_code == 200
         assert ">q4.pdf</span>" in resp.text
-        assert "title=\"/tmp/reports/q4.pdf\"" in resp.text
+        assert 'title="/tmp/reports/q4.pdf"' in resp.text
 
     async def test_upload_preserves_filename_for_directory_ingest(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager

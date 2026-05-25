@@ -16,6 +16,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ------------------------------------------------------------------
+  # Lint: ruff check + format
+  # ------------------------------------------------------------------
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -28,6 +31,23 @@ jobs:
       - run: uv run ruff check src/ tests/ scripts/
       - run: uv run ruff format --check src/ tests/ scripts/
 
+  # ------------------------------------------------------------------
+  # Type check: pyright
+  # ------------------------------------------------------------------
+  type-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --group dev
+      - run: uv run pyright src/
+
+  # ------------------------------------------------------------------
+  # Unit tests
+  # ------------------------------------------------------------------
   unit-tests:
     runs-on: ubuntu-latest
     steps:
@@ -37,4 +57,52 @@ jobs:
           enable-cache: true
           python-version: '3.12'
       - run: uv sync --group dev
-      - run: uv run pytest tests/unit -v --tb=short
+      - run: uv run pytest tests/unit -v --tb=short --cov=dlightrag --cov-report=term-missing
+
+  # ------------------------------------------------------------------
+  # Integration tests (needs PostgreSQL + pgvector)
+  # ------------------------------------------------------------------
+  integration-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: dlightrag
+          POSTGRES_USER: dlightrag
+          POSTGRES_PASSWORD: dlightrag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dlightrag -d dlightrag"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --group dev
+      - run: uv run pytest tests/integration -v --tb=short
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: dlightrag
+          PGPASSWORD: dlightrag
+          PGDATABASE: dlightrag
+
+  # ------------------------------------------------------------------
+  # Architecture: enforce import layer boundaries
+  # ------------------------------------------------------------------
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync
+      - run: uv run python scripts/ci/check-architecture.py

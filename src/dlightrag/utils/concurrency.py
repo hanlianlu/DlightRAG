@@ -38,6 +38,7 @@ async def bounded_gather(
         ``Exception`` instance (same convention as
         ``asyncio.gather(return_exceptions=True)``).
     """
+
     async def _await_coro(coro: Coroutine[Any, Any, Any]) -> Any:
         return await coro
 
