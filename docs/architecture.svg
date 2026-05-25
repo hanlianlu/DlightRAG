@@ -48,8 +48,8 @@
   <rect class="bg" width="1280" height="900"/>
 
   <text class="title" x="64" y="52">DlightRAG Unified LightRAG Main Architecture</text>
-  <text class="subtitle" x="64" y="80">One production path: LightRAG main owns document ingest, KG/vector retrieval, doc status, and reference seeds.</text>
-  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, direct visual search, BM25 fusion, answer generation, and validated cited sources.</text>
+  <text class="subtitle" x="64" y="80">One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.</text>
+  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, direct visual search, BM25 fusion, reference canonicalization, and validated cited answers.</text>
 
   <rect class="band-soft" x="64" y="126" width="1152" height="108"/>
   <text class="band-title" x="84" y="151">Interface Boundary</text>
@@ -117,7 +117,7 @@
   <rect class="box box-orange" x="649" y="440" width="126" height="64"/>
   <text class="label" text-anchor="middle" x="712" y="463">Doc Status</text>
   <text class="small" text-anchor="middle" x="712" y="482">content hash</text>
-  <text class="small" text-anchor="middle" x="712" y="496">reference seeds</text>
+  <text class="small" text-anchor="middle" x="712" y="496">chunks list</text>
 
   <rect class="box box-orange" x="505" y="525" width="270" height="58"/>
   <text class="label" text-anchor="middle" x="640" y="548">LightRAG Mix Retrieval</text>
@@ -153,9 +153,9 @@
   <path class="line-blue" d="M 1010 389 H 1034"/>
   <path class="line-blue" d="M 1097 418 V 455"/>
   <path class="line-orange" d="M 775 554 H 884"/>
+  <text class="note" text-anchor="middle" x="830" y="546" fill="#92400e">chunks + references</text>
   <path class="line" d="M 1022 515 V 525 H 947 V 535"/>
   <path class="line" d="M 1010 564 H 1034"/>
-  <path class="line-orange dash" d="M 775 472 C 860 430 1100 430 1180 456 V 564 H 1160"/>
 
   <path class="line" d="M 826 224 V 252 H 257 V 316"/>
   <path class="line" d="M 826 252 H 1023 V 316"/>
