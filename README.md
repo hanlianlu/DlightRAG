@@ -624,22 +624,19 @@ cp .env.example .env
 uv sync
 ```
 
-Common checks:
+### CI (local)
 
 ```bash
-uv run pytest tests/unit
-uv run pytest tests/integration
-uv run ruff check src tests
-uv run pyright
+make ci         # ruff, pyright, import-linter, unit tests (~2 min)
+make ci-full    # + integration tests (needs PostgreSQL + pgvector)
+make ci-e2e     # + E2E smoke tests (needs PG18 + AGE + API keys)
 ```
 
-Full local test command:
+### CI (GitHub Actions)
 
-```bash
-uv run pytest -q
-```
+The badge above runs `ruff` → `pyright` → `import-linter` → `unit tests` → `integration tests` on every push and PR. E2E tests are `workflow_dispatch` only. Import boundary contracts are defined in `pyproject.toml` under `[tool.importlinter]`.
 
-Opt-in PG18 + LightRAG smoke:
+### Opt-in E2E smoke
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build postgres
