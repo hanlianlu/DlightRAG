@@ -1475,12 +1475,10 @@ class RAGService:
         *,
         file_paths: list[str] | None = None,
         filenames: list[str] | None = None,
-        delete_source: bool = True,
     ) -> list[dict[str, Any]]:
         """Unified file deletion."""
         self._ensure_initialized()
         self._ensure_writable("delete files")
-        del delete_source
         from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
 
         identifiers = [*(file_paths or []), *(filenames or [])]
