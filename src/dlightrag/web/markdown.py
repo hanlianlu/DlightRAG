@@ -1,8 +1,9 @@
-"""Markdown-to-HTML renderers for Web UI.
+r"""Markdown-to-HTML renderers for Web UI.
 
 Uses markdown-it-py (GFM-like preset) for Markdown/tables/lists and
-Pygments for fenced code block syntax highlighting. LaTeX $...$ passes
-through as literal text for client-side KaTeX rendering.
+Pygments for fenced code block syntax highlighting. LaTeX math blocks
+($$...$$, $...$, \[...\], \(...\)) are protected from markdown processing
+so underscores and other LaTeX syntax survive intact for client-side KaTeX.
 
 Two renderers are provided:
 - ``render_markdown``: For answer content (``html: False`` — escapes raw HTML).
@@ -13,6 +14,7 @@ Two renderers are provided:
 from __future__ import annotations
 
 import html as _html
+import re
 
 from markdown_it import MarkdownIt
 from pygments import highlight as pygments_highlight
@@ -21,6 +23,43 @@ from pygments.lexers import get_lexer_by_name
 from pygments.util import ClassNotFound
 
 _FORMATTER = HtmlFormatter(nowrap=True)
+
+# ---------------------------------------------------------------------------
+# Math-block protection — prevent markdown-it-py from corrupting LaTeX
+# (e.g., underscores in $$x_{1}$$ becoming <em> tags).
+# ---------------------------------------------------------------------------
+
+_MATH_DISPLAY_RE = re.compile(r"(\$\$|\\\[)(.+?)(\$\$|\\\])", re.DOTALL)
+_MATH_INLINE_RE = re.compile(r"\\\((.+?)\\\)|(?<!\$)\$(?![\s\d$])(.+?)(?<![\s])\$(?!\d)")
+
+
+_MATH_PLACEHOLDER_RE = re.compile(r"⧸MATH(\d+)⧸")
+
+
+def _protect_math(text: str) -> tuple[str, list[str]]:
+    """Replace math blocks with indexed placeholders."""
+    protected: list[str] = []
+
+    def _replace(m: re.Match) -> str:
+        idx = len(protected)
+        protected.append(m.group(0))
+        return f"⧸MATH{idx}⧸"
+
+    text = _MATH_DISPLAY_RE.sub(_replace, text)
+    text = _MATH_INLINE_RE.sub(_replace, text)
+    return text, protected
+
+
+def _restore_math(html: str, protected: list[str]) -> str:
+    """Restore math blocks from placeholders."""
+    for idx, original in enumerate(protected):
+        html = html.replace(f"⧸MATH{idx}⧸", original)
+    return html
+
+
+# ---------------------------------------------------------------------------
+# Code highlighting
+# ---------------------------------------------------------------------------
 
 
 def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
@@ -54,9 +93,13 @@ _md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).d
 
 def render_markdown(text: str) -> str:
     """Convert Markdown text to HTML with syntax-highlighted code blocks."""
-    return _md.render(text)
+    text, math_blocks = _protect_math(text)
+    html = _md.render(text)
+    return _restore_math(html, math_blocks)
 
 
 def render_chunk_content(text: str) -> str:
     """Render chunk content to HTML, allowing HTML passthrough for tables etc."""
-    return _md_chunk.render(text)
+    text, math_blocks = _protect_math(text)
+    html = _md_chunk.render(text)
+    return _restore_math(html, math_blocks)
