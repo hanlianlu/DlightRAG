@@ -1,14 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web routes for workspace management."""
 
-import html
 import json
 import logging
 import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse
 
 from dlightrag.web.deps import get_manager, get_workspace, templates
 
@@ -22,19 +21,11 @@ def _render_partial(name: str, **ctx: Any) -> str:
     return templates.env.get_template(name).render(**ctx)
 
 
-def _workspace_cookie_value(raw: str, known_workspaces: list[str]) -> str:
-    """Resolve a requested workspace to a safe cookie value from known workspaces."""
-    from dlightrag.utils import normalize_workspace
-
-    requested = normalize_workspace(raw)
-    if not requested:
-        return "default"
-
-    for known in known_workspaces:
-        candidate = normalize_workspace(known)
-        if candidate == requested:
-            return candidate
-    return "default"
+def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
+    return HTMLResponse(
+        _render_partial("partials/error.html", message=message),
+        status_code=status_code,
+    )
 
 
 @router.get("/workspaces", response_class=HTMLResponse)
@@ -51,25 +42,6 @@ async def workspace_list(request: Request, workspace: str = Depends(get_workspac
         "partials/workspace_list.html",
         {"workspaces": workspaces, "current_workspace": workspace},
     )
-
-
-@router.post("/workspaces/switch")
-async def switch_workspace(request: Request):
-    """Switch workspace via cookie."""
-    manager = get_manager(request)
-    form = await request.form()
-    raw = str(form.get("workspace", "default"))
-
-    try:
-        known_workspaces = await manager.list_workspaces()
-    except Exception:
-        logger.exception("Workspace listing failed")
-        known_workspaces = ["default"]
-
-    workspace = _workspace_cookie_value(raw, known_workspaces)
-    response = RedirectResponse(url="/web/", status_code=303)
-    response.set_cookie("dlightrag_workspace", workspace, httponly=True, samesite="lax")
-    return response
 
 
 _WS_FORBIDDEN_RE = re.compile(r'[/\\<>"\']')
@@ -89,25 +61,25 @@ async def create_workspace(
 
     # Validation
     if not name:
-        return HTMLResponse("Workspace name cannot be empty", status_code=400)
+        return _error_response("Workspace name cannot be empty")
     if len(name) > 64:
-        return HTMLResponse("Workspace name too long (max 64 characters)", status_code=400)
+        return _error_response("Workspace name too long (max 64 characters)")
     if _WS_FORBIDDEN_RE.search(name):
-        return HTMLResponse("Workspace name contains forbidden characters", status_code=400)
+        return _error_response("Workspace name contains forbidden characters")
 
     ws = normalize_workspace(name)
 
     # Duplicate check
     existing = await manager.list_workspaces()
     if ws in existing:
-        return HTMLResponse(f"Workspace '{html.escape(name)}' already exists", status_code=409)
+        return _error_response(f"Workspace '{name}' already exists", status_code=409)
 
     # Initialize workspace (creates the RAGService)
     try:
         await manager.acreate_workspace(ws)
     except Exception:
         logger.exception("Workspace creation failed")
-        return HTMLResponse(
+        return _error_response(
             "Failed to create workspace; see server logs for details.",
             status_code=500,
         )
@@ -139,9 +111,9 @@ async def delete_workspace(
     confirm = confirm_name.strip()
 
     if not name:
-        return HTMLResponse("Workspace name cannot be empty", status_code=400)
+        return _error_response("Workspace name cannot be empty")
     if normalize_workspace(name) != normalize_workspace(confirm):
-        return HTMLResponse("Confirmation name does not match", status_code=400)
+        return _error_response("Confirmation name does not match")
 
     ws = normalize_workspace(name)
 
@@ -149,7 +121,7 @@ async def delete_workspace(
         await manager.areset(workspace=ws)
     except Exception:
         logger.exception("Workspace deletion failed")
-        return HTMLResponse(
+        return _error_response(
             "Failed to delete workspace; see server logs for details.",
             status_code=500,
         )

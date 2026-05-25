@@ -36,3 +36,7 @@ export function appendExchange(query, answer, imageIds) {
 export function setActiveWorkspaces(workspaces) {
     activeWorkspaces.splice(0, activeWorkspaces.length, ...workspaces);
 }
+
+export function getPrimaryWorkspace() {
+    return activeWorkspaces[0] || 'default';
+}

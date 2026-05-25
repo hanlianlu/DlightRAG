@@ -11,7 +11,7 @@
     <div class="source-chunk" data-ref="{{ src.id }}" data-chunk="{{ chunk.chunk_idx }}">
       <div class="source-chunk-header">
         <span class="source-chunk-page">
-          {% if chunk.page_idx %}p.{{ chunk.page_idx }}{% else %}#{{ chunk.chunk_idx }}{% endif %}
+          {% if chunk.page_idx is not none %}p.{{ chunk.page_idx }}{% else %}#{{ chunk.chunk_idx }}{% endif %}
         </span>
       </div>
       {% if chunk.thumbnail_url or chunk.image_url %}

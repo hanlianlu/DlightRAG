@@ -134,6 +134,21 @@ class TestWebFiles:
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
 
+    async def test_file_list_derives_display_name_from_path(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_ingested_files = AsyncMock(
+            return_value=[
+                {"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}
+            ]
+        )
+
+        resp = await client.get("/web/files")
+
+        assert resp.status_code == 200
+        assert ">q4.pdf</span>" in resp.text
+        assert "title=\"/tmp/reports/q4.pdf\"" in resp.text
+
     async def test_delete_files(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
@@ -152,35 +167,21 @@ class TestWebFiles:
 
 
 class TestWebWorkspaces:
-    """Tests for GET /web/workspaces and POST /web/workspaces/switch."""
+    """Tests for GET /web/workspaces."""
 
     async def test_workspace_list(self, client: AsyncClient, test_config: DlightragConfig) -> None:
         resp = await client.get("/web/workspaces")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
 
-    async def test_switch_workspace_redirects(
+    async def test_cookie_workspace_switch_route_is_not_exposed(
         self, client: AsyncClient, test_config: DlightragConfig
     ) -> None:
         resp = await client.post(
             "/web/workspaces/switch",
             data={"workspace": "test-ws"},
         )
-        assert resp.status_code in {302, 303, 307}
-        assert resp.headers.get("location", "").endswith("/web/")
-
-    async def test_switch_workspace_ignores_unknown_tampered_workspace(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.post(
-            "/web/workspaces/switch",
-            data={"workspace": "evil\r\nSet-Cookie: injected=1"},
-        )
-        cookie = resp.headers.get("set-cookie", "")
-
-        assert resp.status_code == 303
-        assert "dlightrag_workspace=default" in cookie
-        assert "injected" not in cookie
+        assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +217,7 @@ class TestWebWorkspaceCreate:
             data={"workspace_name": ""},
         )
         assert resp.status_code == 400
+        assert 'class="file-error"' in resp.text
 
     async def test_create_workspace_duplicate(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
@@ -285,14 +287,37 @@ class TestWebWorkspaceDelete:
 
 
 class TestIngestProgress:
-    """Tests for GET /web/ingest/progress SSE endpoint."""
+    """Tests for removed ingest-progress frontend route."""
 
-    async def test_no_task_manager_returns_error(
+    async def test_progress_endpoint_is_not_exposed_without_frontend_consumer(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        # Ensure no ingest_task_manager is set
-        if hasattr(web_app.state, "ingest_task_manager"):
-            del web_app.state.ingest_task_manager
         resp = await client.get("/web/ingest/progress")
-        assert resp.status_code == 200
-        assert "error" in resp.text
+        assert resp.status_code == 404
+
+
+class TestSourcePanelTemplate:
+    """Tests for source panel rendering contracts."""
+
+    def test_zero_page_idx_is_rendered_as_page_zero(self) -> None:
+        from dlightrag.web.deps import templates
+
+        html = templates.env.get_template("partials/source_panel.html").render(
+            sources=[
+                {
+                    "id": "1",
+                    "title": "Doc",
+                    "path": "/tmp/doc.pdf",
+                    "chunks": [
+                        {
+                            "chunk_idx": 1,
+                            "page_idx": 0,
+                            "content": "first page",
+                        }
+                    ],
+                }
+            ]
+        )
+
+        assert "p.0" in html
+        assert "#1" not in html
