@@ -143,6 +143,76 @@ class TestWebAnswer:
         assert "Service error" not in resp.text
         manager.aanswer_stream.assert_awaited_once()
 
+    async def test_highlights_use_keyword_llm_role(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def keyword_llm(*, messages, **kwargs):
+            return '{"phrases": ["Evidence"], "confidence": 1.0}'
+
+        keyword_called = False
+        highlights_called = False
+
+        def fake_get_keyword_model_func(cfg: DlightragConfig):
+            nonlocal keyword_called
+            keyword_called = True
+            return keyword_llm
+
+        async def fake_extract_highlights_for_sources(*, sources, answer_text, llm_func, **kwargs):
+            nonlocal highlights_called
+            highlights_called = True
+            assert llm_func is keyword_llm
+            return sources
+
+        def fail_query_model(*args, **kwargs):
+            raise AssertionError("highlighter must not use query role")
+
+        async def mock_tokens():
+            yield "Evidence [1-1]."
+
+        class PublicOnlyManager:
+            def __init__(self) -> None:
+                self.config = test_config
+                self.aanswer_stream = AsyncMock(
+                    return_value=(
+                        {
+                            "chunks": [
+                                {
+                                    "chunk_id": "c1",
+                                    "reference_id": "1",
+                                    "content": "Evidence in cited chunk.",
+                                    "file_path": "/docs/report.pdf",
+                                }
+                            ]
+                        },
+                        mock_tokens(),
+                    )
+                )
+
+        test_config.citations.highlights.enabled = True
+        manager = PublicOnlyManager()
+        web_app.state.manager = manager
+        monkeypatch.setattr(
+            "dlightrag.models.llm.get_keyword_model_func",
+            fake_get_keyword_model_func,
+            raising=False,
+        )
+        monkeypatch.setattr("dlightrag.models.llm.get_query_model_func", fail_query_model)
+        monkeypatch.setattr(
+            "dlightrag.web.routes.chat.extract_highlights_for_sources",
+            fake_extract_highlights_for_sources,
+        )
+
+        resp = await client.post("/web/answer", json={"query": "hello"})
+
+        assert resp.status_code == 200
+        assert "event: highlights" in resp.text
+        assert keyword_called is True
+        assert highlights_called is True
+
 
 # ---------------------------------------------------------------------------
 # TestWebFiles
