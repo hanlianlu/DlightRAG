@@ -6,10 +6,10 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
-from dlightrag.web.deps import get_manager, get_workspace, templates
+from dlightrag.web.deps import get_manager, templates
 
 logger = logging.getLogger(__name__)
 
@@ -28,30 +28,35 @@ def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
     )
 
 
-@router.get("/workspaces", response_class=HTMLResponse)
-async def workspace_list(request: Request, workspace: str = Depends(get_workspace)):
-    """Return workspace list fragment."""
-    manager = get_manager(request)
-    try:
-        workspaces = await manager.list_workspaces()
-    except Exception:
-        workspaces = ["default"]
-
-    return templates.TemplateResponse(
-        request,
-        "partials/workspace_list.html",
-        {"workspaces": workspaces, "current_workspace": workspace},
-    )
-
-
 _WS_FORBIDDEN_RE = re.compile(r'[/\\<>"\']')
+
+
+def _set_workspace_cookies(response: HTMLResponse, request: Request, workspaces: list[str]) -> None:
+    primary = workspaces[0] if workspaces else "default"
+    joined = ",".join(workspaces or [primary])
+    secure = request.url.scheme == "https"
+    response.set_cookie(
+        key="dlightrag_workspace",
+        value=primary,
+        httponly=False,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+    response.set_cookie(
+        key="dlightrag_workspace_ids",
+        value=joined,
+        httponly=False,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
 
 
 @router.post("/workspaces/create", response_class=HTMLResponse)
 async def create_workspace(
     request: Request,
     workspace_name: str = Form(default=""),
-    workspace: str = Depends(get_workspace),
 ):
     """Create a new workspace and return updated workspace list."""
     from dlightrag.utils import normalize_workspace
@@ -76,7 +81,7 @@ async def create_workspace(
 
     # Initialize workspace (creates the RAGService)
     try:
-        await manager.acreate_workspace(ws)
+        await manager.acreate_workspace(ws, display_name=name)
     except Exception:
         logger.exception("Workspace creation failed")
         return _error_response(
@@ -84,17 +89,16 @@ async def create_workspace(
             status_code=500,
         )
 
-    # Return updated workspace list
-    workspaces = await manager.list_workspaces()
-    body = _render_partial(
-        "partials/workspace_list.html",
-        workspaces=workspaces,
-        current_workspace=workspace,
+    response = HTMLResponse(
+        "",
+        headers={
+            "HX-Trigger": json.dumps(
+                {"workspaceCreated": {"workspace": ws, "display_name": name}}
+            )
+        },
     )
-    return HTMLResponse(
-        body,
-        headers={"HX-Trigger": json.dumps({"workspaceCreated": {"workspace": ws}})},
-    )
+    _set_workspace_cookies(response, request, [ws])
+    return response
 
 
 @router.post("/workspaces/delete", response_class=HTMLResponse)
@@ -126,17 +130,16 @@ async def delete_workspace(
             status_code=500,
         )
 
-    # Return updated workspace list, falling back to first available
     workspaces = await manager.list_workspaces()
     fallback = workspaces[0] if workspaces else "default"
 
-    # Switch cookie to fallback workspace
-    body = _render_partial(
-        "partials/workspace_list.html",
-        workspaces=workspaces,
-        current_workspace=fallback,
+    response = HTMLResponse(
+        "",
+        headers={
+            "HX-Trigger": json.dumps(
+                {"workspaceDeleted": {"workspace": ws, "fallback": fallback}}
+            )
+        },
     )
-    return HTMLResponse(
-        body,
-        headers={"HX-Trigger": json.dumps({"workspaceDeleted": {"workspace": ws}})},
-    )
+    _set_workspace_cookies(response, request, [fallback])
+    return response

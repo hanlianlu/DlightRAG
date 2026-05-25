@@ -47,3 +47,15 @@ def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
 
     offenders = [path for path in checked if "ingest/progress" in path.read_text(encoding="utf-8")]
     assert offenders == []
+
+
+def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
+    web_root = ROOT / "src/dlightrag/web"
+    index_html = (web_root / "templates" / "index.html").read_text(encoding="utf-8")
+    workspaces_js = (web_root / "static" / "js" / "workspaces.js").read_text(encoding="utf-8")
+
+    assert 'id="workspace-selector"' in index_html
+    assert "workspace-chips" not in index_html
+    assert not (web_root / "templates" / "partials" / "workspace_list.html").exists()
+    assert "dlightrag_workspace_ids" in workspaces_js
+    assert "document.cookie" in workspaces_js

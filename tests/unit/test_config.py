@@ -579,6 +579,24 @@ def test_postgres_session_settings_merge_hnsw_defaults(
     assert os.environ["POSTGRES_STATEMENT_CACHE_SIZE"] == "256"
 
 
+def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    """LightRAG workspace must come from each instance, not process env."""
+    monkeypatch.setenv("POSTGRES_WORKSPACE", "stale_workspace")
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        workspace="fresh_workspace",
+    )
+    cfg.apply_lightrag_backend_env(force=True)
+
+    assert "POSTGRES_WORKSPACE" not in os.environ
+
+
 def test_dotenv_rejects_unknown_dlightrag_keys(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     env_file = tmp_path / ".env"
     removed_key = "DLIGHTRAG_REMOVED__API_KEY"

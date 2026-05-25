@@ -20,6 +20,20 @@ def app():
         ]
     )
     mock_manager.list_workspaces = AsyncMock(return_value=["default", "finance"])
+    mock_manager.list_workspace_records = AsyncMock(
+        return_value=[
+            {
+                "workspace": "default",
+                "display_name": "Default",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+            {
+                "workspace": "finance",
+                "display_name": "Finance",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+        ]
+    )
     real_app.state.manager = mock_manager
 
     return real_app

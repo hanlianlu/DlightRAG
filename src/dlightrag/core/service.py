@@ -737,44 +737,26 @@ class RAGService:
             except Exception:  # noqa: BLE001
                 logger.debug("Failed to shutdown %s worker pool", attr, exc_info=True)
 
-    async def _upsert_workspace_meta(self) -> None:
-        """Record embedding model for this workspace (PG-only, best-effort).
-
-        Self-initializing: creates the table idempotently if it doesn't exist.
-        No advisory lock needed — all DDL is IF NOT EXISTS.
-        """
+    async def _upsert_workspace_meta(self, *, display_name: str | None = None) -> None:
+        """Persist this workspace in DlightRAG's PostgreSQL registry."""
         if self.config.is_query_role is True:
             return
-        try:
-            from dlightrag.storage.pool import pg_pool
 
-            pool = await pg_pool.get()
-            async with pool.acquire() as conn:
-                # Idempotent DDL — safe to call from multiple workers
-                await conn.execute(
-                    """CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
-                        workspace TEXT PRIMARY KEY,
-                        embedding_model TEXT NOT NULL,
-                        created_at TIMESTAMPTZ DEFAULT NOW(),
-                        updated_at TIMESTAMPTZ DEFAULT NOW()
-                    )"""
-                )
-                await conn.execute(
-                    """INSERT INTO dlightrag_workspace_meta (workspace, embedding_model)
-                       VALUES ($1, $2)
-                       ON CONFLICT (workspace)
-                       DO UPDATE SET embedding_model = $2, updated_at = NOW()""",
-                    self.config.workspace,
-                    self.config.embedding.model,
-                )
-        except Exception:
-            logger.debug("workspace meta upsert failed", exc_info=True)
+        from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-    async def aregister_workspace(self) -> None:
+        registry = PGWorkspaceRegistry(target="primary")
+        await registry.initialize()
+        await registry.upsert(
+            workspace=self.config.workspace,
+            display_name=display_name,
+            embedding_model=self.config.embedding.model,
+        )
+
+    async def aregister_workspace(self, *, display_name: str | None = None) -> None:
         """Persist this initialized workspace so it is discoverable by managers."""
         self._ensure_initialized()
         self._ensure_writable("create workspace")
-        await self._upsert_workspace_meta()
+        await self._upsert_workspace_meta(display_name=display_name)
 
     # === INGESTION API ===
 
@@ -1031,7 +1013,6 @@ class RAGService:
         """
         self._ensure_initialized()
         self._ensure_writable("ingest")
-        await self.aregister_workspace()
         replace = self._resolve_replace(kwargs.get("replace"))
 
         if self._ingestion_engine is not None and source_type == "local":
