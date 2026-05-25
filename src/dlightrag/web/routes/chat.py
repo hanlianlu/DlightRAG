@@ -5,10 +5,8 @@ import asyncio
 import base64
 import json
 import logging
-import tempfile
 import time
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -52,30 +50,25 @@ async def answer_stream(
 
     conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
 
-    # Extract images (base64 from frontend)
+    # Extract images (base64 from frontend). Raw base64 is passed to the
+    # manager; it handles answer budgeting, semantic VLM enhancement, session
+    # memory, and direct visual retrieval.
     images_b64: list[str] = body.get("images", [])
-    multimodal_content: list[dict[str, Any]] | None = None
-    tmp_paths: list[str] = []
+    clean_images: list[str] = []
     if images_b64:
-        multimodal_content = []
         for b64 in images_b64[:3]:  # enforce 3-image limit
             try:
                 img_bytes = base64.b64decode(b64)
                 if len(img_bytes) > 10 * 1024 * 1024:  # 10MB server-side limit
                     logger.warning("Skipping oversized image (%d bytes)", len(img_bytes))
                     continue
-                tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                tmp.write(img_bytes)
-                tmp.close()
-                tmp_paths.append(tmp.name)
-                multimodal_content.append({"type": "image", "img_path": tmp.name})
+                clean_images.append(b64)
             except Exception:
                 logger.warning("Failed to decode uploaded image", exc_info=True)
-        if not multimodal_content:
-            multimodal_content = None
 
     # Extract workspaces (multi-select from frontend)
     workspaces: list[str] | None = body.get("workspaces")
+    session_id = str(body.get("session_id") or "")
 
     manager = get_manager(request)
     cfg = manager.config
@@ -90,42 +83,22 @@ async def answer_stream(
             t0 = time.monotonic()
             logger.info("[SSE] query received: %s", query[:80])
 
-            # --- Phase 1: Query planning ---
+            # --- Phase 1: Query planning / retrieval ---
             yield f"event: progress\ndata: {json.dumps({'phase': 'planning'})}\n\n"
 
             ws_list = workspaces or [workspace or manager.config.workspace]
-            plan = await manager.aplan_query(
+            contexts, token_iter = await manager.aanswer_stream(
                 query,
                 conversation_history=conversation_history,
+                workspaces=ws_list,
+                query_images=clean_images,
+                session_id=session_id or None,
             )
             t1 = time.monotonic()
-            logger.info(
-                "[SSE] planning done (%.1fs): original=%r, standalone=%r",
-                t1 - t0,
-                plan.original_query[:60],
-                plan.standalone_query[:60],
-            )
+            logger.info("[SSE] retrieval+stream setup done (%.1fs)", t1 - t0)
 
-            # --- Phase 2: Retrieval ---
-            yield f"event: progress\ndata: {json.dumps({'phase': 'searching'})}\n\n"
-
-            retrieval = await manager.aretrieve(
-                query,
-                plan=plan,
-                workspaces=ws_list,
-                multimodal_content=multimodal_content,
-            )
-            t2 = time.monotonic()
-            logger.info("[SSE] retrieval done (%.1fs)", t2 - t1)
-
-            # --- Phase 3: Answer generation (streaming) ---
             yield f"event: progress\ndata: {json.dumps({'phase': 'generating'})}\n\n"
-
-            contexts, token_iter = await manager.agenerate_stream_from_contexts(
-                plan.standalone_query,
-                retrieval.contexts,
-            )
-            logger.info("[SSE] stream started (%.1fs since retrieval)", time.monotonic() - t2)
+            logger.info("[SSE] stream started")
 
             accumulated_text = ""
             last_preview_ts = 0.0
@@ -157,7 +130,11 @@ async def answer_stream(
                 if isinstance(items, list):
                     flat_contexts.extend(items)
 
-            sources = build_sources(contexts)
+            sources = build_sources(
+                contexts,
+                image_url_prefix="/web/images",
+                default_workspace=workspace or manager.config.workspace,
+            )
 
             processor = CitationProcessor(
                 contexts=flat_contexts,
@@ -170,8 +147,17 @@ async def answer_stream(
                 answer=result.answer,
                 sources=result.sources,
             )
-            done_payload = {"html": done_html, "answer": result.answer}
+            done_payload = {
+                "html": done_html,
+                "answer": result.answer,
+                "current_image_ids": getattr(token_iter, "current_image_ids", []),
+                "image_descriptions": getattr(token_iter, "image_descriptions", []),
+            }
             yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
+
+            trace = getattr(token_iter, "trace", None)
+            if isinstance(trace, dict) and trace:
+                yield f"event: trace\ndata: {json.dumps(trace)}\n\n"
 
             highlight_cfg = cfg.citations.highlights
             has_text_chunks = any(
@@ -210,8 +196,7 @@ async def answer_stream(
             logger.exception("Answer streaming failed")
             yield "event: error\ndata: Service error. Please try again.\n\n"
         finally:
-            for p in tmp_paths:
-                Path(p).unlink(missing_ok=True)
+            pass
 
     return StreamingResponse(
         event_generator(),

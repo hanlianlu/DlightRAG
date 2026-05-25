@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -11,8 +13,10 @@ class ChunkSnippet(BaseModel):
     chunk_id: str
     chunk_idx: int | None = None
     page_idx: int | None = None
+    bbox: dict[str, Any] | None = None
     content: str
-    image_data: str | None = None  # base64-encoded page/image data
+    image_url: str | None = None
+    thumbnail_url: str | None = None
     highlight_phrases: list[str] | None = None
 
     model_config = {"extra": "forbid"}

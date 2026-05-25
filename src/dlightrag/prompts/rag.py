@@ -34,6 +34,8 @@ visual content, and knowledge graph
 only when the fact applies to the document as a whole. Every factual claim \
 must have at least one inline citation. Correlate markers with the entries \
 in the reference list provided.
+- Do not add a "References", "Sources", or bibliography section. The system \
+will validate inline citations and build sources separately.
 
 **Examples with Inline Citations**:
 The project has 46 tasks with an average progress of 36.89% [1-1]. \

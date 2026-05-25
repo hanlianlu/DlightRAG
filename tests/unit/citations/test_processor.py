@@ -94,6 +94,7 @@ def test_image_only_chunk_is_citable():
             "image_data": "base64-page-image",
             "file_path": "/data/chart.pdf",
             "page_idx": 4,
+            "_workspace": "default",
             "metadata": {"file_name": "chart.pdf"},
         }
     ]
@@ -104,7 +105,7 @@ def test_image_only_chunk_is_citable():
 
     assert result.answer == "The chart shows the trend [1-1]."
     assert result.sources[0].chunks is not None
-    assert result.sources[0].chunks[0].image_data == "base64-page-image"
+    assert result.sources[0].chunks[0].image_url == "/images/default/img1?size=full"
 
 
 def test_source_catalog_metadata_is_preserved():

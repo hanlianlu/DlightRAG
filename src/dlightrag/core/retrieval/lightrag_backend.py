@@ -52,21 +52,35 @@ class LightRAGMixBackend:
             only_need_context=True,
             top_k=top_k or 60,
             enable_rerank=False,
+            include_references=True,
         )
         raw = await self._lightrag.aquery_data(query, param=param)
         data = raw.get("data", {})
 
         chunks = self._chunks_from_lightrag(data.get("chunks", []))
+        trace: dict[str, Any] = {
+            "lightrag_status": raw.get("status"),
+            "lightrag_chunk_count": len(chunks),
+            "lightrag_entity_count": len(data.get("entities", [])),
+            "lightrag_relationship_count": len(data.get("relationships", [])),
+            "direct_visual_chunk_count": 0,
+            "hydrated_chunk_count": 0,
+            "reranked_chunk_count": 0,
+        }
         seen_ids = {chunk["chunk_id"] for chunk in chunks}
         injected = await fetch_missing_chunks(self._lightrag.text_chunks, seen_ids, limit)
         chunks.extend(injected)
+        trace["metadata_injected_chunk_count"] = len(injected)
 
         image_chunks = await self._retrieve_query_images(multimodal_content, top_k=limit)
+        trace["direct_visual_chunk_count"] = len(image_chunks)
         if image_chunks:
             chunks = rrf_fuse([chunks, image_chunks])[:limit]
 
         await self._hydrate_chunk_provenance(chunks)
+        trace["hydrated_chunk_count"] = len(chunks)
         chunks = await self._rerank(query, chunks, top_k=limit)
+        trace["reranked_chunk_count"] = len(chunks)
         chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
 
         context_chunks = []
@@ -77,10 +91,13 @@ class LightRAGMixBackend:
                 "file_path": c.get("file_path", ""),
                 "content": c.get("content", ""),
                 "image_data": c.get("image_data"),
+                "image_mime_type": c.get("image_mime_type"),
                 "relevance_score": c.get("relevance_score"),
             }
             if c.get("page_idx") is not None:
                 context_chunk["page_idx"] = c["page_idx"]
+            if c.get("bbox") is not None:
+                context_chunk["bbox"] = c["bbox"]
             context_chunks.append(context_chunk)
 
         return RetrievalResult(
@@ -88,7 +105,8 @@ class LightRAGMixBackend:
                 "entities": data.get("entities", []),
                 "relationships": data.get("relationships", []),
                 "chunks": context_chunks,
-            }
+            },
+            trace=trace,
         )
 
     @staticmethod

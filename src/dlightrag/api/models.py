@@ -72,6 +72,9 @@ class RetrieveRequest(BaseModel):
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[dict[str, Any]] | None = None
+    query_images: list[str | dict[str, Any]] | None = None
+    session_id: str | None = None
+    referenced_image_ids: list[str] | None = None
 
     @field_validator("multimodal_content")
     @classmethod
@@ -80,6 +83,15 @@ class RetrieveRequest(BaseModel):
     ) -> list[dict[str, Any]] | None:
         if v and len(v) > 3:
             raise ValueError("Maximum 3 multimodal items per query")
+        return v
+
+    @field_validator("query_images")
+    @classmethod
+    def validate_query_images(
+        cls, v: list[str | dict[str, Any]] | None
+    ) -> list[str | dict[str, Any]] | None:
+        if v and len(v) > 10:
+            raise ValueError("Maximum 10 query_images per request")
         return v
 
 
@@ -94,13 +106,11 @@ class AnswerRequest(BaseModel):
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[dict[str, Any]] | None = None
     conversation_history: list[dict[str, str]] | None = None
+    session_id: str | None = None
+    referenced_image_ids: list[str] | None = None
     query_images: list[str | dict[str, Any]] | None = None
-    """User-attached images inlined into the answer LLM call as
-    OpenAI ``image_url`` content blocks. Each item is either a URL/data
-    URI string or a pre-built ``{"type":"image_url","image_url":{...}}``
-    dict. Distinct from ``multimodal_content`` (which drives visual
-    retrieval); pass both if you want the same images
-    used for both retrieval and answer reasoning."""
+    """User-attached images used for VLM semantic enhancement, direct visual
+    retrieval, session image memory, and bounded answer-model image blocks."""
 
     @field_validator("multimodal_content")
     @classmethod

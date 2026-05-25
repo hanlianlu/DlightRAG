@@ -38,18 +38,27 @@ class UnifiedRetriever:
         metadata_filter: MetadataFilter | None = None,
         metadata_filter_source: str | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
+        bm25_query: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         candidate_ids = await self._resolve_candidates(metadata_filter)
+        trace: dict[str, Any] = {
+            "metadata_filter_source": metadata_filter_source,
+            "metadata_candidate_count": len(candidate_ids) if candidate_ids is not None else None,
+            "metadata_filter_relaxed": False,
+        }
         if candidate_ids is not None and not candidate_ids:
             if metadata_filter_source == "llm_inferred":
                 candidate_ids = None
+                trace["metadata_filter_relaxed"] = True
             else:
-                return RetrievalResult()
+                trace["strict_filter_empty"] = True
+                return RetrievalResult(trace=trace)
 
         chunk_limit = chunk_top_k or top_k
+        lexical_query = bm25_query or query
         async with metadata_filter_scope(candidate_ids):
             lightrag_task = asyncio.create_task(
                 self._backend.aretrieve(
@@ -63,7 +72,11 @@ class UnifiedRetriever:
             )
             bm25_task = (
                 asyncio.create_task(
-                    self._bm25.search(query, candidate_ids=candidate_ids, top_k=chunk_limit)
+                    self._bm25.search(
+                        lexical_query,
+                        candidate_ids=candidate_ids,
+                        top_k=chunk_limit,
+                    )
                 )
                 if self._bm25 is not None
                 else None
@@ -72,10 +85,19 @@ class UnifiedRetriever:
             lightrag_result = await lightrag_task
             bm25_chunks = await bm25_task if bm25_task is not None else []
 
+        trace.update(getattr(lightrag_result, "trace", {}) or {})
+        trace["bm25_enabled"] = self._bm25 is not None
+        trace["bm25_query"] = lexical_query if self._bm25 is not None else None
+        trace["bm25_chunk_count"] = len(bm25_chunks)
+        trace["semantic_chunk_count"] = len(lightrag_result.contexts.get("chunks", []))
         if bm25_chunks:
             semantic_chunks = lightrag_result.contexts.get("chunks", [])
             fused = rrf_fuse([semantic_chunks, bm25_chunks], k=self._rrf_k)
             lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
+            trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
+        else:
+            trace["fused_chunk_count"] = trace["semantic_chunk_count"]
+        lightrag_result.trace = trace
         return lightrag_result
 
     async def _resolve_candidates(self, metadata_filter: MetadataFilter | None) -> set[str] | None:

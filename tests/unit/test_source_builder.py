@@ -64,11 +64,14 @@ class TestBuildSources:
         assert sources[0].title == "report.pdf"
         assert sources[0].path == "/long/path/report.pdf"
 
-    def test_preserves_image_data(self) -> None:
-        contexts = {"chunks": [_chunk("c1", "ref-1", image_data="base64data", page_idx=1)]}
+    def test_projects_image_urls_without_exposing_image_data(self) -> None:
+        chunk = _chunk("c1", "ref-1", image_data="base64data", page_idx=1)
+        chunk["_workspace"] = "default"
+        contexts = {"chunks": [chunk]}
         sources = build_sources(contexts)
 
-        assert sources[0].chunks[0].image_data == "base64data"
+        assert sources[0].chunks[0].image_url == "/images/default/c1?size=full"
+        assert sources[0].chunks[0].thumbnail_url == "/images/default/c1?size=thumb"
 
     def test_empty_contexts(self) -> None:
         assert build_sources({}) == []

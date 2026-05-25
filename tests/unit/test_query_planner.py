@@ -221,6 +221,25 @@ class TestPlanWithLLM:
         assert plan.metadata_filter is None
         assert plan.metadata_filter_confidence == "low"
 
+    async def test_high_confidence_filter_does_not_require_static_evidence_gate(self):
+        llm = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "standalone_query": "find Ada material",
+                    "filters": {"doc_author": "Ada"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [],
+                }
+            )
+        )
+        planner = QueryPlanner(llm_func=llm)
+
+        plan = await planner.plan("find Ada material")
+
+        assert plan.metadata_filter is not None
+        assert plan.metadata_filter.doc_author == "Ada"
+        assert plan.metadata_filter_source == "llm_inferred"
+
 
 class TestPlanFallback:
     async def test_llm_exception_returns_fallback(self):

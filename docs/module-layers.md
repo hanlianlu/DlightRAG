@@ -15,7 +15,9 @@ on the shared lower layers, not on each other.
 L9  api, mcp, web                                  interface adapters
 L8  core.servicemanager                            multi-workspace coordinator
 L7  core.{service, reset, ingest_tasks}            per-workspace facade
-L6  core.{answer, federation, query_planner}       query/answer orchestration
+L6  core.{answer, answer_images, federation,
+          query_images, query_planner,
+          session_images, visual_assets}           query/answer/visual orchestration
     core.retrieval.{retriever, fusion,
                     lightrag_backend}
     core.ingestion.engine
@@ -73,7 +75,7 @@ L0  prompts, utils                                 pure helpers
 | `core.retrieval.{filtered_vdb,bm25}` | L5 | PostgreSQL in-filtering and pg_textsearch BM25 |
 | `core.ingestion.engine` | L6 | Unified ingest orchestration |
 | `core.retrieval.{retriever,fusion,lightrag_backend}` | L6 | LightRAG mix retrieval, BM25 fusion, direct image path |
-| `core.{answer,federation,query_planner}` | L6 | Answering, federation, filter planning |
+| `core.{answer,answer_images,federation,query_images,query_planner,session_images,visual_assets}` | L6 | Answering, image budgeting, query-image semantics, session image memory, visual asset serving, federation, filter planning |
 | `core.{service,reset,ingest_tasks}` | L7 | Workspace lifecycle and public service facade |
 | `core.servicemanager` | L8 | Multi-workspace pool |
 | `api/`, `mcp/`, `web/` | L9 | Interface adapters |

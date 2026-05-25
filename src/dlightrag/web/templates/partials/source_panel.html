@@ -14,10 +14,12 @@
           {% if chunk.page_idx %}p.{{ chunk.page_idx }}{% else %}#{{ chunk.chunk_idx }}{% endif %}
         </span>
       </div>
-      {% if chunk.image_data %}
+      {% if chunk.thumbnail_url or chunk.image_url %}
       <div class="source-chunk-image">
-        <img src="data:image/png;base64,{{ chunk.image_data }}"
-             alt="Page {{ chunk.page_idx or '' }}" loading="lazy">
+        <img src="{{ chunk.thumbnail_url or chunk.image_url }}"
+             data-full-src="{{ chunk.image_url or chunk.thumbnail_url }}"
+             alt="Page {{ chunk.page_idx or '' }}" loading="lazy"
+             data-action="open-lightbox">
       </div>
       {% elif chunk.content %}
       <div class="source-chunk-content">

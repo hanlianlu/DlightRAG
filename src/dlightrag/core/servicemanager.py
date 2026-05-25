@@ -12,7 +12,8 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Literal
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
@@ -28,6 +29,15 @@ from dlightrag.core.service import RAGService
 logger = logging.getLogger(__name__)
 
 _MAX_RETRY_INTERVAL: float = 300.0
+
+
+@dataclass
+class _PreparedQueryImages:
+    query: str
+    answer_images: list[str | dict[str, Any]]
+    multimodal_content: list[dict[str, Any]]
+    descriptions: list[str]
+    current_image_ids: list[str]
 
 
 class RAGServiceUnavailableError(Exception):
@@ -62,6 +72,8 @@ class RAGServiceManager:
 
         self._answer_engine: AnswerEngine | None = None
         self._query_planner: QueryPlanner | None = None
+        self._query_image_enhancer: Any = None
+        self._session_images: Any = None
 
     @property
     def config(self) -> DlightragConfig:
@@ -250,6 +262,11 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.alist_failed_docs()
 
+    async def aget_visual_asset(self, workspace: str, chunk_id: str, *, size: str = "full") -> Any:
+        """Resolve a visual chunk asset for browser/API image routes."""
+        svc = await self._get_service(workspace)
+        return await svc.aget_visual_asset(chunk_id, size=size)
+
     async def retry_failed_docs(self, workspace: str) -> dict[str, Any]:
         """Retry all FAILED documents in a specific workspace via re-ingest."""
         self._ensure_writable("retry failed docs")
@@ -337,8 +354,14 @@ class RAGServiceManager:
         if self._answer_engine is None:
             from dlightrag.models.llm import get_query_model_func
 
+            answer_cfg = self._config.answer
             self._answer_engine = AnswerEngine(
                 model_func=get_query_model_func(self._config),
+                max_images=answer_cfg.max_images,
+                image_max_bytes=answer_cfg.image_max_bytes,
+                image_max_total_bytes=answer_cfg.image_max_total_bytes,
+                image_max_px=answer_cfg.image_max_px,
+                image_quality=answer_cfg.image_quality,
             )
         return self._answer_engine
 
@@ -353,6 +376,33 @@ class RAGServiceManager:
                 schema_ttl=300.0,
             )
         return self._query_planner
+
+    def _get_session_images(self):
+        """Lazy-create session image memory."""
+        if self._session_images is None:
+            from dlightrag.core.session_images import SessionImageStore
+
+            cfg = self._config.query_images
+            self._session_images = SessionImageStore(
+                max_images_per_session=cfg.session_max_images,
+                max_sessions=cfg.session_max_sessions,
+                ttl_seconds=cfg.session_ttl_seconds,
+            )
+        return self._session_images
+
+    def _get_query_image_enhancer(self):
+        """Lazy-create VLM query image enhancer."""
+        if self._query_image_enhancer is None:
+            from dlightrag.core.query_images import QueryImageEnhancer
+            from dlightrag.models.llm import get_vlm_model_func
+
+            cfg = self._config.query_images
+            self._query_image_enhancer = QueryImageEnhancer(
+                vlm_func=get_vlm_model_func(self._config),
+                enabled=cfg.semantic_enhancement,
+                max_images=cfg.max_described_images,
+            )
+        return self._query_image_enhancer
 
     async def _get_schema(self) -> dict[str, Any]:
         """Fetch metadata schema from first available workspace."""
@@ -408,6 +458,9 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         plan: QueryPlan | None = None,
+        query_images: list[str | dict[str, Any]] | None = None,
+        session_id: str | None = None,
+        referenced_image_ids: list[str] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple).
@@ -418,6 +471,18 @@ class RAGServiceManager:
                 for structured filtering.
         """
         effective_query = plan.standalone_query if plan else query
+        prepared = await self._prepare_query_images(
+            effective_query,
+            query_images=query_images,
+            session_id=session_id,
+            referenced_image_ids=referenced_image_ids
+            or (plan.referenced_image_ids if plan else None),
+            store_current=False,
+        )
+        effective_query = prepared.query
+        if prepared.multimodal_content:
+            existing_mm = kwargs.get("multimodal_content") or []
+            kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         if plan is not None:
             kwargs.setdefault("_plan", plan)
         ws_list = workspaces or [workspace or self._config.workspace]
@@ -428,10 +493,15 @@ class RAGServiceManager:
                 async with trace_pipeline("retrieve", workspaces=ws_list, query=effective_query):
                     if len(ws_list) == 1:
                         svc = await self._get_service(ws_list[0])
-                        return await svc.aretrieve(effective_query, **kwargs)
-                    return await federated_retrieve(
-                        effective_query, ws_list, self._get_service, **kwargs
-                    )
+                        result = await svc.aretrieve(effective_query, **kwargs)
+                    else:
+                        result = await federated_retrieve(
+                            effective_query, ws_list, self._get_service, **kwargs
+                        )
+                    result.image_descriptions = prepared.descriptions
+                    result.current_image_ids = prepared.current_image_ids
+                    result.trace["query_image_description_count"] = len(prepared.descriptions)
+                    return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -464,13 +534,37 @@ class RAGServiceManager:
                         query,
                         conversation_history=conversation_history,
                     )
-                    retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
+                    prepared = await self._prepare_query_images(
+                        plan.standalone_query,
+                        query_images=query_images,
+                        session_id=kwargs.pop("session_id", None),
+                        referenced_image_ids=kwargs.pop("referenced_image_ids", None)
+                        or plan.referenced_image_ids,
+                        store_current=True,
+                    )
+                    retrieval_plan = replace(plan, standalone_query=prepared.query)
+                    if prepared.multimodal_content:
+                        existing_mm = kwargs.get("multimodal_content") or []
+                        kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
+                    retrieval = await self.aretrieve(
+                        query,
+                        plan=retrieval_plan,
+                        workspaces=ws_list,
+                        **kwargs,
+                    )
+                    retrieval.trace["query_image_description_count"] = len(
+                        prepared.descriptions
+                    )
                     engine = self._get_answer_engine()
-                    return await engine.generate(
+                    result = await engine.generate(
                         plan.standalone_query,
                         retrieval.contexts,
-                        query_images=query_images,
+                        query_images=prepared.answer_images or None,
                     )
+                    result.trace.update(retrieval.trace)
+                    result.image_descriptions = prepared.descriptions
+                    result.current_image_ids = prepared.current_image_ids
+                    return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
@@ -508,16 +602,73 @@ class RAGServiceManager:
                         plan.standalone_query[:60],
                     )
 
-                    retrieval = await self.aretrieve(query, plan=plan, workspaces=ws_list, **kwargs)
-                    return await self.agenerate_stream_from_contexts(
+                    prepared = await self._prepare_query_images(
+                        plan.standalone_query,
+                        query_images=query_images,
+                        session_id=kwargs.pop("session_id", None),
+                        referenced_image_ids=kwargs.pop("referenced_image_ids", None)
+                        or plan.referenced_image_ids,
+                        store_current=True,
+                    )
+                    retrieval_plan = replace(plan, standalone_query=prepared.query)
+                    if prepared.multimodal_content:
+                        existing_mm = kwargs.get("multimodal_content") or []
+                        kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
+                    retrieval = await self.aretrieve(
+                        query,
+                        plan=retrieval_plan,
+                        workspaces=ws_list,
+                        **kwargs,
+                    )
+                    retrieval.trace["query_image_description_count"] = len(
+                        prepared.descriptions
+                    )
+                    contexts, stream = await self.agenerate_stream_from_contexts(
                         plan.standalone_query,
                         retrieval.contexts,
-                        query_images=query_images,
+                        query_images=prepared.answer_images or None,
                     )
+                    if stream is not None:
+                        stream_meta = cast(Any, stream)
+                        stream_meta.current_image_ids = prepared.current_image_ids
+                        stream_meta.image_descriptions = prepared.descriptions
+                        stream_meta.trace = retrieval.trace
+                    return contexts, stream
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from e
+
+    async def _prepare_query_images(
+        self,
+        query: str,
+        *,
+        query_images: list[str | dict[str, Any]] | None,
+        session_id: str | None,
+        referenced_image_ids: list[str] | None,
+        store_current: bool,
+    ) -> _PreparedQueryImages:
+        """Resolve session images and create semantic/direct image query inputs."""
+        current_images = list(query_images or [])
+        current_storable = _storable_image_strings(current_images)
+        current_ids = (
+            self._get_session_images().store(session_id, current_storable)
+            if store_current and current_storable
+            else []
+        )
+        historical = self._get_session_images().get(session_id, referenced_image_ids)
+        answer_images: list[str | dict[str, Any]] = [*historical, *current_images]
+
+        enhancer = self._get_query_image_enhancer()
+        enhanced = await enhancer.enhance(query, answer_images)
+        multimodal_content = _images_to_multimodal_content(answer_images)
+        return _PreparedQueryImages(
+            query=enhanced.query,
+            answer_images=answer_images,
+            multimodal_content=multimodal_content,
+            descriptions=enhanced.descriptions,
+            current_image_ids=current_ids,
+        )
 
     # --- Management ---
 
@@ -578,6 +729,27 @@ class RAGServiceManager:
                 for ws, (ts, interval) in self._backoff.items()
             },
         }
+
+
+def _storable_image_strings(images: list[str | dict[str, Any]]) -> list[str]:
+    return [image for image in images if isinstance(image, str) and image.strip()]
+
+
+def _images_to_multimodal_content(images: list[str | dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert raw base64/data URI images to direct visual retrieval inputs."""
+    from dlightrag.utils.images import split_data_uri
+
+    items: list[dict[str, Any]] = []
+    for image in images:
+        if not isinstance(image, str):
+            continue
+        text = image.strip()
+        if not text or text.startswith(("http://", "https://")):
+            continue
+        _, payload = split_data_uri(text)
+        if payload:
+            items.append({"type": "image", "data": payload})
+    return items
 
 
 __all__ = [

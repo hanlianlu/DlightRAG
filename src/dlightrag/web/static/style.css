@@ -459,6 +459,7 @@ body {
     max-width: 100%;
     border-radius: 6px;
     border: 1px solid rgba(120, 113, 108, 0.2);
+    cursor: zoom-in;
 }
 .source-chunk-content {
     color: var(--text-400);
@@ -895,6 +896,44 @@ body {
 .thumbnail-remove:hover {
     color: var(--text-100);
     background: var(--bg-surface);
+}
+
+.image-lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    background: rgba(15, 23, 42, 0.78);
+}
+
+.image-lightbox.open {
+    display: flex;
+}
+
+.image-lightbox-img {
+    max-width: min(96vw, 1400px);
+    max-height: 92vh;
+    object-fit: contain;
+    background: #fff;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.image-lightbox-close {
+    position: fixed;
+    top: 16px;
+    right: 18px;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #0f172a;
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
 }
 
 /* === Drop Overlay === */

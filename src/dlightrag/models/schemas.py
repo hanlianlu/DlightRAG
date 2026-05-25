@@ -18,14 +18,4 @@ class Reference(BaseModel):
         return str(value)
 
 
-class StructuredAnswer(BaseModel):
-    """Structured answer with separated references."""
-
-    answer: str = Field(description="Markdown answer with inline [n-m] citations")
-    references: list[Reference] = Field(
-        default_factory=list,
-        description="Document-level references cited in the answer",
-    )
-
-
-__all__ = ["Reference", "StructuredAnswer"]
+__all__ = ["Reference"]

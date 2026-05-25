@@ -76,6 +76,15 @@ def merge_results(
             "entities": merged_entities,
             "relationships": merged_relations,
         },
+        trace={
+            "federated": True,
+            "workspaces": workspaces,
+            "per_workspace": {
+                ws: getattr(result, "trace", {})
+                for ws, result in zip(workspaces, results, strict=True)
+            },
+            "merged_chunk_count": len(merged_chunks),
+        },
     )
 
 
@@ -176,6 +185,18 @@ def merge_results_weighted(
             "entities": merged_entities,
             "relationships": merged_relations,
         },
+        trace={
+            "federated": True,
+            "weighted": True,
+            "workspaces": workspaces,
+            "quality_scores": resolved,
+            "seat_allocation": seats,
+            "per_workspace": {
+                ws: getattr(result, "trace", {})
+                for ws, result in zip(workspaces, results, strict=True)
+            },
+            "merged_chunk_count": len(merged),
+        },
     )
 
 
@@ -249,6 +270,8 @@ async def federated_retrieve(
         result = await svc.aretrieve(query=query, top_k=top_k, chunk_top_k=chunk_top_k, **kwargs)
         for chunk in result.contexts.get("chunks", []):
             chunk["_workspace"] = workspaces[0]
+        result.trace.setdefault("workspace", workspaces[0])
+        result.trace.setdefault("federated", False)
         return result
 
     # Pre-compute query analysis ONCE to avoid redundant LLM calls per workspace

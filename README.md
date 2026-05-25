@@ -136,7 +136,7 @@ curl -X POST http://localhost:8100/ingest \
 
 curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
-  -d '{"query": "What are the key findings?", "mode": "mix"}'
+  -d '{"query": "What are the key findings?"}'
 
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
@@ -446,8 +446,8 @@ Metadata is explicit-schema first:
 - Undeclared metadata can be stored as JSONB enrichment, but is not filterable
   by default.
 - Explicit API/user filters are strict and never fall back to global retrieval.
-- LLM-inferred filters must be supported by query evidence; empty inferred
-  candidates fall back to unfiltered retrieval.
+- LLM-inferred filters include confidence/evidence for observability; empty
+  inferred candidates fall back to unfiltered retrieval.
 - Non-empty inferred candidates constrain both semantic and BM25 retrieval.
 
 ### Storage
@@ -542,6 +542,7 @@ instead of calling those helpers directly.
 | `GET` | `/metadata/{doc_id}` | Read document metadata. |
 | `POST` | `/metadata/{doc_id}` | Merge or replace document metadata. |
 | `POST` | `/metadata/search` | Find document IDs matching metadata filters. |
+| `GET` | `/images/{workspace}/{chunk_id}` | Serve full or thumbnail visual chunk assets for source panels. |
 | `POST` | `/reset` | Reset workspace storage. |
 | `GET` | `/workspaces` | List available workspaces. |
 | `GET` | `/health` | Health and storage status. |

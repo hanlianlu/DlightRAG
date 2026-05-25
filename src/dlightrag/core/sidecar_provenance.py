@@ -73,15 +73,15 @@ def block_ids_from_sidecar(sidecar: dict[str, Any]) -> list[str]:
     return block_ids
 
 
-def first_page_index_for_blocks(
+def first_provenance_for_blocks(
     block_ids: list[str],
     index: dict[str, BlockProvenance],
-) -> int | None:
-    """Return the starting page index for ordered block refs."""
+) -> BlockProvenance | None:
+    """Return the first available provenance for ordered block refs."""
     for block_id in block_ids:
         provenance = index.get(block_id)
-        if provenance and provenance.page_index is not None:
-            return provenance.page_index
+        if provenance and (provenance.page_index is not None or provenance.bbox is not None):
+            return provenance
     return None
 
 
@@ -96,6 +96,20 @@ def explicit_item_page_index(item: dict[str, Any]) -> int | None:
         page_number = coerce_non_negative_int(item.get(key))
         if page_number is not None:
             return max(page_number - 1, 0)
+    return None
+
+
+def explicit_item_bbox(item: dict[str, Any]) -> dict[str, Any] | None:
+    """Read an explicit bbox-like payload from a LightRAG sidecar item."""
+    raw = item.get("bbox") or item.get("bounding_box")
+    if isinstance(raw, dict):
+        return dict(raw)
+    if isinstance(raw, list):
+        page_index = explicit_item_page_index(item)
+        payload: dict[str, Any] = {"range": list(raw)}
+        if page_index is not None:
+            payload["page_index"] = page_index
+        return payload
     return None
 
 
