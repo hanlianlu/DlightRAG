@@ -9,7 +9,9 @@ throughout the request lifecycle and included in the response headers.
 from __future__ import annotations
 
 import contextvars
+import logging
 import uuid
+from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -33,9 +35,20 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             request_id_var.reset(token)
 
 
-class RequestIdLogFilter:
-    """Logging filter that injects request_id into log records."""
+_REQUEST_ID_FACTORY_MARKER = "_dlightrag_request_id_factory"
 
-    def filter(self, record) -> bool:  # noqa: A003
-        record.request_id = request_id_var.get("") or "-"
-        return True
+
+def install_request_id_log_record_factory() -> None:
+    """Ensure every log record has a request_id attribute."""
+    current_factory = logging.getLogRecordFactory()
+    if getattr(current_factory, _REQUEST_ID_FACTORY_MARKER, False):
+        return
+
+    def record_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = current_factory(*args, **kwargs)
+        if not hasattr(record, "request_id"):
+            record.request_id = request_id_var.get("") or "-"
+        return record
+
+    setattr(record_factory, _REQUEST_ID_FACTORY_MARKER, True)
+    logging.setLogRecordFactory(record_factory)

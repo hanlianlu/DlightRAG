@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from dlightrag.api.middleware import RequestIdLogFilter, RequestIdMiddleware
+from dlightrag.api.middleware import RequestIdMiddleware, install_request_id_log_record_factory
 from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
@@ -150,12 +150,11 @@ def main() -> None:
         set_config(config)
     else:
         config = get_config()
+    install_request_id_log_record_factory()
     logging.basicConfig(
         level=getattr(logging, config.log_level.upper(), logging.INFO),
         format="%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s",
     )
-    # Attach request ID filter to root logger so all loggers inherit it
-    logging.getLogger().addFilter(RequestIdLogFilter())
 
     uvicorn.run(
         "dlightrag.api.server:get_app",
