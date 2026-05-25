@@ -3,7 +3,6 @@
 
 import json
 import logging
-import re
 from typing import Any
 
 from fastapi import APIRouter, Form, Request
@@ -26,9 +25,6 @@ def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
         _render_partial("partials/error.html", message=message),
         status_code=status_code,
     )
-
-
-_WS_FORBIDDEN_RE = re.compile(r'[/\\<>"\']')
 
 
 def _set_workspace_cookies(response: HTMLResponse, request: Request, workspaces: list[str]) -> None:
@@ -59,18 +55,14 @@ async def create_workspace(
     workspace_name: str = Form(default=""),
 ):
     """Create a new workspace and return updated workspace list."""
-    from dlightrag.utils import normalize_workspace
+    from dlightrag.utils import normalize_workspace, validate_workspace_name
 
     manager = get_manager(request)
-    name = workspace_name.strip()
 
-    # Validation
-    if not name:
-        return _error_response("Workspace name cannot be empty")
-    if len(name) > 64:
-        return _error_response("Workspace name too long (max 64 characters)")
-    if _WS_FORBIDDEN_RE.search(name):
-        return _error_response("Workspace name contains forbidden characters")
+    try:
+        name = validate_workspace_name(workspace_name)
+    except ValueError as exc:
+        return _error_response(str(exc))
 
     ws = normalize_workspace(name)
 

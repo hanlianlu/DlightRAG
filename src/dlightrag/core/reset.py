@@ -83,6 +83,8 @@ async def areset(
             storage = getattr(lr, attr, None)
             if storage is None:
                 continue
+            if isinstance(storage, type):
+                continue
             drop_fn = getattr(storage, "drop", None)
             if drop_fn is None or not callable(drop_fn):
                 continue

@@ -44,6 +44,18 @@ async def _ensure_manager() -> RAGServiceManager:
     return _manager
 
 
+def _json_content(payload: dict[str, Any]) -> list[TextContent]:
+    return [TextContent(type="text", text=json.dumps(payload, default=str, indent=2))]
+
+
+def _normalize_workspace_argument(arguments: dict[str, Any]) -> tuple[str, str]:
+    from dlightrag.utils import normalize_workspace, validate_workspace_name
+
+    label = validate_workspace_name(str(arguments.get("workspace") or ""))
+    display_name = validate_workspace_name(str(arguments.get("display_name") or label))
+    return normalize_workspace(label), display_name
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
@@ -172,8 +184,50 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="list_workspaces",
-            description="List all available workspaces with ingested data.",
+            description="List all registered workspaces.",
             inputSchema={"type": "object", "properties": {}},
+        ),
+        Tool(
+            name="create_workspace",
+            description="Create an empty DlightRAG workspace.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace": {
+                        "type": "string",
+                        "description": "Workspace name to create.",
+                    },
+                    "display_name": {
+                        "type": "string",
+                        "description": "Optional user-facing display name.",
+                    },
+                },
+                "required": ["workspace"],
+            },
+        ),
+        Tool(
+            name="delete_workspace",
+            description="Delete/reset one DlightRAG workspace.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "workspace": {
+                        "type": "string",
+                        "description": "Workspace name to delete.",
+                    },
+                    "keep_files": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Keep source files on disk.",
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Report what would be deleted without mutating storage.",
+                    },
+                },
+                "required": ["workspace"],
+            },
         ),
         Tool(
             name="list_files",
@@ -291,8 +345,49 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         if name == "list_workspaces":
             manager = await _ensure_manager()
-            ws_list = await manager.list_workspaces()
-            return [TextContent(type="text", text=json.dumps({"workspaces": ws_list}, indent=2))]
+            records = await manager.list_workspace_records()
+            return _json_content(
+                {
+                    "workspaces": [row["workspace"] for row in records],
+                    "records": records,
+                }
+            )
+
+        if name == "create_workspace":
+            manager = await _ensure_manager()
+            workspace, display_name = _normalize_workspace_argument(arguments)
+            existing = await manager.list_workspaces()
+            if workspace in existing:
+                raise ValueError(f"Workspace '{display_name}' already exists")
+            await manager.acreate_workspace(workspace, display_name=display_name)
+            return _json_content(
+                {
+                    "workspace": workspace,
+                    "display_name": display_name,
+                    "created": True,
+                }
+            )
+
+        if name == "delete_workspace":
+            manager = await _ensure_manager()
+            from dlightrag.utils import normalize_workspace, validate_workspace_name
+
+            workspace = normalize_workspace(
+                validate_workspace_name(str(arguments.get("workspace") or ""))
+            )
+            dry_run = bool(arguments.get("dry_run", False))
+            result = await manager.areset(
+                workspace=workspace,
+                keep_files=bool(arguments.get("keep_files", False)),
+                dry_run=dry_run,
+            )
+            return _json_content(
+                {
+                    "workspace": workspace,
+                    "deleted": not dry_run,
+                    "result": result,
+                }
+            )
 
         if name == "ingest":
             manager = await _ensure_manager()

@@ -259,12 +259,14 @@ async def main():
     config = DlightragConfig()
     manager = await RAGServiceManager.create(config)
     try:
-        await manager.aingest("default", source_type="local", path="./docs")
+        workspace = "research_notes"
+        await manager.acreate_workspace(workspace, display_name="Research Notes")
+        await manager.aingest(workspace, source_type="local", path="./docs")
 
-        contexts = await manager.aretrieve("What are the key findings?")
+        contexts = await manager.aretrieve("What are the key findings?", workspace=workspace)
         print(contexts.contexts)
 
-        answer = await manager.aanswer("What are the key findings?")
+        answer = await manager.aanswer("What are the key findings?", workspace=workspace)
         print(answer.answer)
     finally:
         await manager.close()
@@ -300,8 +302,8 @@ DLIGHTRAG_MCP_HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 
-MCP tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`, and
-`list_workspaces`.
+MCP tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`,
+`list_workspaces`, `create_workspace`, and `delete_workspace`.
 
 ### Primary / Replica Process Roles
 
@@ -588,7 +590,9 @@ instead of calling those helpers directly.
 | `POST` | `/metadata/search` | Find document IDs matching metadata filters. |
 | `GET` | `/images/{workspace}/{chunk_id}` | Serve full or thumbnail visual chunk assets for source panels. |
 | `POST` | `/reset` | Reset workspace storage. |
-| `GET` | `/workspaces` | List available workspaces. |
+| `GET` | `/workspaces` | List registered workspaces and registry records. |
+| `POST` | `/workspaces` | Create an empty workspace. |
+| `DELETE` | `/workspaces/{workspace}` | Delete/reset one workspace. |
 | `GET` | `/health` | Health and storage status. |
 
 All write endpoints accept optional `workspace`. Read endpoints accept

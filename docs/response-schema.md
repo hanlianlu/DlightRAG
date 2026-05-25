@@ -148,6 +148,31 @@ curl -X POST http://localhost:8100/answer \
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{"query": "key findings"}'
+
+# Create an empty workspace
+curl -X POST http://localhost:8100/workspaces \
+  -H "Content-Type: application/json" \
+  -d '{"workspace": "Research Notes"}'
+
+# Delete/reset a workspace
+curl -X DELETE "http://localhost:8100/workspaces/research_notes?keep_files=false"
+```
+
+**Workspace list response:**
+
+```json
+{
+  "workspaces": ["default", "research_notes"],
+  "records": [
+    {
+      "workspace": "default",
+      "display_name": "default",
+      "embedding_model": "voyage-multimodal-3.5",
+      "created_at": "2026-05-25T19:22:22.788620+00:00",
+      "updated_at": "2026-05-25T19:42:08.781671+00:00"
+    }
+  ]
+}
 ```
 
 **Non-streaming response:**
