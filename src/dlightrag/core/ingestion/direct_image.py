@@ -33,6 +33,18 @@ async def build_direct_image_chunk(
     finally:
         image.close()
     chunk_id = direct_image_chunk_id(workspace, full_doc_id, ref)
+    sidecar: dict[str, Any] = {
+        "type": ref.sidecar_type,
+        "id": ref.sidecar_id,
+        "path": str(ref.asset_path),
+    }
+    if ref.page_index is not None:
+        sidecar["page_index"] = ref.page_index
+    if ref.bbox is not None:
+        sidecar["bbox"] = ref.bbox
+    if ref.block_id:
+        sidecar["block_id"] = ref.block_id
+
     row = {
         "full_doc_id": full_doc_id,
         "tokens": 0,
@@ -40,13 +52,7 @@ async def build_direct_image_chunk(
         "content": text_content,
         "file_path": str(ref.asset_path),
         "heading": {},
-        "sidecar": {
-            "type": ref.sidecar_type,
-            "id": ref.sidecar_id,
-            "path": str(ref.asset_path),
-            "page_index": ref.page_number,
-            "bbox": ref.bbox,
-        },
+        "sidecar": sidecar,
         "llm_cache_list": [],
     }
     return chunk_id, row, vector
@@ -58,7 +64,7 @@ def native_image_ref(path: Path) -> LightRAGSidecarRef:
         sidecar_type="native_image",
         sidecar_id=path.stem,
         asset_path=path.resolve(),
-        page_number=None,
+        page_index=None,
         bbox=None,
         payload={"source_path": str(path)},
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -47,6 +48,7 @@ async def test_backend_always_queries_lightrag_mix() -> None:
     assert result.contexts["entities"] == [{"entity_name": "Alpha"}]
     assert result.contexts["chunks"][0]["chunk_id"] == "txt1"
     assert result.contexts["chunks"][0]["reference_id"] == "3"
+    assert result.contexts["chunks"][0].get("page_idx") is None
 
 
 async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path: Path) -> None:
@@ -81,6 +83,61 @@ async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path:
     assert chunk["chunk_id"] == "img1"
     assert chunk["image_data"]
     assert chunk["page_idx"] == 3
+
+
+async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
+    tmp_path: Path,
+) -> None:
+    parsed_dir = tmp_path / "sample.parsed"
+    parsed_dir.mkdir()
+    (parsed_dir / "sample.blocks.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "content",
+                "blockid": "block-1",
+                "content": "body",
+                "positions": [{"type": "bbox", "anchor": 4, "range": [1, 2, 3, 4]}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={
+            "data": {
+                "chunks": [{"id": "txt1", "content": "alpha", "file_path": "/docs/a.pdf"}],
+                "entities": [],
+                "relationships": [],
+            }
+        }
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(
+        return_value=[
+            {
+                "id": "txt1",
+                "content": "alpha",
+                "file_path": "/docs/a.pdf",
+                "full_doc_id": "doc-1",
+                "sidecar": {
+                    "type": "block",
+                    "id": "block-1",
+                    "refs": [{"type": "block", "id": "block-1"}],
+                },
+            }
+        ]
+    )
+    lightrag.full_docs = MagicMock()
+    lightrag.full_docs.get_by_id = AsyncMock(
+        return_value={"sidecar_location": parsed_dir.as_uri()}
+    )
+
+    backend = LightRAGMixBackend(lightrag=lightrag)
+    result = await backend.aretrieve("question")
+
+    assert result.contexts["chunks"][0]["page_idx"] == 5
 
 
 async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:

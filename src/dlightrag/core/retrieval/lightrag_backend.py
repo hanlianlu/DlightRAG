@@ -16,6 +16,7 @@ from dlightrag.core.retrieval import canonicalize_reference_ids
 from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -64,26 +65,29 @@ class LightRAGMixBackend:
         if image_chunks:
             chunks = rrf_fuse([chunks, image_chunks])[:limit]
 
-        await self._hydrate_image_chunks(chunks)
+        await self._hydrate_chunk_provenance(chunks)
         chunks = await self._rerank(query, chunks, top_k=limit)
         chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
+
+        context_chunks = []
+        for c in chunks[:limit]:
+            context_chunk = {
+                "chunk_id": c["chunk_id"],
+                "reference_id": c.get("reference_id", ""),
+                "file_path": c.get("file_path", ""),
+                "content": c.get("content", ""),
+                "image_data": c.get("image_data"),
+                "relevance_score": c.get("relevance_score"),
+            }
+            if c.get("page_idx") is not None:
+                context_chunk["page_idx"] = c["page_idx"]
+            context_chunks.append(context_chunk)
 
         return RetrievalResult(
             contexts={
                 "entities": data.get("entities", []),
                 "relationships": data.get("relationships", []),
-                "chunks": [
-                    {
-                        "chunk_id": c["chunk_id"],
-                        "reference_id": c.get("reference_id", ""),
-                        "file_path": c.get("file_path", ""),
-                        "content": c.get("content", ""),
-                        "image_data": c.get("image_data"),
-                        "page_idx": c.get("page_idx", 1),
-                        "relevance_score": c.get("relevance_score"),
-                    }
-                    for c in chunks[:limit]
-                ],
+                "chunks": context_chunks,
             }
         )
 
@@ -96,15 +100,17 @@ class LightRAGMixBackend:
             if not cid or cid in seen:
                 continue
             seen.add(cid)
-            chunks.append(
-                {
-                    "chunk_id": cid,
-                    "content": raw.get("content", ""),
-                    "reference_id": str(raw.get("reference_id", "")),
-                    "file_path": raw.get("file_path", ""),
-                    "relevance_score": raw.get("score") or raw.get("distance"),
-                }
-            )
+            chunk = {
+                "chunk_id": cid,
+                "content": raw.get("content", ""),
+                "reference_id": str(raw.get("reference_id", "")),
+                "file_path": raw.get("file_path", ""),
+                "relevance_score": raw.get("score") or raw.get("distance"),
+            }
+            for key in ("full_doc_id", "sidecar", "sidecar_location", "page_idx"):
+                if raw.get(key) is not None:
+                    chunk[key] = raw[key]
+            chunks.append(chunk)
         return chunks
 
     async def _retrieve_query_images(
@@ -134,7 +140,6 @@ class LightRAGMixBackend:
                         "content": c.get("content", ""),
                         "file_path": c.get("file_path", ""),
                         "reference_id": "",
-                        "page_idx": (c.get("chunk_order_index") or 0) + 1,
                         "relevance_score": c.get("distance"),
                     }
                     for c in (raw_chunks or [])
@@ -145,8 +150,8 @@ class LightRAGMixBackend:
                 logger.warning("Direct visual query failed", exc_info=True)
         return rrf_fuse(rankings)[:top_k] if rankings else []
 
-    async def _hydrate_image_chunks(self, chunks: list[dict[str, Any]]) -> None:
-        await hydrate_image_chunks(self._lightrag, chunks)
+    async def _hydrate_chunk_provenance(self, chunks: list[dict[str, Any]]) -> None:
+        await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
 
     async def _rerank(
         self,
@@ -177,36 +182,3 @@ def _extract_images(multimodal_content: list[dict[str, Any]] | None) -> list[Ima
         if raw:
             images.append(Image.open(io.BytesIO(raw)))
     return images
-
-
-async def hydrate_image_chunks(lightrag: Any, chunks: list[dict[str, Any]]) -> None:
-    """Hydrate image bytes/page metadata from LightRAG text_chunks sidecars."""
-    if not chunks:
-        return
-    chunk_ids = [c["chunk_id"] for c in chunks]
-    try:
-        raw_chunks = await lightrag.text_chunks.get_by_ids(chunk_ids)
-    except Exception:
-        logger.debug("LightRAG text chunk hydration failed", exc_info=True)
-        raw_chunks = [None for _ in chunk_ids]
-    for chunk, raw in zip(chunks, raw_chunks, strict=False):
-        sidecar: dict[str, Any] = {}
-        if isinstance(raw, dict):
-            if not chunk.get("file_path"):
-                chunk["file_path"] = raw.get("file_path", "")
-            raw_sidecar = raw.get("sidecar")
-            if isinstance(raw_sidecar, dict):
-                sidecar = raw_sidecar
-        page_index = sidecar.get("page_index")
-        if isinstance(page_index, int):
-            chunk["page_idx"] = page_index + 1
-        image_path = sidecar.get("path") or chunk.get("file_path")
-        if not isinstance(image_path, str):
-            continue
-        path = Path(image_path)
-        if path.suffix.lower() not in _IMAGE_SUFFIXES or not path.exists():
-            continue
-        chunk["image_data"] = base64.b64encode(path.read_bytes()).decode("ascii")
-
-
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}

@@ -43,11 +43,41 @@ async def test_build_direct_image_chunk_embeds_original_image(tmp_path) -> None:
         "type": "drawing",
         "id": "fig-1",
         "path": str(path),
-        "page_index": None,
-        "bbox": None,
     }
     assert vector == [0.1, 0.2, 0.3]
     embedder.embed_index_images.assert_awaited_once()
+
+
+async def test_build_direct_image_chunk_keeps_sidecar_provenance(tmp_path) -> None:
+    path = tmp_path / "fig.png"
+    Image.new("RGB", (1, 1), "white").save(path)
+    ref = LightRAGSidecarRef(
+        sidecar_type="drawing",
+        sidecar_id="fig-1",
+        asset_path=path,
+        page_index=2,
+        bbox={"page_index": 2, "range": [1, 2, 3, 4]},
+        block_id="block-1",
+    )
+    embedder = AsyncMock()
+    embedder.embed_index_images.return_value = [[0.1, 0.2, 0.3]]
+
+    _, row, _ = await build_direct_image_chunk(
+        workspace="default",
+        full_doc_id="doc-1",
+        ref=ref,
+        embedder=embedder,
+        text_content="figure caption",
+    )
+
+    assert row["sidecar"] == {
+        "type": "drawing",
+        "id": "fig-1",
+        "path": str(path),
+        "page_index": 2,
+        "bbox": {"page_index": 2, "range": [1, 2, 3, 4]},
+        "block_id": "block-1",
+    }
 
 
 async def test_build_direct_image_chunk_requires_asset_path() -> None:
