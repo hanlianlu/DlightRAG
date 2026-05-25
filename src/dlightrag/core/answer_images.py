@@ -3,13 +3,11 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.utils.images import bounded_image_data_uri, image_url_block
-
-logger = logging.getLogger(__name__)
+from dlightrag.utils.image_budget import ImagePayloadBudget
+from dlightrag.utils.images import image_url_block
 
 
 @dataclass
@@ -36,25 +34,23 @@ class AnswerImageBudget:
 
     def _bound_base64(self, value: str, *, label: str) -> tuple[str, int] | None:
         """Bound a raw base64/data URI image and record consumed bytes."""
-        if self.count >= self.max_images or self.used_bytes >= self.max_total_bytes:
-            return None
-        remaining = self.max_total_bytes - self.used_bytes
-        max_bytes = min(self.max_bytes_per_image, remaining)
-        bounded = bounded_image_data_uri(
-            value,
-            max_bytes=max_bytes,
+        budget = ImagePayloadBudget(
+            max_images=self.max_images,
+            max_total_bytes=self.max_total_bytes,
+            max_bytes_per_image=self.max_bytes_per_image,
             max_px=self.max_px,
             min_px=self.min_px,
             quality=self.quality,
             min_quality=self.min_quality,
+            count=self.count,
+            used_bytes=self.used_bytes,
         )
+        bounded = budget.add_base64(value, label=label)
         if bounded is None:
-            logger.info("Skipping answer image %s: cannot fit payload budget", label)
             return None
-        uri, byte_count = bounded
-        self.count += 1
-        self.used_bytes += byte_count
-        return uri, byte_count
+        self.count = budget.count
+        self.used_bytes = budget.used_bytes
+        return bounded
 
     def add_user_image(self, value: str | dict[str, Any], *, label: str) -> dict[str, Any] | None:
         """Add a user image. URLs pass through while base64 is bounded."""

@@ -448,6 +448,20 @@ Otherwise DlightRAG relies on LightRAG's symmetric fallback. Changing
 `embedding.dim` after indexing requires clearing the workspace and rebuilding
 vector indexes.
 
+### Rerank Image Budget
+
+Reranking happens before answer-context packing. Multimodal rerankers therefore
+use their own image payload budget instead of relying on `answer.*` limits:
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `rerank.image_max_bytes` | `1500000` | Maximum compressed binary bytes per rerank image before base64 expansion. |
+| `rerank.image_max_total_bytes` | `8000000` | Maximum compressed binary image bytes per rerank model request. |
+| `rerank.image_max_px` | `1280` | Maximum long edge after rerank-stage bounding. |
+| `rerank.image_min_px` | `768` | Long-edge floor before oversized rerank images are skipped. |
+| `rerank.image_quality` | `86` | Initial JPEG quality for recompressed rerank images. |
+| `rerank.image_min_quality` | `76` | JPEG quality floor before oversized rerank images are skipped. |
+
 ### Answer Image Budget
 
 Answer generation uses one shared image budget for user `query_images` and

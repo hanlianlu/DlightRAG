@@ -119,6 +119,13 @@ Post-rerank filtering removes chunks below `rerank.score_threshold`. If all
 chunks fall below the threshold, DlightRAG keeps the top scored fallback set
 instead of returning an accidental empty answer context.
 
+Reranking has an independent image budget because it runs before answer-context
+packing. `chat_llm_reranker` and image-capable HTTP rerankers bound each request
+with `rerank.image_max_bytes`, `rerank.image_max_total_bytes`, and the
+rerank-stage size/quality floors before constructing model payloads. Visual
+chunks whose images cannot fit fall back to their text, if present, rather than
+sending unbounded data URIs.
+
 ## Answer Generation
 
 The answer prompt receives:
