@@ -5,7 +5,6 @@ Ported from sandbox_agent. LangChain replaced with raw async LLM function call.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import json
 import logging
@@ -16,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from pydantic import BaseModel, Field
 
 from dlightrag.prompts import HIGHLIGHT_SYSTEM_PROMPT, HIGHLIGHT_USER_PROMPT
+from dlightrag.utils.concurrency import bounded_map
 
 from .parser import strip_generated_references_section
 from .schemas import SourceReference
@@ -155,15 +155,14 @@ async def extract_highlights_for_sources(
         max_input_chars=max_input_chars,
     )
     citing_sentences = extract_all_citing_sentences(answer_text)
-    semaphore = asyncio.Semaphore(max_concurrency)
 
     async def _extract_one(
-        chunk_id: str, chunk_content: str, sentence: str
+        item: tuple[str, str, str],
     ) -> tuple[str, HighlightPhrases]:
-        async with semaphore:
-            return chunk_id, await extractor.extract_highlights(sentence, chunk_content, chunk_id)
+        chunk_id, chunk_content, sentence = item
+        return chunk_id, await extractor.extract_highlights(sentence, chunk_content, chunk_id)
 
-    tasks = []
+    items: list[tuple[str, str, str]] = []
     for src in sources:
         if not src.chunks:
             continue
@@ -177,12 +176,17 @@ async def extract_highlights_for_sources(
                 if s not in sentences:
                     sentences.append(s)
             for sentence in sentences:
-                tasks.append(_extract_one(chunk.chunk_id, chunk.content, sentence))
+                items.append((chunk.chunk_id, chunk.content, sentence))
 
-    if not tasks:
+    if not items:
         return sources
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await bounded_map(
+        items,
+        _extract_one,
+        max_concurrent=max_concurrency,
+        task_name="highlight",
+    )
 
     chunk_phrases: dict[str, set[str]] = {}
     for res in results:

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Literal
 
@@ -16,6 +15,7 @@ from dlightrag.models.embedding_inputs import (
     TextEmbeddingInput,
 )
 from dlightrag.models.providers.embed_base import EmbedProvider
+from dlightrag.utils.concurrency import bounded_map
 
 logger = logging.getLogger(__name__)
 
@@ -95,17 +95,25 @@ class MultimodalEmbedder:
         if not images:
             return []
 
-        sem = asyncio.Semaphore(self.batch_size)
-
         async def one(image: Image.Image) -> list[float]:
-            async with sem:
-                payload = self._build_image_payload(image, context=context)
-                data = await self._post(payload)
-                vectors = self.provider.parse_response(data)
-                self._validate_vectors(vectors)
-                return vectors[0]
+            payload = self._build_image_payload(image, context=context)
+            data = await self._post(payload)
+            vectors = self.provider.parse_response(data)
+            self._validate_vectors(vectors)
+            return vectors[0]
 
-        return await asyncio.gather(*(one(image) for image in images))
+        results = await bounded_map(
+            images,
+            one,
+            max_concurrent=self.batch_size,
+            task_name="image-embedding",
+        )
+        vectors: list[list[float]] = []
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
+            vectors.append(result)
+        return vectors
 
     async def embed_index_images(self, images: list[Image.Image]) -> list[list[float]]:
         """Embed document/index-side images."""
