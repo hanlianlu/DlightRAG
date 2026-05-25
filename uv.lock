@@ -387,7 +387,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.5.0"
+version = "1.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -863,7 +863,7 @@ wheels = [
 [[package]]
 name = "lightrag-hku"
 version = "1.5.0"
-source = { git = "https://github.com/HKUDS/LightRAG.git?rev=main#2144a029596fe9688e682fcbee1d7f18d95f2102" }
+source = { git = "https://github.com/HKUDS/LightRAG.git?rev=main#dc387a4b0426f04c96081fa15ae42c3e2f438463" }
 dependencies = [
     { name = "aiohttp" },
     { name = "configparser" },
