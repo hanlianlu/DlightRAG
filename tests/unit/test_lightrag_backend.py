@@ -51,6 +51,22 @@ async def test_backend_always_queries_lightrag_mix() -> None:
     assert result.contexts["chunks"][0].get("page_idx") is None
 
 
+async def test_backend_forwards_chunk_top_k_to_lightrag_query_param() -> None:
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={"data": {"chunks": [], "entities": [], "relationships": []}}
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[])
+
+    backend = LightRAGMixBackend(lightrag=lightrag)
+    await backend.aretrieve("question", top_k=60, chunk_top_k=30)
+
+    param = lightrag.aquery_data.await_args.kwargs["param"]
+    assert param.top_k == 60
+    assert param.chunk_top_k == 30
+
+
 async def test_backend_hydrates_image_chunks_from_lightrag_text_chunks(tmp_path: Path) -> None:
     image_path = tmp_path / "page.png"
     _write_image(image_path)

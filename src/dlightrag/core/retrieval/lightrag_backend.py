@@ -51,6 +51,7 @@ class LightRAGMixBackend:
             mode="mix",
             only_need_context=True,
             top_k=top_k or 60,
+            chunk_top_k=limit,
             enable_rerank=False,
             include_references=True,
         )
