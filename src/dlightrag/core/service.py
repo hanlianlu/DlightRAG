@@ -1148,7 +1148,7 @@ class RAGService:
         """Force-inject metadata-resolved chunks missing from retrieval results.
 
         Uses the shared ``fetch_chunks_by_ids`` helper for base text_chunks
-        retrieval, then hydrates image bytes from LightRAG chunk sidecar data.
+        retrieval, then hydrates provenance from LightRAG sidecar data.
         """
         from dlightrag.core.retrieval.filtered_vdb import fetch_chunks_by_ids
 
@@ -1166,9 +1166,9 @@ class RAGService:
         if not injected:
             return
 
-        from dlightrag.core.retrieval.lightrag_backend import hydrate_image_chunks
+        from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
-        await hydrate_image_chunks(lr, injected)
+        await hydrate_lightrag_chunk_provenance(lr, injected)
 
         chunks = result.contexts.get("chunks", [])
         result.contexts["chunks"] = chunks + injected

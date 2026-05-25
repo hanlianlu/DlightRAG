@@ -8,19 +8,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from dlightrag.core.sidecar_provenance import (
+    explicit_item_page_index,
+    load_block_provenance_index,
+)
+
 
 @dataclass(frozen=True)
 class LightRAGSidecarRef:
     sidecar_type: str
     sidecar_id: str
     asset_path: Path | None = None
-    page_number: int | None = None
+    page_index: int | None = None
     bbox: dict[str, Any] | None = None
+    block_id: str | None = None
     payload: dict[str, Any] | None = None
 
 
 def collect_sidecar_refs(artifact_dir: Path) -> list[LightRAGSidecarRef]:
     """Collect drawing/table/equation refs from LightRAG sidecar JSON files."""
+    block_index = load_block_provenance_index(artifact_dir)
     refs: list[LightRAGSidecarRef] = []
     for sidecar_type, pattern, item_key in (
         ("drawing", "*.drawings.json", "drawings"),
@@ -37,13 +44,22 @@ def collect_sidecar_refs(artifact_dir: Path) -> list[LightRAGSidecarRef]:
             for index, item in enumerate(items):
                 sidecar_id = str(item.get("id") or item.get("uid") or f"{sidecar_type}-{index}")
                 raw_asset = item.get("path") or item.get("asset_path") or item.get("image_path")
+                block_id = item.get("blockid")
+                block_provenance = block_index.get(block_id) if isinstance(block_id, str) else None
+                explicit_page_index = explicit_item_page_index(item)
                 refs.append(
                     LightRAGSidecarRef(
                         sidecar_type=sidecar_type,
                         sidecar_id=sidecar_id,
                         asset_path=(artifact_dir / raw_asset).resolve() if raw_asset else None,
-                        page_number=item.get("page") or item.get("page_number"),
-                        bbox=item.get("bbox"),
+                        page_index=explicit_page_index
+                        if explicit_page_index is not None
+                        else (
+                            block_provenance.page_index if block_provenance is not None else None
+                        ),
+                        bbox=item.get("bbox")
+                        or (block_provenance.bbox if block_provenance is not None else None),
+                        block_id=block_id if isinstance(block_id, str) else None,
                         payload=item,
                     )
                 )
