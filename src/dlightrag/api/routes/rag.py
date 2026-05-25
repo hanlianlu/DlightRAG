@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -34,6 +35,27 @@ def _metadata_filter(body: MetadataFilterRequest | None) -> Any | None:
     from dlightrag.core.retrieval.models import MetadataFilter
 
     return MetadataFilter(**body.model_dump(exclude_none=True))
+
+
+def _public_contexts(contexts: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Return API-safe contexts without inline base64 images."""
+    public: dict[str, list[dict[str, Any]]] = {}
+    for key, items in contexts.items():
+        if not isinstance(items, list):
+            continue
+        public_items: list[dict[str, Any]] = []
+        for item in items:
+            row = dict(item)
+            if key == "chunks" and row.pop("image_data", None):
+                workspace = row.get("_workspace")
+                chunk_id = row.get("chunk_id")
+                if workspace and chunk_id:
+                    path = f"/images/{quote(str(workspace), safe='')}/{quote(str(chunk_id), safe='')}"
+                    row["image_url"] = f"{path}?size=full"
+                    row["thumbnail_url"] = f"{path}?size=thumb"
+            public_items.append(row)
+        public[key] = public_items
+    return public
 
 
 @router.post("/ingest")
@@ -87,6 +109,12 @@ async def retrieve(
         kwargs["filters"] = filters
     if body.multimodal_content:
         kwargs["multimodal_content"] = body.multimodal_content
+    if body.query_images:
+        kwargs["query_images"] = body.query_images
+    if body.session_id:
+        kwargs["session_id"] = body.session_id
+    if body.referenced_image_ids:
+        kwargs["referenced_image_ids"] = body.referenced_image_ids
 
     result = await manager.aretrieve(
         body.query,
@@ -95,11 +123,15 @@ async def retrieve(
         chunk_top_k=body.chunk_top_k,
         **kwargs,
     )
-    sources = build_sources(result.contexts)
+    public_contexts = _public_contexts(result.contexts)
+    sources = build_sources(public_contexts)
     return {
         "answer": result.answer,
-        "contexts": result.contexts,
+        "contexts": public_contexts,
         "sources": [s.model_dump() for s in sources],
+        "trace": result.trace,
+        "image_descriptions": result.image_descriptions,
+        "current_image_ids": result.current_image_ids,
     }
 
 
@@ -117,6 +149,10 @@ async def answer(
         kwargs["multimodal_content"] = body.multimodal_content
     if body.query_images:
         kwargs["query_images"] = body.query_images
+    if body.session_id:
+        kwargs["session_id"] = body.session_id
+    if body.referenced_image_ids:
+        kwargs["referenced_image_ids"] = body.referenced_image_ids
 
     if not body.stream:
         result = await manager.aanswer(
@@ -127,11 +163,12 @@ async def answer(
             chunk_top_k=body.chunk_top_k,
             **kwargs,
         )
+        public_contexts = _public_contexts(result.contexts)
         flat_contexts: list[dict[str, Any]] = []
         for items in result.contexts.values():
             if isinstance(items, list):
                 flat_contexts.extend(items)
-        all_sources = build_sources(result.contexts)
+        all_sources = build_sources(public_contexts)
         answer_text = result.answer
         if result.answer and flat_contexts:
             processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
@@ -143,9 +180,12 @@ async def answer(
         cited_refs = [{"id": s.id, "title": s.title} for s in sources]
         return {
             "answer": answer_text,
-            "contexts": result.contexts,
+            "contexts": public_contexts,
             "references": cited_refs,
             "sources": [s.model_dump() for s in sources],
+            "trace": result.trace,
+            "image_descriptions": result.image_descriptions,
+            "current_image_ids": result.current_image_ids,
         }
 
     contexts, token_iter = await manager.aanswer_stream(
@@ -158,7 +198,8 @@ async def answer(
     )
 
     async def event_generator() -> AsyncIterator[str]:
-        yield f"data: {json.dumps({'type': 'context', 'data': contexts}, ensure_ascii=False)}\n\n"
+        public_contexts = _public_contexts(contexts)
+        yield f"data: {json.dumps({'type': 'context', 'data': public_contexts}, ensure_ascii=False)}\n\n"
         answer_parts: list[str] = []
         try:
             if token_iter is None:
@@ -177,7 +218,7 @@ async def answer(
             for items in contexts.values():
                 if isinstance(items, list):
                     flat_contexts.extend(items)
-            all_sources = build_sources(contexts)
+            all_sources = build_sources(public_contexts)
             final_answer = clean_answer
             if clean_answer and flat_contexts:
                 processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
@@ -188,6 +229,13 @@ async def answer(
                 sources = []
 
             yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
+            trace = getattr(token_iter, "trace", None)
+            if isinstance(trace, dict) and trace:
+                yield f"data: {json.dumps({'type': 'trace', 'data': trace}, ensure_ascii=False)}\n\n"
+            image_ids = getattr(token_iter, "current_image_ids", None)
+            image_descriptions = getattr(token_iter, "image_descriptions", None)
+            if image_ids or image_descriptions:
+                yield f"data: {json.dumps({'type': 'image_meta', 'current_image_ids': image_ids or [], 'image_descriptions': image_descriptions or []}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'answer': final_answer}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             logger.debug("Client disconnected during SSE streaming")

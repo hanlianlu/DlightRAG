@@ -15,6 +15,12 @@ Startup checks require PostgreSQL 18 or newer. Workspaces should not mix
 embedding models or dimensions after data has been indexed; changing
 `embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
+The checked-in Docker Compose stack uses
+`ghcr.io/hanlianlu/dlightrag-postgres:pg18` and preloads `age,pg_textsearch`.
+The optional `replica` profile uses the same image and physical streaming
+replication, so vector, graph, and BM25 indexes replicate through WAL rather
+than application-level copy jobs.
+
 Default vector storage is `VECTOR(dim)` with HNSW. `HNSW_HALFVEC` is an
 explicit opt-in index type for deployments that have chosen the precision
 tradeoff and rebuilt indexes accordingly.
@@ -138,6 +144,15 @@ and only read or verify schema.
   `idx_lightrag_doc_chunks_bm25` exists.
 - Hot standby queries can conflict with WAL replay. Tune
   `max_standby_streaming_delay` and `hot_standby_feedback` deliberately.
+
+Local commands:
+
+```bash
+make postgres-replica-prepare
+make postgres-replica-start
+make postgres-replica-smoke
+make postgres-replica-reset
+```
 
 ## Version Compatibility Log
 

@@ -123,8 +123,10 @@ async for token in token_iter:
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
-| `multimodal_content` | `list[dict]` | `None` | Up to 3 images for direct visual retrieval |
-| `query_images` | `list[str \| dict]` | `None` | User-attached images inlined into the answer LLM call as `image_url` blocks (URL strings or pre-built dict blocks). Capped at 10. Distinct from `multimodal_content`: this only affects answer generation, not retrieval. |
+| `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
+| `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded before being sent to the answer LLM. Capped at 10. |
+| `session_id` | `str \| None` | `None` | Conversation/session key for reusing uploaded query images. |
+| `referenced_image_ids` | `list[str] \| None` | `None` | Image IDs from a previous `image_meta` event or JSON response to include again in retrieval and answer generation. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
 
 ### REST API
@@ -153,7 +155,10 @@ curl -X POST http://localhost:8100/answer \
   "answer": "The key findings are... [1-1] [2-3]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
   "references": [{"id": "1", "title": "report.pdf"}, {"id": "2", "title": "spec.pdf"}],
-  "sources": [...]
+  "sources": [...],
+  "trace": {...},
+  "image_descriptions": ["Image 1: a line chart about revenue"],
+  "current_image_ids": ["img_0"]
 }
 ```
 
@@ -164,6 +169,8 @@ curl -X POST http://localhost:8100/answer \
 | `context` | `{type, data}` | Full contexts, sent first |
 | `token` | `{type, content}` | LLM answer token (repeats) |
 | `sources` | `{type, data}` | Validated cited sources, after all tokens and before done |
+| `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
+| `image_meta` | `{type, current_image_ids, image_descriptions}` | Session image IDs and VLM image descriptions |
 | `done` | `{type, answer}` | Stream complete; `answer` is the final normalized answer body after citation validation |
 | `error` | `{type, message}` | Error mid-stream |
 
@@ -176,12 +183,15 @@ data: {"type":"token","content":" are..."}
 
 data: {"type":"sources","data":[{"id":"1","title":"report.pdf","path":"/data/report.pdf","chunks":[...]}]}
 
+data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
+
+data: {"type":"image_meta","current_image_ids":["img_0"],"image_descriptions":["Image 1: a line chart"]}
+
 data: {"type":"done","answer":"The key findings are..."}
 ```
 
 REST uses the same fields as the Python manager methods. `retrieve` and
-`answer` both accept `filters`; `retrieve`, `answer`, and Web image queries can
-also pass `multimodal_content` for direct visual retrieval.
+`answer` both accept `filters`, `query_images`, and `multimodal_content`.
 
 ### MCP Server
 
@@ -201,6 +211,12 @@ MCP tools return JSON text with `sources` at top level:
 
 All modes return `contexts` as a `RetrievalContexts` TypedDict with three arrays. Chunks are the primary retrieval unit; entities and relationships come from the knowledge graph.
 
+REST and Web responses never expose inline base64 page/image payloads. When a
+retrieved chunk has a visual sidecar, DlightRAG projects it to
+`image_url`/`thumbnail_url` routes. Python manager internals may still carry
+`image_data` inside contexts so answer generation and reranking can use bounded
+multimodal payloads without a second database read.
+
 ```python
 from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, EntityContext, RelationshipContext
 ```
@@ -214,7 +230,10 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
   "file_path": "/data/report.pdf",
   "content": "Page text content...",
   "page_idx": 2,
-  "image_data": "iVBORw0KGgo...",
+  "bbox": {"x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.6},
+  "image_url": "/images/default/abc123?size=full",
+  "thumbnail_url": "/images/default/abc123?size=thumb",
+  "image_mime_type": "image/png",
   "relevance_score": 0.87
 }
 ```
@@ -226,7 +245,10 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 | `file_path` | string | yes | Source file path |
 | `content` | string | yes | Chunk text content |
 | `page_idx` | int \| null | no | **1-based** page number |
-| `image_data` | string \| null | no | Base64-encoded page or image data |
+| `bbox` | object \| null | no | Visual block bounding box when LightRAG/MinerU sidecar provenance provides one |
+| `image_url` | string \| null | no | Full image route for visual chunks in public REST/Web responses |
+| `thumbnail_url` | string \| null | no | Thumbnail route for source-panel rendering |
+| `image_mime_type` | string \| null | no | MIME type for the visual asset |
 | `relevance_score` | float \| null | no | 0–1 relevance score (when reranking is enabled) |
 | `metadata` | object | no | Extra metadata (`file_name`, `file_type`, etc.) |
 | `_workspace` | string | no | Source workspace (federated queries only) |
@@ -290,15 +312,19 @@ matches `[ref_id-chunk_idx]` markers instead of page sorting.
       "chunk_id": "abc123",
       "chunk_idx": 1,
       "page_idx": 2,
+      "bbox": null,
       "content": "First 200 characters of content...",
-      "image_data": null
+      "image_url": null,
+      "thumbnail_url": null
     },
     {
       "chunk_id": "def456",
       "chunk_idx": 2,
       "page_idx": 5,
+      "bbox": {"x0": 0.2, "y0": 0.1, "x1": 0.7, "y1": 0.5},
       "content": "Another chunk...",
-      "image_data": "iVBORw0KGgo..."
+      "image_url": "/images/default/def456?size=full",
+      "thumbnail_url": "/images/default/def456?size=thumb"
     }
   ]
 }
@@ -321,8 +347,10 @@ Each **chunk snippet** within a source:
 | `chunk_id` | string | Unique chunk identifier |
 | `chunk_idx` | int | 1-based position within this source; matches `[ref_id-chunk_idx]` citations |
 | `page_idx` | int \| null | 1-based page number |
+| `bbox` | object \| null | Visual block bounding box when available |
 | `content` | string | Filtered display content |
-| `image_data` | string \| null | Base64 page or image data |
+| `image_url` | string \| null | Full visual asset route |
+| `thumbnail_url` | string \| null | Thumbnail visual asset route |
 | `highlight_phrases` | list \| null | Semantic highlight phrases (when available) |
 
 
@@ -371,12 +399,15 @@ To trace `[1-2]` back to source material:
 2. The 2nd chunk (1-based) in that group is the cited chunk
 3. Use `chunk_id` to look up the source in `sources` (by matching `id`)
 4. Use `page_idx` on the chunk for the page number
-5. Use `file_path` or source `url` to access the original file via `GET /api/files/{path}`
+5. Use `page_idx` and `bbox` when present for page/block localization
+6. Use source `url` or `GET /api/files/{path}` for the original file; use
+   `image_url`/`thumbnail_url` for retrieved visual chunks
 
 
 ## Multimodal Queries
 
-Upload images alongside a text query for visual similarity search:
+Upload images alongside a text query for visual similarity search and answer
+reasoning:
 
 ```python
 # Python SDK
@@ -385,7 +416,8 @@ with open("photo.png", "rb") as f:
 
 result = await service.aanswer(
     query="What does this diagram show?",
-    multimodal_content=[{"type": "image", "data": img_bytes}],
+    query_images=[base64.b64encode(img_bytes).decode("ascii")],
+    session_id="chat-123",
 )
 ```
 
@@ -396,7 +428,8 @@ curl -X POST http://localhost:8100/answer \
   -d '{
     "query": "What does this diagram show?",
     "stream": false,
-    "multimodal_content": [{"type": "image", "data": "<base64>"}]
+    "query_images": ["<base64>"],
+    "session_id": "chat-123"
   }'
 
 # REST API — file path (server-accessible)
@@ -405,8 +438,12 @@ curl -X POST http://localhost:8100/answer \
   -d '{
     "query": "What does this diagram show?",
     "stream": false,
-    "multimodal_content": [{"type": "image", "img_path": "/data/diagram.png"}]
+    "multimodal_content": [{"type": "image", "data": "<base64>"}]
   }'
 ```
 
-Maximum 3 images per query. These images drive direct visual retrieval; use `query_images` when the answer model should also see user-supplied images.
+`query_images` is the user-facing chat path: DlightRAG stores bounded session
+images, asks the VLM for concise semantic descriptions, embeds the raw image
+for direct visual retrieval, and sends a bounded image preview to the answer
+model. `multimodal_content` remains the lower-level direct visual retrieval
+input for programmatic callers.

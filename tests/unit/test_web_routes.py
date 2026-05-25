@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from dlightrag.core.retrieval.protocols import RetrievalResult
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -104,13 +103,7 @@ class TestWebAnswer:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
-                self.aplan_query = AsyncMock(
-                    return_value=MagicMock(original_query="hello", standalone_query="hello")
-                )
-                self.aretrieve = AsyncMock(
-                    return_value=RetrievalResult(answer=None, contexts={"chunks": []})
-                )
-                self.agenerate_stream_from_contexts = AsyncMock(
+                self.aanswer_stream = AsyncMock(
                     return_value=({"chunks": []}, mock_tokens())
                 )
 
@@ -123,8 +116,7 @@ class TestWebAnswer:
         assert "event: done" in resp.text
         assert '"answer": "Answer"' in resp.text
         assert "Service error" not in resp.text
-        manager.aplan_query.assert_awaited_once()
-        manager.agenerate_stream_from_contexts.assert_awaited_once()
+        manager.aanswer_stream.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,26 @@ read_after_write_mode: eventual
 read_after_write_timeout: 15.0
 ```
 
+## Local Replica Profile
+
+The checked-in compose file includes an opt-in PostgreSQL 18 hot-standby
+profile for local validation. It uses the same `dlightrag-postgres:pg18`
+image as primary so `pgvector`, Apache AGE, and `pg_textsearch` versions stay
+aligned.
+
+```bash
+make postgres-replica-prepare
+make postgres-replica-start
+make postgres-replica-smoke
+```
+
+`postgres-replica-prepare` creates or refreshes the replication role on the
+primary. `postgres-replica-start` starts the `postgres-replica` compose
+profile on host port `5433`. `postgres-replica-smoke` verifies that the
+standby is in recovery and can replay primary WAL. Use
+`make postgres-replica-reset` to remove the local replica volume before
+re-seeding.
+
 ## Tradeoffs
 
 - Read-after-write is eventually consistent by default. With

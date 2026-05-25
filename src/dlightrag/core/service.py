@@ -162,6 +162,7 @@ class RAGService:
         self._bm25: Any = None
         self._retrieval_orchestrator: Any = None
         self._multimodal_embedder: Any = None
+        self._visual_asset_resolver: Any = None
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by the unified LightRAG initialization path.
@@ -341,6 +342,13 @@ class RAGService:
         from dlightrag.core.lightrag_stores import LightRAGStores
 
         self._lightrag_stores = LightRAGStores(lightrag)
+
+        from dlightrag.core.visual_assets import ThumbnailCache, VisualAssetResolver
+
+        self._visual_asset_resolver = VisualAssetResolver(
+            lightrag=lightrag,
+            thumb_cache=ThumbnailCache(max_size=config.visual_assets.thumb_cache_size),
+        )
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
@@ -1088,6 +1096,7 @@ class RAGService:
                 multimodal_content=multimodal_content,
                 metadata_filter=effective_filters,
                 metadata_filter_source=filter_source,
+                bm25_query=getattr(_plan, "bm25_query", None) if _plan is not None else None,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
                 is_reretrieve=is_reretrieve,
@@ -1132,6 +1141,7 @@ class RAGService:
 
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)
+        kg_result.trace["metadata_enriched"] = True
 
         # --- Step 4: Canonicalize reference_id across all merged chunks ---
         # Required so injected chunks (metadata path / visual-only) get a
@@ -1141,8 +1151,25 @@ class RAGService:
         kg_result.contexts["chunks"] = canonicalize_reference_ids(
             kg_result.contexts.get("chunks", [])
         )
+        for chunk in kg_result.contexts.get("chunks", []):
+            chunk.setdefault("_workspace", self.config.workspace)
+        kg_result.trace["workspace"] = self.config.workspace
 
         return kg_result
+
+    async def aget_visual_asset(self, chunk_id: str, *, size: str = "full") -> Any | None:
+        """Resolve a chunk image asset for API/Web image routes."""
+        self._ensure_initialized()
+        if self._visual_asset_resolver is None:
+            return None
+        if size == "thumb":
+            return await self._visual_asset_resolver.resolve_thumbnail(
+                chunk_id,
+                max_px=self.config.visual_assets.thumb_max_px,
+            )
+        if size == "full":
+            return await self._visual_asset_resolver.resolve(chunk_id)
+        raise ValueError("size must be 'full' or 'thumb'")
 
     async def _inject_candidate_chunks(self, result: RetrievalResult, chunk_ids: list[str]) -> None:
         """Force-inject metadata-resolved chunks missing from retrieval results.

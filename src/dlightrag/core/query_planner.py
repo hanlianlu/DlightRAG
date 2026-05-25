@@ -38,6 +38,8 @@ class QueryPlan:
 
     original_query: str  # User's raw input (before rewrite)
     standalone_query: str  # Rewritten standalone query (= original if no history)
+    bm25_query: str | None = None
+    referenced_image_ids: list[str] | None = None
     metadata_filter: MetadataFilter | None = None
     metadata_filter_source: str | None = None
     metadata_filter_confidence: str | None = None
@@ -77,6 +79,8 @@ class QueryPlannerStructuredResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     standalone_query: str
+    bm25_query: str | None = None
+    referenced_image_ids: list[str] = Field(default_factory=list)
     filters: QueryPlannerFilters = Field(default_factory=QueryPlannerFilters)
     filter_confidence: Literal["high", "low"] = "low"
     filter_evidence: list[QueryPlannerFilterEvidence] = Field(default_factory=list)
@@ -118,45 +122,6 @@ def _build_custom_keys_hint(schema: dict[str, Any] | None) -> str:
 
 def _is_empty_filter(f: MetadataFilter) -> bool:
     return f.is_empty()
-
-
-def _filter_proposal_has_evidence(
-    *,
-    query: str,
-    filters: dict[str, Any],
-    evidence: Any,
-) -> bool:
-    """Validate the LLM's evidence-carrying metadata filter contract."""
-    if not isinstance(evidence, list) or not evidence:
-        return False
-
-    q = query.casefold()
-    evidenced_fields: set[str] = set()
-    for item in evidence:
-        if not isinstance(item, dict):
-            continue
-        field = item.get("field")
-        span = item.get("evidence_span")
-        if not isinstance(field, str) or not isinstance(span, str):
-            continue
-        if not span.strip() or span.casefold() not in q:
-            continue
-        evidenced_fields.add(field)
-
-    required_fields = set(filters)
-    if "date_from" in required_fields or "date_to" in required_fields:
-        required_fields.discard("date_from")
-        required_fields.discard("date_to")
-        required_fields.add("date")
-    if "custom" in required_fields:
-        custom = filters.get("custom")
-        required_fields.discard("custom")
-        if isinstance(custom, dict):
-            required_fields.update(f"custom.{key}" for key in custom)
-        else:
-            required_fields.add("custom")
-
-    return required_fields.issubset(evidenced_fields)
 
 
 class QueryPlanner:
@@ -298,18 +263,13 @@ class QueryPlanner:
 
         # Validate filters
         clean = {k: v for k, v in raw_filters.items() if v is not None}
-        if clean and (
-            filter_confidence == "low"
-            or not _filter_proposal_has_evidence(
-                query=query,
-                filters=clean,
-                evidence=filter_evidence,
-            )
-        ):
-            logger.info("QueryPlanner: ignored metadata filter proposal without evidence contract")
+        if clean and filter_confidence == "low":
+            logger.info("QueryPlanner: ignored low-confidence metadata filter proposal")
             return QueryPlan(
                 original_query=query,
                 standalone_query=standalone,
+                bm25_query=data.get("bm25_query") or None,
+                referenced_image_ids=_clean_image_ids(data.get("referenced_image_ids")),
                 metadata_filter=None,
                 metadata_filter_source=None,
                 metadata_filter_confidence=filter_confidence or "low",
@@ -347,6 +307,8 @@ class QueryPlanner:
         return QueryPlan(
             original_query=query,
             standalone_query=standalone,
+            bm25_query=data.get("bm25_query") or None,
+            referenced_image_ids=_clean_image_ids(data.get("referenced_image_ids")),
             metadata_filter=metadata_filter,
             metadata_filter_source="llm_inferred" if metadata_filter is not None else None,
             metadata_filter_confidence=filter_confidence,
@@ -366,6 +328,7 @@ class QueryPlanner:
         merged_kwargs: dict[str, Any] = {}
         filter_fields = [
             "filename",
+            "filename_stem",
             "filename_pattern",
             "file_extension",
             "doc_title",
@@ -408,3 +371,10 @@ class QueryPlanner:
             except Exception:
                 logger.debug("Schema refresh failed, using stale cache")
         return self._schema
+
+
+def _clean_image_ids(raw: Any) -> list[str] | None:
+    if not isinstance(raw, list):
+        return None
+    ids = [item for item in raw if isinstance(item, str) and item.startswith("img_")]
+    return ids or None

@@ -14,10 +14,16 @@ def test_chunk_snippet_full():
         chunk_id="abc123",
         chunk_idx=2,
         page_idx=3,
+        bbox={"x": 1, "y": 2, "w": 3, "h": 4},
         content="market growth reached 15%",
+        image_url="/images/default/abc123?size=full",
+        thumbnail_url="/images/default/abc123?size=thumb",
         highlight_phrases=["15%"],
     )
     assert cs.chunk_idx == 2
+    assert cs.bbox == {"x": 1, "y": 2, "w": 3, "h": 4}
+    assert cs.image_url == "/images/default/abc123?size=full"
+    assert cs.thumbnail_url == "/images/default/abc123?size=thumb"
     assert cs.highlight_phrases == ["15%"]
 
 

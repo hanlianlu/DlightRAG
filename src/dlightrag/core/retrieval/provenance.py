@@ -12,11 +12,13 @@ from typing import Any
 from dlightrag.core.sidecar_provenance import (
     BlockProvenance,
     block_ids_from_sidecar,
-    coerce_non_negative_int,
-    first_page_index_for_blocks,
+    explicit_item_bbox,
+    explicit_item_page_index,
+    first_provenance_for_blocks,
     load_block_provenance_index,
     sidecar_dir_from_location,
 )
+from dlightrag.utils.images import detect_image_mime_type
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +41,9 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
 
         sidecar = _chunk_sidecar(chunk, raw_chunk)
         _hydrate_page_index_direct(chunk, sidecar)
+        _hydrate_bbox_direct(chunk, sidecar)
         if chunk.get("page_idx") is None:
-            page_index = await _page_index_from_block_sidecar(
+            provenance = await _provenance_from_block_sidecar(
                 lightrag,
                 sidecar=sidecar,
                 chunk=chunk,
@@ -48,8 +51,11 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
                 full_doc_cache=full_doc_cache,
                 block_index_cache=block_index_cache,
             )
-            if page_index is not None:
-                chunk["page_idx"] = page_index + 1
+            if provenance is not None:
+                if provenance.page_index is not None:
+                    chunk["page_idx"] = provenance.page_index + 1
+                if provenance.bbox is not None and chunk.get("bbox") is None:
+                    chunk["bbox"] = provenance.bbox
 
         _hydrate_image_data(chunk, sidecar)
 
@@ -80,16 +86,18 @@ def _chunk_sidecar(chunk: dict[str, Any], raw_chunk: dict[str, Any]) -> dict[str
 
 
 def _hydrate_page_index_direct(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
-    page_idx = coerce_non_negative_int(sidecar.get("page_idx"))
-    if page_idx is not None:
-        chunk["page_idx"] = page_idx
-        return
-    page_index = coerce_non_negative_int(sidecar.get("page_index"))
+    page_index = explicit_item_page_index(sidecar)
     if page_index is not None:
         chunk["page_idx"] = page_index + 1
 
 
-async def _page_index_from_block_sidecar(
+def _hydrate_bbox_direct(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
+    bbox = explicit_item_bbox(sidecar)
+    if bbox is not None:
+        chunk["bbox"] = bbox
+
+
+async def _provenance_from_block_sidecar(
     lightrag: Any,
     *,
     sidecar: dict[str, Any],
@@ -97,7 +105,7 @@ async def _page_index_from_block_sidecar(
     raw_chunk: dict[str, Any],
     full_doc_cache: dict[str, dict[str, Any] | None],
     block_index_cache: dict[Path, dict[str, BlockProvenance]],
-) -> int | None:
+) -> BlockProvenance | None:
     block_ids = block_ids_from_sidecar(sidecar)
     if not block_ids:
         return None
@@ -114,7 +122,7 @@ async def _page_index_from_block_sidecar(
     cache_key = artifact_dir.resolve()
     if cache_key not in block_index_cache:
         block_index_cache[cache_key] = load_block_provenance_index(cache_key)
-    return first_page_index_for_blocks(block_ids, block_index_cache[cache_key])
+    return first_provenance_for_blocks(block_ids, block_index_cache[cache_key])
 
 
 async def _artifact_dir_for_chunk(
@@ -172,3 +180,4 @@ def _hydrate_image_data(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
     if path.suffix.lower() not in _IMAGE_SUFFIXES or not path.exists():
         return
     chunk["image_data"] = base64.b64encode(path.read_bytes()).decode("ascii")
+    chunk["image_mime_type"] = detect_image_mime_type(path)

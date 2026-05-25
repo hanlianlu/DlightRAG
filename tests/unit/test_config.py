@@ -182,6 +182,12 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.runtime_role == "ingest"
     assert cfg.pg_target_for_runtime() == "primary"
     assert cfg.citations.highlights.enabled is False
+    assert cfg.answer.max_images == 6
+    assert cfg.answer.image_max_bytes == 1_500_000
+    assert cfg.answer.image_max_total_bytes == 20_000_000
+    assert cfg.query_images.semantic_enhancement is True
+    assert cfg.query_images.max_described_images == 3
+    assert cfg.visual_assets.thumb_max_px == 300
     for removed_shortcut in ("chat", "extract", "keywords", "query", "vlm"):
         assert not hasattr(cfg, removed_shortcut)
 

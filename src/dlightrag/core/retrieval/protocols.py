@@ -19,7 +19,11 @@ class ChunkContext(TypedDict):
     file_path: str
     content: str
     page_idx: NotRequired[int | None]
+    bbox: NotRequired[dict[str, Any] | None]
     image_data: NotRequired[str | None]
+    image_mime_type: NotRequired[str | None]
+    image_url: NotRequired[str | None]
+    thumbnail_url: NotRequired[str | None]
     relevance_score: NotRequired[float | None]
     metadata: NotRequired[dict[str, Any]]
     _workspace: NotRequired[str]
@@ -67,6 +71,9 @@ class RetrievalResult:
         default_factory=lambda: {"chunks": [], "entities": [], "relationships": []}
     )
     references: list[Reference] = field(default_factory=list)
+    trace: dict[str, Any] = field(default_factory=dict)
+    image_descriptions: list[str] = field(default_factory=list)
+    current_image_ids: list[str] = field(default_factory=list)
 
 
 # ── Backend protocol ──────────────────────────────────────────────

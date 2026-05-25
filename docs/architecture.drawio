@@ -8,17 +8,17 @@
         <mxCell id="title" value="DlightRAG Unified LightRAG Main Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
           <mxGeometry x="64" y="24" width="680" height="34" as="geometry"/>
         </mxCell>
-        <mxCell id="subtitle" value="One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.&lt;br&gt;DlightRAG adds metadata governance, direct visual search, BM25 fusion, reference canonicalization, and validated cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
+        <mxCell id="subtitle" value="One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.&lt;br&gt;DlightRAG adds metadata governance, query-image memory, direct visual search, BM25 fusion, visual assets, and validated cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
           <mxGeometry x="64" y="66" width="1040" height="40" as="geometry"/>
         </mxCell>
 
         <mxCell id="layer_interfaces" value="Interface Boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#cbd5e1;arcSize=6;fontFamily=Inter;fontSize=12;fontStyle=1;fontColor=#334155;align=left;verticalAlign=top;spacingLeft=16;spacingTop=8;" vertex="1" parent="1">
           <mxGeometry x="64" y="126" width="1152" height="108" as="geometry"/>
         </mxCell>
-        <mxCell id="adapters" value="&lt;b&gt;API, SDK, Web UI, MCP&lt;/b&gt;&lt;br&gt;transport, auth, uploads, streaming" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=9;" vertex="1" parent="1">
+        <mxCell id="adapters" value="&lt;b&gt;API, SDK, Web UI, MCP&lt;/b&gt;&lt;br&gt;transport, auth, uploads, image routes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=9;" vertex="1" parent="1">
           <mxGeometry x="96" y="166" width="210" height="52" as="geometry"/>
         </mxCell>
-        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, federation&lt;br&gt;read-after-write barrier" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, session images&lt;br&gt;federation, read-after-write" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="382" y="160" width="244" height="64" as="geometry"/>
         </mxCell>
         <mxCell id="service" value="&lt;b&gt;RAGService&lt;/b&gt;&lt;br&gt;per-workspace runtime facade" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
@@ -67,19 +67,19 @@
           <mxGeometry x="505" y="525" width="270" height="58" as="geometry"/>
         </mxCell>
 
-        <mxCell id="planner" value="&lt;b&gt;QueryPlanner&lt;/b&gt;&lt;br&gt;intent-aware filters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="planner" value="&lt;b&gt;QueryPlanner&lt;/b&gt;&lt;br&gt;rewrite, BM25 query, filters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="360" width="126" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="filter_scope" value="&lt;b&gt;Filter Scope&lt;/b&gt;&lt;br&gt;strict or fallback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="filter_scope" value="&lt;b&gt;Filter Scope&lt;/b&gt;&lt;br&gt;metadata in-filter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="1034" y="360" width="126" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="retriever" value="&lt;b&gt;UnifiedRetriever&lt;/b&gt;&lt;br&gt;LightRAG mix + BM25 + direct visual" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="retriever" value="&lt;b&gt;UnifiedRetriever&lt;/b&gt;&lt;br&gt;LightRAG mix + BM25 + visual" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="455" width="276" height="60" as="geometry"/>
         </mxCell>
         <mxCell id="fusion" value="&lt;b&gt;Fusion/Rerank&lt;/b&gt;&lt;br&gt;RRF then rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="535" width="126" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="answer" value="&lt;b&gt;Answer/Citation&lt;/b&gt;&lt;br&gt;validated sources" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="answer" value="&lt;b&gt;Answer/Sources&lt;/b&gt;&lt;br&gt;stream + validated citations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="1034" y="535" width="126" height="58" as="geometry"/>
         </mxCell>
 
@@ -89,7 +89,7 @@
         <mxCell id="primary" value="&lt;b&gt;Primary Postgres&lt;/b&gt;&lt;br&gt;DDL, ingest, metadata writes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
           <mxGeometry x="120" y="748" width="250" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;LightRAG chunks/doc status/KG/vectors&lt;br&gt;DlightRAG metadata index + pg_textsearch BM25" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="storage_surfaces" value="&lt;b&gt;Storage Surfaces&lt;/b&gt;&lt;br&gt;LightRAG chunks/doc status/KG/vectors/sidecars&lt;br&gt;DlightRAG metadata index + pg_textsearch BM25" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#22c55e;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="470" y="734" width="340" height="86" as="geometry"/>
         </mxCell>
         <mxCell id="replica" value="&lt;b&gt;Read Replica&lt;/b&gt;&lt;br&gt;query workers attach read-only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">

@@ -58,6 +58,24 @@ citations:
     max_input_chars: 4096
     cache_size: 500
 
+answer:
+  max_images: 6
+  image_max_bytes: 1500000
+  image_max_total_bytes: 20000000
+  image_max_px: 1024
+  image_quality: 85
+
+query_images:
+  semantic_enhancement: true
+  max_described_images: 3
+  session_max_images: 50
+  session_max_sessions: 100
+  session_ttl_seconds: 3600
+
+visual_assets:
+  thumb_max_px: 300
+  thumb_cache_size: 256
+
 # ─────────────────────────────────────────────────────────────────
 # Unified LightRAG Main Ingestion
 # ─────────────────────────────────────────────────────────────────
@@ -132,8 +150,8 @@ postgres_required_major: 18
 postgres_min_minor: "18.4"
 
 # Primary endpoint fields. Query workers use postgres_replica_* when
-# runtime_role=query; omitted
-# replica fields fall back to the primary values for local/dev setups.
+# runtime_role=query; omitted replica fields fall back to the primary values
+# for local/dev setups.
 # postgres_host: localhost
 # postgres_port: 5432
 # postgres_user: dlightrag

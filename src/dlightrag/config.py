@@ -280,6 +280,54 @@ class CitationsConfig(BaseModel):
     highlights: CitationHighlightConfig = Field(default_factory=CitationHighlightConfig)
 
 
+class AnswerConfig(BaseModel):
+    """Final answer generation controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_images: int = Field(
+        default=6,
+        description="Maximum total images sent to the answer LLM.",
+    )
+    image_max_bytes: int = Field(
+        default=1_500_000,
+        description="Maximum encoded bytes per answer image preview.",
+    )
+    image_max_total_bytes: int = Field(
+        default=20_000_000,
+        description="Maximum total encoded image bytes per answer request.",
+    )
+    image_max_px: int = Field(
+        default=1024,
+        description="Maximum image dimension sent to the answer LLM.",
+    )
+    image_quality: int = Field(
+        default=85,
+        description="JPEG quality for answer LLM image previews.",
+    )
+
+
+class QueryImagesConfig(BaseModel):
+    """Query-time image memory and semantic enhancement controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    semantic_enhancement: bool = True
+    max_described_images: int = 3
+    session_max_images: int = 50
+    session_max_sessions: int = 100
+    session_ttl_seconds: int = 3600
+
+
+class VisualAssetsConfig(BaseModel):
+    """Browser-facing visual asset serving controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thumb_max_px: int = 300
+    thumb_cache_size: int = 256
+
+
 class DlightragConfig(BaseSettings):
     """DlightRAG configuration.
 
@@ -408,6 +456,9 @@ class DlightragConfig(BaseSettings):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     metadata: MetadataConfig = Field(default_factory=MetadataConfig)
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
+    answer: AnswerConfig = Field(default_factory=AnswerConfig)
+    query_images: QueryImagesConfig = Field(default_factory=QueryImagesConfig)
+    visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")

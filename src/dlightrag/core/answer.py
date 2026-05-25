@@ -24,8 +24,10 @@ from typing import Any
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
+from dlightrag.core.answer_images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import get_answer_system_prompt
+from dlightrag.utils.images import image_data_uri
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +48,18 @@ class AnswerEngine:
         self,
         *,
         model_func: Callable[..., Any] | None = None,
+        max_images: int = 6,
+        image_max_bytes: int = 1_500_000,
+        image_max_total_bytes: int = 20_000_000,
+        image_max_px: int = 1024,
+        image_quality: int = 85,
     ) -> None:
         self.model_func = model_func
+        self._max_images = max_images
+        self._image_max_bytes = image_max_bytes
+        self._image_max_total_bytes = image_max_total_bytes
+        self._image_max_px = image_max_px
+        self._image_quality = image_quality
 
     # ------------------------------------------------------------------
     # Public API
@@ -203,16 +215,22 @@ class AnswerEngine:
         {"url": s}}`` so callers can pass either URLs or pre-built blocks.
         """
         content: list[dict[str, Any]] = []
+        image_budget = AnswerImageBudget(
+            max_images=self._max_images,
+            max_total_bytes=self._image_max_total_bytes,
+            max_bytes_per_image=self._image_max_bytes,
+            max_px=self._image_max_px,
+            quality=self._image_quality,
+        )
 
         if query_images:
             content.append({"type": "text", "text": "## User-attached images\n"})
-            for img in query_images:
-                if isinstance(img, dict) and img.get("type") == "image_url":
-                    content.append(img)
-                else:
-                    content.append({"type": "image_url", "image_url": {"url": img}})
+            for idx, img in enumerate(query_images, start=1):
+                block = image_budget.add_user_image(img, label=f"query_image_{idx}")
+                if block is not None:
+                    content.append(block)
 
-        content.extend(self._build_excerpt_blocks(contexts, indexer))
+        content.extend(self._build_excerpt_blocks(contexts, indexer, image_budget=image_budget))
 
         content.append({"type": "text", "text": user_prompt})
 
@@ -279,6 +297,7 @@ class AnswerEngine:
     def _build_excerpt_blocks(
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
+        image_budget: AnswerImageBudget | None = None,
     ) -> list[dict[str, Any]]:
         """Build per-document content blocks with interleaved images.
 
@@ -347,12 +366,12 @@ class AnswerEngine:
                         filename=filename,
                     )
                     blocks.append({"type": "text", "text": label})
-                    blocks.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_data}"},
-                        }
-                    )
+                    if image_budget is not None:
+                        block = image_budget.add_base64(img_data, label=chunk_id or filename)
+                    else:
+                        block = {"type": "image_url", "image_url": {"url": image_data_uri(img_data)}}
+                    if block is not None:
+                        blocks.append(block)
 
                 # Text excerpt
                 if content:

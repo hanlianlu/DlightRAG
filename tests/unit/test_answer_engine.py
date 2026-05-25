@@ -10,6 +10,11 @@ import pytest
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
+_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO"
+    "+/p9sAAAAASUVORK5CYII="
+)
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -49,7 +54,7 @@ def _image_contexts() -> RetrievalContexts:
                 "file_path": "/docs/chart.pdf",
                 "content": "Chart showing growth",
                 "page_idx": 1,
-                "image_data": "iVBORw0KGgoAAAANS",
+                "image_data": _PNG_B64,
             },
         ],
         "entities": [],
@@ -67,7 +72,7 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "file_path": "/docs/report.pdf",
                 "content": "Revenue data.",
                 "page_idx": 3,
-                "image_data": "img_report_p3",
+                "image_data": _PNG_B64,
                 "metadata": {"doc_title": "2025 Annual Report"},
             },
             {
@@ -76,7 +81,7 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "file_path": "/docs/report.pdf",
                 "content": "Expenses data.",
                 "page_idx": 7,
-                "image_data": "img_report_p7",
+                "image_data": _PNG_B64,
             },
             {
                 "chunk_id": "c3",
@@ -333,7 +338,7 @@ class TestBuildMessages:
                     "chunk_id": "c1",
                     "reference_id": "1",
                     "content": "text",
-                    "image_data": "abc123",
+                    "image_data": _PNG_B64,
                     "file_path": "/docs/report.pdf",
                     "page_idx": 3,
                 },
@@ -373,7 +378,7 @@ class TestBuildMessages:
                     "chunk_id": "c1",
                     "reference_id": "2",
                     "content": "chart data",
-                    "image_data": "abc123",
+                    "image_data": _PNG_B64,
                     "file_path": "/docs/report.pdf",
                     "page_idx": 7,
                     "metadata": {"doc_title": "2025 Annual Report"},
@@ -406,14 +411,14 @@ class TestBuildMessages:
                     "chunk_id": "c1",
                     "reference_id": "1",
                     "content": "a",
-                    "image_data": "img1",
+                    "image_data": _PNG_B64,
                     "file_path": "/docs/doc1.pdf",
                 },
                 {
                     "chunk_id": "c2",
                     "reference_id": "2",
                     "content": "b",
-                    "image_data": "img2",
+                    "image_data": _PNG_B64,
                     "file_path": "/docs/doc2.pdf",
                 },
                 {

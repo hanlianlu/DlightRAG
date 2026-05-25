@@ -6,7 +6,7 @@ LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(L
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
 LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env" --host "$(LANGFUSE_HOST)"
 
-.PHONY: mineru-install mineru-api mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health
+.PHONY: mineru-install mineru-api mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall postgres-replica-prepare postgres-replica-start postgres-replica-smoke postgres-replica-reset langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -31,6 +31,18 @@ mineru-service-logs:
 
 mineru-service-uninstall:
 	scripts/mineru/launch_agent.sh uninstall
+
+postgres-replica-prepare:
+	scripts/postgres/replication-role.sh
+
+postgres-replica-start: postgres-replica-prepare
+	docker compose --profile replica up -d postgres-replica
+
+postgres-replica-smoke:
+	scripts/postgres/replica-smoke.sh
+
+postgres-replica-reset:
+	scripts/postgres/replica-reset.sh
 
 langfuse-stack:
 	$(LANGFUSE_STACK)

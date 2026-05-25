@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalContexts
@@ -22,6 +23,8 @@ def build_sources(
     path_resolver: PathResolver | None = None,
     *,
     indexer: CitationIndexer | None = None,
+    image_url_prefix: str | None = "/images",
+    default_workspace: str | None = None,
 ) -> list[SourceReference]:
     """Group chunks by reference_id into document-level SourceReferences.
 
@@ -37,6 +40,8 @@ def build_sources(
         contexts.get("chunks", []),
         path_resolver=path_resolver,
         indexer=indexer,
+        image_url_prefix=image_url_prefix,
+        default_workspace=default_workspace,
     )
 
 
@@ -47,6 +52,8 @@ def build_sources_from_chunks(
     indexer: CitationIndexer | None = None,
     cited_chunks: dict[str, list[str]] | None = None,
     source_catalog: list[SourceReference] | None = None,
+    image_url_prefix: str | None = "/images",
+    default_workspace: str | None = None,
 ) -> list[SourceReference]:
     """Project chunk contexts into document sources using citation index order."""
     if not chunks:
@@ -58,6 +65,11 @@ def build_sources_from_chunks(
     chunks = indexer.inject_chunk_idx(chunks)
 
     catalog_by_id = {source.id: source for source in source_catalog or []}
+    catalog_chunks: dict[str, dict[str, ChunkSnippet]] = {}
+    for source in source_catalog or []:
+        if not source.chunks:
+            continue
+        catalog_chunks[source.id] = {chunk.chunk_id: chunk for chunk in source.chunks}
     allowed_by_ref = {ref_id: set(chunk_ids) for ref_id, chunk_ids in (cited_chunks or {}).items()}
 
     # Group by reference_id, preserving first-appearance order
@@ -92,18 +104,31 @@ def build_sources_from_chunks(
 
         ordered_chunks = sorted(group, key=_citation_order)
 
-        snippets = [
-            ChunkSnippet(
-                chunk_id=c["chunk_id"],
-                chunk_idx=c.get("chunk_idx") or indexer.get_chunk_idx(ref_id, c["chunk_id"]),
-                page_idx=c.get("page_idx")
-                if c.get("page_idx") is not None
-                else (c.get("metadata", {}) or {}).get("page_idx"),
-                content=filter_content_for_display(c.get("content", "")),
-                image_data=c.get("image_data"),
+        snippets: list[ChunkSnippet] = []
+        for c in ordered_chunks:
+            catalog_chunk = catalog_chunks.get(ref_id, {}).get(c["chunk_id"])
+            if catalog_chunk and (catalog_chunk.image_url or catalog_chunk.thumbnail_url):
+                image_url = catalog_chunk.image_url
+                thumbnail_url = catalog_chunk.thumbnail_url
+            else:
+                image_url, thumbnail_url = _chunk_image_urls(
+                    c,
+                    image_url_prefix=image_url_prefix,
+                    default_workspace=default_workspace,
+                )
+            snippets.append(
+                ChunkSnippet(
+                    chunk_id=c["chunk_id"],
+                    chunk_idx=c.get("chunk_idx") or indexer.get_chunk_idx(ref_id, c["chunk_id"]),
+                    page_idx=c.get("page_idx")
+                    if c.get("page_idx") is not None
+                    else (c.get("metadata", {}) or {}).get("page_idx"),
+                    bbox=c.get("bbox") or (c.get("metadata", {}) or {}).get("bbox"),
+                    content=filter_content_for_display(c.get("content", "")),
+                    image_url=image_url,
+                    thumbnail_url=thumbnail_url,
+                )
             )
-            for c in ordered_chunks
-        ]
 
         url = catalog.url if catalog else None
         if url is None and path_resolver and file_path:
@@ -132,3 +157,24 @@ def build_sources_from_chunks(
         )
 
     return sources
+
+
+def _chunk_image_urls(
+    chunk: dict[str, Any],
+    *,
+    image_url_prefix: str | None,
+    default_workspace: str | None,
+) -> tuple[str | None, str | None]:
+    if chunk.get("image_url") or chunk.get("thumbnail_url"):
+        return chunk.get("image_url"), chunk.get("thumbnail_url")
+    if not image_url_prefix or not chunk.get("image_data"):
+        return None, None
+    workspace = chunk.get("_workspace") or default_workspace
+    chunk_id = chunk.get("chunk_id")
+    if not workspace or not chunk_id:
+        return None, None
+    base = image_url_prefix.rstrip("/")
+    safe_ws = quote(str(workspace), safe="")
+    safe_chunk = quote(str(chunk_id), safe="")
+    path = f"{base}/{safe_ws}/{safe_chunk}"
+    return f"{path}?size=full", f"{path}?size=thumb"

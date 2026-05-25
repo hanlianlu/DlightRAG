@@ -1,9 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Lightweight token estimation and conversation history truncation.
 
-Provides a consistent token estimator used by both backend (Python) and
-frontend (JS — see citation.js ``estimateTokens``). The two implementations
-must stay in sync.
+Provides a consistent backend token estimator for planner history truncation.
 
 Three density buckets:
   - **Dense** (~1 token / 1.5 chars): CJK ideographs, Japanese kana, Korean hangul

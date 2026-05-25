@@ -29,12 +29,17 @@ use the same LightRAG document/chunk authority as parsed documents.
 ## Query Pipeline
 
 ```text
-RAGService.aretrieve / aanswer(query, multimodal_content, filters)
+RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
   |
   |-- QueryPlanner
   |     declared metadata fields only
   |     explicit filters are strict
   |     LLM-inferred empty candidates fall back to unfiltered retrieval
+  |
+  |-- Query image preparation
+  |     session image lookup
+  |     VLM semantic descriptions for text/BM25/KG retrieval
+  |     raw image payloads for direct multimodal embedding
   |
   |-- LightRAGMixBackend
   |     QueryParam(mode="mix")
@@ -68,9 +73,11 @@ Metadata filtering is explicit-schema first:
   by default.
 - User/API filters are strict. If they resolve to zero candidate documents or
   chunks, retrieval returns no matches.
-- LLM-inferred filters include `filter_confidence` and evidence spans from the
-  query. If an inferred filter resolves to zero candidates, DlightRAG retries
-  without that inferred filter because the planner may have over-inferred.
+- LLM-inferred filters include `filter_confidence` and evidence spans for
+  observability. DlightRAG does not use hand-written fuzzy/static rules to
+  invent or reject filters. If an inferred filter resolves to zero candidates,
+  DlightRAG retries without that inferred filter because the planner may have
+  over-inferred.
 - Non-empty inferred candidate sets constrain semantic search and BM25.
 
 For semantic search, `FilteredVectorDB` applies the candidate set before
@@ -121,15 +128,18 @@ The answer prompt receives:
 - LightRAG's doc-level `reference_id`/`references` mapping as the seed for
   source numbering
 - document/source metadata
-- inline page or image data when available
-- user-supplied `query_images` when the answer model should reason over them
+- bounded inline page or image previews when available
+- user-supplied `query_images`, also bounded by one shared image budget
 
 DlightRAG does not use LightRAG `aquery_llm()` for final answer generation
 because post-LightRAG context can include BM25 results, direct image matches,
 metadata-path injections, federated chunks, and reranked multimodal pages.
 Instead, it uses LightRAG `aquery_data()` as the base context and reference
 seed, then validates inline `[n]` and `[n-m]` citations against the final
-post-fusion context. Generated `### References` tails are stripped at the
-output boundary; returned `sources` contain only cited documents and chunks.
+post-fusion context. The system prompt tells the model not to generate a
+reference section; the output boundary still normalizes provider drift by
+discarding generated bibliography tails and deriving `sources` deterministically
+from validated inline markers. Returned `sources` contain only cited documents
+and chunks.
 Streaming callers receive tokens immediately and a final normalized answer plus
 cited sources after validation.
