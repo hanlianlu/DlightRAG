@@ -123,7 +123,9 @@ http://localhost:8100/web/
 
 Use the Files panel to upload documents or images, then ask a question in the
 chat composer. This is the easiest first ingest path for Docker because the
-uploaded file is stored inside DlightRAG's managed runtime volume.
+uploaded file is staged inside DlightRAG's managed runtime volume at
+`working_dir/inputs/<workspace>/`, which is also the `INPUT_DIR` root used by
+LightRAG parser workers.
 
 ### First API Calls
 
