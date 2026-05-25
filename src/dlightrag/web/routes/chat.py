@@ -198,9 +198,9 @@ async def answer_stream(
             )
             if highlight_cfg.enabled and has_text_chunks:
                 try:
-                    from dlightrag.models.llm import get_chat_model_func
+                    from dlightrag.models.llm import get_query_model_func
 
-                    llm_func = get_chat_model_func(cfg)
+                    llm_func = get_query_model_func(cfg)
                     highlighted_sources = await asyncio.wait_for(
                         extract_highlights_for_sources(
                             sources=result.sources,

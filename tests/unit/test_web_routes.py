@@ -43,7 +43,6 @@ def mock_manager():
         return_value=[{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}]
     )
     manager.delete_files = AsyncMock(return_value=[])
-    manager.get_llm_func.return_value = AsyncMock(return_value="rewritten")
     return manager
 
 

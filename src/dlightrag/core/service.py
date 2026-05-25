@@ -85,7 +85,7 @@ from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
     build_role_llm_configs,
-    get_chat_model_func_for_lightrag,
+    get_default_model_func_for_lightrag,
     get_embedding_func,
     get_multimodal_embedder,
     get_rerank_func,
@@ -293,7 +293,7 @@ class RAGService:
         logger.info("Initializing unified representational RAG mode...")
 
         # Get model functions
-        chat_func_lr = get_chat_model_func_for_lightrag(config)
+        default_func_lr = get_default_model_func_for_lightrag(config)
         vlm_func = get_vlm_model_func(config)
         rerank_func = get_rerank_func(config)
         role_overrides = build_role_llm_configs(config)
@@ -310,7 +310,7 @@ class RAGService:
         # Do NOT pass rerank_model_func — we handle reranking ourselves
         lightrag = LightRAG(
             working_dir=str(config.working_dir_path),
-            llm_model_func=chat_func_lr,
+            llm_model_func=default_func_lr,
             embedding_func=embedding_func,
             workspace=config.workspace,
             default_llm_timeout=int(config.llm.default.timeout),

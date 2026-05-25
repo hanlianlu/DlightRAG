@@ -247,7 +247,7 @@ def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMulti
     multimodal_embedder = FakeMultimodalEmbedder(dim=dim)
     monkeypatch.setattr(
         service_module,
-        "get_chat_model_func_for_lightrag",
+        "get_default_model_func_for_lightrag",
         lambda _config: fake_lightrag_llm,
     )
     monkeypatch.setattr(service_module, "get_vlm_model_func", lambda _config: fake_vlm_func)
