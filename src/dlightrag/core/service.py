@@ -770,6 +770,12 @@ class RAGService:
         except Exception:
             logger.debug("workspace meta upsert failed", exc_info=True)
 
+    async def aregister_workspace(self) -> None:
+        """Persist this initialized workspace so it is discoverable by managers."""
+        self._ensure_initialized()
+        self._ensure_writable("create workspace")
+        await self._upsert_workspace_meta()
+
     # === INGESTION API ===
 
     def _resolve_replace(self, explicit: Any) -> bool:
@@ -1025,7 +1031,7 @@ class RAGService:
         """
         self._ensure_initialized()
         self._ensure_writable("ingest")
-        await self._upsert_workspace_meta()
+        await self.aregister_workspace()
         replace = self._resolve_replace(kwargs.get("replace"))
 
         if self._ingestion_engine is not None and source_type == "local":
