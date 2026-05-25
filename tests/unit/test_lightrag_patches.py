@@ -234,6 +234,20 @@ class TestNeedsPatch:
 class TestPatchIdempotency:
     """Test that patches can be applied multiple times safely."""
 
+    async def test_apply_also_enables_mineru_parser_hygiene(self):
+        """Patch entrypoint covers both AGE and MinerU parser hygiene."""
+        from lightrag.parser.external.mineru.ir_builder import MinerUIRBuilder
+
+        import dlightrag.core._lightrag_patches as mod
+        from dlightrag.core.ingestion.parser_hygiene import (
+            mineru_ir_builder_needs_auxiliary_filter,
+        )
+
+        mod._PATCHED = False
+        mod.apply()
+
+        assert mineru_ir_builder_needs_auxiliary_filter(MinerUIRBuilder) is False
+
     async def test_apply_twice_no_double_patch(self):
         """Applying patches twice should not double-patch."""
         import dlightrag.core._lightrag_patches as mod
