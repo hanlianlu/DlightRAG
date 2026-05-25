@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {openLightbox} from './images.js';
-import {toggleWorkspace} from './workspaces.js';
 
 let toastTimer = null;
 
@@ -146,42 +145,11 @@ export function setupPanel() {
             showAllSources();
             return;
         }
-        const deleteOpen = e.target.closest('[data-action="workspace-delete-open"]');
-        if (deleteOpen) {
-            const confirmBox = deleteOpen.closest('.workspace-check-item').querySelector('.ws-delete-confirm');
-            if (confirmBox) {
-                confirmBox.classList.add('open');
-                confirmBox.setAttribute('aria-hidden', 'false');
-            }
-            return;
-        }
-        const deleteCancel = e.target.closest('[data-action="workspace-delete-cancel"]');
-        if (deleteCancel) {
-            const openBox = deleteCancel.closest('.ws-delete-confirm');
-            if (openBox) {
-                openBox.classList.remove('open');
-                openBox.setAttribute('aria-hidden', 'true');
-            }
-            return;
-        }
-        const deleteConfirm = e.target.closest('.ws-delete-confirm');
-        if (deleteConfirm) {
-            if (!e.target.closest('.workspace-delete-card')) {
-                deleteConfirm.classList.remove('open');
-                deleteConfirm.setAttribute('aria-hidden', 'true');
-            }
-            return;
-        }
         const uploadZone = e.target.closest('#upload-zone');
         if (uploadZone) {
             const fileInput = uploadZone.querySelector('#file-input');
             if (fileInput) fileInput.click();
             return;
-        }
-        const item = e.target.closest('.workspace-check-item');
-        if (item) {
-            const ws = item.getAttribute('data-ws');
-            if (ws) toggleWorkspace(ws);
         }
     });
     panelContent.addEventListener('change', function(e) {

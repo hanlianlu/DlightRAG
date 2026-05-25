@@ -30,10 +30,43 @@ def _render_partial(name: str, **ctx: Any) -> str:
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""
+    from dlightrag.utils import normalize_workspace
+
+    manager = get_manager(request)
+    try:
+        workspaces = await manager.list_workspace_records()
+    except Exception:
+        workspaces = [
+            {
+                "workspace": workspace,
+                "display_name": workspace,
+                "embedding_model": manager.config.embedding.model,
+            }
+        ]
+
+    known = {str(row["workspace"]) for row in workspaces}
+    active_raw = request.cookies.get("dlightrag_workspace_ids", "")
+    active = [
+        normalize_workspace(item.strip())
+        for item in active_raw.split(",")
+        if item.strip()
+    ]
+    active = [item for item in active if item in known]
+
+    primary = normalize_workspace(request.cookies.get("dlightrag_workspace", workspace))
+    if not active and primary in known:
+        active = [primary]
+    if not active:
+        active = [workspace if workspace in known else (workspaces[0]["workspace"] if workspaces else "default")]
+
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"workspace": workspace},
+        {
+            "workspace": workspace,
+            "workspaces": workspaces,
+            "active_workspaces": active,
+        },
     )
 
 

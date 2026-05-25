@@ -25,6 +25,20 @@ def mock_manager():
     manager.is_degraded.return_value = False
     manager.get_warnings.return_value = []
     manager.list_workspaces = AsyncMock(return_value=["default", "test-ws"])
+    manager.list_workspace_records = AsyncMock(
+        return_value=[
+            {
+                "workspace": "default",
+                "display_name": "Default",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+            {
+                "workspace": "test_ws",
+                "display_name": "Test Workspace",
+                "embedding_model": "voyage-multimodal-3.5",
+            },
+        ]
+    )
     manager.list_ingested_files = AsyncMock(
         return_value=[{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}]
     )
@@ -73,6 +87,18 @@ class TestWebIndex:
         resp = await client.get("/web/")
         assert resp.status_code == 200
         assert "default" in resp.text
+
+    async def test_index_renders_refresh_persistent_workspace_selector(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.get("/web/")
+
+        assert resp.status_code == 200
+        assert 'id="workspace-selector"' in resp.text
+        assert "data-all=" in resp.text
+        assert "data-active=" in resp.text
+        assert "Test Workspace" in resp.text
+        assert 'id="ws-add-btn"' not in resp.text
 
     def test_web_markup_keeps_behavior_in_static_js(self) -> None:
         web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"
@@ -167,12 +193,13 @@ class TestWebFiles:
 
 
 class TestWebWorkspaces:
-    """Tests for GET /web/workspaces."""
+    """Tests for removed side-panel workspace routes."""
 
-    async def test_workspace_list(self, client: AsyncClient, test_config: DlightragConfig) -> None:
+    async def test_workspace_side_panel_route_is_not_exposed(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
         resp = await client.get("/web/workspaces")
-        assert resp.status_code == 200
-        assert "text/html" in resp.headers["content-type"]
+        assert resp.status_code == 404
 
     async def test_cookie_workspace_switch_route_is_not_exposed(
         self, client: AsyncClient, test_config: DlightragConfig
@@ -206,8 +233,12 @@ class TestWebWorkspaceCreate:
             data={"workspace_name": "new workspace"},
         )
         assert resp.status_code == 200
-        assert "text/html" in resp.headers["content-type"]
-        mock_manager.acreate_workspace.assert_awaited_once_with("new_workspace")
+        assert "workspaceCreated" in resp.headers["hx-trigger"]
+        assert "new_workspace" in resp.headers["set-cookie"]
+        mock_manager.acreate_workspace.assert_awaited_once_with(
+            "new_workspace",
+            display_name="new workspace",
+        )
 
     async def test_create_workspace_empty_name(
         self, client: AsyncClient, test_config: DlightragConfig
@@ -260,6 +291,8 @@ class TestWebWorkspaceDelete:
             data={"workspace_name": "test-ws", "confirm_name": "test-ws"},
         )
         assert resp.status_code == 200
+        assert "workspaceDeleted" in resp.headers["hx-trigger"]
+        assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
         mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
 
     async def test_delete_workspace_confirm_mismatch(

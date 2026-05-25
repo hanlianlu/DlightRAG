@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -399,6 +400,7 @@ class TestDelegation:
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
         result = await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
+        mock_svc.aregister_workspace.assert_awaited_once()
         mock_svc.aingest.assert_awaited_once()
         assert result == {"status": "ok"}
 
@@ -528,24 +530,51 @@ class TestClose:
 class TestWorkspaceDiscovery:
     """Test list_workspaces with PostgreSQL-backed metadata."""
 
-    async def test_pg_discovery(self, monkeypatch: pytest.MonkeyPatch, test_cfg) -> None:
-        class MockConnection:
-            async def fetch(self, query: str) -> list[dict[str, str]]:
-                return [{"workspace": "project-a"}, {"workspace": "project-b"}]
-
-            async def close(self) -> None:
-                return None
-
-        async def fake_connect(**kwargs):
-            return MockConnection()
-
-        import asyncpg
-
-        monkeypatch.setattr(asyncpg, "connect", fake_connect)
+    async def test_pg_discovery(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
+        manager._workspace_registry = AsyncMock()
+        manager._workspace_registry.list = AsyncMock(
+            return_value=[
+                {
+                    "workspace": "project-a",
+                    "display_name": "Project A",
+                    "created_at": datetime(2026, 5, 25, tzinfo=UTC),
+                },
+                {"workspace": "project-b", "display_name": "Project B"},
+            ]
+        )
+
         result = await manager.list_workspaces()
+
         assert "project-a" in result
         assert "project-b" in result
+
+    async def test_workspace_records_are_json_safe(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        manager._workspace_registry = AsyncMock()
+        manager._workspace_registry.list = AsyncMock(
+            return_value=[
+                {
+                    "workspace": "project-a",
+                    "display_name": "Project A",
+                    "embedding_model": "voyage-multimodal-3.5",
+                    "created_at": datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
+                    "updated_at": datetime(2026, 5, 25, 12, 1, tzinfo=UTC),
+                }
+            ]
+        )
+
+        records = await manager.list_workspace_records()
+
+        assert records == [
+            {
+                "workspace": "project-a",
+                "display_name": "Project A",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": "2026-05-25T12:00:00+00:00",
+                "updated_at": "2026-05-25T12:01:00+00:00",
+            }
+        ]
 
     async def test_fallback_returns_default(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)

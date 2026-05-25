@@ -78,9 +78,200 @@ body {
     background: var(--bg-elevated);
 }
 
-.workspace-btn {
-    color: var(--gold-300);
+.workspace-selector {
+    align-items: center;
+    background: rgba(87, 74, 36, 0.18);
+    border: 1px solid rgba(210, 182, 97, 0.24);
+    border-radius: var(--radius-sm);
+    color: var(--gold-100);
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 13px;
     font-weight: 500;
+    gap: 8px;
+    max-width: min(320px, 58vw);
+    padding: 8px 14px;
+    position: relative;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.workspace-selector:hover,
+.workspace-selector.open {
+    background: rgba(87, 74, 36, 0.28);
+    border-color: rgba(210, 182, 97, 0.4);
+}
+
+.workspace-dot {
+    background: var(--gold-200);
+    border-radius: 50%;
+    flex-shrink: 0;
+    height: 8px;
+    width: 8px;
+}
+
+.workspace-dot.multi {
+    background: transparent;
+    border: 1px solid var(--gold-200);
+    box-shadow: 5px 0 0 -1px var(--bg-base), 6px 0 0 0 var(--gold-200);
+    width: 14px;
+}
+
+.workspace-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.workspace-caret {
+    color: var(--gold-300);
+    flex-shrink: 0;
+}
+
+.workspace-popover {
+    background: var(--bg-elevated);
+    border: 1px solid rgba(210, 182, 97, 0.18);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
+    left: 0;
+    padding: 6px;
+    position: absolute;
+    top: calc(100% + 6px);
+    width: 260px;
+    z-index: 1000;
+}
+
+.workspace-popover-item {
+    align-items: center;
+    border-radius: 8px;
+    color: var(--text-200);
+    cursor: pointer;
+    display: flex;
+    font-size: 13px;
+    gap: 10px;
+    padding: 8px 10px;
+    transition: background 0.1s;
+}
+
+.workspace-popover-item:hover {
+    background: rgba(210, 182, 97, 0.08);
+}
+
+.workspace-popover-all {
+    color: var(--gold-100);
+}
+
+.workspace-popover-check {
+    align-items: center;
+    border: 1.5px solid var(--text-500);
+    border-radius: 4px;
+    display: flex;
+    flex-shrink: 0;
+    height: 16px;
+    justify-content: center;
+    transition: all 0.15s;
+    width: 16px;
+}
+
+.workspace-popover-check.on {
+    background: var(--gold-200);
+    border-color: var(--gold-200);
+}
+
+.workspace-popover-check.on::after {
+    color: var(--bg-base);
+    content: '\2713';
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.workspace-popover-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-popover-delete {
+    align-items: center;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    color: var(--text-600);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    font-size: 10px;
+    height: 20px;
+    justify-content: center;
+    opacity: 0;
+    transition: all 0.15s;
+    width: 20px;
+}
+
+.workspace-popover-item:hover .workspace-popover-delete {
+    opacity: 1;
+}
+
+.workspace-popover-delete:hover {
+    background: rgba(248, 113, 113, 0.15);
+    color: var(--danger);
+}
+
+.workspace-popover-sep {
+    background: rgba(255, 255, 255, 0.06);
+    height: 1px;
+    margin: 4px 8px;
+}
+
+.workspace-popover-create {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    padding: 4px 6px;
+}
+
+.workspace-popover-input {
+    background: var(--bg-subtle);
+    border: 1px solid rgba(210, 182, 97, 0.18);
+    border-radius: 6px;
+    color: var(--text-100);
+    flex: 1;
+    font-size: 12px;
+    min-width: 0;
+    outline: none;
+    padding: 7px 8px;
+}
+
+.workspace-popover-input:focus {
+    border-color: rgba(210, 182, 97, 0.38);
+}
+
+.workspace-popover-input::placeholder {
+    color: var(--text-600);
+}
+
+.workspace-popover-create-btn {
+    align-items: center;
+    background: rgba(87, 74, 36, 0.28);
+    border: 1px solid rgba(210, 182, 97, 0.24);
+    border-radius: 6px;
+    color: var(--gold-100);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    font-size: 16px;
+    height: 28px;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+    width: 28px;
+}
+
+.workspace-popover-create-btn:hover {
+    background: rgba(87, 74, 36, 0.42);
+    border-color: rgba(210, 182, 97, 0.4);
 }
 
 /* === Chat Area === */
@@ -604,163 +795,6 @@ body {
     color: var(--text-400);
 }
 
-/* === Workspace List (Multi-Select) === */
-
-.workspace-check-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    margin-bottom: 6px;
-    cursor: pointer;
-    transition: background 0.15s;
-}
-
-.workspace-check-item:hover {
-    background: var(--bg-elevated);
-}
-
-.workspace-check-item.selected {
-    background: rgba(87, 74, 36, 0.12);
-    border: 1px solid rgba(210, 182, 97, 0.2);
-}
-
-.workspace-check-item:not(.selected) {
-    border: 1px solid transparent;
-}
-
-.ws-checkbox {
-    width: 18px;
-    height: 18px;
-    border-radius: 5px;
-    border: 1.5px solid var(--border-strong);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    font-size: 11px;
-    color: transparent;
-    transition: all 0.15s;
-}
-
-.ws-checkbox.checked {
-    background: rgba(87, 74, 36, 0.5);
-    border-color: var(--gold-200);
-}
-
-.ws-checkbox.checked::after {
-    content: '\2713';
-    color: var(--gold-200);
-    font-size: 11px;
-    line-height: 1;
-}
-
-.ws-check-name {
-    color: var(--text-300);
-    font-size: 13px;
-}
-
-.workspace-check-item.selected .ws-check-name {
-    color: var(--gold-200);
-    font-weight: 500;
-}
-
-.workspace-create-form {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 12px;
-}
-
-.workspace-create-input,
-.workspace-delete-input {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border-subtle);
-    border-radius: 4px;
-    color: var(--text-100);
-    font-size: 13px;
-    padding: 6px 8px;
-}
-
-.workspace-create-input {
-    flex: 1;
-}
-
-.workspace-delete-input {
-    width: 100%;
-    margin-bottom: 12px;
-}
-
-.workspace-create-submit,
-.workspace-delete-cancel,
-.workspace-delete-danger {
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-    padding: 6px 12px;
-}
-
-.workspace-create-submit {
-    background: var(--gold-500);
-    border: none;
-    color: var(--gold-100);
-}
-
-.workspace-delete-open {
-    background: none;
-    border: none;
-    color: var(--danger);
-    cursor: pointer;
-    font-size: 14px;
-}
-
-.ws-delete-confirm {
-    display: none;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
-    background: rgba(0, 0, 0, 0.5);
-}
-
-.ws-delete-confirm.open {
-    display: flex;
-}
-
-.workspace-delete-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
-    border-radius: 8px;
-    max-width: 360px;
-    padding: 20px;
-    width: 90%;
-}
-
-.workspace-delete-copy {
-    color: var(--text-200);
-    font-size: 14px;
-    margin-bottom: 12px;
-}
-
-.workspace-delete-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-}
-
-.workspace-delete-cancel {
-    background: transparent;
-    border: 1px solid var(--border-strong);
-    color: var(--text-200);
-}
-
-.workspace-delete-danger {
-    background: #b91c1c;
-    border: none;
-    color: var(--text-100);
-}
-
 /* === Empty State === */
 
 .empty-state {
@@ -978,59 +1012,89 @@ body {
     line-height: 1.8;
 }
 
-/* === Workspace Chips === */
+/* === Workspace Dialog === */
 
-.workspace-chips {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
+.workspace-dialog {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52);
+    color: var(--text-200);
+    max-width: 380px;
+    padding: 22px;
+    width: min(380px, calc(100vw - 32px));
 }
 
-.ws-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: rgba(87, 74, 36, 0.3);
-    border: 1px solid rgba(210, 182, 97, 0.25);
-    border-radius: 8px;
-    padding: 4px 8px 4px 10px;
-    font-size: 12px;
-    color: var(--gold-200);
-    font-weight: 500;
+.workspace-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.58);
 }
 
-.ws-chip-remove {
-    background: none;
-    border: none;
-    color: var(--gold-400);
-    font-size: 10px;
-    cursor: pointer;
-    padding: 0 2px;
-    line-height: 1;
-    transition: color 0.15s;
+.workspace-dialog-title {
+    color: var(--text-100);
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 12px;
 }
 
-.ws-chip-remove:hover {
+.workspace-dialog-text {
+    color: var(--text-400);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.workspace-dialog-name {
     color: var(--gold-100);
+    font-size: 14px;
+    font-weight: 600;
+    margin: 8px 0;
+    overflow-wrap: anywhere;
 }
 
-.ws-add-btn {
-    display: inline-flex;
-    align-items: center;
-    background: transparent;
-    border: 1px dashed var(--border-strong);
+.workspace-dialog-input {
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-subtle);
     border-radius: 8px;
-    padding: 4px 8px;
-    font-size: 12px;
-    color: var(--text-500);
-    cursor: pointer;
-    transition: color 0.15s, border-color 0.15s;
+    color: var(--text-100);
+    font-size: 13px;
+    margin: 12px 0;
+    outline: none;
+    padding: 9px 10px;
+    width: 100%;
 }
 
-.ws-add-btn:hover {
-    color: var(--text-300);
-    border-color: rgba(120, 113, 108, 0.4);
+.workspace-dialog-input:focus {
+    border-color: rgba(210, 182, 97, 0.38);
+}
+
+.workspace-dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.workspace-dialog-cancel,
+.workspace-dialog-delete {
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    padding: 8px 12px;
+}
+
+.workspace-dialog-cancel {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text-200);
+}
+
+.workspace-dialog-delete {
+    background: #b91c1c;
+    border: none;
+    color: var(--text-100);
+}
+
+.workspace-dialog-delete:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
 }
 
 /* === Message Image Thumbnails === */

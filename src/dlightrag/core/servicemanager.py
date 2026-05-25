@@ -46,6 +46,15 @@ class _AnswerLimits:
     context_top_k: int
 
 
+def _iso_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat())
+    return str(value)
+
+
 class RAGServiceUnavailableError(Exception):
     """Raised when the RAG service is not ready."""
 
@@ -80,6 +89,7 @@ class RAGServiceManager:
         self._query_planner: QueryPlanner | None = None
         self._query_image_enhancer: Any = None
         self._session_images: Any = None
+        self._workspace_registry: Any = None
 
     @property
     def config(self) -> DlightragConfig:
@@ -95,9 +105,11 @@ class RAGServiceManager:
         manager = cls(config=config)
         init_tracing(manager._config)
 
+        await manager._initialize_workspace_registry()
+
         # Discover all known workspaces and warm them up in parallel
         all_ws = await manager._list_all_workspaces()
-        default_ws = config.workspace if config else manager._config.workspace
+        default_ws = manager._config.workspace
         if default_ws not in all_ws:
             all_ws.insert(0, default_ws)
 
@@ -126,6 +138,30 @@ class RAGServiceManager:
             manager._startup_warnings.append(f"Default workspace init failed: {detail}")
             logger.error("RAG service started in degraded mode: %s", detail)
         return manager
+
+    async def _initialize_workspace_registry(self) -> None:
+        """Initialize the durable workspace registry."""
+        from dlightrag.storage.workspaces import PGWorkspaceRegistry
+
+        self._workspace_registry = PGWorkspaceRegistry(
+            target=self._config.pg_target_for_runtime()
+        )
+        try:
+            await self._workspace_registry.initialize(read_only=self._config.is_query_role is True)
+            if self._config.is_query_role is not True:
+                await self._workspace_registry.upsert(
+                    workspace=self._config.workspace,
+                    display_name=self._config.workspace,
+                    embedding_model=self._config.embedding.model,
+                )
+        except Exception as exc:
+            self._startup_warnings.append("Workspace registry unavailable")
+            logger.warning("Workspace registry initialization failed: %s", exc)
+
+    async def _get_workspace_registry(self) -> Any:
+        if self._workspace_registry is None:
+            await self._initialize_workspace_registry()
+        return self._workspace_registry
 
     @staticmethod
     def _actionable_error(exc: Exception) -> str:
@@ -234,6 +270,7 @@ class RAGServiceManager:
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 svc = await self._get_service(workspace)
+                await svc.aregister_workspace()
                 result = await svc.aingest(source_type=source_type, **kwargs)
                 replay_lsn = await self._wait_after_write()
                 if replay_lsn is not None and isinstance(result, dict):
@@ -244,11 +281,11 @@ class RAGServiceManager:
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from e
 
-    async def acreate_workspace(self, workspace: str) -> None:
+    async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
         self._ensure_writable("create workspace")
         svc = await self._get_service(workspace)
-        await svc.aregister_workspace()
+        await svc.aregister_workspace(display_name=display_name)
         await self._wait_after_write()
 
     async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
@@ -721,27 +758,43 @@ class RAGServiceManager:
 
     async def list_workspaces(self) -> list[str]:
         """Discover available workspaces."""
-        return await self._list_all_workspaces()
+        records = await self.list_workspace_records()
+        return [row["workspace"] for row in records]
+
+    async def list_workspace_records(self) -> list[dict[str, Any]]:
+        """Return registered workspace records for UI/API adapters."""
+        try:
+            registry = await self._get_workspace_registry()
+            rows = await registry.list()
+            if rows:
+                return [self._serialize_workspace_record(row) for row in rows]
+        except Exception as exc:
+            logger.warning("Failed to list workspaces from registry: %s", exc)
+
+        return [
+            {
+                "workspace": self._config.workspace,
+                "display_name": self._config.workspace,
+                "embedding_model": self._config.embedding.model,
+                "created_at": None,
+                "updated_at": None,
+            }
+        ]
+
+    @staticmethod
+    def _serialize_workspace_record(row: dict[str, Any]) -> dict[str, Any]:
+        """Return a JSON-safe workspace record."""
+        return {
+            "workspace": str(row.get("workspace") or ""),
+            "display_name": str(row.get("display_name") or row.get("workspace") or ""),
+            "embedding_model": str(row.get("embedding_model") or ""),
+            "created_at": _iso_or_none(row.get("created_at")),
+            "updated_at": _iso_or_none(row.get("updated_at")),
+        }
 
     async def _list_all_workspaces(self) -> list[str]:
         """Internal: discover all workspaces."""
-        config = self._config
-
-        try:
-            import asyncpg
-
-            conn = await asyncpg.connect(**config.pg_connection_kwargs())
-            try:
-                rows = await conn.fetch(
-                    "SELECT DISTINCT workspace FROM dlightrag_workspace_meta ORDER BY workspace"
-                )
-                workspaces = [row["workspace"] for row in rows]
-                return workspaces if workspaces else [config.workspace]
-            finally:
-                await conn.close()
-        except Exception as exc:
-            logger.warning("Failed to list workspaces from PG: %s", exc)
-            return [config.workspace]
+        return await self.list_workspaces()
 
     async def close(self) -> None:
         """Close all managed RAGService instances."""

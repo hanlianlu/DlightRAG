@@ -749,13 +749,17 @@ class DlightragConfig(BaseSettings):
     def apply_lightrag_backend_env(self, *, force: bool = False) -> None:
         """Bridge this config's active PostgreSQL endpoint into LightRAG env vars."""
         active_pg = self.pg_connection_kwargs()
+        # LightRAG's PostgreSQL ClientManager is process-wide. A global
+        # POSTGRES_WORKSPACE would pin every LightRAG instance to whichever
+        # workspace initialized first, so DlightRAG always passes workspace via
+        # the LightRAG constructor instead.
+        os.environ.pop("POSTGRES_WORKSPACE", None)
         pg_env_map = {
             "POSTGRES_HOST": active_pg["host"],
             "POSTGRES_PORT": str(active_pg["port"]),
             "POSTGRES_USER": active_pg["user"],
             "POSTGRES_PASSWORD": active_pg["password"],
             "POSTGRES_DATABASE": active_pg["database"],
-            "POSTGRES_WORKSPACE": self.workspace,
             "POSTGRES_VECTOR_INDEX_TYPE": self.pg_vector_index_type,
             "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
             # LightRAG's POSTGRES_HNSW_EF is used as ef_construction.

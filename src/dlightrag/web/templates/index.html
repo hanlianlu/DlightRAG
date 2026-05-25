@@ -2,14 +2,15 @@
 {% block content %}
 <div class="app">
     <header class="topbar">
-        <div class="workspace-chips" id="workspace-chips">
-            <span class="ws-chip" data-ws="{{ workspace }}">
-                {{ workspace }}
-            </span>
-            <button class="ws-add-btn" id="ws-add-btn"
-                    hx-get="/web/workspaces"
-                    hx-target="#panel-content"
-                    hx-swap="innerHTML">+ workspace</button>
+        <div class="workspace-selector"
+             id="workspace-selector"
+             role="button"
+             tabindex="0"
+             data-all='{{ workspaces|tojson }}'
+             data-active='{{ active_workspaces|tojson }}'>
+            <span class="workspace-dot" id="workspace-dot"></span>
+            <span class="workspace-label" id="workspace-label"></span>
+            <svg class="workspace-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2.5 4 L5 6.5 L7.5 4"/></svg>
         </div>
         <div class="topbar-spacer"></div>
         <button class="topbar-btn" id="files-btn"
@@ -60,5 +61,32 @@
     </aside>
 
     <div class="toast" id="toast"></div>
+
+    <dialog id="delete-workspace-dialog" class="workspace-dialog">
+        <form id="delete-workspace-form"
+              hx-post="/web/workspaces/delete"
+              hx-swap="none">
+            <h3 class="workspace-dialog-title">Delete workspace</h3>
+            <p class="workspace-dialog-text">This will permanently delete all data for</p>
+            <p class="workspace-dialog-name" id="delete-workspace-name"></p>
+            <p class="workspace-dialog-text">Type the workspace name to confirm</p>
+            <input type="hidden" name="workspace_name" id="delete-workspace-id">
+            <input type="text"
+                   name="confirm_name"
+                   id="delete-workspace-confirm-input"
+                   class="workspace-dialog-input"
+                   autocomplete="off"
+                   placeholder="Type workspace name...">
+            <div class="workspace-dialog-actions">
+                <button type="button"
+                        class="workspace-dialog-cancel"
+                        data-action="close-delete-workspace-dialog">Cancel</button>
+                <button type="submit"
+                        id="delete-workspace-confirm-btn"
+                        class="workspace-dialog-delete"
+                        disabled>Delete</button>
+            </div>
+        </form>
+    </dialog>
 </div>
 {% endblock %}

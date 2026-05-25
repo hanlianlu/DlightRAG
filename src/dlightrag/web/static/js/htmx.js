@@ -2,12 +2,6 @@
 
 import {getPrimaryWorkspace} from './state.js';
 import {openPanel, showToast} from './panel.js';
-import {removeWorkspace, selectWorkspace, updateWorkspacePanelCheckboxes} from './workspaces.js';
-
-function payload(event) {
-    if (!event.detail) return {};
-    return event.detail.value || event.detail;
-}
 
 function isPanelTarget(event) {
     return event.detail && event.detail.target && event.detail.target.id === 'panel-content';
@@ -42,12 +36,6 @@ function openPanelAfterRequest(event) {
         return;
     }
 
-    if (el.id === 'ws-add-btn') {
-        openPanel('WORKSPACES');
-        updateWorkspacePanelCheckboxes();
-        return;
-    }
-
     if (el.id === 'upload-form' || (el.closest && el.closest('#upload-form'))) {
         showToast(
             event.detail.successful ? 'Ingestion complete.' : 'Ingestion failed.',
@@ -74,22 +62,4 @@ export function setupHtmxInteractions() {
     });
 
     document.body.addEventListener('htmx:afterRequest', openPanelAfterRequest);
-
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (isPanelTarget(event)) updateWorkspacePanelCheckboxes();
-    });
-
-    document.body.addEventListener('workspaceCreated', function(event) {
-        const ws = payload(event).workspace;
-        if (!ws) return;
-        selectWorkspace(ws);
-        showToast(`Workspace ${ws} created.`);
-    });
-
-    document.body.addEventListener('workspaceDeleted', function(event) {
-        const ws = payload(event).workspace;
-        if (!ws) return;
-        removeWorkspace(ws);
-        showToast(`Workspace ${ws} deleted.`);
-    });
 }
