@@ -622,9 +622,13 @@ class DlightragConfig(BaseSettings):
 
     # ===== Operational =====
     log_level: str = Field(default="info")
+    ingest_timeout: int | None = Field(
+        default=None,
+        description="Timeout in seconds for ingest operations. None means no limit.",
+    )
     request_timeout: int = Field(
-        default=600,
-        description="Overall request timeout in seconds for ingest/retrieve/answer operations.",
+        default=300,
+        description="Timeout in seconds for retrieve/answer/query operations.",
     )
 
     # ===== Observability =====

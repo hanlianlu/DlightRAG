@@ -267,8 +267,9 @@ class RAGServiceManager:
     ) -> dict[str, Any]:
         """Ingest documents into a specific workspace."""
         self._ensure_writable("ingest")
+        timeout = self._config.ingest_timeout
         try:
-            async with asyncio.timeout(self._config.request_timeout):
+            if timeout is None:
                 svc = await self._get_service(workspace)
                 await svc.aregister_workspace()
                 result = await svc.aingest(source_type=source_type, **kwargs)
@@ -276,9 +277,18 @@ class RAGServiceManager:
                 if replay_lsn is not None and isinstance(result, dict):
                     result["replica_replay_lsn"] = replay_lsn
                 return result
+            else:
+                async with asyncio.timeout(timeout):
+                    svc = await self._get_service(workspace)
+                    await svc.aregister_workspace()
+                    result = await svc.aingest(source_type=source_type, **kwargs)
+                    replay_lsn = await self._wait_after_write()
+                    if replay_lsn is not None and isinstance(result, dict):
+                        result["replica_replay_lsn"] = replay_lsn
+                    return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
-                detail=f"Request timed out after {self._config.request_timeout}s"
+                detail=f"Request timed out after {timeout}s"
             ) from e
 
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
