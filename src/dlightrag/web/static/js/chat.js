@@ -2,6 +2,7 @@
 
 import {activeWorkspaces, appendExchange, getHistoryWindow, getSessionId, conversationHistory} from './state.js';
 import {clearImages, getPendingImageData, renderMessageImages} from './images.js';
+import {closePanel} from './panel.js';
 
 let queryInFlight = false;
 
