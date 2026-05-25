@@ -135,16 +135,20 @@ export function setupPanel() {
         }
     });
 
-    // Apply progress-bar width from data-pct (avoids inline style= in templates).
-    document.body.addEventListener('htmx:afterSettle', function() {
+    // Apply progress-bar width from data-pct and render math in swapped content.
+    document.body.addEventListener('htmx:afterSettle', function(ev) {
         const bar = document.getElementById('ingest-progress');
-        if (!bar) return;
-        const fill = bar.querySelector('.progress-bar-fill');
-        if (!fill) return;
-        const pct = fill.getAttribute('data-pct');
-        if (pct !== null) {
-            fill.style.width = Math.max(0, Math.min(100, parseInt(pct, 10) || 0)) + '%';
+        if (bar) {
+            const fill = bar.querySelector('.progress-bar-fill');
+            if (fill) {
+                const pct = fill.getAttribute('data-pct');
+                if (pct !== null) {
+                    fill.style.width = Math.max(0, Math.min(100, parseInt(pct, 10) || 0)) + '%';
+                }
+            }
         }
+        // Auto-render KaTeX in any HTMX-swapped content.
+        if (ev.detail.target) renderMath(ev.detail.target);
     });
 
     const panelContent = document.getElementById('panel-content');
