@@ -244,6 +244,27 @@ class TestWebFiles:
         assert ">q4.pdf</span>" in resp.text
         assert "title=\"/tmp/reports/q4.pdf\"" in resp.text
 
+    async def test_upload_preserves_filename_for_directory_ingest(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        async def ingest_upload_dir(workspace: str, source_type: str, **kwargs):
+            upload_dir = Path(kwargs["path"])
+            assert workspace == "default"
+            assert source_type == "local"
+            assert upload_dir.is_dir()
+            assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
+            return {"processed": 1, "results": []}
+
+        mock_manager.aingest = AsyncMock(side_effect=ingest_upload_dir)
+
+        resp = await client.post(
+            "/web/files/upload",
+            files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))],
+        )
+
+        assert resp.status_code == 200
+        mock_manager.aingest.assert_awaited_once()
+
     async def test_delete_files(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
