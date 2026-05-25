@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {openLightbox} from './images.js';
+import {renderMath} from './chat_renderer.js';
 
 let toastTimer = null;
 
@@ -56,6 +57,7 @@ export function filterSource(badge) {
 
     const showAllBtn = panelContent.querySelector('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = false;
+    renderMath(panelContent);
     openPanel('SOURCES');
 }
 

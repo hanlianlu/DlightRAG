@@ -1250,6 +1250,17 @@ body {
     margin: 0.5em 0;
 }
 
+.ai-message-content {
+    overflow-x: auto;
+}
+
+.ai-message-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+    margin: 0.5em 0;
+}
+
 .ai-message-content a {
     color: var(--gold-200);
     text-decoration: none;
