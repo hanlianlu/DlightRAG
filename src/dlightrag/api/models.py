@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ═══════════════════════════════════════════════════════════════════
 # Request Models
@@ -102,6 +102,8 @@ class AnswerRequest(BaseModel):
     stream: bool = True
     top_k: int | None = None
     chunk_top_k: int | None = None
+    answer_candidate_top_k: int | None = Field(default=None, ge=1)
+    answer_context_top_k: int | None = Field(default=None, ge=1)
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[dict[str, Any]] | None = None

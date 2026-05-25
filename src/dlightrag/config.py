@@ -285,25 +285,46 @@ class AnswerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    candidate_top_k: int = Field(
+        default=60,
+        ge=1,
+        description=(
+            "Retrieval candidate chunks fetched for answer generation before answer-stage "
+            "packing. Keep this at or above context_top_k to allow visual backfill."
+        ),
+    )
+    context_top_k: int = Field(
+        default=30,
+        ge=1,
+        description="Maximum chunks included in the final answer LLM prompt.",
+    )
     max_images: int = Field(
         default=6,
         description="Maximum total images sent to the answer LLM.",
     )
     image_max_bytes: int = Field(
-        default=1_500_000,
-        description="Maximum encoded bytes per answer image preview.",
+        default=3_000_000,
+        description="Maximum compressed binary bytes per answer image.",
     )
     image_max_total_bytes: int = Field(
-        default=20_000_000,
-        description="Maximum total encoded image bytes per answer request.",
+        default=24_000_000,
+        description="Maximum total compressed binary image bytes per answer request.",
     )
     image_max_px: int = Field(
+        default=1536,
+        description="Maximum image long edge sent to the answer LLM.",
+    )
+    image_min_px: int = Field(
         default=1024,
-        description="Maximum image dimension sent to the answer LLM.",
+        description="Minimum long edge preserved before skipping oversized answer images.",
     )
     image_quality: int = Field(
-        default=85,
-        description="JPEG quality for answer LLM image previews.",
+        default=88,
+        description="Initial JPEG quality for answer LLM image previews.",
+    )
+    image_min_quality: int = Field(
+        default=72,
+        description="Minimum JPEG quality before skipping oversized answer images.",
     )
 
 

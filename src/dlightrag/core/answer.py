@@ -19,17 +19,29 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
+from dlightrag.core.answer_context import AnswerContextPacker
 from dlightrag.core.answer_images import AnswerImageBudget
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import get_answer_system_prompt
 from dlightrag.utils.images import image_data_uri
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _PreparedAnswerPrompt:
+    contexts: RetrievalContexts
+    user_prompt: str
+    indexer: CitationIndexer
+    query_image_blocks: list[dict[str, Any]]
+    chunk_image_blocks: dict[str, dict[str, Any]]
+    trace: dict[str, Any]
 
 
 class AnswerEngine:
@@ -49,17 +61,23 @@ class AnswerEngine:
         *,
         model_func: Callable[..., Any] | None = None,
         max_images: int = 6,
-        image_max_bytes: int = 1_500_000,
-        image_max_total_bytes: int = 20_000_000,
-        image_max_px: int = 1024,
-        image_quality: int = 85,
+        image_max_bytes: int = 3_000_000,
+        image_max_total_bytes: int = 24_000_000,
+        image_max_px: int = 1536,
+        image_min_px: int = 1024,
+        image_quality: int = 88,
+        image_min_quality: int = 72,
+        context_top_k: int | None = 30,
     ) -> None:
         self.model_func = model_func
         self._max_images = max_images
         self._image_max_bytes = image_max_bytes
         self._image_max_total_bytes = image_max_total_bytes
         self._image_max_px = image_max_px
+        self._image_min_px = image_min_px
         self._image_quality = image_quality
+        self._image_min_quality = image_min_quality
+        self._context_top_k = context_top_k
 
     # ------------------------------------------------------------------
     # Public API
@@ -70,6 +88,7 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         query_images: list[str | dict[str, Any]] | None = None,
+        context_top_k: int | None = None,
     ) -> RetrievalResult:
         """Non-streaming answer generation.
 
@@ -88,13 +107,19 @@ class AnswerEngine:
             return RetrievalResult(answer=None, contexts=contexts)
 
         system_prompt = get_answer_system_prompt()
-        user_prompt, indexer = self._build_user_prompt(query, contexts)
+        prepared = self._prepare_prompt_context(
+            query,
+            contexts,
+            query_images=query_images,
+            context_top_k=context_top_k,
+        )
         messages = self._build_messages(
             system_prompt,
-            user_prompt,
-            contexts,
-            indexer=indexer,
-            query_images=query_images,
+            prepared.user_prompt,
+            prepared.contexts,
+            indexer=prepared.indexer,
+            query_image_blocks=prepared.query_image_blocks,
+            chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
         )
 
         logger.info(
@@ -117,8 +142,8 @@ class AnswerEngine:
         from dlightrag.citations.processor import CitationProcessor
         from dlightrag.citations.source_builder import build_sources
 
-        chunks = contexts.get("chunks", [])
-        sources = build_sources(contexts)
+        chunks = prepared.contexts.get("chunks", [])
+        sources = build_sources(prepared.contexts)
         processor = CitationProcessor(chunks, sources)
         processed = processor.process(raw)
 
@@ -135,8 +160,9 @@ class AnswerEngine:
 
         return RetrievalResult(
             answer=processed.answer,
-            contexts=contexts,
+            contexts=prepared.contexts,
             references=references,
+            trace=prepared.trace,
         )
 
     async def generate_stream(
@@ -144,6 +170,7 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         query_images: list[str | dict[str, Any]] | None = None,
+        context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
 
@@ -160,13 +187,19 @@ class AnswerEngine:
             return contexts, None
 
         system_prompt = get_answer_system_prompt()
-        user_prompt, indexer = self._build_user_prompt(query, contexts)
+        prepared = self._prepare_prompt_context(
+            query,
+            contexts,
+            query_images=query_images,
+            context_top_k=context_top_k,
+        )
         messages = self._build_messages(
             system_prompt,
-            user_prompt,
-            contexts,
-            indexer=indexer,
-            query_images=query_images,
+            prepared.user_prompt,
+            prepared.contexts,
+            indexer=prepared.indexer,
+            query_image_blocks=prepared.query_image_blocks,
+            chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
         )
 
         logger.info(
@@ -185,9 +218,10 @@ class AnswerEngine:
         # Always wrap with AnswerStream (passthrough + post-stream citation validation)
         if hasattr(token_iterator, "__aiter__"):
             logger.info("[AE] generate_stream: wrapping with AnswerStream")
-            token_iterator = AnswerStream(token_iterator, indexer=indexer)
+            token_iterator = AnswerStream(token_iterator, indexer=prepared.indexer)
+            cast(Any, token_iterator).trace = prepared.trace
 
-        return contexts, token_iterator
+        return prepared.contexts, token_iterator
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -200,6 +234,8 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
         query_images: list[str | dict[str, Any]] | None = None,
+        query_image_blocks: list[dict[str, Any]] | None = None,
+        chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Build OpenAI-format messages with per-document grouped images.
 
@@ -210,27 +246,30 @@ class AnswerEngine:
         When ``query_images`` is non-empty, those user-attached images are
         prepended (with a clear section header) so the LLM sees them
         before retrieved-document context. Any item that already looks
-        like an OpenAI ``image_url`` block dict is passed through verbatim;
-        plain strings are wrapped as ``{"type": "image_url", "image_url":
-        {"url": s}}`` so callers can pass either URLs or pre-built blocks.
+        like an OpenAI ``image_url`` block keeps its non-URL fields, while
+        data URI/base64 payloads are still bounded by the shared budget.
         """
         content: list[dict[str, Any]] = []
-        image_budget = AnswerImageBudget(
-            max_images=self._max_images,
-            max_total_bytes=self._image_max_total_bytes,
-            max_bytes_per_image=self._image_max_bytes,
-            max_px=self._image_max_px,
-            quality=self._image_quality,
-        )
+        image_budget: AnswerImageBudget | None = None
+        if query_image_blocks is None or chunk_image_blocks_by_chunk_id is None:
+            prepared = self._prepare_prompt_context("", contexts, query_images=query_images)
+            contexts = prepared.contexts
+            indexer = prepared.indexer
+            query_image_blocks = prepared.query_image_blocks
+            chunk_image_blocks_by_chunk_id = prepared.chunk_image_blocks
 
-        if query_images:
+        if query_image_blocks:
             content.append({"type": "text", "text": "## User-attached images\n"})
-            for idx, img in enumerate(query_images, start=1):
-                block = image_budget.add_user_image(img, label=f"query_image_{idx}")
-                if block is not None:
-                    content.append(block)
+            content.extend(query_image_blocks)
 
-        content.extend(self._build_excerpt_blocks(contexts, indexer, image_budget=image_budget))
+        content.extend(
+            self._build_excerpt_blocks(
+                contexts,
+                indexer,
+                image_budget=image_budget,
+                image_blocks_by_chunk_id=chunk_image_blocks_by_chunk_id,
+            )
+        )
 
         content.append({"type": "text", "text": user_prompt})
 
@@ -238,6 +277,52 @@ class AnswerEngine:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": content},
         ]
+
+    def _new_image_budget(self) -> AnswerImageBudget:
+        return AnswerImageBudget(
+            max_images=self._max_images,
+            max_total_bytes=self._image_max_total_bytes,
+            max_bytes_per_image=self._image_max_bytes,
+            max_px=self._image_max_px,
+            min_px=self._image_min_px,
+            quality=self._image_quality,
+            min_quality=self._image_min_quality,
+        )
+
+    def _prepare_prompt_context(
+        self,
+        query: str,
+        contexts: RetrievalContexts,
+        *,
+        query_images: list[str | dict[str, Any]] | None,
+        context_top_k: int | None = None,
+    ) -> _PreparedAnswerPrompt:
+        image_budget = self._new_image_budget()
+        query_image_blocks: list[dict[str, Any]] = []
+        for idx, img in enumerate(query_images or [], start=1):
+            block = image_budget.add_user_image(img, label=f"query_image_{idx}")
+            if block is not None:
+                query_image_blocks.append(block)
+
+        effective_context_top_k = self._context_top_k if context_top_k is None else context_top_k
+        packed = AnswerContextPacker().pack(
+            contexts,
+            image_budget=image_budget,
+            context_top_k=effective_context_top_k,
+        )
+        user_prompt, indexer = self._build_user_prompt(query, packed.contexts)
+        trace = dict(packed.trace)
+        trace["answer_context_query_images_sent"] = len(query_image_blocks)
+        trace["answer_context_image_budget_count"] = image_budget.count
+        trace["answer_context_image_budget_used_bytes"] = image_budget.used_bytes
+        return _PreparedAnswerPrompt(
+            contexts=packed.contexts,
+            user_prompt=user_prompt,
+            indexer=indexer,
+            query_image_blocks=query_image_blocks,
+            chunk_image_blocks=packed.image_blocks_by_chunk_id,
+            trace=trace,
+        )
 
     @staticmethod
     def _build_citation_indexer(contexts: RetrievalContexts) -> CitationIndexer:
@@ -298,6 +383,7 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
         image_budget: AnswerImageBudget | None = None,
+        image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Build per-document content blocks with interleaved images.
 
@@ -358,19 +444,22 @@ class AnswerEngine:
                     if cidx is not None:
                         cite_tag = f"[{ref_id}-{cidx}]"
 
-                # Image with enriched label
+                # Image with enriched label. The label is emitted only when the
+                # corresponding image block is actually sent to the answer model.
                 if img_data:
-                    label = _build_image_label(
-                        cite_tag=cite_tag,
-                        chunk=chunk,
-                        filename=filename,
-                    )
-                    blocks.append({"type": "text", "text": label})
-                    if image_budget is not None:
+                    if image_blocks_by_chunk_id is not None:
+                        block = image_blocks_by_chunk_id.get(str(chunk_id))
+                    elif image_budget is not None:
                         block = image_budget.add_base64(img_data, label=chunk_id or filename)
                     else:
                         block = {"type": "image_url", "image_url": {"url": image_data_uri(img_data)}}
                     if block is not None:
+                        label = _build_image_label(
+                            cite_tag=cite_tag,
+                            chunk=chunk,
+                            filename=filename,
+                        )
+                        blocks.append({"type": "text", "text": label})
                         blocks.append(block)
 
                 # Text excerpt
@@ -389,70 +478,11 @@ class AnswerEngine:
 
         return blocks
 
-    @staticmethod
-    def _format_chunk_excerpts(
+    def _build_user_prompt(
+        self,
+        query: str,
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
-    ) -> str:
-        """Format chunk text content for the LLM prompt.
-
-        When *indexer* is provided, each excerpt is labelled with its
-        ``[ref_id-chunk_idx]`` citation marker so the LLM can directly
-        see which marker corresponds to which content.
-
-        When chunks carry ``metadata`` (injected by _enrich_chunks_with_metadata),
-        non-empty fields are appended to the label so the LLM knows the
-        document title, author, etc. Fields are dynamic -- any key present
-        in metadata is rendered.
-        """
-        chunks = contexts.get("chunks", [])
-        if not chunks:
-            return "No document excerpts available."
-
-        parts: list[str] = []
-        for chunk in chunks:
-            content = chunk.get("content", "").strip()
-            if not content:
-                continue
-            ref_id = str(chunk.get("reference_id", ""))
-            chunk_id = chunk.get("chunk_id", "")
-            page_idx = chunk.get("page_idx")
-            file_path = chunk.get("file_path", "")
-            filename = Path(file_path).name if file_path else f"Source {ref_id}"
-
-            # Build citation tag from indexer when available
-            cite_tag = ""
-            if indexer and ref_id and chunk_id:
-                cidx = indexer.get_chunk_idx(ref_id, chunk_id)
-                if cidx is not None:
-                    cite_tag = f"[{ref_id}-{cidx}] "
-
-            # Build metadata suffix from dynamic fields
-            meta = chunk.get("metadata") or {}
-            meta_parts: list[str] = []
-            for k, v in meta.items():
-                if v is not None and str(v).strip():
-                    # Render key as human-readable: doc_title -> "title", doc_author -> "author"
-                    display_key = k.removeprefix("doc_").replace("_", " ")
-                    meta_parts.append(f"{display_key}: {v}")
-            meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
-
-            if cite_tag:
-                if page_idx:
-                    label = f"{cite_tag}{filename}, Page {page_idx}{meta_suffix}"
-                else:
-                    label = f"{cite_tag}{filename}{meta_suffix}"
-            else:
-                if page_idx:
-                    label = f"[{filename}, Page {page_idx}{meta_suffix}]"
-                else:
-                    label = f"[{filename}{meta_suffix}]"
-            parts.append(f"{label}\n{content}")
-
-        return "\n\n".join(parts) if parts else "No document excerpts available."
-
-    def _build_user_prompt(
-        self, query: str, contexts: RetrievalContexts
     ) -> tuple[str, CitationIndexer]:
         """Combine KG context + reference list + question.
 
@@ -465,7 +495,8 @@ class AnswerEngine:
         ``[n-m]`` citation markers.
         """
         # Build indexer first so KG context includes citation tags
-        indexer = self._build_citation_indexer(contexts)
+        if indexer is None:
+            indexer = self._build_citation_indexer(contexts)
         kg_context = self._format_kg_context(contexts, indexer=indexer)
         ref_list = indexer.format_reference_list()
 

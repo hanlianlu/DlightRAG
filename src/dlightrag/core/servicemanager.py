@@ -40,6 +40,12 @@ class _PreparedQueryImages:
     current_image_ids: list[str]
 
 
+@dataclass(frozen=True)
+class _AnswerLimits:
+    candidate_top_k: int
+    context_top_k: int
+
+
 class RAGServiceUnavailableError(Exception):
     """Raised when the RAG service is not ready."""
 
@@ -361,7 +367,10 @@ class RAGServiceManager:
                 image_max_bytes=answer_cfg.image_max_bytes,
                 image_max_total_bytes=answer_cfg.image_max_total_bytes,
                 image_max_px=answer_cfg.image_max_px,
+                image_min_px=answer_cfg.image_min_px,
                 image_quality=answer_cfg.image_quality,
+                image_min_quality=answer_cfg.image_min_quality,
+                context_top_k=answer_cfg.context_top_k,
             )
         return self._answer_engine
 
@@ -440,6 +449,7 @@ class RAGServiceManager:
         contexts: RetrievalContexts,
         *,
         query_images: list[str | dict[str, Any]] | None = None,
+        context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Generate a streaming answer from already-retrieved contexts."""
         engine = self._get_answer_engine()
@@ -447,7 +457,32 @@ class RAGServiceManager:
             query,
             contexts,
             query_images=query_images,
+            context_top_k=context_top_k,
         )
+
+    def _resolve_answer_limits(self, kwargs: dict[str, Any]) -> _AnswerLimits:
+        """Resolve answer-specific retrieval and final-prompt chunk limits.
+
+        ``top_k``/``chunk_top_k`` remain retrieval controls. Answer generation
+        defaults to over-fetching candidates, then ``AnswerContextPacker``
+        deterministically trims to the final prompt budget.
+        """
+        answer_cfg = self._config.answer
+        answer_candidate_top_k = _positive_int_or_none(kwargs.pop("answer_candidate_top_k", None))
+        answer_context_top_k = _positive_int_or_none(kwargs.pop("answer_context_top_k", None))
+        requested_top_k = _positive_int_or_none(kwargs.get("top_k"))
+        requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
+
+        candidate_top_k = (
+            answer_candidate_top_k
+            or requested_chunk_top_k
+            or requested_top_k
+            or answer_cfg.candidate_top_k
+        )
+        context_top_k = answer_context_top_k or answer_cfg.context_top_k
+        kwargs["top_k"] = max(requested_top_k or candidate_top_k, candidate_top_k)
+        kwargs["chunk_top_k"] = candidate_top_k
+        return _AnswerLimits(candidate_top_k=candidate_top_k, context_top_k=context_top_k)
 
     # --- Read operations (single or federated) ---
 
@@ -546,6 +581,7 @@ class RAGServiceManager:
                     if prepared.multimodal_content:
                         existing_mm = kwargs.get("multimodal_content") or []
                         kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
+                    limits = self._resolve_answer_limits(kwargs)
                     retrieval = await self.aretrieve(
                         query,
                         plan=retrieval_plan,
@@ -560,7 +596,10 @@ class RAGServiceManager:
                         plan.standalone_query,
                         retrieval.contexts,
                         query_images=prepared.answer_images or None,
+                        context_top_k=limits.context_top_k,
                     )
+                    retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
+                    retrieval.trace["answer_context_top_k"] = limits.context_top_k
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     result.current_image_ids = prepared.current_image_ids
@@ -614,6 +653,7 @@ class RAGServiceManager:
                     if prepared.multimodal_content:
                         existing_mm = kwargs.get("multimodal_content") or []
                         kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
+                    limits = self._resolve_answer_limits(kwargs)
                     retrieval = await self.aretrieve(
                         query,
                         plan=retrieval_plan,
@@ -627,12 +667,19 @@ class RAGServiceManager:
                         plan.standalone_query,
                         retrieval.contexts,
                         query_images=prepared.answer_images or None,
+                        context_top_k=limits.context_top_k,
                     )
+                    retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
+                    retrieval.trace["answer_context_top_k"] = limits.context_top_k
                     if stream is not None:
                         stream_meta = cast(Any, stream)
                         stream_meta.current_image_ids = prepared.current_image_ids
                         stream_meta.image_descriptions = prepared.descriptions
-                        stream_meta.trace = retrieval.trace
+                        answer_trace = getattr(stream_meta, "trace", None)
+                        stream_meta.trace = {
+                            **retrieval.trace,
+                            **answer_trace,
+                        } if isinstance(answer_trace, dict) else retrieval.trace
                     return contexts, stream
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
@@ -750,6 +797,15 @@ def _images_to_multimodal_content(images: list[str | dict[str, Any]]) -> list[di
         if payload:
             items.append({"type": "image", "data": payload})
     return items
+
+
+def _positive_int_or_none(value: Any) -> int | None:
+    if value is None:
+        return None
+    result = int(value)
+    if result < 1:
+        raise ValueError("answer top-k limits must be positive integers")
+    return result
 
 
 __all__ = [

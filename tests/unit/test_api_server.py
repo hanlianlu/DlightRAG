@@ -592,6 +592,24 @@ class TestAnswerEndpoint:
         filters = mock_manager.aanswer.call_args.kwargs["filters"]
         assert filters.doc_author == "Ada"
 
+    async def test_answer_forwards_answer_context_limits(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "What is RAG?",
+                "stream": False,
+                "answer_candidate_top_k": 12,
+                "answer_context_top_k": 4,
+            },
+        )
+        assert resp.status_code == 200
+        call_kwargs = mock_manager.aanswer.call_args.kwargs
+        assert call_kwargs["answer_candidate_top_k"] == 12
+        assert call_kwargs["answer_context_top_k"] == 4
+
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -680,6 +698,28 @@ class TestAnswerStreamMode:
         assert resp.status_code == 200
         filters = mock_manager.aanswer_stream.call_args.kwargs["filters"]
         assert filters.doc_title == "Manual"
+
+    async def test_stream_forwards_answer_context_limits(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        async def mock_tokens():
+            yield "Hello"
+
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "Stream with limits",
+                "stream": True,
+                "answer_candidate_top_k": 16,
+                "answer_context_top_k": 5,
+            },
+        )
+        assert resp.status_code == 200
+        call_kwargs = mock_manager.aanswer_stream.call_args.kwargs
+        assert call_kwargs["answer_candidate_top_k"] == 16
+        assert call_kwargs["answer_context_top_k"] == 5
 
     async def test_stream_event_sequence(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

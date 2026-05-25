@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dlightrag.config import (
+    AnswerConfig,
     DlightragConfig,
     EmbeddingConfig,
     LLMConfig,
@@ -220,7 +221,9 @@ class TestRouting:
 
         await manager.aanswer("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
-        mock_engine.generate.assert_awaited_once_with("query", mock_contexts, query_images=None)
+        mock_engine.generate.assert_awaited_once_with(
+            "query", mock_contexts, query_images=None, context_top_k=30
+        )
 
 
 class TestAnswerViaEngine:
@@ -246,7 +249,41 @@ class TestAnswerViaEngine:
         result = await manager.aanswer("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with(
-            "what is X?", mock_contexts, query_images=None
+            "what is X?", mock_contexts, query_images=None, context_top_k=30
+        )
+        assert result is expected_result
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_uses_answer_candidate_and_context_limits(
+        self, mock_create, test_cfg
+    ) -> None:
+        """Answer over-fetches retrieval candidates and caps final prompt contexts."""
+        cfg = test_cfg.model_copy(
+            update={"answer": AnswerConfig(candidate_top_k=7, context_top_k=3)}
+        )
+        mock_svc = AsyncMock()
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
+        mock_create.return_value = mock_svc
+
+        mock_engine = AsyncMock()
+        expected_result = MagicMock(trace={})
+        mock_engine.generate.return_value = expected_result
+
+        manager = RAGServiceManager(config=cfg)
+        manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
+
+        result = await manager.aanswer("query", workspace="ws_a")
+
+        retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
+        assert retrieve_kwargs["top_k"] == 7
+        assert retrieve_kwargs["chunk_top_k"] == 7
+        mock_engine.generate.assert_awaited_once_with(
+            "query",
+            mock_contexts,
+            query_images=None,
+            context_top_k=3,
         )
         assert result is expected_result
 
@@ -270,7 +307,7 @@ class TestAnswerViaEngine:
         contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate_stream.assert_awaited_once_with(
-            "what is X?", mock_contexts, query_images=None
+            "what is X?", mock_contexts, query_images=None, context_top_k=30
         )
         assert contexts is mock_contexts
         assert stream is mock_stream
@@ -294,7 +331,9 @@ class TestAnswerViaEngine:
 
         result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
-        mock_engine.generate.assert_awaited_once_with("query", mock_contexts, query_images=None)
+        mock_engine.generate.assert_awaited_once_with(
+            "query", mock_contexts, query_images=None, context_top_k=30
+        )
         assert result is expected_result
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
@@ -317,7 +356,7 @@ class TestAnswerViaEngine:
         contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
         mock_engine.generate_stream.assert_awaited_once_with(
-            "query", mock_contexts, query_images=None
+            "query", mock_contexts, query_images=None, context_top_k=30
         )
         assert contexts is mock_contexts
 

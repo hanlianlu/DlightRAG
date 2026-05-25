@@ -62,6 +62,7 @@ services:
   postgres:
     restart: unless-stopped
     image: ghcr.io/hanlianlu/dlightrag-postgres:pg18
+    shm_size: 8gb
     # build: postgres/  # uncomment to build the image locally
     ports:
       - "5432:5432"
@@ -125,6 +126,7 @@ services:
     profiles: ["replica"]
     restart: unless-stopped
     image: ghcr.io/hanlianlu/dlightrag-postgres:pg18
+    shm_size: 8gb
     depends_on:
       postgres:
         condition: service_healthy

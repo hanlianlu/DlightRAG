@@ -34,6 +34,10 @@ DlightRAG splits PostgreSQL tuning into two layers:
   PostgreSQL deployment. The checked-in Docker compose stack carries a local
   single-node profile; production primary/replica deployments should tune
   these in their own Postgres configuration.
+- **Docker shared memory** is separate from PostgreSQL memory GUCs. The
+  checked-in compose stack sets `shm_size: 8gb` on both primary and replica so
+  HNSW index builds and rebuilds have enough `/dev/shm` headroom. This should
+  be kept in proportion to corpus size and concurrent index maintenance.
 - **Session-level settings** belong to DlightRAG config. `pg_hnsw_ef_search`
   becomes `hnsw.ef_search`, and `postgres_session_settings` can add additional
   per-connection GUCs. DlightRAG applies the same session settings to both

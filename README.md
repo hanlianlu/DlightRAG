@@ -438,6 +438,36 @@ Otherwise DlightRAG relies on LightRAG's symmetric fallback. Changing
 `embedding.dim` after indexing requires clearing the workspace and rebuilding
 vector indexes.
 
+### Answer Image Budget
+
+Answer generation uses one shared image budget for user `query_images` and
+retrieved visual chunks. The defaults favor VLM understanding over aggressive
+payload minimization:
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `answer.candidate_top_k` | `60` | Retrieval candidates fetched for `/answer` before final prompt packing. |
+| `answer.context_top_k` | `30` | Maximum chunks kept in the final answer prompt. |
+| `answer.max_images` | `6` | Maximum images sent to the answer model. |
+| `answer.image_max_bytes` | `3000000` | Maximum compressed binary bytes per image before base64 expansion. |
+| `answer.image_max_total_bytes` | `24000000` | Maximum compressed binary bytes across all answer images. |
+| `answer.image_max_px` | `1536` | Maximum long edge after bounding. |
+| `answer.image_min_px` | `1024` | Long-edge floor before oversized images are skipped. |
+| `answer.image_quality` | `88` | Initial JPEG quality for recompressed images. |
+| `answer.image_min_quality` | `72` | JPEG quality floor before oversized images are skipped. |
+
+Already-budgeted JPEG, PNG, and WebP payloads pass through unchanged. Images
+that cannot fit without crossing the quality or size floor are skipped instead
+of being sent as low-fidelity previews.
+
+For `/answer`, DlightRAG retrieves `answer.candidate_top_k` candidates, reranks
+them, then packs up to `answer.context_top_k` chunks into the prompt. User
+`query_images` occupy the shared image budget first. Pure visual chunks whose
+image cannot be sent are skipped and the packer backfills from later candidates;
+mixed text+image chunks keep their text. `/answer` therefore returns contexts
+and sources aligned with what the answer model saw. Use `/retrieve` when you
+need the broader pre-answer retrieval set.
+
 ### Metadata Filtering
 
 Metadata is explicit-schema first:
@@ -470,6 +500,10 @@ workspace embedding dimension and rebuilding indexes.
 LightRAG PostgreSQL pool and DlightRAG's domain-store pool. Server-level
 PostgreSQL memory and WAL settings remain deployment configuration in
 `docker-compose.yml` or your managed Postgres service.
+
+The checked-in Docker stack also sets `shm_size: 8gb` for both PostgreSQL
+primary and replica. That controls container `/dev/shm` for HNSW builds and is
+separate from `shared_buffers`, `work_mem`, and `maintenance_work_mem`.
 
 More PostgreSQL notes: [`docs/PG.md`](docs/PG.md).
 
