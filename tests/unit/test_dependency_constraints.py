@@ -76,11 +76,13 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=age,pg_textsearch" in compose
 
 
-def test_compose_uses_pg18_postgres_image_tag() -> None:
+def test_compose_builds_pg18_postgres_image_locally() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/postgres-image.yml").read_text(encoding="utf-8")
 
-    assert "ghcr.io/hanlianlu/dlightrag-postgres:pg18" in compose
+    assert "image: dlightrag-postgres:pg18" in compose
+    assert "context: postgres" in compose
+    assert "ghcr.io/hanlianlu/dlightrag-postgres" not in compose
     assert "ghcr.io/hanlianlu/dlightrag-postgres:latest" not in compose
     assert "dlightrag-postgres:pg18" in workflow
 
