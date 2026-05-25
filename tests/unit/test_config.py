@@ -7,6 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from dlightrag.config import (
+    AnswerConfig,
     CitationHighlightConfig,
     DlightragConfig,
     EmbeddingConfig,
@@ -88,6 +89,14 @@ class TestCitationHighlightConfig:
         assert cfg.enabled is False
         assert cfg.timeout == 5.0
         assert cfg.max_concurrency == 4
+
+
+class TestAnswerConfig:
+    def test_defaults_keep_retrieval_candidates_separate_from_prompt_contexts(self):
+        cfg = AnswerConfig()
+        assert cfg.candidate_top_k == 60
+        assert cfg.context_top_k == 30
+        assert cfg.candidate_top_k >= cfg.context_top_k
 
 
 class TestDlightragConfigNested:
@@ -183,8 +192,12 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.pg_target_for_runtime() == "primary"
     assert cfg.citations.highlights.enabled is False
     assert cfg.answer.max_images == 6
-    assert cfg.answer.image_max_bytes == 1_500_000
-    assert cfg.answer.image_max_total_bytes == 20_000_000
+    assert cfg.answer.image_max_bytes == 3_000_000
+    assert cfg.answer.image_max_total_bytes == 24_000_000
+    assert cfg.answer.image_max_px == 1536
+    assert cfg.answer.image_min_px == 1024
+    assert cfg.answer.image_quality == 88
+    assert cfg.answer.image_min_quality == 72
     assert cfg.query_images.semantic_enhancement is True
     assert cfg.query_images.max_described_images == 3
     assert cfg.visual_assets.thumb_max_px == 300

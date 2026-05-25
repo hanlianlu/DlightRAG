@@ -103,12 +103,12 @@ result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "rel
 # Answer: contexts + LLM-generated answer
 result = await manager.aanswer(query="What are the key findings?")
 result.answer      # "The key findings are... [1-1] [2-3]"
-result.contexts    # same structure as retrieve
+result.contexts    # same structure as retrieve, packed to what the answer model saw
 result.references  # validated cited documents, derived from inline citations
 
 # Streaming answer
 contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
-# contexts (RetrievalContexts) available immediately
+# contexts (answer-packed RetrievalContexts) available immediately
 async for token in token_iter:
     print(token, end="")
 ```
@@ -122,6 +122,8 @@ async for token in token_iter:
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
 | `top_k` | `int \| None` | config default | Total results to retrieve |
 | `chunk_top_k` | `int \| None` | config default | Chunk-level results |
+| `answer_candidate_top_k` | `int \| None` | `answer.candidate_top_k` | `/answer` only. Retrieval candidates fetched before answer-stage packing. `top_k`/`chunk_top_k` remain lower-level retrieval overrides. |
+| `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
 | `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded before being sent to the answer LLM. Capped at 10. |
@@ -375,8 +377,11 @@ with paths, chunks, pages, images, and optional highlights.
 | `title` | string | Document title/filename |
 
 **Relationship to `sources`:** `retrieve` returns all retrieved sources. `answer`
-returns only cited sources after citation validation. `references` is a compact
-document-level projection of that cited `sources` list.
+returns answer-packed contexts plus only cited sources after citation
+validation. `references` is a compact document-level projection of that cited
+`sources` list. Answer packing removes pure visual chunks whose image could not
+fit the answer image budget, while preserving text from mixed text+image
+chunks.
 
 
 ## Citations
@@ -447,3 +452,12 @@ images, asks the VLM for concise semantic descriptions, embeds the raw image
 for direct visual retrieval, and sends a bounded image preview to the answer
 model. `multimodal_content` remains the lower-level direct visual retrieval
 input for programmatic callers.
+
+Answer-model previews are quality-preserving. Budgeted JPEG, PNG, and WebP
+payloads pass through unchanged; oversized images are recompressed only down to
+the configured `answer.image_min_quality` and `answer.image_min_px` floors. If
+an image still cannot fit, DlightRAG skips it rather than sending a degraded
+preview that could hurt visual understanding. Pure visual retrieved chunks
+whose image is skipped are also removed from the answer context; later text or
+sendable visual chunks in the retrieved set remain available to the answer
+model.

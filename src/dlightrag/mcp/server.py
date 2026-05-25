@@ -151,7 +151,15 @@ async def list_tools() -> list[Tool]:
                     },
                     "top_k": {
                         "type": "integer",
-                        "description": "Number of top results to retrieve",
+                        "description": "Retrieval candidate count override for this answer",
+                    },
+                    "answer_candidate_top_k": {
+                        "type": "integer",
+                        "description": "Answer retrieval candidates fetched before final prompt packing",
+                    },
+                    "answer_context_top_k": {
+                        "type": "integer",
+                        "description": "Maximum chunks included in the final answer prompt",
                     },
                     "workspaces": {
                         "type": "array",
@@ -248,6 +256,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
                 top_k=arguments.get("top_k"),
+                answer_candidate_top_k=arguments.get("answer_candidate_top_k"),
+                answer_context_top_k=arguments.get("answer_context_top_k"),
             )
             # Build cited-only sources via CitationProcessor
             flat_contexts: list[dict[str, Any]] = []

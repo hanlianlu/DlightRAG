@@ -101,12 +101,16 @@ def bounded_image_data_uri(
     *,
     max_bytes: int,
     max_px: int,
+    min_px: int,
     quality: int,
+    min_quality: int,
 ) -> tuple[str, int] | None:
-    """Return a JPEG data URI bounded for answer-model payloads.
+    """Return a model image data URI bounded for answer-model payloads.
 
     ``value`` can be raw base64 or a base64 data URI. Non-image or undecodable
-    payloads return ``None``.
+    payloads return ``None``. Already-budgeted JPEG/PNG/WebP images are passed
+    through unchanged. Images that cannot fit without dropping below the quality
+    or long-edge floor are skipped instead of being over-compressed.
     """
     try:
         raw, _ = decode_image_base64(value)
@@ -116,31 +120,62 @@ def bounded_image_data_uri(
     max_bytes = max(1, int(max_bytes))
     max_px = max(1, int(max_px))
     quality = min(95, max(1, int(quality)))
+    min_px = min(max_px, max(1, int(min_px)))
+    min_quality = min(quality, max(1, int(min_quality)))
 
     try:
         with Image.open(io.BytesIO(raw)) as original:
+            original_format = original.format or ""
+            original_mime = _PILLOW_TO_MIME.get(original_format)
+            if (
+                original_format in _PASSTHROUGH_FORMATS
+                and original_mime
+                and len(raw) <= max_bytes
+                and max(original.size) <= max_px
+            ):
+                uri = f"data:{original_mime};base64,{base64.b64encode(raw).decode('ascii')}"
+                return uri, len(raw)
+
             image = original.convert("RGB")
             image.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
 
             current = image
-            current_quality = quality
+            effective_min_px = min(min_px, max(current.size))
+            qualities = _quality_steps(quality, min_quality)
             for _ in range(10):
-                buf = io.BytesIO()
-                current.save(buf, format="JPEG", quality=current_quality, optimize=True)
-                payload = buf.getvalue()
-                if len(payload) <= max_bytes:
-                    uri = f"data:image/jpeg;base64,{base64.b64encode(payload).decode('ascii')}"
-                    return uri, len(payload)
-                if current_quality > 45:
-                    current_quality = max(45, current_quality - 10)
-                    continue
-                next_size = (max(1, int(current.width * 0.8)), max(1, int(current.height * 0.8)))
+                for current_quality in qualities:
+                    buf = io.BytesIO()
+                    current.save(buf, format="JPEG", quality=current_quality, optimize=True)
+                    payload = buf.getvalue()
+                    if len(payload) <= max_bytes:
+                        uri = f"data:image/jpeg;base64,{base64.b64encode(payload).decode('ascii')}"
+                        return uri, len(payload)
+
+                long_edge = max(current.size)
+                if long_edge <= effective_min_px:
+                    break
+                next_long_edge = max(effective_min_px, int(long_edge * 0.85))
+                scale = next_long_edge / long_edge
+                next_size = (
+                    max(1, int(current.width * scale)),
+                    max(1, int(current.height * scale)),
+                )
                 if next_size == current.size:
                     break
                 current = current.resize(next_size, Image.Resampling.LANCZOS)
     except Exception:
         return None
     return None
+
+
+def _quality_steps(quality: int, min_quality: int) -> list[int]:
+    """Return descending JPEG qualities without crossing the configured floor."""
+    values = [quality]
+    current = quality
+    while current > min_quality:
+        current = max(min_quality, current - 8)
+        values.append(current)
+    return values
 
 
 def thumbnail_bytes(raw: bytes, *, max_px: int, output_mime: str | None = None) -> tuple[bytes, str]:

@@ -59,11 +59,15 @@ citations:
     cache_size: 500
 
 answer:
+  candidate_top_k: 60
+  context_top_k: 30
   max_images: 6
-  image_max_bytes: 1500000
-  image_max_total_bytes: 20000000
-  image_max_px: 1024
-  image_quality: 85
+  image_max_bytes: 3000000
+  image_max_total_bytes: 24000000
+  image_max_px: 1536
+  image_min_px: 1024
+  image_quality: 88
+  image_min_quality: 72
 
 query_images:
   semantic_enhancement: true

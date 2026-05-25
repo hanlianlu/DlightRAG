@@ -160,6 +160,39 @@ class TestAnswerEngineGenerate:
         assert any(item.get("type") == "text" for item in user_content)
 
     @pytest.mark.asyncio
+    async def test_query_images_take_budget_before_retrieved_visual_chunks(self) -> None:
+        raw = "ok"
+        model_func = AsyncMock(return_value=raw)
+        engine = AnswerEngine(model_func=model_func, max_images=1)
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "visual-only",
+                    "reference_id": "1",
+                    "file_path": "/docs/chart.pdf",
+                    "content": "",
+                    "image_data": _PNG_B64,
+                }
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+
+        result = await engine.generate("describe this", contexts, query_images=[_PNG_B64])
+
+        assert result.contexts["chunks"] == []
+        assert result.trace["answer_context_query_images_sent"] == 1
+        assert result.trace["answer_context_images_skipped"] == 1
+        assert result.trace["answer_context_skipped_image_only_chunks"] == 1
+        messages = model_func.call_args.kwargs["messages"]
+        user_content = messages[1]["content"]
+        assert sum(1 for item in user_content if item.get("type") == "image_url") == 1
+        assert any(
+            item.get("type") == "text" and "User-attached images" in item.get("text", "")
+            for item in user_content
+        )
+
+    @pytest.mark.asyncio
     async def test_generate_no_response_format(self) -> None:
         """generate() must NOT pass response_format (unified freetext prompt)."""
         raw = "Revenue grew 15% [1-1].\n\n### References\n- [1] report.pdf"
@@ -172,17 +205,66 @@ class TestAnswerEngineGenerate:
         assert "response_format" not in call_kwargs
 
     @pytest.mark.asyncio
-    async def test_contexts_passed_through_unchanged(self) -> None:
-        """The original contexts dict should be returned as-is."""
+    async def test_generate_returns_answer_packed_contexts(self) -> None:
+        """generate() returns the contexts actually sent to the answer model."""
         raw = "answer\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
-        contexts = _text_contexts()
+        engine = AnswerEngine(model_func=model_func, max_images=0)
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "visual-only",
+                    "reference_id": "1",
+                    "file_path": "/docs/figures.pdf",
+                    "content": "",
+                    "image_data": _PNG_B64,
+                },
+                *_text_contexts()["chunks"],
+            ],
+            "entities": [],
+            "relationships": [],
+        }
         result = await engine.generate("q", contexts)
 
-        assert result.contexts is contexts
-        assert result.contexts["chunks"] == contexts["chunks"]
-        assert result.contexts["entities"] == contexts["entities"]
+        assert result.contexts is not contexts
+        assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["c1"]
+        assert result.trace["answer_context_skipped_image_only_chunks"] == 1
+
+    @pytest.mark.asyncio
+    async def test_generate_limits_final_prompt_contexts(self) -> None:
+        """generate() limits final prompt chunks while retrieval can over-fetch."""
+        raw = "The first item matters [1-1]."
+        model_func = AsyncMock(return_value=raw)
+        engine = AnswerEngine(model_func=model_func, context_top_k=1)
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "file_path": "/docs/a.pdf",
+                    "content": "First candidate.",
+                },
+                {
+                    "chunk_id": "c2",
+                    "reference_id": "2",
+                    "file_path": "/docs/b.pdf",
+                    "content": "Second candidate.",
+                },
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+
+        result = await engine.generate("query", contexts)
+
+        assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["c1"]
+        assert result.trace["answer_context_target_chunks"] == 1
+        messages = model_func.call_args.kwargs["messages"]
+        user_text = "\n".join(
+            item["text"] for item in messages[1]["content"] if item.get("type") == "text"
+        )
+        assert "First candidate." in user_text
+        assert "Second candidate." not in user_text
 
     @pytest.mark.asyncio
     async def test_generate_strips_model_generated_references_tail(self) -> None:
@@ -235,8 +317,8 @@ class TestAnswerEngineStream:
         assert ctx is contexts
 
     @pytest.mark.asyncio
-    async def test_generate_stream_returns_contexts_and_tokens(self) -> None:
-        """generate_stream() returns original contexts and consumable tokens."""
+    async def test_generate_stream_returns_packed_contexts_and_tokens(self) -> None:
+        """generate_stream() returns answer-packed contexts and consumable tokens."""
 
         async def mock_stream():
             for token in ["Hello", " ", "world"]:
@@ -248,7 +330,8 @@ class TestAnswerEngineStream:
         contexts = _text_contexts()
         result_contexts, token_iter = await engine.generate_stream("query", contexts)
 
-        assert result_contexts is contexts
+        assert result_contexts is not contexts
+        assert result_contexts["chunks"] == contexts["chunks"]
         assert token_iter is not None
         tokens = [t async for t in token_iter]
         assert tokens == ["Hello", " ", "world"]
@@ -571,130 +654,6 @@ class TestAnswerEngineHelpers:
 
 
 # ---------------------------------------------------------------------------
-# TestFormatChunkExcerpts
-# ---------------------------------------------------------------------------
-
-
-class TestFormatChunkExcerpts:
-    """Test _format_chunk_excerpts static method."""
-
-    def test_excerpts_include_content(self) -> None:
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "file_path": "/docs/report.pdf",
-                    "content": "Revenue grew 15%.",
-                    "page_idx": 3,
-                },
-            ],
-        }
-        result = AnswerEngine._format_chunk_excerpts(contexts)
-        assert "Revenue grew 15%." in result
-        assert "report.pdf" in result
-        assert "Page 3" in result
-
-    def test_empty_chunks(self) -> None:
-        contexts: RetrievalContexts = {"chunks": []}
-        result = AnswerEngine._format_chunk_excerpts(contexts)
-        assert result == "No document excerpts available."
-
-    def test_chunks_without_content_skipped(self) -> None:
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {"chunk_id": "c1", "content": ""},
-                {"chunk_id": "c2", "content": "  "},
-                {"chunk_id": "c3", "content": "actual text", "file_path": "/doc.pdf"},
-            ],
-        }
-        result = AnswerEngine._format_chunk_excerpts(contexts)
-        assert "actual text" in result
-        assert result.count("[") == 1  # Only one label
-
-    def test_chunk_without_page_idx(self) -> None:
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {"chunk_id": "c1", "content": "text", "file_path": "/doc.pdf"},
-            ],
-        }
-        result = AnswerEngine._format_chunk_excerpts(contexts)
-        assert "[doc.pdf]" in result
-        assert "Page" not in result
-
-    def test_excerpts_include_citation_tags_with_indexer(self) -> None:
-        """When indexer is provided, excerpt labels include [ref_id-chunk_idx]."""
-        from dlightrag.citations.indexer import CitationIndexer
-
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "file_path": "/docs/report.pdf",
-                    "content": "Revenue grew 15%.",
-                    "page_idx": 3,
-                },
-                {
-                    "chunk_id": "c2",
-                    "reference_id": "2",
-                    "file_path": "/docs/whitepaper.pdf",
-                    "content": "Parser benchmarks.",
-                    "page_idx": 1,
-                },
-            ],
-        }
-        indexer = CitationIndexer()
-        flat = list(contexts["chunks"])
-        indexer.build_index(flat)
-
-        result = AnswerEngine._format_chunk_excerpts(contexts, indexer=indexer)
-
-        # Citation markers should appear before filenames
-        assert "[1-1] report.pdf, Page 3" in result
-        assert "[2-1] whitepaper.pdf, Page 1" in result
-        # Content still present
-        assert "Revenue grew 15%." in result
-        assert "Parser benchmarks." in result
-
-    def test_citation_tags_match_reference_list(self) -> None:
-        """Citation tags in excerpts must match the reference list numbering."""
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "file_path": "/docs/report.pdf",
-                    "content": "First doc content.",
-                    "page_idx": 1,
-                },
-                {
-                    "chunk_id": "c2",
-                    "reference_id": "1",
-                    "file_path": "/docs/report.pdf",
-                    "content": "Second page content.",
-                    "page_idx": 5,
-                },
-                {
-                    "chunk_id": "c3",
-                    "reference_id": "2",
-                    "file_path": "/docs/other.pdf",
-                    "content": "Other doc content.",
-                    "page_idx": 2,
-                },
-            ],
-            "entities": [],
-            "relationships": [],
-        }
-        engine = AnswerEngine()
-        prompt, _indexer = engine._build_user_prompt("test query", contexts)
-
-        # Reference list should have matching entries
-        assert "[1] report.pdf" in prompt
-        assert "[2] other.pdf" in prompt
-
-
-# ---------------------------------------------------------------------------
 # TestBuildExcerptBlocks
 # ---------------------------------------------------------------------------
 
@@ -765,6 +724,28 @@ class TestBuildExcerptBlocks:
         contexts: RetrievalContexts = {"chunks": []}
         blocks = AnswerEngine._build_excerpt_blocks(contexts)
         assert blocks == []
+
+    def test_skipped_image_has_no_orphan_label(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "visual-only",
+                    "reference_id": "1",
+                    "file_path": "/docs/figures.pdf",
+                    "content": "",
+                    "image_data": _PNG_B64,
+                }
+            ]
+        }
+        engine = AnswerEngine(max_images=0)
+
+        messages = engine._build_messages("sys", "prompt", contexts)
+
+        user_content = messages[1]["content"]
+        assert not any(block.get("type") == "image_url" for block in user_content)
+        all_text = "\n".join(block["text"] for block in user_content if block.get("type") == "text")
+        assert "Page image" not in all_text
+        assert "figures.pdf" not in all_text
 
 
 # ---------------------------------------------------------------------------
