@@ -3,8 +3,8 @@
 
 from dlightrag.models.llm import (
     build_role_llm_configs,
-    get_chat_model_func,
-    get_chat_model_func_for_lightrag,
+    get_default_model_func,
+    get_default_model_func_for_lightrag,
     get_embedding_func,
     get_extract_model_func,
     get_multimodal_embedder,
@@ -15,8 +15,8 @@ from dlightrag.models.llm import (
 
 __all__ = [
     "build_role_llm_configs",
-    "get_chat_model_func",
-    "get_chat_model_func_for_lightrag",
+    "get_default_model_func",
+    "get_default_model_func_for_lightrag",
     "get_embedding_func",
     "get_extract_model_func",
     "get_multimodal_embedder",

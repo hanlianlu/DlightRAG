@@ -164,9 +164,27 @@ class TestMakeCompletionFunc:
         ]
 
 
-class TestGetChatModelFunc:
+class TestModelFactoryExports:
+    def test_legacy_chat_model_factory_is_not_exported(self):
+        import dlightrag.models as models
+        from dlightrag.models import llm
+
+        assert not hasattr(llm, "get_chat_model_func")
+        assert not hasattr(llm, "get_chat_model_func_for_lightrag")
+        assert "get_chat_model_func" not in models.__all__
+        assert "get_chat_model_func_for_lightrag" not in models.__all__
+
+    def test_lightrag_default_adapter_is_explicitly_exported(self):
+        import dlightrag.models as models
+        from dlightrag.models import llm
+
+        assert hasattr(llm, "get_default_model_func_for_lightrag")
+        assert "get_default_model_func_for_lightrag" in models.__all__
+
+
+class TestGetDefaultModelFunc:
     def test_returns_callable(self):
-        from dlightrag.models.llm import get_chat_model_func
+        from dlightrag.models.llm import get_default_model_func
 
         config = DlightragConfig(
             llm=LLMConfig(
@@ -174,7 +192,7 @@ class TestGetChatModelFunc:
             ),
             embedding=_embedding_config(),
         )
-        func = get_chat_model_func(config)
+        func = get_default_model_func(config)
         assert callable(func)
 
 
@@ -208,7 +226,7 @@ class TestGetExtractModelFunc:
 
 
 class TestGetRerankFunc:
-    def test_chat_llm_reranker_uses_chat_fallback_without_override(self, monkeypatch):
+    def test_chat_llm_reranker_uses_default_fallback_without_override(self, monkeypatch):
         from dlightrag.models import llm
 
         seen_models: list[str] = []

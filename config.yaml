@@ -41,15 +41,9 @@ llm:
         thinking:
           type: disabled
   # roles:
-  #   extract:
-  #     provider: anthropic
-  #     model: claude-sonnet-4-20250514
-  #   keyword:
-  #     provider: openai
-  #     model: gpt-4.1-mini
   #   query:
   #     provider: openai
-  #     model: gpt-4.1
+  #     model: gpt-5.2
   #   vlm:
   #     provider: gemini
   #     model: gemini-2.5-flash
@@ -87,8 +81,8 @@ answer:
   image_max_total_bytes: 24000000
   image_max_px: 1536
   image_min_px: 1024
-  image_quality: 88
-  image_min_quality: 72
+  image_quality: 89
+  image_min_quality: 79
 
 query_images:
   semantic_enhancement: true

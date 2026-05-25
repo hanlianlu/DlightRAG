@@ -381,7 +381,7 @@ class TestAnswerViaEngine:
         """_get_answer_engine() lazily creates an AnswerEngine instance."""
         manager = RAGServiceManager(config=test_cfg)
         assert manager._answer_engine is None
-        with patch("dlightrag.models.llm.get_chat_model_func") as mock_llm:
+        with patch("dlightrag.models.llm.get_query_model_func") as mock_llm:
             mock_llm.return_value = MagicMock()
             engine = manager._get_answer_engine()
             assert engine is not None

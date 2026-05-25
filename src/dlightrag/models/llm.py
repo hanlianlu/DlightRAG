@@ -125,8 +125,8 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
     return partial(traced_func)
 
 
-def get_chat_model_func(config: DlightragConfig) -> Callable:
-    """Messages-first chat callable (for DlightRAG direct use)."""
+def get_default_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first callable for the configured default LLM."""
     return _make_completion_func(config.llm.default)
 
 
@@ -175,7 +175,7 @@ def _lightrag_adapted(
     return wrapper
 
 
-get_chat_model_func_for_lightrag = _lightrag_adapted(get_chat_model_func)
+get_default_model_func_for_lightrag = _lightrag_adapted(get_default_model_func)
 
 
 def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
@@ -277,7 +277,7 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
         else:
             # Fall back to the default LLM. Do not implicitly consume the vlm role here:
             # reranker-specific model choices belong under rerank.*.
-            scoring_func = get_chat_model_func(config)
+            scoring_func = get_default_model_func(config)
         return build_rerank_func(rc, ingest_func=scoring_func)
 
     return build_rerank_func(rc)
@@ -285,8 +285,8 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
 
 __all__ = [
     "build_role_llm_configs",
-    "get_chat_model_func",
-    "get_chat_model_func_for_lightrag",
+    "get_default_model_func",
+    "get_default_model_func_for_lightrag",
     "get_embedding_func",
     "get_extract_model_func",
     "get_multimodal_embedder",

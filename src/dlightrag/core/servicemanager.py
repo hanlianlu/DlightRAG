@@ -460,12 +460,6 @@ class RAGServiceManager:
                 return await svc._metadata_index.get_field_schema()
         return {}
 
-    def get_llm_func(self):
-        """Return the global chat model function (for web UI etc.)."""
-        from dlightrag.models.llm import get_chat_model_func
-
-        return get_chat_model_func(self._config)
-
     async def aplan_query(
         self,
         query: str,
