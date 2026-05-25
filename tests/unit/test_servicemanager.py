@@ -85,6 +85,22 @@ class TestGetService:
         assert all(r is mock_service for r in results)
 
 
+class TestWorkspaceCreation:
+    """Test workspace creation registers discoverable workspace metadata."""
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_create_workspace_registers_workspace_meta(self, mock_create, test_cfg) -> None:
+        svc = AsyncMock()
+        mock_create.return_value = svc
+        manager = RAGServiceManager(config=test_cfg)
+        manager._wait_after_write = AsyncMock(return_value=None)
+
+        await manager.acreate_workspace("new workspace")
+
+        svc.aregister_workspace.assert_awaited_once()
+        manager._wait_after_write.assert_awaited_once()
+
+
 class TestBackoff:
     """Test exponential backoff on service creation failure."""
 

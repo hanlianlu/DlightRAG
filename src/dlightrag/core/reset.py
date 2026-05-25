@@ -125,7 +125,7 @@ async def areset(
     # Also clean workspace metadata
     try:
         if not dry_run:
-            await _clean_workspace_meta(workspace)
+            await _clean_workspace_meta(workspace, config=service.config)
     except Exception as exc:
         errors.append(f"Phase 3 (workspace meta): {exc}")
         logger.warning("areset Phase 3 workspace meta failed: %s", exc)
@@ -251,15 +251,17 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
         return 0
 
 
-async def _clean_workspace_meta(workspace: str) -> None:
+async def _clean_workspace_meta(workspace: str, config: Any | None = None) -> None:
     """Delete workspace record from dlightrag_workspace_meta."""
-    from lightrag.kg.postgres_impl import ClientManager
+    import asyncpg
 
-    db = await ClientManager.get_client()
-    pool = db.pool
-    if pool is None:
-        return
-    async with pool.acquire() as conn:
+    if config is None:
+        from dlightrag.config import get_config
+
+        config = get_config()
+
+    conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+    try:
         exists = await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
             "WHERE table_name = 'dlightrag_workspace_meta')"
@@ -269,21 +271,27 @@ async def _clean_workspace_meta(workspace: str) -> None:
                 "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
                 workspace,
             )
+    finally:
+        await conn.close()
 
 
-async def _list_all_workspaces() -> list[str]:
+async def _list_all_workspaces(config: Any | None = None) -> list[str]:
     """Return all known workspace IDs from the database."""
     try:
-        from lightrag.kg.postgres_impl import ClientManager
+        import asyncpg
 
-        db = await ClientManager.get_client()
-        pool = db.pool
-        if pool is None:
-            return []
-        async with pool.acquire() as conn:
+        if config is None:
+            from dlightrag.config import get_config
+
+            config = get_config()
+
+        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        try:
             rows = await conn.fetch(
                 "SELECT DISTINCT workspace FROM dlightrag_workspace_meta ORDER BY workspace"
             )
+        finally:
+            await conn.close()
         return [r["workspace"] for r in rows]
     except Exception:
         return []

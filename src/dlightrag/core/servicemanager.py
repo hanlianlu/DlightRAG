@@ -247,7 +247,8 @@ class RAGServiceManager:
     async def acreate_workspace(self, workspace: str) -> None:
         """Initialize a workspace through the public manager API."""
         self._ensure_writable("create workspace")
-        await self._get_service(workspace)
+        svc = await self._get_service(workspace)
+        await svc.aregister_workspace()
         await self._wait_after_write()
 
     async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
