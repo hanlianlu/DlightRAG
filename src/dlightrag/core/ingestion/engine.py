@@ -17,6 +17,7 @@ from lightrag.constants import (
 )
 from lightrag.parser.routing import resolve_file_parser_directives
 from lightrag.utils import compute_mdhash_id
+from lightrag.utils_pipeline import normalize_document_file_path
 
 from dlightrag.core.ingestion.direct_image import (
     build_direct_image_chunk,
@@ -80,7 +81,7 @@ class UnifiedIngestionEngine:
     ) -> dict[str, Any]:
         """Ingest a local file through the unified path."""
         file_path = Path(path)
-        doc_id = compute_mdhash_id(str(file_path), prefix="doc-")
+        doc_id = _canonical_file_doc_id(file_path)
         metadata_record = self._prepare_metadata_record(
             file_path,
             title=title,
@@ -154,7 +155,6 @@ class UnifiedIngestionEngine:
             )
         await self._lightrag.apipeline_enqueue_documents(
             input="",
-            ids=[doc_id],
             file_paths=[str(file_path)],
             docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
             lightrag_document_paths=[str(file_path)],
@@ -321,3 +321,8 @@ def _file_sha256(path: Path) -> str:
         for chunk in iter(lambda: fh.read(1024 * 1024), b""):
             digest.update(chunk)
     return f"sha256:{digest.hexdigest()}"
+
+
+def _canonical_file_doc_id(path: Path) -> str:
+    """Match LightRAG's file-backed document id derivation."""
+    return compute_mdhash_id(normalize_document_file_path(path), prefix="doc-")
