@@ -113,6 +113,19 @@ class TestAresetPhase1:
 
         assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
 
+    async def test_skips_lightrag_storage_class_attributes(self) -> None:
+        class StorageClass:
+            async def drop(self):
+                raise AssertionError("class drop must not be called")
+
+        service = _make_service()
+        service._lightrag.doc_status_storage_cls = StorageClass
+
+        result = await service.areset()
+
+        assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
+        assert not any("doc_status_storage_cls" in error for error in result["errors"])
+
 
 class TestAresetPhase2:
     """Phase 2: DlightRAG domain stores."""

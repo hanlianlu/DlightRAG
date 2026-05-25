@@ -3,9 +3,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
-
-from dlightrag.api.auth import UserContext, get_current_user
+from fastapi import APIRouter, Request
 
 from .deps import get_manager
 
@@ -52,13 +50,3 @@ async def health(request: Request) -> dict[str, Any]:
         status["status"] = "degraded"
 
     return status
-
-
-@router.get("/workspaces")
-async def workspaces(
-    request: Request, user: UserContext = Depends(get_current_user)
-) -> dict[str, Any]:
-    """List all available workspaces."""
-    manager = get_manager(request)
-    ws_list = await manager.list_workspaces()
-    return {"workspaces": ws_list}

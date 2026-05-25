@@ -76,6 +76,19 @@ def mock_manager(mock_service):
     manager.list_ingested_files = mock_service.alist_ingested_files
     manager.delete_files = mock_service.adelete_files
     manager.list_workspaces = AsyncMock(return_value=["default"])
+    manager.list_workspace_records = AsyncMock(
+        return_value=[
+            {
+                "workspace": "default",
+                "display_name": "default",
+                "embedding_model": "voyage-multimodal-3.5",
+                "created_at": None,
+                "updated_at": None,
+            }
+        ]
+    )
+    manager.acreate_workspace = AsyncMock()
+    manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
     manager.is_ready = lambda: True
     manager.is_degraded = lambda: False
     manager.get_warnings = lambda: []
@@ -145,6 +158,73 @@ class TestAuthMiddleware:
         cfg.auth_mode = "simple"
         resp = await client.get("/files")
         assert resp.status_code == 401
+
+
+class TestWorkspaceLifecycleAPI:
+    """Workspace lifecycle API uses the durable manager registry."""
+
+    async def test_list_workspaces_returns_records(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.get("/workspaces")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["workspaces"] == ["default"]
+        assert body["records"][0]["display_name"] == "default"
+        mock_manager.list_workspace_records.assert_awaited_once()
+
+    async def test_create_workspace_registers_empty_workspace(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+
+        resp = await client.post(
+            "/workspaces",
+            json={"workspace": "New Workspace", "display_name": "New Workspace"},
+        )
+
+        assert resp.status_code == 201
+        assert resp.json() == {
+            "workspace": "new_workspace",
+            "display_name": "New Workspace",
+            "created": True,
+        }
+        mock_manager.acreate_workspace.assert_awaited_once_with(
+            "new_workspace",
+            display_name="New Workspace",
+        )
+
+    async def test_create_workspace_rejects_duplicate(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+
+        resp = await client.post("/workspaces", json={"workspace": "default"})
+
+        assert resp.status_code == 409
+        mock_manager.acreate_workspace.assert_not_awaited()
+
+    async def test_delete_workspace_resets_and_removes_registry_row(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.delete("/workspaces/Old Workspace?keep_files=true&dry_run=true")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["workspace"] == "old_workspace"
+        assert body["deleted"] is False
+        mock_manager.areset.assert_awaited_once_with(
+            workspace="old_workspace",
+            keep_files=True,
+            dry_run=True,
+        )
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_simple_wrong_scheme_401(

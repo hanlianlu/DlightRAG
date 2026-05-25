@@ -138,6 +138,15 @@ class DeleteRequest(BaseModel):
     workspace: str | None = None
 
 
+class WorkspaceCreateRequest(BaseModel):
+    """Request to create an empty workspace."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace: str
+    display_name: str | None = None
+
+
 class ResetRequest(BaseModel):
     """Request to reset a workspace."""
 
