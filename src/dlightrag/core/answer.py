@@ -452,7 +452,10 @@ class AnswerEngine:
                     elif image_budget is not None:
                         block = image_budget.add_base64(img_data, label=chunk_id or filename)
                     else:
-                        block = {"type": "image_url", "image_url": {"url": image_data_uri(img_data)}}
+                        block = {
+                            "type": "image_url",
+                            "image_url": {"url": image_data_uri(img_data)},
+                        }
                     if block is not None:
                         label = _build_image_label(
                             cite_tag=cite_tag,

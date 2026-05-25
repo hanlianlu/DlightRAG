@@ -64,7 +64,9 @@ async def test_workspace_registry_initializes_and_migrates_schema() -> None:
     executed_sql = "\n".join(query for query, _ in conn.executed)
     assert "CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta" in executed_sql
     assert "display_name" in executed_sql
-    assert "ALTER TABLE dlightrag_workspace_meta ADD COLUMN IF NOT EXISTS display_name" in executed_sql
+    assert (
+        "ALTER TABLE dlightrag_workspace_meta ADD COLUMN IF NOT EXISTS display_name" in executed_sql
+    )
 
 
 async def test_workspace_registry_upserts_lists_and_deletes() -> None:

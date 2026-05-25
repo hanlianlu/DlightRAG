@@ -80,9 +80,7 @@ class PGWorkspaceRegistry:
                     TABLE,
                 )
                 if not exists:
-                    raise RuntimeError(
-                        f"{TABLE} is missing; initialize it on the primary first"
-                    )
+                    raise RuntimeError(f"{TABLE} is missing; initialize it on the primary first")
                 return
 
             await conn.execute(_CREATE)

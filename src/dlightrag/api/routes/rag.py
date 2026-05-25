@@ -50,7 +50,9 @@ def _public_contexts(contexts: dict[str, list[dict[str, Any]]]) -> dict[str, lis
                 workspace = row.get("_workspace")
                 chunk_id = row.get("chunk_id")
                 if workspace and chunk_id:
-                    path = f"/images/{quote(str(workspace), safe='')}/{quote(str(chunk_id), safe='')}"
+                    path = (
+                        f"/images/{quote(str(workspace), safe='')}/{quote(str(chunk_id), safe='')}"
+                    )
                     row["image_url"] = f"{path}?size=full"
                     row["thumbnail_url"] = f"{path}?size=thumb"
             public_items.append(row)

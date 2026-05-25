@@ -84,9 +84,7 @@ async def create_workspace(
     response = HTMLResponse(
         "",
         headers={
-            "HX-Trigger": json.dumps(
-                {"workspaceCreated": {"workspace": ws, "display_name": name}}
-            )
+            "HX-Trigger": json.dumps({"workspaceCreated": {"workspace": ws, "display_name": name}})
         },
     )
     _set_workspace_cookies(response, request, [ws])
@@ -128,9 +126,7 @@ async def delete_workspace(
     response = HTMLResponse(
         "",
         headers={
-            "HX-Trigger": json.dumps(
-                {"workspaceDeleted": {"workspace": ws, "fallback": fallback}}
-            )
+            "HX-Trigger": json.dumps({"workspaceDeleted": {"workspace": ws, "fallback": fallback}})
         },
     )
     _set_workspace_cookies(response, request, [fallback])

@@ -83,7 +83,9 @@ def image_bytes_to_data_uri(raw: bytes, *, fallback_mime: str | None = None) -> 
             converted.save(buf, format="JPEG", quality=95, optimize=True)
             return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode('ascii')}"
     except Exception:
-        mime = fallback_mime if fallback_mime and fallback_mime.startswith("image/") else "image/png"
+        mime = (
+            fallback_mime if fallback_mime and fallback_mime.startswith("image/") else "image/png"
+        )
         return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
@@ -178,13 +180,19 @@ def _quality_steps(quality: int, min_quality: int) -> list[int]:
     return values
 
 
-def thumbnail_bytes(raw: bytes, *, max_px: int, output_mime: str | None = None) -> tuple[bytes, str]:
+def thumbnail_bytes(
+    raw: bytes, *, max_px: int, output_mime: str | None = None
+) -> tuple[bytes, str]:
     """Return thumbnail bytes and media type for browser serving."""
     max_px = max(1, int(max_px))
     with Image.open(io.BytesIO(raw)) as original:
         image = original.copy()
         image.thumbnail((max_px, max_px), Image.Resampling.LANCZOS)
-        mime = output_mime if output_mime and output_mime.startswith("image/") else detect_image_mime(raw)
+        mime = (
+            output_mime
+            if output_mime and output_mime.startswith("image/")
+            else detect_image_mime(raw)
+        )
         fmt = "JPEG" if mime == "image/jpeg" else "PNG"
         if fmt == "JPEG" and image.mode != "RGB":
             image = image.convert("RGB")

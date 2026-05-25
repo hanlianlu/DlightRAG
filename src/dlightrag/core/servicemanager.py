@@ -143,9 +143,7 @@ class RAGServiceManager:
         """Initialize the durable workspace registry."""
         from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-        self._workspace_registry = PGWorkspaceRegistry(
-            target=self._config.pg_target_for_runtime()
-        )
+        self._workspace_registry = PGWorkspaceRegistry(target=self._config.pg_target_for_runtime())
         try:
             await self._workspace_registry.initialize(read_only=self._config.is_query_role is True)
             if self._config.is_query_role is not True:
@@ -287,9 +285,7 @@ class RAGServiceManager:
                         result["replica_replay_lsn"] = replay_lsn
                     return result
         except TimeoutError as e:
-            raise RAGServiceUnavailableError(
-                detail=f"Request timed out after {timeout}s"
-            ) from e
+            raise RAGServiceUnavailableError(detail=f"Request timed out after {timeout}s") from e
 
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
@@ -516,9 +512,7 @@ class RAGServiceManager:
         requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
 
         candidate_top_k = (
-            answer_candidate_top_k
-            or requested_chunk_top_k
-            or answer_cfg.candidate_top_k
+            answer_candidate_top_k or requested_chunk_top_k or answer_cfg.candidate_top_k
         )
         context_top_k = answer_context_top_k or answer_cfg.context_top_k
         kwargs["top_k"] = requested_top_k or self._config.top_k
@@ -629,9 +623,7 @@ class RAGServiceManager:
                         workspaces=ws_list,
                         **kwargs,
                     )
-                    retrieval.trace["query_image_description_count"] = len(
-                        prepared.descriptions
-                    )
+                    retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
                     engine = self._get_answer_engine()
                     result = await engine.generate(
                         plan.standalone_query,
@@ -701,9 +693,7 @@ class RAGServiceManager:
                         workspaces=ws_list,
                         **kwargs,
                     )
-                    retrieval.trace["query_image_description_count"] = len(
-                        prepared.descriptions
-                    )
+                    retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
                     contexts, stream = await self.agenerate_stream_from_contexts(
                         plan.standalone_query,
                         retrieval.contexts,
@@ -717,10 +707,14 @@ class RAGServiceManager:
                         stream_meta.current_image_ids = prepared.current_image_ids
                         stream_meta.image_descriptions = prepared.descriptions
                         answer_trace = getattr(stream_meta, "trace", None)
-                        stream_meta.trace = {
-                            **retrieval.trace,
-                            **answer_trace,
-                        } if isinstance(answer_trace, dict) else retrieval.trace
+                        stream_meta.trace = (
+                            {
+                                **retrieval.trace,
+                                **answer_trace,
+                            }
+                            if isinstance(answer_trace, dict)
+                            else retrieval.trace
+                        )
                     return contexts, stream
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
