@@ -9,7 +9,7 @@ function activateChatMode() {
     if (app && !app.classList.contains('has-messages')) app.classList.add('has-messages');
 }
 
-function renderMath(container) {
+export function renderMath(container) {
     if (!window.renderMathInElement) return;
     window.renderMathInElement(container, {
         delimiters: [
@@ -19,6 +19,15 @@ function renderMath(container) {
             {left: '\\(', right: '\\)', display: false},
         ],
         throwOnError: false,
+    });
+}
+
+function fixExternalLinks(container) {
+    container.querySelectorAll('a[href]').forEach(function(a) {
+        if (!a.getAttribute('target')) {
+            a.setAttribute('target', '_blank');
+            a.setAttribute('rel', 'noopener noreferrer');
+        }
     });
 }
 
@@ -132,6 +141,8 @@ export function createAnswerRenderer(turn) {
     function handlePreview(data) {
         const previewHtml = parseData(data);
         turn.contentDiv.innerHTML = typeof previewHtml === 'string' ? previewHtml : '';
+        renderMath(turn.contentDiv);
+        fixExternalLinks(turn.contentDiv);
         scrollToBottom(turn);
     }
 
@@ -154,12 +165,16 @@ export function createAnswerRenderer(turn) {
             turn.aiDiv.appendChild(sourceData);
         }
         renderMath(turn.contentDiv);
+        fixExternalLinks(turn.contentDiv);
     }
 
     function handleHighlights(data) {
         const highlightsHtml = parseData(data);
         const sourceData = turn.aiDiv.querySelector('.source-data');
-        if (sourceData) sourceData.innerHTML = typeof highlightsHtml === 'string' ? highlightsHtml : '';
+        if (sourceData) {
+            sourceData.innerHTML = typeof highlightsHtml === 'string' ? highlightsHtml : '';
+            renderMath(sourceData);
+        }
     }
 
     function handleMeta(data) {
