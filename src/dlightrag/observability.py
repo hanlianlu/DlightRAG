@@ -20,11 +20,28 @@ _client: Any = None  # Langfuse client when enabled, None otherwise
 _LANGFUSE_TRACER_SCOPE = "langfuse-sdk"
 
 
+def _suppress_otel_export_errors() -> None:
+    """Mute the OTEL OTLP exporter ERROR logs for auth failures (401/403).
+
+    When Langfuse credentials are invalid, the OTEL SDK logs a stack-free
+    ERROR every export cycle, which is noisy and unactionable.  We promote
+    the relevant loggers to CRITICAL so the application log stays clean.
+    """
+    for name in (
+        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
+        "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
+    ):
+        otel_logger = logging.getLogger(name)
+        if otel_logger.level == logging.NOTSET or otel_logger.level > logging.CRITICAL:
+            otel_logger.setLevel(logging.CRITICAL)
+
+
 def init_tracing(config: Any) -> None:
     """Initialize Langfuse client from DlightragConfig.
 
-    No-op if disabled. Gracefully falls back to disabled if keys are missing
-    or client creation fails — never crashes the application.
+    No-op if disabled.  Validates credentials with a startup auth check so
+    invalid keys are caught early with a clear log instead of surfacing as
+    cryptic OTEL 401 errors later.
     """
     global _client
     if not config.langfuse_public_key or not config.langfuse_secret_key:
@@ -43,9 +60,23 @@ def init_tracing(config: Any) -> None:
             kwargs["should_export_span"] = _is_dlight_observation_span
 
         _client = Langfuse(**kwargs)
+
+        # Validate credentials synchronously so bad keys fail fast
+        auth_ok = _client.auth_check()
+        if not auth_ok:
+            _client = None
+            logger.warning(
+                "Langfuse auth check failed — invalid or expired credentials. "
+                "Tracing disabled. Update DLIGHTRAG_LANGFUSE_PUBLIC_KEY / "
+                "DLIGHTRAG_LANGFUSE_SECRET_KEY."
+            )
+            return
+
+        _suppress_otel_export_errors()
         logger.info("Langfuse tracing enabled → %s", config.langfuse_host)
     except Exception:
         _client = None
+        _suppress_otel_export_errors()
         logger.warning(
             "Langfuse enabled but initialization failed. Falling back to tracing disabled.",
             exc_info=True,
