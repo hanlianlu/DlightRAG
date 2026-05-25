@@ -414,7 +414,6 @@ class DlightragConfig(BaseSettings):
     chunk_size: int = Field(default=512)
     chunk_overlap: int = Field(default=52)
     context_window: int = Field(default=2)
-    context_filter_types: str = Field(default="text,table")
     max_context_tokens: int = Field(default=3000)
 
     # ===== Ingestion Performance =====

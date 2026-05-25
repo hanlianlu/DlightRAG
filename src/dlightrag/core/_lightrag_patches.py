@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""LightRAG PostgreSQL AGE patches still required by current main.
+"""LightRAG patches still required by current main.
 
-Bug: LightRAG's PostgreSQLDB.configure_age() calls create_graph() unconditionally,
+PostgreSQL AGE bug: LightRAG's PostgreSQLDB.configure_age() calls create_graph() unconditionally,
 which causes Apache AGE (and PG) to log an ERROR on every startup when the graph
 already exists — even though the error is caught. This pollutes PG logs.
 Additionally, Apache AGE raises DuplicateSchemaError (a SyntaxOrAccessError
@@ -14,12 +14,20 @@ when the graph already exists.  Wrap execute() to also catch DuplicateSchemaErro
 as defence-in-depth.
 
 As of LightRAG main ``b0f93c0`` both patched surfaces are still missing
-upstream. Keep this module small and delete it when ``required_patch_names()``
-returns an empty tuple against the pinned LightRAG dependency.
+upstream.
+
+MinerU parser hygiene: current LightRAG MinerU IR builder serializes unknown
+content-list item types as body text. MinerU emits page furniture such as
+headers, footers, page numbers, side notes, and page footnotes in content_list
+outputs; indexing those as body text pollutes chunks, KG extraction, BM25, and
+citations. DlightRAG patches the builder at the parser boundary when a runtime
+behavior probe shows upstream still indexes those auxiliary blocks.
+
+Keep this module small and delete patches as upstream covers them.
 
 Patches are:
 - Idempotent (safe to call multiple times)
-- Source-inspected (skip automatically if upstream adds the pre-check)
+- Guarded (source-inspected for AGE, behavior-probed for parser hygiene)
 - Forward-compatible (unknown execute kwargs passed through via **kwargs)
 """
 
@@ -49,11 +57,15 @@ def apply() -> None:
         applied.append("configure_age")
     if _patch_execute():
         applied.append("execute")
+    from dlightrag.core.ingestion.parser_hygiene import apply_mineru_auxiliary_block_filter
+
+    if apply_mineru_auxiliary_block_filter():
+        applied.append("mineru_auxiliary_blocks")
     _PATCHED = True
     if applied:
-        logger.info("Applied LightRAG AGE patches: %s", ", ".join(applied))
+        logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:
-        logger.debug("LightRAG AGE patches already covered upstream")
+        logger.debug("LightRAG patches already covered upstream")
 
 
 def required_patch_names(postgresql_db_cls: Any) -> tuple[PatchName, ...]:

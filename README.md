@@ -372,6 +372,13 @@ Recommended defaults in `config.yaml`:
 | `parser_sidecars.mineru.local_parse_method` | `auto` | Lets MinerU choose text-layer extraction vs OCR per page. |
 | `parser_sidecars.mineru.enable_table` / `enable_formula` | `true` | Preserves table and equation extraction for LightRAG ingest. |
 
+DlightRAG applies a narrow LightRAG parser hygiene patch at startup when the
+current upstream MinerU IR builder still indexes page furniture. The patch
+drops page furniture families such as headers, footers, page numbers, margin
+notes, page footnotes, and discarded blocks before LightRAG builds chunks,
+while preserving semantic and multimodal blocks such as text, lists, code,
+tables, equations, images, and charts.
+
 The official MinerU API remains available by explicitly changing
 `parser_sidecars.mineru.api_mode: official` in `config.yaml` and setting
 `DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN` in `.env`; it is not the

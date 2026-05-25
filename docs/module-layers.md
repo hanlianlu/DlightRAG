@@ -23,12 +23,13 @@ L5  core.{lightrag_stores, _lightrag_patches,
           compat_guard}
     core.ingestion.{lightrag_sidecar,
                     direct_image,
-                    visual_semantics}
+                    visual_semantics,
+                    parser_hygiene}
     core.retrieval.{filtered_vdb, bm25}
 L4  models.{embedding, multimodal_embedding,
             llm, llm_roles, rerank}
     core.retrieval.{metadata_path}
-    core.ingestion.{cleanup, policy}
+    core.ingestion.{cleanup}
 L3  models.providers                               provider implementations
     storage                                        PostgreSQL domain stores
     sourcing, citations
@@ -66,9 +67,9 @@ L0  prompts, utils                                 pure helpers
 | `citations` | L3 | Inline citation validation, source projection, optional highlights, streaming normalization |
 | `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |
 | `core.retrieval.metadata_path` | L4 | Metadata-to-candidate resolver |
-| `core.ingestion.{cleanup,policy}` | L4 | Cascade cleanup and ingest policy |
+| `core.ingestion.cleanup` | L4 | Cascade cleanup |
 | `core.lightrag_stores` | L5 | LightRAG store and sidecar adapter |
-| `core.ingestion.{lightrag_sidecar,direct_image,visual_semantics}` | L5 | Parser sidecars, direct image embedding, visual KG projection |
+| `core.ingestion.{lightrag_sidecar,direct_image,visual_semantics,parser_hygiene}` | L5 | Parser sidecars, direct image embedding, visual KG projection, LightRAG parser hygiene |
 | `core.retrieval.{filtered_vdb,bm25}` | L5 | PostgreSQL in-filtering and pg_textsearch BM25 |
 | `core.ingestion.engine` | L6 | Unified ingest orchestration |
 | `core.retrieval.{retriever,fusion,lightrag_backend}` | L6 | LightRAG mix retrieval, BM25 fusion, direct image path |
