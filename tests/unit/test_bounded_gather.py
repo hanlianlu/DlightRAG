@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for bounded_gather concurrency utility."""
+"""Tests for bounded concurrency utilities."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import asyncio
 
 import pytest
 
-from dlightrag.utils.concurrency import bounded_gather
+from dlightrag.utils.concurrency import bounded_gather, bounded_map
 
 
 class TestBoundedGather:
@@ -115,3 +115,68 @@ class TestBoundedGather:
         assert isinstance(results[0], RuntimeError)
         assert "boom" in caplog.text
         assert "test-op" in caplog.text
+
+
+class TestBoundedMap:
+    """Verify bounded_map runs item workers without pre-creating coroutines."""
+
+    async def test_results_preserve_input_order(self) -> None:
+        async def double(x: int) -> int:
+            return x * 2
+
+        results = await bounded_map([0, 1, 2, 3], double, max_concurrent=2)
+
+        assert results == [0, 2, 4, 6]
+
+    async def test_respects_concurrency_limit(self) -> None:
+        peak = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        async def track(item: int) -> int:
+            nonlocal peak, current
+            async with lock:
+                current += 1
+                peak = max(peak, current)
+            await asyncio.sleep(0.05)
+            async with lock:
+                current -= 1
+            return item
+
+        results = await bounded_map(list(range(10)), track, max_concurrent=3)
+
+        assert results == list(range(10))
+        assert peak <= 3
+
+    async def test_worker_is_called_lazily_by_workers(self) -> None:
+        started: list[int] = []
+        release = asyncio.Event()
+        first_two_started = asyncio.Event()
+
+        async def worker(item: int) -> int:
+            started.append(item)
+            if len(started) == 2:
+                first_two_started.set()
+            await release.wait()
+            return item
+
+        task = asyncio.create_task(bounded_map([0, 1, 2, 3, 4], worker, max_concurrent=2))
+        await asyncio.wait_for(first_two_started.wait(), timeout=0.5)
+        await asyncio.sleep(0)
+
+        assert started == [0, 1]
+
+        release.set()
+        assert await task == [0, 1, 2, 3, 4]
+
+    async def test_partial_failures_collected(self) -> None:
+        async def maybe_fail(item: int) -> int:
+            if item == 2:
+                raise ValueError("bad-item")
+            return item
+
+        results = await bounded_map([0, 1, 2, 3], maybe_fail, max_concurrent=2)
+
+        assert results[0:2] == [0, 1]
+        assert isinstance(results[2], ValueError)
+        assert results[3] == 3

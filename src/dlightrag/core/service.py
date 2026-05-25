@@ -1230,6 +1230,7 @@ class RAGService:
         idx = self._metadata_index
         if idx is None:
             return
+        from dlightrag.utils.concurrency import bounded_map
 
         async def _fetch(fp: str) -> tuple[str, dict[str, Any]]:
             try:
@@ -1245,8 +1246,16 @@ class RAGService:
             except Exception:
                 return fp, {}  # enrichment is best-effort
 
-        results = await asyncio.gather(*(_fetch(fp) for fp in path_meta))
-        for fp, doc_meta in results:
+        results = await bounded_map(
+            list(path_meta),
+            _fetch,
+            max_concurrent=8,
+            task_name="metadata-enrichment",
+        )
+        for fetch_result in results:
+            if isinstance(fetch_result, Exception):
+                continue
+            fp, doc_meta = fetch_result
             if doc_meta:
                 path_meta[fp] = doc_meta
 
