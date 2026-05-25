@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Monkey-patches for LightRAG upstream bugs.
+"""LightRAG PostgreSQL AGE patches still required by current main.
 
 Bug: LightRAG's PostgreSQLDB.configure_age() calls create_graph() unconditionally,
 which causes Apache AGE (and PG) to log an ERROR on every startup when the graph
@@ -13,10 +13,14 @@ ag_catalog.ag_graph before calling create_graph(), skipping creation entirely
 when the graph already exists.  Wrap execute() to also catch DuplicateSchemaError
 as defence-in-depth.
 
+As of LightRAG main ``b0f93c0`` both patched surfaces are still missing
+upstream. Keep this module small and delete it when ``required_patch_names()``
+returns an empty tuple against the pinned LightRAG dependency.
+
 Patches are:
 - Idempotent (safe to call multiple times)
 - Source-inspected (skip automatically if upstream adds the pre-check)
-- Forward-compatible (unknown kwargs passed through via **kwargs)
+- Forward-compatible (unknown execute kwargs passed through via **kwargs)
 """
 
 from __future__ import annotations
@@ -24,13 +28,14 @@ from __future__ import annotations
 import inspect
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg.exceptions
 
 logger = logging.getLogger(__name__)
 
 _PATCHED = False
+PatchName = Literal["configure_age", "execute"]
 
 
 def apply() -> None:
@@ -49,6 +54,16 @@ def apply() -> None:
         logger.info("Applied LightRAG AGE patches: %s", ", ".join(applied))
     else:
         logger.debug("LightRAG AGE patches already covered upstream")
+
+
+def required_patch_names(postgresql_db_cls: Any) -> tuple[PatchName, ...]:
+    """Return the LightRAG AGE patches still required for a PostgreSQLDB class."""
+    required: list[PatchName] = []
+    if _configure_age_needs_patch(postgresql_db_cls.configure_age):
+        required.append("configure_age")
+    if _execute_needs_patch(postgresql_db_cls.execute):
+        required.append("execute")
+    return tuple(required)
 
 
 def _source_contains(method: Callable[..., Any], needle: str) -> bool | None:

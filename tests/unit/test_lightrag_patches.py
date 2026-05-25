@@ -7,6 +7,14 @@ from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg.exceptions
 import pytest
+from lightrag.kg.postgres_impl import PostgreSQLDB
+
+from dlightrag.core._lightrag_patches import required_patch_names
+
+
+def test_current_lightrag_main_requires_both_age_patches() -> None:
+    """Pinned LightRAG main still lacks the AGE guards DlightRAG needs."""
+    assert required_patch_names(PostgreSQLDB) == ("configure_age", "execute")
 
 
 class TestConfigureAgePatch:

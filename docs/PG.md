@@ -43,11 +43,14 @@ postgres_session_settings:
 postgres_statement_cache_size: 256
 ```
 
-## LightRAG Upstream Compatibility Patches
+## LightRAG AGE Compatibility Patches
 
-DlightRAG keeps defensive monkey-patches around LightRAG PostgreSQL AGE graph
-initialization. They self-disable through source inspection if upstream adds
-equivalent handling.
+DlightRAG keeps two narrowly scoped patches around LightRAG PostgreSQL AGE
+graph initialization. They are not general backward-compatibility shims: they
+exist because the current pinned LightRAG main still lacks the guards below.
+They self-disable through source inspection if upstream adds equivalent
+handling, and should be deleted once `required_patch_names(PostgreSQLDB)`
+returns an empty tuple.
 
 ### Patch 1: `configure_age()` and Existing Graphs
 
@@ -68,7 +71,16 @@ The patch wraps idempotent DDL calls so `DuplicateSchemaError` is handled when
 ### Auto-Detection
 
 Both patches inspect the upstream methods and skip themselves when the required
-checks are present:
+checks are present. The public audit helper is:
+
+```python
+from dlightrag.core._lightrag_patches import required_patch_names
+from lightrag.kg.postgres_impl import PostgreSQLDB
+
+print(required_patch_names(PostgreSQLDB))
+```
+
+Implementation equivalent:
 
 ```python
 def _configure_age_needs_patch(method):
@@ -131,7 +143,7 @@ and only read or verify schema.
 
 | Date | LightRAG Baseline | Patches Needed | Notes |
 |---|---|---|---|
-| 2026-05-24 | `main` commit `9d1910bb63dd5f492844fef9bf91ed228e88a4f7` | Yes, defensive | Locked through `uv.lock`; verify again before release |
+| 2026-05-25 | `main` commit `b0f93c0b0031665067c950d451943afe9cb8d48a` | `configure_age`, `execute` | Locked through `uv.lock`; remove this patch module when upstream covers both |
 
 Check upstream by running:
 
