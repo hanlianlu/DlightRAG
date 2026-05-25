@@ -34,6 +34,9 @@ visual content, and knowledge graph
 only when the fact applies to the document as a whole. Every factual claim \
 must have at least one inline citation. Correlate markers with the entries \
 in the reference list provided.
+- Cite only the 1–2 most directly relevant chunks per claim. Avoid long \
+chains of citations from the same source — if the evidence spans many \
+pages, prefer a single [n] document-level citation for that source.
 - Do not add a "References", "Sources", or bibliography section. The system \
 will validate inline citations and build sources separately.
 
