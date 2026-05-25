@@ -225,6 +225,40 @@ class TestGetExtractModelFunc:
         assert callable(func)
 
 
+class TestGetKeywordModelFunc:
+    def test_keyword_model_factory_is_exported(self):
+        import dlightrag.models as models
+        from dlightrag.models import llm
+
+        assert hasattr(llm, "get_keyword_model_func")
+        assert "get_keyword_model_func" in models.__all__
+
+    def test_explicit_keyword_role(self, monkeypatch):
+        from dlightrag.models import llm
+
+        seen_models: list[str] = []
+
+        def fake_make_completion_func(cfg, fallback_api_key=None):
+            seen_models.append(cfg.model)
+            return f"completion:{cfg.model}"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat"),
+                roles=LLMRolesConfig(
+                    keyword=ModelConfig(provider="openai", model="deepseek-v4-flash")
+                ),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        func = llm.get_keyword_model_func(config)
+
+        assert func == "completion:deepseek-v4-flash"
+        assert seen_models == ["deepseek-v4-flash"]
+
+
 class TestGetRerankFunc:
     def test_chat_llm_reranker_uses_default_fallback_without_override(self, monkeypatch):
         from dlightrag.models import llm

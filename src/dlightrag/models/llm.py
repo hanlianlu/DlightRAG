@@ -138,6 +138,14 @@ def get_extract_model_func(config: DlightragConfig) -> Callable:
     )
 
 
+def get_keyword_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first keyword callable, fallback to the default LLM."""
+    return _make_completion_func(
+        model_for_role(config, "keyword"),
+        fallback_api_key=config.llm.default.api_key,
+    )
+
+
 def get_query_model_func(config: DlightragConfig) -> Callable:
     """Messages-first query callable for AnswerEngine and QueryPlanner.
 
@@ -289,6 +297,7 @@ __all__ = [
     "get_default_model_func_for_lightrag",
     "get_embedding_func",
     "get_extract_model_func",
+    "get_keyword_model_func",
     "get_multimodal_embedder",
     "get_query_model_func",
     "get_rerank_func",
