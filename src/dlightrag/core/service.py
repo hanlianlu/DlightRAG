@@ -841,6 +841,23 @@ class RAGService:
 
         return result
 
+    def _local_ingest_paths(self, path: Path) -> list[Path]:
+        """Resolve a local file or directory into concrete files for ingestion."""
+        if path.is_file():
+            return [path]
+        if not path.exists():
+            raise FileNotFoundError(f"Local ingest path does not exist: {path}")
+        if not path.is_dir():
+            raise ValueError(f"Local ingest path is not a file or directory: {path}")
+
+        files = sorted(
+            (item for item in path.rglob("*") if item.is_file()),
+            key=lambda item: item.relative_to(path).as_posix(),
+        )
+        if not files:
+            raise ValueError(f"Local ingest directory contains no files: {path}")
+        return files
+
     def _remote_local_path(self, source_type: str, namespace: str, key: str) -> Path:
         """Return a managed local source-copy path for a remote object."""
         parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
@@ -1019,14 +1036,23 @@ class RAGService:
             path_str = kwargs.get("path")
             if not path_str:
                 raise ValueError("'path' is required for local source_type")
-            return await self._aingest_local_file(
-                Path(path_str),
-                replace=replace,
-                title=kwargs.get("title"),
-                author=kwargs.get("author"),
-                metadata=kwargs.get("metadata"),
-                metadata_policy=kwargs.get("metadata_policy"),
-            )
+            local_path = Path(path_str)
+            file_paths = self._local_ingest_paths(local_path)
+            common_kwargs = {
+                "replace": replace,
+                "title": kwargs.get("title"),
+                "author": kwargs.get("author"),
+                "metadata": kwargs.get("metadata"),
+                "metadata_policy": kwargs.get("metadata_policy"),
+            }
+            if local_path.is_file():
+                return await self._aingest_local_file(local_path, **common_kwargs)
+
+            results = [
+                await self._aingest_local_file(file_path, **common_kwargs)
+                for file_path in file_paths
+            ]
+            return {"processed": len(results), "results": results}
 
         if self._ingestion_engine is not None and source_type == "azure_blob":
             return await self._aingest_azure_blob(replace=replace, **kwargs)

@@ -48,19 +48,25 @@ class TestRAGServiceAingest:
         with pytest.raises(PermissionError, match="runtime_role='query'"):
             await service.aingest(source_type="local", path="/tmp/file.pdf")
 
-    async def test_aingest_replace_default_from_config(self, test_config: DlightragConfig) -> None:
+    async def test_aingest_replace_default_from_config(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
         test_config.ingestion_replace_default = True
+        fake_pdf = tmp_path / "file.pdf"
+        fake_pdf.write_bytes(b"%PDF-fake")
         service = self._make_initialized_service(test_config)
-        await service.aingest(source_type="local", path="/tmp/file.pdf")
+        await service.aingest(source_type="local", path=str(fake_pdf))
         call_kwargs = service._ingestion_engine.aingest_file.call_args
         assert call_kwargs.kwargs["replace"] is True
 
     async def test_aingest_replace_explicit_overrides_config(
-        self, test_config: DlightragConfig
+        self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
         test_config.ingestion_replace_default = True
+        fake_pdf = tmp_path / "file.pdf"
+        fake_pdf.write_bytes(b"%PDF-fake")
         service = self._make_initialized_service(test_config)
-        await service.aingest(source_type="local", path="/tmp/file.pdf", replace=False)
+        await service.aingest(source_type="local", path=str(fake_pdf), replace=False)
         call_kwargs = service._ingestion_engine.aingest_file.call_args
         assert call_kwargs.kwargs["replace"] is False
 
@@ -396,6 +402,36 @@ class TestRAGServiceLightRAGMainPath:
         assert service._ingestion_engine.aingest_file.call_args.args[0] == fake_pdf
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
+
+    async def test_aingest_local_directory_delegates_each_file(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """Local directory ingestion sends contained files, not the directory, to parser routing."""
+        docs_dir = tmp_path / "docs"
+        nested_dir = docs_dir / "nested"
+        nested_dir.mkdir(parents=True)
+        pdf = docs_dir / "b.pdf"
+        docx = docs_dir / "a.docx"
+        pptx = nested_dir / "c.pptx"
+        for path in (pdf, docx, pptx):
+            path.write_bytes(b"fake")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock(
+            side_effect=lambda path, **kwargs: {"doc_id": path.name, "file_path": str(path)}
+        )
+
+        result = await service.aingest(source_type="local", path=str(docs_dir))
+
+        assert result["processed"] == 3
+        assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
+        assert [call.args[0] for call in service._ingestion_engine.aingest_file.await_args_list] == [
+            docx,
+            pdf,
+            pptx,
+        ]
 
     async def test_aingest_replace_purges_existing_doc_before_ingest(
         self, test_config: DlightragConfig, tmp_path: Path
