@@ -44,11 +44,10 @@ def test_file_list(client):
     assert "analysis.xlsx" in resp.text
 
 
-def test_workspace_switch(client):
+def test_workspace_switch_route_is_not_exposed(client):
     resp = client.post(
         "/web/workspaces/switch",
         data={"workspace": "finance"},
         follow_redirects=False,
     )
-    assert resp.status_code == 303
-    assert "dlightrag_workspace=finance" in resp.headers.get("set-cookie", "")
+    assert resp.status_code == 404

@@ -24,6 +24,19 @@ export function toggleWorkspace(ws) {
     updateWorkspacePanelCheckboxes();
 }
 
+export function selectWorkspace(ws) {
+    setActiveWorkspaces([ws || 'default']);
+    renderWorkspaceChips();
+    updateWorkspacePanelCheckboxes();
+}
+
+export function removeWorkspace(ws) {
+    const remaining = activeWorkspaces.filter(function(active) { return active !== ws; });
+    setActiveWorkspaces(remaining.length ? remaining : ['default']);
+    renderWorkspaceChips();
+    updateWorkspacePanelCheckboxes();
+}
+
 export function renderWorkspaceChips() {
     const container = document.getElementById('workspace-chips');
     if (!container) return;
@@ -38,6 +51,7 @@ export function renderWorkspaceChips() {
             const removeBtn = document.createElement('button');
             removeBtn.className = 'ws-chip-remove';
             removeBtn.textContent = 'x';
+            removeBtn.setAttribute('aria-label', `Remove workspace ${ws}`);
             removeBtn.addEventListener('click', function(e) {
                 e.stopPropagation();
                 toggleWorkspace(ws);

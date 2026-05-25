@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {openLightbox} from './images.js';
-import {toggleWorkspace, updateWorkspacePanelCheckboxes} from './workspaces.js';
+import {toggleWorkspace} from './workspaces.js';
 
 let toastTimer = null;
 
@@ -131,30 +131,6 @@ export function setupPanel() {
         if (badge) {
             e.preventDefault();
             filterSource(badge);
-        }
-    });
-
-    const filesBtn = document.getElementById('files-btn');
-    if (filesBtn) {
-        filesBtn.addEventListener('htmx:afterRequest', function() { openPanel('FILES'); });
-    }
-
-    const wsAddBtn = document.getElementById('ws-add-btn');
-    if (wsAddBtn) {
-        wsAddBtn.addEventListener('htmx:afterRequest', function() {
-            openPanel('WORKSPACES');
-            updateWorkspacePanelCheckboxes();
-        });
-    }
-
-    document.body.addEventListener('htmx:afterRequest', function(e) {
-        const el = e.detail.elt;
-        if (!el) return;
-        if (el.id === 'upload-form' || (el.closest && el.closest('#upload-form'))) {
-            showToast(e.detail.successful ? 'Ingestion complete.' : 'Ingestion failed.', e.detail.successful ? 3000 : 5000);
-        }
-        if (el.classList && el.classList.contains('file-delete')) {
-            showToast(e.detail.successful ? 'File deleted.' : 'Deletion failed.', e.detail.successful ? 3000 : 5000);
         }
     });
 

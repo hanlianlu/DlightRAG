@@ -1,15 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web routes for file management."""
 
-import json
 import logging
 import tempfile
-from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse
 
 from dlightrag.web.deps import get_manager, get_workspace, templates
 
@@ -23,12 +21,53 @@ def _render_partial(name: str, **ctx: Any) -> str:
     return templates.env.get_template(name).render(**ctx)
 
 
+def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
+    return HTMLResponse(
+        _render_partial("partials/error.html", message=message),
+        status_code=status_code,
+    )
+
+
+def _resolve_workspace(requested: str | None, fallback: str) -> str:
+    from dlightrag.utils import normalize_workspace
+
+    if not requested:
+        return fallback
+    normalized = normalize_workspace(requested)
+    return normalized or fallback
+
+
+def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in files:
+        row = dict(item)
+        file_path = str(row.get("file_path") or "")
+        file_name = str(row.get("file_name") or row.get("filename") or "")
+        if not file_name and file_path:
+            file_name = Path(file_path).name
+        if not file_name:
+            file_name = str(row.get("doc_id") or "Untitled file")
+        row["file_name"] = file_name
+        row["file_path"] = file_path
+        rows.append(row)
+    return rows
+
+
 @router.get("/files", response_class=HTMLResponse)
-async def file_list(request: Request, workspace: str = Depends(get_workspace)):
+async def file_list(
+    request: Request,
+    workspace: str = Depends(get_workspace),
+    workspace_name: str | None = Query(default=None, alias="workspace"),
+):
     """Return file list HTML fragment for panel."""
+    selected_workspace = _resolve_workspace(workspace_name, workspace)
+    return await _file_list_response(request, selected_workspace)
+
+
+async def _file_list_response(request: Request, workspace: str):
     manager = get_manager(request)
     try:
-        files = await manager.list_ingested_files(workspace)
+        files = _file_view_models(await manager.list_ingested_files(workspace))
     except Exception:
         files = []
 
@@ -43,6 +82,7 @@ async def file_list(request: Request, workspace: str = Depends(get_workspace)):
 async def upload_files(
     request: Request,
     files: list[UploadFile] = File(...),
+    workspace_name: str | None = Form(default=None, alias="workspace"),
     workspace: str = Depends(get_workspace),
 ):
     """Upload and ingest files."""
@@ -55,57 +95,57 @@ async def upload_files(
     # cheap pre-check; the per-file budget below catches malformed CL too.
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > max_bytes:
-        return HTMLResponse(
-            _render_partial(
-                "partials/error.html",
-                message=f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
-            ),
+        return _error_response(
+            f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
             status_code=413,
         )
 
     manager = get_manager(request)
+    selected_workspace = _resolve_workspace(workspace_name, workspace)
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="dlightrag_upload_"))
     bytes_written = 0
     try:
-        for f in files:
-            if not f.filename:
-                continue
-            # Strip any path components from the user-supplied filename —
-            # ``tmp_dir / "../etc/passwd"`` or ``tmp_dir / "/etc/passwd"``
-            # would otherwise escape tmp_dir on open().
-            safe_name = Path(f.filename).name
-            if not safe_name or safe_name in (".", ".."):
-                logger.warning("Rejected upload with unsafe filename: %r", f.filename)
-                continue
-            dest = tmp_dir / safe_name
-            # Stream-copy with running budget so a missing/lying Content-Length
-            # can't blow past max_bytes.
-            with open(dest, "wb") as out:
-                while chunk := await f.read(1024 * 1024):
-                    bytes_written += len(chunk)
-                    if bytes_written > max_bytes:
-                        out.close()
-                        dest.unlink(missing_ok=True)
-                        return HTMLResponse(
-                            _render_partial(
-                                "partials/error.html",
-                                message=f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
-                            ),
-                            status_code=413,
-                        )
-                    out.write(chunk)
+        with tempfile.TemporaryDirectory(prefix="dlightrag_upload_") as tmp:
+            tmp_dir = Path(tmp)
+            saved_files = 0
+            for f in files:
+                if not f.filename:
+                    continue
+                # Strip any path components from the user-supplied filename:
+                # tmp_dir / "../etc/passwd" would otherwise escape tmp_dir.
+                safe_name = Path(f.filename).name
+                if not safe_name or safe_name in (".", ".."):
+                    logger.warning("Rejected upload with unsafe filename: %r", f.filename)
+                    continue
+                dest = tmp_dir / safe_name
+                # Stream-copy with running budget so a missing or lying
+                # Content-Length cannot blow past max_bytes.
+                with open(dest, "wb") as out:
+                    while chunk := await f.read(1024 * 1024):
+                        bytes_written += len(chunk)
+                        if bytes_written > max_bytes:
+                            out.close()
+                            dest.unlink(missing_ok=True)
+                            return _error_response(
+                                f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+                                status_code=413,
+                            )
+                        out.write(chunk)
+                saved_files += 1
 
-        await manager.aingest(
-            workspace=workspace,
-            source_type="local",
-            path=str(tmp_dir),
-        )
+            if saved_files == 0:
+                return _error_response("No valid files selected")
+
+            await manager.aingest(
+                workspace=selected_workspace,
+                source_type="local",
+                path=str(tmp_dir),
+            )
     except Exception as e:
         logger.exception("Upload/ingestion failed")
-        return HTMLResponse(_render_partial("partials/error.html", message=f"Upload failed: {e}"))
+        return _error_response(f"Upload failed: {e}", status_code=500)
 
-    return await file_list(request, workspace)
+    return await _file_list_response(request, selected_workspace)
 
 
 @router.delete("/files", response_class=HTMLResponse)
@@ -118,61 +158,12 @@ async def delete_files(
     file_path = request.query_params.get("file_path", "")
     file_paths = [file_path] if file_path else []
     manager = get_manager(request)
+    selected_workspace = _resolve_workspace(request.query_params.get("workspace"), workspace)
 
     try:
-        await manager.delete_files(workspace, file_paths=file_paths)
+        await manager.delete_files(selected_workspace, file_paths=file_paths)
     except Exception as e:
         logger.exception("Delete failed")
-        return HTMLResponse(_render_partial("partials/error.html", message=f"Delete failed: {e}"))
+        return _error_response(f"Delete failed: {e}", status_code=500)
 
-    return await file_list(request, workspace)
-
-
-@router.get("/ingest/progress")
-async def ingest_progress(request: Request):
-    """SSE endpoint for ingestion progress -- pushes task event dicts."""
-    ingest_mgr = getattr(request.app.state, "ingest_task_manager", None)
-    if ingest_mgr is None:
-
-        async def _no_mgr() -> AsyncIterator[str]:
-            yield f"event: error\ndata: {json.dumps({'detail': 'Ingest task manager not available'})}\n\n"
-
-        return StreamingResponse(
-            _no_mgr(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
-
-    # Map internal event types to client SSE event names
-    _EVENT_MAP = {
-        "snapshot": "snapshot",
-        "task_created": "task_created",
-        "task_updated": "progress",
-        "task_progress": "progress",
-        "task_done": "done",
-        "task_failed": "failed",
-    }
-
-    async def stream() -> AsyncIterator[str]:
-        async for event in ingest_mgr.subscribe():
-            if await request.is_disconnected():
-                break
-
-            etype = event.get("type", "")
-            sse_name = _EVENT_MAP.get(etype)
-            if not sse_name:
-                continue
-
-            # Encode the event payload as JSON
-            if sse_name == "snapshot":
-                tasks = event.get("tasks", [])
-                yield f"event: snapshot\ndata: {json.dumps(tasks)}\n\n"
-            else:
-                task = event.get("task", {})
-                yield f"event: {sse_name}\ndata: {json.dumps(task)}\n\n"
-
-    return StreamingResponse(
-        stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+    return await _file_list_response(request, selected_workspace)
