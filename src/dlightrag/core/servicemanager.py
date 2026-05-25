@@ -476,11 +476,10 @@ class RAGServiceManager:
         candidate_top_k = (
             answer_candidate_top_k
             or requested_chunk_top_k
-            or requested_top_k
             or answer_cfg.candidate_top_k
         )
         context_top_k = answer_context_top_k or answer_cfg.context_top_k
-        kwargs["top_k"] = max(requested_top_k or candidate_top_k, candidate_top_k)
+        kwargs["top_k"] = requested_top_k or self._config.top_k
         kwargs["chunk_top_k"] = candidate_top_k
         return _AnswerLimits(candidate_top_k=candidate_top_k, context_top_k=context_top_k)
 

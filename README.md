@@ -461,12 +461,14 @@ that cannot fit without crossing the quality or size floor are skipped instead
 of being sent as low-fidelity previews.
 
 For `/answer`, DlightRAG retrieves `answer.candidate_top_k` candidates, reranks
-them, then packs up to `answer.context_top_k` chunks into the prompt. User
-`query_images` occupy the shared image budget first. Pure visual chunks whose
-image cannot be sent are skipped and the packer backfills from later candidates;
-mixed text+image chunks keep their text. `/answer` therefore returns contexts
-and sources aligned with what the answer model saw. Use `/retrieve` when you
-need the broader pre-answer retrieval set.
+them, then packs up to `answer.context_top_k` chunks into the prompt. In
+LightRAG terms, this over-fetch maps to `QueryParam.chunk_top_k`; `top_k`
+remains the independent KG entity/relationship breadth. User `query_images`
+occupy the shared image budget first. Pure visual chunks whose image cannot be
+sent are skipped and the packer backfills from later candidates; mixed
+text+image chunks keep their text. `/answer` therefore returns contexts and
+sources aligned with what the answer model saw. Use `/retrieve` when you need
+the broader pre-answer retrieval set.
 
 ### Metadata Filtering
 

@@ -59,6 +59,9 @@ citations:
     cache_size: 500
 
 answer:
+  # /answer over-fetches chunk/visual candidates, then packs fewer chunks into
+  # the final LLM prompt. This does not change LightRAG top_k, which controls
+  # KG entity/relationship breadth.
   candidate_top_k: 60
   context_top_k: 30
   max_images: 6
@@ -196,8 +199,8 @@ embedding_request_timeout: 120
 # Query
 # ─────────────────────────────────────────────────────────────────
 
-top_k: 60
-chunk_top_k: 30
+top_k: 60        # LightRAG KG entity/relationship breadth.
+chunk_top_k: 30  # Direct /retrieve chunk breadth; /answer uses answer.candidate_top_k.
 bm25_enabled: true
 bm25_top_k: 40
 bm25_text_config: simple

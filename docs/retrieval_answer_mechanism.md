@@ -138,15 +138,17 @@ instead of being degraded into a low-quality preview.
 
 For `/answer`, retrieval deliberately over-fetches with
 `answer.candidate_top_k`, then the answer stage packs up to
-`answer.context_top_k` chunks. User `query_images` consume the shared image
-budget first, then retrieved visual chunks are admitted in reranked order. Pure
-visual chunks whose image cannot be sent are removed from the answer context
-and the packer backfills from later candidates; mixed text+image chunks keep
-their text even if the image is skipped. KG entities and relationships are
-filtered to the packed chunk ids, so citation indexes, reference lists,
-streamed contexts, and returned sources describe the material the answer model
-actually saw. Use `retrieve` when callers need the broader pre-answer retrieval
-set.
+`answer.context_top_k` chunks. That over-fetch is a chunk/visual candidate
+budget and maps to LightRAG `QueryParam.chunk_top_k`; LightRAG `top_k` remains
+the separate KG entity/relationship breadth. User `query_images` consume the
+shared image budget first, then retrieved visual chunks are admitted in reranked
+order. Pure visual chunks whose image cannot be sent are removed from the
+answer context and the packer backfills from later candidates; mixed text+image
+chunks keep their text even if the image is skipped. KG entities and
+relationships are filtered to the packed chunk ids, so citation indexes,
+reference lists, streamed contexts, and returned sources describe the material
+the answer model actually saw. Use `retrieve` when callers need the broader
+pre-answer retrieval set.
 
 DlightRAG does not use LightRAG `aquery_llm()` for final answer generation
 because post-LightRAG context can include BM25 results, direct image matches,
