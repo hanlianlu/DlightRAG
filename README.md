@@ -54,6 +54,8 @@ At minimum, set the LLM and embedding API keys needed by `config.yaml`:
 ```bash
 DLIGHTRAG_LLM__DEFAULT__API_KEY=...
 DLIGHTRAG_EMBEDDING__API_KEY=...
+DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=...
+DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=...
 ```
 
 Normal settings such as model names, parser routing, ports, logging,
@@ -419,6 +421,12 @@ LightRAG-aligned role overrides live under `llm.roles`:
 | `vlm` | Visual analysis for image, table, equation, and drawing sidecars. |
 
 Unset roles fall back to `llm.default`.
+
+The checked-in defaults route `extract` and `keyword` through DeepSeek's
+OpenAI-compatible Chat Completions endpoint using `deepseek-v4-flash` with
+thinking disabled through `model_kwargs.thinking.type: disabled`. `query` and
+`vlm` continue to fall back to the multimodal default LLM unless explicitly
+overridden.
 
 ### Embeddings
 

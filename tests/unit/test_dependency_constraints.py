@@ -237,6 +237,8 @@ def test_env_example_active_keys_are_credentials_only() -> None:
     assert active_keys == [
         "DLIGHTRAG_LLM__DEFAULT__API_KEY",
         "DLIGHTRAG_EMBEDDING__API_KEY",
+        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY",
+        "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY",
         "DLIGHTRAG_POSTGRES_PASSWORD",
     ]
 
