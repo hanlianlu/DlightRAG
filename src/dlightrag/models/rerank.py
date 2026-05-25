@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from dlightrag.utils import image_data_uri
+from dlightrag.utils.image_budget import ImagePayloadBudget
 
 if TYPE_CHECKING:
     from dlightrag.config import RerankConfig
@@ -30,6 +30,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BATCH_SIZE = 7
+_DEFAULT_IMAGE_MAX_BYTES = 1_500_000
+_DEFAULT_IMAGE_MAX_TOTAL_BYTES = 8_000_000
+_DEFAULT_IMAGE_MAX_PX = 1280
+_DEFAULT_IMAGE_MIN_PX = 768
+_DEFAULT_IMAGE_QUALITY = 86
+_DEFAULT_IMAGE_MIN_QUALITY = 76
 
 _LISTWISE_PROMPT = """\
 You are a relevance judge. Given a query and {n} items (each may be an image, text, or both), \
@@ -75,6 +81,12 @@ async def _chat_llm_rerank(
     max_concurrency: int = 4,
     score_threshold: float = 0.5,
     batch_size: int = _DEFAULT_BATCH_SIZE,
+    image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
+    image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
+    image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
+    image_min_px: int = _DEFAULT_IMAGE_MIN_PX,
+    image_quality: int = _DEFAULT_IMAGE_QUALITY,
+    image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
 ) -> list[dict[str, Any]]:
     """LLM/VLM listwise reranker. Scores chunks in bounded-concurrency batches."""
     if not chunks:
@@ -88,17 +100,26 @@ async def _chat_llm_rerank(
 
         content: list[dict[str, Any]] = []
         content.append({"type": "text", "text": prompt})
+        image_budget = ImagePayloadBudget(
+            max_total_bytes=image_max_total_bytes,
+            max_bytes_per_image=image_max_bytes,
+            max_px=image_max_px,
+            min_px=image_min_px,
+            quality=image_quality,
+            min_quality=image_min_quality,
+        )
 
         for i, chunk in enumerate(batch):
             content.append({"type": "text", "text": f"\n--- Item {i + 1} ---"})
             img = chunk.get("image_data")
             if img:
-                content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": image_data_uri(img)},
-                    }
+                bounded = image_budget.add_base64(
+                    img,
+                    label=f"rerank:{batch_start + i}",
                 )
+                if bounded is not None:
+                    uri, _ = bounded
+                    content.append({"type": "image_url", "image_url": {"url": uri}})
             if chunk.get("content"):
                 text_preview = chunk["content"][:500]
                 content.append({"type": "text", "text": text_preview})
@@ -179,6 +200,12 @@ async def _http_rerank(
     api_key: str | None = None,
     score_threshold: float = 0.5,
     client: httpx.AsyncClient | None = None,
+    image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
+    image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
+    image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
+    image_min_px: int = _DEFAULT_IMAGE_MIN_PX,
+    image_quality: int = _DEFAULT_IMAGE_QUALITY,
+    image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
 ) -> list[dict[str, Any]]:
     """Shared HTTP reranker for Jina, Aliyun, and self-hosted endpoints.
 
@@ -190,9 +217,21 @@ async def _http_rerank(
         return []
 
     documents: list[dict[str, str]] = []
-    for c in chunks:
+    image_budget = ImagePayloadBudget(
+        max_total_bytes=image_max_total_bytes,
+        max_bytes_per_image=image_max_bytes,
+        max_px=image_max_px,
+        min_px=image_min_px,
+        quality=image_quality,
+        min_quality=image_min_quality,
+    )
+    for idx, c in enumerate(chunks):
         img = c.get("image_data")
-        documents.append({"image": image_data_uri(img)} if img else {"text": c.get("content", "")})
+        if img:
+            bounded = image_budget.add_base64(img, label=f"rerank:{idx}")
+            documents.append({"image": bounded[0]} if bounded else {"text": c.get("content", "")})
+        else:
+            documents.append({"text": c.get("content", "")})
 
     payload = {
         "model": model,
@@ -349,6 +388,12 @@ def build_rerank_func(
             max_concurrency=rc.max_concurrency,
             score_threshold=rc.score_threshold,
             batch_size=rc.batch_size,
+            image_max_bytes=rc.image_max_bytes,
+            image_max_total_bytes=rc.image_max_total_bytes,
+            image_max_px=rc.image_max_px,
+            image_min_px=rc.image_min_px,
+            image_quality=rc.image_quality,
+            image_min_quality=rc.image_min_quality,
         )
     elif strategy in _HTTP_RERANK_DEFAULTS:
         default_url, default_model, append_path, needs_key = _HTTP_RERANK_DEFAULTS[strategy]
@@ -369,6 +414,12 @@ def build_rerank_func(
             api_key=rc.api_key,
             score_threshold=rc.score_threshold,
             client=client,
+            image_max_bytes=rc.image_max_bytes,
+            image_max_total_bytes=rc.image_max_total_bytes,
+            image_max_px=rc.image_max_px,
+            image_min_px=rc.image_min_px,
+            image_quality=rc.image_quality,
+            image_min_quality=rc.image_min_quality,
         )
     elif strategy == "azure_cohere":
         if not rc.base_url or not rc.api_key:

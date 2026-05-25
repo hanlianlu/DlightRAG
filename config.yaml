@@ -61,6 +61,14 @@ rerank:
   enabled: true
   strategy: chat_llm_reranker
   score_threshold: 0.5
+  # Rerank happens before answer packing, so it has its own request budget.
+  # Values are compressed binary bytes; data URI transport expands over the wire.
+  image_max_bytes: 1500000
+  image_max_total_bytes: 8000000
+  image_max_px: 1280
+  image_min_px: 768
+  image_quality: 86
+  image_min_quality: 76
 
 citations:
   highlights:

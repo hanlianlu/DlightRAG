@@ -10,8 +10,13 @@ import pytest
 
 from dlightrag.models.rerank import (
     _chat_llm_rerank,
+    _http_rerank,
     _parse_listwise_scores,
     build_lightrag_rerank_adapter,
+)
+
+_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
 
 
@@ -58,7 +63,7 @@ class TestChatLlmRerank:
 
         chunks = [
             {"content": "text only"},
-            {"content": "with image", "image_data": "aW1hZ2U="},  # base64 "image"
+            {"content": "with image", "image_data": _PNG_B64},
         ]
         await _chat_llm_rerank(
             "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
@@ -70,6 +75,96 @@ class TestChatLlmRerank:
         # Check that image_url type is present for the chunk with image_data
         has_image = any(c.get("type") == "image_url" for c in content)
         assert has_image
+
+    async def test_multimodal_chunks_are_bounded_before_scoring(self, monkeypatch):
+        """Rerank image payloads should not bypass the rerank-stage budget."""
+        import dlightrag.utils.image_budget as image_budget_module
+
+        raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
+        bounded_uri = "data:image/jpeg;base64,BOUNDED"
+        calls = []
+        received_messages = []
+
+        def fake_bounded_image_data_uri(value, **kwargs):
+            calls.append((value, kwargs))
+            return bounded_uri, 123
+
+        async def mock_scoring(messages, **kwargs):
+            received_messages.append(messages)
+            return "[0.8]"
+
+        monkeypatch.setattr(
+            image_budget_module,
+            "bounded_image_data_uri",
+            fake_bounded_image_data_uri,
+        )
+
+        await _chat_llm_rerank(
+            "query",
+            [{"content": "with image", "image_data": raw_image}],
+            top_k=10,
+            scoring_func=mock_scoring,
+            score_threshold=0.3,
+            image_max_bytes=456,
+            image_max_total_bytes=789,
+            image_max_px=1024,
+            image_min_px=768,
+            image_quality=86,
+            image_min_quality=76,
+        )
+
+        assert calls == [
+            (
+                raw_image,
+                {
+                    "max_bytes": 456,
+                    "max_px": 1024,
+                    "min_px": 768,
+                    "quality": 86,
+                    "min_quality": 76,
+                },
+            )
+        ]
+        serialized = str(received_messages)
+        assert bounded_uri in serialized
+        assert raw_image not in serialized
+
+    async def test_multimodal_chunks_skip_images_when_batch_budget_is_exhausted(self, monkeypatch):
+        """Reranker should omit images that do not fit the batch request budget."""
+        import dlightrag.utils.image_budget as image_budget_module
+
+        received_messages = []
+
+        def fake_bounded_image_data_uri(value, **kwargs):
+            return "data:image/jpeg;base64,TOO_LARGE", 100
+
+        async def mock_scoring(messages, **kwargs):
+            received_messages.append(messages)
+            return "[0.8]"
+
+        monkeypatch.setattr(
+            image_budget_module,
+            "bounded_image_data_uri",
+            fake_bounded_image_data_uri,
+        )
+
+        await _chat_llm_rerank(
+            "query",
+            [{"content": "text fallback", "image_data": "raw-image"}],
+            top_k=10,
+            scoring_func=mock_scoring,
+            score_threshold=0.3,
+            image_max_bytes=456,
+            image_max_total_bytes=50,
+            image_max_px=1024,
+            image_min_px=768,
+            image_quality=86,
+            image_min_quality=76,
+        )
+
+        content = received_messages[0][0]["content"]
+        assert not any(c.get("type") == "image_url" for c in content)
+        assert any(c.get("text") == "text fallback" for c in content)
 
     async def test_fallback_on_error(self):
         mock_scoring = AsyncMock(side_effect=RuntimeError("API down"))
@@ -216,3 +311,64 @@ class TestLightragAdapter:
         result = await adapter("query", [])
         assert result == []
         mock_rerank.assert_not_called()
+
+
+class TestHttpRerank:
+    async def test_bounds_image_payloads(self, monkeypatch):
+        import dlightrag.utils.image_budget as image_budget_module
+
+        raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
+        bounded_uri = "data:image/jpeg;base64,BOUNDED"
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.9}]})
+
+        def fake_bounded_image_data_uri(value, **kwargs):
+            assert value == raw_image
+            assert kwargs["max_bytes"] == 456
+            return bounded_uri, 123
+
+        monkeypatch.setattr(
+            image_budget_module,
+            "bounded_image_data_uri",
+            fake_bounded_image_data_uri,
+        )
+
+        result = await _http_rerank(
+            "query",
+            [{"content": "with image", "image_data": raw_image}],
+            top_k=1,
+            url="https://rerank.example",
+            model="reranker",
+            score_threshold=0.3,
+            client=client,
+            image_max_bytes=456,
+            image_max_total_bytes=789,
+            image_max_px=1024,
+            image_min_px=768,
+            image_quality=86,
+            image_min_quality=76,
+        )
+
+        assert result[0]["rerank_score"] == pytest.approx(0.9)
+        assert client.payload["documents"] == [{"image": bounded_uri}]
+        assert raw_image not in str(client.payload)
+
+
+class _CaptureClient:
+    def __init__(self, data):
+        self.data = data
+        self.payload = None
+
+    async def post(self, url, *, json, headers):
+        self.payload = json
+        return _CaptureResponse(self.data)
+
+
+class _CaptureResponse:
+    def __init__(self, data):
+        self._data = data
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data

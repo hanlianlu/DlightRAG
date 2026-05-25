@@ -256,6 +256,30 @@ class RerankConfig(BaseModel):
     score_threshold: float = 0.5
     max_concurrency: int = 4
     batch_size: int = 7
+    image_max_bytes: int = Field(
+        default=1_500_000,
+        description="Maximum compressed binary bytes per image sent to rerank model calls.",
+    )
+    image_max_total_bytes: int = Field(
+        default=8_000_000,
+        description="Maximum total compressed binary image bytes per rerank model request.",
+    )
+    image_max_px: int = Field(
+        default=1280,
+        description="Maximum image long edge sent to rerank model calls.",
+    )
+    image_min_px: int = Field(
+        default=768,
+        description="Minimum long edge preserved before skipping oversized rerank images.",
+    )
+    image_quality: int = Field(
+        default=86,
+        description="Initial JPEG quality for rerank model image previews.",
+    )
+    image_min_quality: int = Field(
+        default=76,
+        description="Minimum JPEG quality before skipping oversized rerank images.",
+    )
     temperature: float | None = None
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 

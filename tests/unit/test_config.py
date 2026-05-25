@@ -77,6 +77,12 @@ class TestRerankConfig:
         assert cfg.model is None
         assert cfg.score_threshold == 0.5
         assert cfg.batch_size == 7
+        assert cfg.image_max_bytes == 1_500_000
+        assert cfg.image_max_total_bytes == 8_000_000
+        assert cfg.image_max_px == 1280
+        assert cfg.image_min_px == 768
+        assert cfg.image_quality == 86
+        assert cfg.image_min_quality == 76
 
     def test_jina_strategy(self):
         cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-m0", api_key="key")
@@ -190,6 +196,12 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
     assert cfg.runtime_role == "ingest"
     assert cfg.pg_target_for_runtime() == "primary"
+    assert cfg.rerank.image_max_bytes == 1_500_000
+    assert cfg.rerank.image_max_total_bytes == 8_000_000
+    assert cfg.rerank.image_max_px == 1280
+    assert cfg.rerank.image_min_px == 768
+    assert cfg.rerank.image_quality == 86
+    assert cfg.rerank.image_min_quality == 76
     assert cfg.citations.highlights.enabled is False
     assert cfg.answer.max_images == 6
     assert cfg.answer.image_max_bytes == 3_000_000
