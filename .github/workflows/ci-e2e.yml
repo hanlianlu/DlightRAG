@@ -1,0 +1,51 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+#
+# Manual-trigger E2E smoke tests against a real PostgreSQL 18 instance.
+# Requires the dlightrag-postgres:pg18 image + valid LLM API keys.
+# Not part of the standard CI matrix — use `make ci-e2e` for local runs.
+
+name: CI E2E (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-pg18:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: ghcr.io/${{ github.repository_owner }}/dlightrag-postgres:pg18
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          POSTGRES_DB: dlightrag
+          POSTGRES_USER: dlightrag
+          POSTGRES_PASSWORD: dlightrag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dlightrag -d dlightrag"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 10
+    env:
+      DLIGHTRAG_RUN_E2E_PG18: '1'
+      OPENAI_API_KEY: ${{ secrets.DLIGHTRAG_OPENAI_API_KEY }}
+      VOYAGE_API_KEY: ${{ secrets.DLIGHTRAG_VOYAGE_API_KEY }}
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: dlightrag
+      PGPASSWORD: dlightrag
+      PGDATABASE: dlightrag
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --group dev
+      - run: uv run pytest tests/e2e -v --tb=long -m e2e_pg18

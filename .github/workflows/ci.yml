@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   # ------------------------------------------------------------------
-  # Lint: ruff check + format
+  # Lint: ruff check + format (~20s)
   # ------------------------------------------------------------------
   lint:
     runs-on: ubuntu-latest
@@ -32,7 +32,7 @@ jobs:
       - run: uv run ruff format --check src/ tests/ scripts/
 
   # ------------------------------------------------------------------
-  # Type check: pyright
+  # Type check: pyright (~30s)
   # ------------------------------------------------------------------
   type-check:
     runs-on: ubuntu-latest
@@ -46,7 +46,21 @@ jobs:
       - run: uv run pyright src/
 
   # ------------------------------------------------------------------
-  # Unit tests
+  # Architecture: import-linter boundary enforcement (~10s)
+  # ------------------------------------------------------------------
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: '3.12'
+      - run: uv sync --group dev
+      - run: uv run lint-imports
+
+  # ------------------------------------------------------------------
+  # Unit tests: no external deps (~60s)
   # ------------------------------------------------------------------
   unit-tests:
     runs-on: ubuntu-latest
@@ -60,7 +74,7 @@ jobs:
       - run: uv run pytest tests/unit -v --tb=short --cov=dlightrag --cov-report=term-missing
 
   # ------------------------------------------------------------------
-  # Integration tests (needs PostgreSQL + pgvector)
+  # Integration tests: PostgreSQL service container (~90s)
   # ------------------------------------------------------------------
   integration-tests:
     runs-on: ubuntu-latest
@@ -92,17 +106,3 @@ jobs:
           PGUSER: dlightrag
           PGPASSWORD: dlightrag
           PGDATABASE: dlightrag
-
-  # ------------------------------------------------------------------
-  # Architecture: enforce import layer boundaries
-  # ------------------------------------------------------------------
-  architecture:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: '3.12'
-      - run: uv sync
-      - run: uv run python scripts/ci/check-architecture.py
