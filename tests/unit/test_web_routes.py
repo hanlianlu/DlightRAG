@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -261,6 +262,8 @@ class TestWebFiles:
         )
 
         assert resp.status_code == 200
+        # aingest now runs in a background task — give it a tick to start.
+        await asyncio.sleep(0.05)
         mock_manager.aingest.assert_awaited_once()
 
     async def test_delete_files(

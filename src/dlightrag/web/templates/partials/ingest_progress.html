@@ -1,0 +1,17 @@
+<div id="ingest-progress"
+     hx-get="/web/ingest-status?workspace={{ workspace }}"
+     hx-trigger="every 2s"
+     hx-target="#panel-content"
+     hx-swap="innerHTML">
+    <div class="file-status">
+        <div class="spinner"></div>
+        <span>{{ status.latest_message or "Ingesting..." }}</span>
+    </div>
+    {% if status.docs and status.batchs %}
+    {% set pct = (status.cur_batch / status.batchs * 100) | int %}
+    <div class="progress-bar-track">
+        <div class="progress-bar-fill" data-pct="{{ pct }}"></div>
+    </div>
+    <div class="progress-label">batch {{ status.cur_batch }}/{{ status.batchs }} · {{ status.docs }} doc(s)</div>
+    {% endif %}
+</div>

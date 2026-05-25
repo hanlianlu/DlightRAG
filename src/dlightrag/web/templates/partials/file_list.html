@@ -1,3 +1,6 @@
+{% if ingest_busy %}
+    {% include "partials/ingest_progress.html" %}
+{% else %}
 <div class="upload-zone" id="upload-zone">
     Drop files here or click to upload
     <form id="upload-form"
@@ -11,7 +14,8 @@
         <input type="file" id="file-input" name="files" multiple>
     </form>
 </div>
-<div id="upload-spinner" class="file-status htmx-indicator">Ingesting... will update when finished.</div>
+<div id="upload-spinner" class="file-status htmx-indicator">Uploading...</div>
+{% endif %}
 
 {% if files %}
 {% for file in files %}
@@ -27,7 +31,7 @@
     </button>
 </div>
 {% endfor %}
-{% else %}
+{% elif not ingest_busy %}
 <div class="empty-state file-empty-state">
     No files ingested in workspace "{{ workspace }}".
 </div>

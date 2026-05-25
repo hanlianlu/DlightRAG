@@ -299,6 +299,11 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.alist_ingested_files()
 
+    async def get_pipeline_status(self, workspace: str) -> dict[str, Any]:
+        """Return pipeline progress for a workspace."""
+        svc = await self._get_service(workspace)
+        return await svc.aget_pipeline_status()
+
     async def delete_files(self, workspace: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Delete files from a specific workspace."""
         self._ensure_writable("delete files")
