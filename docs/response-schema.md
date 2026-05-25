@@ -120,9 +120,9 @@ async for token in token_iter:
 | `query` | `str` | required | Search query |
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
-| `top_k` | `int \| None` | config default | Total results to retrieve |
-| `chunk_top_k` | `int \| None` | config default | Chunk-level results |
-| `answer_candidate_top_k` | `int \| None` | `answer.candidate_top_k` | `/answer` only. Retrieval candidates fetched before answer-stage packing. `top_k`/`chunk_top_k` remain lower-level retrieval overrides. |
+| `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
+| `chunk_top_k` | `int \| None` | config default | Chunk-level vector results for `/retrieve`; for `/answer`, `answer_candidate_top_k` is mapped to this unless explicitly overridden. |
+| `answer_candidate_top_k` | `int \| None` | `answer.candidate_top_k` | `/answer` only. Chunk/visual candidates fetched before answer-stage packing; maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |

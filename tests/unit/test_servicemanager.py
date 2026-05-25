@@ -277,7 +277,7 @@ class TestAnswerViaEngine:
         result = await manager.aanswer("query", workspace="ws_a")
 
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
-        assert retrieve_kwargs["top_k"] == 7
+        assert retrieve_kwargs["top_k"] == test_cfg.top_k
         assert retrieve_kwargs["chunk_top_k"] == 7
         mock_engine.generate.assert_awaited_once_with(
             "query",
