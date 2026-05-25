@@ -51,6 +51,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "import-linter>=2.11",
     "pyright>=1.1.408",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
@@ -104,4 +105,46 @@ addopts = "--cov=dlightrag --cov-report=term-missing"
 markers = [
     "integration: requires running PostgreSQL",
     "e2e_pg18: opt-in PostgreSQL 18 + LightRAG smoke tests",
+]
+
+[tool.importlinter]
+root_package = "dlightrag"
+
+[[tool.importlinter.contracts]]
+id = "no-transport-internals"
+name = "Internal packages must not import from transport layers"
+type = "forbidden"
+source_modules = [
+    "dlightrag.config",
+    "dlightrag.utils",
+    "dlightrag.prompts",
+    "dlightrag.citations",
+    "dlightrag.models",
+    "dlightrag.core",
+    "dlightrag.storage",
+    "dlightrag.sourcing",
+    "dlightrag.observability",
+]
+forbidden_modules = [
+    "dlightrag.web",
+    "dlightrag.api",
+    "dlightrag.mcp",
+]
+
+[[tool.importlinter.contracts]]
+id = "no-circular-foundation"
+name = "Foundation packages must not import from domain"
+type = "forbidden"
+source_modules = [
+    "dlightrag.config",
+    "dlightrag.utils",
+    "dlightrag.prompts",
+]
+forbidden_modules = [
+    "dlightrag.core",
+    "dlightrag.storage",
+    "dlightrag.sourcing",
+    "dlightrag.observability",
+    "dlightrag.models",
+    "dlightrag.citations",
 ]
