@@ -72,7 +72,7 @@ services:
       POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
       POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
     volumes:
-      - pg_data:/var/lib/postgresql
+      - pg18_data:/var/lib/postgresql
     command:
       - "postgres"
       # AGE and pg_textsearch require preloading
@@ -145,7 +145,7 @@ services:
       POSTGRES_REPLICATION_PASSWORD: ${DLIGHTRAG_POSTGRES_REPLICATION_PASSWORD:-dlightrag-replica}
       POSTGRES_REPLICATION_SLOT: ${DLIGHTRAG_POSTGRES_REPLICATION_SLOT:-dlightrag_replica}
     volumes:
-      - pg_replica_data:/var/lib/postgresql/data
+      - pg18_replica_data:/var/lib/postgresql/data
       - ./scripts/postgres/replica-entrypoint.sh:/usr/local/bin/dlightrag-postgres-replica-entrypoint.sh:ro
     entrypoint: ["dlightrag-postgres-replica-entrypoint.sh"]
     command:
@@ -170,5 +170,5 @@ services:
 
 volumes:
   dlightrag_data:
-  pg_data:
-  pg_replica_data:
+  pg18_data:
+  pg18_replica_data:

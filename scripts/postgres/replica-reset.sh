@@ -17,7 +17,7 @@ if [[ ! "${DLIGHTRAG_POSTGRES_REPLICATION_SLOT}" =~ ^[a-z0-9_]{1,63}$ ]]; then
 fi
 
 docker compose --profile replica rm -sf postgres-replica
-docker volume rm "${COMPOSE_PROJECT_NAME}_pg_replica_data" 2>/dev/null || true
+docker volume rm "${COMPOSE_PROJECT_NAME}_pg18_replica_data" 2>/dev/null || true
 
 if docker compose ps --services --status running | grep -Fxq postgres; then
   docker compose exec -T postgres psql \
