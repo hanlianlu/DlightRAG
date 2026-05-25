@@ -51,7 +51,6 @@ async def delete_files(
             ws,
             file_paths=body.file_paths,
             filenames=body.filenames,
-            delete_source=body.delete_source,
         )
     except NotImplementedError as exc:
         raise HTTPException(

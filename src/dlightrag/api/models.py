@@ -134,7 +134,6 @@ class AnswerRequest(BaseModel):
 class DeleteRequest(BaseModel):
     file_paths: list[str] | None = None
     filenames: list[str] | None = None
-    delete_source: bool = True
     workspace: str | None = None
 
 
