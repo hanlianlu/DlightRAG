@@ -771,12 +771,6 @@ body {
     align-items: center;
 }
 
-.source-chunk-title {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-detail);
-    font-weight: 600;
-}
-
 .source-chunk-page {
     color: var(--color-text-dim);
     font-size: var(--font-size-caption);

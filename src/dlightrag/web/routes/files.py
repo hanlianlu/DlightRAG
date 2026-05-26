@@ -11,7 +11,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
-from dlightrag.web.deps import get_manager, get_workspace, templates
+from dlightrag.web.deps import (
+    error_response,
+    get_manager,
+    get_workspace,
+    render_partial,
+    templates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +26,6 @@ router = APIRouter()
 # Track per-workspace background ingest tasks so the Upload button doesn't
 # launch a duplicate while an ingest is already running.
 _ingest_tasks: dict[str, asyncio.Task[Any] | None] = {}
-
-
-def _render_partial(name: str, **ctx: Any) -> str:
-    """Render a Jinja2 partial template to string."""
-    return templates.env.get_template(name).render(**ctx)
-
-
-def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
-    return HTMLResponse(
-        _render_partial("partials/error.html", message=message),
-        status_code=status_code,
-    )
 
 
 def _resolve_workspace(requested: str | None, fallback: str) -> str:
@@ -145,7 +139,7 @@ async def upload_files(
 
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > max_bytes:
-        return _error_response(
+        return error_response(
             f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
             status_code=413,
         )
@@ -156,7 +150,7 @@ async def upload_files(
     # Reject if an ingest is already running in this workspace.
     existing = _ingest_tasks.get(selected_workspace)
     if existing is not None and not existing.done():
-        return _error_response(
+        return error_response(
             "An ingest is already in progress for this workspace. "
             "Wait for it to finish before uploading more files.",
             status_code=409,
@@ -182,7 +176,7 @@ async def upload_files(
                     if bytes_written > max_bytes:
                         out.close()
                         dest.unlink(missing_ok=True)
-                        return _error_response(
+                        return error_response(
                             f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
                             status_code=413,
                         )
@@ -190,11 +184,11 @@ async def upload_files(
             saved_files += 1
 
         if saved_files == 0:
-            return _error_response("No valid files selected")
+            return error_response("No valid files selected")
 
     except Exception as e:
         logger.exception("Upload staging failed")
-        return _error_response(f"Upload failed: {e}", status_code=500)
+        return error_response(f"Upload failed: {e}", status_code=500)
 
     # Fire-and-forget: schedule ingest, return immediately with progress UI.
     async def _background_ingest() -> None:
@@ -247,7 +241,7 @@ async def ingest_status(
 
     if still_busy:
         return HTMLResponse(
-            _render_partial(
+            render_partial(
                 "partials/ingest_progress.html",
                 workspace=selected_workspace,
                 status=ps,
@@ -279,6 +273,6 @@ async def delete_files(
         await manager.delete_files(selected_workspace, file_paths=file_paths)
     except Exception as e:
         logger.exception("Delete failed")
-        return _error_response(f"Delete failed: {e}", status_code=500)
+        return error_response(f"Delete failed: {e}", status_code=500)
 
     return await _file_list_response(request, selected_workspace)
