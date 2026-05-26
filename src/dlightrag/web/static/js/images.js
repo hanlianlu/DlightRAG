@@ -62,7 +62,7 @@ function renderThumbnails() {
 
         const imgEl = document.createElement('img');
         imgEl.className = 'thumbnail-img';
-        imgEl.src = img.objectUrl;
+        imgEl.src = img.objectUrl && img.objectUrl.startsWith('blob:') ? img.objectUrl : '';
         imgEl.alt = 'Attached image';
         item.appendChild(imgEl);
 
@@ -97,6 +97,7 @@ function ensureLightbox() {
 
 export function openLightbox(src) {
     if (!src) return;
+    if (!src.startsWith('/') && !src.startsWith('blob:')) return;
     const box = ensureLightbox();
     const img = box.querySelector('.image-lightbox-img');
     img.src = src;

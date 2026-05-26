@@ -27,13 +27,18 @@ def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
     )
 
 
+def _sanitize_cookie_value(value: str) -> str:
+    """Strip characters that could be used for cookie injection (CRLF, semicolon)."""
+    return value.replace("\r", "").replace("\n", "").replace(";", "").strip()
+
+
 def _set_workspace_cookies(response: HTMLResponse, request: Request, workspaces: list[str]) -> None:
     primary = workspaces[0] if workspaces else "default"
     joined = ",".join(workspaces or [primary])
     secure = request.url.scheme == "https"
     response.set_cookie(
         key="dlightrag_workspace",
-        value=primary,
+        value=_sanitize_cookie_value(primary),
         httponly=False,
         samesite="lax",
         secure=secure,
@@ -41,7 +46,7 @@ def _set_workspace_cookies(response: HTMLResponse, request: Request, workspaces:
     )
     response.set_cookie(
         key="dlightrag_workspace_ids",
-        value=joined,
+        value=_sanitize_cookie_value(joined),
         httponly=False,
         samesite="lax",
         secure=secure,
