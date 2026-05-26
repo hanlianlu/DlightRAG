@@ -387,3 +387,154 @@ def _reset_local_files(working_dir: Path, *, dry_run: bool) -> int:
             if not dry_run:
                 shutil.rmtree(item, ignore_errors=True)
     return file_count
+
+
+# -- Orphaned workspace cleanup ------------------------------------------------
+
+
+async def areset_orphaned_workspace(
+    workspace: str,
+    *,
+    keep_files: bool = False,
+    dry_run: bool = False,
+    working_dir: str | None = None,
+) -> dict[str, Any]:
+    """Clean up orphaned workspace artifacts without a RAGService instance.
+
+    For workspaces that no longer exist in ``dlightrag_workspace_meta`` but
+    have leftover AGE graph schemas, PG table rows, or filesystem artifacts.
+    This is a best-effort direct PG cleanup.
+    """
+    errors: list[str] = []
+    stats: dict[str, Any] = {
+        "workspace": workspace,
+        "graphs_dropped": [],
+        "orphan_tables_cleaned": 0,
+        "local_files_removed": 0,
+        "errors": errors,
+    }
+
+    # Clean orphan PG table rows
+    try:
+        orphans = await _clean_orphan_tables(workspace, dry_run=dry_run)
+        stats["orphan_tables_cleaned"] = orphans
+    except Exception as exc:
+        errors.append(f"Orphan tables: {exc}")
+
+    # Clean workspace metadata row (if any)
+    try:
+        if not dry_run:
+            await _clean_workspace_meta(workspace)
+    except Exception as exc:
+        errors.append(f"Workspace meta: {exc}")
+
+    # Drop all AGE graph schemas matching this workspace prefix
+    try:
+        dropped = await _drop_age_graphs_for_workspace(workspace, dry_run=dry_run)
+        stats["graphs_dropped"] = dropped
+    except Exception as exc:
+        errors.append(f"AGE graphs: {exc}")
+
+    # File system cleanup
+    if not keep_files and working_dir:
+        try:
+            wd = Path(working_dir)
+            stats["local_files_removed"] = _reset_local_files(wd, dry_run=dry_run)
+        except Exception as exc:
+            errors.append(f"Filesystem: {exc}")
+
+    logger.info("areset_orphaned complete for workspace=%s: %s", workspace, stats)
+    return stats
+
+
+async def _drop_age_graphs_for_workspace(
+    workspace: str,
+    *,
+    dry_run: bool,
+) -> list[str]:
+    """Drop ALL AGE graph schemas whose name starts with ``{workspace}_``.
+
+    Unlike ``_drop_age_graphs``, this does NOT cross-check against known
+    workspaces — it is intended for orphan cleanup where the workspace
+    no longer exists in metadata.
+    """
+    try:
+        from lightrag.kg.postgres_impl import ClientManager
+
+        db = await ClientManager.get_client()
+        pool = db.pool
+        if pool is None:
+            return []
+    except Exception:
+        return []
+
+    dropped: list[str] = []
+
+    async with pool.acquire() as conn:
+        try:
+            escaped = workspace.replace("_", r"\_")
+            rows = await conn.fetch(
+                "SELECT name FROM ag_catalog.ag_graph WHERE name ILIKE $1 ESCAPE '\\'",
+                f"{escaped}\\_%",
+            )
+            for row in rows:
+                gname = row["name"]
+                try:
+                    if not dry_run:
+                        await conn.execute(f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)")
+                    dropped.append(gname)
+                except Exception as exc:
+                    logger.warning("Failed to drop graph %s: %s", gname, exc)
+        except Exception as exc:
+            logger.debug("AGE catalog scan skipped: %s", exc)
+
+    return dropped
+
+
+async def drop_global_orphaned_age_graphs(
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Drop AGE graph schemas that do NOT belong to any known workspace.
+
+    Returns stats dict with ``dropped`` list and ``errors`` list.
+    """
+    errors: list[str] = []
+    known = await _list_all_workspaces()
+
+    try:
+        from lightrag.kg.postgres_impl import ClientManager
+
+        db = await ClientManager.get_client()
+        pool = db.pool
+        if pool is None:
+            return {"dropped": [], "errors": ["No PG pool available"]}
+    except Exception as exc:
+        return {"dropped": [], "errors": [str(exc)]}
+
+    dropped: list[str] = []
+
+    async with pool.acquire() as conn:
+        try:
+            rows = await conn.fetch("SELECT name FROM ag_catalog.ag_graph")
+            for row in rows:
+                gname = row["name"]
+                # Check if this graph belongs to any known workspace
+                belongs = any(
+                    gname.startswith(f"{ws}_") or gname == f"{ws}_chunk_entity_relation"
+                    for ws in known
+                )
+                if belongs:
+                    continue
+                try:
+                    if not dry_run:
+                        await conn.execute(f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)")
+                    dropped.append(gname)
+                except Exception as exc:
+                    errors.append(f"Failed to drop {gname}: {exc}")
+                    logger.warning("Global orphan graph drop failed for %s: %s", gname, exc)
+        except Exception as exc:
+            logger.debug("AGE global catalog scan skipped: %s", exc)
+
+    logger.info("Global orphan graph cleanup: dropped=%s errors=%s", dropped, errors)
+    return {"dropped": dropped, "errors": errors}
