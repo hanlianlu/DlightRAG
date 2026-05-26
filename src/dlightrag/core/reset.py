@@ -149,6 +149,12 @@ async def areset(
         try:
             working_dir = Path(service.config.working_dir)
             stats["local_files_removed"] = _reset_local_files(working_dir, dry_run=dry_run)
+            # Also clean staging files under input_dir/<workspace>/
+            input_ws_dir = service.config.input_dir_path / workspace
+            if input_ws_dir.exists() and input_ws_dir.is_dir():
+                if not dry_run:
+                    shutil.rmtree(input_ws_dir, ignore_errors=True)
+                stats["local_files_removed"] += 1
         except Exception as exc:
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", exc)
@@ -398,6 +404,7 @@ async def areset_orphaned_workspace(
     keep_files: bool = False,
     dry_run: bool = False,
     working_dir: str | None = None,
+    input_dir: str | None = None,
 ) -> dict[str, Any]:
     """Clean up orphaned workspace artifacts without a RAGService instance.
 
@@ -436,12 +443,22 @@ async def areset_orphaned_workspace(
         errors.append(f"AGE graphs: {exc}")
 
     # File system cleanup
-    if not keep_files and working_dir:
-        try:
-            wd = Path(working_dir)
-            stats["local_files_removed"] = _reset_local_files(wd, dry_run=dry_run)
-        except Exception as exc:
-            errors.append(f"Filesystem: {exc}")
+    if not keep_files:
+        if working_dir:
+            try:
+                wd = Path(working_dir)
+                stats["local_files_removed"] = _reset_local_files(wd, dry_run=dry_run)
+            except Exception as exc:
+                errors.append(f"Filesystem (working_dir): {exc}")
+        if input_dir:
+            try:
+                input_ws_dir = Path(input_dir) / workspace
+                if input_ws_dir.exists() and input_ws_dir.is_dir():
+                    if not dry_run:
+                        shutil.rmtree(input_ws_dir, ignore_errors=True)
+                    stats["local_files_removed"] += 1
+            except Exception as exc:
+                errors.append(f"Filesystem (input_dir): {exc}")
 
     logger.info("areset_orphaned complete for workspace=%s: %s", workspace, stats)
     return stats

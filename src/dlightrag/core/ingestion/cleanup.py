@@ -132,8 +132,47 @@ async def cascade_delete(
     return stats
 
 
+def remove_deleted_files(file_paths: set[str], working_dir: str) -> int:
+    """Delete physical files and parsed artifact directories from disk.
+
+    Best-effort — failures are logged but never raised, so a missing file
+    on disk does not block the DB-level deletion from succeeding.
+
+    Args:
+        file_paths: Absolute paths to ingested files (from LightRAG doc_status).
+        working_dir: The workspace's working_dir (for locating parsed artifacts).
+
+    Returns:
+        Number of files/directories removed.
+    """
+    import shutil
+
+    removed = 0
+    for fp in file_paths:
+        path = Path(fp)
+        # Remove the source file itself
+        try:
+            if path.exists() and path.is_file():
+                path.unlink()
+                removed += 1
+        except OSError:
+            logger.debug("Failed to remove source file: %s", fp, exc_info=True)
+
+        # Remove associated parsed artifact directory (e.g., file.pdf.parsed/)
+        parsed_dir = path.parent / (path.name + ".parsed")
+        try:
+            if parsed_dir.exists() and parsed_dir.is_dir():
+                shutil.rmtree(parsed_dir, ignore_errors=True)
+                removed += 1
+        except OSError:
+            logger.debug("Failed to remove parsed dir: %s", parsed_dir, exc_info=True)
+
+    return removed
+
+
 __all__ = [
     "DeletionContext",
     "cascade_delete",
     "collect_deletion_context",
+    "remove_deleted_files",
 ]

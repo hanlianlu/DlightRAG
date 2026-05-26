@@ -379,6 +379,7 @@ class RAGServiceManager:
                     keep_files=keep_files,
                     dry_run=dry_run,
                     working_dir=self._config.working_dir,
+                    input_dir=str(self._config.input_dir_path),
                 )
                 return {
                     "workspaces": {workspace: result},
