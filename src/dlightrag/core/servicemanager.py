@@ -372,7 +372,18 @@ class RAGServiceManager:
         if workspace is not None:
             known = await self.list_workspaces()
             if workspace not in known and workspace not in self._services:
-                return {"workspaces": {}, "total_errors": 0}
+                from dlightrag.core.reset import areset_orphaned_workspace
+
+                result = await areset_orphaned_workspace(
+                    workspace,
+                    keep_files=keep_files,
+                    dry_run=dry_run,
+                    working_dir=self._config.working_dir,
+                )
+                return {
+                    "workspaces": {workspace: result},
+                    "total_errors": len(result.get("errors", [])),
+                }
             workspaces = [workspace]
         else:
             workspaces = await self.list_workspaces()

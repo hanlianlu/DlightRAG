@@ -127,7 +127,7 @@ class TestManagerAresetCacheEviction:
 
 
 class TestManagerAresetNonexistentWorkspace:
-    async def test_nonexistent_workspace_is_noop(self) -> None:
+    async def test_nonexistent_workspace_triggers_orphan_cleanup(self) -> None:
         manager = _make_manager()
 
         with patch.object(
@@ -135,7 +135,13 @@ class TestManagerAresetNonexistentWorkspace:
         ):
             result = await manager.areset(workspace="does-not-exist")
 
-        assert result == {"workspaces": {}, "total_errors": 0}
+        assert "does-not-exist" in result["workspaces"]
+        ws_result = result["workspaces"]["does-not-exist"]
+        assert ws_result["workspace"] == "does-not-exist"
+        assert "graphs_dropped" in ws_result
+        assert "orphan_tables_cleaned" in ws_result
+        assert "local_files_removed" in ws_result
+        assert "errors" in ws_result
 
 
 class TestManagerAresetErrorHandling:
