@@ -418,7 +418,18 @@ class RAGService:
             if read_only:
                 await self._bm25.verify_index()
             else:
-                await self._bm25.ensure_index(text_config=config.bm25_text_config)
+                text_config = config.bm25_text_config
+                if text_config == "auto":
+                    from dlightrag.core.retrieval.language_detect import (
+                        detect_bm25_config,
+                        verify_pg_config,
+                    )
+
+                    # Sample from existing chunks if available; else fall back
+                    sample_chunks: list[dict[str, Any]] = []
+                    text_config = await detect_bm25_config(sample_chunks)
+                    text_config = await verify_pg_config(pool, text_config)
+                await self._bm25.ensure_index(text_config=text_config)
 
         from dlightrag.core.retrieval.retriever import UnifiedRetriever
 

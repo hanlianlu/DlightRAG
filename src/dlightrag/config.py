@@ -581,7 +581,7 @@ class DlightragConfig(BaseSettings):
     chunk_top_k: int = Field(default=30)
     bm25_enabled: bool = Field(default=True)
     bm25_top_k: int = Field(default=40)
-    bm25_text_config: Literal["simple", "english"] = Field(default="simple")
+    bm25_text_config: Literal["simple", "english", "auto"] = Field(default="simple")
     rrf_k: int = Field(default=60)
     direct_visual_top_k: int = Field(default=20)
     metadata_filter_exact_vector_threshold: int = Field(
