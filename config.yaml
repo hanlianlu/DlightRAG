@@ -160,8 +160,7 @@ metadata:
       normalize: lower_trim
 
 # Chunking and LightRAG query defaults.
-chunk_size: 512
-chunk_overlap: 52
+chunk_p_token_size: 1024
 context_window: 2
 max_context_tokens: 3000
 

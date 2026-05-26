@@ -507,8 +507,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")
-    chunk_size: int = Field(default=512)
-    chunk_overlap: int = Field(default=52)
+    chunk_p_token_size: int = Field(default=1024)
     context_window: int = Field(default=2)
     max_context_tokens: int = Field(default=3000)
 
