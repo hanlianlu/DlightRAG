@@ -171,6 +171,10 @@ export function setupImageInputs() {
         }
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') closeLightbox();
+        if (e.key === 'Escape') { closeLightbox(); return; }
+        var box = document.getElementById('image-lightbox');
+        if (!box || !box.classList.contains('open')) return;
+        if (e.key === 'ArrowLeft') { e.preventDefault(); _navigateLightbox(-1); }
+        if (e.key === 'ArrowRight') { e.preventDefault(); _navigateLightbox(1); }
     });
 }
