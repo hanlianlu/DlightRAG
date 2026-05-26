@@ -129,8 +129,8 @@
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
     font-size: var(--text-base);
-    background: var(--bg-base);
-    color: var(--text-300);
+    background: var(--color-bg-base);
+    color: var(--color-text-tertiary);
     height: 100vh;
     overflow: hidden;
     -webkit-font-smoothing: antialiased;
@@ -158,7 +158,7 @@ body {
 .topbar-btn {
     background: transparent;
     border: none;
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     padding: 6px 12px;
     border-radius: 8px;
     cursor: pointer;
@@ -167,8 +167,8 @@ body {
 }
 
 .topbar-btn:hover {
-    color: var(--text-300);
-    background: var(--bg-elevated);
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-elevated);
 }
 
 .workspace-selector {
@@ -176,7 +176,7 @@ body {
     background: rgba(87, 74, 36, 0.18);
     border: 1px solid rgba(210, 182, 97, 0.24);
     border-radius: var(--radius-sm);
-    color: var(--gold-100);
+    color: var(--color-gold-100);
     cursor: pointer;
     display: inline-flex;
     font-size: var(--text-sm);
@@ -197,7 +197,7 @@ body {
 }
 
 .workspace-dot {
-    background: var(--gold-200);
+    background: var(--color-gold-200);
     border-radius: 50%;
     flex-shrink: 0;
     height: 8px;
@@ -206,8 +206,8 @@ body {
 
 .workspace-dot.multi {
     background: transparent;
-    border: 1px solid var(--gold-200);
-    box-shadow: 5px 0 0 -1px var(--bg-base), 6px 0 0 0 var(--gold-200);
+    border: 1px solid var(--color-gold-200);
+    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 var(--color-gold-200);
     width: 14px;
 }
 
@@ -217,12 +217,12 @@ body {
 }
 
 .workspace-caret {
-    color: var(--gold-300);
+    color: var(--color-gold-300);
     flex-shrink: 0;
 }
 
 .workspace-popover {
-    background: var(--bg-elevated);
+    background: var(--color-bg-elevated);
     border: 1px solid rgba(210, 182, 97, 0.18);
     border-radius: var(--radius-sm);
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
@@ -237,7 +237,7 @@ body {
 .workspace-popover-item {
     align-items: center;
     border-radius: 8px;
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     cursor: pointer;
     display: flex;
     font-size: var(--text-sm);
@@ -251,12 +251,12 @@ body {
 }
 
 .workspace-popover-all {
-    color: var(--gold-100);
+    color: var(--color-gold-100);
 }
 
 .workspace-popover-check {
     align-items: center;
-    border: 1.5px solid var(--text-500);
+    border: 1.5px solid var(--color-text-subtle);
     border-radius: 4px;
     display: flex;
     flex-shrink: 0;
@@ -267,12 +267,12 @@ body {
 }
 
 .workspace-popover-check.on {
-    background: var(--gold-200);
-    border-color: var(--gold-200);
+    background: var(--color-gold-200);
+    border-color: var(--color-gold-200);
 }
 
 .workspace-popover-check.on::after {
-    color: var(--bg-base);
+    color: var(--color-bg-base);
     content: '\2713';
     font-size: var(--text-xs);
     font-weight: 700;
@@ -292,7 +292,7 @@ body {
     background: transparent;
     border: none;
     border-radius: 4px;
-    color: var(--text-600);
+    color: var(--color-text-dim);
     cursor: pointer;
     display: flex;
     flex-shrink: 0;
@@ -310,7 +310,7 @@ body {
 
 .workspace-popover-delete:hover {
     background: rgba(248, 113, 113, 0.15);
-    color: var(--danger);
+    color: var(--color-danger);
 }
 
 .workspace-popover-sep {
@@ -327,10 +327,10 @@ body {
 }
 
 .workspace-popover-input {
-    background: var(--bg-subtle);
+    background: var(--color-bg-subtle);
     border: 1px solid rgba(210, 182, 97, 0.18);
     border-radius: 6px;
-    color: var(--text-100);
+    color: var(--color-text-primary);
     flex: 1;
     font-size: var(--text-sm);
     min-width: 0;
@@ -343,7 +343,7 @@ body {
 }
 
 .workspace-popover-input::placeholder {
-    color: var(--text-600);
+    color: var(--color-text-dim);
 }
 
 .workspace-popover-create-btn {
@@ -351,7 +351,7 @@ body {
     background: rgba(87, 74, 36, 0.28);
     border: 1px solid rgba(210, 182, 97, 0.24);
     border-radius: 6px;
-    color: var(--gold-100);
+    color: var(--color-gold-100);
     cursor: pointer;
     display: flex;
     flex-shrink: 0;
@@ -395,14 +395,14 @@ body {
 .welcome-brand {
     font-size: var(--text-xl);
     font-weight: 600;
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     letter-spacing: 0;
     margin-bottom: 8px;
 }
 
 .welcome-sub {
     font-size: var(--text-base);
-    color: var(--text-500);
+    color: var(--color-text-subtle);
 }
 
 .app.has-messages .welcome { display: none; }
@@ -441,8 +441,8 @@ body {
     position: relative;
     display: flex;
     align-items: center;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius);
     padding: 6px 8px;
     transition: border-color 0.2s, box-shadow 0.2s;
@@ -457,7 +457,7 @@ body {
     flex: 1;
     background: transparent;
     border: none;
-    color: var(--text-100);
+    color: var(--color-text-primary);
     font-size: var(--text-base);
     font-family: inherit;
     line-height: 1.6;
@@ -469,7 +469,7 @@ body {
 }
 
 .composer-input::placeholder {
-    color: var(--text-600);
+    color: var(--color-text-dim);
 }
 
 .composer-send {
@@ -480,15 +480,15 @@ body {
     height: var(--btn-size-sm);
     border-radius: 50%;
     border: none;
-    background: var(--gold-500);
-    color: var(--gold-100);
+    background: var(--color-gold-500);
+    color: var(--color-gold-100);
     cursor: pointer;
     flex-shrink: 0;
     transition: background 0.15s, transform 0.1s;
 }
 
 .composer-send:hover {
-    background: var(--gold-400);
+    background: var(--color-gold-400);
 }
 
 .composer-send:active {
@@ -498,13 +498,13 @@ body {
 /* === Messages === */
 
 .user-message {
-    background: var(--bg-elevated);
+    background: var(--color-bg-elevated);
     border-radius: 18px 18px 4px 18px;
     padding: 12px 18px;
     margin: 24px 0 8px auto;
     max-width: 85%;
     width: fit-content;
-    color: var(--text-100);
+    color: var(--color-text-primary);
     font-size: var(--text-base);
     line-height: 1.6;
 }
@@ -523,19 +523,19 @@ body {
 .ai-message-header {
     font-size: var(--text-xs);
     margin-bottom: 8px;
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     font-weight: 500;
     letter-spacing: 0.3px;
     text-transform: uppercase;
 }
 
 .ai-message-header .dot {
-    color: var(--gold-200);
+    color: var(--color-gold-200);
 }
 
 .ai-message-content {
     font-size: var(--text-base);
-    color: var(--text-300);
+    color: var(--color-text-tertiary);
     line-height: 1.75;
 }
 
@@ -549,10 +549,10 @@ body {
 .context-divider {
     text-align: center;
     font-size: var(--text-xs);
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     padding: 8px 0;
     margin: 12px 0;
-    border-top: 1px dashed var(--text-500);
+    border-top: 1px dashed var(--color-text-subtle);
     letter-spacing: 0.3px;
     opacity: 0.7;
 }
@@ -563,7 +563,7 @@ body {
     display: inline-flex;
     align-items: center;
     background: rgba(87, 74, 36, 0.5);
-    color: var(--gold-100);
+    color: var(--color-gold-100);
     font-size: var(--text-xs);
     padding: 1px 6px;
     border-radius: 4px;
@@ -589,8 +589,8 @@ body {
     max-width: 50vw;
     min-width: var(--panel-min-width);
     height: 100vh;
-    background: var(--bg-surface);
-    border-left: 1px solid var(--border-subtle);
+    background: var(--color-bg-surface);
+    border-left: 1px solid var(--color-border-subtle);
     backdrop-filter: blur(20px);
     transform: translateX(100%);
     transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -610,11 +610,11 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
 #panel-title {
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     font-size: var(--text-xs);
     font-weight: 600;
     letter-spacing: 1.5px;
@@ -623,7 +623,7 @@ body {
 .panel-close {
     background: none;
     border: none;
-    color: var(--text-600);
+    color: var(--color-text-dim);
     font-size: var(--text-base);
     cursor: pointer;
     padding: 4px 8px;
@@ -632,8 +632,8 @@ body {
 }
 
 .panel-close:hover {
-    color: var(--text-300);
-    background: var(--bg-elevated);
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-elevated);
 }
 
 .panel-content {
@@ -676,7 +676,7 @@ body {
 /* === Document-Level Source Grouping === */
 
 .source-doc {
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .source-doc:last-child {
@@ -705,7 +705,7 @@ body {
 .collapse-icon {
     font-size: var(--text-xs);
     transition: transform 0.2s ease;
-    color: var(--text-400);
+    color: var(--color-text-muted);
     flex-shrink: 0;
     width: 12px;
 }
@@ -718,7 +718,7 @@ body {
     flex: 1;
     font-size: var(--text-sm);
     font-weight: 500;
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -726,13 +726,13 @@ body {
 
 .source-doc-badge {
     font-size: var(--text-xs);
-    color: var(--gold-300);
+    color: var(--color-gold-300);
     font-weight: 600;
 }
 
 .source-doc-count {
     font-size: var(--text-xs);
-    color: var(--text-400);
+    color: var(--color-text-muted);
     flex-shrink: 0;
 }
 
@@ -752,8 +752,8 @@ body {
 /* === Source Chunks === */
 
 .source-chunk {
-    background: var(--bg-elevated);
-    border-left: 3px solid var(--gold-400);
+    background: var(--color-bg-elevated);
+    border-left: 3px solid var(--color-gold-400);
     padding: 12px 14px;
     margin-bottom: 10px;
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -761,7 +761,7 @@ body {
 }
 
 .source-chunk.active {
-    border-left-color: var(--gold-200);
+    border-left-color: var(--color-gold-200);
     background: rgba(87, 74, 36, 0.15);
 }
 
@@ -772,13 +772,13 @@ body {
 }
 
 .source-chunk-title {
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     font-size: var(--text-sm);
     font-weight: 600;
 }
 
 .source-chunk-page {
-    color: var(--text-600);
+    color: var(--color-text-dim);
     font-size: var(--text-xs);
 }
 
@@ -788,11 +788,11 @@ body {
 .source-chunk-image img {
     max-width: 100%;
     border-radius: 6px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     cursor: zoom-in;
 }
 .source-chunk-content {
-    color: var(--text-400);
+    color: var(--color-text-muted);
     font-size: var(--text-sm);
     margin-top: 8px;
     line-height: 1.65;
@@ -806,13 +806,13 @@ body {
 }
 .source-chunk-content th,
 .source-chunk-content td {
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     padding: 6px 10px;
     text-align: left;
 }
 .source-chunk-content th {
     background: rgba(210, 182, 97, 0.08);
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     font-weight: 600;
 }
 .source-chunk-content tr:hover {
@@ -823,7 +823,7 @@ body {
 
 .highlight {
     background: rgba(210, 182, 97, 0.12);
-    color: var(--gold-100);
+    color: var(--color-gold-100);
     padding: 1px 3px;
     border-radius: 3px;
     border-bottom: 1.5px solid rgba(210, 182, 97, 0.4);
@@ -836,8 +836,8 @@ body {
     padding: 10px;
     margin-top: 10px;
     background: transparent;
-    border: 1px solid var(--border-subtle);
-    color: var(--text-500);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-subtle);
     border-radius: 10px;
     cursor: pointer;
     font-size: var(--text-sm);
@@ -845,8 +845,8 @@ body {
 }
 
 .show-all-btn:hover {
-    border-color: var(--border-strong);
-    color: var(--text-300);
+    border-color: var(--color-border-strong);
+    color: var(--color-text-tertiary);
 }
 
 .show-all-btn[hidden] {
@@ -860,11 +860,11 @@ body {
     justify-content: space-between;
     align-items: center;
     padding: 10px 0;
-    border-bottom: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .file-name {
-    color: var(--text-300);
+    color: var(--color-text-tertiary);
     font-size: var(--text-sm);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -874,7 +874,7 @@ body {
 .file-delete {
     background: none;
     border: none;
-    color: var(--text-600);
+    color: var(--color-text-dim);
     cursor: pointer;
     font-size: var(--text-sm);
     padding: 4px 8px;
@@ -883,7 +883,7 @@ body {
 }
 
 .file-delete:hover {
-    color: var(--danger);
+    color: var(--color-danger);
     background: rgba(248, 113, 113, 0.1);
 }
 
@@ -891,12 +891,12 @@ body {
     background: rgba(248, 113, 113, 0.1);
     border: 1px solid rgba(248, 113, 113, 0.22);
     border-radius: var(--radius-sm);
-    color: var(--danger);
+    color: var(--color-danger);
     padding: 12px 14px;
 }
 
 .text-error {
-    color: var(--danger);
+    color: var(--color-danger);
 }
 
 .file-empty-state {
@@ -907,7 +907,7 @@ body {
 /* === Empty State === */
 
 .empty-state {
-    color: var(--text-600);
+    color: var(--color-text-dim);
     text-align: center;
 }
 
@@ -917,7 +917,7 @@ body {
     display: inline-block;
     width: 6px;
     height: 6px;
-    background: var(--gold-200);
+    background: var(--color-gold-200);
     border-radius: 50%;
     animation: pulse 1.2s ease-in-out infinite;
 }
@@ -934,7 +934,7 @@ body {
     border-radius: 0;
     animation: none;
     font-size: 0.85rem;
-    color: var(--text-400);
+    color: var(--color-text-muted);
 }
 
 .streaming-dot.progress-phase::before {
@@ -946,7 +946,7 @@ body {
     display: inline-block;
     width: 5px;
     height: 5px;
-    background: var(--gold-200);
+    background: var(--color-gold-200);
     border-radius: 50%;
     margin-left: 6px;
     vertical-align: middle;
@@ -960,8 +960,8 @@ body {
     bottom: 20px;
     left: 50%;
     transform: translateX(-50%);
-    background: var(--bg-elevated);
-    color: var(--text-300);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-tertiary);
     padding: 10px 20px;
     border-radius: 10px;
     font-size: var(--text-sm);
@@ -978,7 +978,7 @@ body {
 .file-status {
     padding: 12px 16px;
     font-size: var(--text-sm);
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     text-align: center;
 }
 
@@ -990,7 +990,7 @@ body {
     display: inline-block;
     width: 14px;
     height: 14px;
-    border: 2px solid var(--text-500);
+    border: 2px solid var(--color-text-subtle);
     border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
@@ -1015,7 +1015,7 @@ body {
 .progress-label {
     padding: 0 16px 8px;
     font-size: var(--text-xs);
-    color: var(--text-400);
+    color: var(--color-text-muted);
     text-align: center;
 }
 
@@ -1033,7 +1033,7 @@ body {
     height: var(--btn-size-sm);
     background: transparent;
     border: none;
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     font-size: var(--text-lg);
     line-height: 1;
     cursor: pointer;
@@ -1043,8 +1043,8 @@ body {
 }
 
 .composer-plus:hover {
-    color: var(--text-300);
-    background: var(--bg-elevated);
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-elevated);
 }
 
 .composer-form.multiline {
@@ -1081,7 +1081,7 @@ body {
     height: 56px;
     border-radius: 10px;
     object-fit: cover;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
 }
 
 .thumbnail-remove {
@@ -1091,22 +1091,22 @@ body {
     width: 16px;
     height: 16px;
     border-radius: 50%;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-strong);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-strong);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     font-size: 9px;
-    color: var(--text-400);
+    color: var(--color-text-muted);
     line-height: 1;
     padding: 0;
     transition: color 0.15s, background 0.15s;
 }
 
 .thumbnail-remove:hover {
-    color: var(--text-100);
-    background: var(--bg-surface);
+    color: var(--color-text-primary);
+    background: var(--color-bg-surface);
 }
 
 .image-lightbox {
@@ -1128,7 +1128,7 @@ body {
     max-width: min(96vw, 1400px);
     max-height: 92vh;
     object-fit: contain;
-    background: var(--text-100);
+    background: var(--color-text-primary);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
 }
 
@@ -1154,7 +1154,7 @@ body {
     position: fixed;
     inset: 0;
     background: rgba(87, 74, 36, 0.08);
-    border: 2px dashed var(--gold-400);
+    border: 2px dashed var(--color-gold-400);
     z-index: 150;
     align-items: center;
     justify-content: center;
@@ -1165,7 +1165,7 @@ body {
 }
 
 .drop-overlay-content {
-    color: var(--gold-200);
+    color: var(--color-gold-200);
     font-size: var(--text-base);
     text-align: center;
     line-height: 1.8;
@@ -1174,11 +1174,11 @@ body {
 /* === Workspace Dialog === */
 
 .workspace-dialog {
-    background: var(--bg-surface);
-    border: 1px solid var(--border-subtle);
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52);
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     max-width: 380px;
     padding: 22px;
     width: min(380px, calc(100vw - 32px));
@@ -1189,20 +1189,20 @@ body {
 }
 
 .workspace-dialog-title {
-    color: var(--text-100);
+    color: var(--color-text-primary);
     font-size: 17px;
     font-weight: 600;
     margin-bottom: 12px;
 }
 
 .workspace-dialog-text {
-    color: var(--text-400);
+    color: var(--color-text-muted);
     font-size: var(--text-sm);
     line-height: 1.5;
 }
 
 .workspace-dialog-name {
-    color: var(--gold-100);
+    color: var(--color-gold-100);
     font-size: 14px;
     font-weight: 600;
     margin: 8px 0;
@@ -1210,10 +1210,10 @@ body {
 }
 
 .workspace-dialog-input {
-    background: var(--bg-subtle);
-    border: 1px solid var(--border-subtle);
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
     border-radius: 8px;
-    color: var(--text-100);
+    color: var(--color-text-primary);
     font-size: var(--text-sm);
     margin: 12px 0;
     outline: none;
@@ -1241,14 +1241,14 @@ body {
 
 .workspace-dialog-cancel {
     background: transparent;
-    border: 1px solid var(--border-strong);
-    color: var(--text-200);
+    border: 1px solid var(--color-border-strong);
+    color: var(--color-text-secondary);
 }
 
 .workspace-dialog-delete {
     background: #b91c1c;
     border: none;
-    color: var(--text-100);
+    color: var(--color-text-primary);
 }
 
 .workspace-dialog-delete:disabled {
@@ -1270,7 +1270,7 @@ body {
     height: 52px;
     border-radius: 10px;
     object-fit: cover;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
 }
 
 /* === Scrollbar === */
@@ -1286,7 +1286,7 @@ body {
 .ai-message-content h2,
 .ai-message-content h3,
 .ai-message-content h4 {
-    color: var(--text-200);
+    color: var(--color-text-secondary);
     margin: 1em 0 0.5em;
     line-height: 1.3;
 }
@@ -1305,14 +1305,14 @@ body {
 
 .ai-message-content th,
 .ai-message-content td {
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--color-border-subtle);
     padding: 8px 12px;
     text-align: left;
 }
 
 .ai-message-content th {
-    background: var(--bg-elevated);
-    color: var(--text-200);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-secondary);
     font-weight: 600;
     font-size: var(--text-sm);
     text-transform: uppercase;
@@ -1324,7 +1324,7 @@ body {
 }
 
 .ai-message-content pre {
-    background: var(--bg-elevated);
+    background: var(--color-bg-elevated);
     border-radius: var(--radius-sm);
     padding: 14px 16px;
     overflow-x: auto;
@@ -1339,10 +1339,10 @@ body {
 }
 
 .ai-message-content :not(pre) > code {
-    background: var(--bg-elevated);
+    background: var(--color-bg-elevated);
     padding: 2px 6px;
     border-radius: 4px;
-    color: var(--gold-100);
+    color: var(--color-gold-100);
 }
 
 .ai-message-content ul,
@@ -1356,15 +1356,15 @@ body {
 }
 
 .ai-message-content blockquote {
-    border-left: 3px solid var(--gold-500);
+    border-left: 3px solid var(--color-gold-500);
     padding-left: 14px;
     margin: 1em 0;
-    color: var(--text-400);
+    color: var(--color-text-muted);
 }
 
 .ai-message-content hr {
     border: none;
-    border-top: 1px solid var(--border-subtle);
+    border-top: 1px solid var(--color-border-subtle);
     margin: 1.5em 0;
 }
 
@@ -1384,7 +1384,7 @@ body {
 }
 
 .ai-message-content a {
-    color: var(--gold-200);
+    color: var(--color-gold-200);
     text-decoration: none;
 }
 
@@ -1394,7 +1394,7 @@ body {
 
 /* Pygments highlight container inside answer */
 .ai-message-content .highlight {
-    background: var(--bg-elevated);
+    background: var(--color-bg-elevated);
     border-radius: var(--radius-sm);
     margin: 1em 0;
     overflow-x: auto;
@@ -1438,7 +1438,7 @@ body.panel-open .composer-inner {
 .answer-references-title {
     font-size: var(--text-xs);
     font-weight: 600;
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 8px;
@@ -1459,14 +1459,14 @@ body.panel-open .composer-inner {
 }
 
 .answer-ref-id {
-    color: var(--gold-300);
+    color: var(--color-gold-300);
     font-weight: 600;
     flex-shrink: 0;
     min-width: 24px;
 }
 
 .answer-ref-title {
-    color: var(--text-400);
+    color: var(--color-text-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1520,11 +1520,11 @@ body.panel-open .composer-inner {
 /* === Upload Zone (Files Panel) === */
 
 .upload-zone {
-    border: 1.5px dashed var(--border-strong);
+    border: 1.5px dashed var(--color-border-strong);
     border-radius: var(--radius-sm);
     padding: 24px 16px 16px;
     text-align: center;
-    color: var(--text-600);
+    color: var(--color-text-dim);
     cursor: pointer;
     margin-bottom: 16px;
     transition: border-color 0.2s, background 0.2s;
@@ -1536,20 +1536,20 @@ body.panel-open .composer-inner {
 }
 
 .upload-icon {
-    color: var(--text-500);
+    color: var(--color-text-subtle);
     margin-bottom: 8px;
     opacity: 0.7;
 }
 
 .upload-text {
     font-size: var(--text-sm);
-    color: var(--text-400);
+    color: var(--color-text-muted);
     margin-bottom: 2px;
 }
 
 .upload-hint {
     font-size: var(--text-xs);
-    color: var(--text-600);
+    color: var(--color-text-dim);
     margin-bottom: 14px;
 }
 
@@ -1564,9 +1564,9 @@ body.panel-open .composer-inner {
     align-items: center;
     gap: 5px;
     padding: 7px 14px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border-subtle);
-    color: var(--text-300);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-tertiary);
     font-size: var(--text-sm);
     font-family: inherit;
     border-radius: 8px;
@@ -1577,7 +1577,7 @@ body.panel-open .composer-inner {
 .upload-btn:hover {
     background: rgba(210, 182, 97, 0.1);
     border-color: rgba(210, 182, 97, 0.28);
-    color: var(--gold-200);
+    color: var(--color-gold-200);
 }
 
 .upload-btn svg {
