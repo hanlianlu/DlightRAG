@@ -4,12 +4,16 @@ import {setupQueryForm} from './chat.js';
 import {setupHtmxInteractions} from './htmx.js';
 import {setupImageInputs} from './images.js';
 import {setupPanel} from './panel.js';
+import {setupPanelResize} from './resize.js';
+import {setupFolderInput} from './folder-upload.js';
 import {initWorkspaces} from './workspaces.js';
 
 document.addEventListener('DOMContentLoaded', function() {
     initWorkspaces();
     setupPanel();
+    setupPanelResize();
     setupHtmxInteractions();
     setupImageInputs();
+    setupFolderInput();
     setupQueryForm();
 });

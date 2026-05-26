@@ -1,5 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {detectDropItems, uploadFolderToWorkspace} from './folder-upload.js';
+
 const MAX_IMAGES = 3;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 const pendingImages = [];
@@ -140,13 +142,22 @@ export function setupImageInputs() {
         }
     });
     document.addEventListener('dragover', function(e) { e.preventDefault(); });
-    document.addEventListener('drop', function(e) {
+    document.addEventListener('drop', async function(e) {
         e.preventDefault();
         dragCounter = 0;
         if (dropOverlay) dropOverlay.classList.remove('active');
-        Array.from(e.dataTransfer.files || []).forEach(function(f) {
-            if (f.type.startsWith('image/')) addImage(f);
-        });
+
+        var items = e.dataTransfer.items;
+        if (!items || items.length === 0) return;
+
+        var result = await detectDropItems(
+            items,
+            function(imageFile) { addImage(imageFile); }
+        );
+
+        if (result.files.length > 0) {
+            await uploadFolderToWorkspace(result.files, result.folderName);
+        }
     });
     document.addEventListener('paste', function(e) {
         const items = e.clipboardData && e.clipboardData.items;

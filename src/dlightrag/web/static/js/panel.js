@@ -7,11 +7,13 @@ let toastTimer = null;
 
 export function openPanel(title) {
     document.getElementById('panel').classList.add('open');
+    document.body.classList.add('panel-open');
     if (title) document.getElementById('panel-title').textContent = title;
 }
 
 export function closePanel() {
     document.getElementById('panel').classList.remove('open');
+    document.body.classList.remove('panel-open');
 }
 
 export function showToast(msg, duration) {
@@ -163,10 +165,17 @@ export function setupPanel() {
             showAllSources();
             return;
         }
-        const uploadZone = e.target.closest('#upload-zone');
+        var uploadZone = e.target.closest('#upload-zone');
         if (uploadZone) {
-            const fileInput = uploadZone.querySelector('#file-input');
-            if (fileInput) fileInput.click();
+            var uploadFileBtn = e.target.closest('[data-action="upload-file"]');
+            if (uploadFileBtn) {
+                var fileInput = document.getElementById('file-input');
+                if (fileInput) fileInput.click();
+                return;
+            }
+            // Clicking the zone itself (not a button) opens file picker
+            var fi = document.getElementById('file-input');
+            if (fi && !e.target.closest('[data-action]')) fi.click();
             return;
         }
     });

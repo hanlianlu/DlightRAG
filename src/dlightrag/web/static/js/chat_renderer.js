@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {conversationHistory} from './state.js';
-import {renderMessageImages} from './images.js';
+import {renderMessageImages, openLightbox} from './images.js';
 import {parseData} from './sse.js';
 
 function activateChatMode() {
@@ -152,12 +152,28 @@ export function createAnswerRenderer(turn) {
         tmp.innerHTML = html || '';
         const answerContent = tmp.querySelector('#answer-content');
         const sourceData = tmp.querySelector('#source-data');
+        const imageStrip = tmp.querySelector('.answer-image-strip');
+
         if (answerContent) turn.contentDiv.innerHTML = answerContent.innerHTML;
+        if (imageStrip) {
+            turn.contentDiv.appendChild(imageStrip.cloneNode(true));
+        }
         if (sourceData) {
             sourceData.className = 'source-data visually-hidden';
             sourceData.removeAttribute('id');
             turn.aiDiv.appendChild(sourceData);
         }
+
+        // Delegate lightbox clicks on image gallery
+        turn.contentDiv.addEventListener('click', function (e) {
+            var item = e.target.closest('[data-action="open-lightbox"]');
+            if (item) {
+                e.preventDefault();
+                var src = item.getAttribute('data-src');
+                if (src) openLightbox(src);
+            }
+        });
+
         renderMath(turn.contentDiv);
         fixExternalLinks(turn.contentDiv);
     }

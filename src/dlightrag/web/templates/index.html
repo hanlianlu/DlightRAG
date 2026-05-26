@@ -31,7 +31,7 @@
     <!-- Drop zone overlay (hidden by default) -->
     <div class="drop-overlay" id="drop-overlay">
         <div class="drop-overlay-content">
-            Drop images here.<br>Up to 3 images (PNG, JPG, WebP)
+            Drop files or folders here
         </div>
     </div>
 
@@ -51,6 +51,7 @@
 
     <!-- Hidden file input for image upload -->
     <input class="visually-hidden" type="file" id="image-input" accept="image/*" multiple>
+    <input class="visually-hidden" type="file" id="folder-input" webkitdirectory directory multiple>
 
     <aside class="panel" id="panel">
         <div class="panel-header">
