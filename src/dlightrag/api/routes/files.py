@@ -88,11 +88,14 @@ async def retry_failed_files(
 
 @router.get("/api/files/{file_path:path}", response_model=None)
 async def serve_file(
-    file_path: str, user: UserContext = Depends(get_current_user)
+    file_path: str,
+    workspace: str = Query(default="default"),
+    user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse | RedirectResponse:
     """Serve a file by relative path.
 
-    - Local paths: 200 + StreamingResponse
+    - Local paths under ``input_dir/<workspace>/``: 200 + StreamingResponse
+    - Local paths under ``working_dir/`` (fallback): 200 + StreamingResponse
     - azure://: 302 redirect to SAS signed URL
     - s3://: 501 Not Implemented (S3 presigned URL support in Task 5)
     """
@@ -117,11 +120,38 @@ async def serve_file(
     if "://" in file_path:
         raise HTTPException(400, f"Unsupported scheme: {file_path.split('://', 1)[0]}")
 
-    # --- Local file: stream from working_dir ---
-    working_dir = config.working_dir_path.resolve()
-    full_path = (working_dir / file_path).resolve()
+    # --- Local file ---
+    # PathResolver embeds workspace in the URL path, so try
+    # input_dir/<file_path> directly first.  Fall back to
+    # input_dir/<workspace>/<file_path> for hand-crafted URLs.
+    input_dir = config.input_dir_path.resolve()
+    safe_workspace = workspace.replace("/", "_").replace("\\", "_")
+    attempts: list[Path] = []
+    # Direct path (workspace already in file_path from PathResolver)
+    direct = (input_dir / file_path.lstrip("/")).resolve()
+    # Workspace-prefixed fallback
+    ws_prefixed = (input_dir / safe_workspace / file_path.lstrip("/")).resolve()
+    if direct != ws_prefixed:
+        attempts = [direct, ws_prefixed]
+    else:
+        attempts = [direct]
 
-    # Security: path traversal + symlink escape check
+    for full_path in attempts:
+        try:
+            full_path.relative_to(input_dir)
+        except ValueError:
+            continue  # path traversal attempt, skip
+        if full_path.is_file():
+            content_type, _ = mimetypes.guess_type(str(full_path))
+            return StreamingResponse(
+                _stream_file(full_path),
+                media_type=content_type or "application/octet-stream",
+            )
+
+    # --- Fallback: stream from working_dir (legacy path patterns) ---
+    working_dir = config.working_dir_path.resolve()
+    full_path = (working_dir / file_path.lstrip("/")).resolve()
+
     if not full_path.is_relative_to(working_dir):
         raise HTTPException(403, "Access denied")
     if not full_path.is_file():
