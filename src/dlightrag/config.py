@@ -14,6 +14,7 @@ DLIGHTRAG_* → backend env vars so both modes work seamlessly.
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable
 from pathlib import Path
@@ -373,6 +374,28 @@ class VisualAssetsConfig(BaseModel):
     thumb_cache_size: int = 256
 
 
+def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, Any]:
+    """Recursively redact values whose keys match sensitive patterns."""
+    result: dict[str, Any] = {}
+    for key, value in data.items():
+        if any(pattern in key.lower() for pattern in patterns):
+            if isinstance(value, str) and len(value) > 8:
+                result[key] = value[:4] + "***" + value[-4:]
+            elif isinstance(value, str):
+                result[key] = "***"
+            else:
+                result[key] = value
+        elif isinstance(value, dict):
+            result[key] = _redact_dict(value, patterns)
+        elif isinstance(value, list):
+            result[key] = [
+                _redact_dict(item, patterns) if isinstance(item, dict) else item for item in value
+            ]
+        else:
+            result[key] = value
+    return result
+
+
 class DlightragConfig(BaseSettings):
     """DlightRAG configuration.
 
@@ -385,6 +408,31 @@ class DlightragConfig(BaseSettings):
 
     Supports both pure-.env and hybrid config.yaml + .env setups.
     """
+
+    _SECRET_PATTERNS: tuple[str, ...] = (
+        "api_key",
+        "api_secret",
+        "secret",
+        "password",
+        "connection_string",
+        "account_key",
+        "sas_token",
+    )
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Serialize config with sensitive fields redacted."""
+        data = super().model_dump(**kwargs)
+        return _redact_dict(data, self._SECRET_PATTERNS)
+
+    def model_dump_json(self, **kwargs: Any) -> str:
+        """Serialize config to JSON with sensitive fields redacted."""
+        # Extract json.dumps-specific kwargs that model_dump doesn't accept
+        indent = kwargs.pop("indent", None)
+        data = self.model_dump(**kwargs)
+        dump_kwargs: dict[str, Any] = {"default": str}
+        if indent is not None:
+            dump_kwargs["indent"] = indent
+        return json.dumps(data, **dump_kwargs)
 
     model_config = SettingsConfigDict(
         env_prefix="DLIGHTRAG_",
