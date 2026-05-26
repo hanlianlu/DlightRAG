@@ -1492,10 +1492,14 @@ class RAGService:
         file_paths: list[str] | None = None,
         filenames: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Unified file deletion."""
+        """Unified file deletion — DB records and physical files."""
         self._ensure_initialized()
         self._ensure_writable("delete files")
-        from dlightrag.core.ingestion.cleanup import cascade_delete, collect_deletion_context
+        from dlightrag.core.ingestion.cleanup import (
+            cascade_delete,
+            collect_deletion_context,
+            remove_deleted_files,
+        )
 
         identifiers = [*(file_paths or []), *(filenames or [])]
         results: list[dict[str, Any]] = []
@@ -1516,6 +1520,9 @@ class RAGService:
                 status = "deleted_with_errors"
             else:
                 status = "deleted"
+                # Remove physical files after successful DB cleanup.
+                remove_deleted_files(ctx.file_paths, self.config.working_dir)
+
             results.append({"identifier": identifier, "status": status, **stats})
         return results
 

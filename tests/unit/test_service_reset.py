@@ -27,6 +27,7 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
     config.kv_storage = "PGKVStorage"
     config.workspace = workspace
     config.working_dir = f"/tmp/dlightrag-test/{workspace}"
+    config.input_dir_path = Path(f"/tmp/dlightrag-test/{workspace}/inputs")
 
     service = RAGService.__new__(RAGService)
     service.config = config
