@@ -9,6 +9,17 @@
   {% endfor %}
 </div>
 {% endif %}
+{% if sources %}
+<div class="answer-references">
+  <div class="answer-references-title">References</div>
+  {% for src in sources %}
+  <div class="answer-ref-item" data-action="open-ref-source" data-ref="{{ src.id }}">
+    <span class="answer-ref-id">[{{ src.id }}]</span>
+    <span class="answer-ref-title">{{ src.title or src.path or 'Untitled' }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 <div id="source-data" class="visually-hidden">
     {% include "partials/source_panel.html" %}
 </div>
