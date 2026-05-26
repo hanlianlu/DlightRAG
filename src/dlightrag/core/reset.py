@@ -159,6 +159,17 @@ async def areset(
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", exc)
 
+    # Phase 5b: Remove checkpoint data for this workspace
+    try:
+        from dlightrag.core.checkpoint import ConversationCheckpoint
+
+        cp = ConversationCheckpoint(Path(service.config.working_dir) / "checkpoints.db")
+        removed = await cp.delete_sessions_by_workspace(workspace)
+        if removed > 0:
+            stats["checkpoint_sessions_removed"] = removed
+    except Exception:
+        logger.warning("Failed to clean checkpoint data for workspace %s", workspace, exc_info=True)
+
     service._initialized = False
     logger.info("areset complete for workspace=%s: %s", workspace, stats)
     return stats

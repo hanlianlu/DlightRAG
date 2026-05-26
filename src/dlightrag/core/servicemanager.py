@@ -90,6 +90,7 @@ class RAGServiceManager:
         self._query_image_enhancer: Any = None
         self._session_images: Any = None
         self._workspace_registry: Any = None
+        self._checkpoint: Any = None
 
     @property
     def config(self) -> DlightragConfig:
@@ -459,6 +460,50 @@ class RAGServiceManager:
                 ttl_seconds=cfg.session_ttl_seconds,
             )
         return self._session_images
+
+    def _get_checkpoint(self):
+        """Lazy-create conversation checkpoint store."""
+        if self._checkpoint is None:
+            from dlightrag.core.checkpoint import ConversationCheckpoint
+
+            db_path = self._config.working_dir_path / "checkpoints.db"
+            self._checkpoint = ConversationCheckpoint(db_path)
+        return self._checkpoint
+
+    async def save_turn_checkpoint(
+        self,
+        session_id: str,
+        query: str,
+        answer: str,
+        contexts: dict[str, Any],
+        cited_chunk_ids: list[str],
+    ) -> None:
+        """Save a complete turn (query + answer + retrieval anchors) to checkpoint."""
+        if not session_id:
+            return
+        try:
+            cp = self._get_checkpoint()
+            await cp.ensure_session(session_id)
+            turn_number = await cp.next_turn_number(session_id)
+            await cp.save_turn(
+                session_id,
+                turn_number,
+                role="user",
+                content=query,
+            )
+            await cp.save_turn(
+                session_id,
+                turn_number,
+                role="assistant",
+                content=answer,
+                cited_chunk_ids=cited_chunk_ids,
+            )
+            chunks = contexts.get("chunks", [])
+            if chunks:
+                await cp.save_anchors(session_id, turn_number, chunks)
+                await cp.mark_cited(session_id, turn_number, cited_chunk_ids)
+        except Exception:
+            logger.warning("Failed to save checkpoint for session %s", session_id, exc_info=True)
 
     def _get_query_image_enhancer(self):
         """Lazy-create VLM query image enhancer."""

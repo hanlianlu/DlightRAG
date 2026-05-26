@@ -266,7 +266,7 @@ class ConversationCheckpoint:
             rows = conn.execute(
                 """SELECT role, content FROM turns
                    WHERE session_id = ?
-                   ORDER BY turn_number ASC, role ASC
+                   ORDER BY turn_number ASC, id ASC
                    LIMIT ?""",
                 (session_id, max_turns * 2),
             ).fetchall()
@@ -291,11 +291,14 @@ class ConversationCheckpoint:
         conn = self._ensure_db_sync()
         try:
             turn_rows = conn.execute(
-                """SELECT DISTINCT turn_number FROM turns
-                   WHERE session_id = ?
+                """SELECT DISTINCT turn_number FROM (
+                       SELECT turn_number FROM turns WHERE session_id = ?
+                       UNION
+                       SELECT turn_number FROM context_anchors WHERE session_id = ?
+                   )
                    ORDER BY turn_number DESC
                    LIMIT ?""",
-                (session_id, last_n_turns),
+                (session_id, session_id, last_n_turns),
             ).fetchall()
             if not turn_rows:
                 return []

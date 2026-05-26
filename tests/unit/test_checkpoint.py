@@ -6,6 +6,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from dlightrag.core.checkpoint import ConversationCheckpoint
 
 
@@ -49,3 +51,148 @@ class TestCheckpointInit:
         cp._ensure_db_sync()
         cp._ensure_db_sync()
         assert db_path.exists()
+
+
+@pytest.mark.asyncio
+class TestCheckpointCRUD:
+    async def test_ensure_session_and_save_turns(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.ensure_session("s1", workspace="default")
+        await cp.save_turn("s1", 1, role="user", content="Hello")
+        await cp.save_turn(
+            "s1", 1, role="assistant", content="Hi there!", cited_chunk_ids=["c1", "c2"]
+        )
+
+        history = await cp.get_history("s1")
+        assert len(history) == 2
+        assert history[0] == {"role": "user", "content": "Hello"}
+        assert history[1] == {"role": "assistant", "content": "Hi there!"}
+
+    async def test_next_turn_number(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        assert await cp.next_turn_number("s1") == 1
+
+        await cp.ensure_session("s1")
+        await cp.save_turn("s1", 1, role="user", content="q1")
+        await cp.save_turn("s1", 1, role="assistant", content="a1")
+
+        assert await cp.next_turn_number("s1") == 2
+
+    async def test_save_and_mark_anchors(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        chunks = [
+            {
+                "chunk_id": "c1",
+                "file_path": "/docs/a.pdf",
+                "sidecar": {"type": "drawing", "id": "im-1"},
+                "relevance_score": 0.85,
+            },
+            {
+                "chunk_id": "c2",
+                "file_path": "/docs/b.pdf",
+                "sidecar": None,
+                "relevance_score": 0.42,
+            },
+        ]
+        await cp.ensure_session("s1")
+        await cp.save_anchors("s1", 1, chunks)
+        await cp.mark_cited("s1", 1, ["c1"])
+
+        anchors = await cp.get_previous_anchors("s1", last_n_turns=1)
+        assert len(anchors) == 2
+        cited = {a["chunk_id"] for a in anchors if a["was_cited"]}
+        assert cited == {"c1"}
+
+        cited_ids = await cp.get_cited_chunk_ids("s1")
+        assert cited_ids == {"c1"}
+
+    async def test_delete_session_cascades(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.ensure_session("s1")
+        await cp.save_turn("s1", 1, role="user", content="q")
+        await cp.save_anchors("s1", 1, [{"chunk_id": "c1"}])
+
+        await cp.delete_session("s1")
+
+        history = await cp.get_history("s1")
+        assert history == []
+        anchors = await cp.get_previous_anchors("s1", last_n_turns=1)
+        assert anchors == []
+
+    async def test_list_sessions(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.ensure_session("s1", workspace="ws-a")
+        await cp.ensure_session("s2", workspace="ws-b")
+        await cp.save_turn("s1", 1, role="user", content="q")
+
+        all_sessions = await cp.list_sessions()
+        assert len(all_sessions) == 2
+
+        filtered = await cp.list_sessions(workspace="ws-a")
+        assert len(filtered) == 1
+        assert filtered[0]["session_id"] == "s1"
+        assert filtered[0]["turn_count"] == 1
+
+    async def test_delete_sessions_by_workspace(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.ensure_session("s1", workspace="ws-a")
+        await cp.ensure_session("s2", workspace="ws-b")
+        await cp.save_turn("s1", 1, role="user", content="q")
+        await cp.save_turn("s2", 1, role="user", content="q")
+
+        deleted = await cp.delete_sessions_by_workspace("ws-a")
+        assert deleted == 1
+
+        assert await cp.get_history("s1") == []
+        assert len(await cp.get_history("s2")) == 1
+
+    async def test_prune_old_sessions(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.ensure_session("s1")
+        await cp.save_turn("s1", 1, role="user", content="q")
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "UPDATE sessions SET updated_at = datetime('now', '-60 days') WHERE session_id = 's1'"
+        )
+        conn.commit()
+        conn.close()
+
+        deleted = await cp.prune_old_sessions(max_age_days=30)
+        assert deleted == 1
+        assert await cp.get_history("s1") == []
+
+    async def test_idempotent_ensure_session(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.ensure_session("s1")
+        await cp.ensure_session("s1")
+        await cp.ensure_session("s1")
+
+        sessions = await cp.list_sessions()
+        assert len(sessions) == 1
+
+    async def test_empty_chunks_no_error(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        await cp.save_anchors("s1", 1, [])
+        await cp.mark_cited("s1", 1, [])
+
+        anchors = await cp.get_previous_anchors("s1")
+        assert anchors == []
