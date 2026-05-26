@@ -59,6 +59,15 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
 
         _hydrate_image_data(chunk, sidecar)
 
+        # Sidecar image chunks have asset paths as file_path (e.g., .blocks.assets/hash.jpg).
+        # Remap to the parent document's file_path so citation grouping works correctly.
+        if chunk.get("image_data") and _is_sidecar_asset_path(str(chunk.get("file_path", ""))):
+            doc_id = chunk.get("full_doc_id")
+            if doc_id:
+                full_doc = await _fetch_full_doc(lightrag, doc_id, full_doc_cache)
+                if full_doc and full_doc.get("file_path"):
+                    chunk["file_path"] = full_doc["file_path"]
+
 
 async def _fetch_raw_chunks(lightrag: Any, chunk_ids: list[str]) -> list[Any]:
     try:
@@ -172,7 +181,16 @@ async def _fetch_full_doc(
     return cache[doc_id]
 
 
+_SIDECAR_ASSETS_MARKER = ".blocks.assets/"
+
+
+def _is_sidecar_asset_path(file_path: str) -> bool:
+    return _SIDECAR_ASSETS_MARKER in file_path
+
+
 def _hydrate_image_data(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
+    if chunk.get("image_data"):
+        return  # Already hydrated
     image_path = sidecar.get("path") or chunk.get("file_path")
     if not isinstance(image_path, str):
         return

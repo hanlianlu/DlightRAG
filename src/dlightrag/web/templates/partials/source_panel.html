@@ -21,7 +21,8 @@
              alt="Page {{ chunk.page_idx or '' }}" loading="lazy"
              data-action="open-lightbox">
       </div>
-      {% elif chunk.content %}
+      {% endif %}
+      {% if chunk.content %}
       <div class="source-chunk-content">
         {{ chunk.content | highlight_content(chunk.highlight_phrases) }}
       </div>
