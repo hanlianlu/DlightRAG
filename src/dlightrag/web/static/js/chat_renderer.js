@@ -174,7 +174,7 @@ export function createAnswerRenderer(turn) {
             if (item) {
                 e.preventDefault();
                 var src = item.getAttribute('data-src');
-                if (src) openLightbox(src);
+                if (src && /^(?:\/|blob:|data:)/.test(src)) openLightbox(src);
             }
         });
 

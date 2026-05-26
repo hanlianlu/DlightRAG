@@ -33,9 +33,19 @@ def _sanitize_cookie_value(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9,_-]", "", value).strip(",")
 
 
-def _set_workspace_cookies(response: HTMLResponse, request: Request, workspaces: list[str]) -> None:
-    primary = workspaces[0] if workspaces else "default"
-    joined = ",".join(workspaces or [primary])
+async def _set_workspace_cookies(
+    response: HTMLResponse,
+    request: Request,
+    manager: Any,
+    primary_ws: str | None = None,
+) -> None:
+    """Set workspace cookies from DB state so values never originate from user input."""
+    workspaces = await manager.list_workspaces()
+    if not workspaces:
+        workspaces = ["default"]
+    # Cross-validate primary_ws against the DB list — rejects tainted values
+    primary = primary_ws if (primary_ws and primary_ws in workspaces) else workspaces[0]
+    joined = ",".join(workspaces)
     secure = request.url.scheme == "https"
     response.set_cookie(
         key="dlightrag_workspace",
@@ -93,7 +103,7 @@ async def create_workspace(
             "HX-Trigger": json.dumps({"workspaceCreated": {"workspace": ws, "display_name": name}})
         },
     )
-    _set_workspace_cookies(response, request, [ws])
+    await _set_workspace_cookies(response, request, manager, primary_ws=ws)
     return response
 
 
@@ -135,5 +145,5 @@ async def delete_workspace(
             "HX-Trigger": json.dumps({"workspaceDeleted": {"workspace": ws, "fallback": fallback}})
         },
     )
-    _set_workspace_cookies(response, request, [fallback])
+    await _set_workspace_cookies(response, request, manager)
     return response

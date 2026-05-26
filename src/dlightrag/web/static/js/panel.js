@@ -161,7 +161,8 @@ export function setupPanel() {
         const image = e.target.closest('[data-action="open-lightbox"]');
         if (image) {
             e.preventDefault();
-            openLightbox(image.getAttribute('data-full-src') || image.getAttribute('src'));
+            var lightboxSrc = image.getAttribute('data-full-src') || image.getAttribute('src');
+            if (lightboxSrc && /^(?:\/|blob:|data:)/.test(lightboxSrc)) openLightbox(lightboxSrc);
         }
     });
 
