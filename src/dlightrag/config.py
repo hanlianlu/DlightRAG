@@ -575,6 +575,10 @@ class DlightragConfig(BaseSettings):
     ingestion_batch_pages: int = Field(
         default=20, description="Pages per batch during streaming ingestion."
     )
+    max_upload_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",
+    )
 
     # ===== Query Configuration =====
     top_k: int = Field(default=60)
