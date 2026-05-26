@@ -173,6 +173,7 @@ export function createAnswerRenderer(turn) {
             var item = e.target.closest('[data-action="open-lightbox"]');
             if (item) {
                 e.preventDefault();
+                e.stopPropagation();
                 var src = item.getAttribute('data-src');
                 if (src && /^(?:\/|blob:|data:)/.test(src)) openLightbox(src);
             }

@@ -159,9 +159,9 @@ export function setupPanel() {
             return;
         }
         const image = e.target.closest('[data-action="open-lightbox"]');
-        if (image) {
+        if (image && image.hasAttribute('data-full-src')) {
             e.preventDefault();
-            var lightboxSrc = image.getAttribute('data-full-src') || image.getAttribute('src');
+            var lightboxSrc = image.getAttribute('data-full-src');
             if (lightboxSrc && /^(?:\/|blob:|data:)/.test(lightboxSrc)) openLightbox(lightboxSrc);
         }
     });

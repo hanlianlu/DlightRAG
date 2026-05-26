@@ -7,24 +7,18 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.citations import CitationProcessor, extract_highlights_for_sources
 from dlightrag.citations.source_builder import build_sources
-from dlightrag.web.deps import get_manager, get_workspace, templates
+from dlightrag.web.deps import get_manager, get_workspace, render_partial, templates
 from dlightrag.web.markdown import render_markdown
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _render_partial(name: str, **ctx: Any) -> str:
-    """Render a Jinja2 partial template to string."""
-    return templates.env.get_template(name).render(**ctx)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -221,7 +215,7 @@ async def answer_stream(
             )
             result = processor.process(clean_answer)
 
-            done_html = _render_partial(
+            done_html = render_partial(
                 "partials/answer_done.html",
                 answer=result.answer,
                 sources=result.sources,
@@ -259,7 +253,7 @@ async def answer_stream(
                         ),
                         timeout=highlight_cfg.timeout,
                     )
-                    highlights_html = _render_partial(
+                    highlights_html = render_partial(
                         "partials/source_panel.html",
                         sources=highlighted_sources,
                     )

@@ -9,23 +9,11 @@ from typing import Any
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
-from dlightrag.web.deps import get_manager, templates
+from dlightrag.web.deps import error_response, get_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _render_partial(name: str, **ctx: Any) -> str:
-    """Render a Jinja2 partial template to string."""
-    return templates.env.get_template(name).render(**ctx)
-
-
-def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
-    return HTMLResponse(
-        _render_partial("partials/error.html", message=message),
-        status_code=status_code,
-    )
 
 
 def _sanitize_cookie_value(value: str) -> str:
@@ -78,21 +66,21 @@ async def create_workspace(
     try:
         name = validate_workspace_name(workspace_name)
     except ValueError as exc:
-        return _error_response(str(exc))
+        return error_response(str(exc))
 
     ws = normalize_workspace(name)
 
     # Duplicate check
     existing = await manager.list_workspaces()
     if ws in existing:
-        return _error_response(f"Workspace '{name}' already exists", status_code=409)
+        return error_response(f"Workspace '{name}' already exists", status_code=409)
 
     # Initialize workspace (creates the RAGService)
     try:
         await manager.acreate_workspace(ws, display_name=name)
     except Exception:
         logger.exception("Workspace creation failed")
-        return _error_response(
+        return error_response(
             "Failed to create workspace; see server logs for details.",
             status_code=500,
         )
@@ -121,9 +109,9 @@ async def delete_workspace(
     confirm = confirm_name.strip()
 
     if not name:
-        return _error_response("Workspace name cannot be empty")
+        return error_response("Workspace name cannot be empty")
     if normalize_workspace(name) != normalize_workspace(confirm):
-        return _error_response("Confirmation name does not match")
+        return error_response("Confirmation name does not match")
 
     ws = normalize_workspace(name)
 
@@ -131,7 +119,7 @@ async def delete_workspace(
         await manager.areset(workspace=ws)
     except Exception:
         logger.exception("Workspace deletion failed")
-        return _error_response(
+        return error_response(
             "Failed to delete workspace; see server logs for details.",
             status_code=500,
         )
