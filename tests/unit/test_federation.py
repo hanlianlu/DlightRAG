@@ -10,6 +10,7 @@ import pytest
 from dlightrag.core.federation import (
     federated_retrieve,
     merge_results,
+    merge_results_weighted,
 )
 from dlightrag.core.retrieval.protocols import RetrievalResult
 
@@ -221,3 +222,115 @@ class TestFederatedRetrieve:
         result = await federated_retrieve("query", [], get_svc)
 
         assert result.contexts["chunks"] == []
+
+
+class TestMergeResultsWeighted:
+    """Hamilton Largest Remainder Method for weighted seat allocation."""
+
+    def _make_result(self, chunks: list[str]) -> RetrievalResult:
+        """Helper: create a RetrievalResult from chunk ID strings."""
+        return RetrievalResult(
+            answer=None,
+            contexts={
+                "chunks": [{"chunk_id": cid, "content": f"text-{cid}"} for cid in chunks],
+                "entities": [],
+                "relationships": [],
+            },
+        )
+
+    @staticmethod
+    def _collect_workspaces(result: RetrievalResult) -> set[str]:
+        return {c["_workspace"] for c in result.contexts.get("chunks", [])}
+
+    def test_proportional_seats(self) -> None:
+        """High-quality workspace gets proportionally more seats."""
+        result_a = self._make_result(["a1", "a2", "a3", "a4", "a5", "a6"])
+        result_b = self._make_result(["b1", "b2"])
+        result_c = self._make_result(["c1", "c2"])
+        merged = merge_results_weighted(
+            [result_a, result_b, result_c],
+            workspaces=["ws-a", "ws-b", "ws-c"],
+            quality_scores={"ws-a": 0.9, "ws-b": 0.3, "ws-c": 0.3},
+            chunk_top_k=5,
+        )
+        counts = {ws: 0 for ws in ["ws-a", "ws-b", "ws-c"]}
+        for c in merged.contexts.get("chunks", []):
+            counts[c["_workspace"]] += 1
+        assert counts["ws-a"] >= counts["ws-b"]
+        assert counts["ws-a"] >= counts["ws-c"]
+        assert counts["ws-b"] >= 1  # minimum 1 seat
+        assert counts["ws-c"] >= 1
+        assert sum(counts.values()) <= 5
+
+    def test_minimum_one_seat(self) -> None:
+        """Even lowest-quality workspace gets at least 1 seat."""
+        result_a = self._make_result(["a1", "a2", "a3", "a4", "a5"])
+        result_b = self._make_result(["b1", "b2"])
+        merged = merge_results_weighted(
+            [result_a, result_b],
+            workspaces=["ws-a", "ws-b"],
+            quality_scores={"ws-a": 0.99, "ws-b": 0.01},
+            chunk_top_k=4,
+        )
+        ws_set = self._collect_workspaces(merged)
+        assert "ws-b" in ws_set
+
+    def test_cold_start_default(self) -> None:
+        """None quality score falls back to DEFAULT_QUALITY_SCORE."""
+        result_a = self._make_result(["a1", "a2", "a3", "a4"])
+        result_b = self._make_result(["b1", "b2", "b3", "b4"])
+        merged = merge_results_weighted(
+            [result_a, result_b],
+            workspaces=["ws-a", "ws-b"],
+            quality_scores={"ws-a": None, "ws-b": None},
+            chunk_top_k=4,
+        )
+        ws_set = self._collect_workspaces(merged)
+        assert "ws-a" in ws_set
+        assert "ws-b" in ws_set
+
+    def test_num_workspaces_exceeds_top_k(self) -> None:
+        """When workspaces > top_k, lowest-quality are dropped."""
+        results = [self._make_result([f"x{i}-1", f"x{i}-2"]) for i in range(5)]
+        workspaces = [f"ws-{i}" for i in range(5)]
+        scores: dict[str, float | None] = {f"ws-{i}": float(i) for i in range(5)}  # ws-4 highest
+        merged = merge_results_weighted(
+            results, workspaces=workspaces, quality_scores=scores, chunk_top_k=3
+        )
+        chunks = merged.contexts.get("chunks", [])
+        present_ws = self._collect_workspaces(merged)
+        assert len(present_ws) <= 3
+        # ws-0 (score=0.0) should be dropped
+        assert "ws-0" not in present_ws or len(present_ws) == 3
+        assert len(chunks) <= 3
+
+    def test_equal_workspaces_top_k(self) -> None:
+        """When workspaces == top_k, each gets exactly 1 seat."""
+        result_a = self._make_result(["a1", "a2", "a3"])
+        result_b = self._make_result(["b1", "b2", "b3"])
+        result_c = self._make_result(["c1", "c2", "c3"])
+        merged = merge_results_weighted(
+            [result_a, result_b, result_c],
+            workspaces=["ws-a", "ws-b", "ws-c"],
+            quality_scores={"ws-a": 0.8, "ws-b": 0.5, "ws-c": 0.2},
+            chunk_top_k=3,
+        )
+        chunks = merged.contexts.get("chunks", [])
+        present_ws = self._collect_workspaces(merged)
+        assert present_ws == {"ws-a", "ws-b", "ws-c"}
+        assert len(chunks) == 3
+
+    def test_empty_results(self) -> None:
+        """Empty input yields empty output."""
+        merged = merge_results_weighted([], workspaces=[], quality_scores={}, chunk_top_k=5)
+        assert merged.contexts.get("chunks", []) == []
+
+    def test_single_workspace(self) -> None:
+        """Single workspace gets all seats."""
+        result = self._make_result(["a1", "a2", "a3", "a4", "a5"])
+        merged = merge_results_weighted(
+            [result], workspaces=["ws-a"], quality_scores={"ws-a": 0.7}, chunk_top_k=5
+        )
+        chunks = merged.contexts.get("chunks", [])
+        assert len(chunks) == 5
+        assert all(c["_workspace"] == "ws-a" for c in chunks)
