@@ -153,10 +153,14 @@ export function createAnswerRenderer(turn) {
         const answerContent = tmp.querySelector('#answer-content');
         const sourceData = tmp.querySelector('#source-data');
         const imageStrip = tmp.querySelector('.answer-image-strip');
+        const refList = tmp.querySelector('.answer-references');
 
         if (answerContent) turn.contentDiv.innerHTML = answerContent.innerHTML;
         if (imageStrip) {
             turn.contentDiv.appendChild(imageStrip.cloneNode(true));
+        }
+        if (refList) {
+            turn.contentDiv.appendChild(refList.cloneNode(true));
         }
         if (sourceData) {
             sourceData.className = 'source-data visually-hidden';

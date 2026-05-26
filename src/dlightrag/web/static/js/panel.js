@@ -25,6 +25,37 @@ export function showToast(msg, duration) {
     toastTimer = setTimeout(function() { el.classList.remove('visible'); }, duration || 3000);
 }
 
+function openRefSource(refItem) {
+    const ref = refItem.dataset.ref;
+    const answerEl = refItem.closest('.ai-message');
+    if (!answerEl) return;
+    const panelContent = document.getElementById('panel-content');
+    if (!panelContent) return;
+    const sourceData = answerEl.querySelector('.source-data');
+    if (!sourceData) return;
+
+    panelContent.replaceChildren();
+    const clone = sourceData.cloneNode(true);
+    clone.classList.remove('visually-hidden');
+    while (clone.firstChild) panelContent.appendChild(clone.firstChild);
+
+    panelContent.querySelectorAll('.source-doc').forEach(function(doc) {
+        const chunksContainer = doc.querySelector('.source-doc-chunks');
+        if (doc.dataset.ref === ref) {
+            doc.classList.add('expanded');
+            if (chunksContainer) chunksContainer.hidden = false;
+        } else {
+            doc.classList.remove('expanded');
+            if (chunksContainer) chunksContainer.hidden = true;
+        }
+    });
+
+    const showAllBtn = panelContent.querySelector('.show-all-btn');
+    if (showAllBtn) showAllBtn.hidden = false;
+    renderMath(panelContent);
+    openPanel('SOURCES');
+}
+
 export function filterSource(badge) {
     const ref = badge.dataset.ref;
     const chunk = badge.dataset.chunk;
@@ -119,6 +150,12 @@ export function setupPanel() {
         if (badge) {
             e.preventDefault();
             filterSource(badge);
+            return;
+        }
+        const refItem = e.target.closest('[data-action="open-ref-source"]');
+        if (refItem) {
+            e.preventDefault();
+            openRefSource(refItem);
             return;
         }
         const image = e.target.closest('[data-action="open-lightbox"]');

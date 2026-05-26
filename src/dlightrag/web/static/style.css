@@ -1354,6 +1354,51 @@ body.panel-open .composer-inner {
     max-width: min(var(--content-width), calc(100vw - var(--panel-width) - 48px));
 }
 
+/* === Answer References (doc-level, visible at bottom) === */
+
+.answer-references {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid rgba(120, 113, 108, 0.12);
+}
+
+.answer-references-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-500);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+}
+
+.answer-ref-item {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 12px;
+    line-height: 1.5;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.1s;
+}
+.answer-ref-item:hover {
+    background: rgba(210, 182, 97, 0.06);
+}
+
+.answer-ref-id {
+    color: var(--gold-300);
+    font-weight: 600;
+    flex-shrink: 0;
+    min-width: 24px;
+}
+
+.answer-ref-title {
+    color: var(--text-400);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* === Answer Image Gallery === */
 
 .answer-image-strip {

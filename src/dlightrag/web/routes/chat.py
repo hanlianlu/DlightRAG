@@ -162,6 +162,7 @@ async def answer_stream(
             image_descriptions = getattr(token_iter, "image_descriptions", []) or []
 
             answer_images = []
+            seen_img_ids = set()
             for i, cid in enumerate(current_image_ids):
                 desc = ""
                 if isinstance(image_descriptions, dict):
@@ -174,11 +175,35 @@ async def answer_stream(
                     "thumb_url": f"/web/images/{workspace or manager.config.workspace}/{cid}?size=thumb",
                     "label": desc or f"Visual {i + 1}",
                 })
+                seen_img_ids.add(cid)
 
             flat_contexts = []
             for items in contexts.values():
                 if isinstance(items, list):
                     flat_contexts.extend(items)
+
+            # Extract visual chunks from retrieval contexts for the image gallery
+            for chunk in flat_contexts:
+                cid = chunk.get("chunk_id", "")
+                if not cid or cid in seen_img_ids:
+                    continue
+                image_url = chunk.get("image_url")
+                thumb_url = chunk.get("thumbnail_url") or image_url
+                image_data = chunk.get("image_data")
+                if not image_url and not image_data:
+                    continue
+                ws = chunk.get("_workspace") or workspace or manager.config.workspace
+                if not image_url and image_data:
+                    image_url = f"/web/images/{ws}/{cid}?size=full"
+                    thumb_url = f"/web/images/{ws}/{cid}?size=thumb"
+                label = chunk.get("file_path", "") or f"Visual {len(answer_images) + 1}"
+                answer_images.append({
+                    "chunk_id": cid,
+                    "url": image_url,
+                    "thumb_url": thumb_url,
+                    "label": label,
+                })
+                seen_img_ids.add(cid)
 
             sources = build_sources(
                 contexts,
