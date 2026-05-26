@@ -122,30 +122,27 @@ def merge_results_weighted(
         results = [r for r, _ in paired]
         workspaces = [w for _, w in paired]
 
-    # Seat allocation proportional to quality
-    total_score = sum(resolved[w] for w in workspaces)
-    if total_score <= 0:
-        total_score = float(len(workspaces))
+    # Seat allocation via Hamilton Largest Remainder Method.
+    # Phase 1: each workspace gets 1 guaranteed seat.
+    seats: dict[str, int] = {ws: 1 for ws in workspaces}
+    remaining = top_k - len(workspaces)
 
-    seats: dict[str, int] = {}
-    for ws in workspaces:
-        raw = round(resolved[ws] / total_score * top_k)
-        seats[ws] = max(1, raw)
-
-    # Adjust total seats to match top_k
-    total_seats = sum(seats.values())
-    if total_seats > top_k:
-        sorted_by_seats = sorted(seats, key=lambda w: seats[w], reverse=True)
-        diff = total_seats - top_k
-        for ws in sorted_by_seats:
-            reduce = min(diff, seats[ws] - 1)
-            seats[ws] -= reduce
-            diff -= reduce
-            if diff <= 0:
-                break
-    elif total_seats < top_k:
-        best = max(workspaces, key=lambda w: resolved[w])
-        seats[best] += top_k - total_seats
+    if remaining > 0:
+        total_score = sum(resolved[w] for w in workspaces)
+        if total_score <= 0:
+            total_score = float(len(workspaces))
+        # Phase 2: proportional distribution of remaining seats.
+        quotas = {ws: resolved[ws] / total_score * remaining for ws in workspaces}
+        for ws in workspaces:
+            seats[ws] += int(quotas[ws])
+        # Phase 3: largest fractional remainders get the leftover seats.
+        leftover = remaining - sum(int(quotas[ws]) for ws in workspaces)
+        if leftover > 0:
+            by_remainder = sorted(
+                workspaces, key=lambda w: quotas[w] - int(quotas[w]), reverse=True
+            )
+            for ws in by_remainder[:leftover]:
+                seats[ws] += 1
 
     # Tag and collect per-workspace chunks (top N per workspace)
     ws_chunks: dict[str, list[dict[str, Any]]] = {}
