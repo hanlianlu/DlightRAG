@@ -97,8 +97,7 @@ function ensureLightbox() {
 
 export function openLightbox(src) {
     if (!src) return;
-    const SAFE = ['/', 'blob:', 'data:'];
-    if (!SAFE.some(prefix => src.startsWith(prefix))) return;
+    if (!/^(?:\/|blob:|data:)/.test(src)) return;
     const box = ensureLightbox();
     const img = box.querySelector('.image-lightbox-img');
     img.setAttribute('src', src);
