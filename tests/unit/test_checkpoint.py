@@ -24,9 +24,9 @@ class TestCheckpointInit:
         cp._ensure_db_sync()
 
         conn = sqlite3.connect(str(db_path))
-        tables = {row[0] for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )}
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         assert "sessions" in tables
         assert "turns" in tables
         assert "context_anchors" in tables

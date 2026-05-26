@@ -65,9 +65,7 @@ class ConversationCheckpoint:
     # Public async API
     # ----------------------------------------------------------------
 
-    async def ensure_session(
-        self, session_id: str, *, workspace: str = "default"
-    ) -> None:
+    async def ensure_session(self, session_id: str, *, workspace: str = "default") -> None:
         """Create session row if it doesn't exist."""
         await asyncio.to_thread(self._ensure_session_sync, session_id, workspace)
 
@@ -87,7 +85,11 @@ class ConversationCheckpoint:
         """Save a single conversation turn."""
         await asyncio.to_thread(
             self._save_turn_sync,
-            session_id, turn_number, role, content, cited_chunk_ids,
+            session_id,
+            turn_number,
+            role,
+            content,
+            cited_chunk_ids,
         )
 
     async def save_anchors(
@@ -110,9 +112,7 @@ class ConversationCheckpoint:
             return
         await asyncio.to_thread(self._mark_cited_sync, session_id, turn_number, cited_chunk_ids)
 
-    async def get_history(
-        self, session_id: str, *, max_turns: int = 50
-    ) -> list[dict[str, str]]:
+    async def get_history(self, session_id: str, *, max_turns: int = 50) -> list[dict[str, str]]:
         """Return conversation history as list of {role, content} dicts."""
         return await asyncio.to_thread(self._get_history_sync, session_id, max_turns)
 
@@ -125,7 +125,9 @@ class ConversationCheckpoint:
     ) -> list[dict[str, Any]]:
         """Return context_anchors from the last N turns."""
         return await asyncio.to_thread(
-            self._get_previous_anchors_sync, session_id, last_n_turns,
+            self._get_previous_anchors_sync,
+            session_id,
+            last_n_turns,
         )
 
     async def delete_session(self, session_id: str) -> None:
@@ -258,9 +260,7 @@ class ConversationCheckpoint:
         finally:
             conn.close()
 
-    def _get_history_sync(
-        self, session_id: str, max_turns: int
-    ) -> list[dict[str, str]]:
+    def _get_history_sync(self, session_id: str, max_turns: int) -> list[dict[str, str]]:
         conn = self._ensure_db_sync()
         try:
             rows = conn.execute(
@@ -308,7 +308,7 @@ class ConversationCheckpoint:
                 [session_id, *turn_numbers],
             ).fetchall()
             keys = ["chunk_id", "source_doc", "sidecar_type", "score", "was_cited"]
-            return [dict(zip(keys, r)) for r in rows]
+            return [dict(zip(keys, r, strict=True)) for r in rows]
         finally:
             conn.close()
 
@@ -325,17 +325,13 @@ class ConversationCheckpoint:
         conn = self._ensure_db_sync()
         try:
             conn.execute("PRAGMA foreign_keys = ON")
-            cursor = conn.execute(
-                "DELETE FROM sessions WHERE workspace = ?", (workspace,)
-            )
+            cursor = conn.execute("DELETE FROM sessions WHERE workspace = ?", (workspace,))
             conn.commit()
             return cursor.rowcount
         finally:
             conn.close()
 
-    def _list_sessions_sync(
-        self, workspace: str | None, limit: int
-    ) -> list[dict[str, Any]]:
+    def _list_sessions_sync(self, workspace: str | None, limit: int) -> list[dict[str, Any]]:
         conn = self._ensure_db_sync()
         try:
             if workspace:
@@ -355,7 +351,7 @@ class ConversationCheckpoint:
                     (limit,),
                 ).fetchall()
             keys = ["session_id", "workspace", "created_at", "updated_at", "turn_count"]
-            return [dict(zip(keys, r)) for r in rows]
+            return [dict(zip(keys, r, strict=True)) for r in rows]
         finally:
             conn.close()
 
