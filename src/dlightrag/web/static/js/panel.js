@@ -147,7 +147,7 @@ export function setupPanel() {
                 }
             }
         }
-        // Auto-render KaTeX in any HTMX-swapped content.
+        // Auto-render math in any HTMX-swapped content.
         if (ev.detail.target) renderMath(ev.detail.target);
     });
 
