@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 from dlightrag.models.embedding_inputs import (
     EmbeddingInput,
@@ -308,12 +309,14 @@ def detect_embed_provider(
         return cls()
 
     if base_url:
-        url_lower = base_url.lower()
-        if ":11434" in url_lower:
+        parsed = urlparse(base_url)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+        if port == 11434:
             return OllamaEmbedProvider()
-        if "generativelanguage.googleapis.com" in url_lower:
+        if host.endswith(".generativelanguage.googleapis.com") or host == "generativelanguage.googleapis.com":
             return GeminiEmbedProvider()
-        if "dashscope" in url_lower or "aliyuncs" in url_lower:
+        if "dashscope" in host or "aliyuncs" in host:
             return DashScopeQwenEmbedProvider()
 
     name = model.lower()

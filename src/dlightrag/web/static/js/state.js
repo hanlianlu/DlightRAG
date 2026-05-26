@@ -9,9 +9,11 @@ const SESSION_KEY = 'dlightrag.session_id';
 export function getSessionId() {
     let sessionId = window.localStorage.getItem(SESSION_KEY);
     if (!sessionId) {
-        sessionId = (window.crypto && window.crypto.randomUUID)
-            ? window.crypto.randomUUID()
-            : `session_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+        if (window.crypto && window.crypto.randomUUID) {
+            sessionId = window.crypto.randomUUID();
+        } else {
+            sessionId = 'session_' + Date.now().toString(36) + '_' + performance.now().toString(36).replace('.', '');
+        }
         window.localStorage.setItem(SESSION_KEY, sessionId);
     }
     return sessionId;
