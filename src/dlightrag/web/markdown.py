@@ -1,9 +1,10 @@
 r"""Markdown-to-HTML renderers for Web UI.
 
 Uses markdown-it-py (GFM-like preset) for Markdown/tables/lists and
-Pygments for fenced code block syntax highlighting. LaTeX math blocks
-($$...$$, $...$, \[...\], \(...\)) are protected from markdown processing
-so underscores and other LaTeX syntax survive intact for client-side MathJax.
+Pygments for fenced code block syntax highlighting.  A custom inline
+math rule recognises ``$...$`` and ``\(...\)`` as math tokens and a
+block rule recognises ``$$...$$`` and ``\[...\]`` so that LaTeX
+survives markdown processing intact for client-side MathJax v4.
 
 Two renderers are provided:
 - ``render_markdown``: For answer content (``html: False`` — escapes raw HTML).
@@ -14,9 +15,9 @@ Two renderers are provided:
 from __future__ import annotations
 
 import html as _html
-import re
 
 from markdown_it import MarkdownIt
+from markdown_it.rules_inline import StateInline
 from pygments import highlight as pygments_highlight
 from pygments.formatters import HtmlFormatter
 from pygments.lexers import get_lexer_by_name
@@ -25,40 +26,111 @@ from pygments.util import ClassNotFound
 _FORMATTER = HtmlFormatter(nowrap=True)
 
 # ---------------------------------------------------------------------------
-# Math-block protection — prevent markdown-it-py from corrupting LaTeX
-# (e.g., underscores in $$x_{1}$$ becoming <em> tags).
+# Custom inline math rule — recognises $...$ and \(...\) as math tokens
+# so markdown-it-py never tries to interpret underscores etc. inside them.
 # ---------------------------------------------------------------------------
 
-_MATH_DISPLAY_RE = re.compile(r"(\$\$|\\\[)(.+?)(\$\$|\\\])", re.DOTALL)
-_MATH_INLINE_RE = re.compile(r"\\\((.+?)\\\)|(?<!\$)\$(?![\s\d$])(.+?)(?<![\s])\$(?!\d)")
+
+def _math_inline_rule(state: StateInline, silent: bool) -> bool:
+    """Match inline ``$…$``, ``\(…\)`` and display ``$$…$$``, ``\[…\]``.
+
+    Emits a ``math_inline`` token whose content is the inner LaTeX.
+    The renderer re-wraps it with the correct delimiters so MathJax
+    can pick it up client-side.
+
+    Returns ``True`` on a successful match, advancing ``state.pos`` past
+    the closing delimiter.  When ``silent`` the parser only validates
+    without emitting tokens (used for emphasis/delimiter resolution).
+    """
+    pos = state.pos
+    src = state.src
+
+    # --- \(...\) (inline) --------------------------------------------------
+    if src[pos : pos + 2] == "\\(":
+        end = src.find("\\)", pos + 2)
+        if end == -1:
+            return False
+        if not silent:
+            token = state.push("math_inline", "", 0)
+            token.content = src[pos + 2 : end]
+            token.markup = "\\("
+        state.pos = end + 2
+        return True
+
+    # --- \[...\] (display) -------------------------------------------------
+    if src[pos : pos + 2] == "\\[":
+        end = src.find("\\]", pos + 2)
+        if end == -1:
+            return False
+        if not silent:
+            token = state.push("math_inline", "", 0)
+            token.content = src[pos + 2 : end]
+            token.markup = "\\["
+        state.pos = end + 2
+        return True
+
+    # --- $...$ or $$...$$ --------------------------------------------------
+    if src[pos] != "$":
+        return False
+
+    # \$ is escaped — let the escape rule handle it
+    if pos > 0 and src[pos - 1] == "\\":
+        return False
+
+    # Display math $$...$$ (crosses lines)
+    if pos + 1 < state.posMax and src[pos + 1] == "$":
+        if pos + 2 >= state.posMax:
+            return False
+        end = src.find("$$", pos + 2)
+        if end == -1:
+            return False
+        if not silent:
+            token = state.push("math_inline", "", 0)
+            token.content = src[pos + 2 : end]
+            token.markup = "$$"
+        state.pos = end + 2
+        return True
+
+    # Inline math $...$ (single line)
+    if pos + 1 >= state.posMax:
+        return False
+    nxt = src[pos + 1]
+    if nxt.isspace() or nxt.isdigit() or nxt == "$":
+        return False
+
+    end = src.find("$", pos + 1)
+    if end == -1:
+        return False
+    if "\n" in src[pos + 1 : end]:
+        return False
+    if end > pos + 1 and src[end - 1].isspace():
+        return False
+
+    if not silent:
+        token = state.push("math_inline", "", 0)
+        token.content = src[pos + 1 : end]
+
+    state.pos = end + 1
+    return True
 
 
-_MATH_PLACEHOLDER_RE = re.compile(r"⧸MATH(\d+)⧸")
-
-
-def _protect_math(text: str) -> tuple[str, list[str]]:
-    """Replace math blocks with indexed placeholders."""
-    protected: list[str] = []
-
-    def _replace(m: re.Match) -> str:
-        idx = len(protected)
-        protected.append(m.group(0))
-        return f"⧸MATH{idx}⧸"
-
-    text = _MATH_DISPLAY_RE.sub(_replace, text)
-    text = _MATH_INLINE_RE.sub(_replace, text)
-    return text, protected
-
-
-def _restore_math(html: str, protected: list[str]) -> str:
-    """Restore math blocks from placeholders."""
-    for idx, original in enumerate(protected):
-        html = html.replace(f"⧸MATH{idx}⧸", original)
-    return html
+def _render_math_inline(
+    renderer, tokens: list, idx: int, _options, _env
+) -> str:
+    """Re-wrap math content with its original delimiters for MathJax."""
+    token = tokens[idx]
+    markup = getattr(token, "markup", "$")
+    if markup == "$$":
+        return f"$${token.content}$$"
+    if markup == "\\[":
+        return f"\\[{token.content}\\]"
+    if markup == "\\(":
+        return f"\\({token.content}\\)"
+    return f"${token.content}$"
 
 
 # ---------------------------------------------------------------------------
-# Code highlighting
+# Code highlighting callback
 # ---------------------------------------------------------------------------
 
 
@@ -68,38 +140,60 @@ def _highlight_fn(code: str, lang: str, _attrs: str) -> str:
     Returns highlighted HTML if language is known, a plain ``<pre><code>``
     block for unknown languages, or empty string (no lang) to fall back to
     the default ``<pre><code>`` wrapper.
-
-    markdown-it-py uses the returned string as-is only when it starts with
-    ``<pre``.  Using ``nowrap=True`` in the formatter means Pygments emits
-    bare spans without its own ``<div>``/``<pre>`` wrapper, so we can add our
-    own ``<pre>`` here and avoid double-wrapping.
     """
     if not lang:
         return ""
     try:
         lexer = get_lexer_by_name(lang)
     except ClassNotFound:
-        # Return plain pre/code so the renderer does not add a language class
         return "<pre><code>" + _html.escape(code) + "</code></pre>"
     highlighted = pygments_highlight(code, lexer, _FORMATTER)
-    # Wrap in <pre> so markdown-it uses it as-is (starts with <pre)
     return f'<pre class="highlight"><code>{highlighted}</code></pre>'
 
 
-_md = MarkdownIt("gfm-like", {"html": False, "highlight": _highlight_fn}).disable("linkify")
+# ---------------------------------------------------------------------------
+# Shared markdown-it-py instances
+# ---------------------------------------------------------------------------
 
-_md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).disable("linkify")
+_md_opts_answer = {
+    "html": False,
+    "highlight": _highlight_fn,
+}
+
+
+def _make_md() -> MarkdownIt:
+    """Create a fresh markdown-it-py instance with the math inline rule."""
+    md = MarkdownIt("gfm-like", _md_opts_answer).disable("linkify")
+    # Insert BEFORE the escape rule so \$ still works for literal dollars
+    md.inline.ruler.before("escape", "math_inline", _math_inline_rule)
+    md.add_render_rule("math_inline", _render_math_inline)
+    return md
+
+
+_md = _make_md()
+_md_chunk = MarkdownIt(
+    "gfm-like", {"html": True, "highlight": _highlight_fn}
+).disable("linkify")
+# Also protect math in chunk content
+_md_chunk.inline.ruler.before("escape", "math_inline", _math_inline_rule)
+_md_chunk.add_render_rule("math_inline", _render_math_inline)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 
 def render_markdown(text: str) -> str:
-    """Convert Markdown text to HTML with syntax-highlighted code blocks."""
-    text, math_blocks = _protect_math(text)
-    html = _md.render(text)
-    return _restore_math(html, math_blocks)
+    """Convert Markdown text to HTML with syntax-highlighted code blocks.
+
+    Inline math (``$...$``, ``\(...\)``) and display math
+    (``$$...$$``, ``\[...\]``) are passed through verbatim for
+    client-side MathJax rendering.
+    """
+    return _md.render(text)
 
 
 def render_chunk_content(text: str) -> str:
     """Render chunk content to HTML, allowing HTML passthrough for tables etc."""
-    text, math_blocks = _protect_math(text)
-    html = _md_chunk.render(text)
-    return _restore_math(html, math_blocks)
+    return _md_chunk.render(text)
