@@ -1606,3 +1606,24 @@ body.panel-open .composer-inner {
 .upload-btn:hover svg {
     opacity: 1;
 }
+
+/* === Source Download Icon === */
+
+.source-dl-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-left: 8px;
+    border-radius: 4px;
+    color: var(--color-text-muted, #a8a29e);
+    text-decoration: none;
+    font-size: 14px;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+}
+.source-dl-icon:hover {
+    color: var(--color-text-primary, #f5f5f4);
+    background: rgba(120, 113, 108, 0.16);
+}

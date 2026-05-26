@@ -22,6 +22,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.citations.processor import CitationProcessor
 from dlightrag.citations.source_builder import build_sources
+from dlightrag.core.retrieval.path_resolver import PathResolver
 
 from .deps import get_manager, resolve_workspace
 
@@ -127,7 +128,8 @@ async def retrieve(
         **kwargs,
     )
     public_contexts = _public_contexts(result.contexts)
-    sources = build_sources(public_contexts)
+    resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
+    sources = build_sources(public_contexts, path_resolver=resolver)
     return {
         "answer": result.answer,
         "contexts": public_contexts,
@@ -173,7 +175,8 @@ async def answer(
         for items in result.contexts.values():
             if isinstance(items, list):
                 flat_contexts.extend(items)
-        all_sources = build_sources(public_contexts)
+        _resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
+        all_sources = build_sources(public_contexts, path_resolver=_resolver)
         answer_text = result.answer
         if result.answer and flat_contexts:
             processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
@@ -225,7 +228,8 @@ async def answer(
             for items in contexts.values():
                 if isinstance(items, list):
                     flat_contexts.extend(items)
-            all_sources = build_sources(public_contexts)
+            _resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
+            all_sources = build_sources(public_contexts, path_resolver=_resolver)
             final_answer = clean_answer
             if clean_answer and flat_contexts:
                 processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)

@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.citations import CitationProcessor, extract_highlights_for_sources
 from dlightrag.citations.source_builder import build_sources
+from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.web.deps import get_manager, get_workspace, render_partial, templates
 from dlightrag.web.markdown import render_markdown
 
@@ -203,8 +204,13 @@ async def answer_stream(
                 )
                 seen_img_ids.add(cid)
 
+            resolver = PathResolver(
+                input_dir=str(cfg.input_dir_path),
+                workspace=workspace or manager.config.workspace,
+            )
             sources = build_sources(
                 contexts,
+                path_resolver=resolver,
                 image_url_prefix="/web/images",
                 default_workspace=workspace or manager.config.workspace,
             )
