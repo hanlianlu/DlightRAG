@@ -814,23 +814,6 @@ body {
     font-size: 13px;
 }
 
-.upload-zone {
-    border: 1.5px dashed var(--border-strong);
-    border-radius: var(--radius-sm);
-    padding: 28px;
-    text-align: center;
-    color: var(--text-600);
-    font-size: 13px;
-    cursor: pointer;
-    margin-bottom: 16px;
-    transition: border-color 0.2s, color 0.2s;
-}
-
-.upload-zone:hover {
-    border-color: rgba(210, 182, 97, 0.35);
-    color: var(--text-400);
-}
-
 /* === Empty State === */
 
 .empty-state {
@@ -1341,6 +1324,18 @@ body.panel-open .composer {
     margin-right: var(--panel-width);
     transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
+/* During drag-resize: instant tracking, no transition lag */
+body.resizing.panel-open .chat-area,
+body.resizing.panel-open .composer {
+    transition: none;
+}
+/* Chat content shrinks to fit when panel is open */
+body.panel-open .chat-messages {
+    max-width: calc(100vw - var(--panel-width) - 48px);
+}
+body.panel-open .composer-inner {
+    max-width: calc(100vw - var(--panel-width) - 48px);
+}
 
 /* === Answer Image Gallery === */
 
@@ -1387,34 +1382,74 @@ body.panel-open .composer {
     padding: 8px 4px 3px;
 }
 
-/* === Upload Buttons (Files Panel) === */
+/* === Upload Zone (Files Panel) === */
+
+.upload-zone {
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius-sm);
+    padding: 24px 16px 16px;
+    text-align: center;
+    color: var(--text-600);
+    cursor: pointer;
+    margin-bottom: 16px;
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.upload-zone:hover {
+    border-color: rgba(210, 182, 97, 0.35);
+    background: rgba(210, 182, 97, 0.03);
+}
+
+.upload-icon {
+    color: var(--text-500);
+    margin-bottom: 8px;
+    opacity: 0.7;
+}
+
+.upload-text {
+    font-size: 13px;
+    color: var(--text-400);
+    margin-bottom: 2px;
+}
+
+.upload-hint {
+    font-size: 11px;
+    color: var(--text-600);
+    margin-bottom: 14px;
+}
 
 .upload-buttons {
     display: flex;
     gap: 8px;
-    margin-bottom: 12px;
+    justify-content: center;
 }
 
 .upload-btn {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    background: rgba(210, 182, 97, 0.08);
-    border: 1px solid rgba(210, 182, 97, 0.16);
-    color: var(--gold-200);
+    gap: 5px;
+    padding: 7px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-300);
     font-size: 12px;
     font-family: inherit;
     border-radius: 8px;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .upload-btn:hover {
-    background: rgba(210, 182, 97, 0.14);
-    border-color: rgba(210, 182, 97, 0.3);
+    background: rgba(210, 182, 97, 0.1);
+    border-color: rgba(210, 182, 97, 0.28);
+    color: var(--gold-200);
 }
 
 .upload-btn svg {
     flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.upload-btn:hover svg {
+    opacity: 1;
 }
