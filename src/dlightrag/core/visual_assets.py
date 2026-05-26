@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import base64
-import re
+import logging
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
@@ -13,7 +13,7 @@ from dlightrag.core.retrieval.filtered_vdb import fetch_chunks_by_ids
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from dlightrag.utils.images import detect_image_mime, thumbnail_bytes
 
-_CHUNK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,23 +54,29 @@ class VisualAssetResolver:
 
     async def resolve(self, chunk_id: str) -> VisualAsset | None:
         """Resolve the full image payload for a chunk id."""
-        if not _valid_chunk_id(chunk_id):
-            return None
         text_chunks = getattr(self._lightrag, "text_chunks", None)
         if text_chunks is None:
+            logger.warning("VisualAssetResolver: text_chunks is None for chunk_id=%s", chunk_id)
             return None
 
         chunks = await fetch_chunks_by_ids(text_chunks, [chunk_id])
         if not chunks:
+            logger.warning("VisualAssetResolver: no chunks from fetch_chunks_by_ids for chunk_id=%s", chunk_id)
             return None
         await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
         chunk = chunks[0]
         image_data = chunk.get("image_data")
         if not isinstance(image_data, str) or not image_data:
+            logger.warning(
+                "VisualAssetResolver: no image_data in chunk_id=%s keys=%s",
+                chunk_id,
+                list(chunk.keys()),
+            )
             return None
         try:
             raw = base64.b64decode(image_data)
-        except Exception:
+        except Exception as exc:
+            logger.warning("VisualAssetResolver: base64 decode failed for chunk_id=%s: %s", chunk_id, exc)
             return None
         media_type = str(chunk.get("image_mime_type") or detect_image_mime(raw))
         return VisualAsset(chunk_id=chunk_id, data=raw, media_type=media_type)
@@ -89,10 +95,6 @@ class VisualAssetResolver:
         thumb = VisualAsset(chunk_id=chunk_id, data=data, media_type=media_type)
         self._thumb_cache.set(cache_key, thumb)
         return thumb
-
-
-def _valid_chunk_id(chunk_id: str) -> bool:
-    return bool(_CHUNK_ID_RE.fullmatch(chunk_id))
 
 
 __all__ = ["ThumbnailCache", "VisualAsset", "VisualAssetResolver"]

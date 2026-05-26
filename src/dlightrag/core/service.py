@@ -1169,6 +1169,17 @@ class RAGService:
                 if missing:
                     await self._inject_candidate_chunks(kg_result, sorted(missing))
 
+        # --- Step 2.5: Hydrate image data for all retrieved/injected chunks ---
+        # BM25 chunks and other post-fusion additions haven't been through
+        # hydration yet, so they lack image_data for visual chunks.
+        lr = self.lightrag
+        if lr is not None:
+            from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
+
+            chunks_to_hydrate = kg_result.contexts.get("chunks", [])
+            if chunks_to_hydrate:
+                await hydrate_lightrag_chunk_provenance(lr, chunks_to_hydrate)
+
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)
         kg_result.trace["metadata_enriched"] = True

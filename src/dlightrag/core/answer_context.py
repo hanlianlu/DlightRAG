@@ -40,7 +40,6 @@ class AnswerContextPacker:
         target_chunks = context_top_k if context_top_k and context_top_k > 0 else None
         packed_chunks: list[dict[str, Any]] = []
         image_blocks: dict[str, dict[str, Any]] = {}
-        skipped_image_only = 0
         skipped_images = 0
         sent_images = 0
 
@@ -61,10 +60,6 @@ class AnswerContextPacker:
                     sent_images += 1
                 else:
                     skipped_images += 1
-
-            if image_block is None and image_data and not content:
-                skipped_image_only += 1
-                continue
 
             if content or image_block is not None:
                 packed_chunk = dict(chunk)
@@ -101,7 +96,6 @@ class AnswerContextPacker:
             "answer_context_chunks": len(packed_chunks),
             "answer_context_images_sent": sent_images,
             "answer_context_images_skipped": skipped_images,
-            "answer_context_skipped_image_only_chunks": skipped_image_only,
         }
         return PackedAnswerContext(
             contexts=packed_contexts,
