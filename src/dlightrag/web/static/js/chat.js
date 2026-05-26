@@ -6,6 +6,32 @@ import {closePanel} from './panel.js';
 import {streamSSE} from './sse.js';
 import {createAnswerRenderer, createChatTurn, setAnswerError} from './chat_renderer.js';
 
+function setupComposerMultiline() {
+    const textarea = document.querySelector('.composer-input');
+    const form = document.getElementById('query-form');
+    if (!textarea || !form) return;
+
+    function updateMultiline() {
+        var lineHeight = parseInt(getComputedStyle(textarea).lineHeight, 10) || 24;
+        var rows = Math.floor(textarea.scrollHeight / lineHeight);
+        form.classList.toggle('multiline', rows > 1);
+
+        textarea.style.height = 'auto';
+        var maxHeight = 160;
+        textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
+    }
+
+    textarea.addEventListener('input', updateMultiline);
+
+    form.addEventListener('submit', function () {
+        if (!textarea.value.trim()) return;
+        setTimeout(function () {
+            textarea.style.height = '';
+            form.classList.remove('multiline');
+        }, 0);
+    });
+}
+
 let queryInFlight = false;
 
 export async function submitQuery(query) {
@@ -54,6 +80,7 @@ export async function submitQuery(query) {
 }
 
 export function setupQueryForm() {
+    setupComposerMultiline();
     const form = document.getElementById('query-form');
     if (!form) return;
     const textarea = form.querySelector('.composer-input');

@@ -69,6 +69,18 @@ def _staging_dir(workspace: str) -> Path:
     return p
 
 
+def _safe_relative_path(filename: str) -> Path:
+    """Sanitize a webkitRelativePath — reject path traversal attempts."""
+    if not filename:
+        raise ValueError("Empty filename")
+    if ".." in filename or "\0" in filename:
+        raise ValueError(f"Unsafe filename: {filename!r}")
+    parts = Path(filename).parts
+    if not parts:
+        raise ValueError(f"Empty path parts: {filename!r}")
+    return Path(*parts)
+
+
 # ---------------------------------------------------------------------------
 # GET /web/files — file list panel content
 # ---------------------------------------------------------------------------
@@ -157,11 +169,13 @@ async def upload_files(
         for f in files:
             if not f.filename:
                 continue
-            safe_name = Path(f.filename).name
-            if not safe_name or safe_name in (".", ".."):
+            try:
+                rel = _safe_relative_path(f.filename)
+            except ValueError:
                 logger.warning("Rejected upload with unsafe filename: %r", f.filename)
                 continue
-            dest = dest_dir / safe_name
+            dest = dest_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
             with open(dest, "wb") as out:
                 while chunk := await f.read(1024 * 1024):
                     bytes_written += len(chunk)

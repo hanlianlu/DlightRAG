@@ -1,4 +1,14 @@
 <div id="answer-content">{{ answer | citation_badges }}</div>
+{% if answer_images %}
+<div class="answer-image-strip">
+  {% for img in answer_images %}
+  <div class="answer-image-item" data-action="open-lightbox" data-src="{{ img.url }}">
+    <img src="{{ img.thumb_url }}" alt="{{ img.label }}" loading="lazy">
+    <span class="answer-image-label">{{ img.label }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 <div id="source-data" class="visually-hidden">
     {% include "partials/source_panel.html" %}
 </div>

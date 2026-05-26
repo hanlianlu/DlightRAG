@@ -158,6 +158,23 @@ async def answer_stream(
 
             clean_answer = getattr(token_iter, "answer", None) or full_answer
 
+            current_image_ids = getattr(token_iter, "current_image_ids", []) or []
+            image_descriptions = getattr(token_iter, "image_descriptions", []) or []
+
+            answer_images = []
+            for i, cid in enumerate(current_image_ids):
+                desc = ""
+                if isinstance(image_descriptions, dict):
+                    desc = image_descriptions.get(cid, "")
+                elif isinstance(image_descriptions, list) and i < len(image_descriptions):
+                    desc = image_descriptions[i]
+                answer_images.append({
+                    "chunk_id": cid,
+                    "url": f"/web/images/{workspace or manager.config.workspace}/{cid}",
+                    "thumb_url": f"/web/images/{workspace or manager.config.workspace}/{cid}?size=thumb",
+                    "label": desc or f"Visual {i + 1}",
+                })
+
             flat_contexts = []
             for items in contexts.values():
                 if isinstance(items, list):
@@ -179,6 +196,7 @@ async def answer_stream(
                 "partials/answer_done.html",
                 answer=result.answer,
                 sources=result.sources,
+                answer_images=answer_images,
             )
             done_payload = {
                 "html": done_html,
