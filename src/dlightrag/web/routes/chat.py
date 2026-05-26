@@ -229,6 +229,22 @@ async def answer_stream(
             }
             yield f"event: done\ndata: {json.dumps(done_payload)}\n\n"
 
+            # Save conversation checkpoint for multi-turn persistence
+            try:
+                cited_ids = []
+                for s in result.sources:
+                    if s.id:
+                        cited_ids.append(s.id)
+                await manager.save_turn_checkpoint(
+                    session_id=session_id or "",
+                    query=query,
+                    answer=clean_answer,
+                    contexts=contexts,
+                    cited_chunk_ids=cited_ids,
+                )
+            except Exception:
+                logger.warning("Checkpoint save failed", exc_info=True)
+
             trace = getattr(token_iter, "trace", None)
             if isinstance(trace, dict) and trace:
                 yield f"event: trace\ndata: {json.dumps(trace)}\n\n"
