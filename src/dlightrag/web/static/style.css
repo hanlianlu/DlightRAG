@@ -1141,6 +1141,30 @@ body {
     cursor: pointer;
 }
 
+.image-lightbox-prev,
+.image-lightbox-next {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    color: #0f172a;
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    z-index: 1001;
+}
+.image-lightbox-prev { left: var(--space-related); }
+.image-lightbox-next { right: var(--space-related); }
+.image-lightbox-prev:hover,
+.image-lightbox-next:hover {
+    background: rgba(255, 255, 255, 1);
+}
+
 /* === Drop Overlay === */
 
 .drop-overlay {
