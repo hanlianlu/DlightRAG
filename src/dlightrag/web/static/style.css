@@ -1,4 +1,10 @@
-/* DlightRAG Web Frontend — Immersive Chat Design */
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * Fluid design system: everything scales with viewport width via clamp().
+ * On phones (360px, ~30cm) → compact but readable.
+ * On laptops (1440px, ~60cm) → comfortable reading width.
+ * On TVs (3840px, ~3m) → wider content, larger type for distance viewing.
+ */
 
 :root {
     --gold-100: #f7de9d;
@@ -27,6 +33,16 @@
     --radius: 20px;
     --radius-sm: 12px;
 
+    /* Fluid layout: proportional to viewport, with floor and ceiling.
+       On a phone (390px × 55% = 214) → floor at 340px.
+       On a laptop (1440px × 55% = 792) → in fluid range.
+       On a TV (3840px × 55% = 2112) → ceiling at 880px. */
+    --content-width: clamp(340px, 55vw, 880px);
+
+    /* Fluid type: base font grows with viewport for distance viewing.
+       15px on phone, ~16.5px on laptop, 19px on TV. */
+    --text-base: clamp(15px, 1.6vw, 19px);
+
     --panel-width: 420px;
     --panel-min-width: 320px;
 }
@@ -39,6 +55,7 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    font-size: var(--text-base);
     background: var(--bg-base);
     color: var(--text-300);
     height: 100vh;
@@ -286,7 +303,7 @@ body {
 }
 
 .chat-messages {
-    max-width: 720px;
+    max-width: var(--content-width);
     margin: 0 auto;
     padding-bottom: 24px;
 }
@@ -344,7 +361,7 @@ body {
 
 .composer-inner {
     width: 100%;
-    max-width: 720px;
+    max-width: var(--content-width);
 }
 
 .composer-form {
@@ -1329,12 +1346,12 @@ body.resizing.panel-open .chat-area,
 body.resizing.panel-open .composer {
     transition: none;
 }
-/* Chat content shrinks to fit when panel is open */
+/* Chat content shrinks to fit when panel is open, capped by fluid width */
 body.panel-open .chat-messages {
-    max-width: calc(100vw - var(--panel-width) - 48px);
+    max-width: min(var(--content-width), calc(100vw - var(--panel-width) - 48px));
 }
 body.panel-open .composer-inner {
-    max-width: calc(100vw - var(--panel-width) - 48px);
+    max-width: min(var(--content-width), calc(100vw - var(--panel-width) - 48px));
 }
 
 /* === Answer Image Gallery === */
