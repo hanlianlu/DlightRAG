@@ -3,6 +3,7 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 from fastapi import APIRouter, Form, Request
@@ -28,8 +29,8 @@ def _error_response(message: str, status_code: int = 400) -> HTMLResponse:
 
 
 def _sanitize_cookie_value(value: str) -> str:
-    """Strip characters that could be used for cookie injection (CRLF, semicolon)."""
-    return value.replace("\r", "").replace("\n", "").replace(";", "").strip()
+    """Keep only valid workspace name characters (alphanumeric, dash, underscore, comma)."""
+    return re.sub(r"[^A-Za-z0-9,_-]", "", value).strip(",")
 
 
 def _set_workspace_cookies(response: HTMLResponse, request: Request, workspaces: list[str]) -> None:

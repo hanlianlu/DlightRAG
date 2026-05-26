@@ -97,10 +97,11 @@ function ensureLightbox() {
 
 export function openLightbox(src) {
     if (!src) return;
-    if (!src.startsWith('/') && !src.startsWith('blob:')) return;
+    const SAFE = ['/', 'blob:', 'data:'];
+    if (!SAFE.some(prefix => src.startsWith(prefix))) return;
     const box = ensureLightbox();
     const img = box.querySelector('.image-lightbox-img');
-    img.src = src;
+    img.setAttribute('src', src);
     box.classList.add('open');
     box.setAttribute('aria-hidden', 'false');
 }

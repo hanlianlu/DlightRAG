@@ -67,7 +67,10 @@ async def test_visual_asset_resolver_returns_none_for_missing_image_data() -> No
     resolver = VisualAssetResolver(lightrag=rag)
 
     with (
-        patch("dlightrag.core.visual_assets.fetch_chunks_by_ids", new=AsyncMock(return_value=[{"chunk_id": "c1"}])),
+        patch(
+            "dlightrag.core.visual_assets.fetch_chunks_by_ids",
+            new=AsyncMock(return_value=[{"chunk_id": "c1"}]),
+        ),
         patch("dlightrag.core.visual_assets.hydrate_lightrag_chunk_provenance", new=AsyncMock()),
     ):
         assert await resolver.resolve("chunk_no_image") is None
