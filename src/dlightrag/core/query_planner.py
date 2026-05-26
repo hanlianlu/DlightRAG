@@ -12,6 +12,7 @@ Consumers:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -140,6 +141,47 @@ class QueryPlanner:
         self._schema_ts: float = 0.0
         self._schema_ttl = schema_ttl
 
+    def _make_llm_call(self) -> Callable[..., Any]:
+        """Return a closure that calls ``self._llm_func`` with the right signature.
+
+        LightRAG-adapted wrappers expect ``(prompt, *, system_prompt, ...)``
+        while raw completion funcs expect ``(messages, **kw)``. We detect
+        which one we have at init time so the hot path doesn't branch.
+        """
+        llm_func = self._llm_func
+        assert llm_func is not None  # plan() guards this before calling us
+
+        try:
+            sig = inspect.signature(llm_func)
+            params = sig.parameters
+        except (ValueError, TypeError):
+            params = {}
+
+        if "prompt" in params and "messages" not in params:
+            # LightRAG-adapted wrapper: (prompt, *, system_prompt, ...)
+
+            async def _call(query: str, system_prompt: str) -> str:
+                return await llm_func(
+                    prompt=query,
+                    system_prompt=system_prompt,
+                    structured_output=QUERY_PLAN_STRUCTURED_OUTPUT,
+                )
+
+            return _call
+
+        # Raw completion func (messages-first, default path)
+
+        async def _call(query: str, system_prompt: str) -> str:
+            return await llm_func(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query},
+                ],
+                structured_output=QUERY_PLAN_STRUCTURED_OUTPUT,
+            )
+
+        return _call
+
     async def plan(
         self,
         query: str,
@@ -189,18 +231,17 @@ class QueryPlanner:
             history_section=history_section,
         )
 
+        # Detect callable signature: LightRAG-adapted wrappers expect
+        # (prompt, *, system_prompt, ...) while raw completion funcs
+        # expect (messages, **kw).
+        _llm_call = self._make_llm_call()
+
         # LLM call with adaptive retry (up to 2 retries with exponential backoff)
         _MAX_RETRIES = 2
         response: str | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                response = await self._llm_func(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": query},
-                    ],
-                    structured_output=QUERY_PLAN_STRUCTURED_OUTPUT,
-                )
+                response = await _llm_call(query, system_prompt)
                 logger.info(
                     "[Planner] LLM call: %.1fs (attempt %d)", time.monotonic() - t1, attempt
                 )
