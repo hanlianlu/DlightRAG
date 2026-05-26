@@ -159,7 +159,7 @@ body {
     background: transparent;
     border: none;
     color: var(--color-text-subtle);
-    padding: var(--space-tight) 12px;
+    padding: var(--space-tight) var(--space-component);
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: var(--font-size-detail);
@@ -323,7 +323,7 @@ body {
     align-items: center;
     display: flex;
     gap: var(--space-tight);
-    padding: 4px 6px;
+    padding: var(--space-inline) var(--space-tight);
 }
 
 .workspace-popover-input {
@@ -411,7 +411,7 @@ body {
 
 .composer {
     flex-shrink: 0;
-    padding: 0 var(--space-section) 24px;
+    padding: 0 var(--space-section) var(--space-section);
     display: flex;
     justify-content: center;
 }
@@ -444,7 +444,7 @@ body {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    padding: var(--space-tight) 8px;
+    padding: var(--space-tight) var(--space-tight);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -550,7 +550,7 @@ body {
     text-align: center;
     font-size: var(--font-size-caption);
     color: var(--color-text-subtle);
-    padding: 8px 0;
+    padding: var(--space-tight) 0;
     margin: var(--space-component) 0;
     border-top: 1px dashed var(--color-text-subtle);
     letter-spacing: 0.3px;
@@ -626,7 +626,7 @@ body {
     color: var(--color-text-dim);
     font-size: var(--font-size-body);
     cursor: pointer;
-    padding: 4px 8px;
+    padding: var(--space-inline) var(--space-tight);
     border-radius: var(--radius-sm);
     transition: background 0.15s, color 0.15s;
 }
@@ -754,8 +754,8 @@ body {
 .source-chunk {
     background: var(--color-bg-elevated);
     border-left: 3px solid var(--color-gold-400);
-    padding: 12px 14px;
-    margin-bottom: 10px;
+    padding: var(--space-component) var(--space-related);
+    margin-bottom: var(--space-component);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
     transition: border-color 0.15s;
 }
@@ -807,7 +807,7 @@ body {
 .source-chunk-content th,
 .source-chunk-content td {
     border: 1px solid var(--color-border-subtle);
-    padding: var(--space-tight) 10px;
+    padding: var(--space-tight) var(--space-component);
     text-align: left;
 }
 .source-chunk-content th {
@@ -824,7 +824,7 @@ body {
 .highlight {
     background: rgba(210, 182, 97, 0.12);
     color: var(--color-gold-100);
-    padding: 1px 3px;
+    padding: 1px var(--space-inline);
     border-radius: 3px;
     border-bottom: 1.5px solid rgba(210, 182, 97, 0.4);
 }
@@ -833,8 +833,8 @@ body {
 
 .show-all-btn {
     width: 100%;
-    padding: 10px;
-    margin-top: 10px;
+    padding: var(--space-component);
+    margin-top: var(--space-component);
     background: transparent;
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-subtle);
@@ -859,7 +859,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 0;
+    padding: var(--space-component) 0;
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
@@ -877,7 +877,7 @@ body {
     color: var(--color-text-dim);
     cursor: pointer;
     font-size: var(--font-size-detail);
-    padding: 4px 8px;
+    padding: var(--space-inline) var(--space-tight);
     border-radius: var(--radius-sm);
     transition: color 0.15s, background 0.15s;
 }
@@ -892,7 +892,7 @@ body {
     border: 1px solid rgba(248, 113, 113, 0.22);
     border-radius: var(--radius-sm);
     color: var(--color-danger);
-    padding: 12px 14px;
+    padding: var(--space-component) var(--space-related);
 }
 
 .text-error {
@@ -900,7 +900,7 @@ body {
 }
 
 .file-empty-state {
-    padding: 40px 0;
+    padding: var(--space-layout) 0;
     font-size: var(--font-size-detail);
 }
 
@@ -916,7 +916,7 @@ body {
 .streaming-dot {
     display: inline-block;
     width: var(--space-tight);
-    height: 6px;
+    height: var(--space-tight);
     background: var(--color-gold-200);
     border-radius: 50%;
     animation: pulse 1.2s ease-in-out infinite;
@@ -948,7 +948,7 @@ body {
     height: 5px;
     background: var(--color-gold-200);
     border-radius: 50%;
-    margin-left: 6px;
+    margin-left: var(--space-tight);
     vertical-align: middle;
     animation: pulse 1.2s ease-in-out infinite;
 }
@@ -957,12 +957,12 @@ body {
 
 .toast {
     position: fixed;
-    bottom: 20px;
+    bottom: var(--space-section);
     left: 50%;
     transform: translateX(-50%);
     background: var(--color-bg-elevated);
     color: var(--color-text-tertiary);
-    padding: 10px 20px;
+    padding: var(--space-component) var(--space-section);
     border-radius: var(--radius-sm);
     font-size: var(--font-size-detail);
     z-index: 200;
@@ -976,7 +976,7 @@ body {
 /* === File Status Indicator === */
 
 .file-status {
-    padding: 12px 16px;
+    padding: var(--space-component) var(--space-related);
     font-size: var(--font-size-detail);
     color: var(--color-text-subtle);
     text-align: center;
@@ -989,13 +989,13 @@ body {
 .spinner {
     display: inline-block;
     width: var(--space-related);
-    height: 14px;
+    height: var(--space-related);
     border: 2px solid var(--color-text-subtle);
     border-top-color: var(--color-gold-200);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     vertical-align: middle;
-    margin-right: 8px;
+    margin-right: var(--space-tight);
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -1340,7 +1340,7 @@ body {
 
 .ai-message-content :not(pre) > code {
     background: var(--color-bg-elevated);
-    padding: 2px 6px;
+    padding: var(--space-inline) var(--space-tight);
     border-radius: var(--radius-sm);
     color: var(--color-gold-100);
 }
