@@ -57,6 +57,18 @@ def merge_results(
             if i < len(ws_chunks):
                 merged_chunks.append(ws_chunks[i])
 
+    # Dedup by chunk_id, keeping highest-scored occurrence (already ordered)
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for c in merged_chunks:
+        cid = c.get("chunk_id", "")
+        if cid and cid in seen:
+            continue
+        if cid:
+            seen.add(cid)
+        deduped.append(c)
+    merged_chunks = deduped
+
     if chunk_top_k is not None:
         merged_chunks = merged_chunks[:chunk_top_k]
 
@@ -166,6 +178,18 @@ def merge_results_weighted(
         if not added:
             break
         rnd += 1
+
+    # Dedup by chunk_id (safety net for cross-workspace duplicates)
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for c in merged:
+        cid = c.get("chunk_id", "")
+        if cid and cid in seen:
+            continue
+        if cid:
+            seen.add(cid)
+        deduped.append(c)
+    merged = deduped
 
     # Re-canonicalize reference_id under the federation namespace.
     from dlightrag.core.retrieval import canonicalize_reference_ids
