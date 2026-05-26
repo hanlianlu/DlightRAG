@@ -250,7 +250,6 @@ class AnswerEngine:
         data URI/base64 payloads are still bounded by the shared budget.
         """
         content: list[dict[str, Any]] = []
-        image_budget: AnswerImageBudget | None = None
         if query_image_blocks is None or chunk_image_blocks_by_chunk_id is None:
             prepared = self._prepare_prompt_context("", contexts, query_images=query_images)
             contexts = prepared.contexts
@@ -266,7 +265,6 @@ class AnswerEngine:
             self._build_excerpt_blocks(
                 contexts,
                 indexer,
-                image_budget=image_budget,
                 image_blocks_by_chunk_id=chunk_image_blocks_by_chunk_id,
             )
         )
@@ -382,7 +380,6 @@ class AnswerEngine:
     def _build_excerpt_blocks(
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
-        image_budget: AnswerImageBudget | None = None,
         image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Build per-document content blocks with interleaved images.
@@ -430,7 +427,7 @@ class AnswerEngine:
             header = f"### Document [{ref_id}]: {filename}{meta_suffix}"
             blocks.append({"type": "text", "text": header})
 
-            # Per-chunk: image label + image + text content
+            # Per-chunk: image label + image + text content + dynamic metadata
             for chunk in doc_chunks:
                 content = chunk.get("content", "").strip()
                 chunk_id = chunk.get("chunk_id", "")
@@ -449,8 +446,6 @@ class AnswerEngine:
                 if img_data:
                     if image_blocks_by_chunk_id is not None:
                         block = image_blocks_by_chunk_id.get(str(chunk_id))
-                    elif image_budget is not None:
-                        block = image_budget.add_base64(img_data, label=chunk_id or filename)
                     else:
                         block = {
                             "type": "image_url",
@@ -478,6 +473,11 @@ class AnswerEngine:
                         else:
                             label_line = f"[{filename}]"
                     blocks.append({"type": "text", "text": f"{label_line}\n{content}"})
+
+                # Dynamic metadata line — surfaces sidecar, pipeline_stage, etc.
+                meta_line = _format_chunk_metadata(chunk)
+                if meta_line:
+                    blocks.append({"type": "text", "text": meta_line})
 
         return blocks
 
@@ -510,9 +510,76 @@ class AnswerEngine:
         ]
         return "\n\n".join(prompt_parts), indexer
 
-    # _parse_response removed: references are now extracted programmatically
-    # by CitationProcessor from inline [n]/[n-m] markers, not from
-    # model-generated reference-section text.
+
+# ── Internal keys & metadata formatting ──────────────────────────────────
+# Fields that are internal plumbing — never sent to the LLM context.
+# Everything else in the chunk dict auto-surfaces as structured metadata.
+_INTERNAL_KEYS: frozenset[str] = frozenset(
+    {
+        "chunk_id",
+        "content",
+        "file_path",
+        "full_doc_id",
+        "image_data",
+        "image_mime_type",
+        "metadata",
+        "page_idx",
+        "reference_id",
+        "relevance_score",
+        "_answer_image_sent",
+    }
+)
+
+
+def _format_chunk_metadata(
+    chunk: dict[str, Any],
+    *,
+    internal_keys: frozenset[str] = _INTERNAL_KEYS,
+) -> str:
+    """Serialize non-internal chunk fields into a compact metadata line.
+
+    Returns a string like ``[meta: sidecar.type=drawing, sidecar.id=im-hash-xxx]``
+    or an empty string when there are no extra fields.
+    """
+    extra: dict[str, Any] = {}
+    for k, v in chunk.items():
+        if k in internal_keys or k.startswith("_"):
+            continue
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        extra[k] = v
+
+    if not extra:
+        return ""
+
+    parts: list[str] = []
+    for k, v in extra.items():
+        if isinstance(v, dict):
+            for sk, sv in v.items():
+                if sv is not None and str(sv).strip():
+                    parts.append(f"{k}.{sk}={sv}")
+        elif isinstance(v, list):
+            items = [str(x) for x in v[:5] if str(x).strip()]
+            if len(v) > 5:
+                items.append(f"...({len(v)} total)")
+            parts.append(f"{k}=[{', '.join(items)}]")
+        elif isinstance(v, bool):
+            parts.append(f"{k}={v}")
+        elif isinstance(v, (int, float)):
+            if isinstance(v, float):
+                parts.append(f"{k}={v:.4f}")
+            else:
+                parts.append(f"{k}={v}")
+        else:
+            s = str(v).strip()
+            if len(s) > 120:
+                s = s[:117] + "..."
+            parts.append(f"{k}={s}")
+
+    if not parts:
+        return ""
+
+    return "[meta: " + ", ".join(parts) + "]"
 
 
 def _build_image_label(
@@ -521,29 +588,45 @@ def _build_image_label(
     chunk: dict[str, Any],
     filename: str,
 ) -> str:
-    """Build an enriched image label with metadata.
+    """Build an enriched image label with sidecar awareness.
 
-    Uses chunk metadata (doc_title, page_idx) to produce labels like::
+    Produces labels like::
 
-        [1-2] "2025 Annual Report" Page 7
+        [1-2] "2025 Annual Report" Page 7 (VLM-generated drawing)
 
-    instead of bare ``[1-2] Page image``.
+    The ``(VLM-generated drawing)`` suffix appears when the chunk's
+    sidecar indicates a drawing type, helping the LLM distinguish
+    real document images from VLM-generated illustrations.
     """
     meta = chunk.get("metadata") or {}
     title = meta.get("doc_title", "")
     page_idx = chunk.get("page_idx")
+    sidecar = chunk.get("sidecar")
 
     label_parts: list[str] = []
     if cite_tag:
         label_parts.append(cite_tag)
     if title:
         label_parts.append(f'"{title}"')
-    if page_idx:
+    if page_idx is not None:
         label_parts.append(f"Page {page_idx}")
     elif filename:
         label_parts.append(filename)
     else:
         label_parts.append("Page image")
+
+    # Annotate VLM-generated drawings so the LLM can distinguish them
+    # from actual document photographs/scans.
+    if isinstance(sidecar, dict):
+        stype = sidecar.get("type", "")
+        if stype == "drawing":
+            sid = sidecar.get("id", "")
+            if sid:
+                label_parts.append(f"(VLM drawing: {sid[:24]})")
+            else:
+                label_parts.append("(VLM-generated drawing)")
+        elif stype:
+            label_parts.append(f"(sidecar: {stype})")
 
     return " ".join(label_parts)
 
