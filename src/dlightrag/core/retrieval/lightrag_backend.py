@@ -158,7 +158,9 @@ class LightRAGMixBackend:
                     if not cid:
                         continue
                     dist = c.get("distance")
-                    if cid not in merged or (dist is not None and dist < merged[cid].get("distance", float("inf"))):
+                    if cid not in merged or (
+                        dist is not None and dist < merged[cid].get("distance", float("inf"))
+                    ):
                         merged[cid] = {
                             "chunk_id": cid,
                             "content": c.get("content", ""),
@@ -168,7 +170,9 @@ class LightRAGMixBackend:
                         }
             except Exception:
                 logger.warning("Direct visual query failed", exc_info=True)
-        return sorted(merged.values(), key=lambda c: c.get("relevance_score") or float("inf"))[:top_k]
+        return sorted(merged.values(), key=lambda c: c.get("relevance_score") or float("inf"))[
+            :top_k
+        ]
 
     async def _hydrate_chunk_provenance(self, chunks: list[dict[str, Any]]) -> None:
         await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
