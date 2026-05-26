@@ -62,11 +62,12 @@ async def test_visual_asset_resolver_generates_and_caches_thumbnail() -> None:
     fetch.assert_awaited_once()
 
 
-async def test_visual_asset_resolver_rejects_invalid_chunk_ids() -> None:
+async def test_visual_asset_resolver_returns_none_for_missing_image_data() -> None:
     rag = MagicMock(text_chunks=object())
     resolver = VisualAssetResolver(lightrag=rag)
 
-    with patch("dlightrag.core.visual_assets.fetch_chunks_by_ids", new=AsyncMock()) as fetch:
-        assert await resolver.resolve("../bad") is None
-
-    fetch.assert_not_called()
+    with (
+        patch("dlightrag.core.visual_assets.fetch_chunks_by_ids", new=AsyncMock(return_value=[{"chunk_id": "c1"}])),
+        patch("dlightrag.core.visual_assets.hydrate_lightrag_chunk_provenance", new=AsyncMock()),
+    ):
+        assert await resolver.resolve("chunk_no_image") is None

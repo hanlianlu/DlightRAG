@@ -279,6 +279,7 @@ class TestBuildAddonParams:
         assert result == {
             "language": "Chinese",
             "entity_type_prompt_file": "/prompts/domain-entities.md",
+            "chunker": {"paragraph_semantic": {"chunk_token_size": 1024}},
         }
 
 

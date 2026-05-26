@@ -182,7 +182,7 @@ class TestAnswerEngineGenerate:
         assert result.contexts["chunks"] == []
         assert result.trace["answer_context_query_images_sent"] == 1
         assert result.trace["answer_context_images_skipped"] == 1
-        assert result.trace["answer_context_skipped_image_only_chunks"] == 1
+        assert result.trace["answer_context_images_skipped"] == 1
         messages = model_func.call_args.kwargs["messages"]
         user_content = messages[1]["content"]
         assert sum(1 for item in user_content if item.get("type") == "image_url") == 1
@@ -227,7 +227,7 @@ class TestAnswerEngineGenerate:
 
         assert result.contexts is not contexts
         assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["c1"]
-        assert result.trace["answer_context_skipped_image_only_chunks"] == 1
+        assert result.trace["answer_context_images_skipped"] == 1
 
     @pytest.mark.asyncio
     async def test_generate_limits_final_prompt_contexts(self) -> None:

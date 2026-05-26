@@ -38,7 +38,7 @@ def test_packer_skips_image_only_chunks_when_image_budget_is_exhausted() -> None
 
     assert [c["chunk_id"] for c in packed.contexts["chunks"]] == ["text-1"]
     assert packed.image_blocks_by_chunk_id == {}
-    assert packed.trace["answer_context_skipped_image_only_chunks"] == 1
+    assert packed.trace["answer_context_images_skipped"] == 1
     assert packed.contexts["entities"] == []
 
 
