@@ -55,6 +55,8 @@ export function setupPanelResize() {
         handle.classList.add('active');
         document.body.style.userSelect = 'none';
         document.body.style.cursor = 'col-resize';
+        document.body.setAttribute('data-resizing', '');
+        document.body.classList.add('resizing');
     }
 
     function onPointerMove(e) {
@@ -70,8 +72,14 @@ export function setupPanelResize() {
         handle.classList.remove('active');
         document.body.style.userSelect = '';
         document.body.style.cursor = '';
+        document.body.classList.remove('resizing');
         var finalWidth = panel.getBoundingClientRect().width;
         saveWidth(Math.round(finalWidth));
+        // Defer removing data-resizing so the post-drag click event
+        // doesn't trigger panel-close in the click-outside handler.
+        setTimeout(function () {
+            document.body.removeAttribute('data-resizing');
+        }, 0);
     }
 
     handle.addEventListener('pointerdown', onPointerDown);

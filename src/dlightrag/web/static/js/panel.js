@@ -112,6 +112,7 @@ export function setupPanel() {
     document.addEventListener('click', function(e) {
         const panel = document.getElementById('panel');
         if (panel.classList.contains('open') && !e.target.closest('.panel') && !e.target.closest('.citation-badge')) {
+            if (document.body.hasAttribute('data-resizing')) return;
             closePanel();
         }
         const badge = e.target.closest('[data-action="filter-source"]');
