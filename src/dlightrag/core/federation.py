@@ -297,6 +297,10 @@ async def federated_retrieve(
         except Exception as exc:
             logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)
 
+    # Federation always provides its own _plan; strip any caller-supplied
+    # _plan from kwargs to avoid "multiple values for keyword argument".
+    kwargs.pop("_plan", None)
+
     # Bounded parallel queries with per-workspace timing + optional timeout.
     # A slow/hanging workspace is treated as a partial failure rather than
     # blocking the merge, matching ArtRAG's federation graceful-degradation
