@@ -46,8 +46,17 @@ async def collect_deletion_context(
             # Try exact path match first
             result = await doc_status.get_doc_by_file_path(identifier)
 
+            # get_doc_by_file_path may return a dict without 'id' field
+            # (LightRAG strips it).  Always extract file_path from it if present.
+            if isinstance(result, dict):
+                fp = result.get("file_path", "")
+                if fp:
+                    ctx.file_paths.add(fp)
+
             # If identifier is a basename, also try matching stored paths
-            if result is None and not Path(identifier).is_absolute():
+            # to find the doc_id.  We must do this even when get_doc_by_file_path
+            # succeeded, because its return dict omits the primary-key id.
+            if not ctx.doc_ids and not Path(identifier).is_absolute():
                 # Query all processed docs and match by basename/stem
                 from lightrag.base import DocStatus
 
@@ -58,20 +67,12 @@ async def collect_deletion_context(
                     stored_stem = Path(fp).stem
 
                     if stored_name == basename or stored_stem == stem:
-                        result = {"id": d_id, "file_path": fp}
                         ctx.doc_ids.add(d_id)
-                        ctx.file_paths.add(fp)
+                        if fp:
+                            ctx.file_paths.add(fp)
 
-            if result and "doc_status" not in ctx.sources_used:
-                # get_doc_by_file_path returns dict with id as key or 'id' field
-                if isinstance(result, dict):
-                    d_id = result.get("id") or result.get("doc_id")
-                    fp = result.get("file_path", "")
-                    if d_id:
-                        ctx.doc_ids.add(d_id)
-                    if fp:
-                        ctx.file_paths.add(fp)
-                    ctx.sources_used.append("doc_status")
+            if ctx.doc_ids or ctx.file_paths:
+                ctx.sources_used.append("doc_status")
 
         except Exception as e:
             logger.warning(f"LightRAG doc_status lookup failed for {identifier}: {e}")
