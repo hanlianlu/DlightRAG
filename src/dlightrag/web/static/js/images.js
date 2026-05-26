@@ -77,6 +77,70 @@ function renderThumbnails() {
     });
 }
 
+function _getLightboxImageSrc(el) {
+    return el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
+}
+
+function _collectGalleryImages() {
+    var items = document.querySelectorAll('[data-action="open-lightbox"]');
+    var srcs = [];
+    items.forEach(function(el) {
+        var s = _getLightboxImageSrc(el);
+        if (s && /^(?:\/|blob:|data:)/.test(s)) srcs.push(s);
+    });
+    return srcs;
+}
+
+function _currentGalleryIndex(currentSrc) {
+    var images = _collectGalleryImages();
+    for (var i = 0; i < images.length; i++) {
+        if (images[i] === currentSrc) return i;
+    }
+    return -1;
+}
+
+function _updateNavButtons(box) {
+    if (!box || !box.classList.contains('open')) return;
+    var currentSrc = box.getAttribute('data-current-src') || '';
+    var images = _collectGalleryImages();
+    var idx = _currentGalleryIndex(currentSrc);
+    var prev = box.querySelector('.image-lightbox-prev');
+    var next = box.querySelector('.image-lightbox-next');
+    if (images.length <= 1) {
+        if (prev) prev.style.display = 'none';
+        if (next) next.style.display = 'none';
+    } else {
+        if (prev) {
+            prev.style.display = idx <= 0 ? 'none' : '';
+        }
+        if (next) {
+            next.style.display = idx >= images.length - 1 ? 'none' : '';
+        }
+    }
+}
+
+function _showLightboxImage(box, src) {
+    var img = box.querySelector('.image-lightbox-img');
+    if (!img) return;
+    img.setAttribute('src', src);
+    box.setAttribute('data-current-src', src);
+    _updateNavButtons(box);
+}
+
+function _navigateLightbox(direction) {
+    var box = document.getElementById('image-lightbox');
+    if (!box || !box.classList.contains('open')) return;
+    var currentSrc = box.getAttribute('data-current-src') || '';
+    var images = _collectGalleryImages();
+    if (images.length <= 1) return;
+    var idx = _currentGalleryIndex(currentSrc);
+    if (idx < 0) return;
+    var newIdx = idx + direction;
+    if (newIdx < 0) newIdx = images.length - 1;
+    if (newIdx >= images.length) newIdx = 0;
+    _showLightboxImage(box, images[newIdx]);
+}
+
 function ensureLightbox() {
     let box = document.getElementById('image-lightbox');
     if (box) return box;
@@ -85,11 +149,23 @@ function ensureLightbox() {
     box.id = 'image-lightbox';
     box.className = 'image-lightbox';
     box.setAttribute('aria-hidden', 'true');
-    box.innerHTML = '<button class="image-lightbox-close" type="button" aria-label="Close">×</button><img class="image-lightbox-img" alt="Source image">';
+    box.innerHTML = '<button class="image-lightbox-close" type="button" aria-label="Close">×</button>' +
+        '<button class="image-lightbox-prev" type="button" aria-label="Previous">‹</button>' +
+        '<button class="image-lightbox-next" type="button" aria-label="Next">›</button>' +
+        '<img class="image-lightbox-img" alt="Source image">';
     document.body.appendChild(box);
     box.addEventListener('click', function(e) {
         if (e.target === box || e.target.closest('.image-lightbox-close')) {
             closeLightbox();
+            return;
+        }
+        if (e.target.closest('.image-lightbox-prev')) {
+            _navigateLightbox(-1);
+            return;
+        }
+        if (e.target.closest('.image-lightbox-next')) {
+            _navigateLightbox(1);
+            return;
         }
     });
     return box;
@@ -99,10 +175,12 @@ export function openLightbox(src) {
     if (!src) return;
     if (!/^(?:\/|blob:|data:)/.test(src)) return;
     const box = ensureLightbox();
+    box.setAttribute('data-current-src', src);
     const img = box.querySelector('.image-lightbox-img');
     img.setAttribute('src', src);
     box.classList.add('open');
     box.setAttribute('aria-hidden', 'false');
+    _updateNavButtons(box);
 }
 
 export function closeLightbox() {
@@ -110,6 +188,7 @@ export function closeLightbox() {
     if (!box) return;
     box.classList.remove('open');
     box.setAttribute('aria-hidden', 'true');
+    box.removeAttribute('data-current-src');
     const img = box.querySelector('.image-lightbox-img');
     if (img) img.removeAttribute('src');
 }
