@@ -5,10 +5,11 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from dlightrag.api.auth import UserContext, get_current_user
@@ -255,6 +256,83 @@ async def answer(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/ingest/blob")
+async def ingest_blob(
+    request: Request,
+    file: UploadFile = File(...),
+    workspace: str | None = Form(None),
+    title: str | None = Form(None),
+    author: str | None = Form(None),
+    metadata: str | None = Form(None),
+    metadata_policy: str | None = Form(None),
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Direct file upload ingestion via multipart/form-data.
+
+    File is persisted to input_dir/<workspace>/<filename> for citation
+    download links, then ingested via the local file pipeline.
+    """
+    import json as _json
+
+    manager = get_manager(request)
+    ws = resolve_workspace(workspace)
+    cfg = manager.config
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
+    # Sanitize filename -- reject path traversal
+    safe_name = Path(file.filename).name
+    if safe_name != file.filename or ".." in safe_name:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    # Check file size against config limit
+    contents = await file.read()
+    if len(contents) > cfg.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
+        )
+
+    # Persist to input_dir/<workspace>/<safe_name>
+    target_dir = cfg.input_dir_path / ws
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / safe_name
+    target_path.write_bytes(contents)
+
+    # Parse optional metadata JSON
+    meta_dict: dict[str, Any] | None = None
+    if metadata:
+        try:
+            meta_dict = _json.loads(metadata)
+        except _json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid metadata JSON") from None
+
+    policy = None
+    if metadata_policy:
+        _valid_policies = frozenset({"validate", "reject_unknown", "store_only"})
+        if metadata_policy not in _valid_policies:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid metadata_policy: {metadata_policy}"
+            )
+        policy = metadata_policy
+
+    kwargs: dict[str, Any] = {"path": str(target_path)}
+    if title is not None:
+        kwargs["title"] = title
+    if author is not None:
+        kwargs["author"] = author
+    if meta_dict is not None:
+        kwargs["metadata"] = meta_dict
+    if policy is not None:
+        kwargs["metadata_policy"] = policy
+
+    result = await manager.aingest(ws, source_type="local", **kwargs)
+    result["uploaded_file"] = str(target_path)
+    result["filename"] = safe_name
+    return result
 
 
 @router.post("/reset")
