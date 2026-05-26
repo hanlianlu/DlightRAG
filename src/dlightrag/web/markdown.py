@@ -32,7 +32,7 @@ _FORMATTER = HtmlFormatter(nowrap=True)
 
 
 def _math_inline_rule(state: StateInline, silent: bool) -> bool:
-    """Match inline ``$…$``, ``\(…\)`` and display ``$$…$$``, ``\[…\]``.
+    r"""Match inline ``$…$``, ``\(…\)`` and display ``$$…$$``, ``\[…\]``.
 
     Emits a ``math_inline`` token whose content is the inner LaTeX.
     The renderer re-wraps it with the correct delimiters so MathJax
@@ -114,9 +114,7 @@ def _math_inline_rule(state: StateInline, silent: bool) -> bool:
     return True
 
 
-def _render_math_inline(
-    renderer, tokens: list, idx: int, _options, _env
-) -> str:
+def _render_math_inline(renderer, tokens: list, idx: int, _options, _env) -> str:
     """Re-wrap math content with its original delimiters for MathJax."""
     token = tokens[idx]
     markup = getattr(token, "markup", "$")
@@ -171,9 +169,7 @@ def _make_md() -> MarkdownIt:
 
 
 _md = _make_md()
-_md_chunk = MarkdownIt(
-    "gfm-like", {"html": True, "highlight": _highlight_fn}
-).disable("linkify")
+_md_chunk = MarkdownIt("gfm-like", {"html": True, "highlight": _highlight_fn}).disable("linkify")
 # Also protect math in chunk content
 _md_chunk.inline.ruler.before("escape", "math_inline", _math_inline_rule)
 _md_chunk.add_render_rule("math_inline", _render_math_inline)
@@ -185,7 +181,7 @@ _md_chunk.add_render_rule("math_inline", _render_math_inline)
 
 
 def render_markdown(text: str) -> str:
-    """Convert Markdown text to HTML with syntax-highlighted code blocks.
+    r"""Convert Markdown text to HTML with syntax-highlighted code blocks.
 
     Inline math (``$...$``, ``\(...\)``) and display math
     (``$$...$$``, ``\[...\]``) are passed through verbatim for

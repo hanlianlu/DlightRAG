@@ -61,7 +61,9 @@ class VisualAssetResolver:
 
         chunks = await fetch_chunks_by_ids(text_chunks, [chunk_id])
         if not chunks:
-            logger.warning("VisualAssetResolver: no chunks from fetch_chunks_by_ids for chunk_id=%s", chunk_id)
+            logger.warning(
+                "VisualAssetResolver: no chunks from fetch_chunks_by_ids for chunk_id=%s", chunk_id
+            )
             return None
         await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
         chunk = chunks[0]
@@ -76,7 +78,9 @@ class VisualAssetResolver:
         try:
             raw = base64.b64decode(image_data)
         except Exception as exc:
-            logger.warning("VisualAssetResolver: base64 decode failed for chunk_id=%s: %s", chunk_id, exc)
+            logger.warning(
+                "VisualAssetResolver: base64 decode failed for chunk_id=%s: %s", chunk_id, exc
+            )
             return None
         media_type = str(chunk.get("image_mime_type") or detect_image_mime(raw))
         return VisualAsset(chunk_id=chunk_id, data=raw, media_type=media_type)

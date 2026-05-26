@@ -169,12 +169,14 @@ async def answer_stream(
                     desc = image_descriptions.get(cid, "")
                 elif isinstance(image_descriptions, list) and i < len(image_descriptions):
                     desc = image_descriptions[i]
-                answer_images.append({
-                    "chunk_id": cid,
-                    "url": f"/web/images/{workspace or manager.config.workspace}/{cid}",
-                    "thumb_url": f"/web/images/{workspace or manager.config.workspace}/{cid}?size=thumb",
-                    "label": desc or f"Visual {i + 1}",
-                })
+                answer_images.append(
+                    {
+                        "chunk_id": cid,
+                        "url": f"/web/images/{workspace or manager.config.workspace}/{cid}",
+                        "thumb_url": f"/web/images/{workspace or manager.config.workspace}/{cid}?size=thumb",
+                        "label": desc or f"Visual {i + 1}",
+                    }
+                )
                 seen_img_ids.add(cid)
 
             flat_contexts = []
@@ -197,12 +199,14 @@ async def answer_stream(
                     image_url = f"/web/images/{ws}/{cid}?size=full"
                     thumb_url = f"/web/images/{ws}/{cid}?size=thumb"
                 label = chunk.get("file_path", "") or f"Visual {len(answer_images) + 1}"
-                answer_images.append({
-                    "chunk_id": cid,
-                    "url": image_url,
-                    "thumb_url": thumb_url,
-                    "label": label,
-                })
+                answer_images.append(
+                    {
+                        "chunk_id": cid,
+                        "url": image_url,
+                        "thumb_url": thumb_url,
+                        "label": label,
+                    }
+                )
                 seen_img_ids.add(cid)
 
             sources = build_sources(

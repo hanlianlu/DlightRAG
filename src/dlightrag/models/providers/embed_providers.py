@@ -314,7 +314,10 @@ def detect_embed_provider(
         port = parsed.port
         if port == 11434:
             return OllamaEmbedProvider()
-        if host.endswith(".generativelanguage.googleapis.com") or host == "generativelanguage.googleapis.com":
+        if (
+            host.endswith(".generativelanguage.googleapis.com")
+            or host == "generativelanguage.googleapis.com"
+        ):
             return GeminiEmbedProvider()
         if "dashscope" in host or "aliyuncs" in host:
             return DashScopeQwenEmbedProvider()

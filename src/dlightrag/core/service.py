@@ -190,7 +190,14 @@ class RAGService:
     @staticmethod
     def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
         """Build LightRAG 1.5+ addon_params from the active config."""
-        params: dict[str, Any] = {"language": config.extraction.language}
+        params: dict[str, Any] = {
+            "language": config.extraction.language,
+            "chunker": {
+                "paragraph_semantic": {
+                    "chunk_token_size": config.chunk_p_token_size,
+                }
+            },
+        }
         if config.extraction.entity_type_prompt_file:
             params["entity_type_prompt_file"] = config.extraction.entity_type_prompt_file
         if config.kg_entity_types:
@@ -318,8 +325,6 @@ class RAGService:
             workspace=config.workspace,
             default_llm_timeout=int(config.llm.default.timeout),
             default_embedding_timeout=config.embedding_request_timeout,
-            chunk_token_size=config.chunk_size,
-            chunk_overlap_token_size=config.chunk_overlap,
             max_parallel_insert=config.max_parallel_insert,
             llm_model_max_async=config.max_async,
             embedding_func_max_async=config.embedding_func_max_async,
