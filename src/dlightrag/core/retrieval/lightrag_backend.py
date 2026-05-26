@@ -168,6 +168,8 @@ class LightRAGMixBackend:
                             "reference_id": "",
                             "relevance_score": dist,
                         }
+                        if c.get("full_doc_id"):
+                            merged[cid]["full_doc_id"] = c["full_doc_id"]
             except Exception:
                 logger.warning("Direct visual query failed", exc_info=True)
         return sorted(merged.values(), key=lambda c: c.get("relevance_score") or float("inf"))[
