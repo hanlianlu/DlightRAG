@@ -101,10 +101,12 @@ async def _file_list_response(request: Request, workspace: str):
     # Check whether an ingest is currently active so reopening the panel
     # shows the progress bar again instead of stale state.
     ingest_busy = _ingest_tasks.get(workspace) is not None
+    status: dict[str, Any] = {}
     if ingest_busy:
         try:
             ps = await manager.get_pipeline_status(workspace)
             ingest_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+            status = ps
         except Exception:
             pass
 
@@ -115,6 +117,7 @@ async def _file_list_response(request: Request, workspace: str):
             "files": files,
             "workspace": workspace,
             "ingest_busy": ingest_busy,
+            "status": status,
         },
     )
 
