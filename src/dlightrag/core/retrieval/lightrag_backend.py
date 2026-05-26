@@ -144,7 +144,7 @@ class LightRAGMixBackend:
         if not images:
             return []
 
-        rankings: list[list[dict[str, Any]]] = []
+        merged: dict[str, dict[str, Any]] = {}
         for image in images:
             try:
                 vectors = await self._embedder.embed_query_images([image])
@@ -153,21 +153,22 @@ class LightRAGMixBackend:
                     top_k=top_k,
                     query_embedding=vectors[0],
                 )
-                ranking = [
-                    {
-                        "chunk_id": c.get("id", ""),
-                        "content": c.get("content", ""),
-                        "file_path": c.get("file_path", ""),
-                        "reference_id": "",
-                        "relevance_score": c.get("distance"),
-                    }
-                    for c in (raw_chunks or [])
-                    if c.get("id")
-                ]
-                rankings.append(ranking)
+                for c in raw_chunks or []:
+                    cid = c.get("id")
+                    if not cid:
+                        continue
+                    dist = c.get("distance")
+                    if cid not in merged or (dist is not None and dist < merged[cid].get("distance", float("inf"))):
+                        merged[cid] = {
+                            "chunk_id": cid,
+                            "content": c.get("content", ""),
+                            "file_path": c.get("file_path", ""),
+                            "reference_id": "",
+                            "relevance_score": dist,
+                        }
             except Exception:
                 logger.warning("Direct visual query failed", exc_info=True)
-        return rrf_fuse(rankings)[:top_k] if rankings else []
+        return sorted(merged.values(), key=lambda c: c.get("relevance_score") or float("inf"))[:top_k]
 
     async def _hydrate_chunk_provenance(self, chunks: list[dict[str, Any]]) -> None:
         await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
