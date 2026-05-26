@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import inspect
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -57,7 +58,13 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
                 if provenance.bbox is not None and chunk.get("bbox") is None:
                     chunk["bbox"] = provenance.bbox
 
-        _hydrate_image_data(chunk, sidecar)
+        await _hydrate_image_data(
+            chunk,
+            sidecar,
+            lightrag=lightrag,
+            raw_chunk=raw_chunk,
+            full_doc_cache=full_doc_cache,
+        )
 
         # Sidecar image chunks have asset paths as file_path (e.g., .blocks.assets/hash.jpg).
         # Remap to the parent document's file_path so citation grouping works correctly.
@@ -188,10 +195,57 @@ def _is_sidecar_asset_path(file_path: str) -> bool:
     return _SIDECAR_ASSETS_MARKER in file_path
 
 
-def _hydrate_image_data(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None:
+def _load_sidecar_drawing_path(artifact_dir: Path, drawing_id: str) -> str | None:
+    """Resolve a sidecar drawing's image path from ``*.drawings.json``."""
+    for drawings_path in sorted(artifact_dir.glob("*.drawings.json")):
+        try:
+            data = json.loads(drawings_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        drawings = data.get("drawings")
+        if not isinstance(drawings, dict):
+            continue
+        item = drawings.get(drawing_id)
+        if isinstance(item, dict):
+            rel_path = item.get("path")
+            if isinstance(rel_path, str):
+                candidate = artifact_dir / rel_path
+                if candidate.is_file():
+                    return str(candidate)
+    return None
+
+
+async def _hydrate_image_data(
+    chunk: dict[str, Any],
+    sidecar: dict[str, Any],
+    *,
+    lightrag: Any,
+    raw_chunk: dict[str, Any],
+    full_doc_cache: dict[str, dict[str, Any] | None],
+) -> None:
     if chunk.get("image_data"):
         return  # Already hydrated
-    image_path = sidecar.get("path") or chunk.get("file_path")
+
+    image_path: str | None = sidecar.get("path")  # DlightRAG direct-image chunks
+
+    # v1.5.0rc3 visual chunks: sidecar has type/id/refs but no path.
+    # Resolve the image path from drawings.json in the parsed artifact directory.
+    if not isinstance(image_path, str) and sidecar.get("type") == "drawing":
+        drawing_id = sidecar.get("id")
+        if isinstance(drawing_id, str):
+            artifact_dir = await _artifact_dir_for_chunk(
+                lightrag,
+                chunk=chunk,
+                raw_chunk=raw_chunk,
+                full_doc_cache=full_doc_cache,
+            )
+            if artifact_dir is not None:
+                image_path = _load_sidecar_drawing_path(artifact_dir, drawing_id)
+
+    if not isinstance(image_path, str):
+        image_path = chunk.get("file_path")
     if not isinstance(image_path, str):
         return
     path = Path(image_path)

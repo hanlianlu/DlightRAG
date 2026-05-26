@@ -188,4 +188,70 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     lightrag.chunks_vdb.query.assert_awaited_once()
     assert lightrag.chunks_vdb.query.await_args.kwargs["query_embedding"] == [0.1, 0.2, 0.3]
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
+
+
+async def test_backend_hydrates_v150rc3_drawing_sidecar_from_drawings_json(
+    tmp_path: Path,
+) -> None:
+    """v1.5.0rc3 visual chunks carry sidecar={type,id,refs} with no path field.
+    The image path must be resolved from drawings.json in the parsed artifact dir."""
+    parsed_dir = tmp_path / "sample.parsed"
+    assets_dir = parsed_dir / "sample.blocks.assets"
+    assets_dir.mkdir(parents=True)
+    image_path = assets_dir / "img-0001.png"
+    _write_image(image_path)
+
+    (parsed_dir / "sample.drawings.json").write_text(
+        json.dumps(
+            {
+                "drawings": {
+                    "im-hash-0001": {
+                        "id": "im-hash-0001",
+                        "path": "sample.blocks.assets/img-0001.png",
+                        "format": "png",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={
+            "data": {
+                "chunks": [{"id": "mm1", "content": "visual", "file_path": "/docs/report.pdf"}],
+                "entities": [],
+                "relationships": [],
+            }
+        }
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(
+        return_value=[
+            {
+                "id": "mm1",
+                "content": "visual",
+                "file_path": "/docs/report.pdf",
+                "full_doc_id": "doc-1",
+                "sidecar": {
+                    "type": "drawing",
+                    "id": "im-hash-0001",
+                    "refs": [{"type": "drawing", "id": "im-hash-0001"}],
+                },
+            }
+        ]
+    )
+    lightrag.full_docs = MagicMock()
+    lightrag.full_docs.get_by_id = AsyncMock(return_value={"sidecar_location": parsed_dir.as_uri()})
+
+    backend = LightRAGMixBackend(lightrag=lightrag)
+    result = await backend.aretrieve("question")
+
+    chunk = result.contexts["chunks"][0]
+    assert chunk["chunk_id"] == "mm1"
+    assert chunk["image_data"]
+    assert chunk["image_mime_type"] == "image/png"
+    # file_path should be remapped from the sidecar asset path to the document path
+    assert chunk["file_path"] == "/docs/report.pdf"
     assert result.contexts["chunks"][0]["image_data"]
