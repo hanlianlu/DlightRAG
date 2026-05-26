@@ -10,15 +10,9 @@ function activateChatMode() {
 }
 
 export function renderMath(container) {
-    if (!window.renderMathInElement) return;
-    window.renderMathInElement(container, {
-        delimiters: [
-            {left: '$$', right: '$$', display: true},
-            {left: '\\[', right: '\\]', display: true},
-            {left: '$', right: '$', display: false},
-            {left: '\\(', right: '\\)', display: false},
-        ],
-        throwOnError: false,
+    if (!window.MathJax || !window.MathJax.typesetPromise) return;
+    window.MathJax.typesetPromise([container]).catch(function () {
+        // MathJax may fail on genuinely malformed input; ignore.
     });
 }
 

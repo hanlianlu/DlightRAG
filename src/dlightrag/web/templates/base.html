@@ -7,10 +7,21 @@
     <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
     <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
 
-    <!-- KaTeX math rendering -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.css">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16/dist/katex.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16/dist/contrib/auto-render.min.js"></script>
+    <!-- MathJax v3 math rendering -->
+    <script>
+    MathJax = {
+      tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: false,
+        tags: 'all',
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+      },
+    };
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
 
     <!-- Pygments code highlighting theme -->
     <link rel="stylesheet" href="/static/pygments.css?v={{ static_version() }}">
