@@ -269,6 +269,10 @@ class AnswerEngine:
             )
         )
 
+        meta_count = sum(1 for b in content if isinstance(b, dict) and isinstance(b.get("text"), str) and b["text"].startswith("[meta:"))
+        sidecar_count = sum(1 for b in content if isinstance(b, dict) and isinstance(b.get("text"), str) and "sidecar" in b["text"])
+        logger.info("[AE] content blocks: total=%d, meta_lines=%d, sidecar_refs=%d", len(content), meta_count, sidecar_count)
+
         content.append({"type": "text", "text": user_prompt})
 
         return [
