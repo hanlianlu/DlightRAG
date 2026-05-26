@@ -65,7 +65,7 @@ def test_render_markdown_inline_code():
 
 
 def test_render_markdown_latex_passthrough():
-    """Dollar-sign math should pass through as literal text (KaTeX handles client-side)."""
+    """Dollar-sign math should pass through as literal text (MathJax handles client-side)."""
     from dlightrag.web.markdown import render_markdown
 
     result = render_markdown("The formula $E=mc^2$ is famous.")

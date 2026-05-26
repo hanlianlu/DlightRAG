@@ -3,7 +3,7 @@ r"""Markdown-to-HTML renderers for Web UI.
 Uses markdown-it-py (GFM-like preset) for Markdown/tables/lists and
 Pygments for fenced code block syntax highlighting. LaTeX math blocks
 ($$...$$, $...$, \[...\], \(...\)) are protected from markdown processing
-so underscores and other LaTeX syntax survive intact for client-side KaTeX.
+so underscores and other LaTeX syntax survive intact for client-side MathJax.
 
 Two renderers are provided:
 - ``render_markdown``: For answer content (``html: False`` — escapes raw HTML).
