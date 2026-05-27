@@ -17,8 +17,11 @@ router = APIRouter()
 
 
 def _sanitize_cookie_value(value: str) -> str:
-    """Keep only valid workspace name characters (alphanumeric, dash, underscore, comma)."""
-    return re.sub(r"[^A-Za-z0-9,_-]", "", value).strip(",")
+    """Keep only valid workspace name characters (alphanumeric, dash, underscore, comma).
+
+    CRLF characters (\\r, \\n) are explicitly stripped to prevent HTTP header injection.
+    """
+    return re.sub(r"[\r\n]", "", re.sub(r"[^A-Za-z0-9,_-]", "", value)).strip(",")
 
 
 async def _set_workspace_cookies(
@@ -27,12 +30,18 @@ async def _set_workspace_cookies(
     manager: Any,
     primary_ws: str | None = None,
 ) -> None:
-    """Set workspace cookies from DB state so values never originate from user input."""
+    """Set workspace cookies from DB state.
+
+    Cookie values are always derived from the DB workspace registry so they
+    never originate from unvalidated user input.  ``primary_ws`` is an
+    optional hint that is validated against the DB list before use.
+    """
     workspaces = await manager.list_workspaces()
     if not workspaces:
         workspaces = ["default"]
-    # Cross-validate primary_ws against the DB list — rejects tainted values
-    primary = primary_ws if (primary_ws and primary_ws in workspaces) else workspaces[0]
+    # Cookie values are derived from DB workspace names only.
+    db_values: set[str] = set(workspaces)
+    primary = primary_ws if (primary_ws and primary_ws in db_values) else workspaces[0]
     joined = ",".join(workspaces)
     secure = request.url.scheme == "https"
     response.set_cookie(

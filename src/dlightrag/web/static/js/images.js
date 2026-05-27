@@ -77,8 +77,13 @@ function renderThumbnails() {
     });
 }
 
+function _isSafeImageSrc(src) {
+    return typeof src === 'string' && /^(?:\/|blob:|data:)/.test(src);
+}
+
 function _getLightboxImageSrc(el) {
-    return el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
+    var s = el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
+    return _isSafeImageSrc(s) ? s : '';
 }
 
 function _collectGalleryImages() {
@@ -86,7 +91,7 @@ function _collectGalleryImages() {
     var srcs = [];
     items.forEach(function(el) {
         var s = _getLightboxImageSrc(el);
-        if (s && /^(?:\/|blob:|data:)/.test(s)) srcs.push(s);
+        if (s) srcs.push(s);
     });
     return srcs;
 }
@@ -120,6 +125,7 @@ function _updateNavButtons(box) {
 }
 
 function _showLightboxImage(box, src) {
+    if (!_isSafeImageSrc(src)) return;
     var img = box.querySelector('.image-lightbox-img');
     if (!img) return;
     img.setAttribute('src', src);
@@ -172,8 +178,7 @@ function ensureLightbox() {
 }
 
 export function openLightbox(src) {
-    if (!src) return;
-    if (!/^(?:\/|blob:|data:)/.test(src)) return;
+    if (!_isSafeImageSrc(src)) return;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', src);
     const img = box.querySelector('.image-lightbox-img');

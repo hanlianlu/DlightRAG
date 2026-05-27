@@ -150,11 +150,15 @@ async def areset(
             working_dir = Path(service.config.working_dir)
             stats["local_files_removed"] = _reset_local_files(working_dir, dry_run=dry_run)
             # Also clean staging files under input_dir/<workspace>/
-            input_ws_dir = service.config.input_dir_path / workspace
-            if input_ws_dir.exists() and input_ws_dir.is_dir():
-                if not dry_run:
-                    shutil.rmtree(input_ws_dir, ignore_errors=True)
-                stats["local_files_removed"] += 1
+            input_root = service.config.input_dir_path.resolve()
+            input_ws_dir = (input_root / workspace).resolve()
+            if str(input_ws_dir).startswith(str(input_root) + "/") or input_ws_dir == input_root:
+                if input_ws_dir.exists() and input_ws_dir.is_dir():
+                    if not dry_run:
+                        shutil.rmtree(input_ws_dir, ignore_errors=True)
+                    stats["local_files_removed"] += 1
+            else:
+                errors.append("Phase 5 (filesystem): workspace path escapes input directory")
         except Exception as exc:
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", exc)
@@ -465,11 +469,18 @@ async def areset_orphaned_workspace(
                 errors.append(f"Filesystem (working_dir): {exc}")
         if input_dir:
             try:
-                input_ws_dir = Path(input_dir) / workspace
-                if input_ws_dir.exists() and input_ws_dir.is_dir():
-                    if not dry_run:
-                        shutil.rmtree(input_ws_dir, ignore_errors=True)
-                    stats["local_files_removed"] += 1
+                input_root = Path(input_dir).resolve()
+                input_ws_dir = (input_root / workspace).resolve()
+                if (
+                    str(input_ws_dir).startswith(str(input_root) + "/")
+                    or input_ws_dir == input_root
+                ):
+                    if input_ws_dir.exists() and input_ws_dir.is_dir():
+                        if not dry_run:
+                            shutil.rmtree(input_ws_dir, ignore_errors=True)
+                        stats["local_files_removed"] += 1
+                else:
+                    errors.append("Filesystem (input_dir): workspace path escapes input directory")
             except Exception as exc:
                 errors.append(f"Filesystem (input_dir): {exc}")
 
