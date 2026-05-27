@@ -12,6 +12,9 @@ from urllib.parse import unquote, urlparse
 from lightrag.constants import (
     FULL_DOCS_FORMAT_PENDING_PARSE,
     FULL_DOCS_FORMAT_RAW,
+    PARSER_ENGINE_DOCLING,
+    PARSER_ENGINE_MINERU,
+    PARSER_ENGINE_NATIVE,
 )
 from lightrag.parser.routing import resolve_file_parser_directives
 from lightrag.utils import compute_mdhash_id
@@ -142,6 +145,14 @@ class UnifiedIngestionEngine:
             parser_rules=self._parser_rules,
             require_external_endpoint=False,
         )
+        if parse_engine not in {PARSER_ENGINE_DOCLING, PARSER_ENGINE_MINERU, PARSER_ENGINE_NATIVE}:
+            raise ValueError(
+                f"No explicit parser route for {file_path.name!r}. "
+                f"The file resolved to parser engine {parse_engine!r}, which is the "
+                f"built-in fallback. Configure parser.rules to route this file type "
+                f"to a supported parser (mineru, native, or docling). "
+                f"Current parser.rules: {self._parser_rules!r}"
+            )
         await self._lightrag.apipeline_enqueue_documents(
             input="",
             file_paths=[str(file_path)],
