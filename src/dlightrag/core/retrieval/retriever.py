@@ -7,7 +7,7 @@ import asyncio
 from typing import Any
 
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-from dlightrag.core.retrieval.fusion import rrf_fuse
+from dlightrag.core.retrieval.fusion import dedup_chunks_by_content, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -93,6 +93,7 @@ class UnifiedRetriever:
         if bm25_chunks:
             semantic_chunks = lightrag_result.contexts.get("chunks", [])
             fused = rrf_fuse([semantic_chunks, bm25_chunks], k=self._rrf_k)
+            fused = dedup_chunks_by_content(fused)
             lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
             trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
         else:
