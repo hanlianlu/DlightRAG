@@ -1,5 +1,48 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Single boundary for LightRAG private storage access."""
+"""Single boundary for LightRAG private storage access.
+
+**LightRAG coupling surface (lightrag-hku>=1.5.0rc3):**
+
+This module depends on the following LightRAG internals that are NOT part
+of the public API.  A LightRAG major-version bump may break these:
+
+Storage attributes (accessed via __getattr__):
+    ``chunks_vdb``       — PGVectorStorage instance
+    ``text_chunks``      — PGKVStorage instance
+    ``full_docs``        — PGKVStorage instance
+    ``doc_status``       — PGDocStatusStorage instance
+    ``entities_vdb``     — PGVectorStorage instance
+    ``relationships_vdb`` — PGVectorStorage instance
+    ``chunk_entity_relation_graph`` — PGGraphStorage instance
+    ``full_entities``    — PGKVStorage instance
+    ``full_relations``   — PGKVStorage instance
+    ``entity_chunks``    — PGKVStorage instance
+    ``relation_chunks``  — PGKVStorage instance
+    ``llm_response_cache`` — PGKVStorage instance
+
+Storage internals (reached through storage attributes):
+    ``chunks_vdb.table_name``  — LIGHTRAG_DOC_CHUNKS table name
+    ``chunks_vdb.db``          — PostgreSQL ClientManager
+    ``chunks_vdb.workspace``   — workspace name string
+    ``text_chunks.db``         — PostgreSQL ClientManager
+    ``text_chunks.workspace``  — workspace name string
+    ``chunks_vdb.db._run_with_retry()`` — optional retry wrapper
+    ``chunks_vdb.db.pool``     — asyncpg connection pool
+
+LightRAG API methods (public, but shape-dependent):
+    ``LightRAG._build_global_config()`` — returns config dict
+    ``LightRAG.aquery_data()``          — returns {data: {...}, status: ...}
+    ``apipeline_enqueue_documents()``   — enqueues for processing
+    ``apipeline_process_enqueue_documents()`` — processes queue
+
+Constants:
+    ``lightrag.base.DocStatus``
+    ``lightrag.constants.FULL_DOCS_FORMAT_*``
+    ``lightrag.constants.PARSER_ENGINE_*``
+
+When upgrading lightrag-hku, verify these surfaces still exist and behave
+as expected.  The compat_guard module provides runtime version checks.
+"""
 
 from __future__ import annotations
 
