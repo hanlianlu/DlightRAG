@@ -189,6 +189,35 @@ class LightRAGStores:
                 rows = await _execute(connection)
         return [str(row["id"]) for row in rows]
 
+    async def cleanup_doc(self, doc_id: str) -> int:
+        """Delete a document's LightRAG records (doc_status, doc_full, chunks).
+
+        Returns the number of deleted rows across all tables.
+        Does NOT attempt to clean entities, relations, vectors, or graphs --
+        those are keyed by entity/relation name or chunk_id and do not block
+        re-ingestion.  Orphaned rows in those tables are harmless.
+        """
+        deleted = 0
+
+        # 1. Find chunk ids belonging to this doc so we can clean the text_chunks table.
+        chunk_ids = await self.chunk_ids_for_docs([doc_id])
+
+        # 2. doc_status -- the primary duplicate-detection gate.
+        if hasattr(self.doc_status, "delete"):
+            await self.doc_status.delete([doc_id])
+            deleted += 1  # count the doc_status row
+
+        # 3. doc_full -- parse config / sidecar location.
+        if hasattr(self.full_docs, "delete"):
+            await self.full_docs.delete([doc_id])
+
+        # 4. doc_chunks (text_chunks) -- old chunks would conflict with new ones.
+        if chunk_ids and hasattr(self.text_chunks, "delete"):
+            await self.text_chunks.delete(chunk_ids)
+            deleted += len(chunk_ids)
+
+        return deleted
+
     def _build_chunk_values(
         self,
         rows: dict[str, dict[str, Any]],
