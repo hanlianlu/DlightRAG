@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
@@ -11,6 +12,8 @@ from dlightrag.core.retrieval.fusion import dedup_chunks_by_content, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalResult
+
+logger = logging.getLogger(__name__)
 
 
 class UnifiedRetriever:
@@ -82,7 +85,15 @@ class UnifiedRetriever:
                 else None
             )
 
-            lightrag_result = await lightrag_task
+            try:
+                lightrag_result = await lightrag_task
+            except Exception:
+                logger.warning(
+                    "LightRAG retrieval failed; falling back to BM25-only", exc_info=True
+                )
+                lightrag_result = RetrievalResult(
+                    trace={"lightrag_error": True},
+                )
             bm25_chunks = await bm25_task if bm25_task is not None else []
 
         trace.update(getattr(lightrag_result, "trace", {}) or {})
