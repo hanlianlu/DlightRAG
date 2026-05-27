@@ -91,3 +91,26 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
         "bm25-b",
     ]
     assert result.contexts["entities"] == [{"entity_name": "E"}]
+
+
+async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:
+    """When LightRAG retrieval raises, BM25 results must still be returned."""
+
+    metadata_index = AsyncMock()
+    stores = AsyncMock()
+    backend = AsyncMock()
+    backend.aretrieve.side_effect = RuntimeError("LightRAG backend down")
+    bm25 = AsyncMock()
+    bm25.search.return_value = [{"chunk_id": "bm25-a"}, {"chunk_id": "bm25-b"}]
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+    )
+
+    result = await retriever.aretrieve("query", top_k=5)
+
+    assert result.trace.get("lightrag_error") is True
+    assert len(result.contexts["chunks"]) == 2
+    assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-a", "bm25-b"]
