@@ -663,6 +663,28 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
 
 
+def test_config_repr_redacts_api_keys():
+    """repr(config) must not expose plaintext API keys."""
+    cfg = DlightragConfig(
+        embedding={
+            "provider": "openai_compatible",
+            "model": "text-embed-v4",
+            "api_key": "sk-secret-key-12345678",
+        },
+        llm={
+            "default": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "api_key": "sk-llm-secret-abcd1234",
+            },
+        },
+    )
+    rendered = repr(cfg)
+    assert "sk-secret-key-12345678" not in rendered
+    assert "sk-llm-secret-abcd1234" not in rendered
+    assert "***" in rendered
+
+
 def test_blank_sidecar_values_do_not_override_typed_defaults(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
