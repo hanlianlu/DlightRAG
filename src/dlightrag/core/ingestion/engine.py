@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import shutil
 from collections.abc import Mapping
@@ -66,6 +67,7 @@ class UnifiedIngestionEngine:
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
         self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
         self._vlm_func = vlm_func
+        self._ingest_locks: dict[str, asyncio.Lock] = {}
 
     async def aingest_file(
         self,
@@ -134,6 +136,14 @@ class UnifiedIngestionEngine:
             "metadata_json": normalized_metadata.raw_json,
         }
 
+    def _get_ingest_lock(self, doc_id: str) -> asyncio.Lock:
+        """Return a per-doc async lock to serialize concurrent ingests of the same file."""
+        lock = self._ingest_locks.get(doc_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._ingest_locks[doc_id] = lock
+        return lock
+
     async def _cleanup_partial_doc(self, doc_id: str) -> None:
         """Remove all traces of a partial/failed document before re-ingest."""
         # 1. LightRAG tables: doc_status, doc_full, doc_chunks.
@@ -156,54 +166,59 @@ class UnifiedIngestionEngine:
         doc_id: str,
         metadata_record: dict[str, Any],
     ) -> dict[str, Any]:
-        # Self-healing: if a previous ingest was interrupted, clean up first.
-        existing_status = await self._stores.get_doc_status(doc_id)
-        if existing_status is not None and existing_status.get("status") != "processed":
-            await self._cleanup_partial_doc(doc_id)
+        async with self._get_ingest_lock(doc_id):
+            # Self-healing: if a previous ingest was interrupted, clean up first.
+            existing_status = await self._stores.get_doc_status(doc_id)
+            if existing_status is not None and existing_status.get("status") != "processed":
+                await self._cleanup_partial_doc(doc_id)
 
-        parse_engine, process_options = resolve_file_parser_directives(
-            file_path,
-            parser_rules=self._parser_rules,
-            require_external_endpoint=False,
-        )
-        if parse_engine not in {PARSER_ENGINE_DOCLING, PARSER_ENGINE_MINERU, PARSER_ENGINE_NATIVE}:
-            raise ValueError(
-                f"No explicit parser route for {file_path.name!r}. "
-                f"The file resolved to parser engine {parse_engine!r}, which is the "
-                f"built-in fallback. Configure parser.rules to route this file type "
-                f"to a supported parser (mineru, native, or docling). "
-                f"Current parser.rules: {self._parser_rules!r}"
+            parse_engine, process_options = resolve_file_parser_directives(
+                file_path,
+                parser_rules=self._parser_rules,
+                require_external_endpoint=False,
             )
-        await self._lightrag.apipeline_enqueue_documents(
-            input="",
-            file_paths=[str(file_path)],
-            docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
-            lightrag_document_paths=[str(file_path)],
-            parse_engine=parse_engine,
-            process_options=process_options,
-            chunk_options=self._chunk_options or None,
-        )
-        await self._lightrag.apipeline_process_enqueue_documents()
+            if parse_engine not in {
+                PARSER_ENGINE_DOCLING,
+                PARSER_ENGINE_MINERU,
+                PARSER_ENGINE_NATIVE,
+            }:
+                raise ValueError(
+                    f"No explicit parser route for {file_path.name!r}. "
+                    f"The file resolved to parser engine {parse_engine!r}, which is the "
+                    f"built-in fallback. Configure parser.rules to route this file type "
+                    f"to a supported parser (mineru, native, or docling). "
+                    f"Current parser.rules: {self._parser_rules!r}"
+                )
+            await self._lightrag.apipeline_enqueue_documents(
+                input="",
+                file_paths=[str(file_path)],
+                docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
+                lightrag_document_paths=[str(file_path)],
+                parse_engine=parse_engine,
+                process_options=process_options,
+                chunk_options=self._chunk_options or None,
+            )
+            await self._lightrag.apipeline_process_enqueue_documents()
 
-        doc_status = await self._stores.get_doc_status(doc_id)
-        full_doc = await self._stores.get_full_doc(doc_id)
-        light_chunks = list((doc_status or {}).get("chunks_list") or [])
-        lightrag_record = self._lightrag_metadata(full_doc, doc_status)
-        await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
+            doc_status = await self._stores.get_doc_status(doc_id)
+            full_doc = await self._stores.get_full_doc(doc_id)
+            light_chunks = list((doc_status or {}).get("chunks_list") or [])
+            lightrag_record = self._lightrag_metadata(full_doc, doc_status)
+            await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
 
-        direct_chunks = await self._ingest_sidecar_direct_images(
-            doc_id=doc_id,
-            sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
-        )
+            direct_chunks = await self._ingest_sidecar_direct_images(
+                doc_id=doc_id,
+                sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
+            )
 
-        return {
-            "doc_id": doc_id,
-            "source_kind": "document",
-            "chunks": light_chunks + direct_chunks["chunk_ids"],
-            "ingest_strategy": "lightrag_sidecar_unified",
-            "parse_engine": parse_engine,
-            "process_options": process_options,
-        }
+            return {
+                "doc_id": doc_id,
+                "source_kind": "document",
+                "chunks": light_chunks + direct_chunks["chunk_ids"],
+                "ingest_strategy": "lightrag_sidecar_unified",
+                "parse_engine": parse_engine,
+                "process_options": process_options,
+            }
 
     async def _ingest_sidecar_direct_images(
         self,
@@ -248,61 +263,62 @@ class UnifiedIngestionEngine:
         doc_id: str,
         metadata_record: dict[str, Any],
     ) -> dict[str, Any]:
-        # Self-healing: if a previous ingest was interrupted, clean up first.
-        existing_status = await self._stores.get_doc_status(doc_id)
-        if existing_status is not None and existing_status.get("status") != "processed":
-            await self._cleanup_partial_doc(doc_id)
+        async with self._get_ingest_lock(doc_id):
+            # Self-healing: if a previous ingest was interrupted, clean up first.
+            existing_status = await self._stores.get_doc_status(doc_id)
+            if existing_status is not None and existing_status.get("status") != "processed":
+                await self._cleanup_partial_doc(doc_id)
 
-        ref = native_image_ref(file_path)
-        chunk_id, row, vector = await build_direct_image_chunk(
-            workspace=self._workspace,
-            full_doc_id=doc_id,
-            ref=ref,
-            embedder=self._multimodal_embedder,
-            text_content=f"Native image: {file_path.name}",
-        )
-        content_hash = _file_sha256(file_path)
-        await self._stores.upsert_document_record(
-            doc_id=doc_id,
-            content=f"Native image: {file_path.name}",
-            file_path=str(file_path),
-            chunks=[chunk_id],
-            parse_engine="native_image",
-            parse_format=FULL_DOCS_FORMAT_RAW,
-            content_hash=content_hash,
-            metadata={"source_kind": "image"},
-            sidecar_location=file_path.as_uri(),
-            process_options="P",
-            chunk_options=self._chunk_options,
-        )
-        await self._stores.upsert_chunks_with_vectors(
-            {chunk_id: row},
-            {chunk_id: vector},
-            embedding_dim=getattr(self._multimodal_embedder, "dim", len(vector)),
-            max_token_size=8192,
-        )
-        if self._vlm_func is not None:
-            semantic_doc_id, semantic_text = await build_visual_semantic_projection(
+            ref = native_image_ref(file_path)
+            chunk_id, row, vector = await build_direct_image_chunk(
                 workspace=self._workspace,
-                source_doc_id=doc_id,
+                full_doc_id=doc_id,
                 ref=ref,
-                vlm_func=self._vlm_func,
+                embedder=self._multimodal_embedder,
+                text_content=f"Native image: {file_path.name}",
             )
-            await self._lightrag.apipeline_enqueue_documents(
-                input=semantic_text,
-                ids=[semantic_doc_id],
-                file_paths=[str(file_path)],
-                docs_format=FULL_DOCS_FORMAT_RAW,
+            content_hash = _file_sha256(file_path)
+            await self._stores.upsert_document_record(
+                doc_id=doc_id,
+                content=f"Native image: {file_path.name}",
+                file_path=str(file_path),
+                chunks=[chunk_id],
+                parse_engine="native_image",
+                parse_format=FULL_DOCS_FORMAT_RAW,
+                content_hash=content_hash,
+                metadata={"source_kind": "image"},
+                sidecar_location=file_path.as_uri(),
                 process_options="P",
+                chunk_options=self._chunk_options,
             )
-            await self._lightrag.apipeline_process_enqueue_documents()
-        await self._metadata_index.upsert(doc_id, metadata_record)
-        return {
-            "doc_id": doc_id,
-            "source_kind": "image",
-            "chunks": [chunk_id],
-            "ingest_strategy": "direct_image_with_visual_semantics",
-        }
+            await self._stores.upsert_chunks_with_vectors(
+                {chunk_id: row},
+                {chunk_id: vector},
+                embedding_dim=getattr(self._multimodal_embedder, "dim", len(vector)),
+                max_token_size=8192,
+            )
+            if self._vlm_func is not None:
+                semantic_doc_id, semantic_text = await build_visual_semantic_projection(
+                    workspace=self._workspace,
+                    source_doc_id=doc_id,
+                    ref=ref,
+                    vlm_func=self._vlm_func,
+                )
+                await self._lightrag.apipeline_enqueue_documents(
+                    input=semantic_text,
+                    ids=[semantic_doc_id],
+                    file_paths=[str(file_path)],
+                    docs_format=FULL_DOCS_FORMAT_RAW,
+                    process_options="P",
+                )
+                await self._lightrag.apipeline_process_enqueue_documents()
+            await self._metadata_index.upsert(doc_id, metadata_record)
+            return {
+                "doc_id": doc_id,
+                "source_kind": "image",
+                "chunks": [chunk_id],
+                "ingest_strategy": "direct_image_with_visual_semantics",
+            }
 
     @staticmethod
     def _lightrag_metadata(

@@ -203,3 +203,48 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
 
     deps["stores"].cleanup_doc.assert_not_awaited()
     assert result["doc_id"] is not None
+
+
+async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> None:
+    """Two concurrent ingests of the same failed doc must NOT both clean up.
+    The per-doc lock ensures the second sees the first's state changes."""
+    import asyncio
+
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+
+    status_iter = iter(
+        [
+            {"chunks_list": [], "content_hash": "sha256:dead", "status": "failed"},
+            {"chunks_list": ["chunk-1"], "content_hash": "sha256:abc", "status": "processing"},
+        ]
+    )
+
+    async def status_side_effect(doc_id_arg: str) -> dict | None:
+        try:
+            return next(status_iter)
+        except StopIteration:
+            return {"chunks_list": ["chunk-1"], "content_hash": "sha256:abc", "status": "processed"}
+
+    deps["stores"].get_doc_status = AsyncMock(side_effect=status_side_effect)
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": "file:///tmp/sample.parsed/",
+    }
+
+    async def slow_cleanup(doc_id_arg: str) -> int:
+        await asyncio.sleep(0.03)
+        return 1
+
+    deps["stores"].cleanup_doc = AsyncMock(side_effect=slow_cleanup)
+
+    async def ingest() -> dict:
+        return await engine.aingest_file(source, replace=False)
+
+    results = await asyncio.gather(ingest(), ingest())
+    assert len(results) == 2
+    # Cleanup must have been called exactly once (not twice).
+    assert deps["stores"].cleanup_doc.await_count == 1
