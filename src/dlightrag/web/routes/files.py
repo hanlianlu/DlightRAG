@@ -165,7 +165,7 @@ async def upload_files(
     bytes_written = 0
     try:
         dest_dir = _staging_dir(selected_workspace)
-        saved_files = 0
+        saved_paths: list[Path] = []
         for f in files:
             if not f.filename:
                 continue
@@ -187,9 +187,9 @@ async def upload_files(
                             status_code=413,
                         )
                     out.write(chunk)
-            saved_files += 1
+            saved_paths.append(dest)
 
-        if saved_files == 0:
+        if not saved_paths:
             return error_response("No valid files selected")
 
     except Exception as e:
@@ -199,11 +199,12 @@ async def upload_files(
     # Fire-and-forget: schedule ingest, return immediately with progress UI.
     async def _background_ingest() -> None:
         try:
-            await manager.aingest(
-                workspace=selected_workspace,
-                source_type="local",
-                path=str(dest_dir),
-            )
+            for file_path in saved_paths:
+                await manager.aingest(
+                    workspace=selected_workspace,
+                    source_type="local",
+                    path=str(file_path),
+                )
         except Exception:
             logger.exception("Background ingest failed for workspace %s", selected_workspace)
         finally:
