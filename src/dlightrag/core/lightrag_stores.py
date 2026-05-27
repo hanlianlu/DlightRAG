@@ -71,7 +71,6 @@ class LightRAGStores:
 
         values = self._build_chunk_values(rows, vectors, embedding_dim=embedding_dim)
         chunks_by_doc = self._chunks_by_doc(rows)
-        current_status = await self._load_parent_doc_status(chunks_by_doc)
 
         await self.text_chunks.upsert(rows)
 
@@ -99,6 +98,8 @@ class LightRAGStores:
             await connection.executemany(sql, values)
 
         async with self._vector_write_lock:
+            current_status = await self._load_parent_doc_status(chunks_by_doc)
+
             if hasattr(chunks_vdb.db, "_run_with_retry"):
                 await chunks_vdb.db._run_with_retry(
                     _execute,
@@ -108,7 +109,7 @@ class LightRAGStores:
                 async with chunks_vdb.db.pool.acquire() as connection:
                     await _execute(connection)
 
-        await self._append_doc_status_chunks(chunks_by_doc, current_status)
+            await self._append_doc_status_chunks(chunks_by_doc, current_status)
 
     async def upsert_document_record(
         self,
