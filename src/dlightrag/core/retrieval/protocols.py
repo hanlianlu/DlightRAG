@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
+from dlightrag.citations.schemas import SourceReference
 from dlightrag.models.schemas import Reference
 
 # ── Structured context types ──────────────────────────────────────
@@ -71,6 +72,7 @@ class RetrievalResult:
         default_factory=lambda: {"chunks": [], "entities": [], "relationships": []}
     )
     references: list[Reference] = field(default_factory=list)
+    sources: list[SourceReference] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
     image_descriptions: list[str] = field(default_factory=list)
     current_image_ids: list[str] = field(default_factory=list)

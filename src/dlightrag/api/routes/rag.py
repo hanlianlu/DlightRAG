@@ -171,26 +171,12 @@ async def answer(
             **kwargs,
         )
         public_contexts = _public_contexts(result.contexts)
-        flat_contexts: list[dict[str, Any]] = []
-        for items in result.contexts.values():
-            if isinstance(items, list):
-                flat_contexts.extend(items)
-        _resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
-        all_sources = build_sources(public_contexts, path_resolver=_resolver)
-        answer_text = result.answer
-        if result.answer and flat_contexts:
-            processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
-            cited = processor.process(result.answer)
-            answer_text = cited.answer
-            sources = cited.sources
-        else:
-            sources = []
-        cited_refs = [{"id": s.id, "title": s.title} for s in sources]
+        references = [{"id": r.id, "title": r.title} for r in result.references]
         return {
-            "answer": answer_text,
+            "answer": result.answer,
             "contexts": public_contexts,
-            "references": cited_refs,
-            "sources": [s.model_dump() for s in sources],
+            "references": references,
+            "sources": [s.model_dump() for s in result.sources],
             "trace": result.trace,
             "image_descriptions": result.image_descriptions,
             "current_image_ids": result.current_image_ids,
