@@ -32,8 +32,8 @@ _LANG_TO_PG_CONFIG: dict[str, str] = {
     "ro": "romanian",
 }
 _FALLBACK_CONFIG = "simple"
-_SAMPLE_SIZE = 10
-_MAX_CHAR_PER_CHUNK = 300
+_SAMPLE_SIZE = 30
+_MAX_CHAR_PER_CHUNK = 500
 
 
 async def detect_bm25_config(

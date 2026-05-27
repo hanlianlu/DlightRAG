@@ -6,8 +6,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
-from dlightrag.citations.schemas import SourceReference
+from typing import TYPE_CHECKING
+
 from dlightrag.models.schemas import Reference
+
+if TYPE_CHECKING:
+    from dlightrag.citations.schemas import SourceReference
 
 # ── Structured context types ──────────────────────────────────────
 
