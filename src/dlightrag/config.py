@@ -424,6 +424,12 @@ class DlightragConfig(BaseSettings):
         data = super().model_dump(**kwargs)
         return _redact_dict(data, self._SECRET_PATTERNS)
 
+    def __repr__(self) -> str:
+        """Redact secrets in repr for safe logging."""
+        data = self.model_dump()
+        inner = ", ".join(f"{k}={v!r}" for k, v in data.items())
+        return f"{self.__class__.__name__}({inner})"
+
     def model_dump_json(self, **kwargs: Any) -> str:
         """Serialize config to JSON with sensitive fields redacted."""
         # Extract json.dumps-specific kwargs that model_dump doesn't accept
