@@ -71,15 +71,20 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
     assert deps["metadata_index"].upsert.await_args.args[0] == expected_doc_id
 
 
-async def test_document_ingest_rejects_unrouted_parser_fallback(tmp_path: Path) -> None:
+async def test_document_ingest_passes_unrouted_parser_to_lightrag(tmp_path: Path) -> None:
+    """Files with no matching parser rule are passed through to LightRAG.
+
+    LightRAG resolves the parser engine internally (falling back to
+    ``legacy``) and either processes the file or creates a FAILED record.
+    DlightRAG no longer pre-rejects unresolvable engines.
+    """
     source = tmp_path / "notes.unsupported"
     source.write_text("plain text")
     engine, deps = _make_engine(parser_rules="docx:native-iteP,pdf:mineru-iteP")
 
-    with pytest.raises(ValueError, match="No LightRAG parser route"):
-        await engine.aingest_file(source, replace=False)
+    await engine.aingest_file(source, replace=False)
 
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
 
 
 async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) -> None:
