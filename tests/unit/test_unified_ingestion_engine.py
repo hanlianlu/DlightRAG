@@ -138,3 +138,68 @@ async def test_native_image_ingest_adds_direct_vector_and_visual_semantic_doc(
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["docs_format"] == "raw"
     assert kwargs["process_options"] == "P"
+
+
+async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path) -> None:
+    """When a doc exists with status 'analyzing' (interrupted MinerU run),
+    re-ingesting must clean up the partial record and proceed normally."""
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+
+    # Simulate a partial record from an interrupted ingest.
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["old-chunk-1"],
+        "content_hash": "sha256:deadbeef",
+        "status": "analyzing",
+    }
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": "file:///tmp/nonexistent.parsed/",
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    # Must have cleaned up the old partial record.
+    deps["stores"].cleanup_doc.assert_awaited_once_with(doc_id)
+    deps["metadata_index"].delete.assert_awaited_once_with(doc_id)
+
+    # Must have proceeded with normal ingest.
+    assert result["doc_id"] == doc_id
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
+
+
+async def test_document_ingest_skips_cleanup_when_already_processed(tmp_path: Path) -> None:
+    """When a doc exists with status 'processed', re-ingest must NOT
+    clean up (it should go through normal duplicate detection instead)."""
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-1"],
+        "content_hash": "sha256:abc",
+        "status": "processed",
+    }
+
+    await engine.aingest_file(source, replace=False)
+
+    # Cleanup must NOT have been called for a healthy doc.
+    deps["stores"].cleanup_doc.assert_not_awaited()
+    deps["metadata_index"].delete.assert_not_awaited()
+
+
+async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
+    """When no prior doc_status exists, ingest proceeds without cleanup."""
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = None
+
+    result = await engine.aingest_file(source, replace=False)
+
+    deps["stores"].cleanup_doc.assert_not_awaited()
+    assert result["doc_id"] is not None
