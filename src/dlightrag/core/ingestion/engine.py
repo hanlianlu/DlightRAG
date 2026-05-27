@@ -82,6 +82,20 @@ class UnifiedIngestionEngine:
         """Ingest a local file through the unified path."""
         file_path = Path(path)
         doc_id = _canonical_file_doc_id(file_path)
+
+        # Idempotency: skip re-ingest if file content hasn't changed.
+        existing_status = await self._stores.get_doc_status(doc_id)
+        if existing_status is not None and existing_status.get("status") == "processed":
+            current_hash = _file_sha256(file_path)
+            stored_hash = existing_status.get("content_hash")
+            if stored_hash and current_hash == stored_hash:
+                return {
+                    "doc_id": doc_id,
+                    "source_kind": "skipped",
+                    "reason": "content_hash_match",
+                    "chunks": existing_status.get("chunks_list", []),
+                }
+
         metadata_record = self._prepare_metadata_record(
             file_path,
             title=title,
@@ -337,11 +351,20 @@ class UnifiedIngestionEngine:
 
 
 def _artifact_dir_from_uri(uri: str | None) -> Path | None:
+    """Resolve a sidecar URI to a local directory path.
+
+    Only ``file://`` URIs produce a local path.  Non-file schemes
+    (s3://, azure://, etc.) return None — they are not local artifacts.
+    """
     if not uri:
         return None
     if uri.startswith("file://"):
         parsed = urlparse(uri)
         return Path(unquote(parsed.path))
+    # Non-file URI — sidecar lives on external storage, not locally.
+    if "://" in uri:
+        return None
+    # Bare path (no scheme) — treat as local.
     return Path(uri)
 
 

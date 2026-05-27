@@ -248,3 +248,112 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
     assert len(results) == 2
     # Cleanup must have been called exactly once (not twice).
     assert deps["stores"].cleanup_doc.await_count == 1
+
+
+async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
+    """Re-ingesting a file with the same content_hash must skip and return early."""
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+
+    current_hash = _file_sha256_static(source)
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-1", "chunk-2"],
+        "content_hash": current_hash,
+        "status": "processed",
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["doc_id"] == doc_id
+    assert result["source_kind"] == "skipped"
+    assert result["reason"] == "content_hash_match"
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+def _file_sha256_static(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+async def test_reingest_proceeds_when_content_hash_differs(tmp_path: Path) -> None:
+    """Re-ingesting with different content_hash must proceed normally."""
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-1"],
+        "content_hash": "sha256:different_hash",
+        "status": "processed",
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result.get("source_kind") != "skipped"
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
+
+
+async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
+    """Re-ingesting a failed doc must proceed even if hash matches."""
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+
+    current_hash = _file_sha256_static(source)
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": [],
+        "content_hash": current_hash,
+        "status": "failed",
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result.get("source_kind") != "skipped"
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
+
+
+def test_artifact_dir_from_uri_handles_file_scheme() -> None:
+    from pathlib import Path
+
+    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+
+    result = _artifact_dir_from_uri("file:///tmp/sample.parsed/")
+    assert result == Path("/tmp/sample.parsed/")
+
+
+def test_artifact_dir_from_uri_handles_file_scheme_with_encoding() -> None:
+    from pathlib import Path
+
+    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+
+    result = _artifact_dir_from_uri("file:///tmp/path%20with%20spaces/")
+    assert result == Path("/tmp/path with spaces/")
+
+
+def test_artifact_dir_from_uri_rejects_non_file_scheme() -> None:
+    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+
+    assert _artifact_dir_from_uri("s3://bucket/key/parsed/") is None
+    assert _artifact_dir_from_uri("azure://container/path/") is None
+
+
+def test_artifact_dir_from_uri_handles_bare_path() -> None:
+    from pathlib import Path
+
+    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+
+    result = _artifact_dir_from_uri("/tmp/local/path")
+    assert result == Path("/tmp/local/path")
+
+
+def test_artifact_dir_from_uri_handles_none() -> None:
+    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+
+    assert _artifact_dir_from_uri(None) is None
+    assert _artifact_dir_from_uri("") is None
