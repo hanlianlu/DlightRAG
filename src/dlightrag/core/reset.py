@@ -256,8 +256,10 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
                         )
                     cleaned += 1
 
-                # Drop empty tables
-                if not dry_run:
+                # Only drop empty DlightRAG-owned tables (not LightRAG
+                # infrastructure tables which other workspaces or the
+                # framework itself may still expect to exist).
+                if not dry_run and table.startswith("dlightrag_"):
                     remaining = await conn.fetchrow(
                         f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
                     )
