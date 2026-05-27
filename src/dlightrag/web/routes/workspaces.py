@@ -28,20 +28,17 @@ async def _set_workspace_cookies(
     response: HTMLResponse,
     request: Request,
     manager: Any,
-    primary_ws: str | None = None,
 ) -> None:
     """Set workspace cookies from DB state.
 
     Cookie values are always derived from the DB workspace registry so they
-    never originate from unvalidated user input.  ``primary_ws`` is an
-    optional hint that is validated against the DB list before use.
+    never originate from unvalidated user input.
     """
     workspaces = await manager.list_workspaces()
     if not workspaces:
         workspaces = ["default"]
-    # Cookie values are derived from DB workspace names only.
-    db_values: set[str] = set(workspaces)
-    primary = primary_ws if (primary_ws and primary_ws in db_values) else workspaces[0]
+    # Cookie values are purely DB-sourced, never from user input.
+    primary = workspaces[0]
     joined = ",".join(workspaces)
     secure = request.url.scheme == "https"
     response.set_cookie(
@@ -100,7 +97,7 @@ async def create_workspace(
             "HX-Trigger": json.dumps({"workspaceCreated": {"workspace": ws, "display_name": name}})
         },
     )
-    await _set_workspace_cookies(response, request, manager, primary_ws=ws)
+    await _set_workspace_cookies(response, request, manager)
     return response
 
 

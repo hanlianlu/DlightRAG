@@ -152,13 +152,15 @@ async def areset(
             # Also clean staging files under input_dir/<workspace>/
             input_root = service.config.input_dir_path.resolve()
             input_ws_dir = (input_root / workspace).resolve()
-            if str(input_ws_dir).startswith(str(input_root) + "/") or input_ws_dir == input_root:
+            try:
+                input_ws_dir.relative_to(input_root)
+            except ValueError:
+                errors.append("Phase 5 (filesystem): workspace path escapes input directory")
+            else:
                 if input_ws_dir.exists() and input_ws_dir.is_dir():
                     if not dry_run:
                         shutil.rmtree(input_ws_dir, ignore_errors=True)
                     stats["local_files_removed"] += 1
-            else:
-                errors.append("Phase 5 (filesystem): workspace path escapes input directory")
         except Exception as exc:
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", exc)
@@ -471,16 +473,15 @@ async def areset_orphaned_workspace(
             try:
                 input_root = Path(input_dir).resolve()
                 input_ws_dir = (input_root / workspace).resolve()
-                if (
-                    str(input_ws_dir).startswith(str(input_root) + "/")
-                    or input_ws_dir == input_root
-                ):
+                try:
+                    input_ws_dir.relative_to(input_root)
+                except ValueError:
+                    errors.append("Filesystem (input_dir): workspace path escapes input directory")
+                else:
                     if input_ws_dir.exists() and input_ws_dir.is_dir():
                         if not dry_run:
                             shutil.rmtree(input_ws_dir, ignore_errors=True)
                         stats["local_files_removed"] += 1
-                else:
-                    errors.append("Filesystem (input_dir): workspace path escapes input directory")
             except Exception as exc:
                 errors.append(f"Filesystem (input_dir): {exc}")
 
