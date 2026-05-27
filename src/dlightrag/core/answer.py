@@ -162,6 +162,7 @@ class AnswerEngine:
             answer=processed.answer,
             contexts=prepared.contexts,
             references=references,
+            sources=processed.sources,
             trace=prepared.trace,
         )
 
