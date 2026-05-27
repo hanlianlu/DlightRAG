@@ -90,14 +90,14 @@ class UnifiedRetriever:
         trace["bm25_query"] = lexical_query if self._bm25 is not None else None
         trace["bm25_chunk_count"] = len(bm25_chunks)
         trace["semantic_chunk_count"] = len(lightrag_result.contexts.get("chunks", []))
+        semantic_chunks = lightrag_result.contexts.get("chunks", [])
         if bm25_chunks:
-            semantic_chunks = lightrag_result.contexts.get("chunks", [])
             fused = rrf_fuse([semantic_chunks, bm25_chunks], k=self._rrf_k)
-            fused = dedup_chunks_by_content(fused)
-            lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
-            trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
         else:
-            trace["fused_chunk_count"] = trace["semantic_chunk_count"]
+            fused = list(semantic_chunks)
+        fused = dedup_chunks_by_content(fused)
+        lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
+        trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
         lightrag_result.trace = trace
         return lightrag_result
 
