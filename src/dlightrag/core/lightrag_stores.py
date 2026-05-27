@@ -210,6 +210,7 @@ class LightRAGStores:
         # 3. doc_full -- parse config / sidecar location.
         if hasattr(self.full_docs, "delete"):
             await self.full_docs.delete([doc_id])
+            deleted += 1
 
         # 4. doc_chunks (text_chunks) -- old chunks would conflict with new ones.
         if chunk_ids and hasattr(self.text_chunks, "delete"):
