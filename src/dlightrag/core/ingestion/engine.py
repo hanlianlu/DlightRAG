@@ -12,6 +12,8 @@ from urllib.parse import unquote, urlparse
 from lightrag.constants import (
     FULL_DOCS_FORMAT_PENDING_PARSE,
     FULL_DOCS_FORMAT_RAW,
+    PARSER_ENGINE_DOCLING,
+    PARSER_ENGINE_LEGACY,
     PARSER_ENGINE_MINERU,
     PARSER_ENGINE_NATIVE,
 )
@@ -34,6 +36,8 @@ from dlightrag.core.retrieval.metadata_fields import (
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 _LIGHTRAG_DOCUMENT_PARSER_ENGINES = {
+    PARSER_ENGINE_DOCLING,
+    PARSER_ENGINE_LEGACY,
     PARSER_ENGINE_MINERU,
     PARSER_ENGINE_NATIVE,
 }
