@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -464,10 +465,13 @@ class TestRAGServiceLightRAGMainPath:
         service._lightrag = MagicMock()
         service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=delete_doc)
         service._lightrag.doc_status = MagicMock()
+        # Real LightRAG get_doc_by_file_path strips 'id' — only returns metadata
         service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(
-            return_value={"id": "old-doc", "file_path": str(fake_pdf)}
+            return_value={"file_path": str(fake_pdf)}
         )
-        service._lightrag.doc_status.get_docs_by_status = AsyncMock(return_value={})
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+            return_value={"old-doc": SimpleNamespace(file_path=str(fake_pdf))}
+        )
         service._metadata_index = MagicMock()
         service._metadata_index.get = AsyncMock(return_value={"page_count": 0})
         service._metadata_index.delete = AsyncMock()
