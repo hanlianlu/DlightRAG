@@ -431,6 +431,9 @@ async def areset_orphaned_workspace(
     have leftover AGE graph schemas, PG table rows, or filesystem artifacts.
     This is a best-effort direct PG cleanup.
     """
+    from dlightrag.utils import normalize_workspace
+
+    workspace = normalize_workspace(workspace)
     errors: list[str] = []
     stats: dict[str, Any] = {
         "workspace": workspace,
