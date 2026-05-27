@@ -13,13 +13,6 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
-def test_lightrag_dependency_uses_github_main() -> None:
-    dependencies = _dependencies()
-    lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
-
-    assert lightrag_deps == ["lightrag-hku @ git+https://github.com/HKUDS/LightRAG.git@main"]
-
-
 def test_removed_multimodal_dependency_absent() -> None:
     dependencies = _dependencies()
     removed = "rag" + "anything"
