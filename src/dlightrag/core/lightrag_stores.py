@@ -192,7 +192,8 @@ class LightRAGStores:
     async def cleanup_doc(self, doc_id: str) -> int:
         """Delete a document's LightRAG records (doc_status, doc_full, chunks).
 
-        Returns the number of deleted rows across all tables.
+        Returns the number of rows targeted for deletion (an upper bound,
+        not an exact count of rows that existed).
         Does NOT attempt to clean entities, relations, vectors, or graphs --
         those are keyed by entity/relation name or chunk_id and do not block
         re-ingestion.  Orphaned rows in those tables are harmless.
