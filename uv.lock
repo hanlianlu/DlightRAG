@@ -444,7 +444,7 @@ requires-dist = [
     { name = "langchain-text-splitters", specifier = ">=0.3" },
     { name = "langdetect", specifier = ">=1.0.9" },
     { name = "langfuse", specifier = ">=4.0.0" },
-    { name = "lightrag-hku", git = "https://github.com/HKUDS/LightRAG.git?rev=main" },
+    { name = "lightrag-hku", specifier = ">=1.5.0rc3" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
     { name = "nh3", specifier = ">=0.2" },
@@ -915,8 +915,8 @@ wheels = [
 
 [[package]]
 name = "lightrag-hku"
-version = "1.5.0"
-source = { git = "https://github.com/HKUDS/LightRAG.git?rev=main#8d6a6e394aaa5039be1f95f1a26a1735232fc288" }
+version = "1.5.0rc3"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "configparser" },
@@ -937,6 +937,10 @@ dependencies = [
     { name = "tenacity" },
     { name = "tiktoken" },
     { name = "xlsxwriter" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/1c/64f58c904eac4917e1ad6edbf42bc0b862498af7b35979f46f09f5c184d5/lightrag_hku-1.5.0rc3.tar.gz", hash = "sha256:d6b2505dcfb8047b592ed3885e8db92a62dfceddd5d0cac9473644e797df2fce", size = 3833499, upload-time = "2026-05-26T09:28:02.411Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/b0/6465379d43e1216e79273d50a1d857b9f7d9b9f16e8541a07bf6c8e4ed37/lightrag_hku-1.5.0rc3-py3-none-any.whl", hash = "sha256:37fe6e193d7e4c1c758e697e7bdc253d04104c7dc7261e4da4fe4a76ae8cb6f8", size = 3962681, upload-time = "2026-05-26T09:27:59.026Z" },
 ]
 
 [[package]]
