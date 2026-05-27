@@ -54,9 +54,11 @@ async def collect_deletion_context(
                     ctx.file_paths.add(fp)
 
             # get_doc_by_file_path omits the primary-key id, so we must
-            # scan all processed docs to find the doc_id.  This runs
-            # whenever doc_ids is still empty — for both relative and
-            # absolute identifiers.
+            # scan docs to find the doc_id.  This runs whenever doc_ids is
+            # still empty — for both relative and absolute identifiers.
+            # We also always scan FAILED docs to collect DUPLICATE records
+            # that share the same file_path, so the receipt is cleaned up
+            # alongside the original document.
             if not ctx.doc_ids:
                 from lightrag.base import DocStatus
 
@@ -66,11 +68,25 @@ async def collect_deletion_context(
                     stored_name = Path(fp).name
                     stored_stem = Path(fp).stem
 
-                    # Exact path match first, then basename/stem
                     if fp == identifier or stored_name == basename or stored_stem == stem:
                         ctx.doc_ids.add(d_id)
                         if fp:
                             ctx.file_paths.add(fp)
+
+            # Collect DUPLICATE/FAILED receipts for the same file so they
+            # are removed together with the original document.
+            from lightrag.base import DocStatus
+
+            failed_docs = await doc_status.get_docs_by_status(DocStatus.FAILED)
+            for d_id, doc_info in failed_docs.items():
+                fp = getattr(doc_info, "file_path", "") or ""
+                stored_name = Path(fp).name
+                stored_stem = Path(fp).stem
+
+                if fp == identifier or stored_name == basename or stored_stem == stem:
+                    ctx.doc_ids.add(d_id)
+                    if fp:
+                        ctx.file_paths.add(fp)
 
             if ctx.doc_ids or ctx.file_paths:
                 ctx.sources_used.append("doc_status")
