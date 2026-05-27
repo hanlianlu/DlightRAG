@@ -78,7 +78,7 @@ function renderThumbnails() {
 }
 
 function _isSafeImageSrc(src) {
-    return typeof src === 'string' && /^(?:\/|blob:|data:)/.test(src);
+    return typeof src === 'string' && /^(?!\/\/)(?:\/|blob:|data:)/.test(src);
 }
 
 function _getLightboxImageSrc(el) {
@@ -126,7 +126,7 @@ function _updateNavButtons(box) {
 
 function _showLightboxImage(box, src) {
     if (typeof src !== 'string') return;
-    if (!(src.startsWith('/') || src.startsWith('blob:') || src.startsWith('data:'))) return;
+    if (!((src.startsWith('/') && !src.startsWith('//')) || src.startsWith('blob:') || src.startsWith('data:'))) return;
     var img = box.querySelector('.image-lightbox-img');
     if (!img) return;
     img.src = src;
@@ -180,7 +180,7 @@ function ensureLightbox() {
 
 export function openLightbox(src) {
     if (typeof src !== 'string') return;
-    if (!(src.startsWith('/') || src.startsWith('blob:') || src.startsWith('data:'))) return;
+    if (!((src.startsWith('/') && !src.startsWith('//')) || src.startsWith('blob:') || src.startsWith('data:'))) return;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', src);
     const img = box.querySelector('.image-lightbox-img');
