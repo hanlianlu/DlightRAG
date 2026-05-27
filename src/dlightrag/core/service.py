@@ -862,7 +862,12 @@ class RAGService:
         return result
 
     def _local_ingest_paths(self, path: Path) -> list[Path]:
-        """Resolve a local file or directory into concrete files for ingestion."""
+        """Resolve a local file or directory into concrete files for ingestion.
+
+        Skips ``__parsed__`` sidecar directories and hidden files so that
+        MinerU artifacts and editor temp files are never treated as ingest
+        candidates.
+        """
         if path.is_file():
             return [path]
         if not path.exists():
@@ -870,10 +875,16 @@ class RAGService:
         if not path.is_dir():
             raise ValueError(f"Local ingest path is not a file or directory: {path}")
 
-        files = sorted(
-            (item for item in path.rglob("*") if item.is_file()),
-            key=lambda item: item.relative_to(path).as_posix(),
-        )
+        files: list[Path] = []
+        for item in sorted(
+            (p for p in path.rglob("*") if p.is_file()),
+            key=lambda p: p.relative_to(path).as_posix(),
+        ):
+            if "__parsed__" in (p.name for p in item.parents):
+                continue
+            if item.name.startswith("."):
+                continue
+            files.append(item)
         if not files:
             raise ValueError(f"Local ingest directory contains no files: {path}")
         return files
@@ -1081,11 +1092,15 @@ class RAGService:
             if local_path.is_file():
                 return await self._aingest_local_file(local_path, **common_kwargs)
 
-            results = [
-                await self._aingest_local_file(file_path, **common_kwargs)
-                for file_path in file_paths
-            ]
-            return {"processed": len(results), "results": results}
+            results = []
+            errors = []
+            for file_path in file_paths:
+                try:
+                    results.append(await self._aingest_local_file(file_path, **common_kwargs))
+                except Exception:
+                    logger.exception("Ingest failed for %s", file_path)
+                    errors.append(str(file_path))
+            return {"processed": len(results), "errors": errors, "results": results}
 
         if self._ingestion_engine is not None and source_type == "azure_blob":
             return await self._aingest_azure_blob(replace=replace, **kwargs)
