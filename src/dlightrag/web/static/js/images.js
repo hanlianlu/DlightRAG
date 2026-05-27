@@ -125,10 +125,11 @@ function _updateNavButtons(box) {
 }
 
 function _showLightboxImage(box, src) {
-    if (!_isSafeImageSrc(src)) return;
+    if (typeof src !== 'string') return;
+    if (!(src.startsWith('/') || src.startsWith('blob:') || src.startsWith('data:'))) return;
     var img = box.querySelector('.image-lightbox-img');
     if (!img) return;
-    img.setAttribute('src', src);
+    img.src = src;
     box.setAttribute('data-current-src', src);
     _updateNavButtons(box);
 }
@@ -178,11 +179,12 @@ function ensureLightbox() {
 }
 
 export function openLightbox(src) {
-    if (!_isSafeImageSrc(src)) return;
+    if (typeof src !== 'string') return;
+    if (!(src.startsWith('/') || src.startsWith('blob:') || src.startsWith('data:'))) return;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', src);
     const img = box.querySelector('.image-lightbox-img');
-    img.setAttribute('src', src);
+    img.src = src;
     box.classList.add('open');
     box.setAttribute('aria-hidden', 'false');
     _updateNavButtons(box);
