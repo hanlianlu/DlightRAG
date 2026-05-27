@@ -53,11 +53,11 @@ async def collect_deletion_context(
                 if fp:
                     ctx.file_paths.add(fp)
 
-            # If identifier is a basename, also try matching stored paths
-            # to find the doc_id.  We must do this even when get_doc_by_file_path
-            # succeeded, because its return dict omits the primary-key id.
-            if not ctx.doc_ids and not Path(identifier).is_absolute():
-                # Query all processed docs and match by basename/stem
+            # get_doc_by_file_path omits the primary-key id, so we must
+            # scan all processed docs to find the doc_id.  This runs
+            # whenever doc_ids is still empty — for both relative and
+            # absolute identifiers.
+            if not ctx.doc_ids:
                 from lightrag.base import DocStatus
 
                 all_docs = await doc_status.get_docs_by_status(DocStatus.PROCESSED)
@@ -66,7 +66,8 @@ async def collect_deletion_context(
                     stored_name = Path(fp).name
                     stored_stem = Path(fp).stem
 
-                    if stored_name == basename or stored_stem == stem:
+                    # Exact path match first, then basename/stem
+                    if fp == identifier or stored_name == basename or stored_stem == stem:
                         ctx.doc_ids.add(d_id)
                         if fp:
                             ctx.file_paths.add(fp)
@@ -133,40 +134,72 @@ async def cascade_delete(
     return stats
 
 
-def remove_deleted_files(file_paths: set[str], working_dir: str) -> int:
+def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     """Delete physical files and parsed artifact directories from disk.
+
+    Handles the full LightRAG parser artifact layout:
+
+    - Source files in ``input_dir/``
+    - Parsed artifacts under ``input_dir/__parsed__/``:
+      ``<name>.parsed/``, ``<name>.mineru_raw/``, ``<name>.docling_raw/``
+    - Collision-suffixed variants (``<name>_001.parsed/``, etc.)
 
     Best-effort — failures are logged but never raised, so a missing file
     on disk does not block the DB-level deletion from succeeding.
 
     Args:
         file_paths: Absolute paths to ingested files (from LightRAG doc_status).
-        working_dir: The workspace's working_dir (for locating parsed artifacts).
+        input_dir: The workspace's input directory (parent of the source files).
 
     Returns:
         Number of files/directories removed.
     """
+    import re
     import shutil
 
+    from lightrag.constants import PARSED_ARTIFACT_DIR_SUFFIXES, PARSED_DIR_NAME
+
     removed = 0
+    parsed_root = Path(input_dir) / PARSED_DIR_NAME
+    _collision_re = re.compile(r"_\d{3}$")
+
     for fp in file_paths:
         path = Path(fp)
-        # Remove the source file itself
-        try:
-            if path.exists() and path.is_file():
-                path.unlink()
-                removed += 1
-        except OSError:
-            logger.debug("Failed to remove source file: %s", fp, exc_info=True)
+        filename = path.name
+        stem = path.stem
 
-        # Remove associated parsed artifact directory (e.g., file.pdf.parsed/)
-        parsed_dir = path.parent / (path.name + ".parsed")
+        # 1. Remove the source file (may be in input_dir/ or moved into
+        #    __parsed__/ by LightRAG after ingest).
+        for candidate_dir in (Path(input_dir), parsed_root):
+            candidate = candidate_dir / filename
+            try:
+                if candidate.exists() and candidate.is_file():
+                    candidate.unlink()
+                    removed += 1
+            except OSError:
+                logger.debug("Failed to remove source file: %s", candidate, exc_info=True)
+
+        # 2. Remove parsed artifact directories under __parsed__/.
+        #    LightRAG creates:  <stem>.parsed/, <stem>.mineru_raw/,
+        #    <stem>.docling_raw/, plus collision-suffixed variants
+        #    (<stem>_001.parsed/, etc.).
         try:
-            if parsed_dir.exists() and parsed_dir.is_dir():
-                shutil.rmtree(parsed_dir, ignore_errors=True)
-                removed += 1
+            if parsed_root.exists() and parsed_root.is_dir():
+                for entry in sorted(parsed_root.iterdir()):
+                    if not entry.is_dir():
+                        continue
+                    entry_name = entry.name
+                    for suffix in PARSED_ARTIFACT_DIR_SUFFIXES:
+                        expected = f"{stem}{suffix}"
+                        if entry_name == expected or (
+                            entry_name.endswith(suffix)
+                            and _collision_re.sub("", entry_name[: -len(suffix)]) == stem
+                        ):
+                            shutil.rmtree(entry, ignore_errors=True)
+                            removed += 1
+                            break
         except OSError:
-            logger.debug("Failed to remove parsed dir: %s", parsed_dir, exc_info=True)
+            logger.debug("Failed to scan parsed dir: %s", parsed_root, exc_info=True)
 
     return removed
 

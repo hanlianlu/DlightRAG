@@ -1532,7 +1532,10 @@ class RAGService:
             else:
                 status = "deleted"
                 # Remove physical files after successful DB cleanup.
-                remove_deleted_files(ctx.file_paths, self.config.working_dir)
+                remove_deleted_files(
+                    ctx.file_paths,
+                    str(self.config.input_dir_path / self.config.workspace),
+                )
 
             results.append({"identifier": identifier, "status": status, **stats})
         return results

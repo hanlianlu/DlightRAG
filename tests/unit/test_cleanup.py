@@ -21,9 +21,10 @@ def _make_lightrag(docs: dict[str, str] | None = None):
     doc_status = MagicMock()
 
     async def _get_by_path(fp: str):
-        for d_id, stored_fp in docs.items():
+        for _d_id, stored_fp in docs.items():
             if stored_fp == fp:
-                return {"id": d_id, "file_path": stored_fp}
+                # Real LightRAG strips 'id' from the return dict
+                return {"file_path": stored_fp}
         return None
 
     async def _get_by_status(_status):
