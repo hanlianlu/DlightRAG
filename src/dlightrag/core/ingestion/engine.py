@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -133,6 +134,21 @@ class UnifiedIngestionEngine:
             "metadata_json": normalized_metadata.raw_json,
         }
 
+    async def _cleanup_partial_doc(self, doc_id: str) -> None:
+        """Remove all traces of a partial/failed document before re-ingest."""
+        # 1. LightRAG tables: doc_status, doc_full, doc_chunks.
+        await self._stores.cleanup_doc(doc_id)
+
+        # 2. DlightRAG metadata index.
+        await self._metadata_index.delete(doc_id)
+
+        # 3. Sidecar directory (parsed artifacts).
+        full_doc = await self._stores.get_full_doc(doc_id)
+        sidecar_uri = (full_doc or {}).get("sidecar_location")
+        artifact_dir = _artifact_dir_from_uri(sidecar_uri)
+        if artifact_dir is not None and artifact_dir.exists():
+            shutil.rmtree(artifact_dir, ignore_errors=True)
+
     async def _ingest_document(
         self,
         file_path: Path,
@@ -140,6 +156,11 @@ class UnifiedIngestionEngine:
         doc_id: str,
         metadata_record: dict[str, Any],
     ) -> dict[str, Any]:
+        # Self-healing: if a previous ingest was interrupted, clean up first.
+        existing_status = await self._stores.get_doc_status(doc_id)
+        if existing_status is not None and existing_status.get("status") != "processed":
+            await self._cleanup_partial_doc(doc_id)
+
         parse_engine, process_options = resolve_file_parser_directives(
             file_path,
             parser_rules=self._parser_rules,
@@ -227,6 +248,11 @@ class UnifiedIngestionEngine:
         doc_id: str,
         metadata_record: dict[str, Any],
     ) -> dict[str, Any]:
+        # Self-healing: if a previous ingest was interrupted, clean up first.
+        existing_status = await self._stores.get_doc_status(doc_id)
+        if existing_status is not None and existing_status.get("status") != "processed":
+            await self._cleanup_partial_doc(doc_id)
+
         ref = native_image_ref(file_path)
         chunk_id, row, vector = await build_direct_image_chunk(
             workspace=self._workspace,
