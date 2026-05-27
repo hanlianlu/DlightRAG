@@ -100,15 +100,18 @@ async def _file_list_response(request: Request, workspace: str):
 
     # Check whether an ingest is currently active so reopening the panel
     # shows the progress bar again instead of stale state.
+    # Always query pipeline_status — the in-memory _ingest_tasks dict may
+    # be empty after a server restart or task-tracker race, but LightRAG's
+    # shared-storage pipeline_status is the authoritative source.
     ingest_busy = _ingest_tasks.get(workspace) is not None
     status: dict[str, Any] = {}
-    if ingest_busy:
-        try:
-            ps = await manager.get_pipeline_status(workspace)
-            ingest_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+    try:
+        ps = await manager.get_pipeline_status(workspace)
+        ingest_busy = ingest_busy or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+        if ingest_busy:
             status = ps
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     return templates.TemplateResponse(
         request,
