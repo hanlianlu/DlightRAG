@@ -16,33 +16,21 @@ export function openPanel(title) {
     if (!title) return;
 
     const titleEl = document.getElementById('panel-title');
+    const ingestTarget = document.getElementById('ingest-target');
     if (title === 'FILES') {
         resetIngestWorkspace();
-        titleEl.style.letterSpacing = '0';
-        renderIngestPill(titleEl);
+        titleEl.textContent = 'FILES';
+        renderIngestPill();
     } else {
-        titleEl.style.letterSpacing = '';
-        titleEl.innerHTML = '';
         titleEl.textContent = title;
+        if (ingestTarget) ingestTarget.innerHTML = '';
     }
 }
 
-function renderIngestPill(titleEl) {
-    titleEl.innerHTML = '';
-
-    const label = document.createElement('span');
-    label.className = 'ingest-target-label';
-    label.textContent = 'FILES';
-    titleEl.appendChild(label);
-
-    const sep = document.createElement('span');
-    sep.className = 'ingest-target-sep';
-    sep.textContent = '›';
-    titleEl.appendChild(sep);
-
-    const container = document.createElement('span');
-    container.className = 'ingest-target';
-    container.id = 'ingest-target';
+function renderIngestPill() {
+    const container = document.getElementById('ingest-target');
+    if (!container) return;
+    container.innerHTML = '';
 
     const pill = document.createElement('span');
     pill.className = 'ingest-target-pill';
@@ -76,7 +64,6 @@ function renderIngestPill(titleEl) {
     });
 
     container.appendChild(pill);
-    titleEl.appendChild(container);
 }
 
 function getIngestWorkspaceRecords() {

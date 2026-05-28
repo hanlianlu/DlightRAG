@@ -209,6 +209,7 @@ body {
 .workspace-dot.multi {
     background: transparent;
     border: 1px solid var(--color-gold-200);
+    border-radius: 999px;
     box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 var(--color-gold-200);
     width: var(--space-related);
 }
@@ -381,19 +382,12 @@ body {
 
 /* === Files Panel — Ingest Target Pill === */
 
-.ingest-target-label {
-    opacity: 0.45;
-}
-
-.ingest-target-sep {
-    color: var(--color-text-dim);
-    font-weight: 300;
-    margin: 0 calc(var(--space-inline) * 0.5);
-    opacity: 0.4;
-}
-
 .ingest-target {
     position: relative;
+}
+
+#ingest-target:empty {
+    display: none;
 }
 
 .ingest-target-pill {
@@ -789,10 +783,14 @@ body {
 
 .panel-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: var(--space-tight);
     padding: var(--space-related) var(--space-section);
     border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.panel-close {
+    margin-left: auto;
 }
 
 #panel-title {
