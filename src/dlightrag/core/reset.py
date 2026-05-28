@@ -332,53 +332,25 @@ async def _drop_age_graphs(
 ) -> list[str]:
     """Phase 4: Drop AGE graph schemas for this workspace.
 
+    Primary path uses ``ag_catalog.drop_graph()`` via LightRAG's pool.
+    If that pool is unavailable, falls back to direct PostgreSQL
+    ``DROP SCHEMA ... CASCADE`` via ``asyncpg``.
+
     ``workspace`` is already the normalized lowercase identifier,
     so it is safe to use directly in graph name matching.
     """
+    dropped: list[str] = []
+
+    # ---- Primary: AGE-native drop via LightRAG pool ----
     try:
         from lightrag.kg.postgres_impl import ClientManager
 
         db = await ClientManager.get_client()
         pool = db.pool
-        if pool is None:
-            return []
-    except Exception:
-        return []
-
-    dropped: list[str] = []
-
-    async with pool.acquire() as conn:
-        # 1. Drop collected graph names from Phase 1
-        for gname in collected_names:
-            try:
-                if not dry_run:
-                    await conn.execute(f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)")
-                dropped.append(gname)
-            except Exception as exc:
-                logger.warning("Failed to drop collected graph %s: %s", gname, exc)
-
-        # 2. Catalog scan fallback -- find additional graphs
-        try:
-            escaped = workspace.replace("_", r"\_")
-            rows = await conn.fetch(
-                "SELECT name FROM ag_catalog.ag_graph WHERE name ILIKE $1 ESCAPE '\\'",
-                f"{escaped}\\_%",
-            )
-
-            if rows:
-                known_workspaces = await _list_all_workspaces()
-                for row in rows:
-                    gname = row["name"]
-                    if gname in dropped:
-                        continue
-                    # Cross-check: skip graphs belonging to other workspaces
-                    belongs_to_other = any(
-                        gname.startswith(f"{other}_") and other != workspace
-                        for other in known_workspaces
-                        if len(other) > len(workspace) and other.startswith(workspace)
-                    )
-                    if belongs_to_other:
-                        continue
+        if pool is not None:
+            async with pool.acquire() as conn:
+                # 1. Drop collected graph names from Phase 1
+                for gname in collected_names:
                     try:
                         if not dry_run:
                             await conn.execute(
@@ -386,10 +358,111 @@ async def _drop_age_graphs(
                             )
                         dropped.append(gname)
                     except Exception as exc:
-                        logger.warning("Failed to drop graph %s: %s", gname, exc)
-        except Exception as exc:
-            # ag_catalog may not exist if AGE is not installed
-            logger.debug("AGE catalog scan skipped: %s", exc)
+                        logger.warning(
+                            "Failed to drop collected graph %s: %s", gname, exc
+                        )
+
+                # 2. Catalog scan -- find additional graphs
+                try:
+                    escaped = workspace.replace("_", r"\_")
+                    rows = await conn.fetch(
+                        "SELECT name FROM ag_catalog.ag_graph "
+                        "WHERE name ILIKE $1 ESCAPE '\\'",
+                        f"{escaped}\\_%",
+                    )
+                    if rows:
+                        known_workspaces = await _list_all_workspaces()
+                        for row in rows:
+                            gname = row["name"]
+                            if gname in dropped:
+                                continue
+                            belongs_to_other = any(
+                                gname.startswith(f"{other}_") and other != workspace
+                                for other in known_workspaces
+                                if len(other) > len(workspace)
+                                and other.startswith(workspace)
+                            )
+                            if belongs_to_other:
+                                continue
+                            try:
+                                if not dry_run:
+                                    await conn.execute(
+                                        f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)"
+                                    )
+                                dropped.append(gname)
+                            except Exception as exc:
+                                logger.warning(
+                                    "Failed to drop graph %s: %s", gname, exc
+                                )
+                except Exception as exc:
+                    logger.debug("AGE catalog scan skipped: %s", exc)
+    except Exception as exc:
+        logger.warning(
+            "AGE graph drop via LightRAG pool unavailable, "
+            "falling back to direct PG schema drop: %s",
+            exc,
+        )
+
+    # ---- Fallback: direct PostgreSQL DROP SCHEMA ----
+    # Catches schemas that ag_catalog.drop_graph() may have missed
+    # (or all of them if the AGE path was entirely unavailable).
+    try:
+        fallback_dropped = await _drop_workspace_schemas_via_pg(
+            workspace, already_dropped=dropped, dry_run=dry_run
+        )
+        for schema_name in fallback_dropped:
+            if schema_name not in dropped:
+                dropped.append(schema_name)
+    except Exception as exc:
+        logger.warning("PG schema fallback failed for workspace %s: %s", workspace, exc)
+
+    return dropped
+
+
+async def _drop_workspace_schemas_via_pg(
+    workspace: str,
+    already_dropped: list[str],
+    *,
+    dry_run: bool,
+) -> list[str]:
+    """Fallback: drop PostgreSQL schemas matching ``{workspace}_%`` directly.
+
+    Uses ``asyncpg`` (bypassing LightRAG's pool and AGE's catalog).
+    This catches schemas that ``ag_catalog.drop_graph()`` left behind,
+    or handles the entire cleanup when the AGE path is unavailable.
+    """
+    import asyncpg
+
+    from dlightrag.config import get_config
+
+    config = get_config()
+    dropped: list[str] = []
+
+    try:
+        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+    except Exception as exc:
+        logger.warning("Failed to connect via asyncpg for schema cleanup: %s", exc)
+        return dropped
+
+    try:
+        rows = await conn.fetch(
+            "SELECT schema_name FROM information_schema.schemata "
+            "WHERE schema_name LIKE $1 AND schema_name NOT IN ('public', 'information_schema', 'pg_catalog', 'pg_toast')",
+            f"{workspace}\\_%",
+        )
+        for row in rows:
+            schema_name = row["schema_name"]
+            if schema_name in already_dropped:
+                continue
+            try:
+                if not dry_run:
+                    await conn.execute(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+                dropped.append(schema_name)
+                logger.info("Dropped schema %s (PG fallback)", schema_name)
+            except Exception as exc:
+                logger.warning("Failed to drop schema %s: %s", schema_name, exc)
+    finally:
+        await conn.close()
 
     return dropped
 
@@ -504,35 +577,57 @@ async def _drop_age_graphs_for_workspace(
     workspaces — it is intended for orphan cleanup where the workspace
     no longer exists in metadata.
     """
+    dropped: list[str] = []
+
+    # ---- Primary: AGE-native drop via LightRAG pool ----
     try:
         from lightrag.kg.postgres_impl import ClientManager
 
         db = await ClientManager.get_client()
         pool = db.pool
-        if pool is None:
-            return []
-    except Exception:
-        return []
-
-    dropped: list[str] = []
-
-    async with pool.acquire() as conn:
-        try:
-            escaped = workspace.replace("_", r"\_")
-            rows = await conn.fetch(
-                "SELECT name FROM ag_catalog.ag_graph WHERE name ILIKE $1 ESCAPE '\\'",
-                f"{escaped}\\_%",
-            )
-            for row in rows:
-                gname = row["name"]
+        if pool is not None:
+            async with pool.acquire() as conn:
                 try:
-                    if not dry_run:
-                        await conn.execute(f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)")
-                    dropped.append(gname)
+                    escaped = workspace.replace("_", r"\_")
+                    rows = await conn.fetch(
+                        "SELECT name FROM ag_catalog.ag_graph "
+                        "WHERE name ILIKE $1 ESCAPE '\\'",
+                        f"{escaped}\\_%",
+                    )
+                    for row in rows:
+                        gname = row["name"]
+                        try:
+                            if not dry_run:
+                                await conn.execute(
+                                    f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)"
+                                )
+                            dropped.append(gname)
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to drop graph %s: %s", gname, exc
+                            )
                 except Exception as exc:
-                    logger.warning("Failed to drop graph %s: %s", gname, exc)
-        except Exception as exc:
-            logger.debug("AGE catalog scan skipped: %s", exc)
+                    logger.debug("AGE catalog scan skipped: %s", exc)
+    except Exception as exc:
+        logger.warning(
+            "AGE graph drop via LightRAG pool unavailable "
+            "for orphan workspace %s, falling back to PG: %s",
+            workspace,
+            exc,
+        )
+
+    # ---- Fallback: direct PostgreSQL DROP SCHEMA ----
+    try:
+        fallback_dropped = await _drop_workspace_schemas_via_pg(
+            workspace, already_dropped=dropped, dry_run=dry_run
+        )
+        for schema_name in fallback_dropped:
+            if schema_name not in dropped:
+                dropped.append(schema_name)
+    except Exception as exc:
+        logger.warning(
+            "PG schema fallback failed for orphan workspace %s: %s", workspace, exc
+        )
 
     return dropped
 
