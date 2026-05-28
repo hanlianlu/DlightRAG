@@ -379,6 +379,165 @@ body {
     border-color: rgba(210, 182, 97, 0.4);
 }
 
+/* === Files Panel — Ingest Target Pill === */
+
+.ingest-target {
+    position: relative;
+}
+
+.ingest-target-pill {
+    align-items: center;
+    background: var(--color-bg-hover);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-200);
+    cursor: pointer;
+    display: flex;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    gap: var(--space-inline);
+    padding: 3px 10px;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.ingest-target-pill:hover {
+    background: var(--color-bg-hover-strong);
+    border-color: rgba(210, 182, 97, 0.35);
+}
+
+.ingest-target-dot {
+    background: var(--color-gold-200);
+    border-radius: 50%;
+    flex-shrink: 0;
+    height: 6px;
+    width: 6px;
+}
+
+.ingest-target-caret {
+    color: var(--color-gold-300);
+    flex-shrink: 0;
+    transition: transform 0.15s;
+}
+
+.ingest-target.open .ingest-target-caret {
+    transform: rotate(180deg);
+}
+
+/* Popover */
+.ingest-target-popover {
+    background: var(--color-bg-elevated);
+    border: 1px solid rgba(210, 182, 97, 0.18);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
+    display: flex;
+    flex-direction: column;
+    left: 0;
+    max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-tight);
+    position: absolute;
+    top: calc(100% + 6px);
+    width: clamp(200px, 20vw, 260px);
+    z-index: 1000;
+}
+
+.ingest-target-popover-item {
+    align-items: center;
+    border-radius: calc(var(--radius-sm) * 0.8);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-component);
+    padding: 7px var(--space-component);
+    transition: background 0.1s;
+}
+
+.ingest-target-popover-item:hover,
+.ingest-target-popover-item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+/* Radio circle */
+.ingest-target-popover-radio {
+    align-items: center;
+    border: 1.5px solid var(--color-text-subtle);
+    border-radius: 50%;
+    display: flex;
+    flex-shrink: 0;
+    height: var(--size-icon-sm);
+    justify-content: center;
+    transition: all 0.15s;
+    width: var(--size-icon-sm);
+}
+
+.ingest-target-popover-radio.on {
+    border-color: var(--color-gold-200);
+}
+
+.ingest-target-popover-radio.on::after {
+    background: var(--color-gold-200);
+    border-radius: 50%;
+    content: '';
+    height: 50%;
+    width: 50%;
+}
+
+/* Create row — same pattern as workspace popover */
+.ingest-target-popover-create {
+    align-items: center;
+    border-top: 1px solid var(--color-border-subtle);
+    display: flex;
+    gap: var(--space-tight);
+    margin-top: var(--space-tight);
+    padding: var(--space-tight) 0 0;
+}
+
+.ingest-target-popover-input {
+    background: var(--color-bg-subtle);
+    border: 1px solid rgba(210, 182, 97, 0.18);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    flex: 1;
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    outline: none;
+    padding: var(--space-tight) var(--space-tight);
+}
+
+.ingest-target-popover-input:focus {
+    border-color: rgba(210, 182, 97, 0.38);
+}
+
+.ingest-target-popover-input::placeholder {
+    color: var(--color-text-dim);
+}
+
+.ingest-target-popover-create-btn {
+    align-items: center;
+    background: rgba(87, 74, 36, 0.28);
+    border: 1px solid rgba(210, 182, 97, 0.24);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-100);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    font-size: var(--font-size-body);
+    height: clamp(28px, 2.8vw, 34px);
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+    width: clamp(28px, 2.8vw, 34px);
+}
+
+.ingest-target-popover-create-btn:hover {
+    background: rgba(87, 74, 36, 0.42);
+    border-color: rgba(210, 182, 97, 0.4);
+}
+
 /* === Chat Area === */
 
 .chat-area {

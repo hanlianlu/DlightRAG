@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {getPrimaryWorkspace} from './state.js';
+import {getIngestWorkspace} from './state.js';
 import {openPanel, showToast} from './panel.js';
 
 function isPanelTarget(event) {
@@ -17,7 +17,7 @@ function isFileRequest(el) {
 function syncWorkspaceParameter(event) {
     const el = event.detail && event.detail.elt;
     if (!isFileRequest(el)) return;
-    const workspace = getPrimaryWorkspace();
+    const workspace = getIngestWorkspace();
     if (!event.detail.parameters) event.detail.parameters = {};
     event.detail.parameters.workspace = workspace;
 

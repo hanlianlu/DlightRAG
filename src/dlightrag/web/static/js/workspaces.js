@@ -9,6 +9,10 @@ const ACTIVE_COOKIE = 'dlightrag_workspace_ids';
 let workspaceRecords = [];
 let popoverEl = null;
 
+export function getWorkspaceRecords() {
+    return workspaceRecords;
+}
+
 function payload(event) {
     if (!event.detail) return {};
     return event.detail.value || event.detail;
