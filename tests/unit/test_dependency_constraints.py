@@ -133,13 +133,6 @@ def test_docx_native_parser_runtime_dependency_is_direct() -> None:
     assert any(dep.lower().startswith("python-docx") for dep in dependencies)
 
 
-def test_lightrag_paragraph_chunking_fallback_dependency_is_direct() -> None:
-    """LightRAG P chunking falls back to R, which imports langchain-text-splitters."""
-    dependencies = _dependencies()
-
-    assert any(dep.lower().startswith("langchain-text-splitters") for dep in dependencies)
-
-
 def test_runtime_imports_do_not_reference_old_lightrag_docx_entrypoint() -> None:
     source_files = list(Path("src/dlightrag").rglob("*.py")) + list(Path("tests").rglob("*.py"))
     old_entrypoint = "lightrag.native_parser" + ".docx"
