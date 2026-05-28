@@ -170,11 +170,11 @@ export function createAnswerRenderer(turn) {
 
         // Delegate lightbox clicks on image gallery
         turn.contentDiv.addEventListener('click', function (e) {
-            var item = e.target.closest('[data-action="open-lightbox"]');
+            const item = e.target.closest('[data-action="open-lightbox"]');
             if (item) {
                 e.preventDefault();
                 e.stopPropagation();
-                var src = item.getAttribute('data-src');
+                const src = item.getAttribute('data-src');
                 if (src && /^(?:\/|blob:|data:)/.test(src)) openLightbox(src);
             }
         });

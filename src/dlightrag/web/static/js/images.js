@@ -82,23 +82,23 @@ function _isSafeImageSrc(src) {
 }
 
 function _getLightboxImageSrc(el) {
-    var s = el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
+    const s =el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
     return _isSafeImageSrc(s) ? s : '';
 }
 
 function _collectGalleryImages() {
-    var items = document.querySelectorAll('[data-action="open-lightbox"]');
-    var srcs = [];
+    const items = document.querySelectorAll('[data-action="open-lightbox"]');
+    const srcs = [];
     items.forEach(function(el) {
-        var s = _getLightboxImageSrc(el);
+        const s =_getLightboxImageSrc(el);
         if (s) srcs.push(s);
     });
     return srcs;
 }
 
 function _currentGalleryIndex(currentSrc) {
-    var images = _collectGalleryImages();
-    for (var i = 0; i < images.length; i++) {
+    const images = _collectGalleryImages();
+    for (let i = 0; i < images.length; i++) {
         if (images[i] === currentSrc) return i;
     }
     return -1;
@@ -106,11 +106,11 @@ function _currentGalleryIndex(currentSrc) {
 
 function _updateNavButtons(box) {
     if (!box || !box.classList.contains('open')) return;
-    var currentSrc = box.getAttribute('data-current-src') || '';
-    var images = _collectGalleryImages();
-    var idx = _currentGalleryIndex(currentSrc);
-    var prev = box.querySelector('.image-lightbox-prev');
-    var next = box.querySelector('.image-lightbox-next');
+    const currentSrc = box.getAttribute('data-current-src') || '';
+    const images = _collectGalleryImages();
+    const idx = _currentGalleryIndex(currentSrc);
+    const prev = box.querySelector('.image-lightbox-prev');
+    const next = box.querySelector('.image-lightbox-next');
     if (images.length <= 1) {
         if (prev) prev.style.display = 'none';
         if (next) next.style.display = 'none';
@@ -126,8 +126,8 @@ function _updateNavButtons(box) {
 
 function _showLightboxImage(box, src) {
     if (typeof src !== 'string') return;
-    if (!((src.startsWith('/') && !src.startsWith('//')) || src.startsWith('blob:') || src.startsWith('data:'))) return;
-    var img = box.querySelector('.image-lightbox-img');
+    if (!_isSafeImageSrc(src)) return;
+    const img = box.querySelector('.image-lightbox-img');
     if (!img) return;
     img.src = src;
     box.setAttribute('data-current-src', src);
@@ -135,14 +135,14 @@ function _showLightboxImage(box, src) {
 }
 
 function _navigateLightbox(direction) {
-    var box = document.getElementById('image-lightbox');
+    const box = document.getElementById('image-lightbox');
     if (!box || !box.classList.contains('open')) return;
-    var currentSrc = box.getAttribute('data-current-src') || '';
-    var images = _collectGalleryImages();
+    const currentSrc = box.getAttribute('data-current-src') || '';
+    const images = _collectGalleryImages();
     if (images.length <= 1) return;
-    var idx = _currentGalleryIndex(currentSrc);
+    const idx = _currentGalleryIndex(currentSrc);
     if (idx < 0) return;
-    var newIdx = idx + direction;
+    let newIdx = idx + direction;
     if (newIdx < 0) newIdx = images.length - 1;
     if (newIdx >= images.length) newIdx = 0;
     _showLightboxImage(box, images[newIdx]);
@@ -180,7 +180,7 @@ function ensureLightbox() {
 
 export function openLightbox(src) {
     if (typeof src !== 'string') return;
-    if (!((src.startsWith('/') && !src.startsWith('//')) || src.startsWith('blob:') || src.startsWith('data:'))) return;
+    if (!_isSafeImageSrc(src)) return;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', src);
     const img = box.querySelector('.image-lightbox-img');
@@ -234,10 +234,10 @@ export function setupImageInputs() {
         dragCounter = 0;
         if (dropOverlay) dropOverlay.classList.remove('active');
 
-        var items = e.dataTransfer.items;
+        const items = e.dataTransfer.items;
         if (!items || items.length === 0) return;
 
-        var result = await detectDropItems(
+        const result = await detectDropItems(
             items,
             function(imageFile) { addImage(imageFile); }
         );
@@ -258,7 +258,7 @@ export function setupImageInputs() {
     });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') { closeLightbox(); return; }
-        var box = document.getElementById('image-lightbox');
+        const box = document.getElementById('image-lightbox');
         if (!box || !box.classList.contains('open')) return;
         if (e.key === 'ArrowLeft') { e.preventDefault(); _navigateLightbox(-1); }
         if (e.key === 'ArrowRight') { e.preventDefault(); _navigateLightbox(1); }

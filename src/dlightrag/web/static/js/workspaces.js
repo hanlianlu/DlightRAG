@@ -143,9 +143,13 @@ export function openWorkspacePopover() {
 
     const popover = document.createElement('div');
     popover.className = 'workspace-popover';
+    popover.setAttribute('role', 'listbox');
+    popover.setAttribute('aria-label', 'Workspaces');
 
     const allItem = document.createElement('div');
     allItem.className = 'workspace-popover-item workspace-popover-all';
+    allItem.setAttribute('tabindex', '0');
+    allItem.setAttribute('role', 'option');
     const allCheck = document.createElement('div');
     const allIds = workspaceRecords.map((item) => item.workspace);
     const isAllSelected = allIds.length > 0 && allIds.every(
@@ -158,12 +162,21 @@ export function openWorkspacePopover() {
         event.stopPropagation();
         selectAllWorkspaces();
     });
+    allItem.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            selectAllWorkspaces();
+        }
+    });
     popover.appendChild(allItem);
     popover.appendChild(separator());
 
     workspaceRecords.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
         const item = document.createElement('div');
         item.className = 'workspace-popover-item';
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', activeWorkspaces.indexOf(record.workspace) >= 0 ? 'true' : 'false');
         const check = document.createElement('div');
         check.className = `workspace-popover-check${activeWorkspaces.indexOf(record.workspace) >= 0 ? ' on' : ''}`;
         item.appendChild(check);
@@ -190,6 +203,15 @@ export function openWorkspacePopover() {
             event.stopPropagation();
             toggleWorkspace(record.workspace);
             check.classList.toggle('on', activeWorkspaces.indexOf(record.workspace) >= 0);
+            item.setAttribute('aria-selected', activeWorkspaces.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+        });
+        item.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                toggleWorkspace(record.workspace);
+                check.classList.toggle('on', activeWorkspaces.indexOf(record.workspace) >= 0);
+                item.setAttribute('aria-selected', activeWorkspaces.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+            }
         });
         popover.appendChild(item);
     });

@@ -3,11 +3,8 @@
 import {getPrimaryWorkspace} from './state.js';
 import {showToast} from './panel.js';
 
-/**
- * Recursively traverse a directory entry, collecting all files.
- */
 async function traverseDirectory(entry, basePath) {
-    var files = [];
+    const files = [];
     if (entry.isFile) {
         return new Promise(function (resolve) {
             entry.file(function (file) {
@@ -18,23 +15,20 @@ async function traverseDirectory(entry, basePath) {
         });
     }
     if (entry.isDirectory) {
-        var dirPath = basePath ? basePath + '/' + entry.name : entry.name;
-        var entries = await readAllEntries(entry);
-        for (var i = 0; i < entries.length; i++) {
-            var childFiles = await traverseDirectory(entries[i], dirPath);
+        const dirPath = basePath ? basePath + '/' + entry.name : entry.name;
+        const entries = await readAllEntries(entry);
+        for (let i = 0; i < entries.length; i++) {
+            const childFiles = await traverseDirectory(entries[i], dirPath);
             files.push.apply(files, childFiles);
         }
     }
     return files;
 }
 
-/**
- * Read all entries from a directory reader (handles batch limits).
- */
 function readAllEntries(dirEntry) {
     return new Promise(function (resolve) {
-        var reader = dirEntry.createReader();
-        var all = [];
+        const reader = dirEntry.createReader();
+        const all = [];
         function readBatch() {
             reader.readEntries(function (entries) {
                 if (entries.length === 0) {
@@ -49,21 +43,18 @@ function readAllEntries(dirEntry) {
     });
 }
 
-/**
- * Traverse directory via File System Access API handles.
- */
 async function traverseFileSystemDirectory(handle, basePath) {
-    var files = [];
-    for await (var entry of handle.entries()) {
-        var name = entry[0];
-        var child = entry[1];
-        var childPath = basePath + '/' + name;
+    const files = [];
+    for await (const entry of handle.entries()) {
+        const name = entry[0];
+        const child = entry[1];
+        const childPath = basePath + '/' + name;
         if (child.kind === 'file') {
-            var file = await child.getFile();
+            const file = await child.getFile();
             file._relativePath = childPath;
             files.push(file);
         } else if (child.kind === 'directory') {
-            var childFiles = await traverseFileSystemDirectory(child, childPath);
+            const childFiles = await traverseFileSystemDirectory(child, childPath);
             files.push.apply(files, childFiles);
         }
     }
@@ -76,30 +67,40 @@ async function traverseFileSystemDirectory(handle, basePath) {
  * Returns {files: File[], folderName: string|null}
  */
 export async function detectDropItems(items, imageHandler) {
-    var allFiles = [];
-    var folderName = null;
+    const allFiles = [];
+    let folderName = null;
 
-    var supportsFileSystemHandle = 'getAsFileSystemHandle' in DataTransferItem.prototype;
-    var supportsWebkitGetAsEntry = 'webkitGetAsEntry' in DataTransferItem.prototype;
+    const supportsFileSystemHandle = 'getAsFileSystemHandle' in DataTransferItem.prototype;
+    const supportsWebkitGetAsEntry = 'webkitGetAsEntry' in DataTransferItem.prototype;
 
-    for (var i = 0; i < items.length; i++) {
-        var item = items[i];
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         if (item.kind !== 'file') continue;
 
         // Tier 1: File System Access API
         if (supportsFileSystemHandle) {
             try {
-                var handle = await item.getAsFileSystemHandle();
+                const handle = await item.getAsFileSystemHandle();
                 if (handle && handle.kind === 'directory') {
                     folderName = folderName || handle.name;
-                    var dirFiles = await traverseFileSystemDirectory(handle, handle.name);
+                    const dirFiles = await traverseFileSystemDirectory(handle, handle.name);
+                    for (let j = dirFiles.length - 1; j >= 0; j--) {
+                        if (dirFiles[j].type.startsWith('image/') && imageHandler) {
+                            imageHandler(dirFiles[j]);
+                            dirFiles.splice(j, 1);
+                        }
+                    }
                     allFiles.push.apply(allFiles, dirFiles);
                     continue;
                 }
                 if (handle && handle.kind === 'file') {
-                    var f = await handle.getFile();
+                    const f = await handle.getFile();
                     f._relativePath = f.name;
-                    allFiles.push(f);
+                    if (f.type.startsWith('image/') && imageHandler) {
+                        imageHandler(f);
+                    } else {
+                        allFiles.push(f);
+                    }
                     continue;
                 }
             } catch (_) { /* fall through */ }
@@ -107,29 +108,39 @@ export async function detectDropItems(items, imageHandler) {
 
         // Tier 2: webkitGetAsEntry
         if (supportsWebkitGetAsEntry) {
-            var entry = item.webkitGetAsEntry();
+            const entry = item.webkitGetAsEntry();
             if (entry) {
                 if (entry.isDirectory) {
                     folderName = folderName || entry.name;
-                    var dirFiles2 = await traverseDirectory(entry, entry.name);
+                    const dirFiles2 = await traverseDirectory(entry, entry.name);
+                    for (let j = dirFiles2.length - 1; j >= 0; j--) {
+                        if (dirFiles2[j].type.startsWith('image/') && imageHandler) {
+                            imageHandler(dirFiles2[j]);
+                            dirFiles2.splice(j, 1);
+                        }
+                    }
                     allFiles.push.apply(allFiles, dirFiles2);
                     continue;
                 }
                 if (entry.isFile) {
-                    var f2 = await new Promise(function (resolve) {
+                    const f2 = await new Promise(function (resolve) {
                         entry.file(function (file) {
                             file._relativePath = file.name;
                             resolve(file);
                         });
                     });
-                    allFiles.push(f2);
+                    if (f2.type.startsWith('image/') && imageHandler) {
+                        imageHandler(f2);
+                    } else {
+                        allFiles.push(f2);
+                    }
                     continue;
                 }
             }
         }
 
         // Tier 3: Plain file
-        var file = item.getAsFile();
+        const file = item.getAsFile();
         if (file) {
             file._relativePath = file.name;
             if (file.type.startsWith('image/') && imageHandler) {
@@ -149,30 +160,30 @@ export async function detectDropItems(items, imageHandler) {
 export async function uploadFolderToWorkspace(files, folderName) {
     if (files.length === 0) return;
 
-    var formData = new FormData();
+    const formData = new FormData();
     formData.append('workspace', getPrimaryWorkspace());
     files.forEach(function (file) {
-        var path = file._relativePath || file.name;
+        const path = file._relativePath || file.name;
         formData.append('files', file, path);
     });
 
-    var label = folderName || (files.length === 1 ? files[0].name : files.length + ' files');
+    const label = folderName || (files.length === 1 ? files[0].name : files.length + ' files');
     showToast('Uploading ' + label + '...');
 
     try {
-        var resp = await fetch('/web/files/upload', {
+        const resp = await fetch('/web/files/upload', {
             method: 'POST',
             body: formData,
         });
         if (resp.ok) {
-            var html = await resp.text();
-            var panelContent = document.getElementById('panel-content');
+            const html = await resp.text();
+            const panelContent = document.getElementById('panel-content');
             if (panelContent) {
                 panelContent.innerHTML = html;
             }
             showToast('Uploaded ' + label);
         } else {
-            var text = await resp.text();
+            const text = await resp.text();
             showToast('Upload failed: ' + (text || resp.statusText));
         }
     } catch (err) {
@@ -184,20 +195,20 @@ export async function uploadFolderToWorkspace(files, folderName) {
  * Set up folder input (webkitdirectory) and Files panel button delegation.
  */
 export function setupFolderInput() {
-    var folderInput = document.getElementById('folder-input');
+    const folderInput = document.getElementById('folder-input');
     if (!folderInput) return;
 
     folderInput.addEventListener('change', async function () {
-        var fileList = folderInput.files;
+        const fileList = folderInput.files;
         if (!fileList || fileList.length === 0) return;
-        var rawFiles = Array.from(fileList);
+        const rawFiles = Array.from(fileList);
 
-        var folderName = null;
-        var augmented = rawFiles.map(function (f) {
-            var path = f.webkitRelativePath || f.name;
+        let folderName = null;
+        const augmented = rawFiles.map(function (f) {
+            const path = f.webkitRelativePath || f.name;
             f._relativePath = path;
             if (!folderName && f.webkitRelativePath) {
-                var parts = f.webkitRelativePath.split('/');
+                const parts = f.webkitRelativePath.split('/');
                 folderName = parts[0];
             }
             return f;
@@ -209,7 +220,7 @@ export function setupFolderInput() {
 
     // Delegated click for "Upload Folder" button in Files panel
     document.addEventListener('click', function (e) {
-        var btn = e.target.closest('[data-action="upload-folder"]');
+        const btn = e.target.closest('[data-action="upload-folder"]');
         if (btn) {
             folderInput.click();
         }
