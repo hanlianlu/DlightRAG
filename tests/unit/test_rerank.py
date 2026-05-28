@@ -12,7 +12,6 @@ from dlightrag.models.rerank import (
     _chat_llm_rerank,
     _http_rerank,
     _parse_listwise_scores,
-    build_lightrag_rerank_adapter,
 )
 
 _PNG_B64 = (
@@ -272,45 +271,6 @@ class TestChatLlmRerank:
             "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
         )
         assert chunks == original
-
-
-class TestLightragAdapter:
-    async def test_converts_text_to_chunks(self):
-        """Adapter should convert list[str] to list[dict] and back."""
-
-        async def mock_rerank(query, chunks, top_k):
-            # Verify chunks have content field
-            assert all("content" in c for c in chunks)
-            # Return scored chunks
-            return [{**c, "rerank_score": 0.9 - i * 0.1} for i, c in enumerate(chunks[:top_k])]
-
-        adapter = build_lightrag_rerank_adapter(mock_rerank)
-        result = await adapter("test query", ["doc A", "doc B", "doc C"])
-
-        assert len(result) == 3
-        assert result[0]["index"] == 0
-        assert result[0]["relevance_score"] == pytest.approx(0.9)
-        assert result[1]["index"] == 1
-
-    async def test_forwards_top_n(self):
-        """LightRAG passes top_n; adapter should forward as top_k."""
-        received_top_k = None
-
-        async def mock_rerank(query, chunks, top_k):
-            nonlocal received_top_k
-            received_top_k = top_k
-            return [{**c, "rerank_score": 0.9} for c in chunks[:top_k]]
-
-        adapter = build_lightrag_rerank_adapter(mock_rerank)
-        await adapter("query", ["a", "b", "c"], top_n=2)
-        assert received_top_k == 2
-
-    async def test_empty_documents(self):
-        mock_rerank = AsyncMock()
-        adapter = build_lightrag_rerank_adapter(mock_rerank)
-        result = await adapter("query", [])
-        assert result == []
-        mock_rerank.assert_not_called()
 
 
 class TestHttpRerank:
