@@ -55,6 +55,7 @@ export function setupPanelResize() {
         document.body.style.cursor = 'col-resize';
         document.body.setAttribute('data-resizing', '');
         document.body.classList.add('resizing');
+        panel.style.backdropFilter = 'none';
     }
 
     function onPointerMove(e) {
@@ -71,6 +72,7 @@ export function setupPanelResize() {
         document.body.style.userSelect = '';
         document.body.style.cursor = '';
         document.body.classList.remove('resizing');
+        panel.style.backdropFilter = '';
         const finalWidth = panel.getBoundingClientRect().width;
         saveWidth(Math.round(finalWidth));
         setTimeout(function () {
