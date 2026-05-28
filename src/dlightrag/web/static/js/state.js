@@ -4,6 +4,23 @@ export const conversationHistory = [];
 export const HISTORY_SEND_CAP = 100;
 export const activeWorkspaces = [];
 
+let ingestWorkspace = null;
+
+export function getIngestWorkspace() {
+    if (!ingestWorkspace) {
+        ingestWorkspace = getPrimaryWorkspace();
+    }
+    return ingestWorkspace;
+}
+
+export function setIngestWorkspace(workspace) {
+    ingestWorkspace = workspace;
+}
+
+export function resetIngestWorkspace() {
+    ingestWorkspace = getPrimaryWorkspace();
+}
+
 const SESSION_KEY = 'dlightrag.session_id';
 
 export function getSessionId() {

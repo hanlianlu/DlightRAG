@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {getPrimaryWorkspace} from './state.js';
+import {getIngestWorkspace} from './state.js';
 import {showToast} from './panel.js';
 
 async function traverseDirectory(entry, basePath) {
@@ -161,7 +161,7 @@ export async function uploadFolderToWorkspace(files, folderName) {
     if (files.length === 0) return;
 
     const formData = new FormData();
-    formData.append('workspace', getPrimaryWorkspace());
+    formData.append('workspace', getIngestWorkspace());
     files.forEach(function (file) {
         const path = file._relativePath || file.name;
         formData.append('files', file, path);
