@@ -229,7 +229,8 @@ body {
     display: flex;
     flex-direction: column;
     left: 0;
-    max-height: min(70vh, 480px);
+    /* Utopia: 280px@390vp → 480px@1440vp, matches popover width scaling */
+    max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: var(--space-tight);
