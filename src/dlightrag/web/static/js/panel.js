@@ -16,8 +16,10 @@ export function openPanel(title) {
     const titleEl = document.getElementById('panel-title');
     if (title === 'FILES') {
         resetIngestWorkspace();
+        titleEl.style.letterSpacing = '0';
         renderIngestPill(titleEl);
     } else {
+        titleEl.style.letterSpacing = '';
         titleEl.innerHTML = '';
         titleEl.textContent = title;
     }
@@ -25,6 +27,17 @@ export function openPanel(title) {
 
 function renderIngestPill(titleEl) {
     titleEl.innerHTML = '';
+
+    const label = document.createElement('span');
+    label.className = 'ingest-target-label';
+    label.textContent = 'FILES';
+    titleEl.appendChild(label);
+
+    const sep = document.createElement('span');
+    sep.className = 'ingest-target-sep';
+    sep.textContent = '›';
+    titleEl.appendChild(sep);
+
     const container = document.createElement('span');
     container.className = 'ingest-target';
     container.id = 'ingest-target';

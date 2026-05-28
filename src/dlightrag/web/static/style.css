@@ -381,6 +381,17 @@ body {
 
 /* === Files Panel — Ingest Target Pill === */
 
+.ingest-target-label {
+    opacity: 0.45;
+}
+
+.ingest-target-sep {
+    color: var(--color-text-dim);
+    font-weight: 300;
+    margin: 0 2px;
+    opacity: 0.4;
+}
+
 .ingest-target {
     position: relative;
 }
