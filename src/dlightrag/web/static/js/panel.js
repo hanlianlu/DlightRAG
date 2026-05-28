@@ -2,13 +2,197 @@
 
 import {openLightbox} from './images.js';
 import {renderMath} from './chat_renderer.js';
+import {getIngestWorkspace, setIngestWorkspace, resetIngestWorkspace} from './state.js';
+import {getWorkspaceRecords} from './workspaces.js';
 
 let toastTimer = null;
+let ingestPopoverEl = null;
 
 export function openPanel(title) {
     document.getElementById('panel').classList.add('open');
     document.body.classList.add('panel-open');
-    if (title) document.getElementById('panel-title').textContent = title;
+    if (!title) return;
+
+    const titleEl = document.getElementById('panel-title');
+    if (title === 'FILES') {
+        resetIngestWorkspace();
+        renderIngestPill(titleEl);
+    } else {
+        titleEl.innerHTML = '';
+        titleEl.textContent = title;
+    }
+}
+
+function renderIngestPill(titleEl) {
+    titleEl.innerHTML = '';
+    const container = document.createElement('span');
+    container.className = 'ingest-target';
+    container.id = 'ingest-target';
+
+    const pill = document.createElement('span');
+    pill.className = 'ingest-target-pill';
+    pill.setAttribute('role', 'button');
+    pill.setAttribute('tabindex', '0');
+    pill.setAttribute('aria-label', 'Select ingest workspace');
+
+    const dot = document.createElement('span');
+    dot.className = 'ingest-target-dot';
+    pill.appendChild(dot);
+
+    const name = document.createElement('span');
+    name.className = 'ingest-target-name';
+    name.textContent = getIngestWorkspace();
+    pill.appendChild(name);
+
+    const caret = document.createElement('span');
+    caret.className = 'ingest-target-caret';
+    caret.innerHTML = '<svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4 L5 6.5 L7.5 4"/></svg>';
+    pill.appendChild(caret);
+
+    pill.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleIngestPopover(container);
+    });
+    pill.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggleIngestPopover(container);
+        }
+    });
+
+    container.appendChild(pill);
+    titleEl.appendChild(container);
+}
+
+function toggleIngestPopover(container) {
+    if (ingestPopoverEl) {
+        closeIngestPopover();
+        return;
+    }
+    container.classList.add('open');
+
+    const popover = document.createElement('div');
+    popover.className = 'ingest-target-popover';
+    popover.setAttribute('role', 'listbox');
+    popover.setAttribute('aria-label', 'Select ingest workspace');
+
+    const records = getWorkspaceRecords();
+    const current = getIngestWorkspace();
+
+    records.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
+        const item = document.createElement('div');
+        item.className = 'ingest-target-popover-item';
+        item.setAttribute('role', 'option');
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('aria-selected', record.workspace === current ? 'true' : 'false');
+
+        const radio = document.createElement('div');
+        radio.className = 'ingest-target-popover-radio' + (record.workspace === current ? ' on' : '');
+        item.appendChild(radio);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = record.display_name;
+        item.appendChild(nameSpan);
+
+        item.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectIngestWorkspace(record.workspace);
+        });
+        item.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectIngestWorkspace(record.workspace);
+            }
+        });
+        popover.appendChild(item);
+    });
+
+    // Create row
+    const createRow = document.createElement('div');
+    createRow.className = 'ingest-target-popover-create';
+
+    const input = document.createElement('input');
+    input.className = 'ingest-target-popover-input';
+    input.type = 'text';
+    input.placeholder = 'New workspace...';
+    input.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            createIngestWorkspace(input);
+        }
+    });
+    createRow.appendChild(input);
+
+    const btn = document.createElement('button');
+    btn.className = 'ingest-target-popover-create-btn';
+    btn.type = 'button';
+    btn.textContent = '+';
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        createIngestWorkspace(input);
+    });
+    createRow.appendChild(btn);
+    popover.appendChild(createRow);
+
+    container.appendChild(popover);
+    ingestPopoverEl = popover;
+
+    setTimeout(() => {
+        document.addEventListener('click', onIngestPopoverOutside);
+        document.addEventListener('keydown', onIngestPopoverEscape);
+    }, 0);
+}
+
+function selectIngestWorkspace(workspace) {
+    setIngestWorkspace(workspace);
+    updateIngestPillLabel();
+    closeIngestPopover();
+    // Refresh file list for the new workspace.
+    // Pass workspace explicitly — syncWorkspaceParameter won't catch manual htmx.ajax calls.
+    htmx.ajax('GET', '/web/files', {
+        target: '#panel-content',
+        swap: 'innerHTML',
+        values: {workspace: workspace},
+    });
+}
+
+function createIngestWorkspace(input) {
+    const name = input.value.trim();
+    if (!name) return;
+    input.disabled = true;
+    htmx.ajax('POST', '/web/workspaces/create', {
+        values: {workspace_name: name},
+        swap: 'none',
+    }).catch(() => {
+        input.disabled = false;
+        showToast('Failed to create workspace', 5000);
+    });
+}
+
+function updateIngestPillLabel() {
+    const nameEl = document.querySelector('.ingest-target-name');
+    if (nameEl) nameEl.textContent = getIngestWorkspace();
+}
+
+function closeIngestPopover() {
+    if (ingestPopoverEl) {
+        ingestPopoverEl.remove();
+        ingestPopoverEl = null;
+    }
+    const container = document.getElementById('ingest-target');
+    if (container) container.classList.remove('open');
+    document.removeEventListener('click', onIngestPopoverOutside);
+    document.removeEventListener('keydown', onIngestPopoverEscape);
+}
+
+function onIngestPopoverOutside(e) {
+    const container = document.getElementById('ingest-target');
+    if (container && !container.contains(e.target)) closeIngestPopover();
+}
+
+function onIngestPopoverEscape(e) {
+    if (e.key === 'Escape') closeIngestPopover();
 }
 
 export function closePanel() {
@@ -222,5 +406,20 @@ export function setupPanel() {
         if (e.target.id === 'file-input') {
             htmx.trigger(document.getElementById('upload-form'), 'submit');
         }
+    });
+
+    // Sync ingest pill when workspace is created from either popover
+    document.body.addEventListener('workspaceCreated', (event) => {
+        const detail = event.detail && (event.detail.value || event.detail);
+        const workspace = detail && detail.workspace;
+        if (!workspace) return;
+        setIngestWorkspace(workspace);
+        updateIngestPillLabel();
+        closeIngestPopover();
+        htmx.ajax('GET', '/web/files', {
+            target: '#panel-content',
+            swap: 'innerHTML',
+            values: {workspace: workspace},
+        });
     });
 }
