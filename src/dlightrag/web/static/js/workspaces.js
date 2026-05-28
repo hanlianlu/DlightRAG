@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {activeWorkspaces, setActiveWorkspaces} from './state.js';
-import {showToast} from './panel.js';
+import {showToast} from './toast.js';
 
 const PRIMARY_COOKIE = 'dlightrag_workspace';
 const ACTIVE_COOKIE = 'dlightrag_workspace_ids';
@@ -258,7 +258,7 @@ function createRow() {
     return row;
 }
 
-function createWorkspace(input) {
+export function createWorkspace(input) {
     const name = input.value.trim();
     if (!name) return;
     input.disabled = true;
@@ -312,6 +312,13 @@ function showDeleteWorkspaceDialog(workspace) {
     dialog.showModal();
 }
 
+function syncDataAllAttribute() {
+    const selector = document.getElementById('workspace-selector');
+    if (selector) {
+        selector.setAttribute('data-all', JSON.stringify(workspaceRecords));
+    }
+}
+
 function setupWorkspaceEvents() {
     const selector = document.getElementById('workspace-selector');
     if (selector && !selector.dataset.bound) {
@@ -348,6 +355,7 @@ function setupWorkspaceEvents() {
         }
         selectWorkspace(workspace);
         closeWorkspacePopover();
+        syncDataAllAttribute();
         showToast(`Workspace ${workspaceName(workspace)} created.`);
     });
 
@@ -356,6 +364,7 @@ function setupWorkspaceEvents() {
         const workspace = detail.workspace;
         if (!workspace) return;
         removeWorkspace(workspace, detail.fallback);
+        syncDataAllAttribute();
         const dialog = document.getElementById('delete-workspace-dialog');
         if (dialog && dialog.open) dialog.close();
         showToast(`Workspace ${workspace} deleted.`);
