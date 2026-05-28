@@ -59,8 +59,27 @@ embedding:
 
 rerank:
   enabled: true
+  # ── Strategy ──────────────────────────────────────────────────
+  # chat_llm_reranker  — VLM/LLM listwise scoring (multimodal). Uses
+  #   llm.default provider+model unless overridden below.
+  # jina_reranker      — Jina AI rerank API (supports image+text docs).
+  #   Requires: base_url, api_key, model
+  # aliyun_reranker    — Aliyun DashScope rerank (text-only; image chunks
+  #   are sent as text fallback). Requires: api_key
+  # local_reranker     — Self-hosted rerank endpoint (e.g., vLLM/TGI).
+  #   Requires: base_url, model
+  # azure_cohere       — Azure AI Cohere rerank (text-only).
+  #   Requires: base_url, api_key, model
+  # ───────────────────────────────────────────────────────────────
   strategy: chat_llm_reranker
+  # provider: openai          # LLM provider override for chat_llm_reranker
+  # model: gpt-5.2            # Model override (all strategies)
+  # api_key:                  # API key (jina/aliyun/azure_cohere)
+  # base_url:                 # Endpoint URL (jina/local/azure_cohere)
   score_threshold: 0.5
+  max_concurrency: 4
+  batch_size: 7
+  # temperature:              # LLM sampling temperature (chat_llm_reranker)
   # Rerank happens before answer packing, so it has its own request budget.
   # Values are compressed binary bytes; data URI transport expands over the wire.
   image_max_bytes: 1500000
