@@ -3,7 +3,6 @@
 import {openLightbox} from './images.js';
 import {renderMath} from './chat_renderer.js';
 import {getIngestWorkspace, setIngestWorkspace, resetIngestWorkspace} from './state.js';
-import {getWorkspaceRecords} from './workspaces.js';
 
 let toastTimer = null;
 let ingestPopoverEl = null;
@@ -77,6 +76,25 @@ function renderIngestPill(titleEl) {
     titleEl.appendChild(container);
 }
 
+function getIngestWorkspaceRecords() {
+    const selector = document.getElementById('workspace-selector');
+    if (!selector) return [];
+    try {
+        const raw = JSON.parse(selector.getAttribute('data-all') || '[]');
+        return raw.map(function (record) {
+            if (typeof record === 'string') {
+                return {workspace: record, display_name: record};
+            }
+            return {
+                workspace: record.workspace || record.id || 'default',
+                display_name: record.display_name || record.workspace || record.id || 'default',
+            };
+        });
+    } catch (_) {
+        return [];
+    }
+}
+
 function toggleIngestPopover(container) {
     if (ingestPopoverEl) {
         closeIngestPopover();
@@ -89,7 +107,7 @@ function toggleIngestPopover(container) {
     popover.setAttribute('role', 'listbox');
     popover.setAttribute('aria-label', 'Select ingest workspace');
 
-    const records = getWorkspaceRecords();
+    const records = getIngestWorkspaceRecords();
     const current = getIngestWorkspace();
 
     records.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
