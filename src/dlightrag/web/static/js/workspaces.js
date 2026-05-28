@@ -169,7 +169,6 @@ export function openWorkspacePopover() {
         }
     });
     popover.appendChild(allItem);
-    popover.appendChild(separator());
 
     workspaceRecords.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
         const item = document.createElement('div');
@@ -216,7 +215,6 @@ export function openWorkspacePopover() {
         popover.appendChild(item);
     });
 
-    popover.appendChild(separator());
     popover.appendChild(createRow());
     selector.appendChild(popover);
     popoverEl = popover;
@@ -225,12 +223,6 @@ export function openWorkspacePopover() {
         document.addEventListener('click', onOutsideClick);
         document.addEventListener('keydown', onEscapeKey);
     }, 0);
-}
-
-function separator() {
-    const sep = document.createElement('div');
-    sep.className = 'workspace-popover-sep';
-    return sep;
 }
 
 function createRow() {
