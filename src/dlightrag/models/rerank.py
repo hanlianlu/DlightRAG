@@ -7,8 +7,9 @@ and return chunks with rerank_score added, sorted descending.
 Runtime interface:
     async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]
 
-Use ``build_lightrag_rerank_adapter`` to wrap the multimodal reranker into
-LightRAG's (query, documents) signature.
+Reranking is handled by DlightRAG's own pipeline (LightRAGMixBackend),
+NOT through LightRAG's ``rerank_model_func``, because LightRAG's built-in
+rerank pipeline strips image data from chunks before invoking the reranker.
 """
 
 from __future__ import annotations
@@ -439,42 +440,7 @@ def build_rerank_func(
     return wrap_rerank_func(fn, name=f"rerank/{strategy}")
 
 
-# ── LightRAG adapter ────────────────────────────────────────────
-
-
-def build_lightrag_rerank_adapter(rerank_func: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap multimodal reranker for LightRAG's text-only interface.
-
-    LightRAG calls rerank as::
-
-        await rerank_func(query=query, documents=document_texts, top_n=top_n)
-
-    This adapter converts text documents to chunk dicts, calls the
-    multimodal reranker, then maps back to LightRAG's index-based format:
-    ``[{"index": int, "relevance_score": float}, ...]``
-    """
-
-    async def adapter(
-        query: str,
-        documents: list[str],
-        top_n: int | None = None,
-        **kwargs: Any,
-    ) -> list[dict[str, Any]]:
-        if not documents:
-            return []
-
-        top_k = top_n if top_n is not None else len(documents)
-        chunks = [{"content": doc, "_orig_idx": i} for i, doc in enumerate(documents)]
-        scored = await rerank_func(query=query, chunks=chunks, top_k=top_k)
-        return [
-            {"index": c["_orig_idx"], "relevance_score": c.get("rerank_score", 0.0)} for c in scored
-        ]
-
-    return adapter
-
-
 __all__ = [
     "build_rerank_func",
-    "build_lightrag_rerank_adapter",
     "_parse_listwise_scores",
 ]
