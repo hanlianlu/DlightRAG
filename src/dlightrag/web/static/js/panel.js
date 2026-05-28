@@ -3,9 +3,12 @@
 import {openLightbox} from './images.js';
 import {renderMath} from './chat_renderer.js';
 import {getIngestWorkspace, setIngestWorkspace, resetIngestWorkspace} from './state.js';
+import {showToast} from './toast.js';
+import {createWorkspace} from './workspaces.js';
 
-let toastTimer = null;
 let ingestPopoverEl = null;
+
+export {showToast};
 
 export function openPanel(title) {
     document.getElementById('panel').classList.add('open');
@@ -101,6 +104,8 @@ function toggleIngestPopover(container) {
         return;
     }
     container.classList.add('open');
+    const pill = container.querySelector('.ingest-target-pill');
+    if (pill) pill.setAttribute('aria-expanded', 'true');
 
     const popover = document.createElement('div');
     popover.className = 'ingest-target-popover';
@@ -150,7 +155,7 @@ function toggleIngestPopover(container) {
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
-            createIngestWorkspace(input);
+            createWorkspace(input);
         }
     });
     createRow.appendChild(input);
@@ -161,7 +166,7 @@ function toggleIngestPopover(container) {
     btn.textContent = '+';
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        createIngestWorkspace(input);
+        createWorkspace(input);
     });
     createRow.appendChild(btn);
     popover.appendChild(createRow);
@@ -188,19 +193,6 @@ function selectIngestWorkspace(workspace) {
     });
 }
 
-function createIngestWorkspace(input) {
-    const name = input.value.trim();
-    if (!name) return;
-    input.disabled = true;
-    htmx.ajax('POST', '/web/workspaces/create', {
-        values: {workspace_name: name},
-        swap: 'none',
-    }).catch(() => {
-        input.disabled = false;
-        showToast('Failed to create workspace', 5000);
-    });
-}
-
 function updateIngestPillLabel() {
     const nameEl = document.querySelector('.ingest-target-name');
     if (nameEl) nameEl.textContent = getIngestWorkspace();
@@ -212,7 +204,11 @@ function closeIngestPopover() {
         ingestPopoverEl = null;
     }
     const container = document.getElementById('ingest-target');
-    if (container) container.classList.remove('open');
+    if (container) {
+        container.classList.remove('open');
+        const pill = container.querySelector('.ingest-target-pill');
+        if (pill) pill.setAttribute('aria-expanded', 'false');
+    }
     document.removeEventListener('click', onIngestPopoverOutside);
     document.removeEventListener('keydown', onIngestPopoverEscape);
 }
@@ -227,17 +223,9 @@ function onIngestPopoverEscape(e) {
 }
 
 export function closePanel() {
+    closeIngestPopover();
     document.getElementById('panel').classList.remove('open');
     document.body.classList.remove('panel-open');
-}
-
-export function showToast(msg, duration) {
-    const el = document.getElementById('toast');
-    if (!el) return;
-    el.textContent = msg;
-    el.classList.add('visible');
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(function() { el.classList.remove('visible'); }, duration || 3000);
 }
 
 function openRefSource(refItem) {
