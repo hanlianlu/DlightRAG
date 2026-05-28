@@ -83,6 +83,8 @@
     --color-bg-surface: #1c1917;
     --color-bg-elevated: #292524;
     --color-bg-subtle: #14110f;
+    --color-bg-hover: rgba(210, 182, 97, 0.08);   /* gold hover on dark surfaces */
+    --color-bg-hover-strong: rgba(210, 182, 97, 0.15);  /* gold hover for chunk activation */
 
     /* ── Color: Border ── */
     --color-border-subtle: rgba(120, 113, 108, 0.16);
@@ -252,8 +254,10 @@ body {
     transition: background 0.1s;
 }
 
-.workspace-popover-item:hover {
-    background: rgba(210, 182, 97, 0.08);
+.workspace-popover-item:hover,
+.workspace-popover-item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
 }
 
 .workspace-popover-all {
@@ -305,13 +309,19 @@ body {
     font-size: var(--font-size-caption);
     height: var(--size-icon-md);
     justify-content: center;
-    opacity: 0;
+    opacity: 0.45;
     transition: all 0.15s;
     width: var(--size-icon-md);
 }
 
-.workspace-popover-item:hover .workspace-popover-delete {
-    opacity: 1;
+@media (hover: hover) {
+    .workspace-popover-delete {
+        opacity: 0;
+    }
+
+    .workspace-popover-item:hover .workspace-popover-delete {
+        opacity: 1;
+    }
 }
 
 .workspace-popover-delete:hover {
@@ -671,7 +681,7 @@ body {
 }
 .panel-resize-handle:hover,
 .panel-resize-handle.active {
-    background: rgba(210, 182, 97, 0.08);
+    background: var(--color-bg-hover);
 }
 .panel-resize-handle:hover::after,
 .panel-resize-handle.active::after {
@@ -811,7 +821,7 @@ body {
     text-align: left;
 }
 .source-chunk-content th {
-    background: rgba(210, 182, 97, 0.08);
+    background: var(--color-bg-hover);
     color: var(--color-text-secondary);
     font-weight: 600;
 }

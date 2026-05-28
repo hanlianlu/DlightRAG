@@ -59,12 +59,12 @@ export function setupQueryForm() {
     const textarea = form.querySelector('.composer-input');
 
     function autoResize() {
-        var lineHeight = parseInt(getComputedStyle(textarea).lineHeight, 10) || 24;
-        var rows = Math.floor(textarea.scrollHeight / lineHeight);
+        const lineHeight = parseInt(getComputedStyle(textarea).lineHeight, 10) || 24;
+        const rows = Math.floor(textarea.scrollHeight / lineHeight);
         form.classList.toggle('multiline', rows > 1);
 
         textarea.style.height = 'auto';
-        var maxHeight = 160;
+        const maxHeight = 160;
         textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px';
     }
 

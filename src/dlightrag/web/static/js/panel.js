@@ -161,7 +161,7 @@ export function setupPanel() {
         const image = e.target.closest('[data-action="open-lightbox"]');
         if (image && image.hasAttribute('data-full-src')) {
             e.preventDefault();
-            var lightboxSrc = image.getAttribute('data-full-src');
+            const lightboxSrc = image.getAttribute('data-full-src');
             if (lightboxSrc && /^(?:\/|blob:|data:)/.test(lightboxSrc)) openLightbox(lightboxSrc);
         }
     });
@@ -204,16 +204,16 @@ export function setupPanel() {
             showAllSources();
             return;
         }
-        var uploadZone = e.target.closest('#upload-zone');
+        const uploadZone = e.target.closest('#upload-zone');
         if (uploadZone) {
-            var uploadFileBtn = e.target.closest('[data-action="upload-file"]');
+            const uploadFileBtn = e.target.closest('[data-action="upload-file"]');
             if (uploadFileBtn) {
-                var fileInput = document.getElementById('file-input');
+                const fileInput = document.getElementById('file-input');
                 if (fileInput) fileInput.click();
                 return;
             }
             // Clicking the zone itself (not a button) opens file picker
-            var fi = document.getElementById('file-input');
+            const fi = document.getElementById('file-input');
             if (fi && !e.target.closest('[data-action]')) fi.click();
             return;
         }
