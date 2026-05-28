@@ -433,10 +433,11 @@ async def areset_orphaned_workspace(
     """
     from dlightrag.utils import normalize_workspace
 
+    original_workspace = workspace
     workspace = normalize_workspace(workspace)
     errors: list[str] = []
     stats: dict[str, Any] = {
-        "workspace": workspace,
+        "workspace": original_workspace,
         "graphs_dropped": [],
         "orphan_tables_cleaned": 0,
         "local_files_removed": 0,
