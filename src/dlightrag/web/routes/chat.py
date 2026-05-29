@@ -239,6 +239,17 @@ async def answer_stream(
             )
             result = processor.process(clean_answer)
 
+            # Only show images from chunks the LLM actually cited, not every
+            # chunk that happened to be in the retrieval contexts (or even in
+            # the prompt — images sent but not referenced don't belong in the
+            # gallery).  Session/user-uploaded images (img_N) always stay.
+            all_cited_ids: set[str] = set()
+            for cids in result.cited_chunks.values():
+                all_cited_ids.update(cids)
+            cited_images = [img for img in answer_images if img.get("chunk_id", "") in all_cited_ids]
+            session_images = [img for img in answer_images if str(img.get("chunk_id", "")).startswith("img_")]
+            answer_images = session_images + cited_images
+
             done_html = render_partial(
                 "partials/answer_done.html",
                 answer=result.answer,
