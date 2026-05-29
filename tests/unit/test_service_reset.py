@@ -235,7 +235,7 @@ class TestAresetPhase5:
         conn.close()
         (tmp_path / "shared_config.json").write_text("{}")
 
-        result = await service.areset()
+        await service.areset()
 
         assert db_path.exists()
         assert (tmp_path / "shared_config.json").exists()
