@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
@@ -36,6 +37,8 @@ from dlightrag.core.retrieval.metadata_fields import (
 )
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+
+logger = logging.getLogger(__name__)
 
 
 class UnifiedIngestionEngine:
@@ -196,13 +199,13 @@ class UnifiedIngestionEngine:
                 PARSER_ENGINE_MINERU,
                 PARSER_ENGINE_NATIVE,
             }:
-                raise ValueError(
-                    f"No explicit parser route for {file_path.name!r}. "
-                    f"The file resolved to parser engine {parse_engine!r}, which is the "
-                    f"built-in fallback. Configure parser.rules to route this file type "
-                    f"to a supported parser (mineru, native, or docling). "
-                    f"Current parser.rules: {self._parser_rules!r}"
+                logger.warning(
+                    "Skipping %s — unsupported format (parser engine=%s, rules=%s)",
+                    file_path.name,
+                    parse_engine,
+                    self._parser_rules,
                 )
+                return {"status": "skipped", "reason": f"unsupported format: {file_path.suffix}"}
             await self._lightrag.apipeline_enqueue_documents(
                 input="",
                 file_paths=[str(file_path)],

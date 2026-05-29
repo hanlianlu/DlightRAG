@@ -207,17 +207,24 @@ async def upload_files(
 
     # Fire-and-forget: schedule ingest, return immediately with progress UI.
     async def _background_ingest() -> None:
-        try:
-            for file_path in saved_paths:
+        ok = 0
+        for file_path in saved_paths:
+            try:
                 await manager.aingest(
                     workspace=selected_workspace,
                     source_type="local",
                     path=str(file_path),
                 )
-        except Exception:
-            logger.exception("Background ingest failed for workspace %s", selected_workspace)
-        finally:
-            _ingest_tasks.pop(selected_workspace, None)
+                ok += 1
+            except Exception:
+                logger.warning("Skipping file %s (ingest failed)", file_path.name, exc_info=True)
+        logger.info(
+            "Background ingest finished for workspace %s: %d/%d succeeded",
+            selected_workspace,
+            ok,
+            len(saved_paths),
+        )
+        _ingest_tasks.pop(selected_workspace, None)
 
     _ingest_tasks[selected_workspace] = asyncio.create_task(_background_ingest())
 
