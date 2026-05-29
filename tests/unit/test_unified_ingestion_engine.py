@@ -6,7 +6,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-import pytest
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 
@@ -71,20 +70,20 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
     assert deps["metadata_index"].upsert.await_args.args[0] == expected_doc_id
 
 
-async def test_document_ingest_rejects_builtin_fallback_parser(tmp_path: Path) -> None:
-    """Files resolving to the built-in fallback ('legacy') must raise an error.
+async def test_document_ingest_skips_unsupported_parser(tmp_path: Path) -> None:
+    """Files resolving to an unsupported parser engine must be skipped, not crash.
 
-    The user must explicitly configure parser.rules to route every file type
-    to a supported parser (mineru, native, or docling).  Silently accepting
-    the legacy fallback would mask a broken or missing parser_rules config.
+    The engine returns `{"status": "skipped", "reason": "unsupported format: …"}`
+    so that a batch ingest keeps going instead of aborting mid-batch.
     """
     source = tmp_path / "notes.unsupported"
     source.write_text("plain text")
     engine, deps = _make_engine(parser_rules="docx:native-iteP")  # no wildcard → fallback
 
-    with pytest.raises(ValueError, match="Configure parser.rules"):
-        await engine.aingest_file(source, replace=False)
+    result = await engine.aingest_file(source, replace=False)
 
+    assert result["status"] == "skipped"
+    assert "unsupported format" in result["reason"]
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
