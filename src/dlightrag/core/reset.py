@@ -144,12 +144,11 @@ async def areset(
         errors.append(f"Phase 4 (AGE graphs): {exc}")
         logger.warning("areset Phase 4 failed: %s", exc)
 
-    # Phase 5: File system cleanup
+    # Phase 5: File system cleanup — workspace-scoped only.
+    # Each workspace owns input_dir/<workspace>/; the working_dir root
+    # (checkpoints.db, etc.) is shared and must never be wiped per-workspace.
     if not keep_files:
         try:
-            working_dir = Path(service.config.working_dir)
-            stats["local_files_removed"] = _reset_local_files(working_dir, dry_run=dry_run)
-            # Also clean staging files under input_dir/<workspace>/
             input_root = service.config.input_dir_path.resolve()
             input_ws_dir = (input_root / workspace).resolve()
             try:
@@ -158,9 +157,10 @@ async def areset(
                 errors.append("Phase 5 (filesystem): workspace path escapes input directory")
             else:
                 if input_ws_dir.exists() and input_ws_dir.is_dir():
+                    file_count = sum(1 for _ in input_ws_dir.rglob("*") if _.is_file())
                     if not dry_run:
                         shutil.rmtree(input_ws_dir, ignore_errors=True)
-                    stats["local_files_removed"] += 1
+                    stats["local_files_removed"] = file_count
         except Exception as exc:
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", exc)
@@ -468,26 +468,6 @@ async def _drop_workspace_schemas_via_pg(
     return dropped
 
 
-def _reset_local_files(working_dir: Path, *, dry_run: bool) -> int:
-    """Phase 5: Remove all files under working_dir. Returns file count."""
-    if not working_dir.exists():
-        return 0
-
-    file_count = 0
-    for item in sorted(working_dir.iterdir()):
-        if item.is_file():
-            file_count += 1
-            if not dry_run:
-                item.unlink()
-        elif item.is_dir():
-            for f in item.rglob("*"):
-                if f.is_file():
-                    file_count += 1
-            if not dry_run:
-                shutil.rmtree(item, ignore_errors=True)
-    return file_count
-
-
 # -- Orphaned workspace cleanup ------------------------------------------------
 
 
@@ -496,7 +476,6 @@ async def areset_orphaned_workspace(
     *,
     keep_files: bool = False,
     dry_run: bool = False,
-    working_dir: str | None = None,
     input_dir: str | None = None,
 ) -> dict[str, Any]:
     """Clean up orphaned workspace artifacts without a RAGService instance.
@@ -539,14 +518,8 @@ async def areset_orphaned_workspace(
     except Exception as exc:
         errors.append(f"AGE graphs: {exc}")
 
-    # File system cleanup
+    # File system cleanup — workspace-scoped only (see areset Phase 5).
     if not keep_files:
-        if working_dir:
-            try:
-                wd = Path(working_dir)
-                stats["local_files_removed"] = _reset_local_files(wd, dry_run=dry_run)
-            except Exception as exc:
-                errors.append(f"Filesystem (working_dir): {exc}")
         if input_dir:
             try:
                 input_root = Path(input_dir).resolve()
