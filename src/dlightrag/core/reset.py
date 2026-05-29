@@ -360,22 +360,17 @@ async def _drop_age_graphs(
                 continue
             try:
                 if not dry_run:
-                    await conn.execute(
-                        "SELECT ag_catalog.drop_graph($1, true)", gname
-                    )
+                    await conn.execute("SELECT ag_catalog.drop_graph($1, true)", gname)
                 dropped.append(gname)
             except Exception as exc:
-                logger.warning(
-                    "Failed to drop collected graph %s: %s", gname, exc
-                )
+                logger.warning("Failed to drop collected graph %s: %s", gname, exc)
 
         # 2. Catalog scan — find additional graphs matching workspace prefix
         try:
             known_workspaces = await _list_all_workspaces()
             escaped = workspace.replace("_", r"\_")
             rows = await conn.fetch(
-                "SELECT name FROM ag_catalog.ag_graph "
-                "WHERE name ILIKE $1 ESCAPE '\\'",
+                "SELECT name FROM ag_catalog.ag_graph WHERE name ILIKE $1 ESCAPE '\\'",
                 f"{escaped}\\_%",
             )
             for row in rows:
@@ -385,21 +380,16 @@ async def _drop_age_graphs(
                 belongs_to_other = any(
                     gname.startswith(f"{other}_") and other != workspace
                     for other in known_workspaces
-                    if len(other) > len(workspace)
-                    and other.startswith(workspace)
+                    if len(other) > len(workspace) and other.startswith(workspace)
                 )
                 if belongs_to_other:
                     continue
                 try:
                     if not dry_run:
-                        await conn.execute(
-                            "SELECT ag_catalog.drop_graph($1, true)", gname
-                        )
+                        await conn.execute("SELECT ag_catalog.drop_graph($1, true)", gname)
                     dropped.append(gname)
                 except Exception as exc:
-                    logger.warning(
-                        "Failed to drop graph %s: %s", gname, exc
-                    )
+                    logger.warning("Failed to drop graph %s: %s", gname, exc)
         except Exception as exc:
             logger.warning("AGE catalog scan failed: %s", exc)
     finally:
@@ -460,21 +450,15 @@ async def _drop_workspace_schemas_via_pg(
             try:
                 if not dry_run:
                     # AGE-native drop first — handles AGE label tables
-                    await conn.execute(
-                        "SELECT ag_catalog.drop_graph($1, true)", schema_name
-                    )
+                    await conn.execute("SELECT ag_catalog.drop_graph($1, true)", schema_name)
                 dropped.append(schema_name)
                 logger.info("Dropped schema %s (AGE-native)", schema_name)
             except Exception:
                 # Not an AGE graph — try DROP SCHEMA CASCADE
                 try:
                     if not dry_run:
-                        safe = await conn.fetchval(
-                            "SELECT quote_ident($1)", schema_name
-                        )
-                        await conn.execute(
-                            f"DROP SCHEMA IF EXISTS {safe} CASCADE"
-                        )
+                        safe = await conn.fetchval("SELECT quote_ident($1)", schema_name)
+                        await conn.execute(f"DROP SCHEMA IF EXISTS {safe} CASCADE")
                     dropped.append(schema_name)
                     logger.info("Dropped schema %s (PG CASCADE)", schema_name)
                 except Exception as exc:
@@ -613,22 +597,17 @@ async def _drop_age_graphs_for_workspace(
     try:
         escaped = workspace.replace("_", r"\_")
         rows = await conn.fetch(
-            "SELECT name FROM ag_catalog.ag_graph "
-            "WHERE name ILIKE $1 ESCAPE '\\'",
+            "SELECT name FROM ag_catalog.ag_graph WHERE name ILIKE $1 ESCAPE '\\'",
             f"{escaped}\\_%",
         )
         for row in rows:
             gname = row["name"]
             try:
                 if not dry_run:
-                    await conn.execute(
-                        "SELECT ag_catalog.drop_graph($1, true)", gname
-                    )
+                    await conn.execute("SELECT ag_catalog.drop_graph($1, true)", gname)
                 dropped.append(gname)
             except Exception as exc:
-                logger.warning(
-                    "Failed to drop graph %s: %s", gname, exc
-                )
+                logger.warning("Failed to drop graph %s: %s", gname, exc)
     finally:
         await conn.close()
 
@@ -641,9 +620,7 @@ async def _drop_age_graphs_for_workspace(
             if schema_name not in dropped:
                 dropped.append(schema_name)
     except Exception as exc:
-        logger.warning(
-            "PG schema fallback failed for orphan workspace %s: %s", workspace, exc
-        )
+        logger.warning("PG schema fallback failed for orphan workspace %s: %s", workspace, exc)
 
     return dropped
 
