@@ -193,10 +193,14 @@ async def answer_stream(
                 if isinstance(items, list):
                     flat_contexts.extend(items)
 
-            # Extract visual chunks from retrieval contexts for the image gallery
+            # Extract visual chunks from retrieval contexts for the image gallery.
+            # Only include images that were actually sent to the answer LLM (the
+            # AnswerContextPacker marks in-budget chunks with _answer_image_sent).
             for chunk in flat_contexts:
                 cid = chunk.get("chunk_id", "")
                 if not cid or cid in seen_img_ids:
+                    continue
+                if chunk.get("_answer_image_sent") is False:
                     continue
                 image_url = chunk.get("image_url")
                 thumb_url = chunk.get("thumbnail_url") or image_url
