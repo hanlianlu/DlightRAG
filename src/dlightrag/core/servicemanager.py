@@ -867,6 +867,10 @@ class RAGServiceManager:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()
         self._ready = False
+
+        from dlightrag.storage.pool import pg_pool
+
+        await pg_pool.close()
         shutdown_tracing()
 
     # --- Health ---
