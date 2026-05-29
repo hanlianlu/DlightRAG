@@ -255,12 +255,17 @@ async def ingest_status(
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     manager = get_manager(request)
 
+    # Authoritative: the in-memory task tracker owns the lifecycle.
+    # pipeline_status is a best-effort cross-check but lags on completion.
+    task = _ingest_tasks.get(selected_workspace)
+    task_running = task is not None and not task.done()
+
     try:
         ps = await manager.get_pipeline_status(selected_workspace)
     except Exception:
         ps = {"busy": False, "latest_message": "Status unavailable"}
 
-    still_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+    still_busy = task_running or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
 
     if still_busy:
         return HTMLResponse(
@@ -271,9 +276,11 @@ async def ingest_status(
             )
         )
 
-    # Ingest finished — clean up task tracker and return refreshed file list.
-    _ingest_tasks.pop(selected_workspace, None)
-    return await _file_list_response(request, selected_workspace)
+    # Ingest finished — reload the full file list into the panel.
+    # Only _background_ingest pops the task tracker to avoid premature cleanup.
+    response = await _file_list_response(request, selected_workspace)
+    response.headers["HX-Retarget"] = "#panel-content"
+    return response
 
 
 # ---------------------------------------------------------------------------
