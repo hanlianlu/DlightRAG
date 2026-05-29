@@ -100,6 +100,12 @@ class PathResolver:
             if idx != -1:
                 return raw_path[idx:]
 
+        # Bare filename (no directory separators) — LightRAG canonicalizes
+        # file_path to just the basename.  Prepend workspace so the
+        # serve-file endpoint can locate it under input_dir/<workspace>/.
+        if self._workspace and "/" not in raw_path and "\\" not in raw_path:
+            return f"{self._workspace}/{raw_path}"
+
         return None
 
 

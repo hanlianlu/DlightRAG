@@ -158,17 +158,31 @@ async def answer_stream(
 
             answer_images = []
             seen_img_ids = set()
+
+            # Session images carry their base64 data inline — use data: URLs
+            # because /web/images/ expects chunk IDs from the vector DB, not
+            # session-local IDs like img_0/img_1.
+            stored_session_images: list[str] = []
+            if current_image_ids:
+                try:
+                    stored_session_images = manager._get_session_images().get(
+                        session_id, current_image_ids
+                    )
+                except Exception:
+                    stored_session_images = []
+
             for i, cid in enumerate(current_image_ids):
                 desc = ""
                 if isinstance(image_descriptions, dict):
                     desc = image_descriptions.get(cid, "")
                 elif isinstance(image_descriptions, list) and i < len(image_descriptions):
                     desc = image_descriptions[i]
+                data_url = stored_session_images[i] if i < len(stored_session_images) else ""
                 answer_images.append(
                     {
                         "chunk_id": cid,
-                        "url": f"/web/images/{workspace or manager.config.workspace}/{cid}",
-                        "thumb_url": f"/web/images/{workspace or manager.config.workspace}/{cid}?size=thumb",
+                        "url": data_url,
+                        "thumb_url": data_url,
                         "label": desc or f"Visual {i + 1}",
                     }
                 )

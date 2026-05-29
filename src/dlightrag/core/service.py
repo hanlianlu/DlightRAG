@@ -443,6 +443,24 @@ class RAGService:
 
         logger.info("LightRAG main runtime path ready")
 
+        # Pre-warm worker pools in background.  LightRAG lazily initializes
+        # LLM keyword (~4 workers) and embedding (~8 workers) pools on first
+        # use, which adds ~100 s to the first query after restart.  Trigger
+        # init now so real users never pay that cost.
+        if not read_only:
+            try:
+                asyncio.create_task(self._warmup_lightrag_workers())
+            except RuntimeError:
+                pass  # no event loop running (e.g. sync test setup)
+
+    async def _warmup_lightrag_workers(self) -> None:
+        """Pre-initialize LightRAG worker pools in the background."""
+        try:
+            await self._lightrag.aquery("__warmup__", mode="naive")
+            logger.info("LightRAG worker warm-up complete")
+        except Exception:
+            logger.debug("LightRAG worker warm-up failed (non-critical)", exc_info=True)
+
     async def _initialize_lightrag_storages_read_only(self, lightrag: Any) -> None:
         """Attach LightRAG PostgreSQL storages to an existing read-only schema.
 
