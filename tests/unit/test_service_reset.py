@@ -204,20 +204,41 @@ class TestAresetPhase5:
     async def test_removes_local_files(self, tmp_path: Path) -> None:
         service = _make_service()
         service.config.working_dir = str(tmp_path)
+        service.config.input_dir_path = tmp_path / "inputs"
+        ws_dir = tmp_path / "inputs" / service.config.workspace
 
-        # Create test files
-        (tmp_path / "cache.json").write_text("{}")
-        (tmp_path / "subdir").mkdir()
-        (tmp_path / "subdir" / "data.bin").write_bytes(b"x" * 100)
-        (tmp_path / "sources").mkdir()
-        (tmp_path / "sources" / "keep.pdf").write_bytes(b"pdf")
+        # Workspace-scoped files under input_dir/<workspace>/
+        ws_dir.mkdir(parents=True)
+        (ws_dir / "parsed_doc.json").write_text("{}")
+        (ws_dir / "subdir").mkdir()
+        (ws_dir / "subdir" / "data.bin").write_bytes(b"x" * 100)
 
         result = await service.areset()
 
-        assert result["local_files_removed"] == 3
-        assert not (tmp_path / "sources").exists()
-        assert not (tmp_path / "cache.json").exists()
-        assert not (tmp_path / "subdir").exists()
+        # Only workspace-scoped files counted and removed
+        assert result["local_files_removed"] == 2
+        assert not ws_dir.exists()
+
+    async def test_root_files_survive_reset(self, tmp_path: Path) -> None:
+        """Shared files in working_dir root must NOT be deleted per-workspace."""
+        import sqlite3
+
+        service = _make_service()
+        service.config.working_dir = str(tmp_path)
+        service.config.input_dir_path = tmp_path / "inputs"
+
+        # Valid SQLite database so Phase 5b doesn't choke
+        db_path = tmp_path / "checkpoints.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, workspace TEXT)")
+        conn.commit()
+        conn.close()
+        (tmp_path / "shared_config.json").write_text("{}")
+
+        result = await service.areset()
+
+        assert db_path.exists()
+        assert (tmp_path / "shared_config.json").exists()
 
 
 class TestAresetDryRun:
