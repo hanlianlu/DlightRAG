@@ -211,71 +211,70 @@ async def _cancel_pending_tasks(service: RAGService, *, dry_run: bool) -> int:
 async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
     """Phase 3: Scan PG catalog for orphan lightrag_*/dlightrag_* tables and delete rows.
 
-    After workspace normalization, ``workspace`` is the same lowercase
-    identifier used for both dlightrag_* and lightrag_* tables.
+    Uses a direct ``asyncpg`` connection, bypassing LightRAG's process-wide pool
+    (same rationale as ``_drop_age_graphs``).
     """
-    try:
-        from lightrag.kg.postgres_impl import ClientManager
+    import asyncpg
 
-        db = await ClientManager.get_client()
-        pool = db.pool
-        if pool is None:
-            return 0
-    except Exception:
+    from dlightrag.config import get_config
+
+    config = get_config()
+
+    try:
+        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+    except Exception as exc:
+        logger.warning("Failed to connect via asyncpg for orphan table cleanup: %s", exc)
         return 0
 
     try:
-        async with pool.acquire() as conn:
-            table_rows = await conn.fetch(
-                "SELECT tablename FROM pg_tables "
-                "WHERE schemaname = 'public' "
-                "AND (tablename LIKE 'lightrag_%' OR tablename LIKE 'dlightrag_%') "
-                "ORDER BY tablename"
+        table_rows = await conn.fetch(
+            "SELECT tablename FROM pg_tables "
+            "WHERE schemaname = 'public' "
+            "AND (tablename LIKE 'lightrag_%' OR tablename LIKE 'dlightrag_%') "
+            "ORDER BY tablename"
+        )
+        if not table_rows:
+            return 0
+
+        cleaned = 0
+        for row in table_rows:
+            table = row["tablename"]
+
+            col = await conn.fetchrow(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = $1 AND column_name = 'workspace'",
+                table,
             )
-            if not table_rows:
-                return 0
+            if col is None:
+                continue
 
-            cleaned = 0
-            for row in table_rows:
-                table = row["tablename"]
+            count_row = await conn.fetchrow(
+                f'SELECT COUNT(*) as count FROM "{table}" WHERE workspace = $1',
+                workspace,
+            )
+            count = count_row["count"] if count_row else 0
 
-                # Check for workspace column
-                col = await conn.fetchrow(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name = $1 AND column_name = 'workspace'",
-                    table,
-                )
-                if col is None:
-                    continue
-
-                count_row = await conn.fetchrow(
-                    f'SELECT COUNT(*) as count FROM "{table}" WHERE workspace = $1',
-                    workspace,
-                )
-                count = count_row["count"] if count_row else 0
-
-                if count > 0:
-                    if not dry_run:
-                        await conn.execute(
-                            f'DELETE FROM "{table}" WHERE workspace = $1',
-                            workspace,
-                        )
-                    cleaned += 1
-
-                # Only drop empty DlightRAG-owned tables (not LightRAG
-                # infrastructure tables which other workspaces or the
-                # framework itself may still expect to exist).
-                if not dry_run and table.startswith("dlightrag_"):
-                    remaining = await conn.fetchrow(
-                        f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
+            if count > 0:
+                if not dry_run:
+                    await conn.execute(
+                        f'DELETE FROM "{table}" WHERE workspace = $1',
+                        workspace,
                     )
-                    if not remaining["has_rows"]:
-                        await conn.execute(f'DROP TABLE "{table}"')
+                cleaned += 1
 
-            return cleaned
+            if not dry_run and table.startswith("dlightrag_"):
+                remaining = await conn.fetchrow(
+                    f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
+                )
+                if not remaining["has_rows"]:
+                    await conn.execute(f'DROP TABLE "{table}"')
+
+        return cleaned
     except Exception as exc:
         logger.warning("PG orphan table cleanup failed: %s", exc)
         return 0
+    finally:
+        await conn.close()
 
 
 async def _clean_workspace_meta(workspace: str, config: Any | None = None) -> None:
@@ -635,40 +634,37 @@ async def drop_global_orphaned_age_graphs(
     """
     errors: list[str] = []
     known = await _list_all_workspaces()
+    dropped: list[str] = []
+
+    import asyncpg
+
+    from dlightrag.config import get_config
+
+    config = get_config()
 
     try:
-        from lightrag.kg.postgres_impl import ClientManager
-
-        db = await ClientManager.get_client()
-        pool = db.pool
-        if pool is None:
-            return {"dropped": [], "errors": ["No PG pool available"]}
+        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
     except Exception as exc:
         return {"dropped": [], "errors": [str(exc)]}
 
-    dropped: list[str] = []
-
-    async with pool.acquire() as conn:
-        try:
-            rows = await conn.fetch("SELECT name FROM ag_catalog.ag_graph")
-            for row in rows:
-                gname = row["name"]
-                # Check if this graph belongs to any known workspace
-                belongs = any(
-                    gname.startswith(f"{ws}_") or gname == f"{ws}_chunk_entity_relation"
-                    for ws in known
-                )
-                if belongs:
-                    continue
-                try:
-                    if not dry_run:
-                        await conn.execute(f"SELECT * FROM ag_catalog.drop_graph('{gname}', true)")
-                    dropped.append(gname)
-                except Exception as exc:
-                    errors.append(f"Failed to drop {gname}: {exc}")
-                    logger.warning("Global orphan graph drop failed for %s: %s", gname, exc)
-        except Exception as exc:
-            logger.debug("AGE global catalog scan skipped: %s", exc)
+    try:
+        rows = await conn.fetch("SELECT name FROM ag_catalog.ag_graph")
+        for row in rows:
+            gname = row["name"]
+            belongs = any(
+                gname.startswith(f"{ws}_") or gname == f"{ws}_chunk_entity_relation" for ws in known
+            )
+            if belongs:
+                continue
+            try:
+                if not dry_run:
+                    await conn.execute("SELECT ag_catalog.drop_graph($1, true)", gname)
+                dropped.append(gname)
+            except Exception as exc:
+                errors.append(f"Failed to drop {gname}: {exc}")
+                logger.warning("Global orphan graph drop failed for %s: %s", gname, exc)
+    finally:
+        await conn.close()
 
     logger.info("Global orphan graph cleanup: dropped=%s errors=%s", dropped, errors)
     return {"dropped": dropped, "errors": errors}
