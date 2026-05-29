@@ -166,8 +166,17 @@ async def upload_files(
     try:
         dest_dir = _staging_dir(selected_workspace)
         saved_paths: list[Path] = []
+        _SYSTEM_FILES = {
+            ".DS_Store",  # macOS folder metadata
+            "Thumbs.db",  # Windows thumbnail cache
+            "desktop.ini",  # Windows folder customization
+        }
+
         for f in files:
             if not f.filename:
+                continue
+            basename = f.filename.rsplit("/", 1)[-1]
+            if basename in _SYSTEM_FILES or basename.startswith("._"):
                 continue
             try:
                 rel = _safe_relative_path(f.filename)
