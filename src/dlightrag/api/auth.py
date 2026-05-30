@@ -24,14 +24,6 @@ class UserContext(BaseModel, frozen=True):
     auth_mode: str  # "none" | "simple" | "jwt"
 
 
-def _get_auth_config() -> tuple[str, str | None, str | None, str]:
-    """Read auth config from global singleton. Returns (mode, token, jwt_secret, jwt_alg)."""
-    from dlightrag.config import get_config
-
-    cfg = get_config()
-    return cfg.auth_mode, cfg.api_auth_token, cfg.jwt_secret, cfg.jwt_algorithm
-
-
 def _extract_bearer_token(request: Request) -> str:
     """Extract Bearer token from Authorization header. Raises 401 if missing/malformed."""
     auth_header = request.headers.get("Authorization", "")
@@ -40,31 +32,35 @@ def _extract_bearer_token(request: Request) -> str:
     return auth_header[7:]
 
 
-async def get_current_user(request: Request) -> UserContext:
-    """FastAPI dependency -- dispatches to auth strategy based on config.
+def verify_bearer_token(
+    raw_token: str,
+    cfg: "DlightragConfig",
+    default_user_id: str = "anonymous",
+) -> UserContext:
+    """Validate a Bearer token against the configured auth strategy.
 
-    Inject into routes: ``user: UserContext = Depends(get_current_user)``
+    Accepts a raw bearer string (the part after ``Bearer ``) and a config
+    object. Returns ``UserContext`` on success or raises ``HTTPException``.
+    Callable from FastAPI dependencies, Starlette middleware, or tests.
+
+    *default_user_id* is only used in simple mode -- FastAPI may override
+    it with the ``X-User-Id`` header; MCP leaves it as "anonymous".
     """
-    mode, token, jwt_secret, jwt_algorithm = _get_auth_config()
+    mode = cfg.auth_mode
 
     if mode == "none":
         return UserContext(user_id="anonymous", auth_mode="none")
 
     if mode == "simple":
-        provided = _extract_bearer_token(request)
-        # secrets.compare_digest is constant-time — defends against timing
-        # side-channels where a naive `==` leaks token-prefix length info.
-        if not token or not secrets.compare_digest(provided, token):
+        if not cfg.api_auth_token or not secrets.compare_digest(raw_token, cfg.api_auth_token):
             raise HTTPException(status_code=403, detail="Invalid token")
-        user_id = request.headers.get("X-User-Id", "anonymous")
-        return UserContext(user_id=user_id, auth_mode="simple")
+        return UserContext(user_id=default_user_id, auth_mode="simple")
 
     if mode == "jwt":
-        if not jwt_secret:
+        if not cfg.jwt_secret:
             raise HTTPException(status_code=500, detail="JWT secret not configured")
-        raw_token = _extract_bearer_token(request)
         try:
-            claims = jwt.decode(raw_token, jwt_secret, algorithms=[jwt_algorithm])
+            claims = jwt.decode(raw_token, cfg.jwt_secret, algorithms=[cfg.jwt_algorithm])
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expired") from None
         except jwt.InvalidTokenError:
@@ -75,3 +71,16 @@ async def get_current_user(request: Request) -> UserContext:
         return UserContext(user_id=sub, auth_mode="jwt")
 
     raise HTTPException(status_code=500, detail=f"Unknown auth mode: {mode}")
+
+
+async def get_current_user(request: Request) -> UserContext:
+    """FastAPI dependency -- extract Bearer token and delegate to verify_bearer_token."""
+    from dlightrag.config import get_config
+
+    cfg = get_config()
+    if cfg.auth_mode == "none":
+        return UserContext(user_id="anonymous", auth_mode="none")
+
+    raw_token = _extract_bearer_token(request)
+    user_id = request.headers.get("X-User-Id", "anonymous")
+    return verify_bearer_token(raw_token, cfg, default_user_id=user_id)
