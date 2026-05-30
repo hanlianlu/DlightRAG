@@ -58,9 +58,9 @@ def test_collects_drawing_table_equation_refs(tmp_path) -> None:
     refs = collect_sidecar_refs(artifact_dir)
 
     assert [(r.sidecar_type, r.sidecar_id) for r in refs] == [
-        ("drawing", "fig-1"),
-        ("table", "table-1"),
-        ("equation", "eq-1"),
+        ("drawing", "sample.drawings:fig-1"),
+        ("table", "sample.tables:table-1"),
+        ("equation", "sample.equations:eq-1"),
     ]
     assert refs[0].asset_path == (artifact_dir / "sample.blocks.assets/fig.png").resolve()
     assert refs[0].page_index == 1
