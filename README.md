@@ -546,23 +546,62 @@ must use compatible embedding models and dimensions.
 ### Auth
 
 If anyone other than you can reach REST port `8100` or MCP port `8101`, enable
-bearer auth:
+bearer auth.
+
+#### Simple token (shared secret)
 
 ```bash
+# Generate a token
 openssl rand -base64 32
+# Set both mode and token
+echo "DLIGHTRAG_AUTH_MODE=simple" >> .env
 echo "DLIGHTRAG_API_AUTH_TOKEN=<generated>" >> .env
 ```
 
-Set `auth_mode: simple` in `config.yaml`.
+Alternatively in `config.yaml`:
+
+```yaml
+auth_mode: simple
+api_auth_token: "<generated>"
+```
 
 Clients send:
 
 ```text
 Authorization: Bearer <generated>
+X-User-Id: my-user-id          # optional, defaults to "anonymous"
 ```
 
-The same token guards REST and MCP. JWT auth is also available through
-`auth_mode: jwt`.
+#### JWT (HMAC or RSA/ECDSA signing)
+
+```bash
+# Generate a strong HMAC secret
+openssl rand -base64 64
+echo "DLIGHTRAG_AUTH_MODE=jwt" >> .env
+echo "DLIGHTRAG_JWT_SECRET=<generated>" >> .env
+# Optional: override algorithm (HS256, HS384, HS512, RS256, RS384, RS512, ES256)
+# echo "DLIGHTRAG_JWT_ALGORITHM=HS256" >> .env
+```
+
+Create a token (PyJWT example):
+
+```python
+import jwt, datetime, os
+token = jwt.encode(
+    {"sub": "user-42", "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=24)},
+    os.environ["DLIGHTRAG_JWT_SECRET"],
+    algorithm="HS256",
+)
+```
+
+Clients send:
+
+```text
+Authorization: Bearer <jwt-token>
+```
+
+The `sub` claim is required and becomes the authenticated `user_id`.
+Expired tokens return 401.
 
 ### Langfuse
 
