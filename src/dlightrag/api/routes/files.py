@@ -148,6 +148,27 @@ async def serve_file(
                 media_type=content_type or "application/octet-stream",
             )
 
+    # --- Fallback: search workspace subdirectories for bare filenames ---
+    # LightRAG canonicalizes file_path to just the basename (no directory
+    # components).  The original file may live in __parsed__/ or another
+    # workspace subdirectory.
+    ws_dir = input_dir / safe_workspace
+    try:
+        ws_dir.relative_to(input_dir)
+    except ValueError:
+        pass  # traversal attempt, skip fallback
+    else:
+        bare_name = Path(file_path.lstrip("/")).name
+        if ws_dir.is_dir():
+            for sub in _iter_fallback_dirs(ws_dir):
+                candidate = sub / bare_name
+                if candidate.is_file():
+                    content_type, _ = mimetypes.guess_type(str(candidate))
+                    return StreamingResponse(
+                        _stream_file(candidate),
+                        media_type=content_type or "application/octet-stream",
+                    )
+
     # --- Fallback: stream from working_dir (legacy path patterns) ---
     working_dir = config.working_dir_path.resolve()
     full_path = (working_dir / file_path.lstrip("/")).resolve()
@@ -162,6 +183,28 @@ async def serve_file(
         _stream_file(full_path),
         media_type=content_type or "application/octet-stream",
     )
+
+
+def _iter_fallback_dirs(ws_dir: Path) -> list[Path]:
+    """Yield workspace subdirectories to search for bare filenames.
+
+    ``__parsed__/`` comes first because every parsed document gets a copy
+    there during ingestion.  Other immediate subdirectories follow.
+    """
+    dirs: list[Path] = []
+    parsed: Path | None = None
+    try:
+        for entry in ws_dir.iterdir():
+            if entry.is_dir():
+                if entry.name == "__parsed__":
+                    parsed = entry
+                else:
+                    dirs.append(entry)
+    except OSError:
+        return []
+    if parsed is not None:
+        dirs.insert(0, parsed)
+    return dirs
 
 
 async def _stream_file(path: Path, chunk_size: int = 64 * 1024) -> AsyncIterator[bytes]:
