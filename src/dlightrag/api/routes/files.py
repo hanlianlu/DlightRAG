@@ -161,7 +161,11 @@ async def serve_file(
         bare_name = Path(file_path.lstrip("/")).name
         if ws_dir.is_dir():
             for sub in _iter_fallback_dirs(ws_dir):
-                candidate = sub / bare_name
+                candidate = (sub / bare_name).resolve()
+                try:
+                    candidate.relative_to(input_dir)
+                except ValueError:
+                    continue  # symlink escape, skip
                 if candidate.is_file():
                     content_type, _ = mimetypes.guess_type(str(candidate))
                     return StreamingResponse(
