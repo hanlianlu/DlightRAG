@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import logging
 import secrets
+from typing import TYPE_CHECKING
 
 import jwt
 from fastapi import HTTPException, Request
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from dlightrag.config import DlightragConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ def _extract_bearer_token(request: Request) -> str:
 
 def verify_bearer_token(
     raw_token: str,
-    cfg: "DlightragConfig",
+    cfg: DlightragConfig,
     default_user_id: str = "anonymous",
 ) -> UserContext:
     """Validate a Bearer token against the configured auth strategy.

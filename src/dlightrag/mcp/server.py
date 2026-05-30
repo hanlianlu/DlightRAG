@@ -545,9 +545,7 @@ async def run_streamable_http(host: str, port: int) -> None:
 
                 verify_bearer_token(header[7:], cfg)
             except HTTPException as exc:
-                return JSONResponse(
-                    {"error": exc.detail}, status_code=exc.status_code
-                )
+                return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
             return await call_next(request)
 
     await _ensure_manager()

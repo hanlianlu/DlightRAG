@@ -369,9 +369,7 @@ class TestVerifyBearerToken:
         with pytest.raises(HTTPException, match="Invalid token"):
             verify_bearer_token("wrong-token", test_config)
 
-    def test_simple_empty_token_raises_403(
-        self, test_config: DlightragConfig
-    ) -> None:
+    def test_simple_empty_token_raises_403(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
         with pytest.raises(HTTPException, match="Invalid token"):
