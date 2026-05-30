@@ -42,7 +42,22 @@ def collect_sidecar_refs(artifact_dir: Path) -> list[LightRAGSidecarRef]:
                 raw_items = data
             items = raw_items.values() if isinstance(raw_items, dict) else raw_items
             for index, item in enumerate(items):
-                sidecar_id = str(item.get("id") or item.get("uid") or f"{sidecar_type}-{index}")
+                item_id = item.get("id")
+                if not isinstance(item_id, str):
+                    item_id = None
+                item_uid = item.get("uid")
+                if not isinstance(item_uid, str):
+                    item_uid = None
+                raw_id = item_id or item_uid
+                if raw_id:
+                    # Qualify with source file stem so page-local IDs
+                    # (e.g. "im-0" in page_1.drawings.json and page_2.drawings.json)
+                    # produce distinct chunk IDs.
+                    sidecar_id = f"{path.stem}:{raw_id}"
+                else:
+                    sidecar_id = str(
+                        item.get("id") or item.get("uid") or f"{path.stem}:{sidecar_type}-{index}"
+                    )
                 raw_asset = item.get("path") or item.get("asset_path") or item.get("image_path")
                 block_id = item.get("blockid")
                 block_provenance = block_index.get(block_id) if isinstance(block_id, str) else None

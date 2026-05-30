@@ -246,8 +246,12 @@ async def answer_stream(
             all_cited_ids: set[str] = set()
             for cids in result.cited_chunks.values():
                 all_cited_ids.update(cids)
-            cited_images = [img for img in answer_images if img.get("chunk_id", "") in all_cited_ids]
-            session_images = [img for img in answer_images if str(img.get("chunk_id", "")).startswith("img_")]
+            cited_images = [
+                img for img in answer_images if img.get("chunk_id", "") in all_cited_ids
+            ]
+            session_images = [
+                img for img in answer_images if str(img.get("chunk_id", "")).startswith("img_")
+            ]
             answer_images = session_images + cited_images
 
             done_html = render_partial(
