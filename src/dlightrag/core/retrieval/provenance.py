@@ -195,8 +195,31 @@ def _is_sidecar_asset_path(file_path: str) -> bool:
     return _SIDECAR_ASSETS_MARKER in file_path
 
 
-def _load_sidecar_drawing_path(artifact_dir: Path, drawing_id: str) -> str | None:
-    """Resolve a sidecar drawing's image path from ``*.drawings.json``."""
+def _page_index_from_filename(stem: str) -> int | None:
+    """Extract zero-based page index from a parser-generated filename stem.
+
+    Handles patterns like ``page_1``, ``page-01``, ``p2``, ``page3_drawings``.
+    """
+    import re
+
+    m = re.search(r"(?:^|[_-])p(?:age)?[_-]?(\d+)", stem, re.IGNORECASE)
+    if m is None:
+        return None
+    return max(int(m.group(1)) - 1, 0)
+
+
+def _load_sidecar_drawing_path(
+    artifact_dir: Path, drawing_id: str, *, page_idx: int | None = None
+) -> str | None:
+    """Resolve a sidecar drawing's image path from ``*.drawings.json``.
+
+    When *page_idx* is given, prefers the candidate whose page matches the
+    chunk's page.  Parser-generated drawing IDs are often page-local
+    (``im-0``, ``im-1``, …), so the same ID can appear in every page's
+    drawings file.  First-match would return the wrong image for any page
+    after the first.
+    """
+    candidates: list[tuple[int | None, str]] = []  # (item_page_idx, path)
     for drawings_path in sorted(artifact_dir.glob("*.drawings.json")):
         try:
             data = json.loads(drawings_path.read_text(encoding="utf-8"))
@@ -213,8 +236,17 @@ def _load_sidecar_drawing_path(artifact_dir: Path, drawing_id: str) -> str | Non
             if isinstance(rel_path, str):
                 candidate = artifact_dir / rel_path
                 if candidate.is_file():
-                    return str(candidate)
-    return None
+                    item_page = explicit_item_page_index(item)
+                    if item_page is None:
+                        item_page = _page_index_from_filename(drawings_path.stem)
+                    candidates.append((item_page, str(candidate)))
+    if not candidates:
+        return None
+    if page_idx is not None:
+        for item_page, path in candidates:
+            if item_page == page_idx:
+                return path
+    return candidates[0][1]
 
 
 async def _hydrate_image_data(
@@ -242,7 +274,9 @@ async def _hydrate_image_data(
                 full_doc_cache=full_doc_cache,
             )
             if artifact_dir is not None:
-                image_path = _load_sidecar_drawing_path(artifact_dir, drawing_id)
+                image_path = _load_sidecar_drawing_path(
+                    artifact_dir, drawing_id, page_idx=chunk.get("page_idx")
+                )
 
     if not isinstance(image_path, str):
         image_path = chunk.get("file_path")
