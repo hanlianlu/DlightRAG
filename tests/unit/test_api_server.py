@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
-from dlightrag.api.auth import UserContext, get_current_user
+from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -357,8 +357,6 @@ class TestVerifyBearerToken:
     """Unit tests for verify_bearer_token() — no FastAPI dependency needed."""
 
     def test_simple_valid_token(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
         ctx = verify_bearer_token("secret-token", test_config)
@@ -366,34 +364,26 @@ class TestVerifyBearerToken:
         assert ctx.auth_mode == "simple"
 
     def test_simple_invalid_token_raises_403(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
         with pytest.raises(HTTPException, match="Invalid token"):
             verify_bearer_token("wrong-token", test_config)
 
-    def test_simple_missing_token_configured_raises_403(
+    def test_simple_empty_token_raises_403(
         self, test_config: DlightragConfig
     ) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
         with pytest.raises(HTTPException, match="Invalid token"):
             verify_bearer_token("", test_config)
 
     def test_simple_default_user_id(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "simple"
         test_config.api_auth_token = "secret-token"
         ctx = verify_bearer_token("secret-token", test_config, default_user_id="user-99")
         assert ctx.user_id == "user-99"
 
     def test_jwt_valid_token(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "jwt"
         test_config.jwt_secret = _JWT_SECRET
         test_config.jwt_algorithm = "HS256"
@@ -408,8 +398,6 @@ class TestVerifyBearerToken:
         assert ctx.auth_mode == "jwt"
 
     def test_jwt_expired_token_raises_401(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "jwt"
         test_config.jwt_secret = _JWT_SECRET
         test_config.jwt_algorithm = "HS256"
@@ -423,8 +411,6 @@ class TestVerifyBearerToken:
             verify_bearer_token(token, test_config)
 
     def test_jwt_missing_sub_claim_raises_401(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "jwt"
         test_config.jwt_secret = _JWT_SECRET
         test_config.jwt_algorithm = "HS256"
@@ -437,8 +423,6 @@ class TestVerifyBearerToken:
             verify_bearer_token(token, test_config)
 
     def test_jwt_wrong_secret_raises_401(self, test_config: DlightragConfig) -> None:
-        from dlightrag.api.auth import verify_bearer_token
-
         test_config.auth_mode = "jwt"
         test_config.jwt_secret = _JWT_SECRET
         test_config.jwt_algorithm = "HS256"
