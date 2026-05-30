@@ -266,10 +266,15 @@ class UnifiedIngestionEngine:
             if ref.asset_path is None or not ref.asset_path.exists():
                 continue
             dims = _image_dims(ref.asset_path)
-            if dims is not None and (dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel):
+            if dims is not None and (
+                dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
+            ):
                 logger.debug(
                     "Skipping sidecar image %s (%dx%d < %dpx min)",
-                    ref.asset_path, dims[0], dims[1], self._min_image_pixel,
+                    ref.asset_path,
+                    dims[0],
+                    dims[1],
+                    self._min_image_pixel,
                 )
                 continue
             content = _sidecar_text_content(ref)
