@@ -487,11 +487,11 @@ async def run_stdio() -> None:
 async def run_streamable_http(host: str, port: int) -> None:
     """Run MCP server over streamable-http transport.
 
-    Bearer-token auth is enforced when ``DLIGHTRAG_API_AUTH_TOKEN`` is set.
-    Runtime configuration requires an explicit auth mode when a token is
-    present. Without a token, the server runs open — caller is responsible
-    for binding to loopback or trusted network only. We log a loud warning
-    in that case.
+    Bearer auth is enforced when ``auth_mode`` is not ``"none"``.
+    Both simple (``DLIGHTRAG_API_AUTH_TOKEN``) and JWT (``DLIGHTRAG_JWT_SECRET``)
+    modes are supported via the shared ``verify_bearer_token`` dispatcher.
+    Without auth, the server runs open — caller is responsible for binding
+    to loopback or trusted network only. We log a loud warning in that case.
     """
     import uvicorn
     from fastapi import HTTPException
