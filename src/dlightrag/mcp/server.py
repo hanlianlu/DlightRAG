@@ -493,9 +493,8 @@ async def run_streamable_http(host: str, port: int) -> None:
     for binding to loopback or trusted network only. We log a loud warning
     in that case.
     """
-    import secrets
-
     import uvicorn
+    from fastapi import HTTPException
     from mcp.server.streamable_http import StreamableHTTPServerTransport
     from starlette.applications import Starlette
     from starlette.middleware import Middleware
@@ -504,49 +503,51 @@ async def run_streamable_http(host: str, port: int) -> None:
     from starlette.routing import Mount
 
     cfg = _get_config()
-    token = cfg.api_auth_token
+    has_auth = cfg.auth_mode != "none"
 
-    # We can't reliably tell from inside the process whether a 0.0.0.0 bind
-    # is actually reachable from a non-loopback network — Docker port-mapping
-    # to 127.0.0.1:8101:8101 means container-side 0.0.0.0 is still loopback-
-    # only at the host level. So we warn (loud, repeatedly) instead of
-    # refusing to start; the operator's network/compose config is the source
-    # of truth for actual exposure.
-    if not token:
+    if not has_auth:
         if host not in ("127.0.0.1", "localhost", "::1"):
             logger.warning(
-                "=" * 72 + "\nMCP streamable-http on host=%s:%d WITHOUT DLIGHTRAG_API_AUTH_TOKEN.\n"
+                "=" * 72 + "\nMCP streamable-http on host=%s:%d WITHOUT auth (auth_mode='none').\n"
                 "If this bind reaches a non-loopback network, ANY client can call\n"
                 "ingest, delete_files, retrieve, answer against EVERY workspace.\n"
                 "Safe configurations:\n"
                 "  (a) Set DLIGHTRAG_AUTH_MODE=simple + DLIGHTRAG_API_AUTH_TOKEN\n"
-                "      — bearer auth then guards MCP and REST (same secret).\n"
-                "  (b) Bind to 127.0.0.1 (loopback only).\n"
-                "  (c) Map host port to 127.0.0.1 only (compose: '127.0.0.1:8101:8101')\n"
+                "      — bearer token guards MCP and REST (single secret).\n"
+                "  (b) Set DLIGHTRAG_AUTH_MODE=jwt + DLIGHTRAG_JWT_SECRET\n"
+                "      — JWT bearer auth guards MCP and REST (same secret).\n"
+                "  (c) Bind to 127.0.0.1 (loopback only).\n"
+                "  (d) Map host port to 127.0.0.1 only (compose: '127.0.0.1:8101:8101')\n"
                 "      — safe even with container-internal 0.0.0.0.\n" + "=" * 72,
                 host,
                 port,
             )
         else:
-            logger.info("MCP streamable-http on %s:%d (loopback, no token required)", host, port)
+            logger.info("MCP streamable-http on %s:%d (loopback, no auth required)", host, port)
 
     class BearerAuthMiddleware(BaseHTTPMiddleware):
         """Enforce Bearer auth on every request to the MCP transport.
 
-        No-op when token is None (operator opted out). Constant-time
-        comparison defends against timing side-channels.
+        Delegates to ``verify_bearer_token`` for auth-mode dispatch.
+        No-op when ``auth_mode='none'`` (operator opted out).
         """
 
         async def dispatch(self, request, call_next):
-            if not token:
+            if not has_auth:
                 return await call_next(request)
             header = request.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
                 return JSONResponse(
                     {"error": "Missing or invalid Authorization header"}, status_code=401
                 )
-            if not secrets.compare_digest(header[7:], token):
-                return JSONResponse({"error": "Invalid token"}, status_code=403)
+            try:
+                from dlightrag.api.auth import verify_bearer_token
+
+                verify_bearer_token(header[7:], cfg)
+            except HTTPException as exc:
+                return JSONResponse(
+                    {"error": exc.detail}, status_code=exc.status_code
+                )
             return await call_next(request)
 
     await _ensure_manager()
