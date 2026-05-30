@@ -403,6 +403,7 @@ class RAGService:
             metadata_registry=self._metadata_registry,
             allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,
             default_metadata_policy=config.metadata.default_ingest_policy,
+            min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
         )
 
         if config.bm25_enabled:

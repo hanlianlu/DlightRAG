@@ -41,6 +41,17 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 logger = logging.getLogger(__name__)
 
 
+def _image_dims(path: Path) -> tuple[int, int] | None:
+    """Return (width, height) for an image, or None if unreadable."""
+    from PIL import Image
+
+    try:
+        with Image.open(path) as img:
+            return img.size
+    except Exception:
+        return None
+
+
 class UnifiedIngestionEngine:
     """One ingestion path for LightRAG documents and direct image chunks."""
 
@@ -58,6 +69,7 @@ class UnifiedIngestionEngine:
         allow_ad_hoc_metadata: bool = True,
         default_metadata_policy: MetadataIngestPolicy = "validate",
         vlm_func: Any | None = None,
+        min_image_pixel: int = 100,
     ) -> None:
         self._lightrag = lightrag
         self._stores = stores
@@ -70,6 +82,7 @@ class UnifiedIngestionEngine:
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
         self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
         self._vlm_func = vlm_func
+        self._min_image_pixel = min_image_pixel
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
     async def aingest_file(
@@ -251,6 +264,13 @@ class UnifiedIngestionEngine:
         vectors: dict[str, list[float]] = {}
         for ref in collect_sidecar_refs(artifact_dir):
             if ref.asset_path is None or not ref.asset_path.exists():
+                continue
+            dims = _image_dims(ref.asset_path)
+            if dims is not None and (dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel):
+                logger.debug(
+                    "Skipping sidecar image %s (%dx%d < %dpx min)",
+                    ref.asset_path, dims[0], dims[1], self._min_image_pixel,
+                )
                 continue
             content = _sidecar_text_content(ref)
             chunk_id, row, vector = await build_direct_image_chunk(
