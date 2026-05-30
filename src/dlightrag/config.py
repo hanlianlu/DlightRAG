@@ -32,6 +32,7 @@ _LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(
     {
         "VLM_PROCESS_ENABLE",
         "VLM_MAX_IMAGE_BYTES",
+        "VLM_MIN_IMAGE_PIXEL",
         "SURROUNDING_LEADING_MAX_TOKENS",
         "SURROUNDING_TRAILING_MAX_TOKENS",
         "LIGHTRAG_FORCE_REPARSE_MINERU",
@@ -184,6 +185,7 @@ class VLMSidecarConfig(BaseModel):
 
     enabled: bool = True
     max_image_bytes: int = 5_242_880
+    min_image_pixel: int = 100
     surrounding_leading_max_tokens: int | None = None
     surrounding_trailing_max_tokens: int | None = None
 
@@ -800,6 +802,7 @@ class DlightragConfig(BaseSettings):
         raw: dict[str, str | int | float | bool | None] = {
             "VLM_PROCESS_ENABLE": vlm.enabled,
             "VLM_MAX_IMAGE_BYTES": vlm.max_image_bytes,
+            "VLM_MIN_IMAGE_PIXEL": vlm.min_image_pixel,
             "SURROUNDING_LEADING_MAX_TOKENS": vlm.surrounding_leading_max_tokens,
             "SURROUNDING_TRAILING_MAX_TOKENS": vlm.surrounding_trailing_max_tokens,
             "MINERU_API_MODE": mineru.api_mode,
