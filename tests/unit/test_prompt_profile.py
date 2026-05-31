@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import dlightrag.prompts as prompts
 import dlightrag.prompts.identity as identity
 from dlightrag.prompts import (
@@ -17,6 +19,7 @@ from dlightrag.prompts.guidance import (
     ANSWER_CONTEXT_GUIDANCE,
     CITATION_GUIDANCE,
     HIGHLIGHT_GUIDANCE,
+    HIGHLIGHT_RESPONSE_FORMAT,
     LISTWISE_RERANK_PROMPT,
     PLANNER_GUIDANCE,
     RERANK_GUIDANCE,
@@ -57,6 +60,19 @@ def test_rag_side_prompts_are_assembled_from_guidance() -> None:
 def test_highlight_system_prompt_uses_literal_json_braces() -> None:
     assert "{{" not in HIGHLIGHT_SYSTEM_PROMPT
     assert "}}" not in HIGHLIGHT_SYSTEM_PROMPT
+
+
+def test_highlight_response_format_contains_parseable_json_example() -> None:
+    prefix = "Return JSON only, for example: "
+    example = HIGHLIGHT_RESPONSE_FORMAT.removeprefix(prefix).split(
+        ". Confidence must",
+        1,
+    )[0]
+
+    parsed = json.loads(example)
+
+    assert parsed == {"phrases": ["phrase1", "phrase2"], "confidence": 0.8}
+    assert "0.0-1.0" not in HIGHLIGHT_SYSTEM_PROMPT
 
 
 def test_exported_guidance_constants_do_not_declare_identity() -> None:
