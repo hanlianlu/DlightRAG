@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from dlightrag.core.ingestion.lightrag_sidecar import LightRAGSidecarRef
+from dlightrag.prompts import VISUAL_SEMANTIC_GUIDANCE
 
 
 def visual_semantic_doc_id(workspace: str, source_doc_id: str, ref: LightRAGSidecarRef) -> str:
@@ -25,7 +26,7 @@ async def build_visual_semantic_projection(
         raise ValueError(f"{ref.sidecar_type}:{ref.sidecar_id} has no asset_path")
     doc_id = visual_semantic_doc_id(workspace, source_doc_id, ref)
     description = await vlm_func(
-        prompt="Describe visible entities, relationships, text, scene attributes, and uncertainty.",
+        prompt=VISUAL_SEMANTIC_GUIDANCE,
         image_path=str(ref.asset_path),
     )
     text = (
