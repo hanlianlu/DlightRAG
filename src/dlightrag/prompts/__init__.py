@@ -1,6 +1,20 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Centralized prompts for DlightRAG."""
 
+from .guidance import (
+    ANSWER_CITATION_EXAMPLE,
+    ANSWER_CONTEXT_GUIDANCE,
+    CITATION_GUIDANCE,
+    HIGHLIGHT_GUIDANCE,
+    HIGHLIGHT_RESPONSE_FORMAT,
+    HIGHLIGHT_USER_PROMPT,
+    LISTWISE_RERANK_PROMPT,
+    PLANNER_GUIDANCE,
+    RERANK_GUIDANCE,
+    VISUAL_RERANK_PROMPT_TEMPLATE,
+    VISUAL_SEMANTIC_GUIDANCE,
+)
+from .identity import CORE_IDENTITY
 from .planner import (
     PLANNER_HISTORY_TEMPLATE,
     PLANNER_NO_HISTORY_TEMPLATE,
@@ -9,12 +23,25 @@ from .planner import (
 from .rag import (
     ANSWER_CORE,
     HIGHLIGHT_SYSTEM_PROMPT,
-    HIGHLIGHT_USER_PROMPT,
     VISUAL_RERANK_PROMPT,
     get_answer_system_prompt,
 )
 
 __all__ = [
+    # identity
+    "CORE_IDENTITY",
+    # guidance
+    "ANSWER_CONTEXT_GUIDANCE",
+    "CITATION_GUIDANCE",
+    "ANSWER_CITATION_EXAMPLE",
+    "PLANNER_GUIDANCE",
+    "VISUAL_SEMANTIC_GUIDANCE",
+    "RERANK_GUIDANCE",
+    "VISUAL_RERANK_PROMPT_TEMPLATE",
+    "LISTWISE_RERANK_PROMPT",
+    "HIGHLIGHT_GUIDANCE",
+    "HIGHLIGHT_RESPONSE_FORMAT",
+    "HIGHLIGHT_USER_PROMPT",
     # planner
     "PLANNER_SYSTEM_PROMPT",
     "PLANNER_HISTORY_TEMPLATE",
@@ -24,5 +51,4 @@ __all__ = [
     "get_answer_system_prompt",
     "VISUAL_RERANK_PROMPT",
     "HIGHLIGHT_SYSTEM_PROMPT",
-    "HIGHLIGHT_USER_PROMPT",
 ]
