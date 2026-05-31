@@ -17,7 +17,7 @@
 llm:
   default:
     provider: openai
-    model: google/gemini-2.5-flash-lite
+    model: google/gemini-3.1-flash-lite
     base_url: https://openrouter.ai/api/v1
     temperature: 0.5
     timeout: 120.0
@@ -46,7 +46,7 @@ llm:
   #     model: gpt-5.2
   #   vlm:
   #     provider: gemini
-  #     model: gemini-2.5-flash
+  #     model: gemini-3.1-flash
 
 embedding:
   provider: voyage
