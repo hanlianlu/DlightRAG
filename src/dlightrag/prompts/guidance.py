@@ -124,7 +124,8 @@ HIGHLIGHT_GUIDANCE = (
 )
 
 HIGHLIGHT_RESPONSE_FORMAT = (
-    'Return JSON: {"phrases": ["phrase1", "phrase2"], "confidence": 0.0-1.0}'
+    'Return JSON only, for example: {"phrases": ["phrase1", "phrase2"], '
+    '"confidence": 0.8}. Confidence must be a number from 0.0 to 1.0.'
 )
 
 HIGHLIGHT_USER_PROMPT = (
