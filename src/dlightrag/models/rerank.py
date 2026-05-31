@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from dlightrag.prompts import LISTWISE_RERANK_PROMPT
 from dlightrag.utils.image_budget import ImagePayloadBudget
 
 if TYPE_CHECKING:
@@ -37,15 +38,6 @@ _DEFAULT_IMAGE_MAX_PX = 1280
 _DEFAULT_IMAGE_MIN_PX = 768
 _DEFAULT_IMAGE_QUALITY = 86
 _DEFAULT_IMAGE_MIN_QUALITY = 76
-
-_LISTWISE_PROMPT = """\
-You are a relevance judge. Given a query and {n} items (each may be an image, text, or both), \
-score each item's relevance to the query.
-
-Respond with ONLY a JSON array of {n} scores in order: [<float>, <float>, ...]
-Each score is 0.00 (completely irrelevant) to 1.00 (perfectly relevant).
-
-Query: {query}"""
 
 
 def _clamp(value: float) -> float:
@@ -97,7 +89,7 @@ async def _chat_llm_rerank(
         batch_start: int,
         batch: list[dict[str, Any]],
     ) -> list[tuple[dict[str, Any], float]]:
-        prompt = _LISTWISE_PROMPT.format(query=query, n=len(batch))
+        prompt = LISTWISE_RERANK_PROMPT.format(query=query, n=len(batch))
 
         content: list[dict[str, Any]] = []
         content.append({"type": "text", "text": prompt})
