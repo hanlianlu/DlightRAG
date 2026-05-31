@@ -52,6 +52,29 @@ class TestChatLlmRerank:
         assert result[0]["content"] == "doc1"
         assert result[1]["rerank_score"] == pytest.approx(0.5)
 
+    async def test_listwise_prompt_comes_from_central_guidance(self, monkeypatch):
+        import dlightrag.models.rerank as rerank_module
+
+        prompt_template = "Central listwise prompt: {n} items for {query}"
+        monkeypatch.setattr(rerank_module, "LISTWISE_RERANK_PROMPT", prompt_template)
+        received_messages = []
+
+        async def mock_scoring(messages, **kwargs):
+            received_messages.append(messages)
+            return "[0.8]"
+
+        await _chat_llm_rerank(
+            "market query",
+            [{"content": "candidate text"}],
+            top_k=10,
+            scoring_func=mock_scoring,
+            score_threshold=0.3,
+        )
+
+        assert received_messages[0][0]["content"][0]["text"] == (
+            "Central listwise prompt: 1 items for market query"
+        )
+
     async def test_multimodal_chunks(self):
         """Chunks with image_data should include images in scoring messages."""
         received_messages = []
