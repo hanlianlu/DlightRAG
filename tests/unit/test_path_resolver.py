@@ -1,21 +1,23 @@
-"""Tests for PathResolver — verifies all source type dispatch paths."""
+"""Tests for PathResolver — verifies current source URL normalization."""
 
 from __future__ import annotations
 
+import inspect
+
 from dlightrag.core.retrieval.path_resolver import PathResolver
+
+
+def test_constructor_does_not_expose_working_dir_legacy_generation() -> None:
+    """URL generation should only use current input_dir/workspace roots."""
+    assert "working_dir" not in inspect.signature(PathResolver).parameters
 
 
 class TestResolve:
     """Each test covers a distinct dispatch branch in resolve()."""
 
-    def test_local_path_resolved_to_endpoint(self) -> None:
-        """Core behavior: absolute local path → /api/files/ with relative path."""
-        resolver = PathResolver(working_dir="/data/rag_storage")
-        assert resolver.resolve("/data/rag_storage/files/f.pdf") == "/api/files/files/f.pdf"
-
     def test_file_scheme_is_not_rewritten(self) -> None:
         """file:// is no longer a supported source URL scheme."""
-        resolver = PathResolver(working_dir="/data/rag_storage")
+        resolver = PathResolver()
         assert (
             resolver.resolve("file://sources/local/f.pdf")
             == "/api/files/file://sources/local/f.pdf"
@@ -23,26 +25,26 @@ class TestResolve:
 
     def test_azure_scheme_wrapped_into_endpoint(self) -> None:
         """Remote scheme preserved inside endpoint URL for 302 dispatch."""
-        resolver = PathResolver(working_dir="/data/rag_storage")
+        resolver = PathResolver()
         assert (
             resolver.resolve("azure://mycontainer/doc.pdf")
             == "/api/files/azure://mycontainer/doc.pdf"
         )
 
     def test_s3_scheme_wrapped_into_endpoint(self) -> None:
-        resolver = PathResolver(working_dir="/data/rag_storage")
+        resolver = PathResolver()
         assert resolver.resolve("s3://my-bucket/doc.pdf") == "/api/files/s3://my-bucket/doc.pdf"
 
-    def test_fallback_marker_when_no_working_dir(self) -> None:
-        """Without working_dir, falls back to the artifacts marker."""
-        resolver = PathResolver(working_dir=None)
+    def test_artifact_marker_paths_are_preserved_for_serving(self) -> None:
+        """Parser artifact paths keep the artifact-relative suffix for /api/files."""
+        resolver = PathResolver()
         assert (
             resolver.resolve("/random/prefix/artifacts/page.png") == "/api/files/artifacts/page.png"
         )
 
     def test_sources_marker_is_not_special(self) -> None:
         """A directory named sources is treated as a normal path component."""
-        resolver = PathResolver(working_dir=None)
+        resolver = PathResolver()
         assert (
             resolver.resolve("/random/prefix/sources/local/f.pdf")
             == "/api/files//random/prefix/sources/local/f.pdf"
@@ -50,12 +52,12 @@ class TestResolve:
 
     def test_no_match_uses_raw_path(self) -> None:
         """Unresolvable path passed through as-is."""
-        resolver = PathResolver(working_dir="/other/dir")
+        resolver = PathResolver()
         assert resolver.resolve("/random/path/file.pdf") == "/api/files//random/path/file.pdf"
 
 
 class TestInputDir:
-    """Tests for the input_dir + workspace parameters added in Task 5."""
+    """Tests for current input_dir + workspace URL generation."""
 
     def test_resolve_local_path_under_input_dir(self) -> None:
         """Local path under input_dir is stripped to relative."""
@@ -87,20 +89,8 @@ class TestInputDir:
         result = resolver.resolve("/data/input/ws-a/subdir/doc.pdf")
         assert result == "/api/files/ws-a/subdir/doc.pdf"
 
-    def test_input_dir_takes_priority_over_working_dir(self) -> None:
-        """When both are set, input_dir is tried first."""
-        resolver = PathResolver(
-            working_dir="/data/rag_storage",
-            input_dir="/data/input",
-        )
-        result = resolver.resolve("/data/input/default/doc.pdf")
-        assert result == "/api/files/default/doc.pdf"
-
-    def test_working_dir_fallback_when_input_dir_does_not_match(self) -> None:
-        """When input_dir does not match, working_dir is used."""
-        resolver = PathResolver(
-            working_dir="/data/rag_storage",
-            input_dir="/data/input",
-        )
-        result = resolver.resolve("/data/rag_storage/files/f.pdf")
-        assert result == "/api/files/files/f.pdf"
+    def test_resolve_workspace_bare_filename(self) -> None:
+        """LightRAG basename-only file paths are scoped by workspace."""
+        resolver = PathResolver(input_dir="/data/input", workspace="ws-a")
+        result = resolver.resolve("report.pdf")
+        assert result == "/api/files/ws-a/report.pdf"
