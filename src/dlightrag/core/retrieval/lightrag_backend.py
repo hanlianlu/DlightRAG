@@ -30,10 +30,18 @@ class LightRAGMixBackend:
         lightrag: Any,
         embedder: Any | None = None,
         rerank_func: Any | None = None,
+        direct_visual_top_k: int = 20,
+        max_entity_tokens: int = 6000,
+        max_relation_tokens: int = 8000,
+        max_total_tokens: int = 40000,
     ) -> None:
         self._lightrag = lightrag
         self._embedder = embedder
         self._rerank_func = rerank_func
+        self._direct_visual_top_k = max(0, int(direct_visual_top_k))
+        self._max_entity_tokens = max_entity_tokens
+        self._max_relation_tokens = max_relation_tokens
+        self._max_total_tokens = max_total_tokens
 
     async def aretrieve(
         self,
@@ -52,6 +60,9 @@ class LightRAGMixBackend:
             only_need_context=True,
             top_k=top_k or 60,
             chunk_top_k=limit,
+            max_entity_tokens=self._max_entity_tokens,
+            max_relation_tokens=self._max_relation_tokens,
+            max_total_tokens=self._max_total_tokens,
             enable_rerank=False,
             include_references=True,
         )
@@ -73,7 +84,10 @@ class LightRAGMixBackend:
         chunks.extend(injected)
         trace["metadata_injected_chunk_count"] = len(injected)
 
-        image_chunks = await self._retrieve_query_images(multimodal_content, top_k=limit)
+        image_chunks = await self._retrieve_query_images(
+            multimodal_content,
+            top_k=self._direct_visual_top_k,
+        )
         trace["direct_visual_chunk_count"] = len(image_chunks)
         if image_chunks:
             chunks = rrf_fuse([chunks, image_chunks])[:limit]
@@ -139,6 +153,8 @@ class LightRAGMixBackend:
         top_k: int,
     ) -> list[dict[str, Any]]:
         if self._embedder is None:
+            return []
+        if top_k <= 0:
             return []
         images = _extract_images(multimodal_content)
         if not images:

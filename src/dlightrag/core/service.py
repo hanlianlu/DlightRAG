@@ -207,6 +207,27 @@ class RAGService:
             )
         return params
 
+    @staticmethod
+    def _build_retrieval_backend(
+        config: DlightragConfig,
+        *,
+        lightrag: Any,
+        embedder: Any | None = None,
+        rerank_func: Any | None = None,
+    ) -> Any:
+        """Build the LightRAG retrieval backend from typed DlightRAG config."""
+        from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
+
+        return LightRAGMixBackend(
+            lightrag=lightrag,
+            embedder=embedder,
+            rerank_func=rerank_func,
+            direct_visual_top_k=config.direct_visual_top_k,
+            max_entity_tokens=config.max_entity_tokens,
+            max_relation_tokens=config.max_relation_tokens,
+            max_total_tokens=config.max_total_tokens,
+        )
+
     async def initialize(self) -> None:
         """Initialize LightRAG storages and caches (idempotent).
 
@@ -376,9 +397,8 @@ class RAGService:
         if not read_only:
             await self._verify_graph_labels(lightrag)
 
-        from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
-
-        self._backend = LightRAGMixBackend(
+        self._backend = self._build_retrieval_backend(
+            config,
             lightrag=lightrag,
             embedder=multimodal_embedder,
             rerank_func=rerank_func,

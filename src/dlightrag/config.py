@@ -508,7 +508,6 @@ class DlightragConfig(BaseSettings):
     workspace: str = Field(default="default")
 
     postgres_required_major: int = Field(default=18)
-    postgres_min_minor: str = Field(default="18.4")
 
     # pgvector index configuration. LightRAG derives VECTOR/HALFVEC from this.
     pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
@@ -564,11 +563,8 @@ class DlightragConfig(BaseSettings):
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")
     chunk_p_token_size: int = Field(default=1024)
-    context_window: int = Field(default=2)
-    max_context_tokens: int = Field(default=3000)
 
     # ===== Ingestion Performance =====
-    max_concurrent_ingestion: int = Field(default=4)
     max_parallel_insert: int = Field(default=2)
     max_async: int = Field(default=4)
     embedding_func_max_async: int = Field(default=8)
@@ -580,9 +576,6 @@ class DlightragConfig(BaseSettings):
         "Increase for slow local models (CPU inference).",
     )
     ingestion_replace_default: bool = Field(default=False)
-    ingestion_batch_pages: int = Field(
-        default=20, description="Pages per batch during streaming ingestion."
-    )
     max_upload_bytes: int = Field(
         default=100 * 1024 * 1024,
         description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",

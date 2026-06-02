@@ -26,4 +26,4 @@ def test_query_and_vlm_still_fall_back_to_multimodal_default() -> None:
 
     assert "query" not in config["llm"]["roles"]
     assert "vlm" not in config["llm"]["roles"]
-    assert config["llm"]["default"]["model"] == "google/gemini-2.5-flash-lite"
+    assert config["llm"]["default"]["model"] == "google/gemini-3.5-flash"
