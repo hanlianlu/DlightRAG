@@ -22,12 +22,8 @@ class PathResolver:
     The front-end only ever sees one URL format: /api/files/{path}.
 
     Args:
-        working_dir: Legacy RAG storage root directory. Local absolute paths
-            under this directory are converted to relative paths.
-            Kept for backward compatibility.
         input_dir: Input file storage directory. Paths under this
             directory are resolved relative to it. Takes priority over
-            working_dir.
         workspace: Optional workspace name scoping. When set, resolution
             strips ``input_dir/<workspace>/`` prefix from matching paths.
         base_url: URL prefix for the file-serving endpoint
@@ -52,12 +48,10 @@ class PathResolver:
 
     def __init__(
         self,
-        working_dir: str | None = None,
         input_dir: str | None = None,
         workspace: str | None = None,
         base_url: str = "/api/files",
     ) -> None:
-        self._working_dir = working_dir.rstrip("/") if working_dir else None
         self._input_dir = str(Path(input_dir).resolve()) if input_dir else None
         self._workspace = workspace
         self._base_url = base_url.rstrip("/")
@@ -75,25 +69,19 @@ class PathResolver:
         return f"{self._base_url}/{raw_path}"
 
     def resolve_relative(self, raw_path: str) -> str | None:
-        """Extract input_dir- or working_dir-relative path.
+        """Extract input_dir-relative or artifact-relative path.
 
-        Tries ``input_dir`` first (new), then ``working_dir`` (legacy),
-        then falls back to known artifact directory markers.
+        Tries ``input_dir`` first, then falls back to known artifact
+        directory markers.
 
         E.g. "/data/rag_storage/inputs/ws-a/doc.pdf" with
         input_dir="/data/rag_storage/inputs" → "ws-a/doc.pdf"
         """
-        # Try input_dir first (new behaviour)
+        # Try input_dir first.
         if self._input_dir:
             idx = raw_path.find(self._input_dir)
             if idx != -1:
                 return raw_path[idx + len(self._input_dir) :].lstrip("/")
-
-        # Try working_dir (legacy backward compat)
-        if self._working_dir:
-            idx = raw_path.find(self._working_dir)
-            if idx != -1:
-                return raw_path[idx + len(self._working_dir) :].lstrip("/")
 
         for marker in self._FALLBACK_MARKERS:
             idx = raw_path.find(marker)
