@@ -284,6 +284,28 @@ class TestBuildAddonParams:
         }
 
 
+class TestBuildRetrievalBackend:
+    """Test DlightRAG retrieval backend configuration wiring."""
+
+    def test_passes_query_budget_config(self, test_config: DlightragConfig) -> None:
+        test_config.direct_visual_top_k = 9
+        test_config.max_entity_tokens = 111
+        test_config.max_relation_tokens = 222
+        test_config.max_total_tokens = 333
+
+        backend = RAGService._build_retrieval_backend(
+            test_config,
+            lightrag=MagicMock(),
+            embedder=MagicMock(),
+            rerank_func=MagicMock(),
+        )
+
+        assert backend._direct_visual_top_k == 9
+        assert backend._max_entity_tokens == 111
+        assert backend._max_relation_tokens == 222
+        assert backend._max_total_tokens == 333
+
+
 # ---------------------------------------------------------------------------
 # TestRAGServiceLightRAGMainPath
 # ---------------------------------------------------------------------------

@@ -579,5 +579,9 @@ class TestWorkspaceDiscovery:
 
     async def test_fallback_returns_default(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
+        manager._workspace_registry = AsyncMock()
+        manager._workspace_registry.list = AsyncMock(side_effect=RuntimeError("registry down"))
+
         result = await manager.list_workspaces()
+
         assert test_cfg.workspace in result

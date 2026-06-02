@@ -180,8 +180,6 @@ metadata:
 
 # Chunking and LightRAG query defaults.
 chunk_p_token_size: 1024
-context_window: 2
-max_context_tokens: 3000
 
 # ─────────────────────────────────────────────────────────────────
 # PostgreSQL 18 Storage
@@ -192,7 +190,6 @@ runtime_role: ingest   # ingest | admin | query
 read_after_write_mode: eventual  # eventual | wait_for_replay
 read_after_write_timeout: 15.0
 postgres_required_major: 18
-postgres_min_minor: "18.4"
 
 # Primary endpoint fields. Query workers use postgres_replica_* when
 # runtime_role=query; omitted replica fields fall back to the primary values
@@ -226,7 +223,6 @@ postgres_statement_cache_size:
 # Ingestion Performance
 # ─────────────────────────────────────────────────────────────────
 
-max_concurrent_ingestion: 4
 max_parallel_insert: 2
 max_async: 4
 embedding_func_max_async: 8

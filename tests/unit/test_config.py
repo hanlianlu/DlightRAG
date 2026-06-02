@@ -19,6 +19,15 @@ from dlightrag.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_dlightrag_config_sources(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep config unit tests independent from developer shell env and repo .env."""
+    for key in list(os.environ):
+        if key.startswith("DLIGHTRAG_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
+
+
 class TestModelConfig:
     def test_defaults(self):
         cfg = ModelConfig(model="gpt-4.1-mini")
@@ -106,8 +115,9 @@ class TestAnswerConfig:
 
 
 class TestDlightragConfigNested:
-    def test_minimal_config(self):
+    def test_minimal_config(self, tmp_path, monkeypatch):
         """Only embedding required; llm defaults are nested under llm.default."""
+        monkeypatch.chdir(tmp_path)
         cfg = DlightragConfig(
             embedding=EmbeddingConfig(
                 provider="voyage",
@@ -116,10 +126,11 @@ class TestDlightragConfigNested:
                 startup_probe=False,
             ),
         )
-        assert cfg.llm.default.model == "google/gemini-2.5-flash-lite"
+        assert cfg.llm.default.model == "gpt-4.1"
         assert cfg.embedding.model == "voyage-multimodal-3.5"
 
-    def test_chat_defaults(self):
+    def test_chat_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
         cfg = DlightragConfig(
             embedding=EmbeddingConfig(
                 provider="voyage",
@@ -128,7 +139,7 @@ class TestDlightragConfigNested:
                 startup_probe=False,
             ),
         )
-        assert cfg.llm.default.model == "google/gemini-2.5-flash-lite"
+        assert cfg.llm.default.model == "gpt-4.1"
         assert cfg.llm.default.temperature == 0.5
 
     def test_env_var_nested(self, monkeypatch):
@@ -152,6 +163,29 @@ class TestDlightragConfigNested:
         with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
             DlightragConfig(
                 openai_api_key="sk-old",
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="sk-test",
+                    startup_probe=False,
+                ),
+            )
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "context_window",
+            "max_context_tokens",
+            "ingestion_batch_pages",
+            "max_concurrent_ingestion",
+            "postgres_min_minor",
+        ],
+    )
+    def test_stale_root_config_fields_rejected(self, field: str):
+        """Removed legacy knobs should fail fast instead of being accepted inertly."""
+        with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
+            DlightragConfig(
+                **{field: 1},
                 embedding=EmbeddingConfig(
                     provider="voyage",
                     model="voyage-multimodal-3.5",
