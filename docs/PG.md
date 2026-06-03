@@ -57,7 +57,7 @@ postgres_statement_cache_size: 256
 
 DlightRAG keeps two narrowly scoped patches around LightRAG PostgreSQL AGE
 graph initialization. They are not general backward-compatibility shims: they
-exist because the current pinned LightRAG main still lacks the guards below.
+exist because LightRAG 1.5.0 still lacks the guards below.
 They self-disable through source inspection if upstream adds equivalent
 handling, and should be deleted once `required_patch_names(PostgreSQLDB)`
 returns an empty tuple.
@@ -162,7 +162,7 @@ make postgres-replica-reset
 
 | Date | LightRAG Baseline | Patches Needed | Notes |
 |---|---|---|---|
-| 2026-05-25 | `main` commit `b0f93c0b0031665067c950d451943afe9cb8d48a` | `configure_age`, `execute` | Locked through `uv.lock`; remove this patch module when upstream covers both |
+| 2026-06-03 | `lightrag-hku==1.5.0` | `configure_age`, `execute` | Locked through `uv.lock`; remove this patch module when upstream covers both |
 
 Check upstream by running:
 

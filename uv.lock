@@ -444,7 +444,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.58.0" },
     { name = "langdetect", specifier = ">=1.0.9" },
     { name = "langfuse", specifier = ">=4.0.0" },
-    { name = "lightrag-hku", specifier = ">=1.5.0rc3" },
+    { name = "lightrag-hku", specifier = ">=1.5.0" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
     { name = "nh3", specifier = ">=0.2" },

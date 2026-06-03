@@ -22,7 +22,7 @@ from typing import Any, Literal
 from urllib.parse import urlencode
 
 from dotenv import dotenv_values
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _YAML_FILE = "config.yaml"
@@ -175,7 +175,36 @@ class ExtractionConfig(BaseModel):
 
     use_json: bool = True
     language: str = "English"
-    entity_type_prompt_file: str | None = None
+    entity_type_prompt_file: str | None = Field(
+        default=None,
+        description=(
+            "LightRAG entity-type prompt profile YAML file name. Loaded from "
+            "PROMPT_DIR/entity_type; must be a .yml/.yaml file name, not a path."
+        ),
+    )
+
+    @field_validator("entity_type_prompt_file")
+    @classmethod
+    def _validate_entity_type_prompt_file(cls, value: str | None) -> str | None:
+        """Mirror LightRAG 1.5.0's ENTITY_TYPE_PROMPT_FILE contract."""
+        if value is None:
+            return None
+        file_name = value.strip()
+        if not file_name:
+            return None
+        candidate = Path(file_name)
+        if (
+            "\\" in file_name
+            or candidate.is_absolute()
+            or candidate.name != file_name
+            or ".." in candidate.parts
+        ):
+            raise ValueError(
+                "entity_type_prompt_file must be a file name under PROMPT_DIR/entity_type"
+            )
+        if candidate.suffix.lower() not in {".yml", ".yaml"}:
+            raise ValueError("entity_type_prompt_file must use a .yml or .yaml extension")
+        return file_name
 
 
 class VLMSidecarConfig(BaseModel):
