@@ -20,6 +20,13 @@ def test_removed_multimodal_dependency_absent() -> None:
     assert not any(dep.startswith(removed) for dep in dependencies)
 
 
+def test_lightrag_dependency_tracks_stable_1_5_release() -> None:
+    dependencies = _dependencies()
+    lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
+
+    assert lightrag_deps == ["lightrag-hku>=1.5.0"]
+
+
 def test_langfuse_dependency_has_no_upper_bound() -> None:
     """Langfuse should require the v4 SDK API without an upper cap."""
     dependencies = _dependencies()

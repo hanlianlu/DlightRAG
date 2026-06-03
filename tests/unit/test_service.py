@@ -272,14 +272,14 @@ class TestBuildAddonParams:
         self, test_config: DlightragConfig
     ) -> None:
         test_config.extraction.language = "Chinese"
-        test_config.extraction.entity_type_prompt_file = "/prompts/domain-entities.md"
+        test_config.extraction.entity_type_prompt_file = "domain-entities.yaml"
         test_config.kg_entity_types = []
 
         result = RAGService._build_addon_params(test_config)
 
         assert result == {
             "language": "Chinese",
-            "entity_type_prompt_file": "/prompts/domain-entities.md",
+            "entity_type_prompt_file": "domain-entities.yaml",
             "chunker": {"paragraph_semantic": {"chunk_token_size": 1024}},
         }
 

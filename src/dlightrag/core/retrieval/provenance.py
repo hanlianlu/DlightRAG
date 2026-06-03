@@ -262,7 +262,7 @@ async def _hydrate_image_data(
 
     image_path: str | None = sidecar.get("path")  # DlightRAG direct-image chunks
 
-    # v1.5.0rc3 visual chunks: sidecar has type/id/refs but no path.
+    # LightRAG 1.5 visual chunks: sidecar has type/id/refs but no path.
     # Resolve the image path from drawings.json in the parsed artifact directory.
     if not isinstance(image_path, str) and sidecar.get("type") == "drawing":
         drawing_id = sidecar.get("id")

@@ -10,7 +10,7 @@ license = "Apache-2.0"
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Core RAG
-    "lightrag-hku>=1.5.0rc3",
+    "lightrag-hku>=1.5.0",
     # LLM
     "openai>=2.29.0",
     "anthropic>=0.42.0",

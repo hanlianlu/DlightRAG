@@ -252,10 +252,10 @@ async def test_backend_uses_dedicated_direct_visual_top_k_for_image_search(
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 
-async def test_backend_hydrates_v150rc3_drawing_sidecar_from_drawings_json(
+async def test_backend_hydrates_v150_drawing_sidecar_from_drawings_json(
     tmp_path: Path,
 ) -> None:
-    """v1.5.0rc3 visual chunks carry sidecar={type,id,refs} with no path field.
+    """LightRAG 1.5 visual chunks carry sidecar={type,id,refs} with no path field.
     The image path must be resolved from drawings.json in the parsed artifact dir."""
     parsed_dir = tmp_path / "sample.parsed"
     assets_dir = parsed_dir / "sample.blocks.assets"

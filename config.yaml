@@ -134,6 +134,8 @@ parser:
 extraction:
   use_json: true
   language: English
+  # YAML file name under PROMPT_DIR/entity_type (default ./prompts/entity_type).
+  # Must be a file name such as domain-entities.yaml, not a path.
   entity_type_prompt_file:
 
 parser_sidecars:

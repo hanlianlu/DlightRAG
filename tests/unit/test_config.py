@@ -194,6 +194,44 @@ class TestDlightragConfigNested:
                 ),
             )
 
+    @pytest.mark.parametrize(
+        "prompt_file",
+        [
+            "/prompts/domain-entities.yaml",
+            "../domain-entities.yaml",
+            "entity_type/domain-entities.yaml",
+            "domain-entities.md",
+            "domain-entities.txt",
+        ],
+    )
+    def test_entity_type_prompt_file_must_match_lightrag_15_contract(
+        self, prompt_file: str
+    ) -> None:
+        """LightRAG loads YAML file names from PROMPT_DIR/entity_type only."""
+        with pytest.raises(ValidationError, match="entity_type_prompt_file"):
+            DlightragConfig(
+                extraction={"entity_type_prompt_file": prompt_file},
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="sk-test",
+                    startup_probe=False,
+                ),
+            )
+
+    def test_entity_type_prompt_file_accepts_yaml_file_name(self) -> None:
+        cfg = DlightragConfig(
+            extraction={"entity_type_prompt_file": "domain-entities.yaml"},
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        )
+
+        assert cfg.extraction.entity_type_prompt_file == "domain-entities.yaml"
+
 
 def test_storage_backends_are_postgres_only() -> None:
     cfg = DlightragConfig(
