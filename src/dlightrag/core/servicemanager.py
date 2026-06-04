@@ -616,6 +616,10 @@ class RAGServiceManager:
             kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         if plan is not None:
             kwargs.setdefault("_plan", plan)
+        requested_top_k = _positive_int_or_none(kwargs.get("top_k"))
+        requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
+        kwargs["top_k"] = requested_top_k or self._config.top_k
+        kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
         ws_list = workspaces or [workspace or self._config.workspace]
         from dlightrag.observability import trace_pipeline
 
@@ -920,7 +924,7 @@ def _positive_int_or_none(value: Any) -> int | None:
         return None
     result = int(value)
     if result < 1:
-        raise ValueError("answer top-k limits must be positive integers")
+        raise ValueError("top-k limits must be positive integers")
     return result
 
 

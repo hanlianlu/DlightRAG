@@ -48,6 +48,17 @@ def client(tmp_working_dir: Path) -> TestClient:
 
 
 class TestFileEndpoint:
+    def test_streams_canonical_input_file(self, client: TestClient, tmp_working_dir: Path) -> None:
+        """Primary path: files under input_dir/<workspace>/ stream directly."""
+        canonical = tmp_working_dir / "inputs" / "default" / "docs" / "canonical.pdf"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"%PDF-1.4 canonical input content")
+
+        resp = client.get("/api/files/default/docs/canonical.pdf")
+        assert resp.status_code == 200
+        assert b"%PDF-1.4 canonical input content" in resp.content
+        assert resp.headers["content-type"] == "application/pdf"
+
     def test_streams_local_file(self, client: TestClient) -> None:
         """Happy path: local file served with correct content and MIME type."""
         resp = client.get("/api/files/docs/report.pdf")
