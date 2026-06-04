@@ -220,6 +220,20 @@ class TestRouting:
         await manager.aretrieve("query")
         call_kwargs = mock_create.call_args[1]
         assert call_kwargs["config"].workspace == test_cfg.workspace
+        retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
+        assert retrieve_kwargs["top_k"] == test_cfg.top_k
+        assert retrieve_kwargs["chunk_top_k"] == test_cfg.chunk_top_k
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aretrieve_keeps_explicit_retrieval_limits(self, mock_create, test_cfg) -> None:
+        mock_svc = AsyncMock()
+        mock_svc.aretrieve.return_value = MagicMock()
+        mock_create.return_value = mock_svc
+        manager = RAGServiceManager(config=test_cfg)
+        await manager.aretrieve("query", top_k=9, chunk_top_k=4)
+        retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
+        assert retrieve_kwargs["top_k"] == 9
+        assert retrieve_kwargs["chunk_top_k"] == 4
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:
