@@ -40,11 +40,10 @@ class DeclaredMetadataField:
     field_type: str = "string"
     normalizer: str = "identity"
     filter_ops: tuple[str, ...] = field(default_factory=tuple)
-    indexed: bool = False
 
     @property
     def filterable(self) -> bool:
-        return self.indexed and bool(self.filter_ops)
+        return bool(self.filter_ops)
 
     @property
     def type(self) -> str:
@@ -64,15 +63,14 @@ class MetadataFieldRegistry:
         self._fields = dict(fields or {})
 
     @classmethod
-    def from_config(cls, config: Mapping[str, Mapping[str, Any]] | None) -> MetadataFieldRegistry:
+    def from_config(cls, config: Mapping[str, Any] | None) -> MetadataFieldRegistry:
         fields = {}
         for field_id, raw in (config or {}).items():
             fields[field_id] = DeclaredMetadataField(
                 field_id=field_id,
-                field_type=str(raw.get("type") or "string"),
-                normalizer=str(raw.get("normalizer") or "identity"),
-                filter_ops=tuple(raw.get("filter_ops") or ()),
-                indexed=bool(raw.get("indexed", False)),
+                field_type=str(_field_option(raw, "type", "string") or "string"),
+                normalizer=str(_field_option(raw, "normalizer", "identity") or "identity"),
+                filter_ops=tuple(_field_option(raw, "filter_ops", ()) or ()),
             )
         return cls(fields)
 
@@ -81,9 +79,15 @@ class MetadataFieldRegistry:
 
     def filter_spec(self, field_id: str) -> DeclaredMetadataField | None:
         field_def = self._fields.get(field_id)
-        if field_def is None or not field_def.filter_ops:
+        if field_def is None or not field_def.filterable:
             return None
         return field_def
+
+
+def _field_option(raw: Any, key: str, default: Any) -> Any:
+    if isinstance(raw, Mapping):
+        return raw.get(key, default)
+    return getattr(raw, key, default)
 
 
 def normalize_user_metadata(

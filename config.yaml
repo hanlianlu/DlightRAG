@@ -167,14 +167,13 @@ metadata:
   fields: {}
   # Declare custom user metadata fields here only when they should become
   # filterable. Undeclared metadata is still stored in metadata_json when
-  # allow_ad_hoc_json is true, but it is not promoted to indexed filters.
+  # allow_ad_hoc_json is true, but it is not promoted to declared filters.
   # Example:
   # fields:
   #   department:
   #     type: string
   #     normalizer: casefold_trim
   #     filter_ops: ["exact"]
-  #     indexed: true
 
 # Chunking and LightRAG query defaults.
 chunk_p_token_size: 1024

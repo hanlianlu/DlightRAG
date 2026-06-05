@@ -90,9 +90,10 @@ class TestYamlConfigLoading:
 
         assert set(metadata) == {"allow_ad_hoc_json", "default_ingest_policy", "fields"}
         for field_spec in metadata["fields"].values():
-            assert set(field_spec) <= {"type", "normalizer", "filter_ops", "indexed"}
+            assert set(field_spec) <= {"type", "normalizer", "filter_ops"}
             assert "filter" not in field_spec
             assert "normalize" not in field_spec
+            assert "indexed" not in field_spec
 
 
 class TestConfigSources:

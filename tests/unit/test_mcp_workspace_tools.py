@@ -37,6 +37,16 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "session_id" in answer_props
     assert "referenced_image_ids" in answer_props
     assert "filters" in answer_props
+    ingest_tool = next(tool for tool in tools if tool.name == "ingest")
+    ingest_props = ingest_tool.inputSchema["properties"]
+    assert "title" in ingest_props
+    assert "author" in ingest_props
+    assert "metadata" in ingest_props
+    assert ingest_props["metadata_policy"]["enum"] == [
+        "validate",
+        "reject_unknown",
+        "store_only",
+    ]
 
 
 async def test_mcp_create_workspace_uses_manager_registry(mock_mcp_manager) -> None:
@@ -70,6 +80,34 @@ async def test_mcp_delete_workspace_resets_workspace(mock_mcp_manager) -> None:
         workspace="old_workspace",
         keep_files=True,
         dry_run=True,
+    )
+
+
+async def test_mcp_ingest_forwards_document_metadata(mock_mcp_manager) -> None:
+    mock_mcp_manager.aingest = AsyncMock(return_value={"ingested": 1})
+
+    result = await mcp_server.call_tool(
+        "ingest",
+        {
+            "source_type": "local",
+            "path": "/tmp/report.pdf",
+            "workspace": "finance",
+            "title": "Quarterly Report",
+            "author": "Ada",
+            "metadata": {"department": "Finance"},
+            "metadata_policy": "reject_unknown",
+        },
+    )
+
+    assert json.loads(result[0].text) == {"ingested": 1}
+    mock_mcp_manager.aingest.assert_awaited_once_with(
+        "finance",
+        source_type="local",
+        path="/tmp/report.pdf",
+        title="Quarterly Report",
+        author="Ada",
+        metadata={"department": "Finance"},
+        metadata_policy="reject_unknown",
     )
 
 

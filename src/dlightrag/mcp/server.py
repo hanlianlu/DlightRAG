@@ -26,6 +26,7 @@ from dlightrag.core.client_payloads import (
 from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
+_METADATA_POLICY_VALUES = ("validate", "reject_unknown", "store_only")
 
 server = Server(
     "dlightrag",
@@ -167,6 +168,23 @@ async def list_tools() -> list[Tool]:
                     "workspace": {
                         "type": "string",
                         "description": "Target workspace. Omit for default workspace.",
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional document title metadata.",
+                    },
+                    "author": {
+                        "type": "string",
+                        "description": "Optional document author metadata.",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "User metadata to attach to ingested documents.",
+                    },
+                    "metadata_policy": {
+                        "type": "string",
+                        "enum": list(_METADATA_POLICY_VALUES),
+                        "description": "How undeclared user metadata fields are handled.",
                     },
                 },
                 "required": ["source_type"],
@@ -446,6 +464,17 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     kwargs["prefix"] = arguments["prefix"]
             if arguments.get("replace") is not None:
                 kwargs["replace"] = arguments["replace"]
+            if arguments.get("title") is not None:
+                kwargs["title"] = arguments["title"]
+            if arguments.get("author") is not None:
+                kwargs["author"] = arguments["author"]
+            if arguments.get("metadata") is not None:
+                kwargs["metadata"] = arguments["metadata"]
+            if arguments.get("metadata_policy") is not None:
+                metadata_policy = str(arguments["metadata_policy"])
+                if metadata_policy not in _METADATA_POLICY_VALUES:
+                    raise ValueError(f"Invalid metadata_policy: {metadata_policy}")
+                kwargs["metadata_policy"] = metadata_policy
             result = await manager.aingest(ws, source_type=source_type, **kwargs)
             return [TextContent(type="text", text=json.dumps(result, default=str))]
 
