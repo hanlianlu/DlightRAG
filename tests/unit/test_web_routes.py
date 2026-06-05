@@ -142,6 +142,42 @@ class TestWebAnswer:
         assert "Service error" not in resp.text
         manager.aanswer_stream.assert_awaited_once()
 
+    async def test_answer_stream_reads_session_images_through_public_manager_api(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        class TokenStream:
+            answer = "Answer"
+            current_image_ids = ["img_0"]
+            image_descriptions = ["Uploaded diagram"]
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise StopAsyncIteration
+
+        class PublicOnlyManager:
+            def __init__(self) -> None:
+                self.config = test_config
+                self.aanswer_stream = AsyncMock(return_value=({"chunks": []}, TokenStream()))
+                self.get_session_image_data = AsyncMock(return_value=["data:image/png;base64,abc"])
+
+        manager = PublicOnlyManager()
+        web_app.state.manager = manager
+
+        resp = await client.post(
+            "/web/answer",
+            json={"query": "hello", "session_id": "session-1"},
+        )
+
+        assert resp.status_code == 200
+        assert "event: done" in resp.text
+        assert "Uploaded diagram" in resp.text
+        manager.get_session_image_data.assert_awaited_once_with("session-1", ["img_0"])
+
     async def test_highlights_use_keyword_llm_role(
         self,
         client: AsyncClient,
@@ -265,6 +301,12 @@ class TestWebFiles:
         # aingest now runs in a background task — give it a tick to start.
         await asyncio.sleep(0.05)
         mock_manager.aingest.assert_awaited_once()
+
+    def test_safe_relative_path_rejects_absolute_paths(self) -> None:
+        from dlightrag.web.routes.files import _safe_relative_path
+
+        with pytest.raises(ValueError):
+            _safe_relative_path("/tmp/evil.pdf")
 
     async def test_delete_files(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
