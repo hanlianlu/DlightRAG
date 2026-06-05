@@ -426,7 +426,11 @@ class TestVerifyBearerToken:
         test_config.jwt_algorithm = "HS256"
 
         payload = {"sub": "user-42"}
-        token = jwt.encode(payload, "wrong-secret-different-key", algorithm="HS256")
+        token = jwt.encode(
+            payload,
+            "wrong-secret-different-key-for-unit-tests",
+            algorithm="HS256",
+        )
         with pytest.raises(HTTPException, match="Invalid token"):
             verify_bearer_token(token, test_config)
 

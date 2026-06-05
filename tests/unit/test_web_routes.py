@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import datetime
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -43,6 +47,9 @@ def mock_manager():
     manager.list_ingested_files = AsyncMock(
         return_value=[{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}]
     )
+    manager.get_pipeline_status = AsyncMock(
+        return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
+    )
     manager.delete_files = AsyncMock(return_value=[])
     return manager
 
@@ -66,6 +73,128 @@ async def client(web_app):
         follow_redirects=False,
     ) as c:
         yield c
+
+
+def _configure_web_manager(manager, cfg: DlightragConfig):
+    manager.config = cfg
+    manager.get_pipeline_status = AsyncMock(
+        return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
+    )
+    return manager
+
+
+def _web_client_for(cfg: DlightragConfig, manager):
+    application = create_app(include_web=True)
+    application.state.manager = _configure_web_manager(manager, cfg)
+    transport = ASGITransport(app=application)
+    return AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        cookies={"dlightrag_workspace": "default"},
+        follow_redirects=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# TestWebAuth
+# ---------------------------------------------------------------------------
+
+
+class TestWebAuth:
+    """Web routes follow global auth_mode."""
+
+    async def test_simple_missing_auth_redirects_browser_get(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            resp = await c.get("/web/")
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/web/login")
+
+    async def test_simple_invalid_bearer_rejected(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            resp = await c.get(
+                "/web/files",
+                headers={"Authorization": "Bearer wrong-token"},
+            )
+
+        assert resp.status_code == 403
+
+    async def test_simple_login_sets_cookie_and_grants_access(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            login = await c.post(
+                "/web/login",
+                data={"token": "secret-token", "next": "/web/"},
+            )
+            resp = await c.get("/web/")
+
+        assert login.status_code == 303
+        assert "dlightrag_web_auth=" in login.headers["set-cookie"]
+        assert resp.status_code == 200
+
+    async def test_bearer_header_grants_web_access(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            resp = await c.get(
+                "/web/files",
+                headers={"Authorization": "Bearer secret-token"},
+            )
+
+        assert resp.status_code == 200
+
+    async def test_jwt_invalid_bearer_rejected(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "jwt"
+        test_config.jwt_secret = "test-jwt-secret-key-for-web-route-tests"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            resp = await c.get(
+                "/web/files",
+                headers={"Authorization": "Bearer not-a-jwt"},
+            )
+
+        assert resp.status_code == 401
+
+    async def test_jwt_bearer_header_grants_web_access(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "jwt"
+        test_config.jwt_secret = "test-jwt-secret-key-for-web-route-tests"
+        token = jwt.encode(
+            {
+                "sub": "user-1",
+                "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5),
+            },
+            "test-jwt-secret-key-for-web-route-tests",
+            algorithm="HS256",
+        )
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            resp = await c.get(
+                "/web/files",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
+        assert resp.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +366,7 @@ class TestWebAnswer:
         )
         monkeypatch.setattr("dlightrag.models.llm.get_query_model_func", fail_query_model)
         monkeypatch.setattr(
-            "dlightrag.web.routes.chat.extract_highlights_for_sources",
+            "dlightrag.web.answer_events.extract_highlights_for_sources",
             fake_extract_highlights_for_sources,
         )
 
@@ -247,6 +376,109 @@ class TestWebAnswer:
         assert "event: highlights" in resp.text
         assert keyword_called is True
         assert highlights_called is True
+
+
+class TestWebSSEBoundary:
+    """Tests for SSE framing and browser HTML fragment safety."""
+
+    def test_sse_event_json_encodes_payload(self) -> None:
+        from dlightrag.web.sse import sse_event
+
+        event = sse_event("done", {"html": "<b>x</b>"})
+
+        assert event.startswith("event: done\n")
+        assert event.endswith("\n\n")
+        data_line = next(line for line in event.splitlines() if line.startswith("data: "))
+        assert json.loads(data_line.removeprefix("data: ")) == {"html": "<b>x</b>"}
+
+    async def test_answer_done_html_strips_unsafe_urls(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        async def mock_tokens():
+            yield "Answer [1-1]."
+
+        class PublicOnlyManager:
+            def __init__(self) -> None:
+                self.config = test_config
+                self.aanswer_stream = AsyncMock(
+                    return_value=(
+                        {
+                            "chunks": [
+                                {
+                                    "chunk_id": "c1",
+                                    "reference_id": "1",
+                                    "content": "Evidence in cited chunk.",
+                                    "file_path": "/docs/report.pdf",
+                                    "image_url": "javascript:alert(1)",
+                                    "thumbnail_url": "javascript:alert(2)",
+                                    "_answer_image_sent": True,
+                                }
+                            ]
+                        },
+                        mock_tokens(),
+                    )
+                )
+
+        web_app.state.manager = PublicOnlyManager()
+
+        resp = await client.post("/web/answer", json={"query": "hello"})
+
+        assert resp.status_code == 200
+        assert "event: done" in resp.text
+        assert "answer-content" in resp.text
+        assert "source-data" in resp.text
+        assert "javascript:" not in resp.text
+        assert "onerror" not in resp.text.lower()
+        assert "<script" not in resp.text.lower()
+
+
+class TestWebAnswerAdapter:
+    """The route is a thin adapter over the browser answer presenter."""
+
+    async def test_answer_route_delegates_to_stream_presenter(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured = {}
+
+        async def fake_stream_answer_events(**kwargs):
+            captured.update(kwargs)
+            yield 'event: done\ndata: {"html": "", "answer": "ok"}\n\n'
+
+        monkeypatch.setattr(
+            "dlightrag.web.routes.chat.stream_answer_events",
+            fake_stream_answer_events,
+            raising=False,
+        )
+        web_app.state.manager.config = test_config
+        image_b64 = base64.b64encode(b"tiny-image").decode()
+
+        resp = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "images": [image_b64],
+                "workspaces": ["default", "test_ws"],
+                "conversation_history": [{"role": "user", "content": "previous"}],
+                "session_id": "session-1",
+            },
+        )
+
+        assert resp.status_code == 200
+        assert captured["manager"] is web_app.state.manager
+        assert captured["cfg"] is test_config
+        assert captured["query"] == "hello"
+        assert captured["query_images"] == [image_b64]
+        assert captured["workspaces"] == ["default", "test_ws"]
+        assert captured["workspace"] == "default"
+        assert captured["session_id"] == "session-1"
+        assert captured["conversation_history"] == [{"role": "user", "content": "previous"}]
 
 
 # ---------------------------------------------------------------------------
