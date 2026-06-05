@@ -75,7 +75,8 @@ class LightRAGCompatGuard:
         pool = vdb.db.pool
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = $1",
                 table_name.lower(),
             )
         actual = {r["column_name"] for r in rows}
@@ -88,7 +89,8 @@ class LightRAGCompatGuard:
         pool = self._lightrag.chunks_vdb.db.pool
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = $1",
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = $1",
                 self._BM25_TABLE.lower(),
             )
         if not rows:

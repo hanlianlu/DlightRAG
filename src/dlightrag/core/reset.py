@@ -184,6 +184,12 @@ async def areset(
 # -- Internal helpers ----------------------------------------------------------
 
 
+async def _quote_public_table(conn: Any, table: str) -> str:
+    """Return a safely quoted public-table identifier for dynamic SQL."""
+    quoted = await conn.fetchval("SELECT quote_ident($1)", table)
+    return f"public.{quoted}"
+
+
 async def _cancel_pending_tasks(service: RAGService, *, dry_run: bool) -> int:
     """Phase 0: Cancel pending async tasks (worker pools, etc.).
 
@@ -242,14 +248,16 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
 
             col = await conn.fetchrow(
                 "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = $1 AND column_name = 'workspace'",
+                "WHERE table_schema = 'public' "
+                "AND table_name = $1 AND column_name = 'workspace'",
                 table,
             )
             if col is None:
                 continue
 
+            qualified_table = await _quote_public_table(conn, table)
             count_row = await conn.fetchrow(
-                f'SELECT COUNT(*) as count FROM "{table}" WHERE workspace = $1',
+                f"SELECT COUNT(*) as count FROM {qualified_table} WHERE workspace = $1",
                 workspace,
             )
             count = count_row["count"] if count_row else 0
@@ -257,17 +265,17 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
             if count > 0:
                 if not dry_run:
                     await conn.execute(
-                        f'DELETE FROM "{table}" WHERE workspace = $1',
+                        f"DELETE FROM {qualified_table} WHERE workspace = $1",
                         workspace,
                     )
                 cleaned += 1
 
             if not dry_run and table.startswith("dlightrag_"):
                 remaining = await conn.fetchrow(
-                    f'SELECT EXISTS (SELECT 1 FROM "{table}") AS has_rows'
+                    f"SELECT EXISTS (SELECT 1 FROM {qualified_table}) AS has_rows"
                 )
                 if not remaining["has_rows"]:
-                    await conn.execute(f'DROP TABLE "{table}"')
+                    await conn.execute(f"DROP TABLE {qualified_table}")
 
         return cleaned
     except Exception as exc:
@@ -290,7 +298,8 @@ async def _clean_workspace_meta(workspace: str, config: Any | None = None) -> No
     try:
         exists = await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-            "WHERE table_name = 'dlightrag_workspace_meta')"
+            "WHERE table_schema = 'public' "
+            "AND table_name = 'dlightrag_workspace_meta')"
         )
         if exists:
             await conn.execute(

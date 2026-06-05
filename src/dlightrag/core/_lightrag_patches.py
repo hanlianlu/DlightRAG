@@ -130,7 +130,7 @@ def _patch_configure_age() -> bool:
         )
         if not exists:
             try:
-                await connection.execute(f"select create_graph('{graph_name}')")
+                await connection.execute("SELECT create_graph($1)", graph_name)
             except (
                 asyncpg.exceptions.InvalidSchemaNameError,
                 asyncpg.exceptions.UniqueViolationError,

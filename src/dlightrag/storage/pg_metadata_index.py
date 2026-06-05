@@ -65,28 +65,58 @@ def _json_param(value: Any) -> str | None:
 
 _CREATE_INDEXES = _build_create_indexes()
 
-_UPSERT = """\
-INSERT INTO dlightrag_doc_metadata
-    (workspace, doc_id, filename, filename_stem, file_path, file_extension,
-     doc_title, doc_author, creation_date, original_format,
-     page_count, ingest_strategy, parse_engine, process_options,
-     custom_metadata, metadata_json)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-ON CONFLICT (workspace, doc_id) DO UPDATE SET
-    filename = COALESCE(EXCLUDED.filename, dlightrag_doc_metadata.filename),
-    filename_stem = COALESCE(EXCLUDED.filename_stem, dlightrag_doc_metadata.filename_stem),
-    file_path = COALESCE(EXCLUDED.file_path, dlightrag_doc_metadata.file_path),
-    file_extension = COALESCE(EXCLUDED.file_extension, dlightrag_doc_metadata.file_extension),
-    doc_title = COALESCE(EXCLUDED.doc_title, dlightrag_doc_metadata.doc_title),
-    doc_author = COALESCE(EXCLUDED.doc_author, dlightrag_doc_metadata.doc_author),
-    creation_date = COALESCE(EXCLUDED.creation_date, dlightrag_doc_metadata.creation_date),
-    original_format = COALESCE(EXCLUDED.original_format, dlightrag_doc_metadata.original_format),
-    page_count = COALESCE(EXCLUDED.page_count, dlightrag_doc_metadata.page_count),
-    ingest_strategy = COALESCE(EXCLUDED.ingest_strategy, dlightrag_doc_metadata.ingest_strategy),
-    parse_engine = COALESCE(EXCLUDED.parse_engine, dlightrag_doc_metadata.parse_engine),
-    process_options = COALESCE(EXCLUDED.process_options, dlightrag_doc_metadata.process_options),
-    custom_metadata = dlightrag_doc_metadata.custom_metadata || EXCLUDED.custom_metadata,
-    metadata_json = dlightrag_doc_metadata.metadata_json || EXCLUDED.metadata_json"""
+_JSONB_MERGE_FIELDS = frozenset({"custom_metadata", "metadata_json"})
+_UPSERT_FIELDS = tuple(f for f in METADATA_FIELDS if f.field_id != "ingested_at")
+_UPSERT_FIELD_IDS = tuple(f.field_id for f in _UPSERT_FIELDS)
+
+
+def _build_upsert() -> str:
+    columns = ("workspace", "doc_id", *_UPSERT_FIELD_IDS)
+    insert_columns = ", ".join(columns)
+    placeholders = ",".join(f"${idx}" for idx in range(1, len(columns) + 1))
+    updates = []
+    for field_id in _UPSERT_FIELD_IDS:
+        if field_id in _JSONB_MERGE_FIELDS:
+            updates.append(
+                f"    {field_id} = "
+                f"dlightrag_doc_metadata.{field_id} || EXCLUDED.{field_id}"
+            )
+        else:
+            updates.append(
+                f"    {field_id} = "
+                f"COALESCE(EXCLUDED.{field_id}, dlightrag_doc_metadata.{field_id})"
+            )
+    return (
+        "INSERT INTO dlightrag_doc_metadata\n"
+        f"    ({insert_columns})\n"
+        f"VALUES ({placeholders})\n"
+        "ON CONFLICT (workspace, doc_id) DO UPDATE SET\n"
+        + ",\n".join(updates)
+    )
+
+
+def _build_upsert_params(
+    *,
+    workspace: str,
+    doc_id: str,
+    system: dict[str, Any],
+    custom: dict[str, Any],
+    metadata_json: dict[str, Any],
+) -> list[Any]:
+    values: list[Any] = [workspace, doc_id]
+    for field_id in _UPSERT_FIELD_IDS:
+        if field_id == "custom_metadata":
+            values.append(json.dumps(custom))
+        elif field_id == "metadata_json":
+            values.append(json.dumps(metadata_json))
+        elif field_id == "process_options":
+            values.append(_json_param(system.get(field_id)))
+        else:
+            values.append(system.get(field_id))
+    return values
+
+
+_UPSERT = _build_upsert()
 
 
 class PGMetadataIndex:
@@ -152,27 +182,17 @@ class PGMetadataIndex:
 
         raw_json = metadata.get("metadata_json")
         metadata_json = raw_json if isinstance(raw_json, dict) else {}
-        process_options = system.get("process_options")
 
         async with self._pool.acquire() as conn:
             await conn.execute(
                 _UPSERT,
-                self._workspace,
-                doc_id,
-                system.get("filename"),
-                system.get("filename_stem"),
-                system.get("file_path"),
-                system.get("file_extension"),
-                system.get("doc_title"),
-                system.get("doc_author"),
-                system.get("creation_date"),
-                system.get("original_format"),
-                system.get("page_count"),
-                system.get("ingest_strategy"),
-                system.get("parse_engine"),
-                _json_param(process_options),
-                json.dumps(custom),
-                json.dumps(metadata_json),
+                *_build_upsert_params(
+                    workspace=self._workspace,
+                    doc_id=doc_id,
+                    system=system,
+                    custom=custom,
+                    metadata_json=metadata_json,
+                ),
             )
 
     async def query(self, filters: MetadataFilter) -> list[str]:
@@ -279,7 +299,9 @@ class PGMetadataIndex:
         async with self._pool.acquire() as conn:
             col_rows = await conn.fetch(
                 "SELECT column_name, data_type FROM information_schema.columns "
-                "WHERE table_name = 'dlightrag_doc_metadata' ORDER BY ordinal_position"
+                "WHERE table_schema = 'public' "
+                "AND table_name = 'dlightrag_doc_metadata' "
+                "ORDER BY ordinal_position"
             )
             key_rows = await conn.fetch(
                 "SELECT DISTINCT jsonb_object_keys(custom_metadata) AS k "

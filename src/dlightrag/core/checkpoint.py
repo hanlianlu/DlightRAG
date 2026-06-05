@@ -362,8 +362,10 @@ class ConversationCheckpoint:
         conn = self._ensure_db_sync()
         try:
             conn.execute("PRAGMA foreign_keys = ON")
+            age_modifier = f"-{int(max_age_days)} days"
             cursor = conn.execute(
-                f"DELETE FROM sessions WHERE updated_at < datetime('now', '-{max_age_days} days')"
+                "DELETE FROM sessions WHERE updated_at < datetime('now', ?)",
+                (age_modifier,),
             )
             conn.commit()
             return cursor.rowcount

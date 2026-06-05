@@ -17,6 +17,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dlightrag.storage.sql_identifiers import pg_qualified_identifier
+
 logger = logging.getLogger(__name__)
 
 EXACT_FILTER_THRESHOLD = 8192
@@ -102,7 +104,7 @@ class FilteredVectorStorage:
         if not candidate_ids:
             return []
 
-        table_name = self._original.table_name
+        table_name = pg_qualified_identifier(self._original.table_name)
         workspace = self._original.workspace
         cosine_threshold = self._original.cosine_better_than_threshold
         vector_cast = (

@@ -53,6 +53,8 @@ from typing import Any, ClassVar
 
 from lightrag.base import DocStatus
 
+from dlightrag.storage.sql_identifiers import pg_qualified_identifier
+
 logger = logging.getLogger(__name__)
 
 
@@ -121,8 +123,9 @@ class LightRAGStores:
         if not hasattr(chunks_vdb, "table_name") or not hasattr(chunks_vdb, "db"):
             raise RuntimeError("Direct image vector writes require PGVectorStorage")
 
+        chunks_table = pg_qualified_identifier(chunks_vdb.table_name)
         sql = f"""
-            INSERT INTO {chunks_vdb.table_name} (
+            INSERT INTO {chunks_table} (
                 workspace, id, tokens, chunk_order_index, full_doc_id,
                 content, content_vector, file_path, create_time, update_time
             )
