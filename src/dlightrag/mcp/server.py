@@ -17,9 +17,12 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from dlightrag.citations import finalize_answer
-from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.core.client_payloads import (
+    answer_payload,
+    metadata_filter_from_payload,
+    retrieval_payload,
+)
 from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
@@ -79,6 +82,10 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of top results to return",
                     },
+                    "chunk_top_k": {
+                        "type": "integer",
+                        "description": "Vector chunk candidate count override",
+                    },
                     "workspaces": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -98,6 +105,20 @@ async def list_tools() -> list[Tool]:
                             "doc_author": {"type": "string"},
                             "custom": {"type": "object"},
                         },
+                    },
+                    "query_images": {
+                        "type": "array",
+                        "items": {},
+                        "description": "User-attached image URLs or data URI blocks for visual retrieval",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session id for image memory.",
+                    },
+                    "referenced_image_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Previously stored image ids to include in the query.",
                     },
                 },
                 "required": ["query"],
@@ -165,6 +186,10 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Retrieval candidate count override for this answer",
                     },
+                    "chunk_top_k": {
+                        "type": "integer",
+                        "description": "Vector chunk candidate count override for this answer",
+                    },
                     "answer_candidate_top_k": {
                         "type": "integer",
                         "description": "Answer retrieval candidates fetched before final prompt packing",
@@ -177,6 +202,40 @@ async def list_tools() -> list[Tool]:
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Workspace names to search. Omit to search default workspace.",
+                    },
+                    "filters": {
+                        "type": "object",
+                        "description": "Metadata filters for structured queries (filename, doc_author, etc.)",
+                        "properties": {
+                            "filename": {"type": "string"},
+                            "filename_pattern": {
+                                "type": "string",
+                                "description": "Explicit SQL ILIKE pattern",
+                            },
+                            "file_extension": {"type": "string"},
+                            "doc_title": {"type": "string"},
+                            "doc_author": {"type": "string"},
+                            "custom": {"type": "object"},
+                        },
+                    },
+                    "conversation_history": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Prior conversation turns as role/content objects.",
+                    },
+                    "query_images": {
+                        "type": "array",
+                        "items": {},
+                        "description": "User-attached image URLs or data URI blocks for visual answer context.",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Session id for image memory.",
+                    },
+                    "referenced_image_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Previously stored image ids to include in the answer.",
                     },
                 },
                 "required": ["query"],
@@ -277,62 +336,49 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if "mode" in arguments:
                 raise ValueError("MCP retrieve does not accept 'mode'; DlightRAG always uses mix")
             kwargs: dict[str, Any] = {}
-            if arguments.get("filters"):
-                from dlightrag.core.retrieval.models import MetadataFilter
-
-                kwargs["filters"] = MetadataFilter(**arguments["filters"])
+            filters = metadata_filter_from_payload(arguments.get("filters"))
+            if filters is not None:
+                kwargs["filters"] = filters
+            if arguments.get("query_images"):
+                kwargs["query_images"] = arguments["query_images"]
+            if arguments.get("session_id"):
+                kwargs["session_id"] = arguments["session_id"]
+            if arguments.get("referenced_image_ids"):
+                kwargs["referenced_image_ids"] = arguments["referenced_image_ids"]
             result = await manager.aretrieve(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
                 top_k=arguments.get("top_k"),
+                chunk_top_k=arguments.get("chunk_top_k"),
                 **kwargs,
             )
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps(
-                        {
-                            "answer": result.answer,
-                            "contexts": result.contexts,
-                            "sources": [s.model_dump() for s in build_sources(result.contexts)],
-                        },
-                        default=str,
-                        indent=2,
-                    ),
-                )
-            ]
+            return _json_content(retrieval_payload(result))
 
         if name == "answer":
             manager = await _ensure_manager()
             if "mode" in arguments:
                 raise ValueError("MCP answer does not accept 'mode'; DlightRAG always uses mix")
+            kwargs = {}
+            filters = metadata_filter_from_payload(arguments.get("filters"))
+            if filters is not None:
+                kwargs["filters"] = filters
+            if arguments.get("query_images"):
+                kwargs["query_images"] = arguments["query_images"]
+            if arguments.get("session_id"):
+                kwargs["session_id"] = arguments["session_id"]
+            if arguments.get("referenced_image_ids"):
+                kwargs["referenced_image_ids"] = arguments["referenced_image_ids"]
             result = await manager.aanswer(
                 arguments["query"],
+                conversation_history=arguments.get("conversation_history"),
                 workspaces=arguments.get("workspaces"),
                 top_k=arguments.get("top_k"),
+                chunk_top_k=arguments.get("chunk_top_k"),
                 answer_candidate_top_k=arguments.get("answer_candidate_top_k"),
                 answer_context_top_k=arguments.get("answer_context_top_k"),
+                **kwargs,
             )
-            answer_text = result.answer or ""
-            finalized = finalize_answer(answer_text, result.contexts)
-            answer = finalized.answer if result.answer is not None else None
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps(
-                        {
-                            "answer": answer,
-                            "contexts": result.contexts,
-                            "references": [r.model_dump() for r in result.references]
-                            if result.references
-                            else [],
-                            "sources": [s.model_dump() for s in finalized.sources],
-                        },
-                        default=str,
-                        indent=2,
-                    ),
-                )
-            ]
+            return _json_content(answer_payload(result))
 
         if name == "list_workspaces":
             manager = await _ensure_manager()

@@ -7,7 +7,6 @@ import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -16,50 +15,22 @@ from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
     AnswerRequest,
     IngestRequest,
-    MetadataFilterRequest,
     ResetRequest,
     RetrieveRequest,
 )
 from dlightrag.citations import finalize_answer
-from dlightrag.citations.source_builder import build_sources
+from dlightrag.core.client_payloads import (
+    answer_payload,
+    metadata_filter_from_payload,
+    project_contexts_for_client,
+    retrieval_payload,
+)
 from dlightrag.core.retrieval.path_resolver import PathResolver
 
 from .deps import get_manager, resolve_workspace
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _metadata_filter(body: MetadataFilterRequest | None) -> Any | None:
-    if body is None:
-        return None
-
-    from dlightrag.core.retrieval.models import MetadataFilter
-
-    return MetadataFilter(**body.model_dump(exclude_none=True))
-
-
-def _public_contexts(contexts: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
-    """Return API-safe contexts without inline base64 images."""
-    public: dict[str, list[dict[str, Any]]] = {}
-    for key, items in contexts.items():
-        if not isinstance(items, list):
-            continue
-        public_items: list[dict[str, Any]] = []
-        for item in items:
-            row = dict(item)
-            if key == "chunks" and row.pop("image_data", None):
-                workspace = row.get("_workspace")
-                chunk_id = row.get("chunk_id")
-                if workspace and chunk_id:
-                    path = (
-                        f"/images/{quote(str(workspace), safe='')}/{quote(str(chunk_id), safe='')}"
-                    )
-                    row["image_url"] = f"{path}?size=full"
-                    row["thumbnail_url"] = f"{path}?size=thumb"
-            public_items.append(row)
-        public[key] = public_items
-    return public
 
 
 @router.post("/ingest")
@@ -108,7 +79,7 @@ async def retrieve(
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
     kwargs: dict[str, Any] = {}
-    filters = _metadata_filter(body.filters)
+    filters = metadata_filter_from_payload(body.filters)
     if filters is not None:
         kwargs["filters"] = filters
     if body.multimodal_content:
@@ -127,17 +98,8 @@ async def retrieve(
         chunk_top_k=body.chunk_top_k,
         **kwargs,
     )
-    public_contexts = _public_contexts(result.contexts)
     resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
-    sources = build_sources(public_contexts, path_resolver=resolver)
-    return {
-        "answer": result.answer,
-        "contexts": public_contexts,
-        "sources": [s.model_dump() for s in sources],
-        "trace": result.trace,
-        "image_descriptions": result.image_descriptions,
-        "current_image_ids": result.current_image_ids,
-    }
+    return retrieval_payload(result, path_resolver=resolver)
 
 
 @router.post("/answer", response_model=None)
@@ -147,7 +109,7 @@ async def answer(
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     manager = get_manager(request)
     kwargs: dict[str, Any] = {}
-    filters = _metadata_filter(body.filters)
+    filters = metadata_filter_from_payload(body.filters)
     if filters is not None:
         kwargs["filters"] = filters
     if body.multimodal_content:
@@ -170,17 +132,7 @@ async def answer(
             answer_context_top_k=body.answer_context_top_k,
             **kwargs,
         )
-        public_contexts = _public_contexts(result.contexts)
-        references = [{"id": r.id, "title": r.title} for r in result.references]
-        return {
-            "answer": result.answer,
-            "contexts": public_contexts,
-            "references": references,
-            "sources": [s.model_dump() for s in result.sources],
-            "trace": result.trace,
-            "image_descriptions": result.image_descriptions,
-            "current_image_ids": result.current_image_ids,
-        }
+        return answer_payload(result)
 
     contexts, token_iter = await manager.aanswer_stream(
         body.query,
@@ -194,7 +146,7 @@ async def answer(
     )
 
     async def event_generator() -> AsyncIterator[str]:
-        public_contexts = _public_contexts(contexts)
+        public_contexts = project_contexts_for_client(contexts)
         yield f"data: {json.dumps({'type': 'context', 'data': public_contexts}, ensure_ascii=False)}\n\n"
         answer_parts: list[str] = []
         try:
