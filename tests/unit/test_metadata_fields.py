@@ -155,7 +155,6 @@ def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
                 "type": "string",
                 "normalizer": "casefold_trim",
                 "filter_ops": ["exact"],
-                "indexed": True,
             }
         }
     )
@@ -198,7 +197,6 @@ def test_store_only_metadata_policy_never_promotes_declared_fields() -> None:
                 "type": "string",
                 "normalizer": "casefold_trim",
                 "filter_ops": ["exact"],
-                "indexed": True,
             }
         }
     )
@@ -230,7 +228,7 @@ def test_intent_detection_cannot_filter_unknown_metadata_field() -> None:
 
 def test_json_contains_requires_declared_metadata_json_field() -> None:
     registry = MetadataFieldRegistry.from_config(
-        {"metadata_json": {"type": "json", "filter_ops": ["contains"], "indexed": False}}
+        {"metadata_json": {"type": "json", "filter_ops": ["contains"]}}
     )
 
     spec = registry.filter_spec("metadata_json")
@@ -252,7 +250,6 @@ async def test_metadata_update_revalidates_without_reindexing() -> None:
                 "type": "string",
                 "normalizer": "casefold_trim",
                 "filter_ops": ["exact"],
-                "indexed": True,
             }
         }
     )

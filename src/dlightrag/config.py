@@ -254,6 +254,16 @@ class ParserSidecarsConfig(BaseModel):
     mineru: MinerUSidecarConfig = Field(default_factory=MinerUSidecarConfig)
 
 
+class MetadataFieldConfig(BaseModel):
+    """User-declared metadata field behavior."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = "string"
+    normalizer: str = "identity"
+    filter_ops: list[str] = Field(default_factory=list)
+
+
 class MetadataConfig(BaseModel):
     """Metadata registry and ingest policy controls."""
 
@@ -261,7 +271,7 @@ class MetadataConfig(BaseModel):
 
     allow_ad_hoc_json: bool = True
     default_ingest_policy: Literal["validate", "reject_unknown", "store_only"] = "validate"
-    fields: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    fields: dict[str, MetadataFieldConfig] = Field(default_factory=dict)
 
 
 class RerankConfig(BaseModel):

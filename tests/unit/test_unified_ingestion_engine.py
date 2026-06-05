@@ -97,7 +97,6 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
                     "type": "string",
                     "normalizer": "casefold_trim",
                     "filter_ops": ["exact"],
-                    "indexed": True,
                 }
             }
         ),

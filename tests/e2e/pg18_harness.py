@@ -155,7 +155,6 @@ def make_e2e_config(
                     "type": "string",
                     "normalizer": "casefold_trim",
                     "filter_ops": ["exact"],
-                    "indexed": True,
                 }
             },
         ),

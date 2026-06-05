@@ -125,6 +125,10 @@ class TestMetadataConfig:
         assert not hasattr(cfg, "enabled")
         assert not hasattr(cfg, "unknown_filter_policy")
 
+    def test_field_schema_rejects_stale_indexed_knob(self) -> None:
+        with pytest.raises(ValidationError):
+            MetadataConfig(fields={"department": {"filter_ops": ["exact"], "indexed": True}})
+
 
 class TestDlightragConfigNested:
     def test_minimal_config(self, tmp_path, monkeypatch):
