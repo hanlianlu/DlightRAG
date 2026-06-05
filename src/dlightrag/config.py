@@ -259,14 +259,8 @@ class MetadataConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
     allow_ad_hoc_json: bool = True
     default_ingest_policy: Literal["validate", "reject_unknown", "store_only"] = "validate"
-    unknown_filter_policy: Literal[
-        "reject",
-        "ignore_with_warning",
-        "allow_declared_json_contains",
-    ] = "ignore_with_warning"
     fields: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 

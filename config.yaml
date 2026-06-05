@@ -162,23 +162,19 @@ parser_sidecars:
     # is_ocr: false
 
 metadata:
-  enabled: true
   allow_ad_hoc_json: true
   default_ingest_policy: validate
-  unknown_filter_policy: ignore_with_warning
-  fields:
-    title:
-      type: text
-      filter: exact
-      normalize: lower_trim
-    author:
-      type: text
-      filter: exact
-      normalize: lower_trim
-    filename:
-      type: text
-      filter: exact_or_explicit_pattern
-      normalize: lower_trim
+  fields: {}
+  # Declare custom user metadata fields here only when they should become
+  # filterable. Undeclared metadata is still stored in metadata_json when
+  # allow_ad_hoc_json is true, but it is not promoted to indexed filters.
+  # Example:
+  # fields:
+  #   department:
+  #     type: string
+  #     normalizer: casefold_trim
+  #     filter_ops: ["exact"]
+  #     indexed: true
 
 # Chunking and LightRAG query defaults.
 chunk_p_token_size: 1024
