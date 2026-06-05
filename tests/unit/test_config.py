@@ -13,6 +13,7 @@ from dlightrag.config import (
     EmbeddingConfig,
     LLMConfig,
     LLMRolesConfig,
+    MetadataConfig,
     ModelConfig,
     RerankConfig,
     load_config,
@@ -112,6 +113,17 @@ class TestAnswerConfig:
         assert cfg.candidate_top_k == 60
         assert cfg.context_top_k == 30
         assert cfg.candidate_top_k >= cfg.context_top_k
+
+
+class TestMetadataConfig:
+    def test_defaults_expose_only_live_metadata_policy_controls(self) -> None:
+        cfg = MetadataConfig()
+
+        assert cfg.allow_ad_hoc_json is True
+        assert cfg.default_ingest_policy == "validate"
+        assert cfg.fields == {}
+        assert not hasattr(cfg, "enabled")
+        assert not hasattr(cfg, "unknown_filter_policy")
 
 
 class TestDlightragConfigNested:
