@@ -9,21 +9,12 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from dlightrag.citations import CitationProcessor, extract_highlights_for_sources
-from dlightrag.citations.source_builder import build_sources
+from dlightrag.citations import extract_highlights_for_sources, finalize_answer
 from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
 
 logger = logging.getLogger(__name__)
-
-
-def _flatten_contexts(contexts: dict[str, Any]) -> list[dict[str, Any]]:
-    flat_contexts: list[dict[str, Any]] = []
-    for items in contexts.values():
-        if isinstance(items, list):
-            flat_contexts.extend(item for item in items if isinstance(item, dict))
-    return flat_contexts
 
 
 async def _session_image_cards(
@@ -166,7 +157,18 @@ async def stream_answer_events(
         )
         seen_img_ids = {str(img.get("chunk_id", "")) for img in session_cards}
 
-        flat_contexts = _flatten_contexts(contexts)
+        resolver = PathResolver(
+            input_dir=str(cfg.input_dir_path),
+            workspace=workspace or manager.config.workspace,
+        )
+        finalized = finalize_answer(
+            clean_answer,
+            contexts,
+            path_resolver=resolver,
+            image_url_prefix="/web/images",
+            default_workspace=workspace or manager.config.workspace,
+        )
+        flat_contexts = finalized.flat_contexts
         answer_images = [
             *session_cards,
             *_retrieved_image_cards(
@@ -178,25 +180,8 @@ async def stream_answer_events(
             ),
         ]
 
-        resolver = PathResolver(
-            input_dir=str(cfg.input_dir_path),
-            workspace=workspace or manager.config.workspace,
-        )
-        sources = build_sources(
-            contexts,
-            path_resolver=resolver,
-            image_url_prefix="/web/images",
-            default_workspace=workspace or manager.config.workspace,
-        )
-
-        processor = CitationProcessor(
-            contexts=flat_contexts,
-            available_sources=sources,
-        )
-        result = processor.process(clean_answer)
-
         all_cited_ids: set[str] = set()
-        for cids in result.cited_chunks.values():
+        for cids in finalized.cited_chunks.values():
             all_cited_ids.update(cids)
         cited_images = [img for img in answer_images if img.get("chunk_id", "") in all_cited_ids]
         session_images = [
@@ -206,22 +191,22 @@ async def stream_answer_events(
 
         done_payload = {
             "html": safe_answer_done(
-                answer=result.answer,
-                sources=result.sources,
+                answer=finalized.answer,
+                sources=finalized.sources,
                 answer_images=answer_images,
             ),
-            "answer": result.answer,
+            "answer": finalized.answer,
             "current_image_ids": current_image_ids,
             "image_descriptions": image_descriptions,
         }
         yield sse_event("done", done_payload)
 
         try:
-            cited_ids = [s.id for s in result.sources if s.id]
+            cited_ids = [s.id for s in finalized.sources if s.id]
             await manager.save_turn_checkpoint(
                 session_id=session_id or "",
                 query=query,
-                answer=clean_answer,
+                answer=finalized.answer,
                 contexts=contexts,
                 cited_chunk_ids=cited_ids,
             )
@@ -234,7 +219,7 @@ async def stream_answer_events(
 
         highlight_cfg = cfg.citations.highlights
         has_text_chunks = any(
-            chunk.content for src in result.sources if src.chunks for chunk in src.chunks
+            chunk.content for src in finalized.sources if src.chunks for chunk in src.chunks
         )
         if highlight_cfg.enabled and has_text_chunks:
             try:
@@ -243,8 +228,8 @@ async def stream_answer_events(
                 llm_func = get_keyword_model_func(cfg)
                 highlighted_sources = await asyncio.wait_for(
                     extract_highlights_for_sources(
-                        sources=result.sources,
-                        answer_text=result.answer,
+                        sources=finalized.sources,
+                        answer_text=finalized.answer,
                         llm_func=llm_func,
                         max_concurrency=highlight_cfg.max_concurrency,
                         max_input_chars=highlight_cfg.max_input_chars,
@@ -267,4 +252,3 @@ async def stream_answer_events(
 
 
 __all__ = ["stream_answer_events"]
-

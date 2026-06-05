@@ -20,7 +20,7 @@ from dlightrag.api.models import (
     ResetRequest,
     RetrieveRequest,
 )
-from dlightrag.citations.processor import CitationProcessor
+from dlightrag.citations import finalize_answer
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.core.retrieval.path_resolver import PathResolver
 
@@ -210,22 +210,15 @@ async def answer(
 
             full_answer = "".join(answer_parts)
             clean_answer = getattr(token_iter, "answer", None) or full_answer
-            flat_contexts: list[dict[str, Any]] = []
-            for items in contexts.values():
-                if isinstance(items, list):
-                    flat_contexts.extend(items)
             _resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
-            all_sources = build_sources(public_contexts, path_resolver=_resolver)
-            final_answer = clean_answer
-            if clean_answer and flat_contexts:
-                processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
-                cited = processor.process(clean_answer)
-                final_answer = cited.answer
-                sources = cited.sources
-            else:
-                sources = []
+            finalized = finalize_answer(
+                clean_answer,
+                contexts,
+                source_contexts=public_contexts,
+                path_resolver=_resolver,
+            )
 
-            yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in sources]}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in finalized.sources]}, ensure_ascii=False)}\n\n"
             trace = getattr(token_iter, "trace", None)
             if isinstance(trace, dict) and trace:
                 yield f"data: {json.dumps({'type': 'trace', 'data': trace}, ensure_ascii=False)}\n\n"
@@ -233,7 +226,7 @@ async def answer(
             image_descriptions = getattr(token_iter, "image_descriptions", None)
             if image_ids or image_descriptions:
                 yield f"data: {json.dumps({'type': 'image_meta', 'current_image_ids': image_ids or [], 'image_descriptions': image_descriptions or []}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'answer': final_answer}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'answer': finalized.answer}, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             logger.debug("Client disconnected during SSE streaming")
             raise

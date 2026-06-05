@@ -137,32 +137,28 @@ class AnswerEngine:
             repr(raw[:200]) if isinstance(raw, str) else repr(raw),
         )
 
-        # Extract references programmatically via CitationProcessor, not
-        # from model-generated reference-section text.
-        from dlightrag.citations.processor import CitationProcessor
-        from dlightrag.citations.source_builder import build_sources
+        # Extract references programmatically from validated inline markers,
+        # not from model-generated reference-section text.
+        from dlightrag.citations import finalize_answer
 
-        chunks = prepared.contexts.get("chunks", [])
-        sources = build_sources(prepared.contexts)
-        processor = CitationProcessor(chunks, sources)
-        processed = processor.process(raw)
+        finalized = finalize_answer(raw, prepared.contexts)
 
         logger.info(
             "[AE] generate: parsed sources=%d answer_len=%d",
-            len(processed.sources),
-            len(processed.answer) if processed.answer else 0,
+            len(finalized.sources),
+            len(finalized.answer) if finalized.answer else 0,
         )
 
         # Convert sources to Reference objects for RetrievalResult
         from dlightrag.models.schemas import Reference
 
-        references = [Reference(id=s.id, title=s.title or s.path) for s in processed.sources]
+        references = [Reference(id=s.id, title=s.title or s.path) for s in finalized.sources]
 
         return RetrievalResult(
-            answer=processed.answer,
+            answer=finalized.answer,
             contexts=prepared.contexts,
             references=references,
-            sources=processed.sources,
+            sources=finalized.sources,
             trace=prepared.trace,
         )
 
@@ -177,7 +173,7 @@ class AnswerEngine:
 
         Uses the same freetext prompt as ``generate()``.  Wraps the
         token stream with :class:`AnswerStream` for post-stream citation
-        validation via :class:`CitationProcessor`.
+        index validation.
 
         ``query_images`` mirrors ``generate()``: user-attached images
         (URLs or base64 data URIs) are inlined as OpenAI ``image_url``

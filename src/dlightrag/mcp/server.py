@@ -17,7 +17,7 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import TextContent, Tool
 
-from dlightrag.citations.processor import CitationProcessor
+from dlightrag.citations import finalize_answer
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -313,29 +313,20 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 answer_candidate_top_k=arguments.get("answer_candidate_top_k"),
                 answer_context_top_k=arguments.get("answer_context_top_k"),
             )
-            # Build cited-only sources via CitationProcessor
-            flat_contexts: list[dict[str, Any]] = []
-            for items in result.contexts.values():
-                if isinstance(items, list):
-                    flat_contexts.extend(items)
-            all_sources = build_sources(result.contexts)
-            if result.answer and flat_contexts:
-                processor = CitationProcessor(contexts=flat_contexts, available_sources=all_sources)
-                cited = processor.process(result.answer)
-                sources = cited.sources
-            else:
-                sources = []
+            answer_text = result.answer or ""
+            finalized = finalize_answer(answer_text, result.contexts)
+            answer = finalized.answer if result.answer is not None else None
             return [
                 TextContent(
                     type="text",
                     text=json.dumps(
                         {
-                            "answer": result.answer,
+                            "answer": answer,
                             "contexts": result.contexts,
                             "references": [r.model_dump() for r in result.references]
                             if result.references
                             else [],
-                            "sources": [s.model_dump() for s in sources],
+                            "sources": [s.model_dump() for s in finalized.sources],
                         },
                         default=str,
                         indent=2,

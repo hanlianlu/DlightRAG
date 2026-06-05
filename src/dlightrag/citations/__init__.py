@@ -1,5 +1,6 @@
 """Citation processing and semantic highlighting for DlightRAG."""
 
+from .finalization import FinalizedAnswer, finalize_answer, flatten_context_chunks
 from .highlight import HighlightExtractor, extract_highlights_for_sources
 from .indexer import CitationIndexer, build_citation_index
 from .parser import extract_citation_keys, extract_cited_chunks
@@ -12,6 +13,7 @@ __all__ = [
     "CitationIndexer",
     "CitationProcessor",
     "CitationResult",
+    "FinalizedAnswer",
     "HighlightExtractor",
     "SourceReference",
     "build_citation_index",
@@ -20,4 +22,6 @@ __all__ = [
     "extract_citation_keys",
     "extract_cited_chunks",
     "extract_highlights_for_sources",
+    "finalize_answer",
+    "flatten_context_chunks",
 ]
