@@ -7,7 +7,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from dlightrag.core.retrieval.models import MetadataFilter
 
 
 @dataclass(frozen=True)
@@ -66,11 +69,14 @@ class MetadataFieldRegistry:
     def from_config(cls, config: Mapping[str, Any] | None) -> MetadataFieldRegistry:
         fields = {}
         for field_id, raw in (config or {}).items():
+            field_type = str(_field_option(raw, "type", "string") or "string")
+            filter_ops = tuple(_field_option(raw, "filter_ops", ()) or ())
+            normalizer = _field_option(raw, "normalizer", None)
             fields[field_id] = DeclaredMetadataField(
                 field_id=field_id,
-                field_type=str(_field_option(raw, "type", "string") or "string"),
-                normalizer=str(_field_option(raw, "normalizer", "identity") or "identity"),
-                filter_ops=tuple(_field_option(raw, "filter_ops", ()) or ()),
+                field_type=field_type,
+                normalizer=str(normalizer or _default_normalizer(field_type, filter_ops)),
+                filter_ops=filter_ops,
             )
         return cls(fields)
 
@@ -83,11 +89,36 @@ class MetadataFieldRegistry:
             return None
         return field_def
 
+    def normalize_filter(self, filters: MetadataFilter) -> MetadataFilter:
+        custom = getattr(filters, "custom", None)
+        if not custom:
+            return filters
+
+        normalized_custom: dict[str, Any] = {}
+        changed = False
+        for key, value in custom.items():
+            field_def = self.filter_spec(key)
+            normalized_value = (
+                _normalize_value(value, field_def.normalizer) if field_def is not None else value
+            )
+            normalized_custom[key] = normalized_value
+            changed = changed or normalized_value != value
+
+        if not changed:
+            return filters
+        return filters.model_copy(update={"custom": normalized_custom})
+
 
 def _field_option(raw: Any, key: str, default: Any) -> Any:
     if isinstance(raw, Mapping):
         return raw.get(key, default)
     return getattr(raw, key, default)
+
+
+def _default_normalizer(field_type: str, filter_ops: tuple[str, ...]) -> str:
+    if field_type == "string" and "exact" in filter_ops:
+        return "casefold_trim"
+    return "identity"
 
 
 def normalize_user_metadata(

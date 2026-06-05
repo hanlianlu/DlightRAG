@@ -168,11 +168,12 @@ metadata:
   # Declare custom user metadata fields here only when they should become
   # filterable. Undeclared metadata is still stored in metadata_json when
   # allow_ad_hoc_json is true, but it is not promoted to declared filters.
+  # String exact filters default to casefold_trim for stable human-entered
+  # matching; set normalizer: identity only for case-sensitive identifiers.
   # Example:
   # fields:
   #   department:
   #     type: string
-  #     normalizer: casefold_trim
   #     filter_ops: ["exact"]
 
 # Chunking and LightRAG query defaults.
