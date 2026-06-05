@@ -3,6 +3,11 @@
 
 from __future__ import annotations
 
+import json
+import re
+
+from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
+from dlightrag.storage import pg_metadata_index
 from dlightrag.storage.pg_metadata_index import _CREATE_INDEXES, _UPSERT
 
 
@@ -45,6 +50,51 @@ class TestMetadataSQL:
         assert "ingest_strategy" in _UPSERT
         assert "parse_engine" in _UPSERT
         assert "process_options" in _UPSERT
+
+    def test_upsert_fields_follow_metadata_registry(self):
+        expected = tuple(f.field_id for f in METADATA_FIELDS if f.field_id != "ingested_at")
+
+        assert pg_metadata_index._UPSERT_FIELD_IDS == expected
+
+        insert_columns = _UPSERT.split("VALUES", 1)[0]
+        for field_id in expected:
+            assert field_id in insert_columns
+        assert "ingested_at" not in insert_columns
+
+    def test_upsert_placeholders_match_registry_fields(self):
+        placeholders = {int(match) for match in re.findall(r"\$(\d+)", _UPSERT)}
+
+        assert max(placeholders) == len(pg_metadata_index._UPSERT_FIELD_IDS) + 2
+
+    def test_upsert_params_follow_registry_field_order(self):
+        metadata = {
+            "filename": "report.pdf",
+            "filename_stem": "report",
+            "file_path": "/tmp/report.pdf",
+            "file_extension": "pdf",
+            "doc_title": "Report",
+            "doc_author": "Ada",
+            "ingest_strategy": "lightrag_sidecar_unified",
+            "parse_engine": "mineru-iteP",
+            "process_options": {"chunker": "recursive"},
+        }
+        params = pg_metadata_index._build_upsert_params(
+            workspace="default",
+            doc_id="doc-1",
+            system=metadata,
+            custom={"department": "finance"},
+            metadata_json={"department": "Finance"},
+        )
+
+        assert params[:2] == ["default", "doc-1"]
+        field_values = dict(
+            zip(pg_metadata_index._UPSERT_FIELD_IDS, params[2:], strict=True)
+        )
+        assert field_values["filename"] == "report.pdf"
+        assert json.loads(field_values["process_options"]) == {"chunker": "recursive"}
+        assert json.loads(field_values["custom_metadata"]) == {"department": "finance"}
+        assert json.loads(field_values["metadata_json"]) == {"department": "Finance"}
+        assert "ingested_at" not in field_values
 
     def test_pg_metadata_index_does_not_query_lightrag_doc_status_metadata(self):
         from dlightrag.storage import pg_metadata_index as module

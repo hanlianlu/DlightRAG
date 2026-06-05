@@ -7,7 +7,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dlightrag.core.reset import _clean_workspace_meta, _list_all_workspaces
+from dlightrag.core.reset import (
+    _clean_orphan_tables,
+    _clean_workspace_meta,
+    _list_all_workspaces,
+)
 
 
 class _Conn:
@@ -78,4 +82,71 @@ async def test_list_all_workspaces_uses_primary_config(monkeypatch, config) -> N
 
     config.pg_connection_kwargs.assert_called_once_with("primary")
     assert workspaces == ["default", "research"]
+    assert conn.closed is True
+
+
+async def test_clean_orphan_tables_quotes_public_table_identifiers(
+    monkeypatch, config
+) -> None:
+    class Conn:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, tuple[object, ...]]] = []
+            self.closed = False
+
+        async def fetch(self, query: str) -> list[dict[str, str]]:
+            assert "pg_tables" in query
+            return [{"tablename": 'dlightrag_bad"name'}]
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
+            if "information_schema.columns" in query:
+                assert "table_schema = 'public'" in query
+                assert args == ('dlightrag_bad"name',)
+                return {"?column?": 1}
+            if "COUNT(*)" in query:
+                assert query == (
+                    'SELECT COUNT(*) as count FROM public."dlightrag_bad""name" '
+                    "WHERE workspace = $1"
+                )
+                assert args == ("research",)
+                return {"count": 1}
+            if "SELECT EXISTS" in query:
+                assert query == (
+                    'SELECT EXISTS (SELECT 1 FROM public."dlightrag_bad""name") '
+                    "AS has_rows"
+                )
+                return {"has_rows": False}
+            raise AssertionError(query)
+
+        async def fetchval(self, query: str, *args: object) -> str:
+            assert query == "SELECT quote_ident($1)"
+            assert args == ('dlightrag_bad"name',)
+            return '"dlightrag_bad""name"'
+
+        async def execute(self, query: str, *args: object) -> None:
+            self.executed.append((query, args))
+
+        async def close(self) -> None:
+            self.closed = True
+
+    conn = Conn()
+
+    async def fake_connect(**kwargs):
+        assert kwargs == config.pg_connection_kwargs.return_value
+        return conn
+
+    import asyncpg
+
+    monkeypatch.setattr(asyncpg, "connect", fake_connect)
+    monkeypatch.setattr("dlightrag.config.get_config", lambda: config)
+
+    cleaned = await _clean_orphan_tables("research", dry_run=False)
+
+    assert cleaned == 1
+    assert conn.executed == [
+        (
+            'DELETE FROM public."dlightrag_bad""name" WHERE workspace = $1',
+            ("research",),
+        ),
+        ('DROP TABLE public."dlightrag_bad""name"', ()),
+    ]
     assert conn.closed is True

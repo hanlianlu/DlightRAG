@@ -176,6 +176,48 @@ class TestCheckpointCRUD:
         assert deleted == 1
         assert await cp.get_history("s1") == []
 
+    async def test_prune_old_sessions_binds_age_modifier(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
+
+        class Cursor:
+            rowcount = 0
+
+        class Conn:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, tuple[object, ...]]] = []
+                self.committed = False
+                self.closed = False
+
+            def execute(
+                self, query: str, params: tuple[object, ...] = ()
+            ) -> Cursor:
+                self.calls.append((query, params))
+                return Cursor()
+
+            def commit(self) -> None:
+                self.committed = True
+
+            def close(self) -> None:
+                self.closed = True
+
+        conn = Conn()
+        monkeypatch.setattr(cp, "_ensure_db_sync", lambda: conn)
+
+        deleted = cp._prune_old_sessions_sync(30)
+
+        assert deleted == 0
+        assert conn.calls == [
+            ("PRAGMA foreign_keys = ON", ()),
+            (
+                "DELETE FROM sessions WHERE updated_at < datetime('now', ?)",
+                ("-30 days",),
+            ),
+        ]
+        assert conn.committed is True
+        assert conn.closed is True
+
     async def test_idempotent_ensure_session(self, tmp_path: Path) -> None:
         db_path = tmp_path / "checkpoints.db"
         cp = ConversationCheckpoint(db_path)

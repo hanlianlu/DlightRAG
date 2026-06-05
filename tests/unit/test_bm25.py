@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from dlightrag.core.retrieval.bm25 import BM25_INDEX, PostgresBM25, build_bm25_sql
 
 
@@ -12,6 +14,7 @@ def test_bm25_sql_filters_candidates() -> None:
     sql = build_bm25_sql(candidate_ids={"chunk-a"}, limit=20)
 
     assert "id = ANY" in sql
+    assert "LIMIT $4" in sql
     assert "to_bm25query" in sql
     assert BM25_INDEX in sql
 
@@ -20,6 +23,12 @@ def test_bm25_sql_has_no_candidate_clause_when_unfiltered() -> None:
     sql = build_bm25_sql(candidate_ids=None, limit=20)
 
     assert "id = ANY" not in sql
+    assert "LIMIT $3" in sql
+
+
+def test_bm25_sql_rejects_non_positive_limit() -> None:
+    with pytest.raises(ValueError, match="limit must be positive"):
+        build_bm25_sql(candidate_ids=None, limit=0)
 
 
 async def test_bm25_search_empty_candidate_set_short_circuits() -> None:
@@ -39,6 +48,11 @@ async def test_bm25_search_maps_rows() -> None:
 
     rows = await bm25.search("hello", candidate_ids={"chunk-a"})
 
+    args = conn.fetch.await_args.args
+    assert args[1] == "hello"
+    assert args[2] == "default"
+    assert args[3] == ["chunk-a"]
+    assert args[4] == 3
     assert rows == [
         {
             "chunk_id": "chunk-a",

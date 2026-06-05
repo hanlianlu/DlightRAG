@@ -97,6 +97,7 @@ from dlightrag.storage.postgres_version import (  # noqa: E402
     ensure_pgvector_halfvec,
     ensure_postgres_major,
 )
+from dlightrag.storage.sql_identifiers import pg_qualified_identifier  # noqa: E402
 
 
 class RAGService:
@@ -602,7 +603,8 @@ class RAGService:
         async with db.pool.acquire() as conn:
             for table in sorted(tables):
                 try:
-                    await conn.fetchval(f"SELECT 1 FROM {table} LIMIT 1")
+                    safe_table = pg_qualified_identifier(table)
+                    await conn.fetchval(f"SELECT 1 FROM {safe_table} LIMIT 1")
                 except Exception as exc:
                     raise RuntimeError(
                         f"LightRAG table {table} is missing or unreadable; "

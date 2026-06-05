@@ -5,8 +5,10 @@ from __future__ import annotations
 
 from typing import Any
 
-BM25_INDEX = "idx_lightrag_doc_chunks_bm25"
-BM25_TABLE = "LIGHTRAG_DOC_CHUNKS"
+from dlightrag.storage.sql_identifiers import pg_identifier
+
+BM25_INDEX = pg_identifier("idx_lightrag_doc_chunks_bm25")
+BM25_TABLE = pg_identifier("LIGHTRAG_DOC_CHUNKS")
 BM25_TEXT_CONFIGS = frozenset(
     {
         "simple",
@@ -32,7 +34,11 @@ BM25_TEXT_CONFIGS = frozenset(
 
 def build_bm25_sql(*, candidate_ids: set[str] | None, limit: int) -> str:
     """Build a pg_textsearch BM25 query with optional hard candidate filter."""
+    limit_value = int(limit)
+    if limit_value < 1:
+        raise ValueError("BM25 limit must be positive")
     candidate_clause = "AND id = ANY($3::text[])" if candidate_ids is not None else ""
+    limit_placeholder = "$4" if candidate_ids is not None else "$3"
     return f"""
         SELECT id, content, file_path,
                -(content <@> to_bm25query($1, '{BM25_INDEX}')) AS score
@@ -40,7 +46,7 @@ def build_bm25_sql(*, candidate_ids: set[str] | None, limit: int) -> str:
         WHERE workspace = $2
         {candidate_clause}
         ORDER BY content <@> to_bm25query($1, '{BM25_INDEX}')
-        LIMIT {int(limit)}
+        LIMIT {limit_placeholder}
     """
 
 
@@ -81,13 +87,19 @@ class PostgresBM25:
     ) -> list[dict[str, Any]]:
         if candidate_ids is not None and len(candidate_ids) == 0:
             return []
-        limit = top_k or self._top_k
+        limit = self._top_k if top_k is None else top_k
         sql = build_bm25_sql(candidate_ids=candidate_ids, limit=limit)
         async with self._pool.acquire() as conn:
             if candidate_ids is None:
-                rows = await conn.fetch(sql, query, self._workspace)
+                rows = await conn.fetch(sql, query, self._workspace, int(limit))
             else:
-                rows = await conn.fetch(sql, query, self._workspace, list(candidate_ids))
+                rows = await conn.fetch(
+                    sql,
+                    query,
+                    self._workspace,
+                    list(candidate_ids),
+                    int(limit),
+                )
         return [
             {
                 "chunk_id": row["id"],
