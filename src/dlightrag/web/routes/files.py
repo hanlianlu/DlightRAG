@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
@@ -67,12 +67,26 @@ def _safe_relative_path(filename: str) -> Path:
     """Sanitize a webkitRelativePath — reject path traversal attempts."""
     if not filename:
         raise ValueError("Empty filename")
-    if ".." in filename or "\0" in filename:
+    if "\0" in filename:
         raise ValueError(f"Unsafe filename: {filename!r}")
-    parts = Path(filename).parts
-    if not parts:
-        raise ValueError(f"Empty path parts: {filename!r}")
+    candidate = Path(filename)
+    windows_candidate = PureWindowsPath(filename)
+    if candidate.is_absolute() or windows_candidate.is_absolute() or windows_candidate.drive:
+        raise ValueError(f"Unsafe filename: {filename!r}")
+    parts = candidate.parts
+    if not parts or ".." in parts:
+        raise ValueError(f"Unsafe filename: {filename!r}")
     return Path(*parts)
+
+
+def _safe_upload_destination(dest_dir: Path, filename: str) -> Path:
+    """Return a destination under dest_dir, rejecting escapes after resolution."""
+    rel = _safe_relative_path(filename)
+    root = dest_dir.resolve()
+    dest = (root / rel).resolve()
+    if not dest.is_relative_to(root):
+        raise ValueError(f"Unsafe filename: {filename!r}")
+    return dest
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +193,10 @@ async def upload_files(
             if basename in _SYSTEM_FILES or basename.startswith("._"):
                 continue
             try:
-                rel = _safe_relative_path(f.filename)
+                dest = _safe_upload_destination(dest_dir, f.filename)
             except ValueError:
                 logger.warning("Rejected upload with unsafe filename: %r", f.filename)
                 continue
-            dest = dest_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             with open(dest, "wb") as out:
                 while chunk := await f.read(1024 * 1024):

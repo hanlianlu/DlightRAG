@@ -165,7 +165,7 @@ async def answer_stream(
             stored_session_images: list[str] = []
             if current_image_ids:
                 try:
-                    stored_session_images = manager._get_session_images().get(
+                    stored_session_images = await manager.get_session_image_data(
                         session_id, current_image_ids
                     )
                 except Exception:

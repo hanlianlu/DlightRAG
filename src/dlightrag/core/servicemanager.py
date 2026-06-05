@@ -460,6 +460,12 @@ class RAGServiceManager:
             )
         return self._session_images
 
+    async def get_session_image_data(
+        self, session_id: str | None, image_ids: list[str] | None
+    ) -> list[str]:
+        """Return stored query image data for web/API presentation layers."""
+        return self._get_session_images().get(session_id, image_ids)
+
     def _get_checkpoint(self):
         """Lazy-create conversation checkpoint store."""
         if self._checkpoint is None:
