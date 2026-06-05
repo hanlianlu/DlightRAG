@@ -1185,6 +1185,7 @@ class RAGService:
         if effective_filters is None and _plan is not None:
             effective_filters = getattr(_plan, "metadata_filter", None)
             filter_source = getattr(_plan, "metadata_filter_source", None)
+        effective_filters = self._normalize_metadata_filter(effective_filters)
 
         if self._retrieval_orchestrator is not None:
             kg_result = await self._retrieval_orchestrator.aretrieve(
@@ -1429,7 +1430,14 @@ class RAGService:
         """Search metadata by filters, return matching doc_ids."""
         if self._metadata_index is None:
             return []
-        return await self._metadata_index.query(filters)
+        normalized_filters = self._normalize_metadata_filter(filters)
+        assert normalized_filters is not None
+        return await self._metadata_index.query(normalized_filters)
+
+    def _normalize_metadata_filter(self, filters: MetadataFilter | None) -> MetadataFilter | None:
+        if filters is None or self._metadata_registry is None:
+            return filters
+        return self._metadata_registry.normalize_filter(filters)
 
     # === FILE MANAGEMENT API ===
 

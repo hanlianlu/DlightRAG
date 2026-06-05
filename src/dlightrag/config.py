@@ -260,7 +260,7 @@ class MetadataFieldConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: str = "string"
-    normalizer: str = "identity"
+    normalizer: str | None = None
     filter_ops: list[str] = Field(default_factory=list)
 
 

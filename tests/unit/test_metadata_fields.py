@@ -9,6 +9,7 @@ from dlightrag.core.retrieval.metadata_fields import (
     MetadataFieldRegistry,
     normalize_user_metadata,
 )
+from dlightrag.core.retrieval.models import MetadataFilter
 
 
 class TestMetadataFieldDef:
@@ -162,6 +163,58 @@ def test_declared_metadata_field_is_normalized_for_exact_filtering() -> None:
     normalized = normalize_user_metadata({"author": " Ada Lovelace "}, registry)
 
     assert normalized.filterable["author"] == "ada lovelace"
+
+
+def test_string_exact_metadata_defaults_to_casefold_trim() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {"department": {"type": "string", "filter_ops": ["exact"]}}
+    )
+
+    normalized = normalize_user_metadata({"department": " Finance "}, registry)
+
+    spec = registry.filter_spec("department")
+    assert spec is not None
+    assert spec.normalizer == "casefold_trim"
+    assert normalized.filterable["department"] == "finance"
+
+
+def test_identity_normalizer_can_preserve_exact_string_metadata() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {
+            "sku": {
+                "type": "string",
+                "normalizer": "identity",
+                "filter_ops": ["exact"],
+            }
+        }
+    )
+
+    normalized = normalize_user_metadata({"sku": " AbC-123 "}, registry)
+
+    assert normalized.filterable["sku"] == " AbC-123 "
+
+
+def test_custom_metadata_filter_is_normalized_with_registry() -> None:
+    registry = MetadataFieldRegistry.from_config(
+        {
+            "department": {"type": "string", "filter_ops": ["exact"]},
+            "sku": {
+                "type": "string",
+                "normalizer": "identity",
+                "filter_ops": ["exact"],
+            },
+        }
+    )
+
+    normalized = registry.normalize_filter(
+        MetadataFilter(custom={"department": " Finance ", "sku": " AbC-123 ", "legacy": " Raw "})
+    )
+
+    assert normalized.custom == {
+        "department": "finance",
+        "sku": " AbC-123 ",
+        "legacy": " Raw ",
+    }
 
 
 def test_unknown_metadata_is_stored_but_not_filterable() -> None:

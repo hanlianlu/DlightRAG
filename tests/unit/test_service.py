@@ -527,6 +527,54 @@ class TestRAGServiceLightRAGMainPath:
         assert result.answer is None
         assert result.contexts == {"chunks": []}
 
+    async def test_aretrieve_normalizes_custom_metadata_filters(
+        self, test_config: DlightragConfig
+    ) -> None:
+        from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
+        from dlightrag.core.retrieval.models import MetadataFilter
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._backend = MagicMock()
+        service._lightrag = None
+        service._metadata_registry = MetadataFieldRegistry.from_config(
+            {"department": {"type": "string", "filter_ops": ["exact"]}}
+        )
+        service._retrieval_orchestrator = MagicMock()
+        service._retrieval_orchestrator.aretrieve = AsyncMock(
+            return_value=RetrievalResult(contexts={"chunks": []})
+        )
+
+        await service.aretrieve(
+            "test query",
+            filters=MetadataFilter(custom={"department": " Finance "}),
+        )
+
+        call_kwargs = service._retrieval_orchestrator.aretrieve.await_args.kwargs
+        assert call_kwargs["metadata_filter"].custom == {"department": "finance"}
+
+    async def test_metadata_search_normalizes_custom_metadata_filters(
+        self, test_config: DlightragConfig
+    ) -> None:
+        from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
+        from dlightrag.core.retrieval.models import MetadataFilter
+
+        service = RAGService(config=test_config)
+        service._metadata_registry = MetadataFieldRegistry.from_config(
+            {"department": {"type": "string", "filter_ops": ["exact"]}}
+        )
+        service._metadata_index = AsyncMock()
+        service._metadata_index.query = AsyncMock(return_value=["doc-1"])
+
+        result = await service.asearch_metadata(
+            MetadataFilter(custom={"department": " Finance "})
+        )
+
+        assert result == ["doc-1"]
+        sent_filter = service._metadata_index.query.await_args.args[0]
+        assert sent_filter.custom == {"department": "finance"}
+
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
         """close() finalizes LightRAG storages."""
         service = RAGService(config=test_config)
