@@ -101,21 +101,11 @@ def create_app(*, include_web: bool = True) -> FastAPI:
             if importlib.util.find_spec("jinja2"):
                 from fastapi.staticfiles import StaticFiles
 
+                from dlightrag.web.auth import WebAuthMiddleware
                 from dlightrag.web.deps import _TEMPLATE_DIR
                 from dlightrag.web.routes import router as web_router
 
-                # SECURITY: web routes use cookie-based workspace selection,
-                # not the bearer/JWT auth that protects /ingest, /retrieve etc.
-                # When auth_mode != "none" the REST surface is locked but the
-                # web UI is not — operators must terminate web auth at a
-                # reverse proxy or run web behind a private network.
-                if cfg.auth_mode != "none":
-                    logger.warning(
-                        "Mounting web UI under /web/ without auth (auth_mode=%s applies "
-                        "to REST only). Reverse-proxy or network-isolate the web UI in "
-                        "untrusted environments.",
-                        cfg.auth_mode,
-                    )
+                application.add_middleware(WebAuthMiddleware)
                 application.include_router(web_router)
                 _static_dir = _TEMPLATE_DIR.parent / "static"
                 if _static_dir.exists():

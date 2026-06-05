@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="app">
+  <section class="panel open">
+    <div class="panel-header">
+      <h1>DlightRAG</h1>
+    </div>
+    <form class="panel-content" method="post" action="/web/login">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label for="token">Access token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password" autofocus>
+      {% if error %}
+      <div class="file-error">{{ error }}</div>
+      {% endif %}
+      <button class="primary-btn" type="submit">Sign in</button>
+    </form>
+  </section>
+</main>
+{% endblock %}
