@@ -221,7 +221,7 @@ class TestWorkspaceLifecycleAPI:
         assert body["workspace"] == "old_workspace"
         assert body["deleted"] is False
         mock_manager.areset.assert_awaited_once_with(
-            workspace="old_workspace",
+            workspace="Old Workspace",
             keep_files=True,
             dry_run=True,
         )

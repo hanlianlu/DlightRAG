@@ -25,6 +25,7 @@ from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.service import RAGService
+from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,15 @@ def _iso_or_none(value: Any) -> str | None:
     if callable(isoformat):
         return str(isoformat())
     return str(value)
+
+
+def _workspace_aliases(workspace: str) -> tuple[str, ...]:
+    """Return the raw workspace id and its canonical normalized id."""
+    aliases: list[str] = []
+    for candidate in (workspace, normalize_workspace(workspace)):
+        if candidate and candidate not in aliases:
+            aliases.append(candidate)
+    return tuple(aliases)
 
 
 class RAGServiceUnavailableError(Exception):
@@ -371,23 +381,31 @@ class RAGServiceManager:
         """
         self._ensure_writable("reset")
         if workspace is not None:
+            requested_workspace = workspace
+            target_workspace = normalize_workspace(workspace)
+            aliases = _workspace_aliases(workspace)
             known = await self.list_workspaces()
-            if workspace not in known and workspace not in self._services:
+            registry_aliases = aliases if any(alias in known for alias in aliases) else ()
+            if target_workspace not in known and target_workspace not in self._services:
                 from dlightrag.core.reset import areset_orphaned_workspace
 
                 result = await areset_orphaned_workspace(
-                    workspace,
+                    requested_workspace,
                     keep_files=keep_files,
                     dry_run=dry_run,
                     input_dir=str(self._config.input_dir_path),
                 )
+                if registry_aliases and not dry_run:
+                    await self._delete_workspace_registry_aliases(registry_aliases)
                 return {
-                    "workspaces": {workspace: result},
+                    "workspaces": {target_workspace: result},
                     "total_errors": len(result.get("errors", [])),
                 }
-            workspaces = [workspace]
+            workspaces = [target_workspace]
         else:
             workspaces = await self.list_workspaces()
+            aliases = ()
+            registry_aliases = ()
 
         results: dict[str, Any] = {}
         total_errors = 0
@@ -413,8 +431,19 @@ class RAGServiceManager:
 
         if results:
             await self._wait_after_write()
+        if workspace is not None and registry_aliases and not dry_run:
+            await self._delete_workspace_registry_aliases(registry_aliases)
 
         return {"workspaces": results, "total_errors": total_errors}
+
+    async def _delete_workspace_registry_aliases(self, aliases: tuple[str, ...]) -> None:
+        """Best-effort cleanup for legacy registry rows that predate normalization."""
+        try:
+            registry = await self._get_workspace_registry()
+            for alias in aliases:
+                await registry.delete(alias)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to delete workspace registry aliases %s: %s", aliases, exc)
 
     def _get_answer_engine(self) -> AnswerEngine:
         """Lazy-create AnswerEngine from global config."""

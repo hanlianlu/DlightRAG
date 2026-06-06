@@ -71,11 +71,12 @@ async def delete_workspace(
     """Delete/reset one workspace and remove its registry row."""
     manager = get_manager(request)
     try:
-        normalized = normalize_workspace(validate_workspace_name(workspace))
+        label = validate_workspace_name(workspace)
+        normalized = normalize_workspace(label)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     result = await manager.areset(
-        workspace=normalized,
+        workspace=label,
         keep_files=keep_files,
         dry_run=dry_run,
     )

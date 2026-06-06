@@ -77,7 +77,7 @@ async def test_mcp_delete_workspace_resets_workspace(mock_mcp_manager) -> None:
     assert body["workspace"] == "old_workspace"
     assert body["deleted"] is False
     mock_mcp_manager.areset.assert_awaited_once_with(
-        workspace="old_workspace",
+        workspace="Old Workspace",
         keep_files=True,
         dry_run=True,
     )
