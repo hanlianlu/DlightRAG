@@ -138,9 +138,11 @@ Directory or prefix ingestion wraps those per-file results:
     },
     {
       "doc_id": "file-doc-def456",
-      "source_kind": "image",
+      "source_kind": "document",
       "chunks": ["chunk-c"],
-      "ingest_strategy": "direct_image_with_visual_semantics"
+      "ingest_strategy": "lightrag_sidecar_unified",
+      "parse_engine": "mineru",
+      "process_options": {}
     }
   ]
 }
@@ -149,10 +151,10 @@ Directory or prefix ingestion wraps those per-file results:
 | Field | Type | Description |
 |---|---|---|
 | `doc_id` | `string` | Canonical document id for a single ingested file |
-| `source_kind` | `string` | `document`, `image`, or `skipped` |
+| `source_kind` | `string` | `document` or `skipped` |
 | `status` | `string` | Present for unsupported-format skips (`skipped`) |
 | `reason` | `string` | Skip reason when a file is not ingested |
-| `chunks` | `list[string]` | LightRAG and direct-visual chunk IDs created or reused |
+| `chunks` | `list[string]` | LightRAG chunk IDs created or reused |
 | `ingest_strategy` | `string` | Ingestion path used for successful files |
 | `parse_engine` | `string` | Parser selected for document files |
 | `process_options` | `object \| string` | LightRAG parser process options |

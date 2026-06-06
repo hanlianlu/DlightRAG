@@ -1,53 +1,39 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for LightRAG sidecar reference collection."""
+"""Tests for LightRAG sidecar drawing asset resolution."""
 
 from __future__ import annotations
 
 import json
 
-from dlightrag.core.ingestion.lightrag_sidecar import collect_sidecar_refs
+from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 
 
-def test_collects_drawing_table_equation_refs(tmp_path) -> None:
+def test_collects_successful_drawing_assets_for_lightrag_mm_chunks(tmp_path) -> None:
     artifact_dir = tmp_path / "doc"
     artifact_dir.mkdir()
+    (artifact_dir / "sample.blocks.jsonl").write_text("", encoding="utf-8")
+    assets_dir = artifact_dir / "sample.blocks.assets"
+    assets_dir.mkdir()
+    image_path = assets_dir / "fig.png"
+    image_path.write_bytes(b"image")
     (artifact_dir / "sample.drawings.json").write_text(
         json.dumps(
             {
-                "version": "1.0",
                 "drawings": {
+                    "ignored": {
+                        "id": "ignored",
+                        "path": "sample.blocks.assets/ignored.png",
+                        "llm_analyze_result": {"status": "skipped"},
+                    },
                     "fig-1": {
                         "id": "fig-1",
-                        "path": "sample.blocks.assets/fig.png",
-                        "page": 2,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (artifact_dir / "sample.tables.json").write_text(
-        json.dumps(
-            {
-                "version": "1.0",
-                "tables": {
-                    "table-1": {
-                        "id": "table-1",
-                        "llm_analyze_result": {"status": "success"},
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (artifact_dir / "sample.equations.json").write_text(
-        json.dumps(
-            {
-                "version": "1.0",
-                "equations": {
-                    "eq-1": {
-                        "id": "eq-1",
-                        "llm_analyze_result": {"status": "success"},
+                        "img_path": "sample.blocks.assets/fig.png",
+                        "llm_analyze_result": {
+                            "status": "success",
+                            "name": "Figure",
+                            "type": "Illustration",
+                            "description": "A figure.",
+                        },
                     }
                 },
             }
@@ -55,39 +41,25 @@ def test_collects_drawing_table_equation_refs(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    refs = collect_sidecar_refs(artifact_dir)
+    assets = collect_lightrag_drawing_assets(artifact_dir, doc_id="doc-abc")
 
-    assert [(r.sidecar_type, r.sidecar_id) for r in refs] == [
-        ("drawing", "sample.drawings:fig-1"),
-        ("table", "sample.tables:table-1"),
-        ("equation", "sample.equations:eq-1"),
-    ]
-    assert refs[0].asset_path == (artifact_dir / "sample.blocks.assets/fig.png").resolve()
-    assert refs[0].page_index == 1
+    assert len(assets) == 1
+    assert assets[0].chunk_id == "doc-abc-mm-drawing-001"
+    assert assets[0].sidecar_id == "fig-1"
+    assert assets[0].image_path == image_path.resolve()
 
 
-def test_collects_page_index_from_block_positions(tmp_path) -> None:
+def test_requires_blocks_anchor_to_match_lightrag_builder(tmp_path) -> None:
     artifact_dir = tmp_path / "doc"
     artifact_dir.mkdir()
-    (artifact_dir / "sample.blocks.jsonl").write_text(
-        json.dumps(
-            {
-                "type": "content",
-                "blockid": "block-1",
-                "positions": [{"type": "bbox", "anchor": 3, "range": [1, 2, 3, 4]}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
     (artifact_dir / "sample.drawings.json").write_text(
         json.dumps(
             {
                 "drawings": {
                     "fig-1": {
                         "id": "fig-1",
-                        "blockid": "block-1",
                         "path": "sample.blocks.assets/fig.png",
+                        "llm_analyze_result": {"status": "success"},
                     }
                 }
             }
@@ -95,8 +67,4 @@ def test_collects_page_index_from_block_positions(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    refs = collect_sidecar_refs(artifact_dir)
-
-    assert refs[0].block_id == "block-1"
-    assert refs[0].page_index == 3
-    assert refs[0].bbox == {"page_index": 3, "range": [1, 2, 3, 4]}
+    assert collect_lightrag_drawing_assets(artifact_dir, doc_id="doc-abc") == []

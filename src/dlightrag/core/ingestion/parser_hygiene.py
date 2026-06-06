@@ -4,12 +4,15 @@
 DlightRAG delegates document parsing to LightRAG. This module does not create a
 second MinerU ingestion path; it narrows LightRAG's MinerU IR builder at the
 parser boundary when current upstream would otherwise index page furniture as
-body text.
+body text. Conservative mode drops only discarded blocks, headers, footers, and
+printed page numbers; extended mode also drops aside/margin/page-footnote
+blocks.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from functools import wraps
 from pathlib import Path
 from typing import Any
@@ -26,6 +29,11 @@ MINERU_AUXILIARY_BLOCK_TYPES = frozenset(
         "page_header",
         "page_footer",
         "page_number",
+    }
+)
+
+MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES = frozenset(
+    {
         "aside_text",
         "page_aside_text",
         "margin_note",
@@ -107,7 +115,16 @@ def _is_mineru_auxiliary_block(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
     block_type = _block_type(item)
-    return block_type in MINERU_AUXILIARY_BLOCK_TYPES
+    if block_type in MINERU_AUXILIARY_BLOCK_TYPES:
+        return True
+    if _auxiliary_block_policy() == "extended":
+        return block_type in MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES
+    return False
+
+
+def _auxiliary_block_policy() -> str:
+    policy = os.getenv("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", "conservative")
+    return policy.strip().lower()
 
 
 def _block_type(item: dict[str, Any]) -> str:
@@ -116,6 +133,7 @@ def _block_type(item: dict[str, Any]) -> str:
 
 __all__ = [
     "MINERU_AUXILIARY_BLOCK_TYPES",
+    "MINERU_EXTENDED_AUXILIARY_BLOCK_TYPES",
     "apply_mineru_auxiliary_block_filter",
     "filter_mineru_auxiliary_blocks",
     "mineru_ir_builder_needs_auxiliary_filter",

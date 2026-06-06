@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -46,19 +45,17 @@ def test_lightrag_stores_reports_missing_surfaces() -> None:
         LightRAGStores(Broken())
 
 
-async def test_upsert_chunks_with_vectors_requires_matching_dimension() -> None:
+async def test_overwrite_chunk_vectors_requires_matching_dimension() -> None:
     stores = LightRAGStores(FakeLightRAG())
 
     with pytest.raises(ValueError, match="vector dimension"):
-        await stores.upsert_chunks_with_vectors(
-            {"chunk-1": {"content": "x", "full_doc_id": "doc-1"}},
+        await stores.overwrite_chunk_vectors(
             {"chunk-1": [0.1, 0.2]},
             embedding_dim=3,
-            max_token_size=8192,
         )
 
 
-async def test_upsert_chunks_with_vectors_appends_doc_status_chunks() -> None:
+async def test_overwrite_chunk_vectors_updates_existing_rows_only() -> None:
     class FakeDB:
         def __init__(self) -> None:
             self.executed: list[tuple] = []
@@ -70,44 +67,25 @@ async def test_upsert_chunks_with_vectors_appends_doc_status_chunks() -> None:
             self.executed.append((sql, values))
 
     fake = FakeLightRAG()
-    fake.text_chunks = AsyncMock()
-    fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_VDB", db=FakeDB(), workspace="ws")
-    fake.doc_status = AsyncMock()
-    fake.doc_status.get_by_id.return_value = {
-        "content_summary": "source doc",
-        "content_length": 10,
-        "chunks_count": 1,
-        "status": "processed",
-        "file_path": "/tmp/source.pdf",
-        "chunks_list": ["text-1"],
-        "metadata": {"source_kind": "document"},
-        "content_hash": "sha256:abc",
-        "created_at": "2026-05-25T00:00:00+00:00",
-        "updated_at": "2026-05-25T00:00:00+00:00",
-    }
-
+    db = FakeDB()
+    fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_DOC_CHUNKS", db=db, workspace="ws")
     stores = LightRAGStores(fake)
-    await stores.upsert_chunks_with_vectors(
-        {
-            "img-1": {
-                "content": "direct image",
-                "full_doc_id": "doc-1",
-                "file_path": "/tmp/page.png",
-            }
-        },
-        {"img-1": [0.1, 0.2, 0.3]},
+
+    await stores.overwrite_chunk_vectors(
+        {"doc-1-mm-drawing-000": [0.1, 0.2, 0.3]},
         embedding_dim=3,
-        max_token_size=8192,
     )
 
-    fake.text_chunks.upsert.assert_awaited_once()
-    fake.doc_status.upsert.assert_awaited_once()
-    status_payload = fake.doc_status.upsert.await_args.args[0]["doc-1"]
-    assert status_payload["chunks_list"] == ["text-1", "img-1"]
-    assert status_payload["chunks_count"] == 2
+    assert len(db.executed) == 1
+    sql, values = db.executed[0]
+    assert "UPDATE LIGHTRAG_DOC_CHUNKS" in sql
+    assert "INSERT" not in sql
+    assert values[0][0] == "ws"
+    assert values[0][1] == "doc-1-mm-drawing-000"
+    assert values[0][2] == [0.1, 0.2, 0.3]
 
 
-async def test_upsert_chunks_with_vectors_respects_batch_record_budget(
+async def test_overwrite_chunk_vectors_respects_batch_record_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeDB:
@@ -120,36 +98,20 @@ async def test_upsert_chunks_with_vectors_respects_batch_record_budget(
         async def executemany(self, sql, values) -> None:  # noqa: ANN001
             self.batches.append(list(values))
 
-    monkeypatch.setattr(LightRAGStores, "_VECTOR_UPSERT_MAX_RECORDS", 1, raising=False)
-    monkeypatch.setattr(LightRAGStores, "_VECTOR_UPSERT_MAX_BYTES", 16_000_000, raising=False)
+    monkeypatch.setattr(LightRAGStores, "_VECTOR_WRITE_MAX_RECORDS", 1, raising=False)
+    monkeypatch.setattr(LightRAGStores, "_VECTOR_WRITE_MAX_BYTES", 16_000_000, raising=False)
 
     fake = FakeLightRAG()
     db = FakeDB()
-    fake.text_chunks = AsyncMock()
     fake.chunks_vdb = SimpleNamespace(table_name="LIGHTRAG_VDB", db=db, workspace="ws")
-    fake.doc_status = AsyncMock()
-    fake.doc_status.get_by_id.return_value = {
-        "content_summary": "source doc",
-        "content_length": 10,
-        "chunks_count": 0,
-        "status": "processed",
-        "file_path": "/tmp/source.pdf",
-        "chunks_list": [],
-        "metadata": {},
-        "content_hash": "sha256:abc",
-        "created_at": "2026-05-25T00:00:00+00:00",
-        "updated_at": "2026-05-25T00:00:00+00:00",
-    }
 
     stores = LightRAGStores(fake)
-    await stores.upsert_chunks_with_vectors(
+    await stores.overwrite_chunk_vectors(
         {
-            "img-1": {"content": "direct image 1", "full_doc_id": "doc-1"},
-            "img-2": {"content": "direct image 2", "full_doc_id": "doc-1"},
+            "img-1": [0.1, 0.2, 0.3],
+            "img-2": [0.4, 0.5, 0.6],
         },
-        {"img-1": [0.1, 0.2, 0.3], "img-2": [0.4, 0.5, 0.6]},
         embedding_dim=3,
-        max_token_size=8192,
     )
 
     assert len(db.batches) == 2

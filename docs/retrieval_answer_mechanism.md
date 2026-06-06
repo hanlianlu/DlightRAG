@@ -9,22 +9,34 @@ reranking, citations, and answer generation.
 
 ```text
 source file
-  -> LightRAG parser sidecars
-       text, tables, equations, document-derived images
+  -> LightRAG parser/routing
+       sidecar-backed text, tables, equations, and images when available;
+       LightRAG fallback/raw ingestion otherwise
   -> LightRAG ingest
-       chunks, entities, relationships, graph, text vectors, doc status
-  -> direct image embedding
-       native images and parser-extracted image sidecars into LightRAG chunks/vectors
+       chunks, entities, relationships, graph, vectors, doc status
+  -> image vector alignment
+       successful LightRAG drawing multimodal chunks keep their VLM text,
+       sidecar provenance, BM25, and KG identity; DlightRAG overwrites the
+       existing chunk vector with the raw image embedding
   -> DlightRAG metadata/BM25 layer
        declared metadata index, in-filter scope, pg_textsearch BM25
-  -> visual semantic projection
-       VLM text for entity and relationship extraction over images
 ```
 
-Tables, equations, and document-derived image sidecars stay aligned with the
-LightRAG document record. Native images create a LightRAG full-doc/doc-status
-parent and a direct image chunk, so deletion and metadata candidate resolution
-use the same LightRAG document/chunk authority as parsed documents.
+All source files that LightRAG can ingest, including native image files, go
+through LightRAG parser/routing. Tables, equations, text, and document-derived
+image sidecars stay aligned with the LightRAG document record.
+LightRAG fallback/raw documents (`PARSER_ENGINE_LEGACY`, persisted as
+`legacy`) can have no sidecar artifacts; those documents still participate in
+LightRAG text/KG/vector retrieval but do not receive image-vector alignment.
+With DlightRAG's default `docx:native-iteP,*:mineru-iteP` rules, this is a
+defensive fallback rather than the normal document parser route.
+
+Successful drawing sidecars have one canonical chunk identity. LightRAG's
+multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
+`text_chunks`, BM25, and KG extraction. DlightRAG then overwrites that existing
+chunk's vector with the raw image embedding. It does not create a second
+visual-only chunk, so the same VLM description is not exposed twice as independent
+retrieved evidence.
 
 ## Query Pipeline
 
@@ -101,9 +113,11 @@ Query images are embedded with query context when the provider supports
 asymmetric embeddings. If the provider does not expose task-aware routing,
 LightRAG's symmetric fallback is used.
 
-Images also produce VLM semantic text for entity and relationship extraction.
-That semantic projection feeds the graph, but visual similarity search uses
-direct image embeddings.
+Images also produce VLM semantic text through LightRAG's multimodal sidecar
+path. That text feeds BM25 and KG extraction. For successful drawing chunks,
+visual similarity search uses the same LightRAG chunk id after DlightRAG
+overwrites its vector with the raw image embedding, preserving sidecar
+provenance and avoiding duplicate VLM text exposure.
 
 ## Reranking
 

@@ -35,11 +35,6 @@ LightRAG API methods (public, but shape-dependent):
     ``apipeline_enqueue_documents()``   — enqueues for processing
     ``apipeline_process_enqueue_documents()`` — processes queue
 
-Constants:
-    ``lightrag.base.DocStatus``
-    ``lightrag.constants.FULL_DOCS_FORMAT_*``
-    ``lightrag.constants.PARSER_ENGINE_*``
-
 When upgrading lightrag-hku, verify these surfaces still exist and behave
 as expected.  The compat_guard module provides runtime version checks.
 """
@@ -52,18 +47,16 @@ import json
 import logging
 from typing import Any, ClassVar
 
-from lightrag.base import DocStatus
-
 from dlightrag.storage.sql_identifiers import pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
 
 
 class LightRAGStores:
-    """Typed accessor for LightRAG storage attributes DlightRAG writes directly."""
+    """Typed accessor for the LightRAG storage surface DlightRAG touches directly."""
 
-    _VECTOR_UPSERT_MAX_BYTES: ClassVar[int] = 16 * 1024 * 1024
-    _VECTOR_UPSERT_MAX_RECORDS: ClassVar[int] = 200
+    _VECTOR_WRITE_MAX_BYTES: ClassVar[int] = 16 * 1024 * 1024
+    _VECTOR_WRITE_MAX_RECORDS: ClassVar[int] = 200
 
     _REQUIRED: ClassVar[frozenset[str]] = frozenset(
         {
@@ -106,42 +99,28 @@ class LightRAGStores:
     async def get_full_doc(self, doc_id: str) -> dict[str, Any] | None:
         return await self.full_docs.get_by_id(doc_id)
 
-    async def upsert_chunks_with_vectors(
+    async def overwrite_chunk_vectors(
         self,
-        rows: dict[str, dict[str, Any]],
         vectors: dict[str, list[float]],
         *,
         embedding_dim: int,
-        max_token_size: int,  # noqa: ARG002
     ) -> None:
-        """Write direct-image chunks while preserving precomputed image vectors."""
-        if not rows:
+        """Replace vectors for existing LightRAG chunks without changing text rows."""
+        if not vectors:
             return
-
-        values = self._build_chunk_values(rows, vectors, embedding_dim=embedding_dim)
-        chunks_by_doc = self._chunks_by_doc(rows)
-
-        await self.text_chunks.upsert(rows)
+        values = self._build_vector_update_values(vectors, embedding_dim=embedding_dim)
 
         chunks_vdb = self.chunks_vdb
         if not hasattr(chunks_vdb, "table_name") or not hasattr(chunks_vdb, "db"):
-            raise RuntimeError("Direct image vector writes require PGVectorStorage")
+            raise RuntimeError("Vector overwrite requires PGVectorStorage")
 
         chunks_table = pg_qualified_identifier(chunks_vdb.table_name)
         sql = f"""
-            INSERT INTO {chunks_table} (
-                workspace, id, tokens, chunk_order_index, full_doc_id,
-                content, content_vector, file_path, create_time, update_time
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (workspace,id) DO UPDATE
-            SET tokens=EXCLUDED.tokens,
-                chunk_order_index=EXCLUDED.chunk_order_index,
-                full_doc_id=EXCLUDED.full_doc_id,
-                content=EXCLUDED.content,
-                content_vector=EXCLUDED.content_vector,
-                file_path=EXCLUDED.file_path,
-                update_time=EXCLUDED.update_time
+            UPDATE {chunks_table}
+            SET content_vector=$3,
+                update_time=$4
+            WHERE workspace=$1
+              AND id=$2
         """
 
         async def _execute(connection: Any) -> None:
@@ -149,67 +128,14 @@ class LightRAGStores:
                 await connection.executemany(sql, batch)
 
         async with self._vector_write_lock:
-            current_status = await self._load_parent_doc_status(chunks_by_doc)
-
             if hasattr(chunks_vdb.db, "_run_with_retry"):
                 await chunks_vdb.db._run_with_retry(
                     _execute,
-                    timing_label=f"{chunks_vdb.workspace} direct_image_chunk_upsert",
+                    timing_label=f"{chunks_vdb.workspace} chunk_vector_overwrite",
                 )
             else:
                 async with chunks_vdb.db.pool.acquire() as connection:
                     await _execute(connection)
-
-            await self._append_doc_status_chunks(chunks_by_doc, current_status)
-
-    async def upsert_document_record(
-        self,
-        *,
-        doc_id: str,
-        content: str,
-        file_path: str,
-        chunks: list[str],
-        parse_engine: str,
-        parse_format: str,
-        content_hash: str | None,
-        metadata: dict[str, Any] | None = None,
-        sidecar_location: str | None = None,
-        process_options: str | None = None,
-        chunk_options: dict[str, Any] | None = None,
-    ) -> None:
-        """Create/update the LightRAG full_doc and doc_status parent record."""
-        now = datetime.datetime.now(datetime.UTC).isoformat()
-        await self.full_docs.upsert(
-            {
-                doc_id: {
-                    "content": content,
-                    "file_path": file_path,
-                    "sidecar_location": sidecar_location,
-                    "parse_format": parse_format,
-                    "content_hash": content_hash,
-                    "process_options": process_options,
-                    "chunk_options": chunk_options or {},
-                    "parse_engine": parse_engine,
-                }
-            }
-        )
-        await self.doc_status.upsert(
-            {
-                doc_id: {
-                    "content_summary": content[:240],
-                    "content_length": len(content),
-                    "chunks_count": len(chunks),
-                    "status": DocStatus.PROCESSED.value,
-                    "file_path": file_path,
-                    "chunks_list": list(chunks),
-                    "metadata": metadata or {},
-                    "error_msg": None,
-                    "content_hash": content_hash,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-            }
-        )
 
     async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]:
         """Resolve full_doc ids to LightRAG text chunk ids."""
@@ -272,9 +198,8 @@ class LightRAGStores:
 
         return deleted
 
-    def _build_chunk_values(
+    def _build_vector_update_values(
         self,
-        rows: dict[str, dict[str, Any]],
         vectors: dict[str, list[float]],
         *,
         embedding_dim: int,
@@ -282,24 +207,10 @@ class LightRAGStores:
         current_time = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
         workspace = getattr(self.chunks_vdb, "workspace", "default")
         values = []
-        for chunk_id, row in rows.items():
-            vector = vectors[chunk_id]
+        for chunk_id, vector in vectors.items():
             if len(vector) != embedding_dim:
                 raise ValueError(f"{chunk_id} vector dimension {len(vector)} != {embedding_dim}")
-            values.append(
-                (
-                    workspace,
-                    chunk_id,
-                    int(row.get("tokens") or 0),
-                    int(row.get("chunk_order_index") or 0),
-                    str(row["full_doc_id"]),
-                    str(row["content"]),
-                    vector,
-                    row.get("file_path"),
-                    current_time,
-                    current_time,
-                )
-            )
+            values.append((workspace, chunk_id, vector, current_time))
         return values
 
     @classmethod
@@ -308,10 +219,12 @@ class LightRAGStores:
             return []
 
         payload_limit = (
-            cls._VECTOR_UPSERT_MAX_BYTES if cls._VECTOR_UPSERT_MAX_BYTES > 0 else float("inf")
+            cls._VECTOR_WRITE_MAX_BYTES if cls._VECTOR_WRITE_MAX_BYTES > 0 else float("inf")
         )
         records_limit = (
-            cls._VECTOR_UPSERT_MAX_RECORDS if cls._VECTOR_UPSERT_MAX_RECORDS > 0 else float("inf")
+            cls._VECTOR_WRITE_MAX_RECORDS
+            if cls._VECTOR_WRITE_MAX_RECORDS > 0
+            else float("inf")
         )
         batches: list[list[tuple[Any, ...]]] = []
         current: list[tuple[Any, ...]] = []
@@ -358,63 +271,3 @@ class LightRAGStores:
             else:
                 total += 16
         return total
-
-    @staticmethod
-    def _chunks_by_doc(rows: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
-        grouped: dict[str, list[str]] = {}
-        for chunk_id, row in rows.items():
-            grouped.setdefault(str(row["full_doc_id"]), []).append(chunk_id)
-        return grouped
-
-    async def _load_parent_doc_status(
-        self, chunks_by_doc: dict[str, list[str]]
-    ) -> dict[str, dict[str, Any]]:
-        current: dict[str, dict[str, Any]] = {}
-        for doc_id in chunks_by_doc:
-            record = await self.doc_status.get_by_id(doc_id)
-            if record is None:
-                raise RuntimeError(
-                    f"Direct image chunk write requires LightRAG doc_status for {doc_id}"
-                )
-            current[doc_id] = record
-        return current
-
-    async def _append_doc_status_chunks(
-        self,
-        chunks_by_doc: dict[str, list[str]],
-        current_status: dict[str, dict[str, Any]],
-    ) -> None:
-        if not chunks_by_doc:
-            return
-        now = datetime.datetime.now(datetime.UTC).isoformat()
-        updates: dict[str, dict[str, Any]] = {}
-        for doc_id, chunk_ids in chunks_by_doc.items():
-            current = current_status[doc_id]
-            merged = list(dict.fromkeys([*(current.get("chunks_list") or []), *chunk_ids]))
-            if merged == (current.get("chunks_list") or []):
-                continue
-            status = current.get("status") or DocStatus.PROCESSED.value
-            if isinstance(status, DocStatus):
-                status = status.value
-            metadata = current.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-            updates[doc_id] = {
-                "content_summary": current.get("content_summary") or "",
-                "content_length": int(current.get("content_length") or 0),
-                "chunks_count": len(merged),
-                "status": status,
-                "file_path": current.get("file_path") or "",
-                "chunks_list": merged,
-                "track_id": current.get("track_id"),
-                "metadata": metadata,
-                "error_msg": current.get("error_msg"),
-                "content_hash": current.get("content_hash"),
-                "created_at": current.get("created_at") or now,
-                "updated_at": now,
-            }
-        if updates:
-            await self.doc_status.upsert(updates)
-            logger.debug(
-                "Appended direct image chunks to %d LightRAG doc_status rows", len(updates)
-            )

@@ -49,7 +49,7 @@
 
   <text class="title" x="64" y="52">DlightRAG Unified LightRAG Main Architecture</text>
   <text class="subtitle" x="64" y="80">One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.</text>
-  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, query-image memory, direct visual search, BM25 fusion, visual assets, and validated cited answers.</text>
+  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, query-image visual search, BM25 fusion, visual assets, and validated cited answers.</text>
 
   <rect class="band-soft" x="64" y="126" width="1152" height="108"/>
   <text class="band-title" x="84" y="151">Interface Boundary</text>
@@ -95,8 +95,8 @@
   <text class="small" text-anchor="middle" x="256" y="497">single LightRAG-main path</text>
 
   <rect class="box box-pink" x="118" y="535" width="276" height="50"/>
-  <text class="label" text-anchor="middle" x="256" y="556">Direct Visual Path</text>
-  <text class="small" text-anchor="middle" x="256" y="574">native and extracted images</text>
+  <text class="label" text-anchor="middle" x="256" y="556">Image Vector Alignment</text>
+  <text class="small" text-anchor="middle" x="256" y="574">existing LightRAG drawing chunks</text>
 
   <path class="line-blue" d="M 248 389 H 270"/>
   <path class="line-blue" d="M 332 418 V 455"/>
@@ -140,7 +140,7 @@
 
   <rect class="box box-blue" x="884" y="455" width="276" height="60"/>
   <text class="label" text-anchor="middle" x="1022" y="478">UnifiedRetriever</text>
-  <text class="small" text-anchor="middle" x="1022" y="497">LightRAG mix + BM25 + visual</text>
+  <text class="small" text-anchor="middle" x="1022" y="497">LightRAG mix + BM25 + query images</text>
 
   <rect class="box" x="884" y="535" width="126" height="58"/>
   <text class="label" text-anchor="middle" x="947" y="558">Fusion/Rerank</text>

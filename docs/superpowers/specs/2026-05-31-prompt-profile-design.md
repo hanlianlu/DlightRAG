@@ -8,12 +8,10 @@ controls through configuration, API routes, or user inputs.
 
 ## Context
 
-DlightRAG currently keeps prompt text centralized in `dlightrag.prompts`, but the
-domain identity is embedded directly in individual prompt strings. The answer
-prompt says the model is an expert document analysis assistant, the planner
-prompt says it is a document-domain query understanding system, visual semantic
-projection uses a literal VLM instruction in ingestion code, and the listwise
-reranker keeps its prompt template inside `models/rerank.py`.
+DlightRAG keeps product-owned prompt text centralized in `dlightrag.prompts`.
+The prompt profile boundary is intentionally code-only: answer, planner,
+rerank, and citation-highlight prompts share one core identity and compose
+their task-specific behavior from guidance fragments.
 
 This is serviceable for a generic document RAG system, but it makes domain
 porting harder because developers must search across runtime modules to find the
@@ -63,7 +61,6 @@ Owns compact task guidance that is specific to a prompt path:
 - `ANSWER_CITATION_EXAMPLE`: the existing short inline citation example.
 - `PLANNER_GUIDANCE`: the existing planner JSON contract, filter evidence rules,
   metadata filter rules, and examples.
-- `VISUAL_SEMANTIC_GUIDANCE`: the existing visual semantic projection focus.
 - `RERANK_GUIDANCE`: the listwise relevance scoring contract.
 - `HIGHLIGHT_GUIDANCE`: the support-phrase extraction contract.
 
@@ -97,9 +94,6 @@ expects them.
 
 ### Runtime Modules
 
-`src/dlightrag/core/ingestion/visual_semantics.py` should import the centralized
-visual semantic prompt instead of embedding the literal VLM prompt.
-
 `src/dlightrag/models/rerank.py` should import the centralized listwise rerank
 template instead of owning `_LISTWISE_PROMPT`.
 
@@ -130,12 +124,6 @@ Query planning:
 2. `PLANNER_SYSTEM_PROMPT` includes `CORE_IDENTITY` plus planner guidance.
 3. Structured output parsing remains unchanged.
 
-Visual semantic projection:
-
-1. `build_visual_semantic_projection()` passes the centralized visual semantic
-   prompt to `vlm_func`.
-2. The generated projection text format remains unchanged.
-
 Reranking and highlighting:
 
 1. Rerank scoring uses the centralized rerank prompt template.
@@ -159,14 +147,12 @@ Use TDD for implementation:
    references section.
 3. Add planner prompt tests that verify `PLANNER_SYSTEM_PROMPT` includes
    `CORE_IDENTITY` while preserving the JSON/filter evidence contract.
-4. Add visual semantic projection tests that capture the `vlm_func` prompt and
-   verify it comes from centralized guidance.
-5. Add rerank prompt tests that verify the listwise prompt remains formatted with
+4. Add rerank prompt tests that verify the listwise prompt remains formatted with
    query and item count.
 
-After implementation, run the focused prompt, planner, visual semantic, and
-rerank unit tests. Run the full unit test suite if the focused tests reveal any
-shared prompt assembly risk.
+After implementation, run the focused prompt, planner, and rerank unit tests.
+Run the full unit test suite if the focused tests reveal any shared prompt
+assembly risk.
 
 ## Migration Notes
 
@@ -177,8 +163,8 @@ when tests or internal modules need them. Public runtime APIs do not change.
 ## Acceptance Criteria
 
 - DlightRAG has exactly one core identity constant.
-- Answer, planner, visual semantic, rerank, and highlight prompts assemble from
-  the centralized identity or guidance modules.
+- Answer, planner, rerank, and highlight prompts assemble from the centralized
+  identity or guidance modules.
 - Existing prompt exports and call signatures remain compatible.
 - No prompt profile configuration or API surface is added.
 - Focused tests prove the new boundary and preserve existing prompt contracts.

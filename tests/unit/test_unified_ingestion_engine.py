@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
+from PIL import Image
 
 from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
 from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
@@ -70,21 +71,33 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
     assert deps["metadata_index"].upsert.await_args.args[0] == expected_doc_id
 
 
-async def test_document_ingest_skips_unsupported_parser(tmp_path: Path) -> None:
-    """Files resolving to an unsupported parser engine must be skipped, not crash.
+async def test_document_ingest_delegates_lightrag_fallback_parser(tmp_path: Path) -> None:
+    """LightRAG routing is the ingestability boundary.
 
-    The engine returns `{"status": "skipped", "reason": "unsupported format: …"}`
-    so that a batch ingest keeps going instead of aborting mid-batch.
+    If no DlightRAG parser rule matches, LightRAG's resolver falls back to
+    its fallback/raw engine (PARSER_ENGINE_LEGACY, persisted as "legacy").
+    DlightRAG should enqueue that path and simply skip sidecar vector
+    overrides when no sidecar location exists.
     """
-    source = tmp_path / "notes.unsupported"
+    source = tmp_path / "notes.txt"
     source.write_text("plain text")
     engine, deps = _make_engine(parser_rules="docx:native-iteP")  # no wildcard → fallback
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "legacy",
+        "process_options": "",
+        "chunk_options": {},
+        "sidecar_location": None,
+    }
 
     result = await engine.aingest_file(source, replace=False)
 
-    assert result["status"] == "skipped"
-    assert "unsupported format" in result["reason"]
-    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+    assert result["doc_id"] is not None
+    assert result["parse_engine"] == "legacy"
+    assert result["chunks"] == ["chunk-a"]
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["parse_engine"] == "legacy"
+    assert kwargs["process_options"] == ""
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
 async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) -> None:
@@ -117,7 +130,7 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
     assert saved["metadata_json"]["project"] == "Analytical Engine"
 
 
-async def test_native_image_ingest_adds_direct_vector_and_visual_semantic_doc(
+async def test_image_file_ingest_delegates_to_lightrag_parser(
     tmp_path: Path,
 ) -> None:
     from PIL import Image
@@ -130,12 +143,12 @@ async def test_native_image_ingest_adds_direct_vector_and_visual_semantic_doc(
 
     result = await engine.aingest_file(source)
 
-    assert result["source_kind"] == "image"
-    deps["stores"].upsert_document_record.assert_awaited_once()
-    deps["stores"].upsert_chunks_with_vectors.assert_awaited_once()
+    assert result["source_kind"] == "document"
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["docs_format"] == "raw"
-    assert kwargs["process_options"] == "P"
+    assert kwargs["docs_format"] == "pending_parse"
+    assert kwargs["parse_engine"] == "mineru"
+    assert kwargs["process_options"] == "iteP"
 
 
 async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path) -> None:
@@ -201,6 +214,65 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
 
     deps["stores"].cleanup_doc.assert_not_awaited()
     assert result["doc_id"] is not None
+
+
+async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    mm_chunk_id = f"{doc_id}-mm-drawing-000"
+    artifact_dir = tmp_path / "sample.parsed"
+    assets_dir = artifact_dir / "sample.blocks.assets"
+    assets_dir.mkdir(parents=True)
+    (artifact_dir / "sample.blocks.jsonl").write_text("", encoding="utf-8")
+    image_path = assets_dir / "fig.png"
+    Image.new("RGB", (128, 128), "white").save(image_path)
+    (artifact_dir / "sample.drawings.json").write_text(
+        """
+        {
+          "drawings": {
+            "fig-1": {
+              "id": "fig-1",
+              "path": "sample.blocks.assets/fig.png",
+              "llm_analyze_result": {
+                "status": "success",
+                "name": "Harness QR",
+                "type": "QR code",
+                "description": "hallucinated harness lifecycle description"
+              }
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    embedder = AsyncMock()
+    embedder.embed_index_images.return_value = [[0.1, 0.2, 0.3]]
+    engine, deps = _make_engine(multimodal_embedder=embedder)
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {
+            "chunks_list": ["chunk-a", mm_chunk_id],
+            "content_hash": "sha256:parsed",
+            "status": "processed",
+        },
+    ]
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": artifact_dir.as_uri(),
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["chunks"] == ["chunk-a", mm_chunk_id]
+    deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
+    vectors = deps["stores"].overwrite_chunk_vectors.await_args.args[0]
+    assert vectors == {mm_chunk_id: [0.1, 0.2, 0.3]}
 
 
 async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> None:
@@ -316,42 +388,42 @@ async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
     deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
 
 
-def test_artifact_dir_from_uri_handles_file_scheme() -> None:
+def test_sidecar_dir_from_location_handles_file_scheme() -> None:
     from pathlib import Path
 
-    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
-    result = _artifact_dir_from_uri("file:///tmp/sample.parsed/")
+    result = sidecar_dir_from_location("file:///tmp/sample.parsed/")
     assert result == Path("/tmp/sample.parsed/")
 
 
-def test_artifact_dir_from_uri_handles_file_scheme_with_encoding() -> None:
+def test_sidecar_dir_from_location_handles_file_scheme_with_encoding() -> None:
     from pathlib import Path
 
-    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
-    result = _artifact_dir_from_uri("file:///tmp/path%20with%20spaces/")
+    result = sidecar_dir_from_location("file:///tmp/path%20with%20spaces/")
     assert result == Path("/tmp/path with spaces/")
 
 
-def test_artifact_dir_from_uri_rejects_non_file_scheme() -> None:
-    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+def test_sidecar_dir_from_location_rejects_non_file_scheme() -> None:
+    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
-    assert _artifact_dir_from_uri("s3://bucket/key/parsed/") is None
-    assert _artifact_dir_from_uri("azure://container/path/") is None
+    assert sidecar_dir_from_location("s3://bucket/key/parsed/") is None
+    assert sidecar_dir_from_location("azure://container/path/") is None
 
 
-def test_artifact_dir_from_uri_handles_bare_path() -> None:
+def test_sidecar_dir_from_location_handles_bare_path() -> None:
     from pathlib import Path
 
-    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
-    result = _artifact_dir_from_uri("/tmp/local/path")
+    result = sidecar_dir_from_location("/tmp/local/path")
     assert result == Path("/tmp/local/path")
 
 
-def test_artifact_dir_from_uri_handles_none() -> None:
-    from dlightrag.core.ingestion.engine import _artifact_dir_from_uri
+def test_sidecar_dir_from_location_handles_none() -> None:
+    from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
-    assert _artifact_dir_from_uri(None) is None
-    assert _artifact_dir_from_uri("") is None
+    assert sidecar_dir_from_location(None) is None
+    assert sidecar_dir_from_location("") is None

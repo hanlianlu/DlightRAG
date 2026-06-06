@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Unified ingestion over LightRAG parser sidecars and direct image embeddings."""
+"""Unified ingestion over LightRAG parser sidecars and image vector overrides."""
 
 from __future__ import annotations
 
@@ -10,33 +10,22 @@ import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
 
 from lightrag.constants import (
     FULL_DOCS_FORMAT_PENDING_PARSE,
-    FULL_DOCS_FORMAT_RAW,
-    PARSER_ENGINE_DOCLING,
-    PARSER_ENGINE_MINERU,
-    PARSER_ENGINE_NATIVE,
 )
 from lightrag.parser.routing import resolve_file_parser_directives
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 
-from dlightrag.core.ingestion.direct_image import (
-    build_direct_image_chunk,
-    native_image_ref,
-)
-from dlightrag.core.ingestion.lightrag_sidecar import LightRAGSidecarRef, collect_sidecar_refs
-from dlightrag.core.ingestion.visual_semantics import build_visual_semantic_projection
+from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 from dlightrag.core.retrieval.metadata_fields import (
     MetadataFieldRegistry,
     MetadataIngestPolicy,
     extract_system_metadata,
     normalize_user_metadata,
 )
-
-_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +42,7 @@ def _image_dims(path: Path) -> tuple[int, int] | None:
 
 
 class UnifiedIngestionEngine:
-    """One ingestion path for LightRAG documents and direct image chunks."""
+    """One ingestion path over LightRAG parser/routing."""
 
     def __init__(
         self,
@@ -119,12 +108,6 @@ class UnifiedIngestionEngine:
             metadata=metadata,
             metadata_policy=metadata_policy,
         )
-        if file_path.suffix.lower() in _IMAGE_SUFFIXES:
-            return await self._ingest_native_image(
-                file_path,
-                doc_id=doc_id,
-                metadata_record=metadata_record,
-            )
         return await self._ingest_document(
             file_path,
             doc_id=doc_id,
@@ -185,7 +168,7 @@ class UnifiedIngestionEngine:
         # 3. Sidecar directory (parsed artifacts).
         full_doc = await self._stores.get_full_doc(doc_id)
         sidecar_uri = (full_doc or {}).get("sidecar_location")
-        artifact_dir = _artifact_dir_from_uri(sidecar_uri)
+        artifact_dir = sidecar_dir_from_location(sidecar_uri)
         if artifact_dir is not None and artifact_dir.exists():
             shutil.rmtree(artifact_dir, ignore_errors=True)
 
@@ -207,18 +190,6 @@ class UnifiedIngestionEngine:
                 parser_rules=self._parser_rules,
                 require_external_endpoint=False,
             )
-            if parse_engine not in {
-                PARSER_ENGINE_DOCLING,
-                PARSER_ENGINE_MINERU,
-                PARSER_ENGINE_NATIVE,
-            }:
-                logger.warning(
-                    "Skipping %s — unsupported format (parser engine=%s, rules=%s)",
-                    file_path.name,
-                    parse_engine,
-                    self._parser_rules,
-                )
-                return {"status": "skipped", "reason": f"unsupported format: {file_path.suffix}"}
             await self._lightrag.apipeline_enqueue_documents(
                 input="",
                 file_paths=[str(file_path)],
@@ -236,131 +207,65 @@ class UnifiedIngestionEngine:
             lightrag_record = self._lightrag_metadata(full_doc, doc_status)
             await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
 
-            direct_chunks = await self._ingest_sidecar_direct_images(
+            await self._overwrite_sidecar_image_vectors(
                 doc_id=doc_id,
                 sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
+                chunk_ids=set(light_chunks),
             )
 
             return {
                 "doc_id": doc_id,
                 "source_kind": "document",
-                "chunks": light_chunks + direct_chunks["chunk_ids"],
+                "chunks": light_chunks,
                 "ingest_strategy": "lightrag_sidecar_unified",
                 "parse_engine": parse_engine,
                 "process_options": process_options,
             }
 
-    async def _ingest_sidecar_direct_images(
+    async def _overwrite_sidecar_image_vectors(
         self,
         *,
         doc_id: str,
         sidecar_location: str | None,
-    ) -> dict[str, Any]:
-        artifact_dir = _artifact_dir_from_uri(sidecar_location)
+        chunk_ids: set[str],
+    ) -> None:
+        artifact_dir = sidecar_dir_from_location(sidecar_location)
         if artifact_dir is None or not artifact_dir.exists():
-            return {"chunk_ids": []}
+            return
 
-        rows: dict[str, dict[str, Any]] = {}
         vectors: dict[str, list[float]] = {}
-        for ref in collect_sidecar_refs(artifact_dir):
-            if ref.asset_path is None or not ref.asset_path.exists():
+        for asset in collect_lightrag_drawing_assets(
+            artifact_dir,
+            doc_id=doc_id,
+        ):
+            chunk_id = asset.chunk_id
+            if chunk_id not in chunk_ids:
                 continue
-            dims = _image_dims(ref.asset_path)
+            image_path = asset.image_path
+            if not image_path.exists():
+                continue
+            dims = _image_dims(image_path)
             if dims is not None and (
                 dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
             ):
                 logger.debug(
                     "Skipping sidecar image %s (%dx%d < %dpx min)",
-                    ref.asset_path,
+                    image_path,
                     dims[0],
                     dims[1],
                     self._min_image_pixel,
                 )
                 continue
-            content = _sidecar_text_content(ref)
-            chunk_id, row, vector = await build_direct_image_chunk(
-                workspace=self._workspace,
-                full_doc_id=doc_id,
-                ref=ref,
-                embedder=self._multimodal_embedder,
-                text_content=content,
-            )
-            rows[chunk_id] = row
+            vector = await _embed_image_path(self._multimodal_embedder, image_path)
             vectors[chunk_id] = vector
-        if rows:
-            await self._stores.upsert_chunks_with_vectors(
-                rows,
+
+        if vectors:
+            await self._stores.overwrite_chunk_vectors(
                 vectors,
                 embedding_dim=getattr(
                     self._multimodal_embedder, "dim", len(next(iter(vectors.values())))
                 ),
-                max_token_size=8192,
             )
-        return {"chunk_ids": list(rows)}
-
-    async def _ingest_native_image(
-        self,
-        file_path: Path,
-        *,
-        doc_id: str,
-        metadata_record: dict[str, Any],
-    ) -> dict[str, Any]:
-        async with self._get_ingest_lock(doc_id):
-            # Self-healing: if a previous ingest was interrupted, clean up first.
-            existing_status = await self._stores.get_doc_status(doc_id)
-            if existing_status is not None and existing_status.get("status") != "processed":
-                await self._cleanup_partial_doc(doc_id)
-
-            ref = native_image_ref(file_path)
-            chunk_id, row, vector = await build_direct_image_chunk(
-                workspace=self._workspace,
-                full_doc_id=doc_id,
-                ref=ref,
-                embedder=self._multimodal_embedder,
-                text_content=f"Native image: {file_path.name}",
-            )
-            content_hash = _file_sha256(file_path)
-            await self._stores.upsert_document_record(
-                doc_id=doc_id,
-                content=f"Native image: {file_path.name}",
-                file_path=str(file_path),
-                chunks=[chunk_id],
-                parse_engine="native_image",
-                parse_format=FULL_DOCS_FORMAT_RAW,
-                content_hash=content_hash,
-                metadata={"source_kind": "image"},
-                sidecar_location=file_path.as_uri(),
-                process_options="P",
-                chunk_options=self._chunk_options,
-            )
-            await self._stores.upsert_chunks_with_vectors(
-                {chunk_id: row},
-                {chunk_id: vector},
-                embedding_dim=getattr(self._multimodal_embedder, "dim", len(vector)),
-                max_token_size=8192,
-            )
-            if self._vlm_func is not None:
-                semantic_doc_id, semantic_text = await build_visual_semantic_projection(
-                    workspace=self._workspace,
-                    source_doc_id=doc_id,
-                    ref=ref,
-                    vlm_func=self._vlm_func,
-                )
-                await self._lightrag.apipeline_enqueue_documents(
-                    input=semantic_text,
-                    ids=[semantic_doc_id],
-                    file_paths=[str(file_path)],
-                    docs_format=FULL_DOCS_FORMAT_RAW,
-                    process_options="P",
-                )
-                await self._lightrag.apipeline_process_enqueue_documents()
-            await self._metadata_index.upsert(doc_id, metadata_record)
-            return {
-                "doc_id": doc_id,
-                "source_kind": "image",
-                "chunks": [chunk_id],
-                "ingest_strategy": "direct_image_with_visual_semantics",
-            }
 
     @staticmethod
     def _lightrag_metadata(
@@ -378,34 +283,14 @@ class UnifiedIngestionEngine:
         }
 
 
-def _artifact_dir_from_uri(uri: str | None) -> Path | None:
-    """Resolve a sidecar URI to a local directory path.
+async def _embed_image_path(embedder: Any, image_path: Path) -> list[float]:
+    from PIL import Image
 
-    Only ``file://`` URIs produce a local path.  Non-file schemes
-    (s3://, azure://, etc.) return None — they are not local artifacts.
-    """
-    if not uri:
-        return None
-    if uri.startswith("file://"):
-        parsed = urlparse(uri)
-        return Path(unquote(parsed.path))
-    # Non-file URI — sidecar lives on external storage, not locally.
-    if "://" in uri:
-        return None
-    # Bare path (no scheme) — treat as local.
-    return Path(uri)
-
-
-def _sidecar_text_content(ref: LightRAGSidecarRef) -> str:
-    payload = ref.payload or {}
-    analysis = payload.get("llm_analyze_result")
-    if isinstance(analysis, dict):
-        text = analysis.get("text") or analysis.get("description") or analysis.get("summary")
-        if text:
-            return str(text)
-    if caption := payload.get("caption"):
-        return str(caption)
-    return f"{ref.sidecar_type} {ref.sidecar_id}"
+    image = Image.open(image_path).convert("RGB")
+    try:
+        return (await embedder.embed_index_images([image]))[0]
+    finally:
+        image.close()
 
 
 def _file_sha256(path: Path) -> str:

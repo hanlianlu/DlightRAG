@@ -232,7 +232,7 @@ def _load_sidecar_drawing_path(
             continue
         item = drawings.get(drawing_id)
         if isinstance(item, dict):
-            rel_path = item.get("path")
+            rel_path = _drawing_asset_path(item)
             if isinstance(rel_path, str):
                 candidate = artifact_dir / rel_path
                 if candidate.is_file():
@@ -247,6 +247,11 @@ def _load_sidecar_drawing_path(
             if item_page == page_idx:
                 return path
     return candidates[0][1]
+
+
+def _drawing_asset_path(item: dict[str, Any]) -> str | None:
+    raw = item.get("path") or item.get("img_path") or item.get("image_path")
+    return raw if isinstance(raw, str) and raw.strip() else None
 
 
 async def _hydrate_image_data(

@@ -24,8 +24,6 @@ L6  core.{answer, answer_context, answer_images, federation,
 L5  core.{lightrag_stores, _lightrag_patches,
           compat_guard}
     core.ingestion.{lightrag_sidecar,
-                    direct_image,
-                    visual_semantics,
                     parser_hygiene}
     core.retrieval.{filtered_vdb, bm25}
 L4  models.{embedding, multimodal_embedding,
@@ -71,7 +69,7 @@ L0  prompts, utils                                 pure helpers
 | `core.retrieval.metadata_path` | L4 | Metadata-to-candidate resolver |
 | `core.ingestion.cleanup` | L4 | Cascade cleanup |
 | `core.lightrag_stores` | L5 | LightRAG store and sidecar adapter |
-| `core.ingestion.{lightrag_sidecar,direct_image,visual_semantics,parser_hygiene}` | L5 | Parser sidecars, direct image embedding, visual KG projection, LightRAG parser hygiene |
+| `core.ingestion.{lightrag_sidecar,parser_hygiene}` | L5 | LightRAG sidecar asset mapping and parser hygiene |
 | `core.retrieval.{filtered_vdb,bm25}` | L5 | PostgreSQL in-filtering and pg_textsearch BM25 |
 | `core.ingestion.engine` | L6 | Unified ingest orchestration |
 | `core.retrieval.{retriever,fusion,lightrag_backend}` | L6 | LightRAG mix retrieval, BM25 fusion, direct image path |

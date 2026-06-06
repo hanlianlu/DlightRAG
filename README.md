@@ -164,12 +164,15 @@ DlightRAG has one runtime RAG path:
 
 ```text
 source file
-  -> LightRAG parser sidecars
-       text, tables, equations, document-derived images
+  -> LightRAG parser/routing
+       sidecar-backed text, tables, equations, and images when available;
+       LightRAG fallback/raw ingestion otherwise
   -> LightRAG ingest
-       chunks, entities, relationships, graph, text vectors, doc status
-  -> direct image embedding
-       native images and parser-extracted image sidecars into LightRAG chunks/vectors
+       chunks, entities, relationships, graph, vectors, doc status
+  -> image vector alignment
+       successful LightRAG drawing multimodal chunks keep their VLM text,
+       sidecar provenance, BM25, and KG identity; DlightRAG overwrites the
+       existing chunk vector with the raw image embedding
   -> DlightRAG metadata/BM25 layer
        declared metadata index, in-filter scope, pg_textsearch BM25
   -> retrieval
@@ -372,18 +375,38 @@ Recommended defaults in `config.yaml`:
 
 | Setting | Default | Why |
 |---|---|---|
+| `parser_sidecars.vlm.surrounding_leading_max_tokens` / `surrounding_trailing_max_tokens` | `128` / `128` | Gives LightRAG VLM analysis local page context while reducing context-induced visual hallucination. |
 | `parser_sidecars.mineru.api_mode` | `local` | Keeps document parsing local by default. |
 | `parser_sidecars.mineru.local_endpoint` | `http://127.0.0.1:8210` | Reuses ArtRAG or DlightRAG's local `make mineru-api` sidecar. |
 | `parser_sidecars.mineru.local_backend` | `hybrid-auto-engine` | Uses MinerU's local hybrid parser when the service supports it. |
 | `parser_sidecars.mineru.local_parse_method` | `auto` | Lets MinerU choose text-layer extraction vs OCR per page. |
 | `parser_sidecars.mineru.enable_table` / `enable_formula` | `true` | Preserves table and equation extraction for LightRAG ingest. |
+| `parser_sidecars.mineru.auxiliary_block_policy` | `conservative` | Drops only discarded blocks, headers, footers, and printed page numbers; `extended` also drops aside/margin/page-footnote blocks. |
 
 DlightRAG applies a narrow LightRAG parser hygiene patch at startup when the
 current upstream MinerU IR builder still indexes page furniture. The patch
-drops page furniture families such as headers, footers, page numbers, margin
-notes, page footnotes, and discarded blocks before LightRAG builds chunks,
-while preserving semantic and multimodal blocks such as text, lists, code,
-tables, equations, images, and charts.
+drops discarded blocks, headers, footers, and printed page numbers before
+LightRAG builds chunks, while preserving semantic and multimodal blocks such
+as text, lists, code, tables, equations, images, and charts. More ambiguous
+page notes (`aside_text`, `margin_note`, `page_footnote`) are preserved by
+default and can be dropped with
+`parser_sidecars.mineru.auxiliary_block_policy: extended`.
+
+DlightRAG uses LightRAG's parser routing as the ingestability boundary. When
+LightRAG resolves a file to its fallback/raw engine
+(`PARSER_ENGINE_LEGACY`, persisted as `legacy`), DlightRAG still enqueues it
+through the LightRAG pipeline; it simply has no parser sidecar images whose
+vectors can be aligned. With the default `docx:native-iteP,*:mineru-iteP`
+rules, this fallback is a defensive path rather than DlightRAG's normal
+document parsing route.
+
+Source images and parser-extracted images both go through the LightRAG parser
+and multimodal ingest path. LightRAG owns the `llm_analyze_result` text,
+`text_chunks` row, BM25 text, and KG extraction for successful drawing
+multimodal chunks. DlightRAG does not create a second visual-only chunk or a
+separate VLM projection; it only overwrites the existing LightRAG
+drawing chunk's vector with the raw image embedding so visual retrieval returns
+the same canonical chunk id that citations and asset serving already use.
 
 The official MinerU API remains available by explicitly changing
 `parser_sidecars.mineru.api_mode: official` in `config.yaml` and setting

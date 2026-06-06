@@ -95,10 +95,6 @@ Current follow-up: "what about the second image?"
 
 Return valid JSON only, no markdown fences."""
 
-VISUAL_SEMANTIC_GUIDANCE = (
-    "Describe visible entities, relationships, text, scene attributes, and uncertainty."
-)
-
 RERANK_GUIDANCE = (
     "Use 0.00 for completely irrelevant content and 1.00 for perfectly relevant content."
 )
