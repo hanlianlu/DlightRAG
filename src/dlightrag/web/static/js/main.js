@@ -3,6 +3,7 @@
 import {setupQueryForm} from './chat.js';
 import {setupHtmxInteractions} from './htmx.js';
 import {setupImageInputs} from './images.js';
+import {setupMathRendering} from './mathjax.js';
 import {setupPanel} from './panel.js';
 import {setupPanelResize} from './resize.js';
 import {setupFolderInput} from './folder-upload.js';
@@ -16,4 +17,5 @@ document.addEventListener('DOMContentLoaded', function() {
     setupImageInputs();
     setupFolderInput();
     setupQueryForm();
+    setupMathRendering();
 });

@@ -37,6 +37,15 @@ def test_htmx_behavior_lives_in_dedicated_module() -> None:
     assert "htmx:afterRequest" not in panel_js
 
 
+def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
+    web_root = ROOT / "src/dlightrag/web"
+    base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")
+
+    assert 'src="https://' not in base_html
+    assert 'src="/static/vendor/htmx.min.js' in base_html
+    assert (web_root / "static" / "vendor" / "htmx.min.js").is_file()
+
+
 def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
     web_root = ROOT / "src/dlightrag/web"
     checked = [
