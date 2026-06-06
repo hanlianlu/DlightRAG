@@ -69,6 +69,7 @@ def test_mineru_helper_defaults_to_separate_env_file() -> None:
 def test_mineru_env_example_documents_install_extras() -> None:
     example = (ROOT / ".env.mineru.example").read_text(encoding="utf-8")
 
+    assert "MINERU_VERSION=3.2.3" in example
     assert "MINERU_INSTALL_EXTRAS=core,mlx" in example
     assert "# MINERU_INSTALL_EXTRAS=core" in example
     assert "MINERU_SERVICE_VENV=.venv-mineru" in example
@@ -112,6 +113,7 @@ def test_makefile_passes_command_line_overrides_to_scripts(tmp_path: Path) -> No
         [
             "make",
             f"MINERU_SERVICE_VENV={service_env}",
+            "MINERU_VERSION=3.2.3",
             "MINERU_INSTALL_EXTRAS=core,vllm",
             "mineru-install",
         ],
@@ -122,7 +124,7 @@ def test_makefile_passes_command_line_overrides_to_scripts(tmp_path: Path) -> No
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
         f"venv {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[core,vllm]",
+        f"pip install --python {service_env}/bin/python -U mineru[core,vllm]==3.2.3",
     ]
 
 
@@ -247,6 +249,7 @@ def test_mineru_installer_reads_mineru_values_from_env_file(tmp_path: Path) -> N
     )
     env_file.write_text(
         f"MINERU_SERVICE_VENV={service_env}\n"
+        "MINERU_VERSION=3.2.3\n"
         "MINERU_INSTALL_EXTRAS=core,lmdeploy\n"
         "MINERU_LOCAL_ENDPOINT=http://ignored-by-installer:8210\n",
         encoding="utf-8",
@@ -268,7 +271,39 @@ def test_mineru_installer_reads_mineru_values_from_env_file(tmp_path: Path) -> N
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
         f"venv {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[core,lmdeploy]",
+        f"pip install --python {service_env}/bin/python -U mineru[core,lmdeploy]==3.2.3",
+    ]
+
+
+def test_mineru_installer_can_pin_version(tmp_path: Path) -> None:
+    capture = tmp_path / "uv.txt"
+    bin_dir = tmp_path / "bin"
+    service_env = tmp_path / "mineru-env"
+    bin_dir.mkdir()
+    fake_uv = bin_dir / "uv"
+    _write_executable(
+        fake_uv,
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MINERU_CAPTURE"\n',
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MINERU_CAPTURE"] = str(capture)
+    env["MINERU_SERVICE_VENV"] = str(service_env)
+    env["MINERU_VERSION"] = "3.2.3"
+    env["MINERU_INSTALL_EXTRAS"] = "core,mlx"
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
+
+    subprocess.run(
+        [str(MINERU_SCRIPTS / "install.sh")],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        f"venv {service_env}",
+        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]==3.2.3",
     ]
 
 
