@@ -93,10 +93,9 @@ async def verify_pg_config(pool: Any, config_name: str) -> str:
     if config_name == _FALLBACK_CONFIG:
         return config_name
     try:
+
         async def _operation(conn: Any) -> Any:
-            return await conn.fetchval(
-                "SELECT 1 FROM pg_ts_config WHERE cfgname = $1", config_name
-            )
+            return await conn.fetchval("SELECT 1 FROM pg_ts_config WHERE cfgname = $1", config_name)
 
         run = getattr(pool, "run", None)
         if callable(run) and inspect.iscoroutinefunction(run):

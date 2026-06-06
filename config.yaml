@@ -279,10 +279,16 @@ kg_entity_types:
 # jwt_algorithm: "HS256"
 
 # ─────────────────────────────────────────────────────────────────
-# Observability (Optional — best kept in .env)
+# Observability
 # ─────────────────────────────────────────────────────────────────
 
-# langfuse_public_key:
-# langfuse_secret_key:
+# Put Langfuse keys in .env. Keep non-secret SDK behavior here so deployments
+# can tune tracing without changing application code.
 # langfuse_host: http://localhost:3300
 # langfuse_export_external_spans: false
+# langfuse_environment: production
+# langfuse_release:
+# langfuse_sample_rate: 1.0
+# langfuse_timeout:
+# langfuse_flush_at:
+# langfuse_flush_interval:

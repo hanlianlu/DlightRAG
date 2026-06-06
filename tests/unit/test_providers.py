@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from dlightrag.models.providers import get_provider
-from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
 
 
 class TestCompletionProviderABC:
@@ -117,6 +118,31 @@ class TestOpenAICompatProvider:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
             result = await p.complete([{"role": "user", "content": "hi"}], "gpt-4.1")
         assert result == "hello"
+
+    @pytest.mark.asyncio
+    async def test_complete_returns_usage_and_cost_metadata(self):
+        p = get_provider("openai", api_key="test-key")
+        usage = SimpleNamespace(
+            prompt_tokens=4,
+            completion_tokens=3,
+            total_tokens=7,
+            cost=0.002,
+        )
+        mock_response = SimpleNamespace(usage=usage)
+        mock_response.choices = [MagicMock(message=MagicMock(content="hello"))]
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
+            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-4.1")
+
+        assert isinstance(result, CompletionOutput)
+        assert result == "hello"
+        assert result.usage_details == {
+            "prompt_tokens": 4,
+            "completion_tokens": 3,
+            "total_tokens": 7,
+        }
+        assert result.cost_details == {"total": 0.002}
 
     @pytest.mark.asyncio
     async def test_complete_routes_model_kwargs_to_extra_body(self):

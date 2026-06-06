@@ -35,6 +35,7 @@ class _RecordingLangfuse:
         self.observations: list[_RecordingObservation] = []
         self.active: list[_RecordingObservation] = []
         self.flushed = False
+        self.shutdown_called = False
 
     def start_as_current_observation(self, **kwargs: Any) -> _RecordingObservation:
         obs = _RecordingObservation(self, kwargs)
@@ -43,6 +44,9 @@ class _RecordingLangfuse:
 
     def flush(self) -> None:
         self.flushed = True
+
+    def shutdown(self) -> None:
+        self.shutdown_called = True
 
 
 @pytest.fixture(autouse=True)
@@ -72,6 +76,33 @@ async def test_chat_wrapper_uses_generation_observation() -> None:
     assert obs.kwargs["model"] == "gpt-4.1"
     assert obs.kwargs["metadata"] == {"temperature": 0.2}
     assert obs.updates == [{"output": "answer"}]
+
+
+async def test_chat_wrapper_updates_generation_usage_and_cost_details() -> None:
+    from dlightrag.models.providers.base import CompletionOutput
+
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> CompletionOutput:
+        return CompletionOutput(
+            "answer",
+            usage_details={"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            cost_details={"total": 0.001},
+        )
+
+    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-4.1", model="gpt-4.1")
+
+    result = await wrapped(messages=[{"role": "user", "content": "hi"}])
+
+    assert result == "answer"
+    assert client.observations[0].updates == [
+        {
+            "output": "answer",
+            "usage_details": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            "cost_details": {"total": 0.001},
+        }
+    ]
 
 
 async def test_chat_wrapper_does_not_retry_model_call_on_error() -> None:
@@ -187,6 +218,100 @@ def test_init_tracing_filters_external_spans_by_default(monkeypatch: pytest.Monk
     )
 
 
+def test_init_tracing_does_not_call_blocking_auth_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    auth_called = False
+
+    class FakeLangfuse:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+        def auth_check(self) -> bool:
+            nonlocal auth_called
+            auth_called = True
+            raise AssertionError("auth_check should not run during production startup")
+
+    monkeypatch.setattr("langfuse.Langfuse", FakeLangfuse)
+
+    config = SimpleNamespace(
+        langfuse_public_key="pk-test",
+        langfuse_secret_key="sk-test",
+        langfuse_host="https://cloud.langfuse.com",
+        langfuse_export_external_spans=False,
+    )
+    observability.init_tracing(config)
+
+    assert auth_called is False
+    assert isinstance(observability._client, FakeLangfuse)
+
+
+def test_init_tracing_forwards_v4_client_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeLangfuse:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("langfuse.Langfuse", FakeLangfuse)
+
+    config = SimpleNamespace(
+        langfuse_public_key="pk-test",
+        langfuse_secret_key="sk-test",
+        langfuse_host="https://cloud.langfuse.com",
+        langfuse_export_external_spans=False,
+        langfuse_environment="production",
+        langfuse_release="2026.06.06",
+        langfuse_sample_rate=0.25,
+        langfuse_timeout=7,
+        langfuse_flush_at=16,
+        langfuse_flush_interval=2.5,
+    )
+    observability.init_tracing(config)
+
+    assert captured["environment"] == "production"
+    assert captured["release"] == "2026.06.06"
+    assert captured["sample_rate"] == 0.25
+    assert captured["timeout"] == 7
+    assert captured["flush_at"] == 16
+    assert captured["flush_interval"] == 2.5
+    assert callable(captured["mask"])
+
+
+def test_langfuse_mask_redacts_secrets_and_omits_images(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeLangfuse:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("langfuse.Langfuse", FakeLangfuse)
+    config = SimpleNamespace(
+        langfuse_public_key="pk-test",
+        langfuse_secret_key="sk-test",
+        langfuse_host="https://cloud.langfuse.com",
+        langfuse_export_external_spans=False,
+    )
+
+    observability.init_tracing(config)
+    mask = captured["mask"]
+    masked = mask(
+        {
+            "api_key": "sk-secret",
+            "content": [
+                {"type": "text", "text": "hello"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+            ],
+        }
+    )
+
+    assert masked == {
+        "api_key": "[redacted]",
+        "content": [
+            {"type": "text", "text": "hello"},
+            {"type": "image_url", "image_url": "[image omitted]"},
+        ],
+    }
+
+
 def test_init_tracing_clears_previous_client_when_keys_missing() -> None:
     observability._client = _RecordingLangfuse()
 
@@ -196,4 +321,15 @@ def test_init_tracing_clears_previous_client_when_keys_missing() -> None:
     )
     observability.init_tracing(config)
 
+    assert observability._client is None
+
+
+def test_shutdown_tracing_uses_sdk_shutdown_and_clears_client() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    observability.shutdown_tracing()
+
+    assert client.shutdown_called is True
+    assert client.flushed is False
     assert observability._client is None

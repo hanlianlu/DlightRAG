@@ -18,30 +18,23 @@ logger = logging.getLogger(__name__)
 
 _client: Any = None  # Langfuse client when enabled, None otherwise
 _LANGFUSE_TRACER_SCOPE = "langfuse-sdk"
-
-
-def _suppress_otel_export_errors() -> None:
-    """Mute the OTEL OTLP exporter ERROR logs for auth failures (401/403).
-
-    When Langfuse credentials are invalid, the OTEL SDK logs a stack-free
-    ERROR every export cycle, which is noisy and unactionable.  We promote
-    the relevant loggers to CRITICAL so the application log stays clean.
-    """
-    for name in (
-        "opentelemetry.exporter.otlp.proto.http.trace_exporter",
-        "opentelemetry.exporter.otlp.proto.grpc.trace_exporter",
-    ):
-        otel_logger = logging.getLogger(name)
-        if otel_logger.level == logging.NOTSET or otel_logger.level > logging.CRITICAL:
-            otel_logger.setLevel(logging.CRITICAL)
+_SENSITIVE_KEY_PARTS = (
+    "api_key",
+    "secret",
+    "password",
+    "token",
+    "authorization",
+    "connection_string",
+    "account_key",
+    "sas_token",
+)
 
 
 def init_tracing(config: Any) -> None:
     """Initialize Langfuse client from DlightragConfig.
 
-    No-op if disabled.  Validates credentials with a startup auth check so
-    invalid keys are caught early with a clear log instead of surfacing as
-    cryptic OTEL 401 errors later.
+    No-op if disabled. Langfuse's SDK performs export asynchronously; DlightRAG
+    avoids calling the SDK's blocking ``auth_check()`` in production startup.
     """
     global _client
     if not config.langfuse_public_key or not config.langfuse_secret_key:
@@ -55,28 +48,25 @@ def init_tracing(config: Any) -> None:
             "public_key": config.langfuse_public_key,
             "secret_key": config.langfuse_secret_key,
             "base_url": config.langfuse_host,
+            "mask": _mask_langfuse_payload,
         }
+        optional_kwargs = {
+            "environment": getattr(config, "langfuse_environment", None),
+            "release": getattr(config, "langfuse_release", None),
+            "sample_rate": getattr(config, "langfuse_sample_rate", None),
+            "timeout": getattr(config, "langfuse_timeout", None),
+            "flush_at": getattr(config, "langfuse_flush_at", None),
+            "flush_interval": getattr(config, "langfuse_flush_interval", None),
+        }
+        kwargs.update({key: value for key, value in optional_kwargs.items() if value is not None})
         if not getattr(config, "langfuse_export_external_spans", False):
             kwargs["should_export_span"] = _is_dlight_observation_span
 
         _client = Langfuse(**kwargs)
 
-        # Validate credentials synchronously so bad keys fail fast
-        auth_ok = _client.auth_check()
-        if not auth_ok:
-            _client = None
-            logger.warning(
-                "Langfuse auth check failed — invalid or expired credentials. "
-                "Tracing disabled. Update DLIGHTRAG_LANGFUSE_PUBLIC_KEY / "
-                "DLIGHTRAG_LANGFUSE_SECRET_KEY."
-            )
-            return
-
-        _suppress_otel_export_errors()
         logger.info("Langfuse tracing enabled → %s", config.langfuse_host)
     except Exception:
         _client = None
-        _suppress_otel_export_errors()
         logger.warning(
             "Langfuse enabled but initialization failed. Falling back to tracing disabled.",
             exc_info=True,
@@ -84,9 +74,22 @@ def init_tracing(config: Any) -> None:
 
 
 def shutdown_tracing() -> None:
-    """Flush pending events. Safe to call when disabled."""
-    if _client is not None:
-        _client.flush()
+    """Flush pending events and stop SDK background resources."""
+    global _client
+    client = _client
+    _client = None
+    if client is None:
+        return
+    try:
+        shutdown = getattr(client, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+            return
+        flush = getattr(client, "flush", None)
+        if callable(flush):
+            flush()
+    except Exception:
+        logger.debug("Langfuse shutdown failed (non-fatal)", exc_info=True)
 
 
 def _is_dlight_observation_span(span: Any) -> bool:
@@ -139,6 +142,31 @@ def _summarize_messages(messages: Any) -> Any:
     ]
 
 
+def _is_sensitive_key(key: str) -> bool:
+    normalized = key.lower()
+    return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
+
+
+def _mask_langfuse_payload(data: Any, **kwargs: Any) -> Any:  # noqa: ARG001
+    """SDK-level Langfuse mask for secrets, large text, and inline media."""
+    if isinstance(data, dict):
+        if data.get("type") == "image_url":
+            return {"type": "image_url", "image_url": "[image omitted]"}
+        return {
+            key: "[redacted]" if _is_sensitive_key(str(key)) else _mask_langfuse_payload(value)
+            for key, value in data.items()
+        }
+    if isinstance(data, list):
+        return [_mask_langfuse_payload(item) for item in data]
+    if isinstance(data, tuple):
+        return [_mask_langfuse_payload(item) for item in data]
+    if isinstance(data, bytes):
+        return f"[bytes omitted: {len(data)}]"
+    if isinstance(data, str):
+        return _truncate_text(data)
+    return data
+
+
 def _safe_output(value: Any) -> Any:
     if isinstance(value, str):
         return _truncate_text(value)
@@ -160,6 +188,21 @@ def _safe_update(observation: Any, **kwargs: Any) -> None:
         observation.update(**kwargs)
     except Exception:
         logger.debug("Langfuse observation update failed (non-fatal)", exc_info=True)
+
+
+def _observation_update_kwargs(
+    result: Any,
+    *,
+    output_builder: Callable[[Any], Any],
+) -> dict[str, Any]:
+    update: dict[str, Any] = {"output": output_builder(result)}
+    usage_details = getattr(result, "usage_details", None)
+    if usage_details:
+        update["usage_details"] = usage_details
+    cost_details = getattr(result, "cost_details", None)
+    if cost_details:
+        update["cost_details"] = cost_details
+    return update
 
 
 def _exit_observation(
@@ -205,7 +248,10 @@ async def _run_with_observation(
             tb = caught.__traceback__
             _safe_update(observation, level="ERROR", status_message=str(caught))
             raise
-        _safe_update(observation, output=output_builder(result))
+        _safe_update(
+            observation,
+            **_observation_update_kwargs(result, output_builder=output_builder),
+        )
         return result
     finally:
         _exit_observation(cm, exc_type, exc, tb)

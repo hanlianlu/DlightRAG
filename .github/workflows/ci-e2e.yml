@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 #
 # Manual-trigger E2E smoke tests against a real PostgreSQL 18 instance.
-# Requires the dlightrag-postgres:pg18 image + valid LLM API keys.
+# Requires the dlightrag-postgres:pg18 image. Model calls are faked in tests.
 # Not part of the standard CI matrix — use `make ci-e2e` for local runs.
 
 name: CI E2E (manual)
@@ -34,8 +34,6 @@ jobs:
           --health-retries 10
     env:
       DLIGHTRAG_RUN_E2E_PG18: '1'
-      OPENAI_API_KEY: ${{ secrets.DLIGHTRAG_OPENAI_API_KEY }}
-      VOYAGE_API_KEY: ${{ secrets.DLIGHTRAG_VOYAGE_API_KEY }}
       PGHOST: localhost
       PGPORT: 5432
       PGUSER: dlightrag

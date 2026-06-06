@@ -8,6 +8,29 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 
+class CompletionOutput(str):
+    """Completion text with optional observability metadata.
+
+    The value behaves as a plain string for existing callers while allowing
+    providers to attach token usage and cost details for tracing integrations.
+    """
+
+    usage_details: dict[str, int] | None
+    cost_details: dict[str, float] | None
+
+    def __new__(
+        cls,
+        text: str,
+        *,
+        usage_details: dict[str, int] | None = None,
+        cost_details: dict[str, float] | None = None,
+    ) -> CompletionOutput:
+        value = str.__new__(cls, text)
+        value.usage_details = usage_details
+        value.cost_details = cost_details
+        return value
+
+
 class CompletionProvider(ABC):
     """Abstract base for LLM completion providers.
 

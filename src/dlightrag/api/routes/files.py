@@ -97,7 +97,7 @@ async def serve_file(
     - Local paths under ``input_dir/<workspace>/``: 200 + StreamingResponse
     - Local paths under ``working_dir/`` (fallback): 200 + StreamingResponse
     - azure://: 302 redirect to SAS signed URL
-    - s3://: 501 Not Implemented (S3 presigned URL support in Task 5)
+    - s3://: 501 Not Implemented (S3 download URLs are not implemented)
     """
     config = get_config()
 
@@ -112,7 +112,7 @@ async def serve_file(
         )
         return RedirectResponse(url=sas_url, status_code=302)
 
-    # --- S3: not yet implemented ---
+    # --- S3 remote download URLs are not yet implemented ---
     if file_path.startswith("s3://"):
         raise HTTPException(501, "S3 presigned URL support not yet implemented")
 

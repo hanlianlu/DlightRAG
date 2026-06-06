@@ -79,6 +79,7 @@ class PGWorkspaceRegistry:
 
     async def initialize(self, *, read_only: bool = False) -> None:
         """Create or verify the registry table."""
+
         async def _operation(conn: Any) -> None:
             if read_only:
                 exists = await conn.fetchval(
@@ -122,6 +123,7 @@ class PGWorkspaceRegistry:
 
     async def list(self) -> list[dict[str, Any]]:
         """Return all registered workspaces."""
+
         async def _operation(conn: Any) -> list[Any]:
             return await conn.fetch(_LIST)
 
@@ -134,6 +136,7 @@ class PGWorkspaceRegistry:
 
     async def exists(self, workspace: str) -> bool:
         """Return True when a registry row exists."""
+
         async def _operation(conn: Any) -> Any:
             return await conn.fetchrow(_EXISTS, workspace)
 
@@ -142,6 +145,7 @@ class PGWorkspaceRegistry:
 
     async def delete(self, workspace: str) -> None:
         """Delete one workspace registry row."""
+
         async def _operation(conn: Any) -> None:
             await conn.execute(_DELETE, workspace)
 

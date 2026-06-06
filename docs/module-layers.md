@@ -82,34 +82,13 @@ L0  prompts, utils                                 pure helpers
 
 ## Verification
 
-The layering is intended to be audited with an AST import check before large
-releases. A violation means a lower layer imported a higher layer or a request
-interface leaked into core runtime code.
+The layering is audited by the same checks used in CI. A violation means a
+lower layer imported a higher layer or a request interface leaked into core
+runtime code.
 
 ```bash
-uv run python - <<'PY'
-import ast
-from collections import defaultdict
-from pathlib import Path
-
-src_root = Path("src/dlightrag")
-graph: dict[str, set[str]] = defaultdict(set)
-for py in src_root.rglob("*.py"):
-    if "__pycache__" in py.parts:
-        continue
-    rel = py.relative_to(src_root.parent.parent / "src").with_suffix("")
-    mod = ".".join(rel.parts).removesuffix(".__init__")
-    tree = ast.parse(py.read_text())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("dlightrag"):
-            graph[mod].add(node.module)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.startswith("dlightrag"):
-                    graph[mod].add(alias.name)
-
-print(f"audited {len(graph)} modules")
-PY
+uv run lint-imports
+uv run python scripts/ci/check-architecture.py
 ```
 
 ## Adding A Module

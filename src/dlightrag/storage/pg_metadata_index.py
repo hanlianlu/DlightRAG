@@ -119,20 +119,17 @@ def _build_upsert() -> str:
     for field_id in _UPSERT_FIELD_IDS:
         if field_id in _JSONB_MERGE_FIELDS:
             updates.append(
-                f"    {field_id} = "
-                f"dlightrag_doc_metadata.{field_id} || EXCLUDED.{field_id}"
+                f"    {field_id} = dlightrag_doc_metadata.{field_id} || EXCLUDED.{field_id}"
             )
         else:
             updates.append(
-                f"    {field_id} = "
-                f"COALESCE(EXCLUDED.{field_id}, dlightrag_doc_metadata.{field_id})"
+                f"    {field_id} = COALESCE(EXCLUDED.{field_id}, dlightrag_doc_metadata.{field_id})"
             )
     return (
         "INSERT INTO dlightrag_doc_metadata\n"
         f"    ({insert_columns})\n"
         f"VALUES ({placeholders})\n"
-        "ON CONFLICT (workspace, doc_id) DO UPDATE SET\n"
-        + ",\n".join(updates)
+        "ON CONFLICT (workspace, doc_id) DO UPDATE SET\n" + ",\n".join(updates)
     )
 
 
@@ -315,6 +312,7 @@ class PGMetadataIndex:
 
     async def get(self, doc_id: str) -> dict[str, Any] | None:
         """Get metadata for a single document."""
+
         async def _operation(conn: Any) -> Any:
             return await conn.fetchrow(
                 "SELECT * FROM dlightrag_doc_metadata WHERE workspace=$1 AND doc_id=$2",
@@ -329,6 +327,7 @@ class PGMetadataIndex:
 
     async def delete(self, doc_id: str) -> None:
         """Delete metadata for a document."""
+
         async def _operation(conn: Any) -> None:
             await conn.execute(
                 "DELETE FROM dlightrag_doc_metadata WHERE workspace=$1 AND doc_id=$2",
@@ -340,6 +339,7 @@ class PGMetadataIndex:
 
     async def clear(self) -> None:
         """Delete all metadata for this workspace."""
+
         async def _operation(conn: Any) -> str:
             return await conn.execute(
                 "DELETE FROM dlightrag_doc_metadata WHERE workspace=$1",
@@ -360,6 +360,7 @@ class PGMetadataIndex:
 
         Used by QueryAnalyzer to build a context-aware LLM prompt.
         """
+
         async def _operation(conn: Any) -> tuple[list[Any], list[Any]]:
             col_rows = await conn.fetch(
                 "SELECT column_name, data_type FROM information_schema.columns "
@@ -387,6 +388,7 @@ class PGMetadataIndex:
 
     async def find_by_filename(self, name: str) -> list[str]:
         """Find doc_ids by case-insensitive filename match."""
+
         async def _operation(conn: Any) -> list[Any]:
             return await conn.fetch(
                 "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND LOWER(filename)=LOWER($2)",

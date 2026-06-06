@@ -114,6 +114,8 @@ class TestAnswerConfig:
         assert cfg.candidate_top_k == 60
         assert cfg.context_top_k == 30
         assert cfg.candidate_top_k >= cfg.context_top_k
+        assert cfg.image_quality == 89
+        assert cfg.image_min_quality == 79
 
 
 class TestMetadataConfig:
@@ -158,6 +160,36 @@ class TestDlightragConfigNested:
         )
         assert cfg.llm.default.model == "gpt-4.1"
         assert cfg.llm.default.temperature == 0.5
+
+    def test_langfuse_v4_observability_defaults(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        cfg = DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        )
+
+        assert cfg.langfuse_environment is None
+        assert cfg.langfuse_release is None
+        assert cfg.langfuse_sample_rate == 1.0
+        assert cfg.langfuse_timeout is None
+        assert cfg.langfuse_flush_at is None
+        assert cfg.langfuse_flush_interval is None
+
+    def test_langfuse_sample_rate_is_validated(self) -> None:
+        with pytest.raises(ValidationError):
+            DlightragConfig(
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="sk-test",
+                    startup_probe=False,
+                ),
+                langfuse_sample_rate=1.5,
+            )
 
     def test_env_var_nested(self, monkeypatch):
         """Test env var override with __ delimiter."""

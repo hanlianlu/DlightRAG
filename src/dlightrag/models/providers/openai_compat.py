@@ -9,9 +9,41 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
 
 logger = logging.getLogger(__name__)
+
+_USAGE_INT_KEYS = frozenset(
+    {
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "input_tokens",
+        "output_tokens",
+    }
+)
+
+
+def _usage_to_dict(usage: Any) -> dict[str, int] | None:
+    if usage is None:
+        return None
+    raw = usage if isinstance(usage, dict) else getattr(usage, "__dict__", {})
+    result = {
+        key: int(value)
+        for key, value in raw.items()
+        if key in _USAGE_INT_KEYS and isinstance(value, int)
+    }
+    return result or None
+
+
+def _cost_to_dict(usage: Any) -> dict[str, float] | None:
+    if usage is None:
+        return None
+    raw = usage if isinstance(usage, dict) else getattr(usage, "__dict__", {})
+    cost = raw.get("cost")
+    if isinstance(cost, int | float):
+        return {"total": float(cost)}
+    return None
 
 
 class OpenAICompatProvider(CompletionProvider):
@@ -70,7 +102,11 @@ class OpenAICompatProvider(CompletionProvider):
         response = await self._get_client().chat.completions.create(**call_kwargs)
         message = response.choices[0].message
         self.last_reasoning = self._extract_reasoning(message)
-        return message.content or ""
+        return CompletionOutput(
+            message.content or "",
+            usage_details=_usage_to_dict(getattr(response, "usage", None)),
+            cost_details=_cost_to_dict(getattr(response, "usage", None)),
+        )
 
     async def stream(
         self,
