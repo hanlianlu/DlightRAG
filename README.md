@@ -55,26 +55,88 @@ belongs in [docs/PG.md](docs/PG.md) and
 
 2. Install and start a native MinerU sidecar if one is not already running.
 
-On macOS, install the dedicated MinerU environment once, then run it through
-launchd:
+MinerU is intentionally a native sidecar in local development. Docker Compose
+does not run MinerU; it runs DlightRAG, MCP, and PostgreSQL, then connects the
+DlightRAG containers back to the host-native MinerU endpoint.
+
+Create MinerU's own env file and install the dedicated MinerU virtual
+environment once:
 
 ```bash
 cp .env.mineru.example .env.mineru
 make mineru-install
+```
+
+This creates `.venv-mineru` so MinerU's ML dependencies stay out of the
+DlightRAG runtime. Re-run `make mineru-install` only when upgrading MinerU or
+changing `.env.mineru` package extras such as `MINERU_INSTALL_EXTRAS`.
+
+Choose `MINERU_INSTALL_EXTRAS` in `.env.mineru` for the local machine:
+
+- Apple Silicon local development: `core,mlx`
+- Linux or WSL CPU fallback: `core`
+- Linux GPU service, when supported by the target MinerU release:
+  `core,vllm` or `core,lmdeploy`
+
+For a temporary foreground process on any local OS, run:
+
+```bash
+make mineru-api
+```
+
+`make mineru-api` blocks in the current terminal and serves
+`http://127.0.0.1:8210` by default.
+
+On macOS, service-manage the same API through launchd:
+
+```bash
 make mineru-service-install
 make mineru-service-status
 make mineru-service-logs
 ```
 
-The helper creates `.venv-mineru` so MinerU's ML dependencies stay out of the
-DlightRAG runtime. The default local endpoint in `config.yaml` is
-`http://127.0.0.1:8210`.
+`make mineru-service-install` writes the LaunchAgent plist and starts the API.
+Use `make mineru-service-start` later to restart an already installed service.
 
-For a temporary foreground process instead of launchd, run:
+On Linux or WSL with systemd, service-manage the same API with a user service:
 
 ```bash
-make mineru-api
+repo="$(pwd)"
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/dlightrag-mineru.service <<EOF
+[Unit]
+Description=DlightRAG MinerU API sidecar
+
+[Service]
+WorkingDirectory=${repo}
+Environment=MINERU_ENV_FILE=${repo}/.env.mineru
+ExecStart=${repo}/scripts/mineru/api.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now dlightrag-mineru.service
+systemctl --user status dlightrag-mineru.service
+journalctl --user -u dlightrag-mineru.service -f
 ```
+
+On a headless Linux host where the user service must survive logout, enable
+lingering once with `loginctl enable-linger "$USER"`.
+
+Endpoint alignment:
+
+- Native MinerU listens on `MINERU_API_HOST:MINERU_API_PORT` from
+  `.env.mineru`, defaulting to `http://127.0.0.1:8210`.
+- [config.yaml](config.yaml) defaults
+  `parser_sidecars.mineru.local_endpoint` to `http://127.0.0.1:8210`.
+- Docker Compose maps that host-native endpoint into DlightRAG containers as
+  `http://host.docker.internal:8210` through `MINERU_DOCKER_LOCAL_ENDPOINT`.
+  Override that value in `.env` only if the DlightRAG containers must reach a
+  different externally managed MinerU endpoint.
 
 3. Start DlightRAG and PostgreSQL:
 
