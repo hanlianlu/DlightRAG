@@ -95,6 +95,37 @@ class TestYamlConfigLoading:
             assert "normalize" not in field_spec
             assert "indexed" not in field_spec
 
+    def test_repo_config_matches_concurrency_defaults(self):
+        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+
+        assert config["max_async"] == 8
+        assert config["embedding_func_max_async"] == 16
+        assert config["max_parallel_insert"] == 3
+        assert config["postgres_lightrag_pool_max_size"] == 16
+        assert config["postgres_pool_min_size"] == 2
+        assert config["postgres_pool_max_size"] == 10
+        assert (
+            DlightragConfig.model_fields["max_parallel_insert"].default
+            == config["max_parallel_insert"]
+        )
+        assert DlightragConfig.model_fields["max_async"].default == config["max_async"]
+        assert (
+            DlightragConfig.model_fields["embedding_func_max_async"].default
+            == config["embedding_func_max_async"]
+        )
+        assert (
+            DlightragConfig.model_fields["postgres_lightrag_pool_max_size"].default
+            == config["postgres_lightrag_pool_max_size"]
+        )
+        assert (
+            DlightragConfig.model_fields["postgres_pool_min_size"].default
+            == config["postgres_pool_min_size"]
+        )
+        assert (
+            DlightragConfig.model_fields["postgres_pool_max_size"].default
+            == config["postgres_pool_max_size"]
+        )
+
 
 class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):

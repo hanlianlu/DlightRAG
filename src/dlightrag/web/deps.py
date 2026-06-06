@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
 
 from dlightrag.citations.parser import CITATION_PATTERN
+from dlightrag.core.scope import RequestScope
 from dlightrag.web.markdown import render_chunk_content, render_markdown
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
@@ -244,3 +245,12 @@ def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) 
 def get_manager(request: Request):
     """Get RAGServiceManager from app state."""
     return request.app.state.manager
+
+
+def get_request_scope(
+    request: Request,
+    workspaces: list[str] | tuple[str, ...] | None = None,
+) -> RequestScope:
+    """Return the authenticated request scope for browser routes."""
+    user = getattr(request.state, "user_context", None)
+    return RequestScope.from_user(user).for_workspaces(workspaces)

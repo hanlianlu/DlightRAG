@@ -398,3 +398,16 @@ class PGMetadataIndex:
 
         rows = await self._run(_operation)
         return [r["doc_id"] for r in rows]
+
+    async def find_by_file_path(self, file_path: str) -> list[str]:
+        """Find doc_ids by exact stored file_path match."""
+
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(
+                "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND file_path=$2",
+                self._workspace,
+                file_path,
+            )
+
+        rows = await self._run(_operation)
+        return [r["doc_id"] for r in rows]

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from pathlib import Path
 
@@ -37,12 +38,23 @@ class TestCheckpointInit:
     def test_wal_mode_enabled(self, tmp_path: Path) -> None:
         db_path = tmp_path / "checkpoints.db"
         cp = ConversationCheckpoint(db_path)
-        cp._ensure_db_sync()
+        conn = cp._ensure_db_sync()
+        try:
+            journal = conn.execute("PRAGMA journal_mode").fetchone()[0]
+            assert journal.upper() == "WAL"
+        finally:
+            conn.close()
 
-        conn = sqlite3.connect(str(db_path))
-        journal = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        assert journal.upper() == "WAL"
-        conn.close()
+    def test_connection_pragmas_are_configured(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+        conn = cp._ensure_db_sync()
+        try:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+        finally:
+            conn.close()
 
     def test_ensure_db_idempotent(self, tmp_path: Path) -> None:
         db_path = tmp_path / "checkpoints.db"
@@ -111,6 +123,13 @@ class TestCheckpointCRUD:
 
         cited_ids = await cp.get_cited_chunk_ids("s1")
         assert cited_ids == {"c1"}
+
+    async def test_save_anchors_requires_existing_session(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "checkpoints.db"
+        cp = ConversationCheckpoint(db_path)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            await cp.save_anchors("missing-session", 1, [{"chunk_id": "c1"}])
 
     async def test_delete_session_cascades(self, tmp_path: Path) -> None:
         db_path = tmp_path / "checkpoints.db"
@@ -205,7 +224,6 @@ class TestCheckpointCRUD:
 
         assert deleted == 0
         assert conn.calls == [
-            ("PRAGMA foreign_keys = ON", ()),
             (
                 "DELETE FROM sessions WHERE updated_at < datetime('now', ?)",
                 ("-30 days",),
@@ -234,3 +252,57 @@ class TestCheckpointCRUD:
 
         anchors = await cp.get_previous_anchors("s1")
         assert anchors == []
+
+    async def test_save_turn_pair_keeps_scoped_sessions_isolated(self, tmp_path: Path) -> None:
+        cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
+
+        await cp.save_turn_pair(
+            "jwt:alice:reports:same-session",
+            workspace="reports",
+            query="alice question",
+            answer="alice answer",
+            contexts={"chunks": []},
+            cited_chunk_ids=[],
+        )
+        await cp.save_turn_pair(
+            "jwt:bob:reports:same-session",
+            workspace="reports",
+            query="bob question",
+            answer="bob answer",
+            contexts={"chunks": []},
+            cited_chunk_ids=[],
+        )
+
+        assert await cp.get_history("jwt:alice:reports:same-session") == [
+            {"role": "user", "content": "alice question"},
+            {"role": "assistant", "content": "alice answer"},
+        ]
+        assert await cp.get_history("jwt:bob:reports:same-session") == [
+            {"role": "user", "content": "bob question"},
+            {"role": "assistant", "content": "bob answer"},
+        ]
+
+    async def test_save_turn_pair_is_atomic_for_concurrent_same_session(
+        self, tmp_path: Path
+    ) -> None:
+        cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
+
+        async def save(idx: int) -> None:
+            await cp.save_turn_pair(
+                "jwt:alice:reports:s1",
+                workspace="reports",
+                query=f"q{idx}",
+                answer=f"a{idx}",
+                contexts={"chunks": []},
+                cited_chunk_ids=[],
+            )
+
+        await asyncio.gather(save(1), save(2))
+
+        history = await cp.get_history("jwt:alice:reports:s1")
+        assert len(history) == 4
+        assert {item["content"] for item in history if item["role"] == "user"} == {"q1", "q2"}
+        assert {item["content"] for item in history if item["role"] == "assistant"} == {
+            "a1",
+            "a2",
+        }

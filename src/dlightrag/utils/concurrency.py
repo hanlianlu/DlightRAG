@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from typing import Any, cast
@@ -11,6 +12,16 @@ from typing import Any, cast
 logger = logging.getLogger(__name__)
 
 _MISSING = object()
+
+
+async def shutdown_async_callable(func: Any, *, graceful: bool = True) -> None:
+    """Best-effort shutdown for LightRAG priority-queue wrapped callables."""
+    shutdown = getattr(func, "shutdown", None)
+    if not callable(shutdown):
+        return
+    result = shutdown(graceful=graceful)
+    if inspect.isawaitable(result):
+        await cast(Awaitable[Any], result)
 
 
 async def bounded_gather(

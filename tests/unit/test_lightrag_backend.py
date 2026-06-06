@@ -212,6 +212,52 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 
+async def test_backend_batches_multiple_query_image_embeddings(tmp_path: Path) -> None:
+    image_path = tmp_path / "img.png"
+    _write_image(image_path)
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={"data": {"chunks": [], "entities": [], "relationships": []}}
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[None, None])
+    lightrag.chunks_vdb = MagicMock()
+    lightrag.chunks_vdb.query = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "id": "img-a",
+                    "content": "visual match a",
+                    "file_path": str(image_path),
+                    "distance": 0.2,
+                }
+            ],
+            [
+                {
+                    "id": "img-b",
+                    "content": "visual match b",
+                    "file_path": str(image_path),
+                    "distance": 0.1,
+                }
+            ],
+        ]
+    )
+
+    embedder = MagicMock()
+    embedder.embed_query_images = AsyncMock(return_value=[[0.1, 0.2], [0.3, 0.4]])
+
+    backend = LightRAGMixBackend(lightrag=lightrag, embedder=embedder)
+    result = await backend.aretrieve(
+        "find these",
+        multimodal_content=[_image_payload(), _image_payload()],
+    )
+
+    embedder.embed_query_images.assert_awaited_once()
+    assert len(embedder.embed_query_images.await_args.args[0]) == 2
+    assert lightrag.chunks_vdb.query.await_count == 2
+    assert [c["chunk_id"] for c in result.contexts["chunks"][:2]] == ["img-b", "img-a"]
+
+
 async def test_backend_uses_dedicated_direct_visual_top_k_for_image_search(
     tmp_path: Path,
 ) -> None:

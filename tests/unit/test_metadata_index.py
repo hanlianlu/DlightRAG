@@ -178,3 +178,23 @@ async def test_metadata_index_read_only_rejects_missing_migration() -> None:
 
     with pytest.raises(RuntimeError, match="doc_metadata schema migration"):
         await idx.initialize(read_only=True)
+
+
+async def test_metadata_index_finds_by_exact_file_path() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+    seen: dict[str, Any] = {}
+
+    class Conn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+            seen["query"] = query
+            seen["args"] = args
+            return [{"doc_id": "doc-1"}]
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    assert await idx.find_by_file_path("/inputs/default/a/report.pdf") == ["doc-1"]
+    assert "file_path=$2" in seen["query"]
+    assert seen["args"] == ("default", "/inputs/default/a/report.pdf")

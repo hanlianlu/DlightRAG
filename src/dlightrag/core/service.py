@@ -15,7 +15,7 @@ import os
 import shutil
 import sys
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -83,7 +83,6 @@ from dlightrag.models.llm import (  # noqa: E402
     get_embedding_func,
     get_multimodal_embedder,
     get_rerank_func,
-    get_vlm_model_func,
 )
 from dlightrag.storage.postgres_version import (  # noqa: E402
     ensure_pgvector_halfvec,
@@ -318,7 +317,6 @@ class RAGService:
 
         # Get model functions
         default_func_lr = get_default_model_func_for_lightrag(config)
-        vlm_func = get_vlm_model_func(config)
         rerank_func = get_rerank_func(config)
         role_overrides = build_role_llm_configs(config)
         if role_overrides is not None:
@@ -339,7 +337,7 @@ class RAGService:
             workspace=config.workspace,
             default_llm_timeout=int(config.llm.default.timeout),
             default_embedding_timeout=config.embedding_request_timeout,
-            max_parallel_insert=config.max_parallel_insert,
+            **config.lightrag_pipeline_kwargs(),
             llm_model_max_async=config.max_async,
             embedding_func_max_async=config.embedding_func_max_async,
             embedding_batch_num=config.embedding_batch_num,
@@ -409,7 +407,6 @@ class RAGService:
             stores=self._lightrag_stores,
             metadata_index=self._metadata_index,
             multimodal_embedder=multimodal_embedder,
-            vlm_func=vlm_func,
             workspace=config.workspace,
             parser_rules=config.parser.rules,
             chunk_options=config.parser.chunk_options,
@@ -727,28 +724,34 @@ class RAGService:
         return await areset(self, keep_files=keep_files, dry_run=dry_run)
 
     async def _shutdown_worker_pools(self) -> None:
-        """Shutdown LightRAG's EmbeddingFunc/LLM worker pools.
-
-        LightRAG wraps embedding_func and llm_model_func with
-        priority_limit_async_func_call which creates background asyncio
-        tasks.  finalize_storages() does NOT shut these down, so they
-        block asyncio.run() from exiting.  The wrapped functions expose
-        a ``.shutdown()`` coroutine we can call explicitly.
-        """
+        """Shutdown LightRAG priority-queue worker pools."""
         lr = self.lightrag
         if lr is None:
             return
 
-        for attr in ("embedding_func", "llm_model_func"):
+        from dlightrag.utils.concurrency import shutdown_async_callable
+
+        funcs: list[tuple[str, Any]] = []
+        for attr in ("embedding_func", "llm_model_func", "rerank_model_func"):
             try:
                 obj = getattr(lr, attr, None)
-                # EmbeddingFunc stores the wrapped func in .func
-                func = getattr(obj, "func", obj)
-                shutdown = getattr(func, "shutdown", None)
-                if shutdown is not None:
-                    await shutdown()
+                funcs.append((attr, getattr(obj, "func", obj)))
             except Exception:  # noqa: BLE001
-                logger.debug("Failed to shutdown %s worker pool", attr, exc_info=True)
+                logger.debug("Failed to collect %s worker pool", attr, exc_info=True)
+
+        role_funcs = getattr(lr, "role_llm_funcs", None) or {}
+        items = role_funcs.items() if isinstance(role_funcs, Mapping) else ()
+        funcs.extend((f"role_llm_funcs.{role}", func) for role, func in items)
+
+        seen: set[int] = set()
+        for label, func in funcs:
+            if func is None or id(func) in seen:
+                continue
+            seen.add(id(func))
+            try:
+                await shutdown_async_callable(func)
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to shutdown %s worker pool", label, exc_info=True)
 
     async def _upsert_workspace_meta(self, *, display_name: str | None = None) -> None:
         """Persist this workspace in DlightRAG's PostgreSQL registry."""
@@ -826,6 +829,7 @@ class RAGService:
         *,
         replace: bool,
         stored_file_path: str | None = None,
+        source_root: Path | None = None,
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
@@ -837,13 +841,53 @@ class RAGService:
 
         if replace:
             await self._purge_existing_for_replace(
-                file_path=file_path,
+                file_path=self._staged_input_path(file_path, relative_to=source_root),
                 stored_file_path=stored_file_path,
             )
 
-        file_path = self._stage_lightrag_input_file(file_path)
+        file_path = self._stage_lightrag_input_file(file_path, relative_to=source_root)
         result = await self._ingestion_engine.aingest_file(
             file_path,
+            replace=replace,
+            title=title,
+            author=author,
+            metadata=metadata,
+            metadata_policy=metadata_policy,
+        )
+        if hasattr(result, "model_dump"):
+            result = result.model_dump()
+
+        return result
+
+    async def _aingest_local_files(
+        self,
+        file_paths: list[Path],
+        *,
+        replace: bool,
+        source_root: Path | None = None,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        """Ingest local files through one LightRAG staged batch."""
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+        if not file_paths:
+            return {"processed": 0, "errors": [], "results": []}
+
+        if replace:
+            for file_path in file_paths:
+                await self._purge_existing_for_replace(
+                    file_path=self._staged_input_path(file_path, relative_to=source_root)
+                )
+
+        staged_paths = [
+            self._stage_lightrag_input_file(file_path, relative_to=source_root)
+            for file_path in file_paths
+        ]
+        result = await self._ingestion_engine.aingest_files(
+            staged_paths,
             replace=replace,
             title=title,
             author=author,
@@ -874,7 +918,8 @@ class RAGService:
             (p for p in path.rglob("*") if p.is_file()),
             key=lambda p: p.relative_to(path).as_posix(),
         ):
-            if "__parsed__" in (p.name for p in item.parents):
+            parent_names = {p.name for p in item.parents}
+            if "__parsed__" in parent_names or "__uploads__" in parent_names:
                 continue
             if item.name.startswith("."):
                 continue
@@ -883,10 +928,30 @@ class RAGService:
             raise ValueError(f"Local ingest directory contains no files: {path}")
         return files
 
-    def _stage_lightrag_input_file(self, file_path: Path) -> Path:
+    def _workspace_input_root(self) -> Path:
+        return self.config.input_dir_path / self.config.workspace
+
+    def _staged_input_path(self, file_path: Path, *, relative_to: Path | None = None) -> Path:
+        if relative_to is None:
+            relative_path = Path(file_path.name)
+        else:
+            try:
+                relative_path = file_path.resolve().relative_to(relative_to.resolve())
+            except ValueError:
+                relative_path = Path(file_path.name)
+            if not relative_path.parts:
+                relative_path = Path(file_path.name)
+        return self._workspace_input_root() / relative_path
+
+    def _stage_lightrag_input_file(
+        self,
+        file_path: Path,
+        *,
+        relative_to: Path | None = None,
+    ) -> Path:
         """Copy an ingest source into LightRAG's persistent input root."""
         source = file_path.resolve()
-        target = self.config.input_dir_path / self.config.workspace / file_path.name
+        target = self._staged_input_path(file_path, relative_to=relative_to)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() and target.resolve() == source:
             return target
@@ -896,15 +961,16 @@ class RAGService:
         os.replace(tmp_target, target)
         return target
 
+    def _remote_namespace_root(self, source_type: str, namespace: str) -> Path:
+        safe_namespace = namespace.replace("/", "_").replace("\\", "_") or "default"
+        return self.config.working_dir_path / "sources" / source_type / safe_namespace
+
     def _remote_local_path(self, source_type: str, namespace: str, key: str) -> Path:
         """Return a managed local source-copy path for a remote object."""
         parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
         if not parts:
             raise ValueError("remote object key is empty")
-        safe_namespace = namespace.replace("/", "_").replace("\\", "_") or "default"
-        return (
-            self.config.working_dir_path / "sources" / source_type / safe_namespace / Path(*parts)
-        )
+        return self._remote_namespace_root(source_type, namespace) / Path(*parts)
 
     async def _download_remote_to_local(
         self,
@@ -920,35 +986,61 @@ class RAGService:
         await asyncio.to_thread(local_path.write_bytes, content)
         return local_path
 
-    async def _aingest_remote_key(
+    async def _aingest_remote_keys(
         self,
         *,
         source: Any,
         source_type: str,
         namespace: str,
-        key: str,
-        source_uri: str,
+        keys: list[str],
+        source_uri_for_key: Callable[[str], str],
         replace: bool,
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
         metadata_policy: MetadataIngestPolicy | None = None,
     ) -> dict[str, Any]:
-        local_path = await self._download_remote_to_local(
-            source=source,
-            source_type=source_type,
-            namespace=namespace,
-            key=key,
-        )
-        return await self._aingest_local_file(
-            local_path,
-            replace=replace,
-            stored_file_path=source_uri,
+        """Download remote objects and ingest them through one staged batch."""
+        if not keys:
+            return {"processed": 0, "errors": [], "results": []}
+
+        local_paths: list[Path] = []
+        source_uris: list[str] = []
+        source_root = self._remote_namespace_root(source_type, namespace)
+        for key in keys:
+            local_paths.append(
+                await self._download_remote_to_local(
+                    source=source,
+                    source_type=source_type,
+                    namespace=namespace,
+                    key=key,
+                )
+            )
+            source_uris.append(source_uri_for_key(key))
+
+        if replace:
+            for local_path, source_uri in zip(local_paths, source_uris, strict=True):
+                await self._purge_existing_for_replace(
+                    file_path=self._staged_input_path(local_path, relative_to=source_root),
+                    stored_file_path=source_uri,
+                )
+
+        return await self._aingest_local_files(
+            local_paths,
+            replace=False,
+            source_root=source_root,
             title=title,
             author=author,
             metadata=metadata,
             metadata_policy=metadata_policy,
         )
+
+    @staticmethod
+    def _single_file_result(batch_result: dict[str, Any]) -> dict[str, Any]:
+        results = batch_result.get("results")
+        if isinstance(results, list) and results:
+            return results[0]
+        return batch_result
 
     async def _aingest_azure_blob(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         container_name = kwargs.get("container_name")
@@ -967,37 +1059,35 @@ class RAGService:
         try:
             if kwargs.get("blob_path"):
                 key = str(kwargs["blob_path"])
-                return await self._aingest_remote_key(
-                    source=source,
-                    source_type="azure_blob",
-                    namespace=str(container_name or "default"),
-                    key=key,
-                    source_uri=f"azure://{container_name}/{key}",
-                    replace=replace,
-                    title=kwargs.get("title"),
-                    author=kwargs.get("author"),
-                    metadata=kwargs.get("metadata"),
-                    metadata_policy=kwargs.get("metadata_policy"),
+                return self._single_file_result(
+                    await self._aingest_remote_keys(
+                        source=source,
+                        source_type="azure_blob",
+                        namespace=str(container_name or "default"),
+                        keys=[key],
+                        source_uri_for_key=lambda item: f"azure://{container_name}/{item}",
+                        replace=replace,
+                        title=kwargs.get("title"),
+                        author=kwargs.get("author"),
+                        metadata=kwargs.get("metadata"),
+                        metadata_policy=kwargs.get("metadata_policy"),
+                    )
                 )
 
             prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
             keys = await source.alist_documents(prefix=prefix)
-            results = [
-                await self._aingest_remote_key(
-                    source=source,
-                    source_type="azure_blob",
-                    namespace=str(container_name or "default"),
-                    key=str(key),
-                    source_uri=f"azure://{container_name}/{key}",
-                    replace=replace,
-                    title=kwargs.get("title"),
-                    author=kwargs.get("author"),
-                    metadata=kwargs.get("metadata"),
-                    metadata_policy=kwargs.get("metadata_policy"),
-                )
-                for key in keys
-            ]
-            return {"processed": len(results), "results": results}
+            return await self._aingest_remote_keys(
+                source=source,
+                source_type="azure_blob",
+                namespace=str(container_name or "default"),
+                keys=[str(key) for key in keys],
+                source_uri_for_key=lambda key: f"azure://{container_name}/{key}",
+                replace=replace,
+                title=kwargs.get("title"),
+                author=kwargs.get("author"),
+                metadata=kwargs.get("metadata"),
+                metadata_policy=kwargs.get("metadata_policy"),
+            )
         finally:
             if close is not None:
                 await close()
@@ -1017,37 +1107,35 @@ class RAGService:
             key = kwargs.get("key") or kwargs.get("blob_path")
             if key:
                 key = str(key)
-                return await self._aingest_remote_key(
-                    source=source,
-                    source_type="s3",
-                    namespace=str(bucket or "default"),
-                    key=key,
-                    source_uri=f"s3://{bucket}/{key}",
-                    replace=replace,
-                    title=kwargs.get("title"),
-                    author=kwargs.get("author"),
-                    metadata=kwargs.get("metadata"),
-                    metadata_policy=kwargs.get("metadata_policy"),
+                return self._single_file_result(
+                    await self._aingest_remote_keys(
+                        source=source,
+                        source_type="s3",
+                        namespace=str(bucket or "default"),
+                        keys=[key],
+                        source_uri_for_key=lambda item: f"s3://{bucket}/{item}",
+                        replace=replace,
+                        title=kwargs.get("title"),
+                        author=kwargs.get("author"),
+                        metadata=kwargs.get("metadata"),
+                        metadata_policy=kwargs.get("metadata_policy"),
+                    )
                 )
 
             prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
             keys = await source.alist_documents(prefix=prefix)
-            results = [
-                await self._aingest_remote_key(
-                    source=source,
-                    source_type="s3",
-                    namespace=str(bucket or "default"),
-                    key=str(item),
-                    source_uri=f"s3://{bucket}/{item}",
-                    replace=replace,
-                    title=kwargs.get("title"),
-                    author=kwargs.get("author"),
-                    metadata=kwargs.get("metadata"),
-                    metadata_policy=kwargs.get("metadata_policy"),
-                )
-                for item in keys
-            ]
-            return {"processed": len(results), "results": results}
+            return await self._aingest_remote_keys(
+                source=source,
+                source_type="s3",
+                namespace=str(bucket or "default"),
+                keys=[str(key) for key in keys],
+                source_uri_for_key=lambda key: f"s3://{bucket}/{key}",
+                replace=replace,
+                title=kwargs.get("title"),
+                author=kwargs.get("author"),
+                metadata=kwargs.get("metadata"),
+                metadata_policy=kwargs.get("metadata_policy"),
+            )
         finally:
             if close is not None:
                 await close()
@@ -1086,15 +1174,11 @@ class RAGService:
             if local_path.is_file():
                 return await self._aingest_local_file(local_path, **common_kwargs)
 
-            results = []
-            errors = []
-            for file_path in file_paths:
-                try:
-                    results.append(await self._aingest_local_file(file_path, **common_kwargs))
-                except Exception:
-                    logger.exception("Ingest failed for %s", file_path)
-                    errors.append(str(file_path))
-            return {"processed": len(results), "errors": errors, "results": results}
+            return await self._aingest_local_files(
+                file_paths,
+                source_root=local_path,
+                **common_kwargs,
+            )
 
         if self._ingestion_engine is not None and source_type == "azure_blob":
             return await self._aingest_azure_blob(replace=replace, **kwargs)
@@ -1296,16 +1380,17 @@ class RAGService:
         if not chunks:
             return
 
-        # Collect unique file_paths for batch lookup
+        # Collect unique file_paths for batch lookup.  When available, keep the
+        # LightRAG full_doc_id as the strongest metadata key.
         path_meta: dict[str, dict[str, Any]] = {}
+        path_doc_ids: dict[str, str] = {}
         for chunk in chunks:
             fp = chunk.get("file_path", "")
             if fp and fp not in path_meta:
                 path_meta[fp] = {}
-
-        # Lookup metadata by filename in parallel (best-effort, independent
-        # PG round-trips per unique file_path).
-        from pathlib import Path as _Path
+            doc_id = chunk.get("full_doc_id") or chunk.get("_full_doc_id")
+            if fp and doc_id and fp not in path_doc_ids:
+                path_doc_ids[fp] = str(doc_id)
 
         idx = self._metadata_index
         if idx is None:
@@ -1314,10 +1399,19 @@ class RAGService:
 
         async def _fetch(fp: str) -> tuple[str, dict[str, Any]]:
             try:
-                doc_ids = await idx.find_by_filename(_Path(fp).name)
-                if not doc_ids:
-                    return fp, {}
-                meta = await idx.get(doc_ids[0])
+                meta = None
+                doc_id = path_doc_ids.get(fp)
+                if doc_id:
+                    meta = await idx.get(doc_id)
+                if meta is None:
+                    doc_ids = await idx.find_by_file_path(fp)
+                    if not doc_ids:
+                        from pathlib import Path as _Path
+
+                        doc_ids = await idx.find_by_filename(_Path(fp).name)
+                    if not doc_ids:
+                        return fp, {}
+                    meta = await idx.get(doc_ids[0])
                 if not meta:
                     return fp, {}
                 return fp, {

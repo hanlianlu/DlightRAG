@@ -284,6 +284,12 @@ class AnswerEngine:
             min_quality=self._image_min_quality,
         )
 
+    async def aclose(self) -> None:
+        """Release model-function worker resources owned by this engine."""
+        from dlightrag.utils.concurrency import shutdown_async_callable
+
+        await shutdown_async_callable(self.model_func)
+
     def _prepare_prompt_context(
         self,
         query: str,

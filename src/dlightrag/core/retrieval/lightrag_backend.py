@@ -17,6 +17,7 @@ from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
+from dlightrag.utils.concurrency import bounded_map
 
 logger = logging.getLogger(__name__)
 
@@ -160,34 +161,53 @@ class LightRAGMixBackend:
         if not images:
             return []
 
-        merged: dict[str, dict[str, Any]] = {}
-        for image in images:
-            try:
-                vectors = await self._embedder.embed_query_images([image])
-                raw_chunks = await self._lightrag.chunks_vdb.query(
+        try:
+            vectors = await self._embedder.embed_query_images(images)
+        except Exception:
+            logger.warning("Direct visual query embedding failed", exc_info=True)
+            return []
+        finally:
+            for image in images:
+                image.close()
+
+        async def _query_vector(vector: list[float]) -> list[dict[str, Any]]:
+            return (
+                await self._lightrag.chunks_vdb.query(
                     query="",
                     top_k=top_k,
-                    query_embedding=vectors[0],
+                    query_embedding=vector,
                 )
-                for c in raw_chunks or []:
-                    cid = c.get("id")
-                    if not cid:
-                        continue
-                    dist = c.get("distance")
-                    if cid not in merged or (
-                        dist is not None and dist < merged[cid].get("distance", float("inf"))
-                    ):
-                        merged[cid] = {
-                            "chunk_id": cid,
-                            "content": c.get("content", ""),
-                            "file_path": c.get("file_path", ""),
-                            "reference_id": "",
-                            "relevance_score": dist,
-                        }
-                        if c.get("full_doc_id"):
-                            merged[cid]["full_doc_id"] = c["full_doc_id"]
-            except Exception:
-                logger.warning("Direct visual query failed", exc_info=True)
+                or []
+            )
+
+        query_results = await bounded_map(
+            list(vectors),
+            _query_vector,
+            max_concurrent=min(8, max(1, len(vectors))),
+            task_name="direct-visual-query",
+        )
+
+        merged: dict[str, dict[str, Any]] = {}
+        for raw_chunks in query_results:
+            if isinstance(raw_chunks, Exception):
+                continue
+            for c in raw_chunks:
+                cid = c.get("id")
+                if not cid:
+                    continue
+                dist = c.get("distance")
+                if cid not in merged or (
+                    dist is not None and dist < merged[cid].get("distance", float("inf"))
+                ):
+                    merged[cid] = {
+                        "chunk_id": cid,
+                        "content": c.get("content", ""),
+                        "file_path": c.get("file_path", ""),
+                        "reference_id": "",
+                        "relevance_score": dist,
+                    }
+                    if c.get("full_doc_id"):
+                        merged[cid]["full_doc_id"] = c["full_doc_id"]
         return sorted(merged.values(), key=lambda c: c.get("relevance_score") or float("inf"))[
             :top_k
         ]

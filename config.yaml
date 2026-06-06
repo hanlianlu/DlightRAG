@@ -222,6 +222,9 @@ pg_vector_index_type: HNSW
 pg_hnsw_m: 32
 pg_hnsw_ef_construction: 256
 pg_hnsw_ef_search: 256
+postgres_lightrag_pool_max_size: 16
+postgres_pool_min_size: 2
+postgres_pool_max_size: 10
 postgres_session_settings: {}
 postgres_statement_cache_size:
 postgres_connection_retries: 10
@@ -233,9 +236,20 @@ postgres_pool_close_timeout: 5.0
 # Ingestion Performance
 # ─────────────────────────────────────────────────────────────────
 
-max_parallel_insert: 2
-max_async: 4
-embedding_func_max_async: 8
+# LightRAG staged pipeline controls. Defaults follow LightRAG's native
+# batch pipeline while keeping the DlightRAG config surface explicit.
+max_parallel_insert: 3
+max_parallel_parse_native: 5
+max_parallel_parse_mineru: 2
+max_parallel_analyze: 5
+queue_size_parse: 20
+queue_size_analyze: 32
+queue_size_insert: 4
+
+# Shared LLM concurrency cap for LightRAG role queues and DlightRAG-owned
+# planner/answer/query-image VLM calls.
+max_async: 8
+embedding_func_max_async: 16
 embedding_batch_num: 10
 embedding_request_timeout: 120
 

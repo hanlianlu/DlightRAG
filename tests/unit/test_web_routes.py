@@ -305,7 +305,10 @@ class TestWebAnswer:
         assert resp.status_code == 200
         assert "event: done" in resp.text
         assert "Uploaded diagram" in resp.text
-        manager.get_session_image_data.assert_awaited_once_with("session-1", ["img_0"])
+        manager.get_session_image_data.assert_awaited_once()
+        args = manager.get_session_image_data.await_args
+        assert args.args == ("session-1", ["img_0"])
+        assert args.kwargs["scope"].session_key("session-1")
 
     async def test_highlights_use_keyword_llm_role(
         self,

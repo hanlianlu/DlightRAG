@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -197,19 +198,35 @@ async def _cancel_pending_tasks(service: RAGService, *, dry_run: bool) -> int:
     """
     cancelled = 0
 
-    # Shutdown LightRAG worker pools (embedding_func, llm_model_func)
     lr = service.lightrag
     if lr is not None:
-        for attr in ("embedding_func", "llm_model_func"):
+        from dlightrag.utils.concurrency import shutdown_async_callable
+
+        funcs: list[tuple[str, Any]] = []
+        for attr in ("embedding_func", "llm_model_func", "rerank_model_func"):
             try:
                 obj = getattr(lr, attr, None)
-                func = getattr(obj, "func", obj)
-                shutdown = getattr(func, "shutdown", None)
-                if shutdown is not None and not dry_run:
-                    await shutdown()
-                    cancelled += 1
+                funcs.append((attr, getattr(obj, "func", obj)))
             except Exception:  # noqa: BLE001
-                logger.debug("Failed to shutdown %s worker pool", attr, exc_info=True)
+                logger.debug("Failed to collect %s worker pool", attr, exc_info=True)
+
+        role_funcs = getattr(lr, "role_llm_funcs", None) or {}
+        items = role_funcs.items() if isinstance(role_funcs, Mapping) else ()
+        funcs.extend((f"role_llm_funcs.{role}", func) for role, func in items)
+
+        seen: set[int] = set()
+        for label, func in funcs:
+            if func is None or id(func) in seen:
+                continue
+            seen.add(id(func))
+            if not callable(getattr(func, "shutdown", None)):
+                continue
+            try:
+                if not dry_run:
+                    await shutdown_async_callable(func)
+                cancelled += 1
+            except Exception:  # noqa: BLE001
+                logger.debug("Failed to shutdown %s worker pool", label, exc_info=True)
 
     return cancelled
 

@@ -14,7 +14,7 @@ on the shared lower layers, not on each other.
 ```text
 L9  api, mcp, web                                  interface adapters
 L8  core.servicemanager                            multi-workspace coordinator
-L7  core.{service, reset, ingest_tasks}            per-workspace facade
+L7  core.{service, reset}                          per-workspace facade
 L6  core.{answer, answer_context, answer_images, federation,
           query_images, query_planner,
           session_images, visual_assets}           query/answer/visual orchestration
@@ -36,6 +36,7 @@ L3  models.providers                               provider implementations
 L2  config
     core.retrieval.{protocols, models,
                     metadata_fields}
+    core.scope
     models.{schemas, embedding_inputs}
 L1  observability                                  cross-cutting wrappers
 L0  prompts, utils                                 pure helpers
@@ -61,6 +62,7 @@ L0  prompts, utils                                 pure helpers
 | `config` | L2 | `DlightragConfig` plus env/yaml loader |
 | `models.{schemas,embedding_inputs}` | L2 | Shared data types |
 | `core.retrieval.{protocols,models,metadata_fields}` | L2 | Retrieval contracts and metadata registry |
+| `core.scope` | L2 | Request/session scoping contract shared by interfaces and core orchestration |
 | `models.providers` | L3 | OpenAI/Anthropic/Gemini and embedding provider wrappers |
 | `storage` | L3 | PostgreSQL pools, metadata index, version/replication helpers |
 | `sourcing` | L3 | Local, Azure Blob, and S3 source readers |
@@ -74,7 +76,7 @@ L0  prompts, utils                                 pure helpers
 | `core.ingestion.engine` | L6 | Unified ingest orchestration |
 | `core.retrieval.{retriever,fusion,lightrag_backend}` | L6 | LightRAG mix retrieval, BM25 fusion, direct image path |
 | `core.{answer,answer_context,answer_images,federation,query_images,query_planner,session_images,visual_assets}` | L6 | Answering, answer-context packing, image budgeting, query-image semantics, session image memory, visual asset serving, federation, filter planning |
-| `core.{service,reset,ingest_tasks}` | L7 | Workspace lifecycle and public service facade |
+| `core.{service,reset}` | L7 | Workspace lifecycle and public service facade |
 | `core.servicemanager` | L8 | Multi-workspace pool |
 | `api/`, `mcp/`, `web/` | L9 | Interface adapters |
 

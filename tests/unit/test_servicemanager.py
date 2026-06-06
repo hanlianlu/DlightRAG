@@ -18,6 +18,7 @@ from dlightrag.config import (
     set_config,
 )
 from dlightrag.core.query_planner import QueryPlanner
+from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
@@ -235,6 +236,35 @@ class TestRouting:
         assert retrieve_kwargs["top_k"] == 9
         assert retrieve_kwargs["chunk_top_k"] == 4
 
+    async def test_query_image_memory_is_request_scoped(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        manager._query_image_enhancer = AsyncMock()
+        manager._query_image_enhancer.enhance = AsyncMock(
+            side_effect=lambda query, images: MagicMock(query=query, descriptions=[])
+        )
+        alice_scope = RequestScope(user_id="alice", auth_mode="jwt").for_workspaces(["reports"])
+        bob_scope = RequestScope(user_id="bob", auth_mode="jwt").for_workspaces(["reports"])
+
+        first = await manager._prepare_query_images(
+            "query",
+            query_images=["data:image/png;base64,abc"],
+            session_id="same-session",
+            referenced_image_ids=None,
+            store_current=True,
+            scope=alice_scope,
+        )
+        second = await manager._prepare_query_images(
+            "query",
+            query_images=[],
+            session_id="same-session",
+            referenced_image_ids=first.current_image_ids,
+            store_current=False,
+            scope=bob_scope,
+        )
+
+        assert first.current_image_ids == ["img_0"]
+        assert second.answer_images == []
+
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:
         """aanswer() routes through aretrieve() then AnswerEngine.generate()."""
@@ -341,7 +371,7 @@ class TestAnswerViaEngine:
             "what is X?", mock_contexts, query_images=None, context_top_k=30
         )
         assert contexts is mock_contexts
-        assert stream is mock_stream
+        assert stream is not None
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -402,6 +432,30 @@ class TestAnswerViaEngine:
             # Second call returns same instance
             engine2 = manager._get_answer_engine()
             assert engine2 is engine
+
+    async def test_stream_concurrency_is_held_until_iterator_finishes(self, test_cfg) -> None:
+        cfg = test_cfg.model_copy(update={"max_async": 1})
+        manager = RAGServiceManager(config=cfg)
+        contexts = {"chunks": [], "entities": [], "relationships": []}
+
+        async def one_token_stream():
+            yield "token"
+
+        mock_engine = AsyncMock()
+        mock_engine.generate_stream = AsyncMock(return_value=(contexts, one_token_stream()))
+        manager._answer_engine = mock_engine
+
+        _, first_stream = await manager.agenerate_stream_from_contexts("q1", contexts)
+        second = asyncio.create_task(manager.agenerate_stream_from_contexts("q2", contexts))
+        await asyncio.sleep(0)
+
+        assert not second.done()
+        assert first_stream is not None
+        async for _ in first_stream:
+            pass
+
+        _, second_stream = await asyncio.wait_for(second, timeout=1.0)
+        assert second_stream is not None
 
 
 class TestDelegation:
@@ -489,6 +543,42 @@ class TestDegradedMode:
         assert not manager.is_ready()
         assert manager.is_degraded()
         assert any("DB down" in w for w in manager.get_warnings())
+
+    async def test_create_warmup_concurrency_follows_config(
+        self, monkeypatch: pytest.MonkeyPatch, test_cfg
+    ) -> None:
+        cfg = test_cfg.model_copy(update={"max_async": 3})
+        calls: dict[str, object] = {}
+
+        async def fake_initialize_workspace_registry(self):  # noqa: ANN001, ANN202
+            return None
+
+        async def fake_list_all_workspaces(self):  # noqa: ANN001, ANN202
+            return ["default", "alpha", "beta"]
+
+        async def fake_get_service(self, workspace: str):  # noqa: ANN001, ANN202
+            self._services[workspace] = workspace
+            return workspace
+
+        async def fake_bounded_gather(coros, *, max_concurrent: int, task_name: str):  # noqa: ANN001, ANN202
+            calls["max_concurrent"] = max_concurrent
+            calls["task_name"] = task_name
+            return [await coro for coro in coros]
+
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_initialize_workspace_registry",
+            fake_initialize_workspace_registry,
+        )
+        monkeypatch.setattr(RAGServiceManager, "_list_all_workspaces", fake_list_all_workspaces)
+        monkeypatch.setattr(RAGServiceManager, "_get_service", fake_get_service)
+        monkeypatch.setattr("dlightrag.observability.init_tracing", lambda config: None)
+        monkeypatch.setattr("dlightrag.utils.concurrency.bounded_gather", fake_bounded_gather)
+
+        manager = await RAGServiceManager.create(config=cfg)
+
+        assert manager.is_ready()
+        assert calls == {"max_concurrent": 3, "task_name": "warmup"}
 
 
 class TestActionableErrors:
@@ -599,3 +689,36 @@ class TestWorkspaceDiscovery:
         result = await manager.list_workspaces()
 
         assert test_cfg.workspace in result
+
+
+class TestPlannerSchemaScope:
+    async def test_aplan_query_uses_schema_for_requested_workspace(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        reports = AsyncMock()
+        reports._metadata_index.get_field_schema = AsyncMock(
+            return_value={
+                "columns": [{"name": "filename", "type": "character varying"}],
+                "custom_keys": ["department"],
+            }
+        )
+        legal = AsyncMock()
+        legal._metadata_index.get_field_schema = AsyncMock(
+            return_value={
+                "columns": [{"name": "filename", "type": "character varying"}],
+                "custom_keys": ["jurisdiction"],
+            }
+        )
+        manager._services = {"reports": reports, "legal": legal}
+
+        llm = AsyncMock(return_value='{"standalone_query": "q", "filters": {}}')
+        manager._query_planner = QueryPlanner(llm_func=llm)
+
+        await manager.aplan_query("q", workspaces=["reports"])
+        await manager.aplan_query("q", workspaces=["legal"])
+
+        first_prompt = llm.await_args_list[0].kwargs["messages"][0]["content"]
+        second_prompt = llm.await_args_list[1].kwargs["messages"][0]["content"]
+        assert "department" in first_prompt
+        assert "jurisdiction" not in first_prompt
+        assert "jurisdiction" in second_prompt
+        assert "department" not in second_prompt

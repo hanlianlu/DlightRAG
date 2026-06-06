@@ -149,6 +149,27 @@ class TestFederatedRetrieve:
         assert result.contexts["chunks"][1]["_workspace"] == "ws-b"
 
     @pytest.mark.asyncio
+    async def test_multi_workspace_reuses_caller_plan(self) -> None:
+        plan = object()
+        svc_a = AsyncMock()
+        svc_a.aretrieve.return_value = _make_result(chunks=[{"id": "a1"}])
+        svc_a._metadata_index = AsyncMock()
+        svc_a.lightrag = None
+        svc_b = AsyncMock()
+        svc_b.aretrieve.return_value = _make_result(chunks=[{"id": "b1"}])
+        svc_b._metadata_index = AsyncMock()
+        svc_b.lightrag = None
+        services = {"ws-a": svc_a, "ws-b": svc_b}
+
+        async def get_svc(ws: str):
+            return services[ws]
+
+        await federated_retrieve("query", ["ws-a", "ws-b"], get_svc, _plan=plan)
+
+        assert svc_a.aretrieve.await_args.kwargs["_plan"] is plan
+        assert svc_b.aretrieve.await_args.kwargs["_plan"] is plan
+
+    @pytest.mark.asyncio
     async def test_failed_workspace_excluded(self) -> None:
         svc_ok = AsyncMock()
         svc_ok.aretrieve.return_value = _make_result(chunks=[{"id": "ok1"}])

@@ -36,7 +36,9 @@ def test_compose_has_pg18_replica_profile() -> None:
 def test_compose_sets_long_term_postgres_shm_size() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
-    assert compose.count("shm_size: 8gb") == 2
+    assert "shm_size: ${DLIGHTRAG_POSTGRES_SHM_SIZE:-8gb}" in compose
+    assert "shm_size: 8gb" in compose
+    assert compose.count("shm_size:") == 2
 
 
 def test_postgres_replica_scripts_are_syntax_valid() -> None:

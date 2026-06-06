@@ -34,7 +34,7 @@ def test_collects_successful_drawing_assets_for_lightrag_mm_chunks(tmp_path) -> 
                             "type": "Illustration",
                             "description": "A figure.",
                         },
-                    }
+                    },
                 },
             }
         ),

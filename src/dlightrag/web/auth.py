@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from dlightrag.api.auth import verify_bearer_token
+from dlightrag.api.auth import UserContext, verify_bearer_token
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.web.deps import templates
 
@@ -95,6 +95,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
 
         cfg = self._config_getter()
         if cfg.auth_mode == "none":
+            request.state.user_context = UserContext(user_id="anonymous", auth_mode="none")
             return await call_next(request)
 
         source: str | None = None
@@ -102,7 +103,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             raw_token, source = _token_from_request(request)
             if not raw_token:
                 return _browser_missing_auth_response(request)
-            verify_bearer_token(
+            request.state.user_context = verify_bearer_token(
                 raw_token,
                 cfg,
                 default_user_id=request.headers.get("X-User-Id", "anonymous"),

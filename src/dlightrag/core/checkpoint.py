@@ -7,14 +7,16 @@ import asyncio
 import json
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA = """
-PRAGMA journal_mode=WAL;
+_SQLITE_TIMEOUT_SECONDS = 30.0
+_SQLITE_BUSY_TIMEOUT_MS = 30_000
 
+_SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id   TEXT PRIMARY KEY,
     workspace    TEXT NOT NULL DEFAULT 'default',
@@ -60,6 +62,8 @@ class ConversationCheckpoint:
 
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = Path(db_path)
+        self._schema_lock = threading.Lock()
+        self._schema_initialized = False
 
     # ----------------------------------------------------------------
     # Public async API
@@ -89,6 +93,30 @@ class ConversationCheckpoint:
             turn_number,
             role,
             content,
+            cited_chunk_ids,
+        )
+
+    async def save_turn_pair(
+        self,
+        session_id: str,
+        *,
+        workspace: str,
+        query: str,
+        answer: str,
+        contexts: dict[str, Any],
+        cited_chunk_ids: list[str],
+    ) -> int:
+        """Atomically save one user/assistant exchange and its retrieval anchors.
+
+        Returns the assigned 1-based turn number.
+        """
+        return await asyncio.to_thread(
+            self._save_turn_pair_sync,
+            session_id,
+            workspace,
+            query,
+            answer,
+            contexts,
             cited_chunk_ids,
         )
 
@@ -155,10 +183,26 @@ class ConversationCheckpoint:
     def _ensure_db_sync(self) -> sqlite3.Connection:
         """Open connection, create schema on first access."""
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        conn.executescript(_SCHEMA)
-        conn.commit()
+        conn = sqlite3.connect(
+            str(self._db_path),
+            timeout=_SQLITE_TIMEOUT_SECONDS,
+        )
+        self._configure_connection_sync(conn)
+        with self._schema_lock:
+            if not self._schema_initialized:
+                journal_mode = conn.execute("PRAGMA journal_mode = WAL").fetchone()
+                if not journal_mode or str(journal_mode[0]).lower() != "wal":
+                    logger.warning("SQLite checkpoint journal_mode is %s, not WAL", journal_mode)
+                conn.executescript(_SCHEMA)
+                conn.commit()
+                conn.execute("PRAGMA optimize")
+                self._schema_initialized = True
         return conn
+
+    def _configure_connection_sync(self, conn: sqlite3.Connection) -> None:
+        conn.execute(f"PRAGMA busy_timeout = {_SQLITE_BUSY_TIMEOUT_MS}")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA synchronous = NORMAL")
 
     def _ensure_session_sync(self, session_id: str, workspace: str) -> None:
         conn = self._ensure_db_sync()
@@ -205,6 +249,83 @@ class ConversationCheckpoint:
                 (session_id, turn_number, role, content, cited_json),
             )
             conn.commit()
+        finally:
+            conn.close()
+
+    def _save_turn_pair_sync(
+        self,
+        session_id: str,
+        workspace: str,
+        query: str,
+        answer: str,
+        contexts: dict[str, Any],
+        cited_chunk_ids: list[str],
+    ) -> int:
+        conn = self._ensure_db_sync()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR IGNORE INTO sessions (session_id, workspace) VALUES (?, ?)",
+                (session_id, workspace),
+            )
+            conn.execute(
+                """UPDATE sessions
+                   SET workspace = ?, updated_at = datetime('now')
+                   WHERE session_id = ?""",
+                (workspace, session_id),
+            )
+            row = conn.execute(
+                "SELECT COALESCE(MAX(turn_number), 0) FROM turns WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            turn_number = int(row[0]) + 1 if row else 1
+            cited_json = json.dumps(cited_chunk_ids) if cited_chunk_ids else None
+            conn.executemany(
+                """INSERT INTO turns
+                   (session_id, turn_number, role, content, cited_chunks)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (session_id, turn_number, "user", query, None),
+                    (session_id, turn_number, "assistant", answer, cited_json),
+                ],
+            )
+
+            chunks = contexts.get("chunks", [])
+            anchor_chunks = chunks if isinstance(chunks, list) else []
+            rows: list[tuple[str, int, str, str | None, str | None, float | None]] = []
+            for chunk in anchor_chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                chunk_id = str(chunk.get("chunk_id") or "")
+                if not chunk_id:
+                    continue
+                source_doc = str(chunk.get("file_path") or "") or None
+                sidecar = chunk.get("sidecar")
+                sidecar_type: str | None = None
+                if isinstance(sidecar, dict):
+                    sidecar_type = sidecar.get("type") or None
+                score = chunk.get("relevance_score")
+                if score is not None:
+                    score = float(score)
+                rows.append((session_id, turn_number, chunk_id, source_doc, sidecar_type, score))
+            if rows:
+                conn.executemany(
+                    """INSERT OR REPLACE INTO context_anchors
+                       (session_id, turn_number, chunk_id, source_doc, sidecar_type, score)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    rows,
+                )
+            if cited_chunk_ids:
+                conn.executemany(
+                    """UPDATE context_anchors SET was_cited = 1
+                       WHERE session_id = ? AND turn_number = ? AND chunk_id = ?""",
+                    [(session_id, turn_number, cid) for cid in cited_chunk_ids],
+                )
+            conn.commit()
+            return turn_number
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -318,7 +439,6 @@ class ConversationCheckpoint:
     def _delete_session_sync(self, session_id: str) -> None:
         conn = self._ensure_db_sync()
         try:
-            conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
             conn.commit()
         finally:
@@ -327,7 +447,6 @@ class ConversationCheckpoint:
     def _delete_sessions_by_workspace_sync(self, workspace: str) -> int:
         conn = self._ensure_db_sync()
         try:
-            conn.execute("PRAGMA foreign_keys = ON")
             cursor = conn.execute("DELETE FROM sessions WHERE workspace = ?", (workspace,))
             conn.commit()
             return cursor.rowcount
@@ -361,7 +480,6 @@ class ConversationCheckpoint:
     def _prune_old_sessions_sync(self, max_age_days: int) -> int:
         conn = self._ensure_db_sync()
         try:
-            conn.execute("PRAGMA foreign_keys = ON")
             age_modifier = f"-{int(max_age_days)} days"
             cursor = conn.execute(
                 "DELETE FROM sessions WHERE updated_at < datetime('now', ?)",

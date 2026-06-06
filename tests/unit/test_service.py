@@ -36,6 +36,9 @@ class TestRAGServiceAingest:
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock(return_value={"status": "success"})
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": [{"status": "success"}]}
+        )
         service.retrieval = MagicMock()
         return service
 
@@ -95,7 +98,7 @@ class TestRAGServiceAingest:
     async def test_aingest_azure_calls_aclose_on_error(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called even when ingestion raises."""
         service = self._make_initialized_service(test_config)
-        service._ingestion_engine.aingest_file = AsyncMock(
+        service._ingestion_engine.aingest_files = AsyncMock(
             side_effect=RuntimeError("ingestion failed")
         )
         mock_source = AsyncMock()
@@ -124,6 +127,34 @@ class TestRAGServiceClose:
 
         # Should not raise
         await service.close()
+
+    async def test_close_shuts_down_lightrag_role_worker_pools(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service._initialized = True
+        query_func = MagicMock()
+        query_func.shutdown = AsyncMock()
+        extract_func = MagicMock()
+        extract_func.shutdown = AsyncMock()
+        embedding_func = MagicMock()
+        embedding_func.shutdown = AsyncMock()
+        lightrag = MagicMock()
+        lightrag.embedding_func = MagicMock(func=embedding_func)
+        lightrag.llm_model_func = None
+        lightrag.rerank_model_func = None
+        lightrag.role_llm_funcs = {
+            "query": query_func,
+            "extract": extract_func,
+        }
+        lightrag.finalize_storages = AsyncMock()
+        service._lightrag = lightrag
+
+        await service.close()
+
+        embedding_func.shutdown.assert_awaited_once()
+        query_func.shutdown.assert_awaited_once()
+        extract_func.shutdown.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -320,8 +351,13 @@ class TestRAGServiceLightRAGMainPath:
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            return_value={"doc_id": "d1", "page_count": 2, "file_path": "/tmp/report.pdf"}
+        service._ingestion_engine.aingest_file = AsyncMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 1,
+                "errors": [],
+                "results": [{"doc_id": "d1", "page_count": 2, "file_path": "/tmp/report.pdf"}],
+            }
         )
 
         mock_source = AsyncMock()
@@ -334,7 +370,8 @@ class TestRAGServiceLightRAGMainPath:
             source=mock_source,
         )
 
-        service._ingestion_engine.aingest_file.assert_awaited_once()
+        service._ingestion_engine.aingest_file.assert_not_awaited()
+        service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["doc_id"] == "d1"
 
     async def test_aingest_unified_azure_blob_batch(self, test_config: DlightragConfig) -> None:
@@ -342,8 +379,16 @@ class TestRAGServiceLightRAGMainPath:
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            return_value={"doc_id": "d1", "page_count": 1, "file_path": "/tmp/f.pdf"}
+        service._ingestion_engine.aingest_file = AsyncMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 2,
+                "errors": [],
+                "results": [
+                    {"doc_id": "a", "page_count": 1, "file_path": "/tmp/a.pdf"},
+                    {"doc_id": "b", "page_count": 1, "file_path": "/tmp/b.pdf"},
+                ],
+            }
         )
 
         mock_source = AsyncMock()
@@ -357,16 +402,22 @@ class TestRAGServiceLightRAGMainPath:
             source=mock_source,
         )
 
-        assert service._ingestion_engine.aingest_file.await_count == 2
+        service._ingestion_engine.aingest_file.assert_not_awaited()
+        service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["processed"] == 2
 
     async def test_aingest_unified_s3(self, test_config: DlightragConfig) -> None:
-        """S3 downloads an object and ingests via engine.aingest."""
+        """S3 single-object ingest uses the same remote batch path."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            return_value={"doc_id": "d1", "status": "success"}
+        service._ingestion_engine.aingest_file = AsyncMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 1,
+                "errors": [],
+                "results": [{"doc_id": "d1", "status": "success"}],
+            }
         )
 
         mock_source = AsyncMock()
@@ -378,15 +429,18 @@ class TestRAGServiceLightRAGMainPath:
                 source_type="s3", bucket="my-bucket", key="docs/report.pdf"
             )
 
-        service._ingestion_engine.aingest_file.assert_awaited_once()
+        service._ingestion_engine.aingest_file.assert_not_awaited()
+        service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["status"] == "success"
 
-    async def test_aingest_unified_blob_temp_cleanup(self, test_config: DlightragConfig) -> None:
-        """Temp directory is cleaned up even if unified.aingest fails."""
+    async def test_aingest_unified_blob_batch_failure_leaves_no_temp_dirs(
+        self, test_config: DlightragConfig
+    ) -> None:
+        """Remote batch failures do not create legacy temp directories."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
+        service._ingestion_engine.aingest_files = AsyncMock(
             side_effect=RuntimeError("render failed")
         )
 
@@ -430,24 +484,32 @@ class TestRAGServiceLightRAGMainPath:
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
 
-    async def test_aingest_local_directory_delegates_each_file(
+    async def test_aingest_local_directory_uses_batch_pipeline(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:
-        """Local directory ingestion sends contained files, not the directory, to parser routing."""
+        """Local directory ingestion batches contained files into LightRAG's staged pipeline."""
         docs_dir = tmp_path / "docs"
         nested_dir = docs_dir / "nested"
+        upload_tmp_dir = docs_dir / "__uploads__" / "batch"
         nested_dir.mkdir(parents=True)
+        upload_tmp_dir.mkdir(parents=True)
         pdf = docs_dir / "b.pdf"
         docx = docs_dir / "a.docx"
         pptx = nested_dir / "c.pptx"
         for path in (pdf, docx, pptx):
             path.write_bytes(b"fake")
+        (upload_tmp_dir / "stale.pdf").write_bytes(b"stale")
 
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(
-            side_effect=lambda path, **kwargs: {"doc_id": path.name, "file_path": str(path)}
+        service._ingestion_engine.aingest_file = AsyncMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            side_effect=lambda paths, **kwargs: {
+                "processed": len(paths),
+                "errors": [],
+                "results": [{"doc_id": path.name, "file_path": str(path)} for path in paths],
+            }
         )
 
         result = await service.aingest(source_type="local", path=str(docs_dir))
@@ -455,16 +517,16 @@ class TestRAGServiceLightRAGMainPath:
         assert result["processed"] == 3
         assert [item["doc_id"] for item in result["results"]] == ["a.docx", "b.pdf", "c.pptx"]
         staged_root = test_config.input_dir_path / test_config.workspace
-        assert [
-            call.args[0] for call in service._ingestion_engine.aingest_file.await_args_list
-        ] == [
+        service._ingestion_engine.aingest_file.assert_not_awaited()
+        service._ingestion_engine.aingest_files.assert_awaited_once()
+        assert list(service._ingestion_engine.aingest_files.await_args.args[0]) == [
             staged_root / "a.docx",
             staged_root / "b.pdf",
-            staged_root / "c.pptx",
+            staged_root / "nested" / "c.pptx",
         ]
         assert (staged_root / "a.docx").read_bytes() == b"fake"
         assert (staged_root / "b.pdf").read_bytes() == b"fake"
-        assert (staged_root / "c.pptx").read_bytes() == b"fake"
+        assert (staged_root / "nested" / "c.pptx").read_bytes() == b"fake"
 
     async def test_aingest_replace_purges_existing_doc_before_ingest(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -573,6 +635,41 @@ class TestRAGServiceLightRAGMainPath:
         assert result == ["doc-1"]
         sent_filter = service._metadata_index.query.await_args.args[0]
         assert sent_filter.custom == {"department": "finance"}
+
+    async def test_metadata_enrichment_prefers_exact_file_path_over_basename(
+        self, test_config: DlightragConfig
+    ) -> None:
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = RAGService(config=test_config)
+        service._metadata_index = AsyncMock()
+        service._metadata_index.find_by_file_path = AsyncMock(return_value=["doc-right"])
+        service._metadata_index.find_by_filename = AsyncMock(return_value=["doc-wrong"])
+        service._metadata_index.get = AsyncMock(
+            side_effect=lambda doc_id: {
+                "doc-right": {"department": "finance", "filename": "report.pdf"},
+                "doc-wrong": {"department": "legal", "filename": "report.pdf"},
+            }.get(doc_id)
+        )
+        result = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "file_path": "/inputs/default/finance/report.pdf",
+                    }
+                ]
+            }
+        )
+
+        await service._enrich_chunks_with_metadata(result)
+
+        chunk = result.contexts["chunks"][0]
+        assert chunk["metadata"] == {"department": "finance"}
+        service._metadata_index.find_by_file_path.assert_awaited_once_with(
+            "/inputs/default/finance/report.pdf"
+        )
+        service._metadata_index.find_by_filename.assert_not_awaited()
 
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
         """close() finalizes LightRAG storages."""

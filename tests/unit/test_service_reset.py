@@ -91,6 +91,10 @@ class TestAresetPhase0:
         embedding_func.func = inner_func
         lr.embedding_func = embedding_func
         lr.llm_model_func = MagicMock(spec=[])  # no shutdown
+        role_shutdown = AsyncMock()
+        role_func = MagicMock()
+        role_func.shutdown = role_shutdown
+        lr.role_llm_funcs = {"query": role_func}
         # Give it a droppable storage so Phase 1 works
         storage = MagicMock()
         storage.drop = AsyncMock()
@@ -98,8 +102,9 @@ class TestAresetPhase0:
         service._lightrag = lr
 
         result = await service.areset()
-        assert result["pending_tasks_cancelled"] >= 1
+        assert result["pending_tasks_cancelled"] >= 2
         shutdown_mock.assert_awaited_once()
+        role_shutdown.assert_awaited_once()
 
 
 class TestAresetPhase1:
