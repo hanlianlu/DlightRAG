@@ -4,30 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DlightRAG</title>
-    <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
     <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
-
-    <!-- MathJax v4 math rendering -->
-    <script>
-    MathJax = {
-      tex: {
-        inlineMath: [['$', '$'], ['\\(', '\\)']],
-        displayMath: [['$$', '$$'], ['\\[', '\\]']],
-        processEscapes: false,
-        tags: 'all',
-      },
-      options: {
-        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
-      },
-    };
-    </script>
-    <script defer src="https://cdn.jsdelivr.net/npm/mathjax@4.1.2/tex-mml-chtml.js"></script>
 
     <!-- Pygments code highlighting theme -->
     <link rel="stylesheet" href="/static/pygments.css?v={{ static_version() }}">
 </head>
 <body>
     {% block content %}{% endblock %}
+    <script src="/static/vendor/htmx.min.js?v={{ static_version() }}"></script>
+    <script src="/static/vendor/htmx-global.js?v={{ static_version() }}"></script>
     <script type="module" src="/static/js/main.js?v={{ static_version() }}"></script>
 </body>
 </html>
