@@ -48,6 +48,34 @@ class TestMakeCompletionFunc:
         func = _make_completion_func(cfg, fallback_api_key="sk-fallback")
         assert callable(func)
 
+    def test_query_model_func_is_queue_managed_by_default(self):
+        from dlightrag.models import llm
+
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="sk-test")),
+            embedding=_embedding_config(),
+        )
+
+        func = llm.get_query_model_func(cfg)
+        raw_func = llm.get_query_model_func(cfg, bounded=False)
+
+        assert callable(func)
+        assert callable(getattr(func, "shutdown", None))
+        assert not hasattr(raw_func, "shutdown")
+
+    def test_vlm_model_func_is_queue_managed_by_default(self):
+        from dlightrag.models import llm
+
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="sk-test")),
+            embedding=_embedding_config(),
+        )
+
+        func = llm.get_vlm_model_func(cfg)
+
+        assert callable(func)
+        assert callable(getattr(func, "shutdown", None))
+
     @pytest.mark.asyncio
     async def test_structured_output_uses_openai_json_schema(self, monkeypatch):
         from pydantic import BaseModel, ConfigDict

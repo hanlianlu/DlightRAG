@@ -320,9 +320,22 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.pg_hnsw_m == 32
     assert cfg.pg_hnsw_ef_construction == 256
     assert cfg.pg_hnsw_ef_search == 256
+    assert cfg.postgres_lightrag_pool_max_size == 16
+    assert cfg.postgres_pool_min_size == 2
+    assert cfg.postgres_pool_max_size == 10
+    assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
     assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
     assert cfg.runtime_role == "ingest"
     assert cfg.pg_target_for_runtime() == "primary"
+    assert cfg.lightrag_pipeline_kwargs() == {
+        "max_parallel_insert": 3,
+        "max_parallel_parse_native": 5,
+        "max_parallel_parse_mineru": 2,
+        "max_parallel_analyze": 5,
+        "queue_size_parse": 20,
+        "queue_size_analyze": 32,
+        "queue_size_insert": 4,
+    }
     assert cfg.rerank.image_max_bytes == 1_500_000
     assert cfg.rerank.image_max_total_bytes == 8_000_000
     assert cfg.rerank.image_max_px == 1280
@@ -767,6 +780,7 @@ def test_postgres_session_settings_merge_hnsw_defaults(
     monkeypatch.delenv("POSTGRES_CONNECTION_RETRY_BACKOFF", raising=False)
     monkeypatch.delenv("POSTGRES_CONNECTION_RETRY_BACKOFF_MAX", raising=False)
     monkeypatch.delenv("POSTGRES_POOL_CLOSE_TIMEOUT", raising=False)
+    monkeypatch.delenv("POSTGRES_MAX_CONNECTIONS", raising=False)
 
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
@@ -785,6 +799,7 @@ def test_postgres_session_settings_merge_hnsw_defaults(
         postgres_connection_retry_backoff=1.5,
         postgres_connection_retry_backoff_max=9.0,
         postgres_pool_close_timeout=2.5,
+        postgres_lightrag_pool_max_size=18,
     )
 
     assert cfg.postgres_server_settings_dict() == {
@@ -800,6 +815,7 @@ def test_postgres_session_settings_merge_hnsw_defaults(
     assert os.environ["POSTGRES_CONNECTION_RETRY_BACKOFF"] == "1.5"
     assert os.environ["POSTGRES_CONNECTION_RETRY_BACKOFF_MAX"] == "9.0"
     assert os.environ["POSTGRES_POOL_CLOSE_TIMEOUT"] == "2.5"
+    assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "18"
 
 
 def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
+import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -25,7 +27,7 @@ router = APIRouter()
 
 # Track per-workspace background ingest tasks so the Upload button doesn't
 # launch a duplicate while an ingest is already running.
-_ingest_tasks: dict[str, asyncio.Task[Any] | None] = {}
+_workspace_upload_tasks: dict[str, asyncio.Task[Any] | None] = {}
 
 
 def _resolve_workspace(requested: str | None, fallback: str) -> str:
@@ -60,6 +62,15 @@ def _staging_dir(workspace: str) -> Path:
     cfg = get_config()
     p = cfg.input_dir_path / workspace
     p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _upload_batch_dir(workspace: str) -> Path:
+    """Per-request staging directory so batch ingest never scans old uploads."""
+    root = _staging_dir(workspace) / "__uploads__"
+    root.mkdir(parents=True, exist_ok=True)
+    p = root / uuid.uuid4().hex
+    p.mkdir(parents=True, exist_ok=False)
     return p
 
 
@@ -114,10 +125,11 @@ async def _file_list_response(request: Request, workspace: str):
 
     # Check whether an ingest is currently active so reopening the panel
     # shows the progress bar again instead of stale state.
-    # Always query pipeline_status — the in-memory _ingest_tasks dict may
+    # Always query pipeline_status — the in-memory task dict may
     # be empty after a server restart or task-tracker race, but LightRAG's
     # shared-storage pipeline_status is the authoritative source.
-    ingest_busy = _ingest_tasks.get(workspace) is not None
+    task = _workspace_upload_tasks.get(workspace)
+    ingest_busy = task is not None and not task.done()
     status: dict[str, Any] = {}
     try:
         ps = await manager.get_pipeline_status(workspace)
@@ -168,7 +180,7 @@ async def upload_files(
     selected_workspace = _resolve_workspace(workspace_name, workspace)
 
     # Reject if an ingest is already running in this workspace.
-    existing = _ingest_tasks.get(selected_workspace)
+    existing = _workspace_upload_tasks.get(selected_workspace)
     if existing is not None and not existing.done():
         return error_response(
             "An ingest is already in progress for this workspace. "
@@ -177,8 +189,9 @@ async def upload_files(
         )
 
     bytes_written = 0
+    upload_dir: Path | None = None
     try:
-        dest_dir = _staging_dir(selected_workspace)
+        upload_dir = _upload_batch_dir(selected_workspace)
         saved_paths: list[Path] = []
         _SYSTEM_FILES = {
             ".DS_Store",  # macOS folder metadata
@@ -193,7 +206,7 @@ async def upload_files(
             if basename in _SYSTEM_FILES or basename.startswith("._"):
                 continue
             try:
-                dest = _safe_upload_destination(dest_dir, f.filename)
+                dest = _safe_upload_destination(upload_dir, f.filename)
             except ValueError:
                 logger.warning("Rejected upload with unsafe filename: %r", f.filename)
                 continue
@@ -220,26 +233,33 @@ async def upload_files(
 
     # Fire-and-forget: schedule ingest, return immediately with progress UI.
     async def _background_ingest() -> None:
-        ok = 0
-        for file_path in saved_paths:
-            try:
-                await manager.aingest(
-                    workspace=selected_workspace,
-                    source_type="local",
-                    path=str(file_path),
-                )
-                ok += 1
-            except Exception:
-                logger.warning("Skipping file %s (ingest failed)", file_path.name, exc_info=True)
-        logger.info(
-            "Background ingest finished for workspace %s: %d/%d succeeded",
-            selected_workspace,
-            ok,
-            len(saved_paths),
-        )
-        _ingest_tasks.pop(selected_workspace, None)
+        try:
+            result = await manager.aingest(
+                workspace=selected_workspace,
+                source_type="local",
+                path=str(upload_dir),
+            )
+            processed = result.get("processed", 0) if isinstance(result, dict) else 0
+            errors = result.get("errors", []) if isinstance(result, dict) else []
+            logger.info(
+                "Background ingest finished for workspace %s: %d/%d processed%s",
+                selected_workspace,
+                processed,
+                len(saved_paths),
+                f", errors={errors}" if errors else "",
+            )
+        except Exception:
+            logger.warning(
+                "Background ingest failed for workspace %s",
+                selected_workspace,
+                exc_info=True,
+            )
+        finally:
+            if upload_dir is not None:
+                shutil.rmtree(upload_dir, ignore_errors=True)
+            _workspace_upload_tasks.pop(selected_workspace, None)
 
-    _ingest_tasks[selected_workspace] = asyncio.create_task(_background_ingest())
+    _workspace_upload_tasks[selected_workspace] = asyncio.create_task(_background_ingest())
 
     return templates.TemplateResponse(
         request,
@@ -268,9 +288,9 @@ async def ingest_status(
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     manager = get_manager(request)
 
-    # Authoritative: the in-memory task tracker owns the lifecycle.
-    # pipeline_status is a best-effort cross-check but lags on completion.
-    task = _ingest_tasks.get(selected_workspace)
+    # The in-memory task only tracks this server process. LightRAG's shared
+    # pipeline_status remains the cross-process signal after restart/scale-out.
+    task = _workspace_upload_tasks.get(selected_workspace)
     task_running = task is not None and not task.done()
 
     try:
@@ -289,8 +309,8 @@ async def ingest_status(
             )
         )
 
-    # Ingest finished — reload the full file list into the panel.
-    # Only _background_ingest pops the task tracker to avoid premature cleanup.
+    # Ingest finished -- reload the full file list into the panel.
+    # _background_ingest owns local task cleanup.
     response = await _file_list_response(request, selected_workspace)
     response.headers["HX-Retarget"] = "#panel-content"
     return response

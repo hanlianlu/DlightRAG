@@ -131,9 +131,11 @@ LightRAG parser workers.
 
 ### First API Calls
 
-Local-source ingestion paths must be visible to the API process. For native
-API runs, pass a normal host path. For Docker, either use the Web UI upload or
-mount a host directory into the API container.
+Local-source ingestion paths must be visible to the API process. `path` may be
+a file or directory; directory, Web upload, and remote prefix ingest use
+LightRAG's staged batch pipeline with per-file parser routing. For native API
+runs, pass a normal host path. For Docker, either use the Web UI upload or mount
+a host directory into the API container.
 
 ```bash
 curl -X POST http://localhost:8100/ingest \
@@ -314,7 +316,10 @@ MCP tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`,
 
 ### Primary / Replica Process Roles
 
-For production concurrency, separate write and read processes:
+DlightRAG's default `runtime_role: ingest` follows LightRAG's single-primary
+model: ingest and query can run in the same process, and queries read committed
+data while the ingest pipeline keeps processing. Primary/replica roles are an
+optional production read-isolation topology:
 
 ```text
 Ingest/admin workers -> primary PostgreSQL
@@ -458,6 +463,14 @@ OpenAI-compatible Chat Completions endpoint using `deepseek-v4-flash` with
 thinking disabled through `model_kwargs.thinking.type: disabled`. `query` and
 `vlm` continue to fall back to the multimodal default LLM unless explicitly
 overridden.
+
+`max_async` is the shared LLM concurrency budget: LightRAG applies it to role
+queues, and DlightRAG applies the same cap to its own query planner, answer
+engine, and query-image VLM enhancement calls. The checked-in default is
+`max_async: 8`; embedding calls use `embedding_func_max_async: 16`.
+The staged ingest pipeline defaults to `max_parallel_insert: 3`,
+`max_parallel_parse_native: 5`, `max_parallel_parse_mineru: 2`, and
+`max_parallel_analyze: 5`.
 
 ### Embeddings
 

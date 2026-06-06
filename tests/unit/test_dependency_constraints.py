@@ -76,6 +76,20 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=age,pg_textsearch" in compose
 
 
+def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    for setting, default in {
+        "shared_buffers": "8GB",
+        "work_mem": "256MB",
+        "maintenance_work_mem": "2GB",
+        "effective_cache_size": "18GB",
+        "max_connections": "80",
+    }.items():
+        env_name = f"DLIGHTRAG_POSTGRES_{setting.upper()}"
+        assert f"{setting}=${{{env_name}:-{default}}}" in compose
+
+
 def test_compose_builds_pg18_postgres_image_locally() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/postgres-image.yml").read_text(encoding="utf-8")

@@ -64,7 +64,7 @@ services:
     image: dlightrag-postgres:pg18
     build:
       context: postgres
-    shm_size: 8gb
+    shm_size: ${DLIGHTRAG_POSTGRES_SHM_SIZE:-8gb}
     ports:
       - "5432:5432"
     environment:
@@ -80,13 +80,13 @@ services:
       - "shared_preload_libraries=age,pg_textsearch"
       # Memory
       - "-c"
-      - "shared_buffers=8GB"
+      - "shared_buffers=${DLIGHTRAG_POSTGRES_SHARED_BUFFERS:-8GB}"
       - "-c"
-      - "work_mem=256MB"
+      - "work_mem=${DLIGHTRAG_POSTGRES_WORK_MEM:-256MB}"
       - "-c"
-      - "maintenance_work_mem=2GB"
+      - "maintenance_work_mem=${DLIGHTRAG_POSTGRES_MAINTENANCE_WORK_MEM:-2GB}"
       - "-c"
-      - "effective_cache_size=18GB"
+      - "effective_cache_size=${DLIGHTRAG_POSTGRES_EFFECTIVE_CACHE_SIZE:-18GB}"
       # SSD / IO
       - "-c"
       - "random_page_cost=1.1"
@@ -110,7 +110,7 @@ services:
       - "max_parallel_maintenance_workers=4"
       # Connections
       - "-c"
-      - "max_connections=50"
+      - "max_connections=${DLIGHTRAG_POSTGRES_MAX_CONNECTIONS:-80}"
       # Disable JIT (no benefit for vector/JSONB workloads, saves compilation overhead)
       - "-c"
       - "jit=off"

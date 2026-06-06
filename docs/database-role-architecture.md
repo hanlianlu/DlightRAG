@@ -1,7 +1,12 @@
 # Database Role Architecture
 
-DlightRAG supports PostgreSQL process roles instead of in-process dynamic
-connection switching.
+DlightRAG follows LightRAG's default concurrency model on a single primary:
+ingest and query can run in the same process, and queries read already
+committed data while the staged ingest pipeline continues in the background.
+
+PostgreSQL process roles are an optional production isolation layer, not a
+requirement for basic ingest/query concurrency. Use them when query traffic
+needs a read-only process and a separate database read target.
 
 ```text
 ingest/admin workers -> primary PostgreSQL
@@ -63,6 +68,12 @@ re-seeding.
 
 ## Tradeoffs
 
+- Single-process `runtime_role: ingest` is the clean local/default topology.
+  It uses LightRAG's native staged ingest pipeline and does not block
+  `retrieve` or `answer` routes at the application layer.
+- Replica routing is for read load isolation, operational blast-radius
+  reduction, and read-only query workers. It adds deployment complexity and
+  replica lag; do not use it just to make local query-while-ingest work.
 - Read-after-write is eventually consistent by default. With
   `read_after_write_mode: wait_for_replay`, ingest/admin write acknowledgements
   wait until the replica has replayed the current primary WAL LSN. DlightRAG

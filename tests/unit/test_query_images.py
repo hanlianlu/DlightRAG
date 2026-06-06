@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock
 
 from dlightrag.core.query_images import QueryImageEnhancer
@@ -45,3 +46,23 @@ async def test_query_image_enhancer_disabled_returns_original_query() -> None:
     assert result.query == "plain query"
     assert result.descriptions == []
     vlm.assert_not_called()
+
+
+async def test_query_image_enhancer_describes_images_concurrently() -> None:
+    active = 0
+    peak = 0
+
+    async def vlm(**kwargs) -> str:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return "visual detail"
+
+    enhancer = QueryImageEnhancer(vlm_func=vlm, enabled=True, max_images=3)
+
+    result = await enhancer.enhance("query", [_PNG_B64, _PNG_B64, _PNG_B64])
+
+    assert len(result.descriptions) == 3
+    assert peak > 1

@@ -125,6 +125,23 @@ def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None)
     return partial(traced_func)
 
 
+def _queue_managed_completion_func(
+    completion_func: Callable,
+    *,
+    max_async: int,
+    timeout: float,
+    queue_name: str,
+) -> Callable:
+    """Apply LightRAG's priority queue wrapper to a messages-first callable."""
+    from lightrag.utils import priority_limit_async_func_call
+
+    return priority_limit_async_func_call(
+        max_async,
+        llm_timeout=timeout,
+        queue_name=queue_name,
+    )(completion_func)
+
+
 def get_default_model_func(config: DlightragConfig) -> Callable:
     """Messages-first callable for the configured default LLM."""
     return _make_completion_func(config.llm.default)
@@ -146,27 +163,39 @@ def get_keyword_model_func(config: DlightragConfig) -> Callable:
     )
 
 
-def get_query_model_func(config: DlightragConfig) -> Callable:
+def get_query_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
     """Messages-first query callable for AnswerEngine and QueryPlanner.
 
     Uses ``config.llm.roles.query`` if set, otherwise falls back to
     ``config.llm.default``.
     """
-    return _make_completion_func(
-        model_for_role(config, "query"),
-        fallback_api_key=config.llm.default.api_key,
+    cfg = model_for_role(config, "query")
+    func = _make_completion_func(cfg, fallback_api_key=config.llm.default.api_key)
+    if not bounded:
+        return func
+    return _queue_managed_completion_func(
+        func,
+        max_async=config.max_async,
+        timeout=cfg.timeout,
+        queue_name="DlightRAG query LLM func",
     )
 
 
-def get_vlm_model_func(config: DlightragConfig) -> Callable:
+def get_vlm_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
     """Messages-first VLM callable for vlm_parser, multimodal_query, and unified extractor.
 
     Uses ``config.llm.roles.vlm`` if set, otherwise falls back to
     ``config.llm.default``.
     """
-    return _make_completion_func(
-        model_for_role(config, "vlm"),
-        fallback_api_key=config.llm.default.api_key,
+    cfg = model_for_role(config, "vlm")
+    func = _make_completion_func(cfg, fallback_api_key=config.llm.default.api_key)
+    if not bounded:
+        return func
+    return _queue_managed_completion_func(
+        func,
+        max_async=config.max_async,
+        timeout=cfg.timeout,
+        queue_name="DlightRAG VLM LLM func",
     )
 
 

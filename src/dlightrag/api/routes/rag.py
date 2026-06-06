@@ -27,7 +27,7 @@ from dlightrag.core.client_payloads import (
 )
 from dlightrag.core.retrieval.path_resolver import PathResolver
 
-from .deps import get_manager, resolve_workspace
+from .deps import get_manager, request_scope, resolve_workspace
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -90,12 +90,14 @@ async def retrieve(
         kwargs["session_id"] = body.session_id
     if body.referenced_image_ids:
         kwargs["referenced_image_ids"] = body.referenced_image_ids
+    scope = request_scope(user, body.workspaces)
 
     result = await manager.aretrieve(
         body.query,
         workspaces=body.workspaces,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
+        scope=scope,
         **kwargs,
     )
     resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
@@ -120,6 +122,7 @@ async def answer(
         kwargs["session_id"] = body.session_id
     if body.referenced_image_ids:
         kwargs["referenced_image_ids"] = body.referenced_image_ids
+    scope = request_scope(user, body.workspaces)
 
     if not body.stream:
         result = await manager.aanswer(
@@ -130,6 +133,7 @@ async def answer(
             chunk_top_k=body.chunk_top_k,
             answer_candidate_top_k=body.answer_candidate_top_k,
             answer_context_top_k=body.answer_context_top_k,
+            scope=scope,
             **kwargs,
         )
         return answer_payload(result)
@@ -142,6 +146,7 @@ async def answer(
         chunk_top_k=body.chunk_top_k,
         answer_candidate_top_k=body.answer_candidate_top_k,
         answer_context_top_k=body.answer_context_top_k,
+        scope=scope,
         **kwargs,
     )
 

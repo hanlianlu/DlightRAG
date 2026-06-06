@@ -19,7 +19,7 @@ import os
 import ssl
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 from urllib.parse import urlencode
 
 from dotenv import dotenv_values
@@ -30,6 +30,18 @@ _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
 PostgresTarget = Literal["primary", "replica"]
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
+
+
+class LightRAGPipelineKwargs(TypedDict):
+    max_parallel_insert: int
+    max_parallel_parse_native: int
+    max_parallel_parse_mineru: int
+    max_parallel_analyze: int
+    queue_size_parse: int
+    queue_size_analyze: int
+    queue_size_insert: int
+
+
 _LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(
     {
         "VLM_PROCESS_ENABLE",
@@ -100,6 +112,8 @@ def _load_lightrag_sidecar_env(env_file: Any, *, force: bool = False) -> None:
 
 class ModelConfig(BaseModel):
     """Reusable model configuration block."""
+
+    model_config = ConfigDict(extra="forbid")
 
     provider: Literal["openai", "anthropic", "gemini"] = "openai"
     model: str
@@ -544,6 +558,14 @@ class DlightragConfig(BaseSettings):
     postgres_pool_max_size: int = Field(
         default=10, description="DlightRAG domain store pool max connections."
     )
+    postgres_lightrag_pool_max_size: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            "LightRAG PostgreSQL backend pool max connections per process. "
+            "Bridged to LightRAG's POSTGRES_MAX_CONNECTIONS."
+        ),
+    )
     postgres_session_settings: dict[str, str | int | float | bool] = Field(
         default_factory=dict,
         description="Per-connection PostgreSQL GUCs applied to both LightRAG and DlightRAG pools.",
@@ -636,10 +658,44 @@ class DlightragConfig(BaseSettings):
     chunk_p_token_size: int = Field(default=1024)
 
     # ===== Ingestion Performance =====
-    max_parallel_insert: int = Field(default=2)
-    max_async: int = Field(default=4)
-    embedding_func_max_async: int = Field(default=8)
-    embedding_batch_num: int = Field(default=10)
+    max_parallel_insert: int = Field(
+        default=3,
+        ge=1,
+        description="LightRAG staged pipeline insert-worker concurrency.",
+    )
+    max_parallel_parse_native: int = Field(
+        default=5,
+        ge=1,
+        description="LightRAG native-parser worker concurrency.",
+    )
+    max_parallel_parse_mineru: int = Field(
+        default=2,
+        ge=1,
+        description="LightRAG MinerU parser worker concurrency.",
+    )
+    max_parallel_analyze: int = Field(
+        default=5,
+        ge=1,
+        description=("LightRAG multimodal analysis worker concurrency."),
+    )
+    queue_size_parse: int = Field(
+        default=20,
+        ge=1,
+        description="LightRAG staged pipeline parse queue size.",
+    )
+    queue_size_analyze: int = Field(
+        default=32,
+        ge=1,
+        description="LightRAG staged pipeline multimodal analysis queue size.",
+    )
+    queue_size_insert: int = Field(
+        default=4,
+        ge=1,
+        description="LightRAG staged pipeline insert queue size.",
+    )
+    max_async: int = Field(default=8, ge=1)
+    embedding_func_max_async: int = Field(default=16, ge=1)
+    embedding_batch_num: int = Field(default=10, ge=1)
     embedding_request_timeout: int = Field(
         default=120,
         description="Per-request timeout for embedding calls (seconds). "
@@ -927,6 +983,23 @@ class DlightragConfig(BaseSettings):
         """Return LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
         return urlencode(self.postgres_server_settings_dict())
 
+    def lightrag_pipeline_kwargs(self) -> LightRAGPipelineKwargs:
+        """Return LightRAG staged ingestion pipeline controls.
+
+        These are constructor kwargs, not raw upstream env vars, so DlightRAG
+        owns one typed product config surface while still using LightRAG's
+        native pipeline.
+        """
+        return {
+            "max_parallel_insert": self.max_parallel_insert,
+            "max_parallel_parse_native": self.max_parallel_parse_native,
+            "max_parallel_parse_mineru": self.max_parallel_parse_mineru,
+            "max_parallel_analyze": self.max_parallel_analyze,
+            "queue_size_parse": self.queue_size_parse,
+            "queue_size_analyze": self.queue_size_analyze,
+            "queue_size_insert": self.queue_size_insert,
+        }
+
     def _lightrag_sidecar_env_map(self) -> dict[str, str]:
         vlm = self.parser_sidecars.vlm
         mineru = self.parser_sidecars.mineru
@@ -987,6 +1060,7 @@ class DlightragConfig(BaseSettings):
             "POSTGRES_HNSW_M": str(self.pg_hnsw_m),
             # LightRAG's POSTGRES_HNSW_EF is used as ef_construction.
             "POSTGRES_HNSW_EF": str(self.pg_hnsw_ef_construction),
+            "POSTGRES_MAX_CONNECTIONS": str(self.postgres_lightrag_pool_max_size),
         }
         if self.postgres_statement_cache_size is not None:
             pg_env_map["POSTGRES_STATEMENT_CACHE_SIZE"] = str(self.postgres_statement_cache_size)

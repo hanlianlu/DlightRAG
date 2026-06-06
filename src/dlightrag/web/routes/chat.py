@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from dlightrag.web.answer_events import stream_answer_events
-from dlightrag.web.deps import get_manager, get_workspace, templates
+from dlightrag.web.deps import get_manager, get_request_scope, get_workspace, templates
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,7 @@ async def answer_stream(
     requested_workspaces = body.get("workspaces")
     workspaces = requested_workspaces if isinstance(requested_workspaces, list) else None
     session_id = str(body.get("session_id") or "")
+    scope = get_request_scope(request, workspaces or [workspace])
 
     manager = get_manager(request)
     cfg = manager.config
@@ -105,6 +106,7 @@ async def answer_stream(
             workspace=workspace,
             query_images=clean_images,
             session_id=session_id,
+            scope=scope,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

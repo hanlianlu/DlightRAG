@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import image_url_block
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,12 @@ class QueryImageEnhancer:
         self._enabled = enabled
         self._max_images = max(0, int(max_images))
 
+    async def aclose(self) -> None:
+        """Release VLM worker resources owned by this enhancer."""
+        from dlightrag.utils.concurrency import shutdown_async_callable
+
+        await shutdown_async_callable(self._vlm_func)
+
     async def enhance(
         self,
         query: str,
@@ -43,14 +50,15 @@ class QueryImageEnhancer:
         """Append concise visual descriptions to the retrieval query."""
         if not self._enabled or self._vlm_func is None or not images or self._max_images <= 0:
             return QueryImageEnhancement(query=query)
+        vlm_func = self._vlm_func
 
-        descriptions: list[str] = []
-        for idx, image in enumerate(images[: self._max_images], start=1):
+        async def _describe(item: tuple[int, str | dict[str, Any]]) -> str | None:
+            idx, image = item
             block = image_url_block(image)
             if block is None:
-                continue
+                return None
             try:
-                response = await self._vlm_func(
+                response = await vlm_func(
                     messages=[
                         {
                             "role": "user",
@@ -71,9 +79,19 @@ class QueryImageEnhancer:
                 )
             except Exception:
                 logger.warning("Query image description failed", exc_info=True)
-                continue
+                return None
             if isinstance(response, str) and response.strip():
-                descriptions.append(f"Image {idx}: {response.strip()}")
+                return f"Image {idx}: {response.strip()}"
+            return None
+
+        items = list(enumerate(images[: self._max_images], start=1))
+        results = await bounded_map(
+            items,
+            _describe,
+            max_concurrent=max(1, min(self._max_images, len(items))),
+            task_name="query-image-description",
+        )
+        descriptions = [item for item in results if isinstance(item, str) and item.strip()]
 
         if not descriptions:
             return QueryImageEnhancement(query=query)

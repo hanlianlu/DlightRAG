@@ -117,11 +117,12 @@ LightRAG path:
   "chunks": ["chunk-a", "chunk-b"],
   "ingest_strategy": "lightrag_sidecar_unified",
   "parse_engine": "mineru",
-  "process_options": {}
+  "process_options": "iteP"
 }
 ```
 
-Directory or prefix ingestion wraps those per-file results:
+Directory, Web upload, or remote prefix ingestion uses LightRAG's staged batch
+pipeline and wraps the per-file results:
 
 ```json
 {
@@ -134,7 +135,7 @@ Directory or prefix ingestion wraps those per-file results:
       "chunks": ["chunk-a", "chunk-b"],
       "ingest_strategy": "lightrag_sidecar_unified",
       "parse_engine": "mineru",
-      "process_options": {}
+      "process_options": "iteP"
     },
     {
       "doc_id": "file-doc-def456",
@@ -142,7 +143,7 @@ Directory or prefix ingestion wraps those per-file results:
       "chunks": ["chunk-c"],
       "ingest_strategy": "lightrag_sidecar_unified",
       "parse_engine": "mineru",
-      "process_options": {}
+      "process_options": "iteP"
     }
   ]
 }
@@ -157,9 +158,9 @@ Directory or prefix ingestion wraps those per-file results:
 | `chunks` | `list[string]` | LightRAG chunk IDs created or reused |
 | `ingest_strategy` | `string` | Ingestion path used for successful files |
 | `parse_engine` | `string` | Parser selected for document files |
-| `process_options` | `object \| string` | LightRAG parser process options |
-| `processed` | `int` | Files successfully processed for directory/prefix ingestion |
-| `errors` | `list[string]` | Local directory files that raised during ingestion |
+| `process_options` | `string` | LightRAG parser process options, for example `iteP` |
+| `processed` | `int` | Files represented in a directory/upload/prefix batch result |
+| `errors` | `list[string]` | Compatibility field for batch wrappers; batch-level failures raise instead |
 | `results` | `list[object]` | Per-file results |
 | `replica_replay_lsn` | `string` | Present when `read_after_write_mode: wait_for_replay` waited for replica WAL replay |
 

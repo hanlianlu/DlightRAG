@@ -8,10 +8,11 @@ entry point. All API/MCP consumers depend on this class only.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -24,6 +25,7 @@ from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import RAGService
 from dlightrag.utils import normalize_workspace
 
@@ -47,6 +49,47 @@ class _AnswerLimits:
     context_top_k: int
 
 
+class _ScopedAnswerStream:
+    """Async iterator wrapper that releases a semaphore when streaming ends."""
+
+    def __init__(self, inner: AsyncIterator[str], semaphore: asyncio.Semaphore) -> None:
+        self._inner = inner
+        self._aiter = inner.__aiter__()
+        self._semaphore = semaphore
+        self._released = False
+
+    def __aiter__(self) -> _ScopedAnswerStream:
+        return self
+
+    async def __anext__(self) -> str:
+        try:
+            return await self._aiter.__anext__()
+        except StopAsyncIteration:
+            self._release()
+            raise
+        except BaseException:
+            self._release()
+            raise
+
+    async def aclose(self) -> None:
+        close = getattr(self._inner, "aclose", None)
+        try:
+            if callable(close):
+                result = close()
+                if inspect.isawaitable(result):
+                    await cast(Awaitable[Any], result)
+        finally:
+            self._release()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def _release(self) -> None:
+        if not self._released:
+            self._released = True
+            self._semaphore.release()
+
+
 def _iso_or_none(value: Any) -> str | None:
     if value is None:
         return None
@@ -63,6 +106,49 @@ def _workspace_aliases(workspace: str) -> tuple[str, ...]:
         if candidate and candidate not in aliases:
             aliases.append(candidate)
     return tuple(aliases)
+
+
+def _normalize_workspaces(workspaces: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for workspace in workspaces or ():
+        normalized = normalize_workspace(workspace)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return tuple(result)
+
+
+def _scope_for_workspaces(
+    scope: RequestScope | None,
+    workspaces: list[str] | tuple[str, ...] | None,
+) -> RequestScope:
+    base = scope or RequestScope.anonymous()
+    normalized = _normalize_workspaces(workspaces)
+    return base.for_workspaces(normalized) if normalized else base
+
+
+def _merge_schema_rows(schemas: list[dict[str, Any]]) -> dict[str, Any]:
+    if not schemas:
+        return {}
+    if len(schemas) == 1:
+        return dict(schemas[0])
+
+    columns: dict[str, dict[str, Any]] = {}
+    custom_keys: set[str] = set()
+    for schema in schemas:
+        for column in schema.get("columns", []) or []:
+            if isinstance(column, dict):
+                name = str(column.get("name") or "")
+                if name and name not in columns:
+                    columns[name] = dict(column)
+        for key in schema.get("custom_keys", []) or []:
+            if key:
+                custom_keys.add(str(key))
+    return {
+        "columns": list(columns.values()),
+        "custom_keys": sorted(custom_keys),
+    }
 
 
 class RAGServiceUnavailableError(Exception):
@@ -101,6 +187,8 @@ class RAGServiceManager:
         self._session_images: Any = None
         self._workspace_registry: Any = None
         self._checkpoint: Any = None
+        self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+        self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
     @property
     def config(self) -> DlightragConfig:
@@ -125,7 +213,11 @@ class RAGServiceManager:
             all_ws.insert(0, default_ws)
 
         warmup_coros = [manager._get_service(ws) for ws in all_ws]
-        results = await bounded_gather(warmup_coros, max_concurrent=8, task_name="warmup")
+        results = await bounded_gather(
+            warmup_coros,
+            max_concurrent=max(1, int(manager._config.max_async)),
+            task_name="warmup",
+        )
         failed = [ws for ws, r in zip(all_ws, results, strict=True) if isinstance(r, Exception)]
         ok = len(all_ws) - len(failed)
         logger.info("Warmed up %d/%d workspace services", ok, len(all_ws))
@@ -490,10 +582,15 @@ class RAGServiceManager:
         return self._session_images
 
     async def get_session_image_data(
-        self, session_id: str | None, image_ids: list[str] | None
+        self,
+        session_id: str | None,
+        image_ids: list[str] | None,
+        *,
+        scope: RequestScope | None = None,
     ) -> list[str]:
         """Return stored query image data for web/API presentation layers."""
-        return self._get_session_images().get(session_id, image_ids)
+        scoped_session_id = scope.session_key(session_id) if scope is not None else session_id
+        return self._get_session_images().get(scoped_session_id, image_ids)
 
     def _get_checkpoint(self):
         """Lazy-create conversation checkpoint store."""
@@ -511,31 +608,30 @@ class RAGServiceManager:
         answer: str,
         contexts: dict[str, Any],
         cited_chunk_ids: list[str],
+        *,
+        workspace: str | None = None,
+        scope: RequestScope | None = None,
     ) -> None:
         """Save a complete turn (query + answer + retrieval anchors) to checkpoint."""
         if not session_id:
             return
         try:
             cp = self._get_checkpoint()
-            await cp.ensure_session(session_id)
-            turn_number = await cp.next_turn_number(session_id)
-            await cp.save_turn(
-                session_id,
-                turn_number,
-                role="user",
-                content=query,
+            effective_workspace = normalize_workspace(
+                workspace
+                or (scope.workspaces[0] if scope is not None and scope.workspaces else "")
+                or self._config.workspace
             )
-            await cp.save_turn(
-                session_id,
-                turn_number,
-                role="assistant",
-                content=answer,
+            scoped = _scope_for_workspaces(scope, [effective_workspace])
+            scoped_session_id = scoped.session_key(session_id) or session_id
+            await cp.save_turn_pair(
+                scoped_session_id,
+                workspace=effective_workspace,
+                query=query,
+                answer=answer,
+                contexts=contexts,
                 cited_chunk_ids=cited_chunk_ids,
             )
-            chunks = contexts.get("chunks", [])
-            if chunks:
-                await cp.save_anchors(session_id, turn_number, chunks)
-                await cp.mark_cited(session_id, turn_number, cited_chunk_ids)
         except Exception:
             logger.warning("Failed to save checkpoint for session %s", session_id, exc_info=True)
 
@@ -553,28 +649,48 @@ class RAGServiceManager:
             )
         return self._query_image_enhancer
 
-    async def _get_schema(self) -> dict[str, Any]:
-        """Fetch metadata schema from first available workspace."""
-        workspaces = await self.list_workspaces()
-        if workspaces:
-            svc = await self._get_service(workspaces[0])
-            if svc._metadata_index is not None:
-                return await svc._metadata_index.get_field_schema()
-        return {}
+    async def _get_schema(
+        self,
+        workspaces: list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, Any]:
+        """Fetch a metadata schema for the requested workspace set."""
+        ws_key = _normalize_workspaces(workspaces) or (normalize_workspace(self._config.workspace),)
+        now = time.monotonic()
+        cached = self._schema_cache.get(ws_key)
+        if cached is not None and now - cached[0] < 300.0:
+            return cached[1]
+
+        schemas: list[dict[str, Any]] = []
+        for workspace in ws_key:
+            try:
+                svc = await self._get_service(workspace)
+                metadata_index = getattr(svc, "_metadata_index", None)
+                if metadata_index is not None:
+                    schema = await metadata_index.get_field_schema()
+                    if isinstance(schema, dict):
+                        schemas.append(schema)
+            except Exception:
+                logger.debug("Schema lookup failed for workspace %s", workspace, exc_info=True)
+        merged = _merge_schema_rows(schemas)
+        self._schema_cache[ws_key] = (now, merged)
+        return merged
 
     async def aplan_query(
         self,
         query: str,
         *,
         conversation_history: list[dict[str, str]] | None = None,
+        workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
         """Plan a query using the manager-owned planner and config limits."""
         planner = self._get_query_planner()
+        schema = await self._get_schema(workspaces)
         return await planner.plan(
             query,
             conversation_history=conversation_history,
             max_turns=self._config.max_conversation_turns,
             max_tokens=self._config.max_conversation_tokens,
+            schema=schema,
         )
 
     async def agenerate_stream_from_contexts(
@@ -587,12 +703,21 @@ class RAGServiceManager:
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Generate a streaming answer from already-retrieved contexts."""
         engine = self._get_answer_engine()
-        return await engine.generate_stream(
-            query,
-            contexts,
-            query_images=query_images,
-            context_top_k=context_top_k,
-        )
+        await self._answer_stream_sem.acquire()
+        try:
+            prepared_contexts, stream = await engine.generate_stream(
+                query,
+                contexts,
+                query_images=query_images,
+                context_top_k=context_top_k,
+            )
+        except BaseException:
+            self._answer_stream_sem.release()
+            raise
+        if stream is None:
+            self._answer_stream_sem.release()
+            return prepared_contexts, None
+        return prepared_contexts, _ScopedAnswerStream(stream, self._answer_stream_sem)
 
     def _resolve_answer_limits(self, kwargs: dict[str, Any]) -> _AnswerLimits:
         """Resolve answer-specific retrieval and final-prompt chunk limits.
@@ -627,6 +752,7 @@ class RAGServiceManager:
         query_images: list[str | dict[str, Any]] | None = None,
         session_id: str | None = None,
         referenced_image_ids: list[str] | None = None,
+        scope: RequestScope | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple).
@@ -636,14 +762,21 @@ class RAGServiceManager:
                 uses plan.standalone_query for search and plan.metadata_filter
                 for structured filtering.
         """
-        effective_query = plan.standalone_query if plan else query
+        requested_top_k = _positive_int_or_none(kwargs.get("top_k"))
+        requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
+        kwargs["top_k"] = requested_top_k or self._config.top_k
+        kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
+        ws_list = workspaces or [workspace or self._config.workspace]
+        scoped = _scope_for_workspaces(scope, ws_list)
+        effective_query = plan.standalone_query if plan is not None else query
         prepared = await self._prepare_query_images(
             effective_query,
             query_images=query_images,
             session_id=session_id,
             referenced_image_ids=referenced_image_ids
-            or (plan.referenced_image_ids if plan else None),
+            or (plan.referenced_image_ids if plan is not None else None),
             store_current=False,
+            scope=scoped,
         )
         effective_query = prepared.query
         if prepared.multimodal_content:
@@ -651,11 +784,6 @@ class RAGServiceManager:
             kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         if plan is not None:
             kwargs.setdefault("_plan", plan)
-        requested_top_k = _positive_int_or_none(kwargs.get("top_k"))
-        requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
-        kwargs["top_k"] = requested_top_k or self._config.top_k
-        kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
-        ws_list = workspaces or [workspace or self._config.workspace]
         from dlightrag.observability import trace_pipeline
 
         try:
@@ -685,6 +813,7 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         query_images: list[str | dict[str, Any]] | None = None,
+        scope: RequestScope | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate.
@@ -695,6 +824,7 @@ class RAGServiceManager:
         only affects answer generation, never the retrieval pipeline.
         """
         ws_list = workspaces or [workspace or self._config.workspace]
+        scoped = _scope_for_workspaces(scope, ws_list)
         from dlightrag.observability import trace_pipeline
 
         try:
@@ -703,6 +833,7 @@ class RAGServiceManager:
                     plan = await self.aplan_query(
                         query,
                         conversation_history=conversation_history,
+                        workspaces=ws_list,
                     )
                     prepared = await self._prepare_query_images(
                         plan.standalone_query,
@@ -711,6 +842,7 @@ class RAGServiceManager:
                         referenced_image_ids=kwargs.pop("referenced_image_ids", None)
                         or plan.referenced_image_ids,
                         store_current=True,
+                        scope=scoped,
                     )
                     retrieval_plan = replace(plan, standalone_query=prepared.query)
                     if prepared.multimodal_content:
@@ -721,6 +853,7 @@ class RAGServiceManager:
                         query,
                         plan=retrieval_plan,
                         workspaces=ws_list,
+                        scope=scoped,
                         **kwargs,
                     )
                     retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
@@ -750,6 +883,7 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         query_images: list[str | dict[str, Any]] | None = None,
+        scope: RequestScope | None = None,
         **kwargs: Any,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces: plan -> retrieve -> stream.
@@ -757,6 +891,7 @@ class RAGServiceManager:
         See ``aanswer`` for ``query_images`` semantics.
         """
         ws_list = workspaces or [workspace or self._config.workspace]
+        scoped = _scope_for_workspaces(scope, ws_list)
         from dlightrag.observability import trace_pipeline
 
         try:
@@ -767,6 +902,7 @@ class RAGServiceManager:
                     plan = await self.aplan_query(
                         query,
                         conversation_history=conversation_history,
+                        workspaces=ws_list,
                     )
                     logger.info(
                         "Query plan: original=%r, standalone=%r",
@@ -781,6 +917,7 @@ class RAGServiceManager:
                         referenced_image_ids=kwargs.pop("referenced_image_ids", None)
                         or plan.referenced_image_ids,
                         store_current=True,
+                        scope=scoped,
                     )
                     retrieval_plan = replace(plan, standalone_query=prepared.query)
                     if prepared.multimodal_content:
@@ -791,6 +928,7 @@ class RAGServiceManager:
                         query,
                         plan=retrieval_plan,
                         workspaces=ws_list,
+                        scope=scoped,
                         **kwargs,
                     )
                     retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
@@ -829,16 +967,18 @@ class RAGServiceManager:
         session_id: str | None,
         referenced_image_ids: list[str] | None,
         store_current: bool,
+        scope: RequestScope | None = None,
     ) -> _PreparedQueryImages:
         """Resolve session images and create semantic/direct image query inputs."""
+        scoped_session_id = scope.session_key(session_id) if scope is not None else session_id
         current_images = list(query_images or [])
         current_storable = _storable_image_strings(current_images)
         current_ids = (
-            self._get_session_images().store(session_id, current_storable)
+            self._get_session_images().store(scoped_session_id, current_storable)
             if store_current and current_storable
             else []
         )
-        historical = self._get_session_images().get(session_id, referenced_image_ids)
+        historical = self._get_session_images().get(scoped_session_id, referenced_image_ids)
         answer_images: list[str | dict[str, Any]] = [*historical, *current_images]
 
         enhancer = self._get_query_image_enhancer()
@@ -897,6 +1037,21 @@ class RAGServiceManager:
     async def close(self) -> None:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
+
+        for component in (
+            self._answer_engine,
+            self._query_planner,
+            self._query_image_enhancer,
+        ):
+            close = getattr(component, "aclose", None)
+            if not callable(close):
+                continue
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await cast(Awaitable[Any], result)
+            except Exception:
+                logger.warning("Failed to close manager component", exc_info=True)
 
         for ws, svc in self._services.items():
             try:

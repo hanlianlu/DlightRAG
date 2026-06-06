@@ -222,9 +222,7 @@ class LightRAGStores:
             cls._VECTOR_WRITE_MAX_BYTES if cls._VECTOR_WRITE_MAX_BYTES > 0 else float("inf")
         )
         records_limit = (
-            cls._VECTOR_WRITE_MAX_RECORDS
-            if cls._VECTOR_WRITE_MAX_RECORDS > 0
-            else float("inf")
+            cls._VECTOR_WRITE_MAX_RECORDS if cls._VECTOR_WRITE_MAX_RECORDS > 0 else float("inf")
         )
         batches: list[list[tuple[Any, ...]]] = []
         current: list[tuple[Any, ...]] = []

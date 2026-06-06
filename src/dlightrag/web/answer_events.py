@@ -6,11 +6,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, cast
 
 from dlightrag.citations import extract_highlights_for_sources, finalize_answer
 from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.scope import RequestScope
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
 
@@ -23,11 +24,16 @@ async def _session_image_cards(
     session_id: str,
     image_ids: list[str],
     image_descriptions: Any,
+    scope: RequestScope | None,
 ) -> list[dict[str, Any]]:
     stored_session_images: list[str] = []
     if image_ids:
         try:
-            stored_session_images = await manager.get_session_image_data(session_id, image_ids)
+            stored_session_images = await manager.get_session_image_data(
+                session_id,
+                image_ids,
+                scope=scope,
+            )
         except Exception:
             stored_session_images = []
 
@@ -97,6 +103,7 @@ async def stream_answer_events(
     workspace: str,
     query_images: list[str],
     session_id: str,
+    scope: RequestScope | None = None,
 ) -> AsyncIterator[str]:
     """Yield browser SSE events for one answer request."""
     full_answer = ""
@@ -116,6 +123,7 @@ async def stream_answer_events(
             workspaces=ws_list,
             query_images=query_images,
             session_id=session_id or None,
+            scope=scope,
         )
         t1 = time.monotonic()
         logger.info("[SSE] retrieval+stream setup done (%.1fs)", t1 - t0)
@@ -154,6 +162,7 @@ async def stream_answer_events(
             session_id=session_id,
             image_ids=current_image_ids,
             image_descriptions=image_descriptions,
+            scope=scope,
         )
         seen_img_ids = {str(img.get("chunk_id", "")) for img in session_cards}
 
@@ -201,17 +210,24 @@ async def stream_answer_events(
         }
         yield sse_event("done", done_payload)
 
-        try:
-            cited_ids = [s.id for s in finalized.sources if s.id]
-            await manager.save_turn_checkpoint(
-                session_id=session_id or "",
-                query=query,
-                answer=finalized.answer,
-                contexts=contexts,
-                cited_chunk_ids=cited_ids,
-            )
-        except Exception:
-            logger.warning("Checkpoint save failed", exc_info=True)
+        save_checkpoint = getattr(manager, "save_turn_checkpoint", None)
+        if callable(save_checkpoint):
+            save_checkpoint_func = cast(Callable[..., Awaitable[None]], save_checkpoint)
+            try:
+                cited_ids = [s.id for s in finalized.sources if s.id]
+                await save_checkpoint_func(
+                    session_id=session_id or "",
+                    query=query,
+                    answer=finalized.answer,
+                    contexts=contexts,
+                    cited_chunk_ids=cited_ids,
+                    workspace=workspace or manager.config.workspace,
+                    scope=scope,
+                )
+            except Exception:
+                logger.warning("Checkpoint save failed", exc_info=True)
+        else:
+            logger.debug("Manager does not expose save_turn_checkpoint; skipping checkpoint")
 
         trace = getattr(token_iter, "trace", None)
         if isinstance(trace, dict) and trace:

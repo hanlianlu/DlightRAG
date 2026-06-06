@@ -30,7 +30,6 @@ def _make_engine(**overrides):
         "stores": stores,
         "metadata_index": AsyncMock(),
         "multimodal_embedder": AsyncMock(),
-        "vlm_func": AsyncMock(return_value="visual description"),
         "workspace": "default",
         "parser_rules": "docx:native-iteP,*:mineru-iteP",
         "chunk_options": {},
@@ -53,6 +52,49 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["process_options"] == "iteP"
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     deps["metadata_index"].upsert.assert_awaited_once()
+
+
+async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Path) -> None:
+    pdf = tmp_path / "b[mineru-iteP].pdf"
+    docx = tmp_path / "a.docx"
+    pdf.write_bytes(b"%PDF-1.4")
+    docx.write_bytes(b"fake-docx")
+    engine, deps = _make_engine()
+    pdf_doc_id = compute_mdhash_id(normalize_document_file_path(pdf), prefix="doc-")
+    docx_doc_id = compute_mdhash_id(normalize_document_file_path(docx), prefix="doc-")
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {"chunks_list": ["chunk-docx"], "content_hash": "sha256:docx", "status": "processed"},
+        {"chunks_list": ["chunk-pdf"], "content_hash": "sha256:pdf", "status": "processed"},
+    ]
+    deps["stores"].get_full_doc.side_effect = [
+        {
+            "parse_engine": "native",
+            "process_options": "iteP",
+            "chunk_options": {},
+            "sidecar_location": None,
+        },
+        {
+            "parse_engine": "mineru",
+            "process_options": "iteP",
+            "chunk_options": {},
+            "sidecar_location": None,
+        },
+    ]
+
+    result = await engine.aingest_files([docx, pdf], replace=False)
+
+    assert result["processed"] == 2
+    assert [item["doc_id"] for item in result["results"]] == [docx_doc_id, pdf_doc_id]
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["input"] == ["", ""]
+    assert kwargs["file_paths"] == [str(docx), str(pdf)]
+    assert kwargs["lightrag_document_paths"] == [str(docx), str(pdf)]
+    assert kwargs["parse_engine"] == ["native", "mineru"]
+    assert kwargs["process_options"] == ["iteP", "iteP"]
+    deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
+    assert deps["metadata_index"].upsert.await_count == 2
 
 
 async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) -> None:

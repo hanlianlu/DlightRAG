@@ -232,12 +232,6 @@ async def fake_lightrag_llm(prompt: str, **_: Any) -> str:
     return "<|COMPLETE|>"
 
 
-async def fake_vlm_func(*, prompt: str, image_path: str, **_: Any) -> str:
-    """Return a compact visual semantic description."""
-    del prompt
-    return f"Test image at {image_path} containing a green square for pg18 smoke."
-
-
 def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMultimodalEmbedder:
     """Patch RAGService model factories to avoid external network calls."""
     from dlightrag.core import service as service_module
@@ -248,7 +242,6 @@ def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMulti
         "get_default_model_func_for_lightrag",
         lambda _config: fake_lightrag_llm,
     )
-    monkeypatch.setattr(service_module, "get_vlm_model_func", lambda _config: fake_vlm_func)
     monkeypatch.setattr(service_module, "get_rerank_func", lambda _config: None)
     monkeypatch.setattr(service_module, "build_role_llm_configs", lambda _config: None)
     monkeypatch.setattr(

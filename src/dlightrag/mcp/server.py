@@ -23,6 +23,7 @@ from dlightrag.core.client_payloads import (
     metadata_filter_from_payload,
     retrieval_payload,
 )
+from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
@@ -363,11 +364,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 kwargs["session_id"] = arguments["session_id"]
             if arguments.get("referenced_image_ids"):
                 kwargs["referenced_image_ids"] = arguments["referenced_image_ids"]
+            scope = current_request_scope().for_workspaces(arguments.get("workspaces"))
             result = await manager.aretrieve(
                 arguments["query"],
                 workspaces=arguments.get("workspaces"),
                 top_k=arguments.get("top_k"),
                 chunk_top_k=arguments.get("chunk_top_k"),
+                scope=scope,
                 **kwargs,
             )
             return _json_content(retrieval_payload(result))
@@ -386,6 +389,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 kwargs["session_id"] = arguments["session_id"]
             if arguments.get("referenced_image_ids"):
                 kwargs["referenced_image_ids"] = arguments["referenced_image_ids"]
+            scope = current_request_scope().for_workspaces(arguments.get("workspaces"))
             result = await manager.aanswer(
                 arguments["query"],
                 conversation_history=arguments.get("conversation_history"),
@@ -394,6 +398,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 chunk_top_k=arguments.get("chunk_top_k"),
                 answer_candidate_top_k=arguments.get("answer_candidate_top_k"),
                 answer_context_top_k=arguments.get("answer_context_top_k"),
+                scope=scope,
                 **kwargs,
             )
             return _json_content(answer_payload(result))
@@ -599,7 +604,8 @@ async def run_streamable_http(host: str, port: int) -> None:
 
         async def dispatch(self, request, call_next):
             if not has_auth:
-                return await call_next(request)
+                with request_scope_context(RequestScope.anonymous()):
+                    return await call_next(request)
             header = request.headers.get("Authorization", "")
             if not header.startswith("Bearer "):
                 return JSONResponse(
@@ -608,10 +614,15 @@ async def run_streamable_http(host: str, port: int) -> None:
             try:
                 from dlightrag.api.auth import verify_bearer_token
 
-                verify_bearer_token(header[7:], cfg)
+                user = verify_bearer_token(
+                    header[7:],
+                    cfg,
+                    default_user_id=request.headers.get("X-User-Id", "anonymous"),
+                )
             except HTTPException as exc:
                 return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
-            return await call_next(request)
+            with request_scope_context(RequestScope.from_user(user)):
+                return await call_next(request)
 
     await _ensure_manager()
 

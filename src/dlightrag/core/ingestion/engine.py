@@ -7,7 +7,9 @@ import asyncio
 import hashlib
 import logging
 import shutil
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,16 @@ from dlightrag.core.retrieval.metadata_fields import (
 from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PendingDocumentIngest:
+    index: int
+    file_path: Path
+    doc_id: str
+    metadata_record: dict[str, Any]
+    parse_engine: str
+    process_options: str
 
 
 def _image_dims(path: Path) -> tuple[int, int] | None:
@@ -57,7 +69,6 @@ class UnifiedIngestionEngine:
         metadata_registry: MetadataFieldRegistry | None = None,
         allow_ad_hoc_metadata: bool = True,
         default_metadata_policy: MetadataIngestPolicy = "validate",
-        vlm_func: Any | None = None,
         min_image_pixel: int = 100,
     ) -> None:
         self._lightrag = lightrag
@@ -70,7 +81,6 @@ class UnifiedIngestionEngine:
         self._metadata_registry = metadata_registry or MetadataFieldRegistry.from_config({})
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
         self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
-        self._vlm_func = vlm_func
         self._min_image_pixel = min_image_pixel
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
@@ -113,6 +123,102 @@ class UnifiedIngestionEngine:
             doc_id=doc_id,
             metadata_record=metadata_record,
         )
+
+    async def aingest_files(
+        self,
+        paths: Sequence[str | Path],
+        *,
+        replace: bool = False,  # noqa: ARG002
+        title: str | None = None,
+        author: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        """Ingest local files as one LightRAG staged batch.
+
+        LightRAG 1.5 accepts per-document parser directives, so a single
+        enqueue can mix native DOCX parsing and MinerU PDF/image parsing.
+        DlightRAG keeps only the product-layer metadata and sidecar vector
+        overrides around that native batch pipeline.
+        """
+        if not paths:
+            return {"processed": 0, "errors": [], "results": []}
+
+        entries: list[_PendingDocumentIngest] = []
+        for index, file_path in enumerate(Path(path) for path in paths):
+            parse_engine, process_options = resolve_file_parser_directives(
+                file_path,
+                parser_rules=self._parser_rules,
+                require_external_endpoint=False,
+            )
+            entries.append(
+                _PendingDocumentIngest(
+                    index=index,
+                    file_path=file_path,
+                    doc_id=_canonical_file_doc_id(file_path),
+                    metadata_record=self._prepare_metadata_record(
+                        file_path,
+                        title=title,
+                        author=author,
+                        metadata=metadata,
+                        metadata_policy=metadata_policy,
+                    ),
+                    parse_engine=parse_engine,
+                    process_options=process_options,
+                )
+            )
+
+        results_by_index: dict[int, dict[str, Any]] = {}
+        to_enqueue: list[_PendingDocumentIngest] = []
+
+        async with AsyncExitStack() as stack:
+            for doc_id in sorted({entry.doc_id for entry in entries}):
+                await stack.enter_async_context(self._get_ingest_lock(doc_id))
+
+            for entry in entries:
+                existing_status = await self._stores.get_doc_status(entry.doc_id)
+                if existing_status is not None and existing_status.get("status") == "processed":
+                    current_hash = _file_sha256(entry.file_path)
+                    stored_hash = existing_status.get("content_hash")
+                    if stored_hash and current_hash == stored_hash:
+                        results_by_index[entry.index] = {
+                            "doc_id": entry.doc_id,
+                            "source_kind": "skipped",
+                            "reason": "content_hash_match",
+                            "chunks": existing_status.get("chunks_list", []),
+                        }
+                        continue
+
+                if existing_status is not None and existing_status.get("status") != "processed":
+                    await self._cleanup_partial_doc(entry.doc_id)
+
+                to_enqueue.append(entry)
+
+            if to_enqueue:
+                await self._lightrag.apipeline_enqueue_documents(
+                    input=[""] * len(to_enqueue),
+                    file_paths=[str(entry.file_path) for entry in to_enqueue],
+                    docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
+                    lightrag_document_paths=[str(entry.file_path) for entry in to_enqueue],
+                    parse_engine=[entry.parse_engine for entry in to_enqueue],
+                    process_options=[entry.process_options for entry in to_enqueue],
+                    chunk_options=self._chunk_options or None,
+                )
+                await self._lightrag.apipeline_process_enqueue_documents()
+
+                for entry in to_enqueue:
+                    results_by_index[entry.index] = await self._finalize_ingested_document(
+                        doc_id=entry.doc_id,
+                        metadata_record=entry.metadata_record,
+                        parse_engine=entry.parse_engine,
+                        process_options=entry.process_options,
+                    )
+
+        return {
+            "processed": len(results_by_index),
+            "errors": [],
+            "results": [results_by_index[index] for index in sorted(results_by_index)],
+        }
 
     def _prepare_metadata_record(
         self,
@@ -201,26 +307,41 @@ class UnifiedIngestionEngine:
             )
             await self._lightrag.apipeline_process_enqueue_documents()
 
-            doc_status = await self._stores.get_doc_status(doc_id)
-            full_doc = await self._stores.get_full_doc(doc_id)
-            light_chunks = list((doc_status or {}).get("chunks_list") or [])
-            lightrag_record = self._lightrag_metadata(full_doc, doc_status)
-            await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
-
-            await self._overwrite_sidecar_image_vectors(
+            return await self._finalize_ingested_document(
                 doc_id=doc_id,
-                sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
-                chunk_ids=set(light_chunks),
+                metadata_record=metadata_record,
+                parse_engine=parse_engine,
+                process_options=process_options,
             )
 
-            return {
-                "doc_id": doc_id,
-                "source_kind": "document",
-                "chunks": light_chunks,
-                "ingest_strategy": "lightrag_sidecar_unified",
-                "parse_engine": parse_engine,
-                "process_options": process_options,
-            }
+    async def _finalize_ingested_document(
+        self,
+        *,
+        doc_id: str,
+        metadata_record: dict[str, Any],
+        parse_engine: str,
+        process_options: str,
+    ) -> dict[str, Any]:
+        doc_status = await self._stores.get_doc_status(doc_id)
+        full_doc = await self._stores.get_full_doc(doc_id)
+        light_chunks = list((doc_status or {}).get("chunks_list") or [])
+        lightrag_record = self._lightrag_metadata(full_doc, doc_status)
+        await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
+
+        await self._overwrite_sidecar_image_vectors(
+            doc_id=doc_id,
+            sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
+            chunk_ids=set(light_chunks),
+        )
+
+        return {
+            "doc_id": doc_id,
+            "source_kind": "document",
+            "chunks": light_chunks,
+            "ingest_strategy": "lightrag_sidecar_unified",
+            "parse_engine": parse_engine,
+            "process_options": process_options,
+        }
 
     async def _overwrite_sidecar_image_vectors(
         self,

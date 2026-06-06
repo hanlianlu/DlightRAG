@@ -295,32 +295,11 @@ async def federated_retrieve(
         result.trace.setdefault("federated", False)
         return result
 
-    # Pre-compute query analysis ONCE to avoid redundant LLM calls per workspace
-    shared_plan = None
-    first_svc = await get_service(workspaces[0])
-    if first_svc._metadata_index is not None:
-        try:
-            from dlightrag.core.query_planner import QueryPlanner
-
-            lr = first_svc.lightrag
-            llm_func = getattr(lr, "llm_model_func", None) if lr else None
-
-            # Provider for schema refresh
-            async def _schema_provider():
-                return await first_svc._metadata_index.get_field_schema()
-
-            planner = QueryPlanner(llm_func=llm_func, schema_provider=_schema_provider)
-            shared_plan = await planner.plan(query, explicit_filter=kwargs.get("filters"))
-            logger.info(
-                "Federation: shared plan computed, query=%r",
-                (shared_plan.standalone_query or "")[:60],
-            )
-        except Exception as exc:
-            logger.warning("Federation: shared plan computation failed (non-fatal): %s", exc)
-
-    # Federation always provides its own _plan; strip any caller-supplied
-    # _plan from kwargs to avoid "multiple values for keyword argument".
-    kwargs.pop("_plan", None)
+    # Query planning belongs to the caller (RAGServiceManager). Federation is
+    # only responsible for parallel workspace retrieval and merge semantics.
+    # This avoids duplicate planner calls and keeps all DlightRAG-owned LLM
+    # calls behind the manager's role-level concurrency budget.
+    shared_plan = kwargs.pop("_plan", None)
 
     # Bounded parallel queries with per-workspace timing + optional timeout.
     # A slow/hanging workspace is treated as a partial failure rather than

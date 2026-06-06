@@ -182,6 +182,12 @@ class QueryPlanner:
 
         return _call
 
+    async def aclose(self) -> None:
+        """Release model-function worker resources owned by this planner."""
+        from dlightrag.utils.concurrency import shutdown_async_callable
+
+        await shutdown_async_callable(self._llm_func)
+
     async def plan(
         self,
         query: str,
@@ -190,6 +196,7 @@ class QueryPlanner:
         explicit_filter: MetadataFilter | None = None,
         max_turns: int = 25,
         max_tokens: int = 65536,
+        schema: dict[str, Any] | None = None,
     ) -> QueryPlan:
         """Produce a full QueryPlan from one LLM call.
 
@@ -209,7 +216,7 @@ class QueryPlanner:
 
         # Refresh schema (TTL-cached)
         t0 = time.monotonic()
-        schema = await self._refresh_schema()
+        schema = schema if schema is not None else await self._refresh_schema()
         t1 = time.monotonic()
         logger.info("[Planner] schema refresh: %.1fs", t1 - t0)
 

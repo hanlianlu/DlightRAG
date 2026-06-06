@@ -51,6 +51,9 @@ postgres_session_settings:
   application_name: dlightrag
   statement_timeout: "60000"
 postgres_statement_cache_size: 256
+postgres_lightrag_pool_max_size: 16
+postgres_pool_min_size: 2
+postgres_pool_max_size: 10
 postgres_connection_retries: 10
 postgres_connection_retry_backoff: 3.0
 postgres_connection_retry_backoff_max: 30.0
@@ -64,6 +67,16 @@ bridged to LightRAG's `POSTGRES_SSL_*` environment contract. DlightRAG's
 domain-store pool, reset helpers, replication checks, and status probes use
 the same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do
 not need a second SSL configuration surface.
+
+Connection budgets are split deliberately:
+
+- `postgres_lightrag_pool_max_size` controls LightRAG's PostgreSQL backend
+  pool and is bridged to `POSTGRES_MAX_CONNECTIONS`.
+- `postgres_pool_min_size` / `postgres_pool_max_size` control DlightRAG-owned
+  domain stores such as metadata, workspaces, checkpoints, and BM25.
+- Docker Compose defaults `max_connections` to `80`, enough for the checked-in
+  API + MCP local profile with headroom. Production deployments should size the
+  server limit from the number of DlightRAG processes and their two pool caps.
 
 ## DlightRAG Schema Migrations
 
@@ -131,7 +144,9 @@ def _execute_needs_patch(method):
 
 ## PG Pool Architecture
 
-DlightRAG uses role-aware PostgreSQL endpoints:
+DlightRAG's default single-primary process can ingest and query concurrently,
+matching LightRAG's staged pipeline behavior. Role-aware PostgreSQL endpoints
+are an optional production read-isolation topology:
 
 ```text
 dlightrag-ingest / admin API -> primary PostgreSQL
@@ -146,6 +161,8 @@ locks and write-time initialization, verify that required LightRAG/DlightRAG
 tables already exist, and reject mutating APIs.
 
 This is process-level separation, not dynamic in-process read/write routing.
+Do not enable a replica merely to make local query-while-ingest work; tune the
+ingest pipeline concurrency first.
 Strong read-after-write flows can set `read_after_write_mode: wait_for_replay`
 on ingest/admin workers so write acknowledgements wait for replica WAL replay.
 Flows that cannot wait should call an admin/ingest surface explicitly; ordinary
