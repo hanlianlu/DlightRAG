@@ -35,6 +35,14 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     assert langfuse_deps == ["langfuse>=4.0.0"]
 
 
+def test_language_detection_uses_lingua_not_legacy_detector() -> None:
+    dependencies = _dependencies()
+    removed = "lang" + "detect"
+
+    assert any(dep.startswith("lingua-language-detector") for dep in dependencies)
+    assert not any(dep.startswith(removed) for dep in dependencies)
+
+
 def test_removed_multimodal_source_absent() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
@@ -59,6 +67,7 @@ def test_postgres_init_uses_required_pg18_extensions() -> None:
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in init_sql
     assert "CREATE EXTENSION IF NOT EXISTS age;" in init_sql
     assert "CREATE EXTENSION IF NOT EXISTS pg_textsearch;" in init_sql
+    assert "CREATE EXTENSION IF NOT EXISTS pg_jieba;" in init_sql
 
 
 def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
@@ -67,13 +76,35 @@ def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
     assert "pgvector/pgvector:pg18" in dockerfile
     assert "postgresql-server-dev-18" in dockerfile
     assert "--branch PG18" in dockerfile
-    assert "pg_textsearch" in dockerfile
+    assert "ARG PG_TEXTSEARCH_REF=v1.3.0" in dockerfile
+    assert (
+        "git clone --branch ${PG_TEXTSEARCH_REF} --depth 1 https://github.com/timescale/pg_textsearch.git"
+        in dockerfile
+    )
+    assert "ARG PG_JIEBA_REF=v2.0.1" in dockerfile
+    assert (
+        "git clone --branch ${PG_JIEBA_REF} --depth 1 --recurse-submodules https://github.com/jaiminpan/pg_jieba.git"
+        in dockerfile
+    )
+    assert "pg_config --includedir-server" in dockerfile
 
 
 def test_compose_preloads_postgres_extensions() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
-    assert "shared_preload_libraries=age,pg_textsearch" in compose
+    assert "shared_preload_libraries=age,pg_textsearch,pg_jieba" in compose
+
+
+def test_removed_chinese_parser_is_not_a_supported_runtime_surface() -> None:
+    runtime_files = (
+        list(Path("src/dlightrag").rglob("*.py"))
+        + list(Path("tests").rglob("*.py"))
+        + [Path("postgres/Dockerfile"), Path("postgres/init.sql"), Path("config.yaml")]
+    )
+    removed = "zh" + "parser"
+    offenders = [str(path) for path in runtime_files if removed in path.read_text()]
+
+    assert offenders == []
 
 
 def test_compose_postgres_performance_knobs_are_env_overridable() -> None:

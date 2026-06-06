@@ -37,7 +37,8 @@ Browser / curl / Python / MCP client
   document parsing.
 
 If you do not use Docker, provide PostgreSQL 18 with `pgvector`, Apache AGE,
-and `pg_textsearch` installed and preloaded as required by [`docs/PG.md`](docs/PG.md).
+`pg_textsearch`, and `pg_jieba` installed and preloaded as required by
+[`docs/PG.md`](docs/PG.md).
 
 ### Recommended Local Setup
 
@@ -109,7 +110,7 @@ curl http://localhost:8100/health
 |---|---|---|
 | `dlightrag-api` | REST API + Web UI | `8100` |
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
-| `postgres` | PostgreSQL 18 + pgvector + AGE + pg_textsearch | `5432` |
+| `postgres` | PostgreSQL 18 + pgvector + AGE + pg_textsearch + pg_jieba | `5432` |
 
 When DlightRAG itself runs in Docker, compose maps
 `MINERU_LOCAL_ENDPOINT` inside the app containers to
@@ -565,6 +566,17 @@ DlightRAG's supported core storage stack is PostgreSQL 18 only:
 | Document status | `PGDocStatusStorage` |
 | BM25 | pg_textsearch |
 
+BM25 uses query-language-routed pg_textsearch profiles over the same LightRAG
+document chunks. The checked-in defaults are:
+
+- Chinese query profile: `public.jiebacfg` from the `pg_jieba` extension
+- English query profile: PostgreSQL `english`
+- Fallback profile: PostgreSQL `simple`
+
+Chinese and English queries run their language-specific BM25 profile plus the
+`simple` fallback; other languages use `simple`. `bm25_k1` and `bm25_b` define
+the shared BM25 tuning for every profile index.
+
 Default vector indexing uses `pg_vector_index_type: HNSW` with `VECTOR(dim)`.
 `HNSW_HALFVEC` is explicit opt-in and should only be used after deciding the
 workspace embedding dimension and rebuilding indexes.
@@ -743,8 +755,9 @@ DLIGHTRAG_E2E_POSTGRES_PORT=55432 \
 uv run pytest tests/e2e -m e2e_pg18 -q
 ```
 
-The E2E smoke expects PostgreSQL 18 with `pgvector`, Apache AGE, and
-`pg_textsearch` installed, and `age,pg_textsearch` in
+The E2E smoke expects PostgreSQL 18 with `pgvector`, Apache AGE,
+`pg_textsearch`, and `pg_jieba` installed, and
+`age,pg_textsearch,pg_jieba` in
 `shared_preload_libraries`. It uses deterministic fake model functions by
 default, so it validates the storage/runtime path without external model API
 calls.

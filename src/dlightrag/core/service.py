@@ -416,29 +416,33 @@ class RAGService:
         )
 
         if config.bm25_enabled:
-            from dlightrag.core.retrieval.bm25 import PostgresBM25
+            from dlightrag.core.retrieval.bm25 import BM25Profile, PostgresBM25
             from dlightrag.storage.pool import pg_pool
 
             self._bm25 = PostgresBM25(
                 pool=pg_pool,
                 workspace=config.workspace,
                 top_k=config.bm25_top_k,
+                profiles=[
+                    BM25Profile(
+                        name=profile.name,
+                        text_config=profile.text_config,
+                        languages=tuple(profile.languages),
+                        fallback=profile.fallback,
+                    )
+                    for profile in config.bm25_profiles
+                ],
             )
             if read_only:
-                await self._bm25.verify_index()
+                await self._bm25.verify_indexes(
+                    k1=config.bm25_k1,
+                    b=config.bm25_b,
+                )
             else:
-                text_config = config.bm25_text_config
-                if text_config == "auto":
-                    from dlightrag.core.retrieval.language_detect import (
-                        detect_bm25_config,
-                        verify_pg_config,
-                    )
-
-                    # Sample from existing chunks if available; else fall back
-                    sample_chunks: list[dict[str, Any]] = []
-                    text_config = await detect_bm25_config(sample_chunks)
-                    text_config = await verify_pg_config(pg_pool, text_config)
-                await self._bm25.ensure_index(text_config=text_config)
+                await self._bm25.ensure_indexes(
+                    k1=config.bm25_k1,
+                    b=config.bm25_b,
+                )
 
         from dlightrag.core.retrieval.retriever import UnifiedRetriever
 
