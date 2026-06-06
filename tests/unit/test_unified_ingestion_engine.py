@@ -113,17 +113,16 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
     assert deps["metadata_index"].upsert.await_args.args[0] == expected_doc_id
 
 
-async def test_document_ingest_delegates_lightrag_fallback_parser(tmp_path: Path) -> None:
+async def test_document_ingest_delegates_lightrag_raw_parser_route(tmp_path: Path) -> None:
     """LightRAG routing is the ingestability boundary.
 
-    If no DlightRAG parser rule matches, LightRAG's resolver falls back to
-    its fallback/raw engine (PARSER_ENGINE_LEGACY, persisted as "legacy").
-    DlightRAG should enqueue that path and simply skip sidecar vector
-    overrides when no sidecar location exists.
+    If no DlightRAG parser rule matches, DlightRAG still enqueues the
+    LightRAG-resolved parser route and simply skips sidecar vector overrides
+    when no sidecar location exists.
     """
     source = tmp_path / "notes.txt"
     source.write_text("plain text")
-    engine, deps = _make_engine(parser_rules="docx:native-iteP")  # no wildcard → fallback
+    engine, deps = _make_engine(parser_rules="docx:native-iteP")  # no wildcard
     deps["stores"].get_full_doc.return_value = {
         "parse_engine": "legacy",
         "process_options": "",

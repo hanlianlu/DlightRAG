@@ -231,7 +231,7 @@ class TestDlightragConfigNested:
         ],
     )
     def test_stale_root_config_fields_rejected(self, field: str):
-        """Removed legacy knobs should fail fast instead of being accepted inertly."""
+        """Removed root-level knobs should fail fast instead of being accepted inertly."""
         with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
             DlightragConfig(
                 **{field: 1},

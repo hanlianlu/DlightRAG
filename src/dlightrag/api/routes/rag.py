@@ -25,7 +25,7 @@ from dlightrag.core.client_payloads import (
     project_contexts_for_client,
     retrieval_payload,
 )
-from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .deps import get_manager, request_scope, resolve_workspace
 
@@ -100,8 +100,8 @@ async def retrieve(
         scope=scope,
         **kwargs,
     )
-    resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
-    return retrieval_payload(result, path_resolver=resolver)
+    resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
+    return retrieval_payload(result, source_url_resolver=resolver)
 
 
 @router.post("/answer", response_model=None)
@@ -167,12 +167,12 @@ async def answer(
 
             full_answer = "".join(answer_parts)
             clean_answer = getattr(token_iter, "answer", None) or full_answer
-            _resolver = PathResolver(input_dir=str(manager.config.input_dir_path))
+            _resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
             finalized = finalize_answer(
                 clean_answer,
                 contexts,
                 source_contexts=public_contexts,
-                path_resolver=_resolver,
+                source_url_resolver=_resolver,
             )
 
             yield f"data: {json.dumps({'type': 'sources', 'data': [s.model_dump() for s in finalized.sources]}, ensure_ascii=False)}\n\n"

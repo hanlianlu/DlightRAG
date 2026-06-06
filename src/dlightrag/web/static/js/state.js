@@ -57,5 +57,5 @@ export function setActiveWorkspaces(workspaces) {
 }
 
 export function getPrimaryWorkspace() {
-    return activeWorkspaces[0] || 'default';
+    return activeWorkspaces[0] || '';
 }

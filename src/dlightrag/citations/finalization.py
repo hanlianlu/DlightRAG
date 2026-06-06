@@ -6,8 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .processor import CitationProcessor
 from .schemas import SourceReference
@@ -39,7 +39,7 @@ def finalize_answer(
     contexts: RetrievalContexts,
     *,
     source_contexts: RetrievalContexts | None = None,
-    path_resolver: PathResolver | None = None,
+    source_url_resolver: SourceUrlResolver | None = None,
     image_url_prefix: str | None = "/images",
     default_workspace: str | None = None,
 ) -> FinalizedAnswer:
@@ -53,7 +53,7 @@ def finalize_answer(
     flat_contexts = flatten_context_chunks(contexts)
     all_sources = build_sources(
         source_contexts or contexts,
-        path_resolver=path_resolver,
+        source_url_resolver=source_url_resolver,
         image_url_prefix=image_url_prefix,
         default_workspace=default_workspace,
     )

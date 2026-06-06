@@ -3,7 +3,7 @@
 
 import mimetypes
 from collections.abc import AsyncIterator
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -14,6 +14,7 @@ from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import DeleteRequest
 from dlightrag.config import get_config
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
+from dlightrag.utils import normalize_workspace
 
 from .deps import get_manager, resolve_workspace
 
@@ -95,7 +96,6 @@ async def serve_file(
     """Serve a file by relative path.
 
     - Local paths under ``input_dir/<workspace>/``: 200 + StreamingResponse
-    - Local paths under ``working_dir/`` (fallback): 200 + StreamingResponse
     - azure://: 302 redirect to SAS signed URL
     - s3://: 501 Not Implemented (S3 download URLs are not implemented)
     """
@@ -121,15 +121,17 @@ async def serve_file(
         raise HTTPException(400, f"Unsupported scheme: {file_path.split('://', 1)[0]}")
 
     # --- Local file ---
-    # PathResolver embeds workspace in the URL path, so try
-    # input_dir/<file_path> directly first.  Fall back to
-    # input_dir/<workspace>/<file_path> for hand-crafted URLs.
+    _ensure_safe_local_file_path(file_path)
+
+    # SourceUrlResolver embeds workspace in the URL path, so try
+    # input_dir/<file_path> directly first. Also support explicit
+    # ?workspace=... callers with input_dir/<workspace>/<file_path>.
     input_dir = config.input_dir_path.resolve()
-    safe_workspace = workspace.replace("/", "_").replace("\\", "_")
+    safe_workspace = normalize_workspace(workspace) or "default"
     attempts: list[Path] = []
-    # Direct path (workspace already in file_path from PathResolver)
+    # Direct path (workspace already in file_path from SourceUrlResolver)
     direct = (input_dir / file_path.lstrip("/")).resolve()
-    # Workspace-prefixed fallback
+    # Explicit ?workspace=... path
     ws_prefixed = (input_dir / safe_workspace / file_path.lstrip("/")).resolve()
     if direct != ws_prefixed:
         attempts = [direct, ws_prefixed]
@@ -148,7 +150,7 @@ async def serve_file(
                 media_type=content_type or "application/octet-stream",
             )
 
-    # --- Fallback: search workspace subdirectories for bare filenames ---
+    # --- Canonical basename lookup ---
     # LightRAG canonicalizes file_path to just the basename (no directory
     # components).  The original file may live in __parsed__/ or another
     # workspace subdirectory.
@@ -156,11 +158,11 @@ async def serve_file(
     try:
         ws_dir.relative_to(input_dir)
     except ValueError:
-        pass  # traversal attempt, skip fallback
+        pass  # traversal attempt, skip lookup
     else:
         bare_name = Path(file_path.lstrip("/")).name
         if ws_dir.is_dir():
-            for sub in _iter_fallback_dirs(ws_dir):
+            for sub in _iter_workspace_lookup_dirs(ws_dir):
                 candidate = (sub / bare_name).resolve()
                 try:
                     candidate.relative_to(input_dir)
@@ -173,23 +175,22 @@ async def serve_file(
                         media_type=content_type or "application/octet-stream",
                     )
 
-    # --- Fallback: stream from working_dir (legacy path patterns) ---
-    working_dir = config.working_dir_path.resolve()
-    full_path = (working_dir / file_path.lstrip("/")).resolve()
+    raise HTTPException(404, "File not found")
 
-    if not full_path.is_relative_to(working_dir):
+
+def _ensure_safe_local_file_path(file_path: str) -> None:
+    candidate = Path(file_path)
+    windows_candidate = PureWindowsPath(file_path)
+    if (
+        candidate.is_absolute()
+        or windows_candidate.is_absolute()
+        or windows_candidate.drive
+        or ".." in candidate.parts
+    ):
         raise HTTPException(403, "Access denied")
-    if not full_path.is_file():
-        raise HTTPException(404, "File not found")
-
-    content_type, _ = mimetypes.guess_type(str(full_path))
-    return StreamingResponse(
-        _stream_file(full_path),
-        media_type=content_type or "application/octet-stream",
-    )
 
 
-def _iter_fallback_dirs(ws_dir: Path) -> list[Path]:
+def _iter_workspace_lookup_dirs(ws_dir: Path) -> list[Path]:
     """Yield workspace subdirectories to search for bare filenames.
 
     ``__parsed__/`` comes first because every parsed document gets a copy

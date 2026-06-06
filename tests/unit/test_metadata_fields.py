@@ -207,13 +207,13 @@ def test_custom_metadata_filter_is_normalized_with_registry() -> None:
     )
 
     normalized = registry.normalize_filter(
-        MetadataFilter(custom={"department": " Finance ", "sku": " AbC-123 ", "legacy": " Raw "})
+        MetadataFilter(custom={"department": " Finance ", "sku": " AbC-123 ", "raw_note": " Raw "})
     )
 
     assert normalized.custom == {
         "department": "finance",
         "sku": " AbC-123 ",
-        "legacy": " Raw ",
+        "raw_note": " Raw ",
     }
 
 

@@ -87,7 +87,7 @@ def _to_gemini_content(item: EmbeddingInput) -> dict[str, list[dict[str, Any]]]:
     return {"parts": [_to_gemini_part(part) for part in _parts(item)]}
 
 
-class OpenAICompatEmbedProvider(EmbedProvider):
+class OpenAICompatibleEmbedProvider(EmbedProvider):
     """POST /embeddings for OpenAI-compatible embedding servers."""
 
     endpoint = "/embeddings"
@@ -115,7 +115,7 @@ class OpenAICompatEmbedProvider(EmbedProvider):
         return payload
 
 
-class QwenOpenAICompatEmbedProvider(OpenAICompatEmbedProvider):
+class QwenOpenAICompatibleEmbedProvider(OpenAICompatibleEmbedProvider):
     """OpenAI-compatible Qwen3-VL embedding servers, including LM Studio."""
 
     supports_images = True
@@ -286,10 +286,10 @@ class OllamaEmbedProvider(EmbedProvider):
 _EMBED_REGISTRY: dict[str, type[EmbedProvider]] = {
     "voyage": VoyageEmbedProvider,
     "dashscope_qwen": DashScopeQwenEmbedProvider,
-    "qwen_openai_compatible": QwenOpenAICompatEmbedProvider,
+    "qwen_openai_compatible": QwenOpenAICompatibleEmbedProvider,
     "gemini": GeminiEmbedProvider,
     "jina": JinaEmbedProvider,
-    "openai_compatible": OpenAICompatEmbedProvider,
+    "openai_compatible": OpenAICompatibleEmbedProvider,
     "ollama": OllamaEmbedProvider,
 }
 
@@ -332,4 +332,4 @@ def detect_embed_provider(
     if "qwen3-vl-embedding" in name:
         return DashScopeQwenEmbedProvider()
 
-    return OpenAICompatEmbedProvider()
+    return OpenAICompatibleEmbedProvider()

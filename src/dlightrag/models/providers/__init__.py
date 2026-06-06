@@ -8,7 +8,7 @@ import importlib
 from dlightrag.models.providers.base import CompletionProvider
 
 _PROVIDER_CLASSES: dict[str, str] = {
-    "openai": "dlightrag.models.providers.openai_compat.OpenAICompatProvider",
+    "openai": "dlightrag.models.providers.openai_compatible.OpenAICompatibleProvider",
     "anthropic": "dlightrag.models.providers.anthropic_native.AnthropicProvider",
     "gemini": "dlightrag.models.providers.gemini_native.GeminiProvider",
 }

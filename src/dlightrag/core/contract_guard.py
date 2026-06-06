@@ -19,7 +19,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-class LightRAGCompatGuard:
+class LightRAGContractGuard:
     """Validates LightRAG internal API assumptions at startup.
 
     Collects all errors before raising, producing one report instead of
@@ -47,10 +47,10 @@ class LightRAGCompatGuard:
         self._check_patch_signatures(errors)
         if errors:
             raise RuntimeError(
-                f"LightRAG compatibility check failed "
+                f"LightRAG contract check failed "
                 f"({len(errors)} issue(s)):\n" + "\n".join(f"  - {e}" for e in errors)
             )
-        logger.info("LightRAG compatibility check passed (backend=postgresql)")
+        logger.info("LightRAG contract check passed (backend=postgresql)")
 
     def _require_pg_backend(self, errors: list[str]) -> None:
         """Require chunks_vdb to expose PostgreSQL pool access."""

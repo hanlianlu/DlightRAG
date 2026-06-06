@@ -39,8 +39,28 @@ class TestRAGServiceAingest:
         service._ingestion_engine.aingest_files = AsyncMock(
             return_value={"processed": 1, "errors": [], "results": [{"status": "success"}]}
         )
-        service.retrieval = MagicMock()
         return service
+
+    @patch("dlightrag.storage.workspaces.PGWorkspaceRegistry")
+    async def test_workspace_meta_upsert_uses_canonical_workspace_id(
+        self,
+        mock_registry_cls: MagicMock,
+        test_config: DlightragConfig,
+    ) -> None:
+        registry = MagicMock()
+        registry.initialize = AsyncMock()
+        registry.upsert = AsyncMock()
+        mock_registry_cls.return_value = registry
+        config = test_config.model_copy(update={"workspace": "test-fallback-ws"})
+        service = RAGService(config=config)
+
+        await service._upsert_workspace_meta()
+
+        registry.upsert.assert_awaited_once_with(
+            workspace="test_fallback_ws",
+            display_name="test-fallback-ws",
+            embedding_model=config.embedding.model,
+        )
 
     async def test_aingest_not_initialized_raises(self, test_config: DlightragConfig) -> None:
         service = RAGService(config=test_config)
@@ -122,8 +142,6 @@ class TestRAGServiceClose:
         service._initialized = True
         service._lightrag = MagicMock()
         service._lightrag.finalize_storages = AsyncMock(side_effect=RuntimeError("cleanup failed"))
-        service.ingestion = None
-        service.retrieval = None
 
         # Should not raise
         await service.close()
@@ -168,21 +186,20 @@ class TestRAGServiceRetrieve:
     def _make_retrieval_service(self, config: DlightragConfig) -> RAGService:
         service = RAGService(config=config)
         service._initialized = True
-        service.retrieval = MagicMock()
-        service.retrieval.aretrieve = AsyncMock(return_value=MagicMock())
-        service.ingestion = MagicMock()
+        service._backend = MagicMock()
+        service._backend.aretrieve = AsyncMock(return_value=MagicMock())
         return service
 
-    async def test_aretrieve_delegates_to_retrieval(self, test_config):
+    async def test_aretrieve_delegates_to_backend(self, test_config):
         service = self._make_retrieval_service(test_config)
         await service.aretrieve("test query")
-        service.retrieval.aretrieve.assert_awaited_once()
+        service._backend.aretrieve.assert_awaited_once()
 
     async def test_aretrieve_passes_multimodal_content(self, test_config):
         service = self._make_retrieval_service(test_config)
         mc = [{"type": "image"}]
         await service.aretrieve("test query", multimodal_content=mc)
-        call_kwargs = service.retrieval.aretrieve.call_args.kwargs
+        call_kwargs = service._backend.aretrieve.call_args.kwargs
         assert call_kwargs["multimodal_content"] == mc
 
     async def test_aretrieve_not_initialized_raises(self, test_config):
@@ -287,7 +304,7 @@ class TestBuildVectorDbKwargs:
 
 
 class TestBuildAddonParams:
-    """Test LightRAG addon_params compatibility."""
+    """Test LightRAG 1.5 addon_params contract."""
 
     def test_uses_lightrag_15_entity_guidance(self, test_config: DlightragConfig) -> None:
         test_config.kg_entity_types = ["Product", "Technology", "Organization"]
@@ -436,7 +453,7 @@ class TestRAGServiceLightRAGMainPath:
     async def test_aingest_unified_blob_batch_failure_leaves_no_temp_dirs(
         self, test_config: DlightragConfig
     ) -> None:
-        """Remote batch failures do not create legacy temp directories."""
+        """Remote batch failures do not create obsolete temp directories."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
@@ -527,6 +544,33 @@ class TestRAGServiceLightRAGMainPath:
         assert (staged_root / "a.docx").read_bytes() == b"fake"
         assert (staged_root / "b.pdf").read_bytes() == b"fake"
         assert (staged_root / "nested" / "c.pptx").read_bytes() == b"fake"
+
+    async def test_aingest_explicit_upload_batch_directory_is_ingestable(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        """Web upload batches live under __uploads__ and must still be ingestable."""
+        upload_dir = tmp_path / "docs" / "__uploads__" / "batch"
+        upload_dir.mkdir(parents=True)
+        pdf = upload_dir / "uploaded.pdf"
+        pdf.write_bytes(b"%PDF-fake")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": []}
+        )
+
+        result = await service.aingest(source_type="local", path=str(upload_dir))
+
+        assert result["processed"] == 1
+        staged_root = test_config.input_dir_path / test_config.workspace
+        service._ingestion_engine.aingest_files.assert_awaited_once()
+        assert list(service._ingestion_engine.aingest_files.await_args.args[0]) == [
+            staged_root / "uploaded.pdf"
+        ]
+        assert (staged_root / "uploaded.pdf").read_bytes() == b"%PDF-fake"
 
     async def test_aingest_replace_purges_existing_doc_before_ingest(
         self, test_config: DlightragConfig, tmp_path: Path

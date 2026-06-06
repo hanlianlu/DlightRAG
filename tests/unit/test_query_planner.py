@@ -382,7 +382,7 @@ class TestSchemaCache:
         await planner.plan("q1")
         assert provider.await_count == 1
 
-        # Second call: provider fails but stale schema is used
+        # Second call: provider fails but existing cached schema is used
         provider.side_effect = RuntimeError("DB down")
         plan = await planner.plan("q2")
         assert plan.standalone_query == "q"

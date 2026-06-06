@@ -22,7 +22,7 @@ L6  core.{answer, answer_context, answer_images, federation,
                     lightrag_backend}
     core.ingestion.engine
 L5  core.{lightrag_stores, _lightrag_patches,
-          compat_guard}
+          contract_guard}
     core.ingestion.{lightrag_sidecar,
                     parser_hygiene}
     core.retrieval.{filtered_vdb, bm25}

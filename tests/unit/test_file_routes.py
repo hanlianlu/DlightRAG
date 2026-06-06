@@ -25,9 +25,6 @@ def _embedding_config() -> EmbeddingConfig:
 
 @pytest.fixture()
 def tmp_working_dir(tmp_path: Path) -> Path:
-    docs = tmp_path / "docs"
-    docs.mkdir(parents=True)
-    (docs / "report.pdf").write_bytes(b"%PDF-1.4 test content")
     return tmp_path
 
 
@@ -66,16 +63,36 @@ class TestFileEndpoint:
         assert b"%PDF-1.4 canonical input content" in resp.content
         assert resp.headers["content-type"] == "application/pdf"
 
-    async def test_streams_local_file(self, client: AsyncClient) -> None:
-        """Happy path: local file served with correct content and MIME type."""
+    async def test_does_not_stream_from_working_dir(
+        self, client: AsyncClient, tmp_working_dir: Path
+    ) -> None:
+        """Local file serving is scoped to input_dir, not working_dir."""
+        docs = tmp_working_dir / "docs"
+        docs.mkdir(parents=True)
+        (docs / "report.pdf").write_bytes(b"%PDF-1.4 test content")
+
         resp = await client.get("/api/files/docs/report.pdf")
-        assert resp.status_code == 200
-        assert b"%PDF-1.4 test content" in resp.content
-        assert resp.headers["content-type"] == "application/pdf"
+        assert resp.status_code == 404
 
     async def test_rejects_path_traversal(self, client: AsyncClient) -> None:
-        """Security critical: URL-encoded .. must not escape working_dir."""
+        """Security critical: URL-encoded .. must not escape input_dir."""
         resp = await client.get("/api/files/%2e%2e/%2e%2e/%2e%2e/etc/passwd")
+        assert resp.status_code == 403
+
+    async def test_canonicalizes_workspace_query_for_bare_filename(
+        self, client: AsyncClient, tmp_working_dir: Path
+    ) -> None:
+        canonical = tmp_working_dir / "inputs" / "test_ws" / "report.pdf"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_bytes(b"%PDF-1.4 workspace query")
+
+        resp = await client.get("/api/files/report.pdf", params={"workspace": "test-ws"})
+
+        assert resp.status_code == 200
+        assert b"%PDF-1.4 workspace query" in resp.content
+
+    async def test_rejects_windows_absolute_path(self, client: AsyncClient) -> None:
+        resp = await client.get(r"/api/files/C:\Users\me\secret.pdf")
         assert resp.status_code == 403
 
     async def test_azure_503_when_unconfigured(self, client: AsyncClient) -> None:

@@ -11,7 +11,7 @@ reranking, citations, and answer generation.
 source file
   -> LightRAG parser/routing
        sidecar-backed text, tables, equations, and images when available;
-       LightRAG fallback/raw ingestion otherwise
+       LightRAG raw parser route otherwise
   -> LightRAG ingest
        chunks, entities, relationships, graph, vectors, doc status
   -> image vector alignment
@@ -25,11 +25,11 @@ source file
 All source files that LightRAG can ingest, including native image files, go
 through LightRAG parser/routing. Tables, equations, text, and document-derived
 image sidecars stay aligned with the LightRAG document record.
-LightRAG fallback/raw documents (`PARSER_ENGINE_LEGACY`, persisted as
-`legacy`) can have no sidecar artifacts; those documents still participate in
-LightRAG text/KG/vector retrieval but do not receive image-vector alignment.
+LightRAG raw-route documents can have no sidecar artifacts; those documents
+still participate in LightRAG text/KG/vector retrieval but do not receive
+image-vector alignment.
 With DlightRAG's default `docx:native-iteP,*:mineru-iteP` rules, this is a
-defensive fallback rather than the normal document parser route.
+defensive path rather than the normal document parser route.
 
 Successful drawing sidecars have one canonical chunk identity. LightRAG's
 multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
@@ -111,7 +111,7 @@ query + images
 Document and sidecar images are embedded with document context at ingestion.
 Query images are embedded with query context when the provider supports
 asymmetric embeddings. If the provider does not expose task-aware routing,
-LightRAG's symmetric fallback is used.
+LightRAG's symmetric embedding mode is used.
 
 Images also produce VLM semantic text through LightRAG's multimodal sidecar
 path. That text feeds BM25 and KG extraction. For successful drawing chunks,

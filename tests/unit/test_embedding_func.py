@@ -9,7 +9,7 @@ import pytest
 from dlightrag.config import DlightragConfig, EmbeddingConfig
 from dlightrag.models.embedding import httpx_embed
 from dlightrag.models.llm import get_embedding_func
-from dlightrag.models.providers.embed_providers import OpenAICompatEmbedProvider
+from dlightrag.models.providers.embed_providers import OpenAICompatibleEmbedProvider
 
 
 def _make_response(status_code: int, json_data: dict) -> httpx.Response:
@@ -33,12 +33,12 @@ def _mock_async_client(mock_response: httpx.Response) -> MagicMock:
 class TestHttpxEmbed:
     @pytest.mark.asyncio
     async def test_empty_texts(self):
-        result = await httpx_embed([], model="test", provider=OpenAICompatEmbedProvider())
+        result = await httpx_embed([], model="test", provider=OpenAICompatibleEmbedProvider())
         assert result == []
 
     @pytest.mark.asyncio
     async def test_embed_texts(self):
-        provider = OpenAICompatEmbedProvider()
+        provider = OpenAICompatibleEmbedProvider()
         response_data = {
             "data": [
                 {"embedding": [0.1, 0.2, 0.3]},
@@ -61,7 +61,7 @@ class TestHttpxEmbed:
 
     @pytest.mark.asyncio
     async def test_auth_header_set(self):
-        provider = OpenAICompatEmbedProvider()
+        provider = OpenAICompatibleEmbedProvider()
         mock_response = _make_response(200, {"data": [{"embedding": [1.0]}]})
         mock_cls, instance = _mock_async_client(mock_response)
 

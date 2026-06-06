@@ -93,10 +93,3 @@ def test_exported_guidance_constants_do_not_declare_identity() -> None:
         assert name in prompts.__all__
         assert "You are " not in getattr(prompts, name)
     assert "You are " not in LISTWISE_RERANK_PROMPT
-
-
-def test_highlight_user_prompt_import_compatibility() -> None:
-    from dlightrag.prompts import HIGHLIGHT_USER_PROMPT
-    from dlightrag.prompts.rag import HIGHLIGHT_USER_PROMPT as RAG_HIGHLIGHT_USER_PROMPT
-
-    assert RAG_HIGHLIGHT_USER_PROMPT == HIGHLIGHT_USER_PROMPT

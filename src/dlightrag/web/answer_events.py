@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
 from dlightrag.citations import extract_highlights_for_sources, finalize_answer
-from dlightrag.core.retrieval.path_resolver import PathResolver
+from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
@@ -166,14 +166,14 @@ async def stream_answer_events(
         )
         seen_img_ids = {str(img.get("chunk_id", "")) for img in session_cards}
 
-        resolver = PathResolver(
+        resolver = SourceUrlResolver(
             input_dir=str(cfg.input_dir_path),
             workspace=workspace or manager.config.workspace,
         )
         finalized = finalize_answer(
             clean_answer,
             contexts,
-            path_resolver=resolver,
+            source_url_resolver=resolver,
             image_url_prefix="/web/images",
             default_workspace=workspace or manager.config.workspace,
         )

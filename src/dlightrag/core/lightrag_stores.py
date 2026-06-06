@@ -36,7 +36,7 @@ LightRAG API methods (public, but shape-dependent):
     ``apipeline_process_enqueue_documents()`` — processes queue
 
 When upgrading lightrag-hku, verify these surfaces still exist and behave
-as expected.  The compat_guard module provides runtime version checks.
+as expected.  The contract_guard module provides runtime contract checks.
 """
 
 from __future__ import annotations

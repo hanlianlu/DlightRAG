@@ -28,7 +28,7 @@ Keep this module small and delete patches as upstream covers them.
 Patches are:
 - Idempotent (safe to call multiple times)
 - Guarded (source-inspected for AGE, behavior-probed for parser hygiene)
-- Forward-compatible (unknown execute kwargs passed through via **kwargs)
+- Preserves PostgreSQLDB.execute keyword arguments via **kwargs
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ def _patch_execute() -> bool:
     Defence-in-depth: the primary fix is configure_age(), but execute()'s
     inner _operation also misses DuplicateSchemaError in its catch tuple.
     Wrapping (vs replacing) preserves the original's full logic and forwards
-    unknown kwargs for future-compatibility.
+    unknown upstream kwargs.
     """
     from lightrag.kg.postgres_impl import PostgreSQLDB
 

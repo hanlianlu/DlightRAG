@@ -160,7 +160,7 @@ pipeline and wraps the per-file results:
 | `parse_engine` | `string` | Parser selected for document files |
 | `process_options` | `string` | LightRAG parser process options, for example `iteP` |
 | `processed` | `int` | Files represented in a directory/upload/prefix batch result |
-| `errors` | `list[string]` | Compatibility field for batch wrappers; batch-level failures raise instead |
+| `errors` | `list[string]` | Per-file ingest errors collected by the batch result; batch-level failures raise instead |
 | `results` | `list[object]` | Per-file results |
 | `replica_replay_lsn` | `string` | Present when `read_after_write_mode: wait_for_replay` waited for replica WAL replay |
 
@@ -447,7 +447,7 @@ matches `[ref_id-chunk_idx]` markers instead of page sorting.
 | `title` | string \| null | Document title (filename or metadata) |
 | `path` | string | Source file path |
 | `type` | string \| null | File type |
-| `url` | string \| null | Resolved download URL (via PathResolver) |
+| `url` | string \| null | Resolved download URL (via SourceUrlResolver) |
 | `cited_chunk_ids` | list \| null | Cited chunk IDs for answer responses; null when returning all retrieved sources |
 | `chunks` | list | Chunk snippets in citation-index order |
 

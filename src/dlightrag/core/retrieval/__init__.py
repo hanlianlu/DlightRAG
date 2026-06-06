@@ -6,7 +6,6 @@ from __future__ import annotations
 from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import (
     ChunkContext,
     EntityContext,
@@ -15,6 +14,7 @@ from dlightrag.core.retrieval.protocols import (
     RetrievalContexts,
     RetrievalResult,
 )
+from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 
 def canonicalize_reference_ids(
@@ -130,10 +130,10 @@ __all__ = [
     "ChunkContext",
     "EntityContext",
     "MetadataFilter",
-    "PathResolver",
     "RelationshipContext",
     "RetrievalBackend",
     "RetrievalContexts",
     "RetrievalResult",
+    "SourceUrlResolver",
     "canonicalize_reference_ids",
 ]

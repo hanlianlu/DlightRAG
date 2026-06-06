@@ -106,8 +106,8 @@ class TestPGWorkspaceDiscovery:
             manager = RAGServiceManager(config=cfg)
             workspaces = await manager.list_workspaces()
 
-            assert "project-alpha" in workspaces
-            assert "project-beta" in workspaces
+            assert "project_alpha" in workspaces
+            assert "project_beta" in workspaces
         finally:
             # Cleanup test rows
             await conn.execute(
@@ -151,5 +151,10 @@ class TestPGWorkspaceDiscovery:
             # (may contain more if table has data from other tests)
             assert isinstance(workspaces, list)
             assert len(workspaces) >= 1
+            assert "test_fallback_ws" in workspaces
         finally:
+            await conn.execute(
+                "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
+                "test_fallback_ws",
+            )
             await conn.close()

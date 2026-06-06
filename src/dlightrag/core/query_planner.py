@@ -417,7 +417,7 @@ class QueryPlanner:
                 self._schema = await self._schema_provider()
                 self._schema_ts = now
             except Exception:
-                logger.debug("Schema refresh failed, using stale cache")
+                logger.debug("Schema refresh failed, keeping existing cache")
         return self._schema
 
 

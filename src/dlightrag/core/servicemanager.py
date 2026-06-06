@@ -99,15 +99,6 @@ def _iso_or_none(value: Any) -> str | None:
     return str(value)
 
 
-def _workspace_aliases(workspace: str) -> tuple[str, ...]:
-    """Return the raw workspace id and its canonical normalized id."""
-    aliases: list[str] = []
-    for candidate in (workspace, normalize_workspace(workspace)):
-        if candidate and candidate not in aliases:
-            aliases.append(candidate)
-    return tuple(aliases)
-
-
 def _normalize_workspaces(workspaces: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
     seen: set[str] = set()
     result: list[str] = []
@@ -208,7 +199,7 @@ class RAGServiceManager:
 
         # Discover all known workspaces and warm them up in parallel
         all_ws = await manager._list_all_workspaces()
-        default_ws = manager._config.workspace
+        default_ws = normalize_workspace(manager._config.workspace)
         if default_ws not in all_ws:
             all_ws.insert(0, default_ws)
 
@@ -251,7 +242,7 @@ class RAGServiceManager:
             await self._workspace_registry.initialize(read_only=self._config.is_query_role is True)
             if self._config.is_query_role is not True:
                 await self._workspace_registry.upsert(
-                    workspace=self._config.workspace,
+                    workspace=normalize_workspace(self._config.workspace),
                     display_name=self._config.workspace,
                     embedding_model=self._config.embedding.model,
                 )
@@ -475,9 +466,7 @@ class RAGServiceManager:
         if workspace is not None:
             requested_workspace = workspace
             target_workspace = normalize_workspace(workspace)
-            aliases = _workspace_aliases(workspace)
             known = await self.list_workspaces()
-            registry_aliases = aliases if any(alias in known for alias in aliases) else ()
             if target_workspace not in known and target_workspace not in self._services:
                 from dlightrag.core.reset import areset_orphaned_workspace
 
@@ -487,8 +476,6 @@ class RAGServiceManager:
                     dry_run=dry_run,
                     input_dir=str(self._config.input_dir_path),
                 )
-                if registry_aliases and not dry_run:
-                    await self._delete_workspace_registry_aliases(registry_aliases)
                 return {
                     "workspaces": {target_workspace: result},
                     "total_errors": len(result.get("errors", [])),
@@ -496,8 +483,6 @@ class RAGServiceManager:
             workspaces = [target_workspace]
         else:
             workspaces = await self.list_workspaces()
-            aliases = ()
-            registry_aliases = ()
 
         results: dict[str, Any] = {}
         total_errors = 0
@@ -513,7 +498,7 @@ class RAGServiceManager:
                 total_errors += 1
                 logger.warning("Failed to reset workspace '%s': %s", ws, exc)
 
-            # Close and evict from cache (even on error — stale state)
+            # Close and evict from cache even after reset errors.
             if ws in self._services:
                 try:
                     await self._services[ws].close()
@@ -523,19 +508,8 @@ class RAGServiceManager:
 
         if results:
             await self._wait_after_write()
-        if workspace is not None and registry_aliases and not dry_run:
-            await self._delete_workspace_registry_aliases(registry_aliases)
 
         return {"workspaces": results, "total_errors": total_errors}
-
-    async def _delete_workspace_registry_aliases(self, aliases: tuple[str, ...]) -> None:
-        """Best-effort cleanup for legacy registry rows that predate normalization."""
-        try:
-            registry = await self._get_workspace_registry()
-            for alias in aliases:
-                await registry.delete(alias)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to delete workspace registry aliases %s: %s", aliases, exc)
 
     def _get_answer_engine(self) -> AnswerEngine:
         """Lazy-create AnswerEngine from global config."""
@@ -1011,7 +985,7 @@ class RAGServiceManager:
 
         return [
             {
-                "workspace": self._config.workspace,
+                "workspace": normalize_workspace(self._config.workspace),
                 "display_name": self._config.workspace,
                 "embedding_model": self._config.embedding.model,
                 "created_at": None,
@@ -1022,9 +996,10 @@ class RAGServiceManager:
     @staticmethod
     def _serialize_workspace_record(row: dict[str, Any]) -> dict[str, Any]:
         """Return a JSON-safe workspace record."""
+        raw_workspace = str(row.get("workspace") or "")
         return {
-            "workspace": str(row.get("workspace") or ""),
-            "display_name": str(row.get("display_name") or row.get("workspace") or ""),
+            "workspace": raw_workspace,
+            "display_name": str(row.get("display_name") or raw_workspace),
             "embedding_model": str(row.get("embedding_model") or ""),
             "created_at": _iso_or_none(row.get("created_at")),
             "updated_at": _iso_or_none(row.get("updated_at")),

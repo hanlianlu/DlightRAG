@@ -108,7 +108,7 @@ class TestAnthropicProvider:
             assert "json" in call_kwargs["system"].lower()
 
 
-class TestOpenAICompatProvider:
+class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio
     async def test_complete_returns_content(self):
         p = get_provider("openai", api_key="test-key")
