@@ -4,6 +4,7 @@
 import pytest
 
 from dlightrag.storage.postgres_version import (
+    ensure_postgres_extensions,
     parse_pgvector_version,
     parse_server_version_num,
     validate_pgvector_halfvec,
@@ -45,3 +46,29 @@ def test_validate_pgvector_halfvec_accepts_modern_pgvector() -> None:
 def test_validate_pgvector_halfvec_rejects_old_pgvector() -> None:
     with pytest.raises(RuntimeError, match="halfvec"):
         validate_pgvector_halfvec("0.6.2")
+
+
+class _FakeConn:
+    def __init__(self) -> None:
+        self.executed: list[str] = []
+
+    async def execute(self, statement: str) -> None:
+        self.executed.append(statement)
+
+
+async def test_ensure_postgres_extensions_runs_idempotent_create_extension() -> None:
+    conn = _FakeConn()
+
+    await ensure_postgres_extensions(conn, ("pg_textsearch", "pg_jieba"))
+
+    assert conn.executed == [
+        "CREATE EXTENSION IF NOT EXISTS pg_textsearch",
+        "CREATE EXTENSION IF NOT EXISTS pg_jieba",
+    ]
+
+
+async def test_ensure_postgres_extensions_rejects_unknown_names() -> None:
+    conn = _FakeConn()
+
+    with pytest.raises(ValueError, match="unsupported PostgreSQL extension"):
+        await ensure_postgres_extensions(conn, ("pg_textsearch; DROP SCHEMA public",))

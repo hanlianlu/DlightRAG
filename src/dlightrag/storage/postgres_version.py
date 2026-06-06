@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Any
 
+_BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba"})
+
 
 def parse_server_version_num(value: str | int) -> int:
     """Return PostgreSQL major version from SHOW server_version_num."""
@@ -49,3 +51,11 @@ async def ensure_pgvector_halfvec(conn: Any) -> None:
     if value is None:
         raise RuntimeError("pgvector extension is required for DlightRAG vector storage.")
     validate_pgvector_halfvec(str(value))
+
+
+async def ensure_postgres_extensions(conn: Any, extensions: tuple[str, ...]) -> None:
+    """Create DlightRAG-owned PostgreSQL extensions on writable startup paths."""
+    for extension in extensions:
+        if extension not in _BOOTSTRAPPABLE_EXTENSIONS:
+            raise ValueError(f"unsupported PostgreSQL extension bootstrap: {extension!r}")
+        await conn.execute(f"CREATE EXTENSION IF NOT EXISTS {extension}")

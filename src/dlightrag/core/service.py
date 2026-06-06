@@ -93,6 +93,7 @@ from dlightrag.models.llm import (  # noqa: E402
 )
 from dlightrag.storage.postgres_version import (  # noqa: E402
     ensure_pgvector_halfvec,
+    ensure_postgres_extensions,
     ensure_postgres_major,
 )
 from dlightrag.storage.sql_identifiers import pg_qualified_identifier  # noqa: E402
@@ -220,6 +221,17 @@ class RAGService:
             max_total_tokens=config.max_total_tokens,
         )
 
+    @staticmethod
+    def _required_postgres_extensions(config: DlightragConfig) -> tuple[str, ...]:
+        """Return DlightRAG-owned PostgreSQL extensions required by runtime config."""
+        if not config.bm25_enabled:
+            return ()
+
+        extensions: list[str] = ["pg_textsearch"]
+        if any(profile.text_config == "public.jiebacfg" for profile in config.bm25_profiles):
+            extensions.append("pg_jieba")
+        return tuple(extensions)
+
     async def initialize(self) -> None:
         """Initialize LightRAG storages and caches (idempotent).
 
@@ -240,7 +252,8 @@ class RAGService:
         The lock only coordinates ``_do_initialize()`` — LightRAG storage
         creation and domain store setup. All DDL is idempotent (CREATE TABLE
         IF NOT EXISTS), so stores self-initialize without needing the lock.
-        PG extension management is delegated entirely to LightRAG.
+        LightRAG owns its storage bootstrap; DlightRAG only bootstraps extensions
+        required by DlightRAG-owned stores such as pg_textsearch BM25.
         """
         try:
             import asyncpg
@@ -273,6 +286,10 @@ class RAGService:
             if acquired:
                 logger.info("Acquired PG advisory lock, initializing RAG pipelines...")
                 try:
+                    await ensure_postgres_extensions(
+                        conn,
+                        self._required_postgres_extensions(self.config),
+                    )
                     await self._do_initialize()
                     logger.info("RAG pipelines initialized successfully")
                 finally:

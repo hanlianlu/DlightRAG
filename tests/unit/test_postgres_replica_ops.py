@@ -28,7 +28,7 @@ def test_compose_has_pg18_replica_profile() -> None:
     assert 'profiles: ["replica"]' in compose
     assert "image: dlightrag-postgres:pg18" in compose
     assert "context: postgres" in compose
-    assert "shared_preload_libraries=age,pg_textsearch" in compose
+    assert "shared_preload_libraries=age,pg_textsearch,pg_jieba" in compose
     assert "wal_level=replica" in compose
     assert "max_replication_slots=10" in compose
 
