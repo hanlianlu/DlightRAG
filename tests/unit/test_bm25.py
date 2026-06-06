@@ -221,11 +221,20 @@ async def test_bm25_ensure_index_verifies_qualified_text_config_by_schema() -> N
     ]
 
 
-async def test_bm25_routes_chinese_query_to_jieba_plus_simple_fallback() -> None:
+def test_query_language_detection_routes_ambiguous_query_to_unknown() -> None:
+    assert (
+        detect_query_language(
+            "bonjour revenue Umsatz",
+            supported_languages=("fr", "de", "en"),
+        )
+        == "unknown"
+    )
+
+
+async def test_bm25_routes_chinese_query_to_jieba_profile_only() -> None:
     conn = AsyncMock()
     conn.fetch.side_effect = [
         [{"id": "zh-hit", "content": "现金流", "file_path": "cn.md", "score": 2.0}],
-        [{"id": "simple-hit", "content": "现金流", "file_path": "mix.md", "score": 1.0}],
     ]
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
@@ -243,16 +252,14 @@ async def test_bm25_routes_chinese_query_to_jieba_plus_simple_fallback() -> None
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_zh" in fetched_sql[0]
-    assert "idx_lightrag_doc_chunks_bm25_simple" in fetched_sql[1]
-    assert len(conn.fetch.await_args_list) == 2
-    assert {row["chunk_id"] for row in rows} == {"zh-hit", "simple-hit"}
+    assert len(conn.fetch.await_args_list) == 1
+    assert {row["chunk_id"] for row in rows} == {"zh-hit"}
 
 
-async def test_bm25_routes_configured_language_to_matching_profile_plus_fallback() -> None:
+async def test_bm25_routes_configured_language_to_matching_profile_only() -> None:
     conn = AsyncMock()
     conn.fetch.side_effect = [
         [{"id": "de-hit", "content": "Umsatz", "file_path": "de.md", "score": 2.0}],
-        [{"id": "simple-hit", "content": "Umsatz", "file_path": "mix.md", "score": 1.0}],
     ]
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
@@ -270,16 +277,14 @@ async def test_bm25_routes_configured_language_to_matching_profile_plus_fallback
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_de" in fetched_sql[0]
-    assert "idx_lightrag_doc_chunks_bm25_simple" in fetched_sql[1]
-    assert len(conn.fetch.await_args_list) == 2
-    assert {row["chunk_id"] for row in rows} == {"de-hit", "simple-hit"}
+    assert len(conn.fetch.await_args_list) == 1
+    assert {row["chunk_id"] for row in rows} == {"de-hit"}
 
 
-async def test_bm25_routes_region_language_tag_to_profile_plus_fallback() -> None:
+async def test_bm25_routes_region_language_tag_to_profile_only() -> None:
     conn = AsyncMock()
     conn.fetch.side_effect = [
         [{"id": "de-hit", "content": "Umsatz", "file_path": "de.md", "score": 2.0}],
-        [{"id": "simple-hit", "content": "Umsatz", "file_path": "mix.md", "score": 1.0}],
     ]
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
@@ -297,6 +302,33 @@ async def test_bm25_routes_region_language_tag_to_profile_plus_fallback() -> Non
 
     fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
     assert "idx_lightrag_doc_chunks_bm25_de" in fetched_sql[0]
-    assert "idx_lightrag_doc_chunks_bm25_simple" in fetched_sql[1]
-    assert len(conn.fetch.await_args_list) == 2
-    assert {row["chunk_id"] for row in rows} == {"de-hit", "simple-hit"}
+    assert len(conn.fetch.await_args_list) == 1
+    assert {row["chunk_id"] for row in rows} == {"de-hit"}
+
+
+async def test_bm25_routes_unknown_language_to_simple_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = AsyncMock()
+    conn.fetch.side_effect = [
+        [{"id": "simple-hit", "content": "query", "file_path": "mix.md", "score": 1.0}],
+    ]
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__.return_value = conn
+    bm25 = PostgresBM25(
+        pool=pool,
+        workspace="default",
+        profiles=[
+            BM25Profile(name="de", text_config="german", languages=("de",)),
+            BM25Profile(name="en", text_config="english", languages=("en",)),
+            BM25_PROFILE_FALLBACK,
+        ],
+    )
+    monkeypatch.setattr(bm25_module, "detect_query_language", lambda *_args, **_kwargs: "unknown")
+
+    rows = await bm25.search("unsupported", candidate_ids=None)
+
+    fetched_sql = [call.args[0] for call in conn.fetch.await_args_list]
+    assert "idx_lightrag_doc_chunks_bm25_simple" in fetched_sql[0]
+    assert len(conn.fetch.await_args_list) == 1
+    assert {row["chunk_id"] for row in rows} == {"simple-hit"}

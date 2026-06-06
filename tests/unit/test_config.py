@@ -355,13 +355,29 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.query_images.max_described_images == 3
     assert cfg.visual_assets.thumb_max_px == 300
     assert not hasattr(cfg, "bm25" + "_text_config")
-    assert [profile.name for profile in cfg.bm25_profiles] == ["zh", "en", "simple"]
+    assert [profile.name for profile in cfg.bm25_profiles] == [
+        "zh",
+        "en",
+        "de",
+        "sv",
+        "es",
+        "fr",
+        "simple",
+    ]
     assert cfg.bm25_profiles[0].text_config == "public.jiebacfg"
     assert cfg.bm25_profiles[0].languages == ["zh"]
     assert cfg.bm25_profiles[1].text_config == "english"
     assert cfg.bm25_profiles[1].languages == ["en"]
-    assert cfg.bm25_profiles[2].fallback is True
-    assert cfg.bm25_profiles[2].text_config == "simple"
+    assert cfg.bm25_profiles[2].text_config == "german"
+    assert cfg.bm25_profiles[2].languages == ["de"]
+    assert cfg.bm25_profiles[3].text_config == "swedish"
+    assert cfg.bm25_profiles[3].languages == ["sv"]
+    assert cfg.bm25_profiles[4].text_config == "spanish"
+    assert cfg.bm25_profiles[4].languages == ["es"]
+    assert cfg.bm25_profiles[5].text_config == "french"
+    assert cfg.bm25_profiles[5].languages == ["fr"]
+    assert cfg.bm25_profiles[6].fallback is True
+    assert cfg.bm25_profiles[6].text_config == "simple"
     assert cfg.bm25_k1 == 1.2
     assert cfg.bm25_b == 0.75
     for removed_shortcut in ("chat", "extract", "keywords", "query", "vlm"):

@@ -15,6 +15,7 @@ from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identi
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
 BM25_TABLE = pg_identifier("LIGHTRAG_DOC_CHUNKS")
 _DEFAULT_DETECTION_LANGUAGES = ("zh", "en")
+_LINGUA_MIN_RELATIVE_DISTANCE = 0.08
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
@@ -89,7 +90,12 @@ def _lingua_detector(language_codes: tuple[str, ...]) -> tuple[Any | None, dict[
 
     if not lingua_languages:
         return None, {}
-    return LanguageDetectorBuilder.from_languages(*lingua_languages).build(), code_by_lingua_name
+    detector = (
+        LanguageDetectorBuilder.from_languages(*lingua_languages)
+        .with_minimum_relative_distance(_LINGUA_MIN_RELATIVE_DISTANCE)
+        .build()
+    )
+    return detector, code_by_lingua_name
 
 
 def detect_query_language(
@@ -352,7 +358,8 @@ class PostgresBM25:
             for profile in language_profiles:
                 if language in profile.languages:
                     selected.append(profile)
-        selected.extend(profile for profile in self._profiles if profile.fallback)
+        if not selected:
+            selected.extend(profile for profile in self._profiles if profile.fallback)
 
         deduped: list[BM25Profile] = []
         seen: set[str] = set()

@@ -571,11 +571,16 @@ document chunks. The checked-in defaults are:
 
 - Chinese query profile: `public.jiebacfg` from the `pg_jieba` extension
 - English query profile: PostgreSQL `english`
+- German query profile: PostgreSQL `german`
+- Swedish query profile: PostgreSQL `swedish`
+- Spanish query profile: PostgreSQL `spanish`
+- French query profile: PostgreSQL `french`
 - Fallback profile: PostgreSQL `simple`
 
-Chinese and English queries run their language-specific BM25 profile plus the
-`simple` fallback; other languages use `simple`. `bm25_k1` and `bm25_b` define
-the shared BM25 tuning for every profile index.
+Chinese, English, German, Swedish, Spanish, and French queries run only their
+language-specific BM25 profile. Unsupported, unknown, or ambiguous queries use
+the `simple` fallback. `bm25_k1` and `bm25_b` define the shared BM25 tuning for
+every profile index.
 
 Default vector indexing uses `pg_vector_index_type: HNSW` with `VECTOR(dim)`.
 `HNSW_HALFVEC` is explicit opt-in and should only be used after deciding the
