@@ -24,8 +24,6 @@ async def health(request: Request) -> dict[str, Any]:
     status: dict[str, Any] = {
         "status": "degraded" if is_degraded else "healthy",
         "rag_initialized": manager.is_ready(),
-        "runtime_role": config.runtime_role,
-        "postgres_target": config.pg_target_for_runtime(),
         "crafted_by": "hllyu",
         "maintained_by": "HanlianLyu",
         "storage": {

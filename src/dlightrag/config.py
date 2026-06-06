@@ -31,7 +31,6 @@ _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
 _PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PG_QUALIFIED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
-PostgresTarget = Literal["primary", "replica"]
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
 
@@ -345,7 +344,7 @@ class CitationHighlightConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = False
+    enabled: bool = True
     timeout: float = 5.0
     max_concurrency: int = 4
     max_input_chars: int = 4096
@@ -413,7 +412,6 @@ class QueryImagesConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    semantic_enhancement: bool = True
     max_described_images: int = 3
     session_max_images: int = 50
     session_max_sessions: int = 100
@@ -554,20 +552,11 @@ class DlightragConfig(BaseSettings):
         return tuple(sources)
 
     # ===== PostgreSQL (Default Storage Backend) =====
-    runtime_role: Literal["ingest", "admin", "query"] = Field(
-        default="ingest",
-        description="Process role. ingest/admin use primary PostgreSQL; query uses replica.",
-    )
     postgres_host: str = Field(default="localhost")
     postgres_port: int = Field(default=5432)
     postgres_user: str = Field(default="dlightrag")
     postgres_password: str = Field(default="dlightrag")
     postgres_database: str = Field(default="dlightrag")
-    postgres_replica_host: str | None = Field(default=None)
-    postgres_replica_port: int | None = Field(default=None)
-    postgres_replica_user: str | None = Field(default=None)
-    postgres_replica_password: str | None = Field(default=None)
-    postgres_replica_database: str | None = Field(default=None)
     postgres_ssl_mode: PostgresSSLMode | None = Field(
         default=None,
         description=(
@@ -579,14 +568,6 @@ class DlightragConfig(BaseSettings):
     postgres_ssl_key: str | None = Field(default=None)
     postgres_ssl_root_cert: str | None = Field(default=None)
     postgres_ssl_crl: str | None = Field(default=None)
-    read_after_write_mode: Literal["eventual", "wait_for_replay"] = Field(
-        default="eventual",
-        description="Replica read-after-write policy for write acknowledgements.",
-    )
-    read_after_write_timeout: float = Field(
-        default=15.0,
-        description="Seconds to wait for replica WAL replay when read_after_write_mode='wait_for_replay'.",
-    )
     postgres_pool_min_size: int = Field(
         default=2, description="DlightRAG domain store pool min connections."
     )
@@ -965,26 +946,6 @@ class DlightragConfig(BaseSettings):
     def input_dir_path(self) -> Path:
         return self.working_dir_path / "inputs"
 
-    @property
-    def is_query_role(self) -> bool:
-        return self.runtime_role == "query"
-
-    @property
-    def is_writable_role(self) -> bool:
-        return self.runtime_role in {"ingest", "admin"}
-
-    def pg_target_for_runtime(self) -> PostgresTarget:
-        return "replica" if self.is_query_role else "primary"
-
-    def _pg_endpoint_value(self, target: PostgresTarget, field: str) -> Any:
-        if target == "primary":
-            return getattr(self, f"postgres_{field}")
-
-        value = getattr(self, f"postgres_replica_{field}")
-        if value is not None:
-            return value
-        return self._pg_endpoint_value("primary", field)
-
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
         """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""
         if self.postgres_ssl_mode is None:
@@ -1017,15 +978,14 @@ class DlightragConfig(BaseSettings):
         except Exception as exc:
             raise ValueError(f"PostgreSQL SSL configuration error: {exc}") from exc
 
-    def pg_connection_kwargs(self, target: PostgresTarget | None = None) -> dict[str, Any]:
-        """Return asyncpg connection kwargs for primary, replica, or current runtime role."""
-        resolved = target or self.pg_target_for_runtime()
+    def pg_connection_kwargs(self) -> dict[str, Any]:
+        """Return asyncpg connection kwargs for DlightRAG's PostgreSQL endpoint."""
         kwargs = {
-            "host": self._pg_endpoint_value(resolved, "host"),
-            "port": self._pg_endpoint_value(resolved, "port"),
-            "user": self._pg_endpoint_value(resolved, "user"),
-            "password": self._pg_endpoint_value(resolved, "password"),
-            "database": self._pg_endpoint_value(resolved, "database"),
+            "host": self.postgres_host,
+            "port": self.postgres_port,
+            "user": self.postgres_user,
+            "password": self.postgres_password,
+            "database": self.postgres_database,
         }
         ssl_value = self._pg_ssl_value()
         if ssl_value is not None:

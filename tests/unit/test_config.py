@@ -101,9 +101,9 @@ class TestRerankConfig:
 
 
 class TestCitationHighlightConfig:
-    def test_defaults_disabled_for_latency(self):
+    def test_defaults_enabled_for_web_source_panel_enrichment(self):
         cfg = CitationHighlightConfig()
-        assert cfg.enabled is False
+        assert cfg.enabled is True
         assert cfg.timeout == 5.0
         assert cfg.max_concurrency == 4
 
@@ -326,8 +326,6 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.postgres_pool_max_size == 10
     assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
     assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
-    assert cfg.runtime_role == "ingest"
-    assert cfg.pg_target_for_runtime() == "primary"
     assert cfg.lightrag_pipeline_kwargs() == {
         "max_parallel_insert": 3,
         "max_parallel_parse_native": 5,
@@ -343,7 +341,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.rerank.image_min_px == 768
     assert cfg.rerank.image_quality == 86
     assert cfg.rerank.image_min_quality == 76
-    assert cfg.citations.highlights.enabled is False
+    assert cfg.citations.highlights.enabled is True
     assert cfg.answer.max_images == 6
     assert cfg.answer.image_max_bytes == 3_000_000
     assert cfg.answer.image_max_total_bytes == 24_000_000
@@ -351,7 +349,6 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.answer.image_min_px == 1024
     assert cfg.answer.image_quality == 89
     assert cfg.answer.image_min_quality == 79
-    assert cfg.query_images.semantic_enhancement is True
     assert cfg.query_images.max_described_images == 3
     assert cfg.visual_assets.thumb_max_px == 300
     assert not hasattr(cfg, "bm25" + "_text_config")
@@ -629,45 +626,45 @@ def test_pg_connection_kwargs_builds_verify_ssl_context() -> None:
     assert ssl_value.check_hostname is False
 
 
-def test_query_runtime_uses_replica_with_primary_fallback() -> None:
-    cfg = DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            dim=1024,
-            startup_probe=False,
-        ),
-        runtime_role="query",
-        postgres_host="primary",
-        postgres_user="writer",
-        postgres_replica_host="replica",
-        postgres_replica_user="reader",
-    )
-
-    assert cfg.pg_target_for_runtime() == "replica"
-    assert cfg.pg_connection_kwargs() == {
-        "host": "replica",
-        "port": cfg.postgres_port,
-        "user": "reader",
-        "password": cfg.postgres_password,
-        "database": cfg.postgres_database,
-    }
-
-
-def test_read_after_write_primary_route_is_rejected() -> None:
-    kwargs: dict[str, object] = {
-        "embedding": EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            dim=1024,
-            startup_probe=False,
-        ),
-        "read_after_write_mode": "primary_route",
-    }
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("runtime_role", "query"),
+        ("postgres_replica_host", "replica.internal"),
+        ("postgres_replica_port", 5433),
+        ("postgres_replica_user", "reader"),
+        ("postgres_replica_password", "secret"),
+        ("postgres_replica_database", "dlightrag"),
+        ("read_after_write_mode", "wait_for_replay"),
+        ("read_after_write_timeout", 15.0),
+    ],
+)
+def test_app_level_replica_routing_fields_removed(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
-        DlightragConfig(**kwargs)
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            **{field: value},
+        )
+
+
+def test_query_image_semantic_enhancement_switch_removed() -> None:
+    with pytest.raises(ValidationError):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            query_images={"semantic_enhancement": False},
+        )
 
 
 @pytest.mark.parametrize("removed_field", ["ingest", "keywords"])

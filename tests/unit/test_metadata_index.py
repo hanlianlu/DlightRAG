@@ -7,8 +7,6 @@ import json
 import re
 from typing import Any
 
-import pytest
-
 from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 from dlightrag.storage import pg_metadata_index
 from dlightrag.storage.pg_metadata_index import _CREATE_INDEXES, _SCHEMA_MIGRATIONS, _UPSERT
@@ -153,9 +151,8 @@ class TestMetadataSQL:
                 assert f"index_{field.field_id}" in versions
 
 
-async def test_metadata_index_read_only_verifies_migrations_without_ddl() -> None:
+async def test_metadata_index_initializes_schema_with_migrations() -> None:
     conn = _Conn()
-    conn.applied.update(("doc_metadata", migration.version) for migration in _SCHEMA_MIGRATIONS)
     idx = pg_metadata_index.PGMetadataIndex(workspace="default")
 
     async def run(operation):  # noqa: ANN001, ANN202
@@ -163,21 +160,14 @@ async def test_metadata_index_read_only_verifies_migrations_without_ddl() -> Non
 
     idx._run = run  # type: ignore[method-assign]
 
-    await idx.initialize(read_only=True)
+    await idx.initialize()
 
-    assert conn.executed == []
-
-
-async def test_metadata_index_read_only_rejects_missing_migration() -> None:
-    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
-
-    async def run(operation):  # noqa: ANN001, ANN202
-        return await operation(_Conn())
-
-    idx._run = run  # type: ignore[method-assign]
-
-    with pytest.raises(RuntimeError, match="doc_metadata schema migration"):
-        await idx.initialize(read_only=True)
+    executed_sql = "\n".join(query for query, _ in conn.executed)
+    assert "CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations" in executed_sql
+    assert "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata" in executed_sql
+    assert conn.applied == {
+        ("doc_metadata", migration.version) for migration in _SCHEMA_MIGRATIONS
+    }
 
 
 async def test_metadata_index_finds_by_exact_file_path() -> None:

@@ -104,22 +104,15 @@ def make_e2e_config(
     working_dir: Path,
     workspace: str,
     conn_kwargs: Mapping[str, Any],
-    runtime_role: str = "ingest",
 ) -> DlightragConfig:
     """Create a compact config for the local fake-model E2E smoke."""
     return DlightragConfig(  # type: ignore[call-arg]
         _env_file=None,
-        runtime_role=runtime_role,
         postgres_host=str(conn_kwargs["host"]),
         postgres_port=int(conn_kwargs["port"]),
         postgres_user=str(conn_kwargs["user"]),
         postgres_password=str(conn_kwargs["password"]),
         postgres_database=str(conn_kwargs["database"]),
-        postgres_replica_host=str(conn_kwargs["host"]),
-        postgres_replica_port=int(conn_kwargs["port"]),
-        postgres_replica_user=str(conn_kwargs["user"]),
-        postgres_replica_password=str(conn_kwargs["password"]),
-        postgres_replica_database=str(conn_kwargs["database"]),
         postgres_pool_min_size=1,
         postgres_pool_max_size=2,
         workspace=workspace,

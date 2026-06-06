@@ -29,11 +29,9 @@ class QueryImageEnhancer:
         self,
         *,
         vlm_func: Callable[..., Any] | None,
-        enabled: bool = True,
         max_images: int = 3,
     ) -> None:
         self._vlm_func = vlm_func
-        self._enabled = enabled
         self._max_images = max(0, int(max_images))
 
     async def aclose(self) -> None:
@@ -48,7 +46,7 @@ class QueryImageEnhancer:
         images: list[str | dict[str, Any]] | None,
     ) -> QueryImageEnhancement:
         """Append concise visual descriptions to the retrieval query."""
-        if not self._enabled or self._vlm_func is None or not images or self._max_images <= 0:
+        if self._vlm_func is None or not images or self._max_images <= 0:
             return QueryImageEnhancement(query=query)
         vlm_func = self._vlm_func
 

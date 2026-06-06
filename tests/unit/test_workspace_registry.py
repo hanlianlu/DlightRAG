@@ -5,9 +5,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-from dlightrag.storage.workspaces import _SCHEMA_MIGRATIONS, PGWorkspaceRegistry
+from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 
 class _Acquire:
@@ -123,25 +121,6 @@ async def test_workspace_registry_initialization_canonicalizes_existing_rows() -
         "voyage-multimodal-3.5",
     ) in [args for _, args in conn.executed]
     assert ("project-alpha",) in [args for _, args in conn.executed]
-
-
-async def test_workspace_registry_read_only_verifies_migrations_without_ddl() -> None:
-    conn = _Conn()
-    conn.applied.update(
-        ("workspace_registry", migration.version) for migration in _SCHEMA_MIGRATIONS
-    )
-    registry = PGWorkspaceRegistry(pool=_Pool(conn))
-
-    await registry.initialize(read_only=True)
-
-    assert not any("CREATE TABLE" in query or "ALTER TABLE" in query for query, _ in conn.executed)
-
-
-async def test_workspace_registry_read_only_rejects_missing_migration() -> None:
-    registry = PGWorkspaceRegistry(pool=_Pool(_Conn()))
-
-    with pytest.raises(RuntimeError, match="workspace_registry schema migration"):
-        await registry.initialize(read_only=True)
 
 
 async def test_workspace_registry_upserts_lists_and_deletes() -> None:

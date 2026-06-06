@@ -17,10 +17,7 @@ embedding models or dimensions after data has been indexed; changing
 `embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
-local `postgres/` image definition and preloads `age,pg_textsearch,pg_jieba`. The
-optional `replica` profile uses the same image and physical streaming
-replication, so vector, graph, and BM25 indexes replicate through WAL rather
-than application-level copy jobs.
+local `postgres/` image definition and preloads `age,pg_textsearch,pg_jieba`.
 
 Default vector storage is `VECTOR(dim)` with HNSW. `HNSW_HALFVEC` is an
 explicit opt-in index type for deployments that have chosen the precision
@@ -33,12 +30,12 @@ DlightRAG splits PostgreSQL tuning into two layers:
 - **Server-level settings** (`shared_buffers`, `work_mem`,
   `maintenance_work_mem`, WAL settings, preload libraries) belong to the
   PostgreSQL deployment. The checked-in Docker compose stack carries a local
-  single-node profile; production primary/replica deployments should tune
-  these in their own Postgres configuration.
+  single-node profile; production deployments should tune these in their own
+  Postgres configuration.
 - **Docker shared memory** is separate from PostgreSQL memory GUCs. The
-  checked-in compose stack sets `shm_size: 8gb` on both primary and replica so
-  HNSW index builds and rebuilds have enough `/dev/shm` headroom. This should
-  be kept in proportion to corpus size and concurrent index maintenance.
+  checked-in compose stack sets `shm_size: 8gb` so HNSW index builds and
+  rebuilds have enough `/dev/shm` headroom. This should be kept in proportion
+  to corpus size and concurrent index maintenance.
 - **Session-level settings** belong to DlightRAG config. `pg_hnsw_ef_search`
   becomes `hnsw.ef_search`, and `postgres_session_settings` can add additional
   per-connection GUCs. DlightRAG applies the same session settings to both
@@ -63,9 +60,8 @@ postgres_ssl_mode: require  # disable | allow | prefer | require | verify-ca | v
 postgres_ssl_root_cert: /etc/postgresql/ca.crt
 ```
 
-PostgreSQL SSL config is shared by the active primary/replica endpoint and is
-bridged to LightRAG's `POSTGRES_SSL_*` environment contract. DlightRAG's
-domain-store pool, reset helpers, replication checks, and status probes use
+PostgreSQL SSL config is bridged to LightRAG's `POSTGRES_SSL_*` environment
+contract. DlightRAG's domain-store pool, reset helpers, and status probes use
 the same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do
 not need a second SSL configuration surface.
 
@@ -86,10 +82,9 @@ ledger for domain schema changes. This applies to DlightRAG tables such as
 `dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
 and AGE graph schemas remain managed by LightRAG.
 
-Writable runtimes ensure these idempotent DDL migrations on startup and record
-their versions in the ledger. Query read-only runtimes only verify that the
-required migration versions already exist, so run an ingest/admin process
-against the primary before starting replica-only query workers after an upgrade.
+DlightRAG ensures these idempotent DDL migrations on startup and records their
+versions in the ledger. All application surfaces use the same configured
+PostgreSQL endpoint.
 
 ## LightRAG AGE Contract Patches
 
@@ -145,62 +140,28 @@ def _execute_needs_patch(method):
 
 ## PG Pool Architecture
 
-DlightRAG's default single-primary process can ingest and query concurrently,
-matching LightRAG's staged pipeline behavior. Role-aware PostgreSQL endpoints
-are an optional production read-isolation topology:
+DlightRAG uses one configured PostgreSQL endpoint per service process. That
+endpoint must be write-capable because startup may apply DlightRAG schema
+migrations, LightRAG may initialize storage, and operational APIs can mutate
+workspace state. LightRAG's staged pipeline already supports ingest and query
+in the same process; local query-while-ingest behavior should be tuned through
+parser/analyze/insert/model concurrency before changing database topology.
 
-```text
-dlightrag-ingest / admin API -> primary PostgreSQL
-dlightrag-query workers      -> hot standby / read replica PostgreSQL
-primary                      -> physical streaming replication -> replica
-```
-
-Set `runtime_role: ingest|admin|query`. Ingest/admin workers attach to the
-primary endpoint and may run DDL, ingest LightRAG data, update metadata, and
-perform resets. Query workers attach to `postgres_replica_*`, skip advisory
-locks and write-time initialization, verify that required LightRAG/DlightRAG
-tables already exist, and reject mutating APIs.
-
-This is process-level separation, not dynamic in-process read/write routing.
-Do not enable a replica merely to make local query-while-ingest work; tune the
-ingest pipeline concurrency first.
-Strong read-after-write flows can set `read_after_write_mode: wait_for_replay`
-on ingest/admin workers so write acknowledgements wait for replica WAL replay.
-Flows that cannot wait should call an admin/ingest surface explicitly; ordinary
-query workers remain read-only and never dynamically route to primary.
-
-DlightRAG uses two asyncpg pools per process target:
+DlightRAG uses two asyncpg pools:
 
 | Pool | Owner | Purpose |
 |---|---|---|
 | LightRAG ClientManager pool | LightRAG | KV, vector, graph, doc status |
-| `pg_pool` singleton | DlightRAG | Metadata index, BM25, workspace/role metadata |
+| `pg_pool` singleton | DlightRAG | Metadata index, BM25, workspace metadata |
 
 The dedicated DlightRAG pool avoids contention between LightRAG internals and
-metadata/BM25 reads and writes. In query role, both pools attach to the replica
-and only read or verify schema.
+metadata/BM25 reads and writes. Both pools use the same endpoint, SSL settings,
+and session-level PostgreSQL tuning.
 
-### Replica Requirements
-
-- PostgreSQL extension versions must match on primary and replica:
-  `pgvector`, Apache AGE, `pg_textsearch`, and `pg_jieba`.
-- DDL and migrations run primary-only. Query workers never self-heal missing
-  tables or indexes.
-- `pg_textsearch` BM25 schema changes, chunk language labeling, and profile
-  index creation/rebuild are primary-only. Query role verifies that every
-  configured `bm25_profiles` index exists and matches `bm25_k1`, `bm25_b`, and
-  the configured language predicate; it never attempts DDL on a replica.
-- Hot standby queries can conflict with WAL replay. Tune
-  `max_standby_streaming_delay` and `hot_standby_feedback` deliberately.
-
-Local commands:
-
-```bash
-make postgres-replica-prepare
-make postgres-replica-start
-make postgres-replica-smoke
-make postgres-replica-reset
-```
+If production infrastructure needs read replicas, configure them outside
+DlightRAG through managed PostgreSQL, a proxy, or platform-level routing.
+DlightRAG itself does not accept separate replica credentials, runtime roles,
+or read-after-write replay policies.
 
 ## Version Support Log
 

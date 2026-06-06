@@ -9,9 +9,10 @@ x-common-env: &common-env
   DLIGHTRAG_POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
   DLIGHTRAG_WORKSPACE: ${DLIGHTRAG_WORKSPACE:-default}
   DLIGHTRAG_WORKING_DIR: /app/dlightrag_storage
-  # .env defaults to a native host sidecar at 127.0.0.1:8210. Inside a
-  # DlightRAG container, 127.0.0.1 is the app container itself, so route local
-  # MinerU through Docker's host alias unless explicitly overridden.
+  # config.yaml defaults to a native host MinerU sidecar at 127.0.0.1:8210.
+  # Inside a DlightRAG container, 127.0.0.1 is the app container itself, so
+  # route that externally managed sidecar through Docker's host alias unless
+  # explicitly overridden.
   MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}
 
 services:
@@ -92,17 +93,9 @@ services:
       - "random_page_cost=1.1"
       - "-c"
       - "effective_io_concurrency=200"
-      # WAL / optional local read replica
+      # WAL
       - "-c"
       - "wal_buffers=16MB"
-      - "-c"
-      - "wal_level=replica"
-      - "-c"
-      - "max_wal_senders=10"
-      - "-c"
-      - "max_replication_slots=10"
-      - "-c"
-      - "max_slot_wal_keep_size=4GB"
       # Parallelism
       - "-c"
       - "max_parallel_workers_per_gather=4"
@@ -123,52 +116,6 @@ services:
       timeout: 3s
       retries: 10
 
-  postgres-replica:
-    profiles: ["replica"]
-    restart: unless-stopped
-    image: dlightrag-postgres:pg18
-    build:
-      context: postgres
-    shm_size: 8gb
-    depends_on:
-      postgres:
-        condition: service_healthy
-    ports:
-      - "5433:5432"
-    environment:
-      POSTGRES_DB: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
-      POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
-      POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
-      POSTGRES_PRIMARY_HOST: postgres
-      POSTGRES_PRIMARY_PORT: "5432"
-      POSTGRES_REPLICATION_USER: ${DLIGHTRAG_POSTGRES_REPLICATION_USER:-replicator}
-      POSTGRES_REPLICATION_PASSWORD: ${DLIGHTRAG_POSTGRES_REPLICATION_PASSWORD:-dlightrag-replica}
-      POSTGRES_REPLICATION_SLOT: ${DLIGHTRAG_POSTGRES_REPLICATION_SLOT:-dlightrag_replica}
-    volumes:
-      - pg18_replica_data:/var/lib/postgresql/data
-      - ./scripts/postgres/replica-entrypoint.sh:/usr/local/bin/dlightrag-postgres-replica-entrypoint.sh:ro
-    entrypoint: ["dlightrag-postgres-replica-entrypoint.sh"]
-    command:
-      - "postgres"
-      - "-c"
-      - "shared_preload_libraries=age,pg_textsearch,pg_jieba"
-      - "-c"
-      - "hot_standby=on"
-      - "-c"
-      - "hot_standby_feedback=off"
-      - "-c"
-      - "max_standby_streaming_delay=30s"
-      - "-c"
-      - "jit=off"
-      - "-c"
-      - "huge_pages=off"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DLIGHTRAG_POSTGRES_USER:-dlightrag} -d ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-
 volumes:
   dlightrag_data:
   pg18_data:
-  pg18_replica_data:

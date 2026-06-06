@@ -64,7 +64,7 @@ L0  prompts, utils                                 pure helpers
 | `core.retrieval.{protocols,models,metadata_fields}` | L2 | Retrieval contracts and metadata registry |
 | `core.scope` | L2 | Request/session scoping contract shared by interfaces and core orchestration |
 | `models.providers` | L3 | OpenAI/Anthropic/Gemini and embedding provider wrappers |
-| `storage` | L3 | PostgreSQL pools, metadata index, version/replication helpers |
+| `storage` | L3 | PostgreSQL pools, metadata index, and schema/version helpers |
 | `sourcing` | L3 | Local, Azure Blob, and S3 source readers |
 | `citations` | L3 | Inline citation validation, source projection, optional highlights, streaming normalization |
 | `models.{embedding,multimodal_embedding,llm,llm_roles,rerank}` | L4 | LightRAG-compatible model callables |

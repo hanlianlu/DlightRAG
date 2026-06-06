@@ -237,15 +237,14 @@ class RAGServiceManager:
         """Initialize the durable workspace registry."""
         from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-        self._workspace_registry = PGWorkspaceRegistry(target=self._config.pg_target_for_runtime())
+        self._workspace_registry = PGWorkspaceRegistry()
         try:
-            await self._workspace_registry.initialize(read_only=self._config.is_query_role is True)
-            if self._config.is_query_role is not True:
-                await self._workspace_registry.upsert(
-                    workspace=normalize_workspace(self._config.workspace),
-                    display_name=self._config.workspace,
-                    embedding_model=self._config.embedding.model,
-                )
+            await self._workspace_registry.initialize()
+            await self._workspace_registry.upsert(
+                workspace=normalize_workspace(self._config.workspace),
+                display_name=self._config.workspace,
+                embedding_model=self._config.embedding.model,
+            )
         except Exception as exc:
             self._startup_warnings.append("Workspace registry unavailable")
             logger.warning("Workspace registry initialization failed: %s", exc)
@@ -268,29 +267,6 @@ class RAGServiceManager:
         if "authentication" in text or "password" in text or "denied" in text:
             return f"{msg}. Check API keys or database credentials."
         return msg
-
-    def _ensure_writable(self, operation: str) -> None:
-        """Fail fast when a mutating API is invoked by a query-role process."""
-        if self._config.is_query_role is True:
-            raise PermissionError(
-                f"{operation} is not available when runtime_role='query'; "
-                "route it to an ingest/admin worker connected to primary PostgreSQL"
-            )
-
-    async def _wait_after_write(self) -> str | None:
-        """Apply configured read-after-write barrier for primary-backed writes."""
-        if self._config.read_after_write_mode != "wait_for_replay":
-            return None
-
-        from dlightrag.storage.replication import wait_for_current_wal_replay
-
-        try:
-            return await wait_for_current_wal_replay(
-                self._config,
-                timeout=self._config.read_after_write_timeout,
-            )
-        except TimeoutError as exc:
-            raise RAGServiceUnavailableError(detail=str(exc)) from exc
 
     async def _get_service(self, workspace: str) -> RAGService:
         """Get or create a RAGService for a specific workspace. Async-safe.
@@ -358,35 +334,24 @@ class RAGServiceManager:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Ingest documents into a specific workspace."""
-        self._ensure_writable("ingest")
         timeout = self._config.ingest_timeout
         try:
             if timeout is None:
                 svc = await self._get_service(workspace)
                 await svc.aregister_workspace()
-                result = await svc.aingest(source_type=source_type, **kwargs)
-                replay_lsn = await self._wait_after_write()
-                if replay_lsn is not None and isinstance(result, dict):
-                    result["replica_replay_lsn"] = replay_lsn
-                return result
+                return await svc.aingest(source_type=source_type, **kwargs)
             else:
                 async with asyncio.timeout(timeout):
                     svc = await self._get_service(workspace)
                     await svc.aregister_workspace()
-                    result = await svc.aingest(source_type=source_type, **kwargs)
-                    replay_lsn = await self._wait_after_write()
-                    if replay_lsn is not None and isinstance(result, dict):
-                        result["replica_replay_lsn"] = replay_lsn
-                    return result
+                    return await svc.aingest(source_type=source_type, **kwargs)
         except TimeoutError as e:
             raise RAGServiceUnavailableError(detail=f"Request timed out after {timeout}s") from e
 
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
-        self._ensure_writable("create workspace")
         svc = await self._get_service(workspace)
         await svc.aregister_workspace(display_name=display_name)
-        await self._wait_after_write()
 
     async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""
@@ -400,11 +365,8 @@ class RAGServiceManager:
 
     async def delete_files(self, workspace: str, **kwargs: Any) -> list[dict[str, Any]]:
         """Delete files from a specific workspace."""
-        self._ensure_writable("delete files")
         svc = await self._get_service(workspace)
-        result = await svc.adelete_files(**kwargs)
-        await self._wait_after_write()
-        return result
+        return await svc.adelete_files(**kwargs)
 
     async def list_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
         """List FAILED documents in a specific workspace."""
@@ -418,11 +380,8 @@ class RAGServiceManager:
 
     async def retry_failed_docs(self, workspace: str) -> dict[str, Any]:
         """Retry all FAILED documents in a specific workspace via re-ingest."""
-        self._ensure_writable("retry failed docs")
         svc = await self._get_service(workspace)
-        result = await svc.aretry_failed_docs()
-        await self._wait_after_write()
-        return result
+        return await svc.aretry_failed_docs()
 
     async def aget_metadata(self, workspace: str, doc_id: str) -> dict[str, Any]:
         """Get document metadata by ID."""
@@ -439,10 +398,8 @@ class RAGServiceManager:
         metadata_policy: MetadataIngestPolicy | None = None,
     ) -> None:
         """Update (merge) document metadata."""
-        self._ensure_writable("metadata update")
         svc = await self._get_service(workspace)
         await svc.aupdate_metadata(doc_id, data, mode=mode, metadata_policy=metadata_policy)
-        await self._wait_after_write()
 
     async def asearch_metadata(self, workspace: str, filters: MetadataFilter) -> list[str]:
         """Search metadata by filters, return matching doc_ids."""
@@ -462,7 +419,6 @@ class RAGServiceManager:
         removes local files. After reset, the service is closed and evicted
         from cache.
         """
-        self._ensure_writable("reset")
         if workspace is not None:
             requested_workspace = workspace
             target_workspace = normalize_workspace(workspace)
@@ -505,9 +461,6 @@ class RAGServiceManager:
                 except Exception:
                     logger.warning("Failed to close service for '%s'", ws, exc_info=True)
                 del self._services[ws]
-
-        if results:
-            await self._wait_after_write()
 
         return {"workspaces": results, "total_errors": total_errors}
 
@@ -618,7 +571,6 @@ class RAGServiceManager:
             cfg = self._config.query_images
             self._query_image_enhancer = QueryImageEnhancer(
                 vlm_func=get_vlm_model_func(self._config),
-                enabled=cfg.semantic_enhancement,
                 max_images=cfg.max_described_images,
             )
         return self._query_image_enhancer

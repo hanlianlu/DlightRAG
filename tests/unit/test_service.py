@@ -11,21 +11,10 @@ import pytest
 
 from dlightrag.config import DlightragConfig
 from dlightrag.core.service import RAGService
-from dlightrag.storage.lightrag_postgres import parse_postgres_server_settings
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
 # ---------------------------------------------------------------------------
-
-
-def test_parse_postgres_server_settings_decodes_query_string() -> None:
-    assert parse_postgres_server_settings(
-        "hnsw.ef_search=384&application_name=dlightrag+api&statement_timeout=60000"
-    ) == {
-        "hnsw.ef_search": "384",
-        "application_name": "dlightrag api",
-        "statement_timeout": "60000",
-    }
 
 
 class TestRAGServiceAingest:
@@ -66,12 +55,6 @@ class TestRAGServiceAingest:
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
             await service.aingest(source_type="local", path="/tmp/f.pdf")
-
-    async def test_aingest_query_role_rejected(self, test_config: DlightragConfig) -> None:
-        test_config.runtime_role = "query"
-        service = self._make_initialized_service(test_config)
-        with pytest.raises(PermissionError, match="runtime_role='query'"):
-            await service.aingest(source_type="local", path="/tmp/file.pdf")
 
     async def test_aingest_replace_default_from_config(
         self, test_config: DlightragConfig, tmp_path: Path
@@ -224,13 +207,6 @@ class TestRAGServiceFileManagement:
     async def test_adelete_not_initialized_raises(self, test_config):
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
-            await service.adelete_files(filenames=["a.pdf"])
-
-    async def test_adelete_query_role_rejected(self, test_config):
-        test_config.runtime_role = "query"
-        service = RAGService(config=test_config)
-        service._initialized = True
-        with pytest.raises(PermissionError, match="runtime_role='query'"):
             await service.adelete_files(filenames=["a.pdf"])
 
     async def test_alist_reads_lightrag_doc_status(self, test_config):

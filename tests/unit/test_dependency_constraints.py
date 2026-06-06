@@ -249,11 +249,6 @@ def test_env_example_defaults_mineru_to_local_sidecar() -> None:
     assert "parser_sidecars:" in config
     assert re.search(r"(?m)^    api_mode: local$", config)
     assert re.search(r"(?m)^    local_endpoint: http://127\.0\.0\.1:8210$", config)
-    assert re.search(r"(?m)^    local_backend: hybrid-auto-engine$", config)
-    assert re.search(r"(?m)^    local_parse_method: auto$", config)
-    assert re.search(r"(?m)^    local_image_analysis: true$", config)
-    assert re.search(r"(?m)^    enable_table: true$", config)
-    assert re.search(r"(?m)^    enable_formula: true$", config)
     for active_non_secret in (
         "MINERU_API_MODE",
         "MINERU_LOCAL_ENDPOINT",
@@ -286,6 +281,15 @@ def test_env_example_active_keys_are_credentials_only() -> None:
         "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY",
         "DLIGHTRAG_POSTGRES_PASSWORD",
     ]
+
+
+def test_env_example_describes_config_as_curated_not_tuning_dump() -> None:
+    example = Path(".env.example").read_text(encoding="utf-8")
+
+    assert "high-signal product" in example
+    assert "deployment choices" in example
+    assert "docs/config-reference.md" in example
+    assert "PostgreSQL tuning" not in example
 
 
 def test_lightrag_constructor_receives_extraction_config() -> None:

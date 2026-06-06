@@ -13,7 +13,7 @@ from dlightrag.core.retrieval.metadata_fields import (
     system_field_ids,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations
 from dlightrag.storage.sql_identifiers import pg_identifier
 
 logger = logging.getLogger(__name__)
@@ -172,34 +172,10 @@ class PGMetadataIndex:
 
         return await pg_pool.run(operation)
 
-    async def initialize(self, *, read_only: bool = False) -> None:
+    async def initialize(self) -> None:
         """Create table and indexes. Call once during service startup."""
-        if read_only:
-            await self._verify_schema()
-            return
-
         async def _operation(conn: Any) -> None:
             await apply_migrations(
-                conn,
-                scope="doc_metadata",
-                migrations=_SCHEMA_MIGRATIONS,
-            )
-
-        await self._run(_operation)
-
-    async def _verify_schema(self) -> None:
-        async def _operation(conn: Any) -> None:
-            exists = await conn.fetchval(
-                "SELECT EXISTS ("
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = 'public' AND table_name = 'dlightrag_doc_metadata'"
-                ")"
-            )
-            if not exists:
-                raise RuntimeError(
-                    "dlightrag_doc_metadata is missing; initialize it on the primary first"
-                )
-            await verify_migrations(
                 conn,
                 scope="doc_metadata",
                 migrations=_SCHEMA_MIGRATIONS,
