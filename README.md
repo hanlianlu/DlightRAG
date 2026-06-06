@@ -75,15 +75,15 @@ make mineru-api
 ```
 
 The helper creates a dedicated `.venv-mineru` so MinerU's ML dependencies do
-not enter DlightRAG's runtime environment. `.env.mineru.example` pins
-`MINERU_VERSION=3.2.3`; unset it only when you intentionally want the installer
-to upgrade to the latest MinerU package. With no explicit
-`MINERU_INSTALL_EXTRAS`, the installer uses `mineru[core,mlx]` on Apple Silicon
-and `mineru[core]` elsewhere. `.env.mineru.example` defaults to `core,mlx` for
-this local development setup. Keep DlightRAG runtime parser settings in
-`config.yaml`. The Makefile targets are the stable public entry points; the
-implementation lives under `scripts/mineru/`. On GPU servers, prefer MinerU's
-official Docker Compose `api` or `router` profile; set
+not enter DlightRAG's runtime environment. The installer upgrades MinerU to the
+latest package by default; set `MINERU_VERSION` only when an exact sidecar
+version is needed. With no explicit `MINERU_INSTALL_EXTRAS`, the installer uses
+`mineru[core,mlx]` on Apple Silicon and `mineru[core]` elsewhere.
+`.env.mineru.example` defaults to `core,mlx` for this local development setup.
+Keep DlightRAG runtime parser settings in `config.yaml`. The Makefile targets
+are the stable public entry points; the implementation lives under
+`scripts/mineru/`. On GPU servers, prefer MinerU's official Docker Compose
+`api` or `router` profile; set
 `parser_sidecars.mineru.local_endpoint` to that service, usually
 `http://127.0.0.1:8000` or `http://127.0.0.1:8002`.
 
@@ -418,10 +418,11 @@ checked-in default.
 Local MinerU service installation uses `.env.mineru`, not `.env`:
 
 ```bash
-MINERU_VERSION=3.2.3
 MINERU_INSTALL_EXTRAS=core,mlx
 MINERU_API_HOST=127.0.0.1
 MINERU_API_PORT=8210
+# Optional exact version override:
+# MINERU_VERSION=3.2.3
 ```
 
 Those keys affect only `make mineru-install`, `make mineru-api`, and the macOS
