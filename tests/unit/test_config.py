@@ -406,6 +406,39 @@ def test_bm25_profiles_accept_safe_pg_textsearch_config_names() -> None:
     assert cfg.bm25_b == 0.65
 
 
+def test_bm25_profiles_reject_multi_language_profile() -> None:
+    with pytest.raises(ValidationError, match="exactly one language"):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            bm25_profiles=[
+                {"name": "mixed", "text_config": "simple", "languages": ["de", "sv"]},
+                {"name": "simple", "text_config": "simple", "fallback": True},
+            ],
+        )
+
+
+def test_bm25_profiles_reject_fallback_languages() -> None:
+    with pytest.raises(ValidationError, match="fallback profiles must not declare languages"):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            bm25_profiles=[
+                {"name": "simple", "text_config": "simple", "languages": ["en"], "fallback": True}
+            ],
+        )
+
+
 def test_bm25_profiles_reject_unsafe_text_config_names() -> None:
     with pytest.raises(ValidationError, match="text_config"):
         DlightragConfig(

@@ -70,6 +70,7 @@ class UnifiedIngestionEngine:
         allow_ad_hoc_metadata: bool = True,
         default_metadata_policy: MetadataIngestPolicy = "validate",
         min_image_pixel: int = 100,
+        bm25_language_classifier: Any | None = None,
     ) -> None:
         self._lightrag = lightrag
         self._stores = stores
@@ -82,6 +83,7 @@ class UnifiedIngestionEngine:
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
         self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
         self._min_image_pixel = min_image_pixel
+        self._bm25_language_classifier = bm25_language_classifier
         self._ingest_locks: dict[str, asyncio.Lock] = {}
 
     async def aingest_file(
@@ -333,6 +335,7 @@ class UnifiedIngestionEngine:
             sidecar_location=lightrag_record.get("lightrag.sidecar_location"),
             chunk_ids=set(light_chunks),
         )
+        await self._label_bm25_languages(light_chunks)
 
         return {
             "doc_id": doc_id,
@@ -387,6 +390,18 @@ class UnifiedIngestionEngine:
                     self._multimodal_embedder, "dim", len(next(iter(vectors.values())))
                 ),
             )
+
+    async def _label_bm25_languages(self, chunk_ids: list[str]) -> None:
+        if self._bm25_language_classifier is None or not chunk_ids:
+            return
+        rows = await self._stores.fetch_chunk_contents(chunk_ids)
+        labels = {
+            str(row["id"]): self._bm25_language_classifier.detect(str(row.get("content") or ""))
+            for row in rows
+            if row.get("id")
+        }
+        if labels:
+            await self._stores.update_chunk_bm25_languages(labels)
 
     @staticmethod
     def _lightrag_metadata(

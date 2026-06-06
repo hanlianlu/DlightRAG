@@ -415,9 +415,32 @@ class RAGService:
         # Initialize metadata index
         self._metadata_index = await self._create_metadata_index(config, read_only=read_only)
         from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
+        from dlightrag.core.retrieval.bm25 import BM25Profile
+        from dlightrag.core.retrieval.bm25_language import BM25LanguageClassifier
         from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
         self._metadata_registry = MetadataFieldRegistry.from_config(config.metadata.fields)
+        bm25_profiles = [
+            BM25Profile(
+                name=profile.name,
+                text_config=profile.text_config,
+                languages=tuple(profile.languages),
+                fallback=profile.fallback,
+            )
+            for profile in config.bm25_profiles
+        ]
+        bm25_language_classifier = (
+            BM25LanguageClassifier(
+                tuple(
+                    language
+                    for profile in bm25_profiles
+                    if not profile.fallback
+                    for language in profile.languages
+                )
+            )
+            if config.bm25_enabled
+            else None
+        )
         self._ingestion_engine = UnifiedIngestionEngine(
             lightrag=lightrag,
             stores=self._lightrag_stores,
@@ -430,25 +453,18 @@ class RAGService:
             allow_ad_hoc_metadata=config.metadata.allow_ad_hoc_json,
             default_metadata_policy=config.metadata.default_ingest_policy,
             min_image_pixel=config.parser_sidecars.vlm.min_image_pixel,
+            bm25_language_classifier=bm25_language_classifier,
         )
 
         if config.bm25_enabled:
-            from dlightrag.core.retrieval.bm25 import BM25Profile, PostgresBM25
+            from dlightrag.core.retrieval.bm25 import PostgresBM25
             from dlightrag.storage.pool import pg_pool
 
             self._bm25 = PostgresBM25(
                 pool=pg_pool,
                 workspace=config.workspace,
                 top_k=config.bm25_top_k,
-                profiles=[
-                    BM25Profile(
-                        name=profile.name,
-                        text_config=profile.text_config,
-                        languages=tuple(profile.languages),
-                        fallback=profile.fallback,
-                    )
-                    for profile in config.bm25_profiles
-                ],
+                profiles=bm25_profiles,
             )
             if read_only:
                 await self._bm25.verify_indexes(

@@ -566,8 +566,10 @@ DlightRAG's supported core storage stack is PostgreSQL 18 only:
 | Document status | `PGDocStatusStorage` |
 | BM25 | pg_textsearch |
 
-BM25 uses query-language-routed pg_textsearch profiles over the same LightRAG
-document chunks. The checked-in defaults are:
+BM25 uses DlightRAG-managed pg_textsearch profiles over the same LightRAG
+document chunks. Ingest labels each chunk with `dlightrag_bm25_language`; the
+language profiles are partial indexes, while `simple` remains a full-table
+fallback. The checked-in defaults are:
 
 - Chinese query profile: `public.jiebacfg` from the `pg_jieba` extension
 - English query profile: PostgreSQL `english`
@@ -578,9 +580,10 @@ document chunks. The checked-in defaults are:
 - Fallback profile: PostgreSQL `simple`
 
 Chinese, English, German, Swedish, Spanish, and French queries run only their
-language-specific BM25 profile. Unsupported, unknown, or ambiguous queries use
-the `simple` fallback. `bm25_k1` and `bm25_b` define the shared BM25 tuning for
-every profile index.
+language-specific BM25 partial index. Unsupported, unknown, or ambiguous queries
+use the `simple` fallback. `bm25_k1` and `bm25_b` define the shared BM25 tuning
+for every profile index. Each non-fallback BM25 profile maps to exactly one
+language; the fallback profile must not declare languages.
 
 Default vector indexing uses `pg_vector_index_type: HNSW` with `VECTOR(dim)`.
 `HNSW_HALFVEC` is explicit opt-in and should only be used after deciding the
