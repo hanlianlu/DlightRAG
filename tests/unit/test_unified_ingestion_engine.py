@@ -54,6 +54,33 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     deps["metadata_index"].upsert.assert_awaited_once()
 
 
+async def test_document_ingest_labels_bm25_chunk_languages(tmp_path: Path) -> None:
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+
+    class FakeClassifier:
+        def detect(self, content: str) -> str:
+            return {"现金流 风险": "zh", "risk factors": "en"}.get(content, "simple")
+
+    engine, deps = _make_engine(bm25_language_classifier=FakeClassifier())
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-zh", "chunk-en"],
+        "content_hash": "sha256:abc",
+        "status": "processed",
+    }
+    deps["stores"].fetch_chunk_contents.return_value = [
+        {"id": "chunk-zh", "content": "现金流 风险"},
+        {"id": "chunk-en", "content": "risk factors"},
+    ]
+
+    await engine.aingest_file(source, replace=False)
+
+    deps["stores"].fetch_chunk_contents.assert_awaited_once_with(["chunk-zh", "chunk-en"])
+    deps["stores"].update_chunk_bm25_languages.assert_awaited_once_with(
+        {"chunk-zh": "zh", "chunk-en": "en"}
+    )
+
+
 async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Path) -> None:
     pdf = tmp_path / "b[mineru-iteP].pdf"
     docx = tmp_path / "a.docx"

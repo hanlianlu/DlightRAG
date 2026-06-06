@@ -47,6 +47,7 @@ import json
 import logging
 from typing import Any, ClassVar
 
+from dlightrag.core.retrieval.bm25_language import BM25_LANGUAGE_COLUMN
 from dlightrag.storage.sql_identifiers import pg_qualified_identifier
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,68 @@ class LightRAGStores:
             async with db.pool.acquire() as connection:
                 rows = await _execute(connection)
         return [str(row["id"]) for row in rows]
+
+    async def fetch_chunk_contents(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """Fetch LightRAG chunk content for BM25 language labeling."""
+        if not chunk_ids:
+            return []
+        text_chunks = self.text_chunks
+        db = getattr(text_chunks, "db", None)
+        if db is None:
+            raise RuntimeError("LightRAG text_chunks storage does not expose a PostgreSQL db")
+        workspace = getattr(text_chunks, "workspace", "default")
+        sql = """
+            SELECT id, content
+            FROM LIGHTRAG_DOC_CHUNKS
+            WHERE workspace = $1
+              AND id = ANY($2::text[])
+            ORDER BY chunk_order_index, id
+        """
+
+        async def _execute(connection: Any) -> list[Any]:
+            return await connection.fetch(sql, workspace, list(chunk_ids))
+
+        if hasattr(db, "_run_with_retry"):
+            rows = await db._run_with_retry(
+                _execute,
+                timing_label=f"{workspace} chunk_content_for_bm25_language",
+            )
+        else:
+            async with db.pool.acquire() as connection:
+                rows = await _execute(connection)
+        return [{"id": str(row["id"]), "content": str(row["content"] or "")} for row in rows]
+
+    async def update_chunk_bm25_languages(self, labels: dict[str, str]) -> None:
+        """Batch update DlightRAG BM25 language labels on LightRAG chunks."""
+        if not labels:
+            return
+        text_chunks = self.text_chunks
+        db = getattr(text_chunks, "db", None)
+        if db is None:
+            raise RuntimeError("LightRAG text_chunks storage does not expose a PostgreSQL db")
+        workspace = getattr(text_chunks, "workspace", "default")
+        chunk_ids = list(labels)
+        languages = [labels[chunk_id] for chunk_id in chunk_ids]
+        sql = f"""
+            UPDATE LIGHTRAG_DOC_CHUNKS AS chunks
+            SET {BM25_LANGUAGE_COLUMN}=labels.language,
+                update_time=CURRENT_TIMESTAMP
+            FROM UNNEST($2::text[], $3::text[]) AS labels(id, language)
+            WHERE chunks.workspace=$1
+              AND chunks.id=labels.id
+        """
+
+        async def _execute(connection: Any) -> None:
+            await connection.execute(sql, workspace, chunk_ids, languages)
+
+        if hasattr(db, "_run_with_retry"):
+            await db._run_with_retry(
+                _execute,
+                timing_label=f"{workspace} chunk_bm25_language_update",
+            )
+        else:
+            async with db.pool.acquire() as connection:
+                await _execute(connection)
 
     async def cleanup_doc(self, doc_id: str) -> int:
         """Delete a document's LightRAG records (doc_status, doc_full, chunks).

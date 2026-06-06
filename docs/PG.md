@@ -186,9 +186,10 @@ and only read or verify schema.
   `pgvector`, Apache AGE, `pg_textsearch`, and `pg_jieba`.
 - DDL and migrations run primary-only. Query workers never self-heal missing
   tables or indexes.
-- `pg_textsearch` BM25 profile index creation and rebuild are primary-only.
-  Query role verifies that every configured `bm25_profiles` index exists and
-  matches `bm25_k1` and `bm25_b`; it never attempts DDL on a replica.
+- `pg_textsearch` BM25 schema changes, chunk language labeling, and profile
+  index creation/rebuild are primary-only. Query role verifies that every
+  configured `bm25_profiles` index exists and matches `bm25_k1`, `bm25_b`, and
+  the configured language predicate; it never attempts DDL on a replica.
 - Hot standby queries can conflict with WAL replay. Tune
   `max_standby_streaming_delay` and `hot_standby_feedback` deliberately.
 

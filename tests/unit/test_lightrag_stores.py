@@ -141,3 +141,57 @@ async def test_chunk_ids_for_docs_reads_lightrag_text_chunks() -> None:
     assert db.fetch_args is not None
     assert db.fetch_args[1] == "ws"
     assert db.fetch_args[2] == ["doc-1", "doc-2"]
+
+
+async def test_fetch_chunk_contents_reads_lightrag_doc_chunks() -> None:
+    class FakeTextChunksDB:
+        def __init__(self) -> None:
+            self.fetch_args: tuple | None = None
+
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            return await operation(self)
+
+        async def fetch(self, *args):  # noqa: ANN002, ANN202
+            self.fetch_args = args
+            return [{"id": "chunk-a", "content": "hello"}]
+
+    fake = FakeLightRAG()
+    db = FakeTextChunksDB()
+    fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
+    stores = LightRAGStores(fake)
+
+    result = await stores.fetch_chunk_contents(["chunk-a"])
+
+    assert result == [{"id": "chunk-a", "content": "hello"}]
+    assert db.fetch_args is not None
+    assert "FROM LIGHTRAG_DOC_CHUNKS" in db.fetch_args[0]
+    assert db.fetch_args[1] == "ws"
+    assert db.fetch_args[2] == ["chunk-a"]
+
+
+async def test_update_chunk_bm25_languages_uses_batch_update() -> None:
+    class FakeTextChunksDB:
+        def __init__(self) -> None:
+            self.execute_args: tuple | None = None
+
+        async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            return await operation(self)
+
+        async def execute(self, *args):  # noqa: ANN002, ANN202
+            self.execute_args = args
+
+    fake = FakeLightRAG()
+    db = FakeTextChunksDB()
+    fake.text_chunks = SimpleNamespace(db=db, workspace="ws")
+    stores = LightRAGStores(fake)
+
+    await stores.update_chunk_bm25_languages({"chunk-a": "en", "chunk-b": "zh"})
+
+    assert db.execute_args is not None
+    sql = db.execute_args[0]
+    assert "UPDATE LIGHTRAG_DOC_CHUNKS AS chunks" in sql
+    assert "FROM UNNEST($2::text[], $3::text[])" in sql
+    assert "dlightrag_bm25_language" in sql
+    assert db.execute_args[1] == "ws"
+    assert db.execute_args[2] == ["chunk-a", "chunk-b"]
+    assert db.execute_args[3] == ["en", "zh"]

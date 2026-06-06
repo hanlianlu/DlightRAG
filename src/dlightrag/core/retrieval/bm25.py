@@ -6,21 +6,29 @@ from __future__ import annotations
 import inspect
 import re
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any
 
+from dlightrag.core.retrieval.bm25_language import (
+    BM25_FALLBACK_LANGUAGE,
+    BM25_LANGUAGE_COLUMN,
+    BM25LanguageClassifier,
+    normalize_language_code,
+)
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
+BM25_LANGUAGE_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_bm25_language")
 BM25_TABLE = pg_identifier("LIGHTRAG_DOC_CHUNKS")
-_DEFAULT_DETECTION_LANGUAGES = ("zh", "en")
-_LINGUA_MIN_RELATIVE_DISTANCE = 0.08
-_CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 
 def _format_float(value: float) -> str:
     return f"{float(value):g}"
+
+
+def _sql_language_literal(language: str) -> str:
+    """Return a validated BM25 language code as a SQL string literal."""
+    return pg_identifier(normalize_language_code(language))
 
 
 def validate_profile_text_config(text_config: str) -> str:
@@ -32,103 +40,9 @@ def validate_profile_text_config(text_config: str) -> str:
         raise ValueError(f"unsafe BM25 text_config: {text_config!r}") from exc
 
 
-def _normalize_language_code(language: str) -> str:
-    value = str(language).strip().lower().replace("_", "-")
-    if not value:
-        return ""
-    if value.startswith("zh") or value in {"cn", "chinese"}:
-        return "zh"
-    return value.split("-", maxsplit=1)[0]
-
-
-def _language_codes_for_detection(supported_languages: tuple[str, ...] | None) -> tuple[str, ...]:
-    raw_languages = supported_languages or _DEFAULT_DETECTION_LANGUAGES
-    language_codes: list[str] = []
-    seen: set[str] = set()
-    for language in raw_languages:
-        code = _normalize_language_code(language)
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        language_codes.append(code)
-    return tuple(language_codes)
-
-
-def _lingua_language_for_code(code: str) -> Any | None:
-    try:
-        from lingua import IsoCode639_1, Language
-    except Exception:
-        return None
-    try:
-        iso_code = IsoCode639_1.from_str(code.upper())
-        return Language.from_iso_code_639_1(iso_code)
-    except Exception:
-        try:
-            return Language.from_str(code)
-        except Exception:
-            return None
-
-
-@lru_cache(maxsize=32)
-def _lingua_detector(language_codes: tuple[str, ...]) -> tuple[Any | None, dict[str, str]]:
-    try:
-        from lingua import LanguageDetectorBuilder
-    except Exception:
-        return None, {}
-
-    lingua_languages: list[Any] = []
-    code_by_lingua_name: dict[str, str] = {}
-    for code in language_codes:
-        lingua_language = _lingua_language_for_code(code)
-        if lingua_language is None:
-            continue
-        lingua_name = lingua_language.name
-        if lingua_name in code_by_lingua_name:
-            continue
-        code_by_lingua_name[lingua_name] = code
-        lingua_languages.append(lingua_language)
-
-    if not lingua_languages:
-        return None, {}
-    detector = (
-        LanguageDetectorBuilder.from_languages(*lingua_languages)
-        .with_minimum_relative_distance(_LINGUA_MIN_RELATIVE_DISTANCE)
-        .build()
-    )
-    return detector, code_by_lingua_name
-
-
-def detect_query_language(
-    query: str,
-    *,
-    supported_languages: tuple[str, ...] | None = None,
-) -> str:
-    """Detect the query language for BM25 profile routing."""
-    language_codes = _language_codes_for_detection(supported_languages)
-    language_code_set = set(language_codes)
-    detector, code_by_lingua_name = _lingua_detector(language_codes)
-    if detector is not None:
-        try:
-            detected = detector.detect_language_of(query)
-        except Exception:
-            detected = None
-        if detected:
-            code = code_by_lingua_name.get(detected.name)
-            if code:
-                return code
-
-    if (
-        _CJK_RE.search(query)
-        and "zh" in language_code_set
-        and language_code_set.isdisjoint({"ja", "ko"})
-    ):
-        return "zh"
-    return "unknown"
-
-
 @dataclass(frozen=True)
 class BM25Profile:
-    """A query-language-routed pg_textsearch BM25 index profile."""
+    """A chunk-language-aware pg_textsearch BM25 index profile."""
 
     name: str
     text_config: str
@@ -138,17 +52,28 @@ class BM25Profile:
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", pg_identifier(str(self.name).strip()))
         object.__setattr__(self, "text_config", validate_profile_text_config(self.text_config))
+        normalized_languages = tuple(
+            code for language in self.languages if (code := normalize_language_code(language))
+        )
+        if self.fallback and normalized_languages:
+            raise ValueError("BM25 fallback profile must not declare languages")
+        if not self.fallback and len(normalized_languages) != 1:
+            raise ValueError("BM25 language profiles must declare exactly one language")
         object.__setattr__(
             self,
             "languages",
-            tuple(
-                code for language in self.languages if (code := _normalize_language_code(language))
-            ),
+            normalized_languages,
         )
 
     @property
     def index_name(self) -> str:
         return pg_identifier(f"{BM25_INDEX_PREFIX}_{self.name}")
+
+    @property
+    def language_bucket(self) -> str | None:
+        if self.fallback or not self.languages:
+            return None
+        return self.languages[0]
 
 
 BM25_PROFILE_FALLBACK = BM25Profile(name="simple", text_config="simple", fallback=True)
@@ -169,18 +94,24 @@ class BM25IndexOptions:
             raise ValueError("BM25 b must be between 0 and 1")
 
     def create_index_sql(self) -> str:
-        return (
+        sql = (
             f"CREATE INDEX {self.profile.index_name} ON {BM25_TABLE} USING bm25(content) "
             f"WITH (text_config='{self.profile.text_config}', "
             f"k1={_format_float(self.k1)}, b={_format_float(self.b)})"
         )
+        if self.profile.language_bucket is not None:
+            sql += (
+                f" WHERE {BM25_LANGUAGE_COLUMN} = "
+                f"'{_sql_language_literal(self.profile.language_bucket)}'"
+            )
+        return sql
 
     def matches_indexdef(self, indexdef: str | None) -> bool:
         if not indexdef:
             return False
         normalized = re.sub(r"\s+", "", indexdef.lower().replace('"', "").replace("'", ""))
         text_config = self.profile.text_config.lower()
-        return (
+        matches = (
             "usingbm25(content)" in normalized
             and self.profile.index_name.lower() in normalized
             and (
@@ -190,15 +121,33 @@ class BM25IndexOptions:
             and f"k1={_format_float(self.k1)}" in normalized
             and f"b={_format_float(self.b)}" in normalized
         )
+        if not matches:
+            return False
+        if self.profile.language_bucket is None:
+            return "where" not in normalized
+        return (
+            "where" in normalized
+            and BM25_LANGUAGE_COLUMN.lower() in normalized
+            and self.profile.language_bucket.lower() in normalized
+        )
 
 
-def build_bm25_sql(*, index_name: str, candidate_ids: set[str] | None, limit: int) -> str:
+def build_bm25_sql(
+    *,
+    index_name: str,
+    candidate_ids: set[str] | None,
+    limit: int,
+    language: str | None = None,
+) -> str:
     """Build a pg_textsearch BM25 query with optional hard candidate filter."""
     safe_index = pg_identifier(index_name)
     limit_value = int(limit)
     if limit_value < 1:
         raise ValueError("BM25 limit must be positive")
     candidate_clause = "AND id = ANY($3::text[])" if candidate_ids is not None else ""
+    language_clause = (
+        f"AND {BM25_LANGUAGE_COLUMN} = '{_sql_language_literal(language)}'" if language else ""
+    )
     limit_placeholder = "$4" if candidate_ids is not None else "$3"
     return f"""
         SELECT id, content, file_path,
@@ -206,6 +155,7 @@ def build_bm25_sql(*, index_name: str, candidate_ids: set[str] | None, limit: in
         FROM {BM25_TABLE}
         WHERE workspace = $2
         {candidate_clause}
+        {language_clause}
         ORDER BY content <@> to_bm25query($1, '{safe_index}')
         LIMIT {limit_placeholder}
     """
@@ -226,6 +176,7 @@ class PostgresBM25:
         self._workspace = workspace
         self._top_k = top_k
         self._profiles = tuple(profiles or (BM25_PROFILE_FALLBACK,))
+        self._language_classifier = BM25LanguageClassifier(self._profile_languages)
         if not any(profile.fallback for profile in self._profiles):
             raise ValueError("At least one BM25 profile must be marked fallback")
 
@@ -247,6 +198,7 @@ class PostgresBM25:
         ]
 
         async def _operation(conn: Any) -> None:
+            await self._ensure_schema(conn)
             for options in options_by_profile:
                 await self._verify_text_config(conn, options.profile.text_config)
                 indexdef = await self._fetch_indexdef(conn, options.profile.index_name)
@@ -255,6 +207,9 @@ class PostgresBM25:
                 if indexdef:
                     await conn.execute(f"DROP INDEX IF EXISTS {options.profile.index_name}")
                 await conn.execute(options.create_index_sql())
+            await self._drop_stale_indexes(
+                conn, {option.profile.index_name for option in options_by_profile}
+            )
 
         await self._run(_operation)
 
@@ -270,6 +225,7 @@ class PostgresBM25:
         ]
 
         async def _operation(conn: Any) -> None:
+            await self._verify_schema(conn)
             for options in options_by_profile:
                 indexdef = await self._fetch_indexdef(conn, options.profile.index_name)
                 if not options.matches_indexdef(indexdef):
@@ -279,6 +235,34 @@ class PostgresBM25:
                     )
 
         await self._run(_operation)
+
+    @staticmethod
+    async def _ensure_schema(conn: Any) -> None:
+        await conn.execute(
+            f"ALTER TABLE {BM25_TABLE} ADD COLUMN IF NOT EXISTS "
+            f"{BM25_LANGUAGE_COLUMN} TEXT NOT NULL DEFAULT '{BM25_FALLBACK_LANGUAGE}'"
+        )
+        await conn.execute(
+            f"CREATE INDEX IF NOT EXISTS {BM25_LANGUAGE_INDEX} "
+            f"ON {BM25_TABLE}(workspace, {BM25_LANGUAGE_COLUMN})"
+        )
+
+    @staticmethod
+    async def _verify_schema(conn: Any) -> None:
+        exists = await conn.fetchval(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = 'lightrag_doc_chunks'
+              AND column_name = $1
+            LIMIT 1
+            """,
+            BM25_LANGUAGE_COLUMN,
+        )
+        if not exists:
+            raise RuntimeError(
+                f"{BM25_TABLE}.{BM25_LANGUAGE_COLUMN} is missing; initialize it on the primary first"
+            )
 
     @staticmethod
     async def _verify_text_config(conn: Any, text_config: str) -> None:
@@ -310,6 +294,24 @@ class PostgresBM25:
             index_name,
         )
 
+    @staticmethod
+    async def _drop_stale_indexes(conn: Any, desired_indexes: set[str]) -> None:
+        rows = await conn.fetch(
+            """
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = 'lightrag_doc_chunks'
+              AND indexname LIKE $1
+              AND indexname <> $2
+            """,
+            f"{BM25_INDEX_PREFIX}%",
+            BM25_LANGUAGE_INDEX,
+        )
+        for row in rows:
+            index_name = str(row["indexname"])
+            if index_name not in desired_indexes:
+                await conn.execute(f"DROP INDEX IF EXISTS {pg_identifier(index_name)}")
+
     async def search(
         self,
         query: str,
@@ -329,6 +331,7 @@ class PostgresBM25:
                     index_name=profile.index_name,
                     candidate_ids=candidate_ids,
                     limit=limit,
+                    language=profile.language_bucket,
                 )
                 if candidate_ids is None:
                     rows = await conn.fetch(sql, query, self._workspace, int(limit))
@@ -354,7 +357,7 @@ class PostgresBM25:
         )
         selected: list[BM25Profile] = []
         if language_profiles:
-            language = detect_query_language(query, supported_languages=self._profile_languages)
+            language = self._language_classifier.detect(query)
             for profile in language_profiles:
                 if language in profile.languages:
                     selected.append(profile)

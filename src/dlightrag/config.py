@@ -922,6 +922,11 @@ class DlightragConfig(BaseSettings):
         profile_names = [profile.name for profile in self.bm25_profiles]
         if len(profile_names) != len(set(profile_names)):
             raise ValueError("bm25_profiles names must be unique")
+        for profile in self.bm25_profiles:
+            if profile.fallback and profile.languages:
+                raise ValueError("BM25 fallback profiles must not declare languages")
+            if not profile.fallback and len(profile.languages) != 1:
+                raise ValueError("BM25 language profiles must declare exactly one language")
         if self.bm25_enabled and not any(profile.fallback for profile in self.bm25_profiles):
             raise ValueError("bm25_profiles must include at least one fallback profile")
 
