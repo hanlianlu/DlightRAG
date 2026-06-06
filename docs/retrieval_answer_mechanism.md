@@ -76,6 +76,14 @@ LightRAG's `hybrid` mode is not used as a public downgrade path. The
 DlightRAG hybrid layer is the combination of LightRAG `mix` retrieval,
 pg_textsearch BM25, direct image retrieval, and RRF fusion.
 
+BM25 runs against the same LightRAG `LIGHTRAG_DOC_CHUNKS` rows through the
+configured pg_textsearch profiles. Chinese queries use the `public.jiebacfg`
+profile from `pg_jieba` plus the `simple` fallback, English queries use the
+PostgreSQL `english` profile plus `simple`, and other languages use `simple`.
+`bm25_profiles`, `bm25_k1`, and `bm25_b` define the index signatures; changing
+them requires a primary-role startup so DlightRAG can rebuild profile indexes
+before query workers attach.
+
 ## Metadata In-Filtering
 
 Metadata filtering is explicit-schema first:

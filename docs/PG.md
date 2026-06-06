@@ -5,9 +5,10 @@ DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 - `pgvector` for vector search
 - Apache AGE for LightRAG graph storage
 - `pg_textsearch` for BM25
+- `pg_jieba` for the Chinese `public.jiebacfg` BM25 profile
 
-`pg_trgm` is intentionally not required. Metadata filtering is normalized
-exact/pattern matching over declared fields, not fuzzy matching.
+No fuzzy-search or separate Chinese-parser extension is required. Metadata
+filtering is normalized exact/pattern matching over declared fields.
 
 ## Required Version
 
@@ -16,7 +17,7 @@ embedding models or dimensions after data has been indexed; changing
 `embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
-local `postgres/` image definition and preloads `age,pg_textsearch`. The
+local `postgres/` image definition and preloads `age,pg_textsearch,pg_jieba`. The
 optional `replica` profile uses the same image and physical streaming
 replication, so vector, graph, and BM25 indexes replicate through WAL rather
 than application-level copy jobs.
@@ -182,11 +183,12 @@ and only read or verify schema.
 ### Replica Requirements
 
 - PostgreSQL extension versions must match on primary and replica:
-  `pgvector`, Apache AGE, and `pg_textsearch`.
+  `pgvector`, Apache AGE, `pg_textsearch`, and `pg_jieba`.
 - DDL and migrations run primary-only. Query workers never self-heal missing
   tables or indexes.
-- `pg_textsearch` BM25 index creation is primary-only; query role verifies
-  `idx_lightrag_doc_chunks_bm25` exists.
+- `pg_textsearch` BM25 profile index creation and rebuild are primary-only.
+  Query role verifies that every configured `bm25_profiles` index exists and
+  matches `bm25_k1` and `bm25_b`; it never attempts DDL on a replica.
 - Hot standby queries can conflict with WAL replay. Tune
   `max_standby_streaming_delay` and `hot_standby_feedback` deliberately.
 

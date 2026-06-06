@@ -75,9 +75,9 @@ services:
       - pg18_data:/var/lib/postgresql
     command:
       - "postgres"
-      # AGE and pg_textsearch require preloading
+      # AGE, pg_textsearch, and pg_jieba require preloading
       - "-c"
-      - "shared_preload_libraries=age,pg_textsearch"
+      - "shared_preload_libraries=age,pg_textsearch,pg_jieba"
       # Memory
       - "-c"
       - "shared_buffers=${DLIGHTRAG_POSTGRES_SHARED_BUFFERS:-8GB}"
@@ -151,7 +151,7 @@ services:
     command:
       - "postgres"
       - "-c"
-      - "shared_preload_libraries=age,pg_textsearch"
+      - "shared_preload_libraries=age,pg_textsearch,pg_jieba"
       - "-c"
       - "hot_standby=on"
       - "-c"

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import ssl
 from collections.abc import Iterable
 from pathlib import Path
@@ -28,6 +29,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
+_PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_PG_QUALIFIED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 PostgresTarget = Literal["primary", "replica"]
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
@@ -426,6 +429,38 @@ class VisualAssetsConfig(BaseModel):
     thumb_cache_size: int = 256
 
 
+class BM25ProfileConfig(BaseModel):
+    """Query-language-routed pg_textsearch BM25 profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    text_config: str
+    languages: list[str] = Field(default_factory=list)
+    fallback: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _validate_pg_identifier(cls, value: str) -> str:
+        text = value.strip()
+        if not _PG_IDENTIFIER_RE.fullmatch(text):
+            raise ValueError("BM25 profile name must be a safe PostgreSQL identifier")
+        return text
+
+    @field_validator("text_config")
+    @classmethod
+    def _validate_pg_text_config(cls, value: str) -> str:
+        text = value.strip()
+        if not _PG_QUALIFIED_IDENTIFIER_RE.fullmatch(text):
+            raise ValueError("BM25 text_config must be a safe PostgreSQL identifier")
+        return text
+
+    @field_validator("languages")
+    @classmethod
+    def _normalize_languages(cls, value: list[str]) -> list[str]:
+        return [language.strip().lower() for language in value if language.strip()]
+
+
 def _redact_dict(data: dict[str, Any], patterns: tuple[str, ...]) -> dict[str, Any]:
     """Recursively redact values whose keys match sensitive patterns."""
     result: dict[str, Any] = {}
@@ -713,7 +748,25 @@ class DlightragConfig(BaseSettings):
     chunk_top_k: int = Field(default=30)
     bm25_enabled: bool = Field(default=True)
     bm25_top_k: int = Field(default=40)
-    bm25_text_config: Literal["simple", "english", "auto"] = Field(default="simple")
+    bm25_profiles: list[BM25ProfileConfig] = Field(
+        default_factory=lambda: [
+            BM25ProfileConfig(name="zh", text_config="public.jiebacfg", languages=["zh"]),
+            BM25ProfileConfig(name="en", text_config="english", languages=["en"]),
+            BM25ProfileConfig(name="simple", text_config="simple", fallback=True),
+        ],
+        description="Query-language-routed pg_textsearch BM25 profiles.",
+    )
+    bm25_k1: float = Field(
+        default=1.2,
+        gt=0,
+        description="BM25 term-frequency saturation parameter passed to pg_textsearch.",
+    )
+    bm25_b: float = Field(
+        default=0.75,
+        ge=0,
+        le=1,
+        description="BM25 document-length normalization parameter passed to pg_textsearch.",
+    )
     rrf_k: int = Field(default=60)
     direct_visual_top_k: int = Field(default=20)
     metadata_filter_exact_vector_threshold: int = Field(
@@ -854,8 +907,22 @@ class DlightragConfig(BaseSettings):
     # ===== Validators =====
 
     @model_validator(mode="after")
-    def _validate_auth_mode(self):
-        """Validate explicit auth configuration."""
+    def _validate_config(self):
+        """Validate cross-field configuration."""
+        self._validate_bm25_profiles()
+        self._validate_auth_mode()
+        return self
+
+    def _validate_bm25_profiles(self) -> None:
+        """Validate BM25 profile routing configuration."""
+        profile_names = [profile.name for profile in self.bm25_profiles]
+        if len(profile_names) != len(set(profile_names)):
+            raise ValueError("bm25_profiles names must be unique")
+        if self.bm25_enabled and not any(profile.fallback for profile in self.bm25_profiles):
+            raise ValueError("bm25_profiles must include at least one fallback profile")
+
+    def _validate_auth_mode(self) -> None:
+        """Validate API/web authentication configuration."""
         if self.auth_mode == "none" and self.api_auth_token:
             raise ValueError("api_auth_token is set; configure auth_mode='simple' explicitly")
         if self.auth_mode == "simple" and not self.api_auth_token:
@@ -874,7 +941,6 @@ class DlightragConfig(BaseSettings):
                 "to explicit origins (e.g. ['https://your-frontend.example.com']).",
                 stacklevel=2,
             )
-        return self
 
     # ===== Computed Properties =====
 

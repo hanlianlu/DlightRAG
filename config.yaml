@@ -261,7 +261,18 @@ top_k: 60        # LightRAG KG entity/relationship breadth.
 chunk_top_k: 30  # Direct /retrieve chunk breadth; /answer uses answer.candidate_top_k.
 bm25_enabled: true
 bm25_top_k: 40
-bm25_text_config: simple
+bm25_profiles:
+  - name: zh
+    text_config: public.jiebacfg
+    languages: ["zh"]
+  - name: en
+    text_config: english
+    languages: ["en"]
+  - name: simple
+    text_config: simple
+    fallback: true
+bm25_k1: 1.2
+bm25_b: 0.75
 rrf_k: 60
 direct_visual_top_k: 20
 metadata_filter_exact_vector_threshold: 8192
