@@ -5,6 +5,7 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
 load_mineru_env_key MINERU_SERVICE_VENV
+load_mineru_env_key MINERU_VERSION
 load_mineru_env_key MINERU_INSTALL_EXTRAS
 
 default_mineru_install_extras() {
@@ -19,7 +20,12 @@ default_mineru_install_extras() {
 }
 
 venv="${MINERU_SERVICE_VENV:-.venv-mineru}"
+version="${MINERU_VERSION:-}"
 extras="${MINERU_INSTALL_EXTRAS:-$(default_mineru_install_extras)}"
+package="mineru[$extras]"
+if [[ -n "$version" ]]; then
+  package="$package==$version"
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv was not found on PATH; install uv before installing the MinerU service env." >&2
@@ -27,4 +33,4 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 uv venv "$venv"
-uv pip install --python "$venv/bin/python" -U "mineru[$extras]"
+uv pip install --python "$venv/bin/python" -U "$package"
