@@ -427,12 +427,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             manager = await _ensure_manager()
             from dlightrag.utils import normalize_workspace, validate_workspace_name
 
-            workspace = normalize_workspace(
-                validate_workspace_name(str(arguments.get("workspace") or ""))
-            )
+            label = validate_workspace_name(str(arguments.get("workspace") or ""))
+            workspace = normalize_workspace(label)
             dry_run = bool(arguments.get("dry_run", False))
             result = await manager.areset(
-                workspace=workspace,
+                workspace=label,
                 keep_files=bool(arguments.get("keep_files", False)),
                 dry_run=dry_run,
             )

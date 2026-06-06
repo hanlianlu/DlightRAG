@@ -658,7 +658,23 @@ class TestWebWorkspaceDelete:
         assert resp.status_code == 200
         assert "workspaceDeleted" in resp.headers["hx-trigger"]
         assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
-        mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
+        mock_manager.areset.assert_awaited_once_with(workspace="test-ws")
+
+    async def test_delete_legacy_hyphen_workspace_triggers_frontend_alias_removal(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+
+        resp = await client.post(
+            "/web/workspaces/delete",
+            data={"workspace_name": "test-fallback-ws", "confirm_name": "test-fallback-ws"},
+        )
+
+        assert resp.status_code == 200
+        assert '"workspace": "test-fallback-ws"' in resp.headers["hx-trigger"]
+        assert '"normalized_workspace": "test_fallback_ws"' in resp.headers["hx-trigger"]
+        mock_manager.areset.assert_awaited_once_with(workspace="test-fallback-ws")
 
     async def test_delete_workspace_confirm_mismatch(
         self, client: AsyncClient, test_config: DlightragConfig

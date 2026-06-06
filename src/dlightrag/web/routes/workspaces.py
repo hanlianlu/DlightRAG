@@ -122,7 +122,7 @@ async def delete_workspace(
     ws = normalize_workspace(name)
 
     try:
-        await manager.areset(workspace=ws)
+        await manager.areset(workspace=name)
     except Exception:
         logger.exception("Workspace deletion failed")
         return error_response(
@@ -136,7 +136,15 @@ async def delete_workspace(
     response = HTMLResponse(
         "",
         headers={
-            "HX-Trigger": json.dumps({"workspaceDeleted": {"workspace": ws, "fallback": fallback}})
+            "HX-Trigger": json.dumps(
+                {
+                    "workspaceDeleted": {
+                        "workspace": name,
+                        "normalized_workspace": ws,
+                        "fallback": fallback,
+                    }
+                }
+            )
         },
     )
     await _set_workspace_cookies(response, request, manager)
