@@ -887,10 +887,6 @@ class DlightragConfig(BaseSettings):
         return self.working_dir_path / ".tmp"
 
     @property
-    def artifacts_dir(self) -> Path:
-        return self.working_dir_path / "artifacts"
-
-    @property
     def input_dir_path(self) -> Path:
         return self.working_dir_path / "inputs"
 

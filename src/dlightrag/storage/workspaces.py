@@ -12,6 +12,7 @@ from typing import Any
 
 from dlightrag.config import PostgresTarget
 from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.utils import normalize_workspace
 
 TABLE = "dlightrag_workspace_meta"
 
@@ -51,6 +52,12 @@ ORDER BY workspace
 _DELETE = f"DELETE FROM {TABLE} WHERE workspace = $1"
 
 _EXISTS = f"SELECT 1 FROM {TABLE} WHERE workspace = $1 LIMIT 1"
+
+_CANONICALIZATION_ROWS = f"""
+SELECT workspace, display_name, embedding_model
+FROM {TABLE}
+ORDER BY workspace
+"""
 
 _SCHEMA_MIGRATIONS = (
     Migration(
@@ -103,6 +110,7 @@ class PGWorkspaceRegistry:
                 scope="workspace_registry",
                 migrations=_SCHEMA_MIGRATIONS,
             )
+            await _canonicalize_workspace_rows(conn)
 
         await self._run(_operation)
 
@@ -114,10 +122,11 @@ class PGWorkspaceRegistry:
         embedding_model: str,
     ) -> None:
         """Insert or update one workspace registry row."""
-        label = (display_name or workspace).strip() or workspace
+        workspace_id = _workspace_id(workspace)
+        label = (display_name or workspace).strip() or workspace_id
 
         async def _operation(conn: Any) -> None:
-            await conn.execute(_UPSERT, workspace, label, embedding_model)
+            await conn.execute(_UPSERT, workspace_id, label, embedding_model)
 
         await self._run(_operation)
 
@@ -136,20 +145,49 @@ class PGWorkspaceRegistry:
 
     async def exists(self, workspace: str) -> bool:
         """Return True when a registry row exists."""
+        workspace_id = _workspace_id(workspace)
 
         async def _operation(conn: Any) -> Any:
-            return await conn.fetchrow(_EXISTS, workspace)
+            return await conn.fetchrow(_EXISTS, workspace_id)
 
         row = await self._run(_operation)
         return row is not None
 
     async def delete(self, workspace: str) -> None:
         """Delete one workspace registry row."""
+        workspace_id = _workspace_id(workspace)
 
         async def _operation(conn: Any) -> None:
-            await conn.execute(_DELETE, workspace)
+            await conn.execute(_DELETE, workspace_id)
 
         await self._run(_operation)
+
+
+async def _canonicalize_workspace_rows(conn: Any) -> None:
+    rows = await conn.fetch(_CANONICALIZATION_ROWS)
+    records = [dict(row) for row in rows]
+    existing = {str(row.get("workspace") or "") for row in records}
+    for row in records:
+        raw_workspace = str(row.get("workspace") or "")
+        workspace_id = normalize_workspace(raw_workspace)
+        if not workspace_id or workspace_id == raw_workspace:
+            continue
+        if workspace_id not in existing:
+            await conn.execute(
+                _UPSERT,
+                workspace_id,
+                str(row.get("display_name") or raw_workspace),
+                str(row.get("embedding_model") or ""),
+            )
+            existing.add(workspace_id)
+        await conn.execute(_DELETE, raw_workspace)
+
+
+def _workspace_id(workspace: str) -> str:
+    workspace_id = normalize_workspace(workspace)
+    if not workspace_id:
+        raise ValueError("workspace cannot be empty")
+    return workspace_id
 
 
 __all__ = ["PGWorkspaceRegistry"]

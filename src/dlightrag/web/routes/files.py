@@ -30,13 +30,57 @@ router = APIRouter()
 _workspace_upload_tasks: dict[str, asyncio.Task[Any] | None] = {}
 
 
-def _resolve_workspace(requested: str | None, fallback: str) -> str:
+def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:
     from dlightrag.utils import normalize_workspace
 
     if not requested:
-        return fallback
+        return cookie_workspace
     normalized = normalize_workspace(requested)
-    return normalized or fallback
+    return normalized or cookie_workspace
+
+
+async def _resolve_registered_workspace(
+    request: Request,
+    workspace: str,
+) -> str | None:
+    """Return the requested workspace when it is registered."""
+    from dlightrag.utils import normalize_workspace
+
+    manager = get_manager(request)
+    try:
+        known = {
+            normalized
+            for item in await manager.list_workspaces()
+            if (normalized := normalize_workspace(item))
+        }
+    except Exception:
+        return workspace
+    if workspace in known:
+        return workspace
+    return None
+
+
+async def _workspace_is_registered(request: Request, workspace: str) -> bool:
+    """Return whether a workspace is registered; fail open on registry outages."""
+    from dlightrag.utils import normalize_workspace
+
+    manager = get_manager(request)
+    try:
+        known = {
+            normalized
+            for item in await manager.list_workspaces()
+            if (normalized := normalize_workspace(item))
+        }
+    except Exception:
+        return True
+    return workspace in known
+
+
+def _stale_workspace_response() -> HTMLResponse:
+    return error_response(
+        "Workspace no longer exists. Refresh and choose an existing workspace.",
+        status_code=409,
+    )
 
 
 def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -113,6 +157,9 @@ async def file_list(
 ):
     """Return file list HTML fragment for panel."""
     selected_workspace = _resolve_workspace(workspace_name, workspace)
+    selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
+    if selected_workspace is None:
+        return _stale_workspace_response()
     return await _file_list_response(request, selected_workspace)
 
 
@@ -124,7 +171,7 @@ async def _file_list_response(request: Request, workspace: str):
         files = []
 
     # Check whether an ingest is currently active so reopening the panel
-    # shows the progress bar again instead of stale state.
+    # shows the progress bar again instead of the previous panel state.
     # Always query pipeline_status — the in-memory task dict may
     # be empty after a server restart or task-tracker race, but LightRAG's
     # shared-storage pipeline_status is the authoritative source.
@@ -178,6 +225,8 @@ async def upload_files(
 
     manager = get_manager(request)
     selected_workspace = _resolve_workspace(workspace_name, workspace)
+    if not await _workspace_is_registered(request, selected_workspace):
+        return _stale_workspace_response()
 
     # Reject if an ingest is already running in this workspace.
     existing = _workspace_upload_tasks.get(selected_workspace)
@@ -286,6 +335,9 @@ async def ingest_status(
 ):
     """Return either a progress partial (while busy) or the file list (done)."""
     selected_workspace = _resolve_workspace(workspace_name, workspace)
+    selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
+    if selected_workspace is None:
+        return _stale_workspace_response()
     manager = get_manager(request)
 
     # The in-memory task only tracks this server process. LightRAG's shared
@@ -331,6 +383,8 @@ async def delete_files(
     file_paths = [file_path] if file_path else []
     manager = get_manager(request)
     selected_workspace = _resolve_workspace(request.query_params.get("workspace"), workspace)
+    if not await _workspace_is_registered(request, selected_workspace):
+        return _stale_workspace_response()
 
     try:
         await manager.delete_files(selected_workspace, file_paths=file_paths)

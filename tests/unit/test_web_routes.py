@@ -29,7 +29,7 @@ def mock_manager():
     manager.is_ready.return_value = True
     manager.is_degraded.return_value = False
     manager.get_warnings.return_value = []
-    manager.list_workspaces = AsyncMock(return_value=["default", "test-ws"])
+    manager.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
     manager.list_workspace_records = AsyncMock(
         return_value=[
             {
@@ -514,6 +514,64 @@ class TestWebFiles:
         assert ">q4.pdf</span>" in resp.text
         assert 'title="/tmp/reports/q4.pdf"' in resp.text
 
+    async def test_file_list_rejects_stale_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+
+        resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
+
+        assert resp.status_code == 409
+        assert "Workspace no longer exists" in resp.text
+        mock_manager.list_ingested_files.assert_not_awaited()
+        mock_manager.get_pipeline_status.assert_not_awaited()
+
+    async def test_file_list_rejects_stale_workspace_even_with_registered_cookie(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default", "test_ws"])
+        client.cookies.set("dlightrag_workspace", "test_ws")
+
+        resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
+
+        assert resp.status_code == 409
+        assert "Workspace no longer exists" in resp.text
+        mock_manager.list_ingested_files.assert_not_awaited()
+        mock_manager.get_pipeline_status.assert_not_awaited()
+
+    async def test_file_list_canonicalizes_requested_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default", "test_fallback_ws"])
+
+        resp = await client.get("/web/files", params={"workspace": "test-fallback-ws"})
+
+        assert resp.status_code == 200
+        mock_manager.list_ingested_files.assert_awaited_once_with("test_fallback_ws")
+        mock_manager.get_pipeline_status.assert_awaited_once_with("test_fallback_ws")
+
+    async def test_file_list_rejects_stale_workspace_without_default(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["other_ws"])
+
+        resp = await client.get("/web/files", params={"workspace": "deleted_ws"})
+
+        assert resp.status_code == 409
+        assert "Workspace no longer exists" in resp.text
+        mock_manager.list_ingested_files.assert_not_awaited()
+
+    async def test_ingest_status_rejects_stale_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+
+        resp = await client.get("/web/ingest-status", params={"workspace": "deleted_ws"})
+
+        assert resp.status_code == 409
+        assert "Workspace no longer exists" in resp.text
+        mock_manager.get_pipeline_status.assert_not_awaited()
+
     async def test_upload_preserves_filename_for_directory_ingest(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
@@ -537,6 +595,22 @@ class TestWebFiles:
         await asyncio.sleep(0.05)
         mock_manager.aingest.assert_awaited_once()
 
+    async def test_upload_rejects_stale_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.aingest = AsyncMock()
+
+        resp = await client.post(
+            "/web/files/upload",
+            data={"workspace": "deleted_ws"},
+            files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))],
+        )
+
+        assert resp.status_code == 409
+        assert "Workspace no longer exists" in resp.text
+        mock_manager.aingest.assert_not_awaited()
+
     def test_safe_relative_path_rejects_absolute_paths(self) -> None:
         from dlightrag.web.routes.files import _safe_relative_path
 
@@ -553,6 +627,21 @@ class TestWebFiles:
         )
         assert resp.status_code == 200
         mock_manager.delete_files.assert_awaited_once()
+
+    async def test_delete_files_rejects_stale_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+
+        resp = await client.request(
+            "DELETE",
+            "/web/files",
+            params={"workspace": "deleted_ws", "file_path": "/tmp/test.pdf"},
+        )
+
+        assert resp.status_code == 409
+        assert "Workspace no longer exists" in resp.text
+        mock_manager.delete_files.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -661,9 +750,9 @@ class TestWebWorkspaceDelete:
         assert resp.status_code == 200
         assert "workspaceDeleted" in resp.headers["hx-trigger"]
         assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
-        mock_manager.areset.assert_awaited_once_with(workspace="test-ws")
+        mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
 
-    async def test_delete_legacy_hyphen_workspace_triggers_frontend_alias_removal(
+    async def test_delete_hyphen_workspace_emits_canonical_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
         mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
@@ -675,9 +764,12 @@ class TestWebWorkspaceDelete:
         )
 
         assert resp.status_code == 200
-        assert '"workspace": "test-fallback-ws"' in resp.headers["hx-trigger"]
-        assert '"normalized_workspace": "test_fallback_ws"' in resp.headers["hx-trigger"]
-        mock_manager.areset.assert_awaited_once_with(workspace="test-fallback-ws")
+        trigger = json.loads(resp.headers["hx-trigger"])
+        assert trigger["workspaceDeleted"] == {
+            "workspace": "test_fallback_ws",
+            "next_workspace": "default",
+        }
+        mock_manager.areset.assert_awaited_once_with(workspace="test_fallback_ws")
 
     async def test_delete_workspace_confirm_mismatch(
         self, client: AsyncClient, test_config: DlightragConfig

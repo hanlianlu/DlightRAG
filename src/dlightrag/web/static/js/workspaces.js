@@ -22,7 +22,8 @@ function normalizeRecord(record) {
     if (typeof record === 'string') {
         return {workspace: record, display_name: record, embedding_model: ''};
     }
-    const workspace = record.workspace || record.id || 'default';
+    const workspace = record.workspace || record.id;
+    if (!workspace) return null;
     return {
         workspace,
         display_name: record.display_name || workspace,
@@ -36,8 +37,12 @@ function workspaceName(workspace) {
 }
 
 function saveWorkspaceCookies() {
-    const primary = activeWorkspaces.length > 0 ? activeWorkspaces[0] : 'default';
-    document.cookie = `${PRIMARY_COOKIE}=${encodeURIComponent(primary)};path=/;SameSite=Lax`;
+    if (activeWorkspaces.length === 0) {
+        document.cookie = `${PRIMARY_COOKIE}=;path=/;SameSite=Lax;Max-Age=0`;
+        document.cookie = `${ACTIVE_COOKIE}=;path=/;SameSite=Lax;Max-Age=0`;
+        return;
+    }
+    document.cookie = `${PRIMARY_COOKIE}=${encodeURIComponent(activeWorkspaces[0])};path=/;SameSite=Lax`;
     document.cookie = `${ACTIVE_COOKIE}=${encodeURIComponent(activeWorkspaces.join(','))};path=/;SameSite=Lax`;
 }
 
@@ -46,7 +51,9 @@ export function initWorkspaces() {
     if (!selector) return;
 
     try {
-        workspaceRecords = JSON.parse(selector.getAttribute('data-all') || '[]').map(normalizeRecord);
+        workspaceRecords = JSON.parse(selector.getAttribute('data-all') || '[]')
+            .map(normalizeRecord)
+            .filter(Boolean);
     } catch (_) {
         workspaceRecords = [];
     }
@@ -57,11 +64,6 @@ export function initWorkspaces() {
     } catch (_) {
         active = [];
     }
-
-    if (workspaceRecords.length === 0) {
-        workspaceRecords = [{workspace: 'default', display_name: 'default', embedding_model: ''}];
-    }
-    if (active.length === 0) active = [workspaceRecords[0].workspace];
 
     setActiveWorkspaces(active);
     renderWorkspaceSelector();
@@ -82,22 +84,21 @@ export function toggleWorkspace(workspace) {
 }
 
 export function selectWorkspace(workspace) {
-    setActiveWorkspaces([workspace || 'default']);
+    if (!workspace) return;
+    setActiveWorkspaces([workspace]);
     renderWorkspaceSelector();
     saveWorkspaceCookies();
 }
 
-export function removeWorkspace(workspace, fallback) {
+export function removeWorkspace(workspace, nextWorkspace) {
     workspaceRecords = workspaceRecords.filter((item) => item.workspace !== workspace);
     const remaining = activeWorkspaces.filter((active) => active !== workspace);
     if (remaining.length > 0) {
         setActiveWorkspaces(remaining);
-    } else if (fallback) {
-        setActiveWorkspaces([fallback]);
-    } else if (workspaceRecords.length > 0) {
-        setActiveWorkspaces([workspaceRecords[0].workspace]);
+    } else if (nextWorkspace) {
+        setActiveWorkspaces([nextWorkspace]);
     } else {
-        setActiveWorkspaces(['default']);
+        setActiveWorkspaces([]);
     }
     renderWorkspaceSelector();
     saveWorkspaceCookies();
@@ -363,7 +364,7 @@ function setupWorkspaceEvents() {
         const detail = payload(event);
         const workspace = detail.workspace;
         if (!workspace) return;
-        removeWorkspace(workspace, detail.fallback);
+        removeWorkspace(workspace, detail.next_workspace);
         syncDataAllAttribute();
         const dialog = document.getElementById('delete-workspace-dialog');
         if (dialog && dialog.open) dialog.close();

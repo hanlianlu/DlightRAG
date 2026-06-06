@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Unified path resolution for retrieval source/media URLs.
+"""URL projection for retrieval source/media paths.
 
 Normalizes raw storage paths (local, azure://, s3://) into
 /api/files/{path} URLs. The file-serving endpoint handles dispatch:
@@ -8,10 +8,10 @@ local → stream, azure → 302 redirect to SAS URL.
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 
-class PathResolver:
+class SourceUrlResolver:
     """Normalize raw storage paths into unified /api/files/ URLs.
 
     All paths — local, azure://, s3:// — are mapped to the
@@ -23,14 +23,14 @@ class PathResolver:
 
     Args:
         input_dir: Input file storage directory. Paths under this
-            directory are resolved relative to it. Takes priority over
+            directory are resolved relative to it.
         workspace: Optional workspace name scoping. When set, resolution
             strips ``input_dir/<workspace>/`` prefix from matching paths.
         base_url: URL prefix for the file-serving endpoint
             (default: "/api/files").
 
     Usage:
-        resolver = PathResolver(input_dir="/data/rag_storage/inputs")
+        resolver = SourceUrlResolver(input_dir="/data/rag_storage/inputs")
 
         # Local file with workspace in path:
         resolver.resolve("/data/rag_storage/inputs/ws-a/files/f.pdf")
@@ -44,49 +44,54 @@ class PathResolver:
         # whether to stream locally or 302 redirect to a signed URL.
     """
 
-    _FALLBACK_MARKERS = ("artifacts/",)
-
     def __init__(
         self,
         input_dir: str | None = None,
         workspace: str | None = None,
         base_url: str = "/api/files",
     ) -> None:
-        self._input_dir = str(Path(input_dir).resolve()) if input_dir else None
+        self._input_dir = Path(input_dir).resolve() if input_dir else None
         self._workspace = workspace
         self._base_url = base_url.rstrip("/")
 
-    def resolve(self, raw_path: str) -> str:
-        """Convert a raw storage path to a /api/files/ URL."""
-        # Remote schemes (azure://, s3://) — wrap as-is
-        if "://" in raw_path:
+    def resolve(self, raw_path: str) -> str | None:
+        """Convert a servable stored path to a /api/files/ URL."""
+        if raw_path.startswith(("azure://", "s3://")):
             return f"{self._base_url}/{raw_path}"
+        if "://" in raw_path:
+            return None
 
-        # Local path — extract relative, wrap
         relative = self.resolve_relative(raw_path)
-        if relative:
-            return f"{self._base_url}/{relative}"
-        return f"{self._base_url}/{raw_path}"
+        return f"{self._base_url}/{relative}" if relative else None
 
     def resolve_relative(self, raw_path: str) -> str | None:
-        """Extract input_dir-relative or artifact-relative path.
+        """Extract an endpoint-relative source path.
 
-        Tries ``input_dir`` first, then falls back to known artifact
-        directory markers.
-
-        E.g. "/data/rag_storage/inputs/ws-a/doc.pdf" with
+        Example: "/data/rag_storage/inputs/ws-a/doc.pdf" with
         input_dir="/data/rag_storage/inputs" → "ws-a/doc.pdf"
         """
-        # Try input_dir first.
-        if self._input_dir:
-            idx = raw_path.find(self._input_dir)
-            if idx != -1:
-                return raw_path[idx + len(self._input_dir) :].lstrip("/")
+        if self._input_dir and raw_path.startswith("/"):
+            try:
+                relative = Path(raw_path).resolve().relative_to(self._input_dir)
+            except ValueError:
+                pass
+            else:
+                return relative.as_posix()
 
-        for marker in self._FALLBACK_MARKERS:
-            idx = raw_path.find(marker)
-            if idx != -1:
-                return raw_path[idx:]
+        if raw_path.startswith("/"):
+            return None
+
+        windows_path = PureWindowsPath(raw_path)
+        if windows_path.is_absolute() or windows_path.drive:
+            return None
+
+        if "\\" in raw_path:
+            parts = windows_path.parts
+            if ".." in parts:
+                return None
+            if self._workspace and len(parts) == 1:
+                return f"{self._workspace}/{parts[0]}"
+            return Path(*parts).as_posix()
 
         # Bare filename (no directory separators) — LightRAG canonicalizes
         # file_path to just the basename.  Prepend workspace so the
@@ -94,7 +99,10 @@ class PathResolver:
         if self._workspace and "/" not in raw_path and "\\" not in raw_path:
             return f"{self._workspace}/{raw_path}"
 
-        return None
+        relative = Path(raw_path)
+        if ".." in relative.parts or relative.is_absolute():
+            return None
+        return relative.as_posix()
 
 
-__all__ = ["PathResolver"]
+__all__ = ["SourceUrlResolver"]

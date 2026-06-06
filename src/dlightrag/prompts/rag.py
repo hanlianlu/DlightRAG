@@ -10,9 +10,6 @@ from .guidance import (
     RERANK_GUIDANCE,
     VISUAL_RERANK_PROMPT_TEMPLATE,
 )
-from .guidance import (
-    HIGHLIGHT_USER_PROMPT as HIGHLIGHT_USER_PROMPT,
-)
 from .identity import CORE_IDENTITY
 
 # --- Answer Generation ---

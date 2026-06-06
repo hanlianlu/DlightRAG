@@ -41,11 +41,11 @@ class TestMakeCompletionFunc:
         func = _make_completion_func(cfg)
         assert callable(func)
 
-    def test_fallback_api_key(self):
+    def test_default_api_key(self):
         from dlightrag.models.llm import _make_completion_func
 
         cfg = ModelConfig(provider="openai", model="gpt-4.1-mini")  # no api_key
-        func = _make_completion_func(cfg, fallback_api_key="sk-fallback")
+        func = _make_completion_func(cfg, default_api_key="sk-default")
         assert callable(func)
 
     def test_query_model_func_is_queue_managed_by_default(self):
@@ -193,7 +193,7 @@ class TestMakeCompletionFunc:
 
 
 class TestModelFactoryExports:
-    def test_legacy_chat_model_factory_is_not_exported(self):
+    def test_removed_chat_model_factory_is_not_exported(self):
         import dlightrag.models as models
         from dlightrag.models import llm
 
@@ -225,7 +225,7 @@ class TestGetDefaultModelFunc:
 
 
 class TestGetExtractModelFunc:
-    def test_fallback_to_default_llm(self):
+    def test_uses_default_llm_when_extract_role_is_unset(self):
         from dlightrag.models.llm import get_extract_model_func
 
         config = DlightragConfig(
@@ -266,7 +266,7 @@ class TestGetKeywordModelFunc:
 
         seen_models: list[str] = []
 
-        def fake_make_completion_func(cfg, fallback_api_key=None):
+        def fake_make_completion_func(cfg, default_api_key=None):
             seen_models.append(cfg.model)
             return f"completion:{cfg.model}"
 
@@ -288,13 +288,13 @@ class TestGetKeywordModelFunc:
 
 
 class TestGetRerankFunc:
-    def test_chat_llm_reranker_uses_default_fallback_without_override(self, monkeypatch):
+    def test_chat_llm_reranker_uses_default_llm_without_override(self, monkeypatch):
         from dlightrag.models import llm
 
         seen_models: list[str] = []
         seen_ingest_func = None
 
-        def fake_make_completion_func(cfg, fallback_api_key=None):
+        def fake_make_completion_func(cfg, default_api_key=None):
             seen_models.append(cfg.model)
             return f"completion:{cfg.model}"
 

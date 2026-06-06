@@ -50,9 +50,9 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
     return wrapper
 
 
-def _make_completion_func(cfg: ModelConfig, fallback_api_key: str | None = None) -> partial:
+def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) -> partial:
     """Build a messages-first completion callable from config."""
-    api_key = cfg.api_key or fallback_api_key
+    api_key = cfg.api_key or default_api_key
     provider = get_provider(
         cfg.provider,
         api_key=api_key,
@@ -148,29 +148,28 @@ def get_default_model_func(config: DlightragConfig) -> Callable:
 
 
 def get_extract_model_func(config: DlightragConfig) -> Callable:
-    """Messages-first extract callable, fallback to the default LLM."""
+    """Messages-first extract callable using role config or default LLM."""
     return _make_completion_func(
         model_for_role(config, "extract"),
-        fallback_api_key=config.llm.default.api_key,
+        default_api_key=config.llm.default.api_key,
     )
 
 
 def get_keyword_model_func(config: DlightragConfig) -> Callable:
-    """Messages-first keyword callable, fallback to the default LLM."""
+    """Messages-first keyword callable using role config or default LLM."""
     return _make_completion_func(
         model_for_role(config, "keyword"),
-        fallback_api_key=config.llm.default.api_key,
+        default_api_key=config.llm.default.api_key,
     )
 
 
 def get_query_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
     """Messages-first query callable for AnswerEngine and QueryPlanner.
 
-    Uses ``config.llm.roles.query`` if set, otherwise falls back to
-    ``config.llm.default``.
+    Uses ``config.llm.roles.query`` if set, otherwise ``config.llm.default``.
     """
     cfg = model_for_role(config, "query")
-    func = _make_completion_func(cfg, fallback_api_key=config.llm.default.api_key)
+    func = _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
     if not bounded:
         return func
     return _queue_managed_completion_func(
@@ -184,11 +183,10 @@ def get_query_model_func(config: DlightragConfig, *, bounded: bool = True) -> Ca
 def get_vlm_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
     """Messages-first VLM callable for vlm_parser, multimodal_query, and unified extractor.
 
-    Uses ``config.llm.roles.vlm`` if set, otherwise falls back to
-    ``config.llm.default``.
+    Uses ``config.llm.roles.vlm`` if set, otherwise ``config.llm.default``.
     """
     cfg = model_for_role(config, "vlm")
-    func = _make_completion_func(cfg, fallback_api_key=config.llm.default.api_key)
+    func = _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
     if not bounded:
         return func
     return _queue_managed_completion_func(
@@ -224,7 +222,7 @@ def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
         role_cfg: ModelConfig | None = getattr(config.llm.roles, role)
         if role_cfg is None:
             continue
-        completion = _make_completion_func(role_cfg, fallback_api_key=config.llm.default.api_key)
+        completion = _make_completion_func(role_cfg, default_api_key=config.llm.default.api_key)
         overrides[role] = RoleLLMConfig(
             func=_adapt_for_lightrag(completion),
             timeout=int(role_cfg.timeout),
@@ -309,10 +307,10 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
                     temperature=rc.temperature or 0.0,
                     model_kwargs=rc.model_kwargs,
                 ),
-                fallback_api_key=config.llm.default.api_key,
+                default_api_key=config.llm.default.api_key,
             )
         else:
-            # Fall back to the default LLM. Do not implicitly consume the vlm role here:
+            # Use the default LLM. Do not implicitly consume the vlm role here:
             # reranker-specific model choices belong under rerank.*.
             scoring_func = get_default_model_func(config)
         return build_rerank_func(rc, ingest_func=scoring_func)

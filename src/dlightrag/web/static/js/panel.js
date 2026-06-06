@@ -2,7 +2,7 @@
 
 import {openLightbox} from './images.js';
 import {renderMath} from './chat_renderer.js';
-import {getIngestWorkspace, setIngestWorkspace, resetIngestWorkspace} from './state.js';
+import {getIngestWorkspace, getPrimaryWorkspace, setIngestWorkspace, resetIngestWorkspace} from './state.js';
 import {showToast} from './toast.js';
 import {createWorkspace} from './workspaces.js';
 
@@ -75,11 +75,13 @@ function getIngestWorkspaceRecords() {
             if (typeof record === 'string') {
                 return {workspace: record, display_name: record};
             }
+            const workspace = record.workspace || record.id;
+            if (!workspace) return null;
             return {
-                workspace: record.workspace || record.id || 'default',
-                display_name: record.display_name || record.workspace || record.id || 'default',
+                workspace: workspace,
+                display_name: record.display_name || workspace,
             };
-        });
+        }).filter(Boolean);
     } catch (_) {
         return [];
     }
@@ -427,5 +429,12 @@ export function setupPanel() {
             swap: 'innerHTML',
             values: {workspace: workspace},
         });
+    });
+
+    document.body.addEventListener('workspaceDeleted', (event) => {
+        const detail = event.detail && (event.detail.value || event.detail);
+        if (!detail) return;
+        setIngestWorkspace(detail.next_workspace || getPrimaryWorkspace());
+        updateIngestPillLabel();
     });
 }

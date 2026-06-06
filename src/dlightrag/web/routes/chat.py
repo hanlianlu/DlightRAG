@@ -40,12 +40,8 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     primary = normalize_workspace(request.cookies.get("dlightrag_workspace", workspace))
     if not active and primary in known:
         active = [primary]
-    if not active:
-        active = [
-            workspace
-            if workspace in known
-            else (workspaces[0]["workspace"] if workspaces else "default")
-        ]
+    if not active and "default" in known:
+        active = ["default"]
 
     return templates.TemplateResponse(
         request,

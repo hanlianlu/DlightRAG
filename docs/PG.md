@@ -90,11 +90,11 @@ their versions in the ledger. Query read-only runtimes only verify that the
 required migration versions already exist, so run an ingest/admin process
 against the primary before starting replica-only query workers after an upgrade.
 
-## LightRAG AGE Compatibility Patches
+## LightRAG AGE Contract Patches
 
 DlightRAG keeps two narrowly scoped patches around LightRAG PostgreSQL AGE
-graph initialization. They are not general backward-compatibility shims: they
-exist because LightRAG 1.5.0 still lacks the guards below.
+graph initialization. They exist because LightRAG 1.5.0 still lacks the guards
+below.
 They self-disable through source inspection if upstream adds equivalent
 handling, and should be deleted once `required_patch_names(PostgreSQLDB)`
 returns an empty tuple.
@@ -199,7 +199,7 @@ make postgres-replica-smoke
 make postgres-replica-reset
 ```
 
-## Version Compatibility Log
+## Version Support Log
 
 | Date | LightRAG Baseline | Patches Needed | Notes |
 |---|---|---|---|

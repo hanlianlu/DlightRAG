@@ -12,16 +12,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shutil
 import sys
-import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal
 
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.core.ingestion.paths import (
+    iter_ingestable_files,
+    remote_namespace_root,
+    remote_object_path,
+    stage_input_file,
+    staged_input_path,
+    workspace_input_root,
+)
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.storage.protocols import MetadataIndexProtocol
+from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +81,7 @@ def _ensure_venv_in_path() -> None:
 
 _ensure_venv_in_path()
 
-from dlightrag.core.compat_guard import LightRAGCompatGuard  # noqa: E402
+from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
 from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
 from dlightrag.core.retrieval.protocols import RetrievalResult  # noqa: E402
 from dlightrag.models.llm import (  # noqa: E402
@@ -140,9 +147,7 @@ class RAGService:
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
 
-        # Direct LightRAG + DlightRAG multimodal wrappers.
-        self.ingestion: Any = None
-        self.retrieval: Any = None
+        # Direct LightRAG runtime and DlightRAG orchestration.
         self._lightrag: Any = None  # Direct LightRAG reference
         self._metadata_index: MetadataIndexProtocol | None = None
         self._table_schema: dict[str, Any] | None = None  # Cached metadata table schema
@@ -161,11 +166,6 @@ class RAGService:
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by the unified LightRAG initialization path.
         self._backend: Any = None
-
-    @property
-    def _effective_backend(self) -> Any:
-        """Return the active retrieval backend, with lazy fallback."""
-        return self._backend or self.retrieval
 
     @property
     def lightrag(self) -> Any:
@@ -372,7 +372,7 @@ class RAGService:
 
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
-            await LightRAGCompatGuard(lightrag).verify_all()
+            await LightRAGContractGuard(lightrag).verify_all()
 
             from dlightrag.core.retrieval.filtered_vdb import FilteredVectorStorage
 
@@ -394,7 +394,6 @@ class RAGService:
             embedder=multimodal_embedder,
             rerank_func=rerank_func,
         )
-        self.retrieval = self._backend
 
         # Initialize metadata index
         self._metadata_index = await self._create_metadata_index(config, read_only=read_only)
@@ -763,8 +762,8 @@ class RAGService:
         registry = PGWorkspaceRegistry(target="primary")
         await registry.initialize()
         await registry.upsert(
-            workspace=self.config.workspace,
-            display_name=display_name,
+            workspace=normalize_workspace(self.config.workspace),
+            display_name=display_name or self.config.workspace,
             embedding_model=self.config.embedding.model,
         )
 
@@ -841,11 +840,19 @@ class RAGService:
 
         if replace:
             await self._purge_existing_for_replace(
-                file_path=self._staged_input_path(file_path, relative_to=source_root),
+                file_path=staged_input_path(
+                    input_root=self._workspace_input_root(),
+                    file_path=file_path,
+                    relative_to=source_root,
+                ),
                 stored_file_path=stored_file_path,
             )
 
-        file_path = self._stage_lightrag_input_file(file_path, relative_to=source_root)
+        file_path = stage_input_file(
+            input_root=self._workspace_input_root(),
+            file_path=file_path,
+            relative_to=source_root,
+        )
         result = await self._ingestion_engine.aingest_file(
             file_path,
             replace=replace,
@@ -879,11 +886,19 @@ class RAGService:
         if replace:
             for file_path in file_paths:
                 await self._purge_existing_for_replace(
-                    file_path=self._staged_input_path(file_path, relative_to=source_root)
+                    file_path=staged_input_path(
+                        input_root=self._workspace_input_root(),
+                        file_path=file_path,
+                        relative_to=source_root,
+                    )
                 )
 
         staged_paths = [
-            self._stage_lightrag_input_file(file_path, relative_to=source_root)
+            stage_input_file(
+                input_root=self._workspace_input_root(),
+                file_path=file_path,
+                relative_to=source_root,
+            )
             for file_path in file_paths
         ]
         result = await self._ingestion_engine.aingest_files(
@@ -899,78 +914,8 @@ class RAGService:
 
         return result
 
-    def _local_ingest_paths(self, path: Path) -> list[Path]:
-        """Resolve a local file or directory into concrete files for ingestion.
-
-        Skips ``__parsed__`` sidecar directories and hidden files so that
-        MinerU artifacts and editor temp files are never treated as ingest
-        candidates.
-        """
-        if path.is_file():
-            return [path]
-        if not path.exists():
-            raise FileNotFoundError(f"Local ingest path does not exist: {path}")
-        if not path.is_dir():
-            raise ValueError(f"Local ingest path is not a file or directory: {path}")
-
-        files: list[Path] = []
-        for item in sorted(
-            (p for p in path.rglob("*") if p.is_file()),
-            key=lambda p: p.relative_to(path).as_posix(),
-        ):
-            parent_names = {p.name for p in item.parents}
-            if "__parsed__" in parent_names or "__uploads__" in parent_names:
-                continue
-            if item.name.startswith("."):
-                continue
-            files.append(item)
-        if not files:
-            raise ValueError(f"Local ingest directory contains no files: {path}")
-        return files
-
     def _workspace_input_root(self) -> Path:
-        return self.config.input_dir_path / self.config.workspace
-
-    def _staged_input_path(self, file_path: Path, *, relative_to: Path | None = None) -> Path:
-        if relative_to is None:
-            relative_path = Path(file_path.name)
-        else:
-            try:
-                relative_path = file_path.resolve().relative_to(relative_to.resolve())
-            except ValueError:
-                relative_path = Path(file_path.name)
-            if not relative_path.parts:
-                relative_path = Path(file_path.name)
-        return self._workspace_input_root() / relative_path
-
-    def _stage_lightrag_input_file(
-        self,
-        file_path: Path,
-        *,
-        relative_to: Path | None = None,
-    ) -> Path:
-        """Copy an ingest source into LightRAG's persistent input root."""
-        source = file_path.resolve()
-        target = self._staged_input_path(file_path, relative_to=relative_to)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and target.resolve() == source:
-            return target
-
-        tmp_target = target.with_name(f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
-        shutil.copy2(source, tmp_target)
-        os.replace(tmp_target, target)
-        return target
-
-    def _remote_namespace_root(self, source_type: str, namespace: str) -> Path:
-        safe_namespace = namespace.replace("/", "_").replace("\\", "_") or "default"
-        return self.config.working_dir_path / "sources" / source_type / safe_namespace
-
-    def _remote_local_path(self, source_type: str, namespace: str, key: str) -> Path:
-        """Return a managed local source-copy path for a remote object."""
-        parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
-        if not parts:
-            raise ValueError("remote object key is empty")
-        return self._remote_namespace_root(source_type, namespace) / Path(*parts)
+        return workspace_input_root(self.config.input_dir_path, self.config.workspace)
 
     async def _download_remote_to_local(
         self,
@@ -981,7 +926,12 @@ class RAGService:
         key: str,
     ) -> Path:
         content = await source.aload_document(key)
-        local_path = self._remote_local_path(source_type, namespace, key)
+        local_path = remote_object_path(
+            working_dir=self.config.working_dir_path,
+            source_type=source_type,
+            namespace=namespace,
+            key=key,
+        )
         local_path.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(local_path.write_bytes, content)
         return local_path
@@ -1006,7 +956,11 @@ class RAGService:
 
         local_paths: list[Path] = []
         source_uris: list[str] = []
-        source_root = self._remote_namespace_root(source_type, namespace)
+        source_root = remote_namespace_root(
+            working_dir=self.config.working_dir_path,
+            source_type=source_type,
+            namespace=namespace,
+        )
         for key in keys:
             local_paths.append(
                 await self._download_remote_to_local(
@@ -1021,7 +975,11 @@ class RAGService:
         if replace:
             for local_path, source_uri in zip(local_paths, source_uris, strict=True):
                 await self._purge_existing_for_replace(
-                    file_path=self._staged_input_path(local_path, relative_to=source_root),
+                    file_path=staged_input_path(
+                        input_root=self._workspace_input_root(),
+                        file_path=local_path,
+                        relative_to=source_root,
+                    ),
                     stored_file_path=source_uri,
                 )
 
@@ -1163,7 +1121,7 @@ class RAGService:
             if not path_str:
                 raise ValueError("'path' is required for local source_type")
             local_path = Path(path_str)
-            file_paths = self._local_ingest_paths(local_path)
+            file_paths = iter_ingestable_files(local_path)
             common_kwargs = {
                 "replace": replace,
                 "title": kwargs.get("title"),
@@ -1217,7 +1175,7 @@ class RAGService:
             _plan: Pre-computed QueryPlan from QueryPlanner (via ServiceManager).
         """
         self._ensure_initialized()
-        backend = self._effective_backend
+        backend = self._backend
         if not backend:
             raise RuntimeError("Retrieval backend not initialized")
 

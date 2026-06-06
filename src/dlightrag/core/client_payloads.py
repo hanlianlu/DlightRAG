@@ -9,8 +9,8 @@ from urllib.parse import quote
 
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
+from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 
 def metadata_filter_from_payload(payload: Any | None) -> MetadataFilter | None:
@@ -61,14 +61,14 @@ def project_contexts_for_client(
 def retrieval_payload(
     result: RetrievalResult,
     *,
-    path_resolver: PathResolver | None = None,
+    source_url_resolver: SourceUrlResolver | None = None,
     image_url_prefix: str | None = "/images",
 ) -> dict[str, Any]:
     """Project retrieval results into a client-safe response dictionary."""
     contexts = project_contexts_for_client(result.contexts, image_url_prefix=image_url_prefix)
     sources = build_sources(
         contexts,
-        path_resolver=path_resolver,
+        source_url_resolver=source_url_resolver,
         image_url_prefix=image_url_prefix,
     )
     return {

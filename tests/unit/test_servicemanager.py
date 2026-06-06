@@ -90,6 +90,27 @@ class TestGetService:
 class TestWorkspaceCreation:
     """Test workspace creation registers discoverable workspace metadata."""
 
+    @patch("dlightrag.storage.workspaces.PGWorkspaceRegistry")
+    async def test_initialize_registry_uses_canonical_workspace_id(
+        self,
+        mock_registry_cls: MagicMock,
+        test_cfg: DlightragConfig,
+    ) -> None:
+        registry = MagicMock()
+        registry.initialize = AsyncMock()
+        registry.upsert = AsyncMock()
+        mock_registry_cls.return_value = registry
+        cfg = test_cfg.model_copy(update={"workspace": "test-fallback-ws"})
+        manager = RAGServiceManager(config=cfg)
+
+        await manager._initialize_workspace_registry()
+
+        registry.upsert.assert_awaited_once_with(
+            workspace="test_fallback_ws",
+            display_name="test-fallback-ws",
+            embedding_model=cfg.embedding.model,
+        )
+
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_create_workspace_registers_workspace_meta(self, mock_create, test_cfg) -> None:
         svc = AsyncMock()
@@ -641,18 +662,18 @@ class TestWorkspaceDiscovery:
         manager._workspace_registry.list = AsyncMock(
             return_value=[
                 {
-                    "workspace": "project-a",
+                    "workspace": "project_a",
                     "display_name": "Project A",
                     "created_at": datetime(2026, 5, 25, tzinfo=UTC),
                 },
-                {"workspace": "project-b", "display_name": "Project B"},
+                {"workspace": "project_b", "display_name": "Project B"},
             ]
         )
 
         result = await manager.list_workspaces()
 
-        assert "project-a" in result
-        assert "project-b" in result
+        assert "project_a" in result
+        assert "project_b" in result
 
     async def test_workspace_records_are_json_safe(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
@@ -660,7 +681,7 @@ class TestWorkspaceDiscovery:
         manager._workspace_registry.list = AsyncMock(
             return_value=[
                 {
-                    "workspace": "project-a",
+                    "workspace": "project_a",
                     "display_name": "Project A",
                     "embedding_model": "voyage-multimodal-3.5",
                     "created_at": datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
@@ -673,7 +694,7 @@ class TestWorkspaceDiscovery:
 
         assert records == [
             {
-                "workspace": "project-a",
+                "workspace": "project_a",
                 "display_name": "Project A",
                 "embedding_model": "voyage-multimodal-3.5",
                 "created_at": "2026-05-25T12:00:00+00:00",

@@ -36,7 +36,7 @@ class TestRetrievalResult:
         assert len(r.contexts["chunks"]) == 1
         assert r.contexts["chunks"][0]["chunk_id"] == "c1"
 
-    def test_typeddict_structural_compat(self) -> None:
+    def test_typeddict_structural_match(self) -> None:
         """Plain dicts that match the TypedDict structure work fine."""
         plain_dict = {
             "chunks": [

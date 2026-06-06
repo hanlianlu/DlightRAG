@@ -170,7 +170,7 @@ DlightRAG has one runtime RAG path:
 source file
   -> LightRAG parser/routing
        sidecar-backed text, tables, equations, and images when available;
-       LightRAG fallback/raw ingestion otherwise
+       LightRAG raw parser route otherwise
   -> LightRAG ingest
        chunks, entities, relationships, graph, vectors, doc status
   -> image vector alignment
@@ -400,12 +400,11 @@ default and can be dropped with
 `parser_sidecars.mineru.auxiliary_block_policy: extended`.
 
 DlightRAG uses LightRAG's parser routing as the ingestability boundary. When
-LightRAG resolves a file to its fallback/raw engine
-(`PARSER_ENGINE_LEGACY`, persisted as `legacy`), DlightRAG still enqueues it
+LightRAG resolves a file to its raw parser route, DlightRAG still enqueues it
 through the LightRAG pipeline; it simply has no parser sidecar images whose
 vectors can be aligned. With the default `docx:native-iteP,*:mineru-iteP`
-rules, this fallback is a defensive path rather than DlightRAG's normal
-document parsing route.
+rules, this path is defensive rather than DlightRAG's normal document parsing
+route.
 
 Source images and parser-extracted images both go through the LightRAG parser
 and multimodal ingest path. LightRAG owns the `llm_analyze_result` text,
@@ -482,11 +481,11 @@ parser-extracted image sidecars must share one vector space.
 | `voyage` | `voyage-multimodal-3.5` | Default provider; recommended dimension `1024`. |
 | `dashscope_qwen` | `qwen3-vl-embedding-2b` | DashScope multimodal payloads. |
 | `qwen_openai_compatible` | `qwen3-vl-embedding-2b` via LM Studio or vLLM | OpenAI-compatible local endpoint. |
-| `gemini` | `gemini-embedding-2` | Uses symmetric fallback when task routing is unavailable. |
+| `gemini` | `gemini-embedding-2` | Uses symmetric embedding mode when task routing is unavailable. |
 | `jina` | `jina-embeddings-v4` | Uses task routing when supported. |
 
 `embedding.asymmetric: auto` enables provider task routing when available.
-Otherwise DlightRAG relies on LightRAG's symmetric fallback. Changing
+Otherwise DlightRAG relies on LightRAG's symmetric embedding mode. Changing
 `embedding.dim` after indexing requires clearing the workspace and rebuilding
 vector indexes.
 

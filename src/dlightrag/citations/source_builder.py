@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from dlightrag.core.retrieval.path_resolver import PathResolver
 from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .indexer import CitationIndexer
 from .schemas import ChunkSnippet, SourceReference
@@ -20,7 +20,7 @@ from .utils import filter_content_for_display
 
 def build_sources(
     contexts: RetrievalContexts,
-    path_resolver: PathResolver | None = None,
+    source_url_resolver: SourceUrlResolver | None = None,
     *,
     indexer: CitationIndexer | None = None,
     image_url_prefix: str | None = "/images",
@@ -30,7 +30,7 @@ def build_sources(
 
     Args:
         contexts: Retrieval contexts dict with "chunks" key.
-        path_resolver: Optional PathResolver with .resolve(path) -> url method.
+        source_url_resolver: Optional resolver with .resolve(path) -> url method.
 
     Returns:
         List of SourceReference, ordered by first chunk appearance.
@@ -38,7 +38,7 @@ def build_sources(
     """
     return build_sources_from_chunks(
         contexts.get("chunks", []),
-        path_resolver=path_resolver,
+        source_url_resolver=source_url_resolver,
         indexer=indexer,
         image_url_prefix=image_url_prefix,
         default_workspace=default_workspace,
@@ -47,8 +47,8 @@ def build_sources(
 
 def build_sources_from_chunks(
     chunks: list[dict[str, Any]],
-    path_resolver: PathResolver | None = None,
     *,
+    source_url_resolver: SourceUrlResolver | None = None,
     indexer: CitationIndexer | None = None,
     cited_chunks: dict[str, list[str]] | None = None,
     source_catalog: list[SourceReference] | None = None,
@@ -131,9 +131,9 @@ def build_sources_from_chunks(
             )
 
         url = catalog.url if catalog else None
-        if url is None and path_resolver and file_path:
+        if url is None and source_url_resolver and file_path:
             try:
-                url = path_resolver.resolve(file_path)
+                url = source_url_resolver.resolve(file_path)
             except Exception:
                 pass
 

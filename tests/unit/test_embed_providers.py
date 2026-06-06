@@ -12,8 +12,8 @@ from dlightrag.models.providers.embed_providers import (
     GeminiEmbedProvider,
     JinaEmbedProvider,
     OllamaEmbedProvider,
-    OpenAICompatEmbedProvider,
-    QwenOpenAICompatEmbedProvider,
+    OpenAICompatibleEmbedProvider,
+    QwenOpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
     detect_embed_provider,
 )
@@ -102,8 +102,8 @@ def test_jina_payload_maps_context_only_when_asymmetric() -> None:
     assert payload["input"] == [{"image": "data:image/jpeg;base64,abc"}]
 
 
-def test_qwen_openai_compat_payload_preserves_image_data_uri_without_task_hint() -> None:
-    provider = QwenOpenAICompatEmbedProvider()
+def test_qwen_openai_compatible_payload_preserves_image_data_uri_without_task_hint() -> None:
+    provider = QwenOpenAICompatibleEmbedProvider()
     payload = provider.build_payload(
         "qwen3-vl-embedding-2b",
         [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
@@ -121,7 +121,7 @@ def test_qwen_openai_compat_payload_preserves_image_data_uri_without_task_hint()
 class TestDetectProvider:
     def test_explicit_openai_compatible(self) -> None:
         p = detect_embed_provider("any-model", provider="openai_compatible")
-        assert isinstance(p, OpenAICompatEmbedProvider)
+        assert isinstance(p, OpenAICompatibleEmbedProvider)
 
     def test_openai_alias_is_not_an_embedding_provider(self) -> None:
         with pytest.raises(ValueError, match="Unknown embed provider"):
@@ -133,7 +133,7 @@ class TestDetectProvider:
 
     def test_explicit_qwen_openai_compatible(self) -> None:
         p = detect_embed_provider("any-model", provider="qwen_openai_compatible")
-        assert isinstance(p, QwenOpenAICompatEmbedProvider)
+        assert isinstance(p, QwenOpenAICompatibleEmbedProvider)
 
     def test_auto_detect_voyage_from_model(self) -> None:
         p = detect_embed_provider("voyage-multimodal-3.5")

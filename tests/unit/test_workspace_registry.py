@@ -72,6 +72,12 @@ class _Conn:
             return 1 if (str(args[0]), str(args[1])) in self.applied else None
         return True
 
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        if "dlightrag_workspace_meta" in query:
+            workspace = str(args[0])
+            return next((row for row in self.rows if row["workspace"] == workspace), None)
+        return None
+
     def transaction(self) -> _Tx:
         return _Tx()
 
@@ -94,6 +100,29 @@ async def test_workspace_registry_initializes_and_migrates_schema() -> None:
         and args[:2] == ("workspace_registry", "0001_workspace_meta")
         for query, args in conn.executed
     )
+
+
+async def test_workspace_registry_initialization_canonicalizes_existing_rows() -> None:
+    conn = _Conn()
+    conn.rows = [
+        {
+            "workspace": "project-alpha",
+            "display_name": "Project Alpha",
+            "embedding_model": "voyage-multimodal-3.5",
+            "created_at": None,
+            "updated_at": None,
+        }
+    ]
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    await registry.initialize()
+
+    assert (
+        "project_alpha",
+        "Project Alpha",
+        "voyage-multimodal-3.5",
+    ) in [args for _, args in conn.executed]
+    assert ("project-alpha",) in [args for _, args in conn.executed]
 
 
 async def test_workspace_registry_read_only_verifies_migrations_without_ddl() -> None:
@@ -134,3 +163,24 @@ async def test_workspace_registry_upserts_lists_and_deletes() -> None:
         "voyage-multimodal-3.5",
     ) in [args for _, args in conn.executed]
     assert ("old_workspace",) in [args for _, args in conn.executed]
+
+
+async def test_workspace_registry_normalizes_write_operations() -> None:
+    conn = _Conn()
+    registry = PGWorkspaceRegistry(pool=_Pool(conn))
+
+    await registry.upsert(
+        workspace="Project Alpha",
+        display_name="Project Alpha",
+        embedding_model="voyage-multimodal-3.5",
+    )
+    exists = await registry.exists("Project Alpha")
+    await registry.delete("Project Alpha")
+
+    assert exists is False
+    assert (
+        "project_alpha",
+        "Project Alpha",
+        "voyage-multimodal-3.5",
+    ) in [args for _, args in conn.executed]
+    assert ("project_alpha",) in [args for _, args in conn.executed]

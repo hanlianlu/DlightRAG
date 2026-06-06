@@ -46,7 +46,7 @@ def _cost_to_dict(usage: Any) -> dict[str, float] | None:
     return None
 
 
-class OpenAICompatProvider(CompletionProvider):
+class OpenAICompatibleProvider(CompletionProvider):
     """OpenAI, Azure OpenAI, Ollama, Xinference, MiniMax, Qwen, OpenRouter.
 
     Any endpoint that speaks the OpenAI chat completions protocol.

@@ -11,13 +11,13 @@ from PIL import Image
 from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 from dlightrag.models.providers.embed_providers import (
     GeminiEmbedProvider,
-    QwenOpenAICompatEmbedProvider,
+    QwenOpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
 
 
 def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
-    provider = QwenOpenAICompatEmbedProvider()
+    provider = QwenOpenAICompatibleEmbedProvider()
     embedder = MultimodalEmbedder(
         model="qwen3-vl-embedding-2b",
         base_url="http://localhost:1234/v1",

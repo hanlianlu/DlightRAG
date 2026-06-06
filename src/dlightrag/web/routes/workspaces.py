@@ -36,9 +36,11 @@ async def _set_workspace_cookies(
     """
     workspaces = await manager.list_workspaces()
     if not workspaces:
-        workspaces = ["default"]
+        response.delete_cookie("dlightrag_workspace", path="/")
+        response.delete_cookie("dlightrag_workspace_ids", path="/")
+        return
     # Cookie values are purely DB-sourced, never from user input.
-    primary = workspaces[0]
+    primary = "default" if "default" in workspaces else workspaces[0]
     joined = ",".join(workspaces)
     secure = request.url.scheme == "https"
     response.set_cookie(
@@ -122,7 +124,7 @@ async def delete_workspace(
     ws = normalize_workspace(name)
 
     try:
-        await manager.areset(workspace=name)
+        await manager.areset(workspace=ws)
     except Exception:
         logger.exception("Workspace deletion failed")
         return error_response(
@@ -131,7 +133,7 @@ async def delete_workspace(
         )
 
     workspaces = await manager.list_workspaces()
-    fallback = workspaces[0] if workspaces else "default"
+    next_workspace = "default" if "default" in workspaces else None
 
     response = HTMLResponse(
         "",
@@ -139,9 +141,8 @@ async def delete_workspace(
             "HX-Trigger": json.dumps(
                 {
                     "workspaceDeleted": {
-                        "workspace": name,
-                        "normalized_workspace": ws,
-                        "fallback": fallback,
+                        "workspace": ws,
+                        "next_workspace": next_workspace,
                     }
                 }
             )

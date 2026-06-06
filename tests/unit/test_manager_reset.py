@@ -143,43 +143,6 @@ class TestManagerAresetNonexistentWorkspace:
         assert "local_files_removed" in ws_result
         assert "errors" in ws_result
 
-    async def test_legacy_hyphen_registry_row_cleans_alias_without_service_init(self) -> None:
-        manager = _make_manager()
-        registry = AsyncMock()
-        orphan_result = {
-            "workspace": "test-fallback-ws",
-            "graphs_dropped": [],
-            "orphan_tables_cleaned": 0,
-            "local_files_removed": 0,
-            "errors": [],
-        }
-
-        with (
-            patch.object(
-                manager,
-                "list_workspaces",
-                new_callable=AsyncMock,
-                return_value=["default", "test-fallback-ws"],
-            ),
-            patch.object(
-                manager, "_get_workspace_registry", new_callable=AsyncMock, return_value=registry
-            ),
-            patch.object(manager, "_get_service", new_callable=AsyncMock) as get_service,
-            patch(
-                "dlightrag.core.reset.areset_orphaned_workspace",
-                new_callable=AsyncMock,
-                return_value=orphan_result,
-            ) as orphan_cleanup,
-        ):
-            result = await manager.areset(workspace="test-fallback-ws")
-
-        get_service.assert_not_awaited()
-        orphan_cleanup.assert_awaited_once()
-        registry.delete.assert_any_await("test-fallback-ws")
-        registry.delete.assert_any_await("test_fallback_ws")
-        assert result["workspaces"]["test_fallback_ws"] == orphan_result
-        assert result["total_errors"] == 0
-
 
 class TestManagerAresetErrorHandling:
     async def test_collects_errors_from_service(self) -> None:

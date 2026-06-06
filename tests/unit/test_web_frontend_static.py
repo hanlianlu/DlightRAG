@@ -68,3 +68,17 @@ def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
     assert not (web_root / "templates" / "partials" / "workspace_list.html").exists()
     assert "dlightrag_workspace_ids" in workspaces_js
     assert "document.cookie" in workspaces_js
+
+
+def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> None:
+    web_root = ROOT / "src/dlightrag/web"
+    static_js = web_root / "static" / "js"
+    workspaces_js = (static_js / "workspaces.js").read_text(encoding="utf-8")
+    panel_js = (static_js / "panel.js").read_text(encoding="utf-8")
+
+    assert "removeWorkspace(workspace, detail.next_workspace)" in workspaces_js
+    assert "item.workspace !== workspace" in workspaces_js
+    assert "active !== workspace" in workspaces_js
+
+    assert "workspaceDeleted" in panel_js
+    assert "setIngestWorkspace(detail.next_workspace || getPrimaryWorkspace())" in panel_js

@@ -150,14 +150,14 @@ class TestBuildSources:
         assert sources[0].cited_chunk_ids == ["c2"]
         assert [c.chunk_id for c in sources[0].chunks] == ["c2"]
 
-    def test_with_path_resolver(self) -> None:
+    def test_with_source_url_resolver(self) -> None:
         contexts = {"chunks": [_chunk("c1", "ref-1", file_path="/data/report.pdf")]}
 
         class FakeResolver:
             def resolve(self, path: str) -> str:
                 return f"https://cdn.example.com/{path}"
 
-        sources = build_sources(contexts, path_resolver=FakeResolver())
+        sources = build_sources(contexts, source_url_resolver=FakeResolver())
 
         assert sources[0].url == "https://cdn.example.com//data/report.pdf"
 
