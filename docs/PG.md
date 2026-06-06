@@ -51,7 +51,31 @@ postgres_session_settings:
   application_name: dlightrag
   statement_timeout: "60000"
 postgres_statement_cache_size: 256
+postgres_connection_retries: 10
+postgres_connection_retry_backoff: 3.0
+postgres_connection_retry_backoff_max: 30.0
+postgres_pool_close_timeout: 5.0
+postgres_ssl_mode: require  # disable | allow | prefer | require | verify-ca | verify-full
+postgres_ssl_root_cert: /etc/postgresql/ca.crt
 ```
+
+PostgreSQL SSL config is shared by the active primary/replica endpoint and is
+bridged to LightRAG's `POSTGRES_SSL_*` environment contract. DlightRAG's
+domain-store pool, reset helpers, replication checks, and status probes use
+the same `pg_connection_kwargs()` path, so managed PostgreSQL deployments do
+not need a second SSL configuration surface.
+
+## DlightRAG Schema Migrations
+
+DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
+ledger for domain schema changes. This applies to DlightRAG tables such as
+`dlightrag_doc_metadata` and `dlightrag_workspace_meta`; LightRAG-owned tables
+and AGE graph schemas remain managed by LightRAG.
+
+Writable runtimes ensure these idempotent DDL migrations on startup and record
+their versions in the ledger. Query read-only runtimes only verify that the
+required migration versions already exist, so run an ingest/admin process
+against the primary before starting replica-only query workers after an upgrade.
 
 ## LightRAG AGE Compatibility Patches
 

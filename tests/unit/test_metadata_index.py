@@ -5,10 +5,43 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
+
+import pytest
 
 from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 from dlightrag.storage import pg_metadata_index
-from dlightrag.storage.pg_metadata_index import _CREATE_INDEXES, _UPSERT
+from dlightrag.storage.pg_metadata_index import _CREATE_INDEXES, _SCHEMA_MIGRATIONS, _UPSERT
+
+
+class _Tx:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class _Conn:
+    def __init__(self) -> None:
+        self.applied: set[tuple[str, str]] = set()
+        self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.table_exists = True
+
+    def transaction(self) -> _Tx:
+        return _Tx()
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        if "information_schema.tables" in query:
+            return self.table_exists
+        if "dlightrag_schema_migrations" in query and "version" in query:
+            return 1 if (str(args[0]), str(args[1])) in self.applied else None
+        return None
+
+    async def execute(self, query: str, *args: Any) -> None:
+        self.executed.append((query, args))
+        if query.startswith("INSERT INTO dlightrag_schema_migrations"):
+            self.applied.add((str(args[0]), str(args[1])))
 
 
 class TestUpsertSQL:
@@ -109,3 +142,41 @@ class TestMetadataSQL:
 
         assert "LIGHTRAG_DOC_STATUS.metadata" not in source
         assert "doc_status.metadata" not in source
+
+    def test_metadata_schema_migrations_cover_registry_columns_and_indexes(self):
+        versions = {migration.version for migration in _SCHEMA_MIGRATIONS}
+        sql = "\n".join(stmt for migration in _SCHEMA_MIGRATIONS for stmt in migration.statements)
+
+        assert "0001_base" in versions
+        for field in METADATA_FIELDS:
+            assert f"column_{field.field_id}" in versions
+            assert f"ADD COLUMN IF NOT EXISTS {field.field_id}" in sql
+            if field.index_type is not None:
+                assert f"index_{field.field_id}" in versions
+
+
+async def test_metadata_index_read_only_verifies_migrations_without_ddl() -> None:
+    conn = _Conn()
+    conn.applied.update(("doc_metadata", migration.version) for migration in _SCHEMA_MIGRATIONS)
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(conn)
+
+    idx._run = run  # type: ignore[method-assign]
+
+    await idx.initialize(read_only=True)
+
+    assert conn.executed == []
+
+
+async def test_metadata_index_read_only_rejects_missing_migration() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(_Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="doc_metadata schema migration"):
+        await idx.initialize(read_only=True)

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Literal
@@ -28,6 +29,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
 PostgresTarget = Literal["primary", "replica"]
+PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 _LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(
     {
         "VLM_PROCESS_ENABLE",
@@ -516,6 +518,17 @@ class DlightragConfig(BaseSettings):
     postgres_replica_user: str | None = Field(default=None)
     postgres_replica_password: str | None = Field(default=None)
     postgres_replica_database: str | None = Field(default=None)
+    postgres_ssl_mode: PostgresSSLMode | None = Field(
+        default=None,
+        description=(
+            "PostgreSQL SSL mode bridged to LightRAG and DlightRAG asyncpg connections. "
+            "Matches LightRAG's POSTGRES_SSL_MODE contract."
+        ),
+    )
+    postgres_ssl_cert: str | None = Field(default=None)
+    postgres_ssl_key: str | None = Field(default=None)
+    postgres_ssl_root_cert: str | None = Field(default=None)
+    postgres_ssl_crl: str | None = Field(default=None)
     read_after_write_mode: Literal["eventual", "wait_for_replay"] = Field(
         default="eventual",
         description="Replica read-after-write policy for write acknowledgements.",
@@ -537,6 +550,30 @@ class DlightragConfig(BaseSettings):
     postgres_statement_cache_size: int | None = Field(
         default=None,
         description="Optional asyncpg statement cache size for LightRAG and DlightRAG pools.",
+    )
+    postgres_connection_retries: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="PostgreSQL transient connection retry attempts for LightRAG and DlightRAG pools.",
+    )
+    postgres_connection_retry_backoff: float = Field(
+        default=3.0,
+        ge=0.0,
+        le=300.0,
+        description="Initial PostgreSQL transient retry backoff in seconds.",
+    )
+    postgres_connection_retry_backoff_max: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=600.0,
+        description="Maximum PostgreSQL transient retry backoff in seconds.",
+    )
+    postgres_pool_close_timeout: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=30.0,
+        description="Seconds to wait when closing a stale PostgreSQL pool after transient failure.",
     )
     workspace: str = Field(default="default")
 
@@ -789,16 +826,52 @@ class DlightragConfig(BaseSettings):
             return value
         return self._pg_endpoint_value("primary", field)
 
+    def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
+        """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""
+        if self.postgres_ssl_mode is None:
+            return None
+
+        if self.postgres_ssl_mode in {"require", "prefer"}:
+            return True
+        if self.postgres_ssl_mode == "disable":
+            return False
+        if self.postgres_ssl_mode == "allow":
+            return None
+
+        try:
+            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            context.check_hostname = self.postgres_ssl_mode == "verify-full"
+
+            if self.postgres_ssl_root_cert and Path(self.postgres_ssl_root_cert).exists():
+                context.load_verify_locations(cafile=self.postgres_ssl_root_cert)
+            if (
+                self.postgres_ssl_cert
+                and self.postgres_ssl_key
+                and Path(self.postgres_ssl_cert).exists()
+                and Path(self.postgres_ssl_key).exists()
+            ):
+                context.load_cert_chain(self.postgres_ssl_cert, self.postgres_ssl_key)
+            if self.postgres_ssl_crl and Path(self.postgres_ssl_crl).exists():
+                context.verify_flags |= ssl.VERIFY_CRL_CHECK_LEAF
+                context.load_verify_locations(cafile=self.postgres_ssl_crl)
+            return context
+        except Exception as exc:
+            raise ValueError(f"PostgreSQL SSL configuration error: {exc}") from exc
+
     def pg_connection_kwargs(self, target: PostgresTarget | None = None) -> dict[str, Any]:
         """Return asyncpg connection kwargs for primary, replica, or current runtime role."""
         resolved = target or self.pg_target_for_runtime()
-        return {
+        kwargs = {
             "host": self._pg_endpoint_value(resolved, "host"),
             "port": self._pg_endpoint_value(resolved, "port"),
             "user": self._pg_endpoint_value(resolved, "user"),
             "password": self._pg_endpoint_value(resolved, "password"),
             "database": self._pg_endpoint_value(resolved, "database"),
         }
+        ssl_value = self._pg_ssl_value()
+        if ssl_value is not None:
+            kwargs["ssl"] = ssl_value
+        return kwargs
 
     @staticmethod
     def _env_value(value: str | int | float | bool | None) -> str | None:
@@ -885,6 +958,25 @@ class DlightragConfig(BaseSettings):
         }
         if self.postgres_statement_cache_size is not None:
             pg_env_map["POSTGRES_STATEMENT_CACHE_SIZE"] = str(self.postgres_statement_cache_size)
+        postgres_ssl_env = {
+            "POSTGRES_SSL_MODE": self.postgres_ssl_mode,
+            "POSTGRES_SSL_CERT": self.postgres_ssl_cert,
+            "POSTGRES_SSL_KEY": self.postgres_ssl_key,
+            "POSTGRES_SSL_ROOT_CERT": self.postgres_ssl_root_cert,
+            "POSTGRES_SSL_CRL": self.postgres_ssl_crl,
+        }
+        for key, value in postgres_ssl_env.items():
+            rendered = self._env_value(value)
+            if rendered is not None:
+                pg_env_map[key] = rendered
+        pg_env_map["POSTGRES_CONNECTION_RETRIES"] = str(self.postgres_connection_retries)
+        pg_env_map["POSTGRES_CONNECTION_RETRY_BACKOFF"] = str(
+            self.postgres_connection_retry_backoff
+        )
+        pg_env_map["POSTGRES_CONNECTION_RETRY_BACKOFF_MAX"] = str(
+            self.postgres_connection_retry_backoff_max
+        )
+        pg_env_map["POSTGRES_POOL_CLOSE_TIMEOUT"] = str(self.postgres_pool_close_timeout)
         for key, value in pg_env_map.items():
             if force or key not in os.environ:
                 os.environ[key] = value

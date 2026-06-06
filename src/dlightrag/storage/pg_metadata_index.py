@@ -13,6 +13,8 @@ from dlightrag.core.retrieval.metadata_fields import (
     system_field_ids,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.sql_identifiers import pg_identifier
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,45 @@ def _json_param(value: Any) -> str | None:
 
 
 _CREATE_INDEXES = _build_create_indexes()
+
+
+def _build_schema_migrations() -> tuple[Migration, ...]:
+    migrations = [
+        Migration(
+            "0001_base",
+            "Create document metadata table",
+            (_CREATE_TABLE,),
+        )
+    ]
+    for f in METADATA_FIELDS:
+        migrations.append(
+            Migration(
+                f"column_{f.field_id}",
+                f"Ensure document metadata column {f.field_id}",
+                (
+                    "ALTER TABLE dlightrag_doc_metadata "
+                    f"ADD COLUMN IF NOT EXISTS {pg_identifier(f.field_id)} {f.pg_type}",
+                ),
+            )
+        )
+    for f in METADATA_FIELDS:
+        idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
+        if idx_clause is None:
+            continue
+        migrations.append(
+            Migration(
+                f"index_{f.field_id}",
+                f"Ensure document metadata index {f.field_id}",
+                (
+                    f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
+                    f"ON dlightrag_doc_metadata{idx_clause}",
+                ),
+            )
+        )
+    return tuple(migrations)
+
+
+_SCHEMA_MIGRATIONS = _build_schema_migrations()
 
 _JSONB_MERGE_FIELDS = frozenset({"custom_metadata", "metadata_json"})
 _UPSERT_FIELDS = tuple(f for f in METADATA_FIELDS if f.field_id != "ingested_at")
@@ -128,24 +169,29 @@ class PGMetadataIndex:
 
     def __init__(self, workspace: str = "default") -> None:
         self._workspace = workspace
-        self._pool: Any = None
+
+    async def _run(self, operation):
+        from dlightrag.storage.pool import pg_pool
+
+        return await pg_pool.run(operation)
 
     async def initialize(self, *, read_only: bool = False) -> None:
         """Create table and indexes. Call once during service startup."""
-        from dlightrag.storage.pool import pg_pool
-
-        pool = await pg_pool.get()
-        self._pool = pool
         if read_only:
-            await self._verify_table()
+            await self._verify_schema()
             return
-        async with self._pool.acquire() as conn:
-            await conn.execute(_CREATE_TABLE)
-            for idx_sql in _CREATE_INDEXES:
-                await conn.execute(idx_sql)
 
-    async def _verify_table(self) -> None:
-        async with self._pool.acquire() as conn:
+        async def _operation(conn: Any) -> None:
+            await apply_migrations(
+                conn,
+                scope="doc_metadata",
+                migrations=_SCHEMA_MIGRATIONS,
+            )
+
+        await self._run(_operation)
+
+    async def _verify_schema(self) -> None:
+        async def _operation(conn: Any) -> None:
             exists = await conn.fetchval(
                 "SELECT EXISTS ("
                 "SELECT 1 FROM information_schema.tables "
@@ -156,6 +202,13 @@ class PGMetadataIndex:
                 raise RuntimeError(
                     "dlightrag_doc_metadata is missing; initialize it on the primary first"
                 )
+            await verify_migrations(
+                conn,
+                scope="doc_metadata",
+                migrations=_SCHEMA_MIGRATIONS,
+            )
+
+        await self._run(_operation)
 
     async def upsert(self, doc_id: str, metadata: dict[str, Any]) -> None:
         """Insert or update document metadata."""
@@ -183,7 +236,7 @@ class PGMetadataIndex:
         raw_json = metadata.get("metadata_json")
         metadata_json = raw_json if isinstance(raw_json, dict) else {}
 
-        async with self._pool.acquire() as conn:
+        async def _operation(conn: Any) -> None:
             await conn.execute(
                 _UPSERT,
                 *_build_upsert_params(
@@ -194,6 +247,8 @@ class PGMetadataIndex:
                     metadata_json=metadata_json,
                 ),
             )
+
+        await self._run(_operation)
 
     async def query(self, filters: MetadataFilter) -> list[str]:
         """Query for doc_ids matching the given filters.
@@ -250,40 +305,49 @@ class PGMetadataIndex:
 
         where = " AND ".join(conditions)
         sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(sql, *params)
+
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(sql, *params)
+
+        rows = await self._run(_operation)
 
         return [r["doc_id"] for r in rows]
 
     async def get(self, doc_id: str) -> dict[str, Any] | None:
         """Get metadata for a single document."""
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(
                 "SELECT * FROM dlightrag_doc_metadata WHERE workspace=$1 AND doc_id=$2",
                 self._workspace,
                 doc_id,
             )
+
+        row = await self._run(_operation)
         if not row:
             return None
         return dict(row)
 
     async def delete(self, doc_id: str) -> None:
         """Delete metadata for a document."""
-        async with self._pool.acquire() as conn:
+        async def _operation(conn: Any) -> None:
             await conn.execute(
                 "DELETE FROM dlightrag_doc_metadata WHERE workspace=$1 AND doc_id=$2",
                 self._workspace,
                 doc_id,
             )
 
+        await self._run(_operation)
+
     async def clear(self) -> None:
         """Delete all metadata for this workspace."""
-        async with self._pool.acquire() as conn:
-            result = await conn.execute(
+        async def _operation(conn: Any) -> str:
+            return await conn.execute(
                 "DELETE FROM dlightrag_doc_metadata WHERE workspace=$1",
                 self._workspace,
             )
-            logger.info("PGMetadataIndex cleared for workspace %s: %s", self._workspace, result)
+
+        result = await self._run(_operation)
+        logger.info("PGMetadataIndex cleared for workspace %s: %s", self._workspace, result)
 
     # Internal columns excluded from schema hints — not user-filterable
     _INTERNAL_COLS = frozenset({"workspace", "doc_id", "ingested_at"})
@@ -296,7 +360,7 @@ class PGMetadataIndex:
 
         Used by QueryAnalyzer to build a context-aware LLM prompt.
         """
-        async with self._pool.acquire() as conn:
+        async def _operation(conn: Any) -> tuple[list[Any], list[Any]]:
             col_rows = await conn.fetch(
                 "SELECT column_name, data_type FROM information_schema.columns "
                 "WHERE table_schema = 'public' "
@@ -309,6 +373,9 @@ class PGMetadataIndex:
                 "WHERE workspace=$1 AND custom_metadata != '{}'",
                 self._workspace,
             )
+            return col_rows, key_rows
+
+        col_rows, key_rows = await self._run(_operation)
 
         columns = [
             {"name": r["column_name"], "type": r["data_type"]}
@@ -320,10 +387,12 @@ class PGMetadataIndex:
 
     async def find_by_filename(self, name: str) -> list[str]:
         """Find doc_ids by case-insensitive filename match."""
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(
                 "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND LOWER(filename)=LOWER($2)",
                 self._workspace,
                 name,
             )
+
+        rows = await self._run(_operation)
         return [r["doc_id"] for r in rows]

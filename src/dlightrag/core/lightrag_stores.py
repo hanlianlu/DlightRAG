@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 from typing import Any, ClassVar
 
@@ -60,6 +61,9 @@ logger = logging.getLogger(__name__)
 
 class LightRAGStores:
     """Typed accessor for LightRAG storage attributes DlightRAG writes directly."""
+
+    _VECTOR_UPSERT_MAX_BYTES: ClassVar[int] = 16 * 1024 * 1024
+    _VECTOR_UPSERT_MAX_RECORDS: ClassVar[int] = 200
 
     _REQUIRED: ClassVar[frozenset[str]] = frozenset(
         {
@@ -141,7 +145,8 @@ class LightRAGStores:
         """
 
         async def _execute(connection: Any) -> None:
-            await connection.executemany(sql, values)
+            for batch in self._chunk_vector_values(values):
+                await connection.executemany(sql, batch)
 
         async with self._vector_write_lock:
             current_status = await self._load_parent_doc_status(chunks_by_doc)
@@ -296,6 +301,63 @@ class LightRAGStores:
                 )
             )
         return values
+
+    @classmethod
+    def _chunk_vector_values(cls, values: list[tuple[Any, ...]]) -> list[list[tuple[Any, ...]]]:
+        if not values:
+            return []
+
+        payload_limit = (
+            cls._VECTOR_UPSERT_MAX_BYTES if cls._VECTOR_UPSERT_MAX_BYTES > 0 else float("inf")
+        )
+        records_limit = (
+            cls._VECTOR_UPSERT_MAX_RECORDS if cls._VECTOR_UPSERT_MAX_RECORDS > 0 else float("inf")
+        )
+        batches: list[list[tuple[Any, ...]]] = []
+        current: list[tuple[Any, ...]] = []
+        current_bytes = 2
+
+        for value in values:
+            value_bytes = cls._estimate_vector_record_bytes(value)
+            separator = 1 if current else 0
+            next_bytes = current_bytes + separator + value_bytes
+            if current and (len(current) >= records_limit or next_bytes > payload_limit):
+                batches.append(current)
+                current = []
+                current_bytes = 2
+                next_bytes = current_bytes + value_bytes
+
+            current.append(value)
+            current_bytes = next_bytes
+
+        if current:
+            batches.append(current)
+        return batches
+
+    @staticmethod
+    def _estimate_vector_record_bytes(record: tuple[Any, ...]) -> int:
+        total = 0
+        for value in record:
+            if isinstance(value, str):
+                total += len(value.encode("utf-8"))
+            elif isinstance(value, (bytes, bytearray)):
+                total += len(value)
+            elif value is None:
+                continue
+            elif isinstance(value, list) and all(isinstance(x, int | float) for x in value):
+                total += len(value) * 8
+            elif isinstance(value, (dict, list)):
+                total += len(
+                    json.dumps(
+                        value,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        default=str,
+                    ).encode("utf-8")
+                )
+            else:
+                total += 16
+        return total
 
     @staticmethod
     def _chunks_by_doc(rows: dict[str, dict[str, Any]]) -> dict[str, list[str]]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 
 
@@ -249,3 +250,105 @@ class TestPGPoolGet:
                 "application_name": "dlightrag",
             },
         )
+
+    @pytest.mark.asyncio
+    async def test_get_forwards_ssl_connection_kwargs(self) -> None:
+        """Managed PostgreSQL SSL settings must reach DlightRAG domain pools."""
+        from dlightrag.storage.pool import PGPool
+
+        mock_pool = MagicMock()
+        pool = PGPool()
+
+        mock_config = MagicMock()
+        mock_config.postgres_pool_min_size = 2
+        mock_config.postgres_pool_max_size = 10
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.pg_target_for_runtime.return_value = "primary"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "primary",
+            "port": 5432,
+            "user": "writer",
+            "password": "secret",
+            "database": "dlightrag",
+            "ssl": True,
+        }
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+            ) as mock_create,
+            patch("dlightrag.config.get_config", return_value=mock_config),
+        ):
+            result = await pool.get()
+
+        assert result is mock_pool
+        mock_create.assert_called_once_with(
+            host="primary",
+            port=5432,
+            user="writer",
+            password="secret",
+            database="dlightrag",
+            ssl=True,
+            min_size=2,
+            max_size=10,
+        )
+
+    @pytest.mark.asyncio
+    async def test_run_retries_transient_errors_with_fresh_pool(self) -> None:
+        """run() retries transient connection failures after closing the stale pool."""
+        from dlightrag.storage.pool import PGPool
+
+        stale_pool = MagicMock()
+        stale_pool.close = AsyncMock()
+        fresh_pool = MagicMock()
+        fresh_pool.close = AsyncMock()
+        pool = PGPool()
+
+        stale_conn = object()
+        fresh_conn = object()
+        stale_pool.acquire.return_value.__aenter__.return_value = stale_conn
+        fresh_pool.acquire.return_value.__aenter__.return_value = fresh_conn
+
+        mock_config = MagicMock()
+        mock_config.postgres_pool_min_size = 2
+        mock_config.postgres_pool_max_size = 10
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.postgres_connection_retries = 2
+        mock_config.postgres_connection_retry_backoff = 0
+        mock_config.postgres_connection_retry_backoff_max = 0
+        mock_config.postgres_pool_close_timeout = 5
+        mock_config.pg_target_for_runtime.return_value = "primary"
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "primary",
+            "port": 5432,
+            "user": "writer",
+            "password": "secret",
+            "database": "dlightrag",
+        }
+
+        calls = 0
+
+        async def operation(conn):  # noqa: ANN001, ANN202
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                assert conn is stale_conn
+                raise asyncpg.exceptions.ConnectionDoesNotExistError("stale connection")
+            assert conn is fresh_conn
+            return "ok"
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool",
+                new=AsyncMock(side_effect=[stale_pool, fresh_pool]),
+            ) as mock_create,
+            patch("dlightrag.config.get_config", return_value=mock_config),
+        ):
+            result = await pool.run(operation)
+
+        assert result == "ok"
+        assert calls == 2
+        assert mock_create.call_count == 2
+        stale_pool.close.assert_awaited_once()
