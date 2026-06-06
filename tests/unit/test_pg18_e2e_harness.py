@@ -38,9 +38,13 @@ def test_pg18_harness_connection_env_prefers_e2e_namespace() -> None:
 
 
 def test_pg18_harness_tracks_required_postgres_extensions() -> None:
-    assert REQUIRED_EXTENSIONS == ("vector", "age", "pg_textsearch")
+    assert REQUIRED_EXTENSIONS == ("vector", "age", "pg_textsearch", "pg_jieba")
 
 
 def test_pg18_harness_validates_preloaded_libraries() -> None:
-    assert missing_preload_libraries("age, pg_textsearch") == []
-    assert missing_preload_libraries("pg_stat_statements") == ["age", "pg_textsearch"]
+    assert missing_preload_libraries("age, pg_textsearch, pg_jieba") == []
+    assert missing_preload_libraries("pg_stat_statements") == [
+        "age",
+        "pg_textsearch",
+        "pg_jieba",
+    ]

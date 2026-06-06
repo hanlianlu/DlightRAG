@@ -299,6 +299,32 @@ class TestBuildVectorDbKwargs:
 
 
 # ---------------------------------------------------------------------------
+# TestRequiredPostgresExtensions
+# ---------------------------------------------------------------------------
+
+
+class TestRequiredPostgresExtensions:
+    """Test DlightRAG-owned PostgreSQL extension bootstrap policy."""
+
+    def test_bm25_defaults_require_textsearch_and_jieba(
+        self, test_config: DlightragConfig
+    ) -> None:
+        test_config.bm25_enabled = True
+
+        assert RAGService._required_postgres_extensions(test_config) == (
+            "pg_textsearch",
+            "pg_jieba",
+        )
+
+    def test_bm25_disabled_requires_no_extra_extensions(
+        self, test_config: DlightragConfig
+    ) -> None:
+        test_config.bm25_enabled = False
+
+        assert RAGService._required_postgres_extensions(test_config) == ()
+
+
+# ---------------------------------------------------------------------------
 # TestBuildAddonParams
 # ---------------------------------------------------------------------------
 
