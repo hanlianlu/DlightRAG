@@ -752,6 +752,10 @@ class DlightragConfig(BaseSettings):
         default_factory=lambda: [
             BM25ProfileConfig(name="zh", text_config="public.jiebacfg", languages=["zh"]),
             BM25ProfileConfig(name="en", text_config="english", languages=["en"]),
+            BM25ProfileConfig(name="de", text_config="german", languages=["de"]),
+            BM25ProfileConfig(name="sv", text_config="swedish", languages=["sv"]),
+            BM25ProfileConfig(name="es", text_config="spanish", languages=["es"]),
+            BM25ProfileConfig(name="fr", text_config="french", languages=["fr"]),
             BM25ProfileConfig(name="simple", text_config="simple", fallback=True),
         ],
         description="Query-language-routed pg_textsearch BM25 profiles.",

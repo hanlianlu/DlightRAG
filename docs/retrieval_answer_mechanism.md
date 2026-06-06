@@ -78,8 +78,10 @@ pg_textsearch BM25, direct image retrieval, and RRF fusion.
 
 BM25 runs against the same LightRAG `LIGHTRAG_DOC_CHUNKS` rows through the
 configured pg_textsearch profiles. Chinese queries use the `public.jiebacfg`
-profile from `pg_jieba` plus the `simple` fallback, English queries use the
-PostgreSQL `english` profile plus `simple`, and other languages use `simple`.
+profile from `pg_jieba`, English queries use the PostgreSQL `english` profile,
+German queries use `german`, Swedish queries use `swedish`, Spanish queries use
+`spanish`, and French queries use `french`. Unsupported, unknown, or ambiguous
+queries use the `simple` fallback.
 `bm25_profiles`, `bm25_k1`, and `bm25_b` define the index signatures; changing
 them requires a primary-role startup so DlightRAG can rebuild profile indexes
 before query workers attach.
