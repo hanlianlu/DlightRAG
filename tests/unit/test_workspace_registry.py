@@ -98,7 +98,9 @@ async def test_workspace_registry_initializes_and_migrates_schema() -> None:
 
 async def test_workspace_registry_read_only_verifies_migrations_without_ddl() -> None:
     conn = _Conn()
-    conn.applied.update(("workspace_registry", migration.version) for migration in _SCHEMA_MIGRATIONS)
+    conn.applied.update(
+        ("workspace_registry", migration.version) for migration in _SCHEMA_MIGRATIONS
+    )
     registry = PGWorkspaceRegistry(pool=_Pool(conn))
 
     await registry.initialize(read_only=True)

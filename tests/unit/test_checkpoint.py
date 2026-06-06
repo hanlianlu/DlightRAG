@@ -176,9 +176,7 @@ class TestCheckpointCRUD:
         assert deleted == 1
         assert await cp.get_history("s1") == []
 
-    async def test_prune_old_sessions_binds_age_modifier(
-        self, monkeypatch, tmp_path: Path
-    ) -> None:
+    async def test_prune_old_sessions_binds_age_modifier(self, monkeypatch, tmp_path: Path) -> None:
         cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
 
         class Cursor:
@@ -190,9 +188,7 @@ class TestCheckpointCRUD:
                 self.committed = False
                 self.closed = False
 
-            def execute(
-                self, query: str, params: tuple[object, ...] = ()
-            ) -> Cursor:
+            def execute(self, query: str, params: tuple[object, ...] = ()) -> Cursor:
                 self.calls.append((query, params))
                 return Cursor()
 

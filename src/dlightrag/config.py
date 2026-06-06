@@ -381,11 +381,11 @@ class AnswerConfig(BaseModel):
         description="Minimum long edge preserved before skipping oversized answer images.",
     )
     image_quality: int = Field(
-        default=88,
+        default=89,
         description="Initial JPEG quality for answer LLM image previews.",
     )
     image_min_quality: int = Field(
-        default=72,
+        default=79,
         description="Minimum JPEG quality before skipping oversized answer images.",
     )
 
@@ -761,6 +761,37 @@ class DlightragConfig(BaseSettings):
         default=False,
         description="Export third-party GenAI/LLM OpenTelemetry spans to Langfuse. "
         "Disabled by default because DlightRAG records model calls manually.",
+    )
+    langfuse_environment: str | None = Field(
+        default=None,
+        description="Optional Langfuse tracing environment label, e.g. production or staging.",
+    )
+    langfuse_release: str | None = Field(
+        default=None,
+        description="Optional Langfuse release/version label for trace grouping.",
+    )
+    langfuse_sample_rate: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=1.0,
+        description="Langfuse trace sample rate.",
+    )
+    langfuse_timeout: int | None = Field(
+        default=None,
+        ge=1,
+        le=300,
+        description="Langfuse SDK request timeout in seconds.",
+    )
+    langfuse_flush_at: int | None = Field(
+        default=None,
+        ge=1,
+        description="Langfuse SDK batch size before flush.",
+    )
+    langfuse_flush_interval: float | None = Field(
+        default=None,
+        ge=0.1,
+        le=300.0,
+        description="Langfuse SDK automatic flush interval in seconds.",
     )
 
     # ===== Validators =====

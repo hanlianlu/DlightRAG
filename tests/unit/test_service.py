@@ -568,9 +568,7 @@ class TestRAGServiceLightRAGMainPath:
         service._metadata_index = AsyncMock()
         service._metadata_index.query = AsyncMock(return_value=["doc-1"])
 
-        result = await service.asearch_metadata(
-            MetadataFilter(custom={"department": " Finance "})
-        )
+        result = await service.asearch_metadata(MetadataFilter(custom={"department": " Finance "}))
 
         assert result == ["doc-1"]
         sent_filter = service._metadata_index.query.await_args.args[0]

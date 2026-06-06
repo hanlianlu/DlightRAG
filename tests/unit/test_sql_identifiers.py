@@ -14,9 +14,7 @@ def test_pg_identifier_accepts_simple_identifiers() -> None:
 
 
 def test_pg_qualified_identifier_accepts_schema_qualified_identifiers() -> None:
-    assert pg_qualified_identifier("public.LIGHTRAG_DOC_CHUNKS") == (
-        "public.LIGHTRAG_DOC_CHUNKS"
-    )
+    assert pg_qualified_identifier("public.LIGHTRAG_DOC_CHUNKS") == ("public.LIGHTRAG_DOC_CHUNKS")
 
 
 @pytest.mark.parametrize(

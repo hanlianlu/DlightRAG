@@ -120,9 +120,7 @@ class TestMetadataSQL:
         )
 
         assert params[:2] == ["default", "doc-1"]
-        field_values = dict(
-            zip(pg_metadata_index._UPSERT_FIELD_IDS, params[2:], strict=True)
-        )
+        field_values = dict(zip(pg_metadata_index._UPSERT_FIELD_IDS, params[2:], strict=True))
         assert field_values["filename"] == "report.pdf"
         assert json.loads(field_values["process_options"]) == {"chunker": "recursive"}
         assert json.loads(field_values["custom_metadata"]) == {"department": "finance"}

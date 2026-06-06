@@ -81,6 +81,7 @@ class PostgresBM25:
 
     async def verify_index(self) -> None:
         """Verify the BM25 index exists without attempting DDL."""
+
         async def _operation(conn: Any) -> bool:
             return await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",

@@ -15,9 +15,9 @@ Startup checks require PostgreSQL 18 or newer. Workspaces should not mix
 embedding models or dimensions after data has been indexed; changing
 `embedding.dim` requires clearing the workspace and rebuilding vector indexes.
 
-The checked-in Docker Compose stack uses
-`ghcr.io/hanlianlu/dlightrag-postgres:pg18` and preloads `age,pg_textsearch`.
-The optional `replica` profile uses the same image and physical streaming
+The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
+local `postgres/` image definition and preloads `age,pg_textsearch`. The
+optional `replica` profile uses the same image and physical streaming
 replication, so vector, graph, and BM25 indexes replicate through WAL rather
 than application-level copy jobs.
 

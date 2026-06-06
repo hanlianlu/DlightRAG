@@ -65,8 +65,8 @@ class AnswerEngine:
         image_max_total_bytes: int = 24_000_000,
         image_max_px: int = 1536,
         image_min_px: int = 1024,
-        image_quality: int = 88,
-        image_min_quality: int = 72,
+        image_quality: int = 89,
+        image_min_quality: int = 79,
         context_top_k: int | None = 30,
     ) -> None:
         self.model_func = model_func

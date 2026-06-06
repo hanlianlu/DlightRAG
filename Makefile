@@ -86,7 +86,7 @@ ci-full: ci
 	uv run pytest tests/integration -v --tb=short
 	@echo "CI (full) passed."
 
-# Full + E2E: needs PostgreSQL 18 with AGE + valid LLM API keys
+# Full + E2E: needs PostgreSQL 18 with AGE; model calls are faked in tests
 ci-e2e: ci-full
 	DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -v --tb=short -m e2e_pg18
 	@echo "CI (e2e) passed."

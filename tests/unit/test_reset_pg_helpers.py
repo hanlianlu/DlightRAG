@@ -85,9 +85,7 @@ async def test_list_all_workspaces_uses_primary_config(monkeypatch, config) -> N
     assert conn.closed is True
 
 
-async def test_clean_orphan_tables_quotes_public_table_identifiers(
-    monkeypatch, config
-) -> None:
+async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, config) -> None:
     class Conn:
         def __init__(self) -> None:
             self.executed: list[tuple[str, tuple[object, ...]]] = []
@@ -111,8 +109,7 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(
                 return {"count": 1}
             if "SELECT EXISTS" in query:
                 assert query == (
-                    'SELECT EXISTS (SELECT 1 FROM public."dlightrag_bad""name") '
-                    "AS has_rows"
+                    'SELECT EXISTS (SELECT 1 FROM public."dlightrag_bad""name") AS has_rows'
                 )
                 return {"has_rows": False}
             raise AssertionError(query)

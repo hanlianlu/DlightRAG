@@ -479,8 +479,8 @@ payload minimization:
 | `answer.image_max_total_bytes` | `24000000` | Maximum compressed binary bytes across all answer images. |
 | `answer.image_max_px` | `1536` | Maximum long edge after bounding. |
 | `answer.image_min_px` | `1024` | Long-edge floor before oversized images are skipped. |
-| `answer.image_quality` | `88` | Initial JPEG quality for recompressed images. |
-| `answer.image_min_quality` | `72` | JPEG quality floor before oversized images are skipped. |
+| `answer.image_quality` | `89` | Initial JPEG quality for recompressed images. |
+| `answer.image_min_quality` | `79` | JPEG quality floor before oversized images are skipped. |
 
 Already-budgeted JPEG, PNG, and WebP payloads pass through unchanged. Images
 that cannot fit without crossing the quality or size floor are skipped instead
@@ -503,10 +503,16 @@ Metadata is explicit-schema first:
 - Declared fields are normalized and filterable.
 - Undeclared metadata can be stored as JSONB enrichment, but is not filterable
   by default.
+- Custom filter fields are declared once in `config.yaml` under
+  `metadata.fields`; REST, MCP, and SDK ingest calls pass metadata values and
+  optional `metadata_policy`, not schema declarations.
 - Explicit API/user filters are strict and never fall back to global retrieval.
 - LLM-inferred filters include confidence/evidence for observability; empty
   inferred candidates fall back to unfiltered retrieval.
 - Non-empty inferred candidates constrain both semantic and BM25 retrieval.
+
+See [`docs/response-schema.md`](docs/response-schema.md#metadata-schema-and-policy)
+for policy behavior and custom-field examples.
 
 ### Storage
 
@@ -615,6 +621,14 @@ DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
 Set `langfuse_host` and `langfuse_export_external_spans` in `config.yaml`
 when the defaults are not right for the deployment.
 
+DlightRAG records its own model-call observations and keeps third-party
+OpenTelemetry spans disabled by default to avoid double-counting. The SDK mask
+redacts secret-looking fields, omits inline image payloads, and truncates large
+text before export. Production deployments can also set
+`langfuse_environment`, `langfuse_release`, `langfuse_sample_rate`,
+`langfuse_timeout`, `langfuse_flush_at`, and `langfuse_flush_interval` in
+`config.yaml`.
+
 For local self-hosted Langfuse:
 
 ```bash
@@ -634,12 +648,14 @@ instead of calling those helpers directly.
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/ingest` | Ingest local, Azure Blob, or AWS S3 content. |
+| `POST` | `/ingest/blob` | Upload one file via multipart form and ingest it. |
 | `POST` | `/retrieve` | Return contexts and sources without answer generation. |
 | `POST` | `/answer` | Return or stream an LLM answer with contexts and sources. |
 | `GET` | `/files` | List ingested documents. |
 | `DELETE` | `/files` | Delete documents. |
 | `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED`. |
 | `POST` | `/files/retry` | Retry failed documents. |
+| `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob sources. |
 | `GET` | `/metadata/{doc_id}` | Read document metadata. |
 | `POST` | `/metadata/{doc_id}` | Merge or replace document metadata. |
 | `POST` | `/metadata/search` | Find document IDs matching metadata filters. |
@@ -650,7 +666,8 @@ instead of calling those helpers directly.
 | `DELETE` | `/workspaces/{workspace}` | Delete/reset one workspace. |
 | `GET` | `/health` | Health and storage status. |
 
-All write endpoints accept optional `workspace`. Read endpoints accept
+Workspace-scoped read/write endpoints accept optional `workspace`; workspace
+lifecycle endpoints name the workspace explicitly. Query endpoints accept
 `workspaces` for federated search. `/answer` streams by default; pass
 `stream: false` only when a single JSON response is required.
 
@@ -668,12 +685,15 @@ uv sync
 ```bash
 make ci         # ruff, pyright, import-linter, unit tests (~2 min)
 make ci-full    # + integration tests (needs PostgreSQL + pgvector)
-make ci-e2e     # + E2E smoke tests (needs PG18 + AGE + API keys)
+make ci-e2e     # + E2E smoke tests (needs PG18 + AGE)
 ```
 
 ### CI (GitHub Actions)
 
-The badge above runs `ruff` → `pyright` → `import-linter` → `unit tests` → `integration tests` on every push and PR. E2E tests are `workflow_dispatch` only. Import boundary contracts are defined in `pyproject.toml` under `[tool.importlinter]`.
+The badge above runs `ruff`, `pyright`, `import-linter`, unit tests, and the
+lightweight integration suite on every push and PR. The full PostgreSQL
+18/AGE runtime smoke is `workflow_dispatch` only. Import boundary contracts
+are defined in `pyproject.toml` under `[tool.importlinter]`.
 
 ### Opt-in E2E smoke
 

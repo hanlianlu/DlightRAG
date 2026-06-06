@@ -10,21 +10,28 @@ Request and response structures for `ingest`, `retrieve`, and `answer` — share
 ```python
 from dlightrag import RAGServiceManager, DlightragConfig
 
-manager = RAGServiceManager(DlightragConfig())
+manager = await RAGServiceManager.create(DlightragConfig())
+try:
+    # Local files or directory
+    result = await manager.aingest("default", source_type="local", path="./docs")
 
-# Local files or directory
-result = await manager.aingest("default", source_type="local", path="./docs")
+    # Azure Blob Storage
+    result = await manager.aingest(
+        "default",
+        source_type="azure_blob",
+        container_name="documents",
+        prefix="reports/",       # or blob_path="reports/q1.pdf"
+    )
 
-# Azure Blob Storage
-result = await manager.aingest(
-    "default",
-    source_type="azure_blob",
-    container_name="documents",
-    prefix="reports/",       # or blob_path="reports/q1.pdf"
-)
-
-# AWS S3
-result = await manager.aingest("default", source_type="s3", bucket="my-bucket", key="docs/q1.pdf")
+    # AWS S3
+    result = await manager.aingest(
+        "default",
+        source_type="s3",
+        bucket="my-bucket",
+        key="docs/q1.pdf",
+    )
+finally:
+    await manager.close()
 ```
 
 ### REST API
@@ -51,33 +58,107 @@ curl -X POST http://localhost:8100/ingest \
 | `metadata` | `object` | — | Declared/custom ingest metadata |
 | `metadata_policy` | `string` | — | `validate`, `reject_unknown`, or `store_only` |
 
+REST also supports one-file multipart upload at `POST /ingest/blob`. Fields are
+`file` plus optional `workspace`, `title`, `author`, `metadata` (JSON string),
+and `metadata_policy`. The file is staged under DlightRAG's managed input
+directory and ingested through the same local pipeline.
+
 ### MCP Server
 
-Same parameters as REST API, passed as tool arguments.
+MCP `ingest` exposes the same source and metadata arguments as REST `/ingest`,
+passed as tool arguments.
+
+### Metadata Schema And Policy
+
+The filterable metadata schema is service configuration, not an ingest-time
+API payload. Declare custom filter fields in `config.yaml` under
+`metadata.fields`; REST, MCP, and SDK ingest calls then pass values for those
+fields through `metadata`.
+
+```yaml
+metadata:
+  allow_ad_hoc_json: true
+  default_ingest_policy: validate
+  fields:
+    department:
+      type: string
+      filter_ops: ["exact"]
+```
+
+For string fields with `exact` filtering, the default normalizer is
+`casefold_trim`; set `normalizer: identity` only for case-sensitive identifiers.
+There is no separate `indexed` flag: declaring a field with filter operations
+is the product signal that it is filterable.
+
+System metadata such as `filename`, `filename_stem`, `file_extension`,
+`doc_title`, `doc_author`, parser details, and ingest strategy is extracted or
+mapped by DlightRAG. User metadata follows the configured policy:
+
+| Policy | Behavior |
+|---|---|
+| `validate` | Default. Declared filterable fields are normalized and promoted to `custom_metadata`; undeclared fields are stored as JSON enrichment when `allow_ad_hoc_json` is true. |
+| `reject_unknown` | Rejects undeclared user metadata fields. |
+| `store_only` | Stores user metadata as JSON enrichment but does not promote declared fields for filtering. |
+
+Query filters use the declared schema. For custom metadata, pass
+`filters.custom`, for example `{"custom": {"department": "finance"}}`.
+Undeclared JSON enrichment is retained for display/debugging, but is not part
+of the supported filter surface.
 
 ### Ingestion Response
 
+Single-file ingestion returns the concrete file result from the unified
+LightRAG path:
+
 ```json
 {
-  "status": "success",
-  "source_type": "local",
-  "processed": 5,
-  "skipped": 2,
-  "total_files": 7,
-  "source_path": "/data/docs",
-  "skipped_files": ["duplicate.pdf", "already_indexed.pdf"],
-  "stats": { "total": 7, "indexed": 5, "dropped_by_type": 0 }
+  "doc_id": "file-doc-abc123",
+  "source_kind": "document",
+  "chunks": ["chunk-a", "chunk-b"],
+  "ingest_strategy": "lightrag_sidecar_unified",
+  "parse_engine": "mineru",
+  "process_options": {}
+}
+```
+
+Directory or prefix ingestion wraps those per-file results:
+
+```json
+{
+  "processed": 2,
+  "errors": [],
+  "results": [
+    {
+      "doc_id": "file-doc-abc123",
+      "source_kind": "document",
+      "chunks": ["chunk-a", "chunk-b"],
+      "ingest_strategy": "lightrag_sidecar_unified",
+      "parse_engine": "mineru",
+      "process_options": {}
+    },
+    {
+      "doc_id": "file-doc-def456",
+      "source_kind": "image",
+      "chunks": ["chunk-c"],
+      "ingest_strategy": "direct_image_with_visual_semantics"
+    }
+  ]
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | `string` | `success` or `error` |
-| `processed` | `int` | Files successfully ingested |
-| `skipped` | `int` | Files skipped (dedup or unsupported) |
-| `total_files` | `int` | Total files found |
-| `skipped_files` | `list` | Names of skipped files |
-| `error` | `string` | Error message (only when `status: "error"`) |
+| `doc_id` | `string` | Canonical document id for a single ingested file |
+| `source_kind` | `string` | `document`, `image`, or `skipped` |
+| `status` | `string` | Present for unsupported-format skips (`skipped`) |
+| `reason` | `string` | Skip reason when a file is not ingested |
+| `chunks` | `list[string]` | LightRAG and direct-visual chunk IDs created or reused |
+| `ingest_strategy` | `string` | Ingestion path used for successful files |
+| `parse_engine` | `string` | Parser selected for document files |
+| `process_options` | `object \| string` | LightRAG parser process options |
+| `processed` | `int` | Files successfully processed for directory/prefix ingestion |
+| `errors` | `list[string]` | Local directory files that raised during ingestion |
+| `results` | `list[object]` | Per-file results |
 | `replica_replay_lsn` | `string` | Present when `read_after_write_mode: wait_for_replay` waited for replica WAL replay |
 
 
@@ -444,7 +525,7 @@ reasoning:
 with open("photo.png", "rb") as f:
     img_bytes = f.read()
 
-result = await service.aanswer(
+result = await manager.aanswer(
     query="What does this diagram show?",
     query_images=[base64.b64encode(img_bytes).decode("ascii")],
     session_id="chat-123",
@@ -462,7 +543,7 @@ curl -X POST http://localhost:8100/answer \
     "session_id": "chat-123"
   }'
 
-# REST API — file path (server-accessible)
+# REST API — lower-level direct visual payload
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{

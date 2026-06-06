@@ -15,4 +15,3 @@ def sse_event(event: str, payload: Any) -> str:
 
 
 __all__ = ["sse_event"]
-
