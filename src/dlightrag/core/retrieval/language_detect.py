@@ -7,6 +7,7 @@ language-appropriate tokenization and stemming in BM25 indexes.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any
 
@@ -92,10 +93,17 @@ async def verify_pg_config(pool: Any, config_name: str) -> str:
     if config_name == _FALLBACK_CONFIG:
         return config_name
     try:
-        async with pool.acquire() as conn:
-            exists = await conn.fetchval(
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchval(
                 "SELECT 1 FROM pg_ts_config WHERE cfgname = $1", config_name
             )
+
+        run = getattr(pool, "run", None)
+        if callable(run) and inspect.iscoroutinefunction(run):
+            exists = await run(_operation)
+        else:
+            async with pool.acquire() as conn:
+                exists = await _operation(conn)
         if exists:
             return config_name
         logger.warning(

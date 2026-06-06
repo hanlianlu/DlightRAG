@@ -202,6 +202,13 @@ postgres_required_major: 18
 # postgres_replica_user: dlightrag_reader
 # postgres_replica_password: ""
 # postgres_replica_database: dlightrag
+# SSL settings are shared by primary and replica and are bridged to both
+# LightRAG and DlightRAG-owned PostgreSQL connections.
+# postgres_ssl_mode: require  # disable | allow | prefer | require | verify-ca | verify-full
+# postgres_ssl_cert:
+# postgres_ssl_key:
+# postgres_ssl_root_cert:
+# postgres_ssl_crl:
 
 vector_storage: PGVectorStorage
 graph_storage: PGGraphStorage
@@ -216,6 +223,10 @@ pg_hnsw_ef_construction: 256
 pg_hnsw_ef_search: 256
 postgres_session_settings: {}
 postgres_statement_cache_size:
+postgres_connection_retries: 10
+postgres_connection_retry_backoff: 3.0
+postgres_connection_retry_backoff_max: 30.0
+postgres_pool_close_timeout: 5.0
 
 # ─────────────────────────────────────────────────────────────────
 # Ingestion Performance

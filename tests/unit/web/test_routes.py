@@ -1,9 +1,9 @@
-"""Smoke tests for web routes using FastAPI TestClient."""
+"""Smoke tests for web routes."""
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture()
@@ -40,28 +40,32 @@ def app():
 
 
 @pytest.fixture()
-def client(app):
-    return TestClient(app)
+async def client(app):
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        follow_redirects=False,
+    ) as c:
+        yield c
 
 
-def test_index_page(client):
-    resp = client.get("/web/")
+async def test_index_page(client):
+    resp = await client.get("/web/")
     assert resp.status_code == 200
     assert "DlightRAG" in resp.text
     assert "query-form" in resp.text
 
 
-def test_file_list(client):
-    resp = client.get("/web/files")
+async def test_file_list(client):
+    resp = await client.get("/web/files")
     assert resp.status_code == 200
     assert "report.pdf" in resp.text
     assert "analysis.xlsx" in resp.text
 
 
-def test_workspace_switch_route_is_not_exposed(client):
-    resp = client.post(
+async def test_workspace_switch_route_is_not_exposed(client):
+    resp = await client.post(
         "/web/workspaces/switch",
         data={"workspace": "finance"},
-        follow_redirects=False,
     )
     assert resp.status_code == 404

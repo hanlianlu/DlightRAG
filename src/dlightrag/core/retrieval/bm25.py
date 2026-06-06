@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 from dlightrag.storage.sql_identifiers import pg_identifier
@@ -58,25 +59,37 @@ class PostgresBM25:
         self._workspace = workspace
         self._top_k = top_k
 
+    async def _run(self, operation):
+        run = getattr(self._pool, "run", None)
+        if callable(run) and inspect.iscoroutinefunction(run):
+            return await run(operation)
+        async with self._pool.acquire() as conn:
+            return await operation(conn)
+
     async def ensure_index(self, *, text_config: str = "simple") -> None:
         if text_config not in BM25_TEXT_CONFIGS:
             raise ValueError(f"unsupported BM25 text_config: {text_config}")
-        async with self._pool.acquire() as conn:
+
+        async def _operation(conn: Any) -> None:
             await conn.execute(
                 f"CREATE INDEX IF NOT EXISTS {BM25_INDEX} "
                 f"ON {BM25_TABLE} USING bm25(content) "
                 f"WITH (text_config='{text_config}')"
             )
 
+        await self._run(_operation)
+
     async def verify_index(self) -> None:
         """Verify the BM25 index exists without attempting DDL."""
-        async with self._pool.acquire() as conn:
-            exists = await conn.fetchval(
+        async def _operation(conn: Any) -> bool:
+            return await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)",
                 BM25_INDEX,
             )
-            if not exists:
-                raise RuntimeError(f"{BM25_INDEX} is missing; create it on the primary first")
+
+        exists = await self._run(_operation)
+        if not exists:
+            raise RuntimeError(f"{BM25_INDEX} is missing; create it on the primary first")
 
     async def search(
         self,
@@ -89,17 +102,19 @@ class PostgresBM25:
             return []
         limit = self._top_k if top_k is None else top_k
         sql = build_bm25_sql(candidate_ids=candidate_ids, limit=limit)
-        async with self._pool.acquire() as conn:
+
+        async def _operation(conn: Any) -> list[Any]:
             if candidate_ids is None:
-                rows = await conn.fetch(sql, query, self._workspace, int(limit))
-            else:
-                rows = await conn.fetch(
-                    sql,
-                    query,
-                    self._workspace,
-                    list(candidate_ids),
-                    int(limit),
-                )
+                return await conn.fetch(sql, query, self._workspace, int(limit))
+            return await conn.fetch(
+                sql,
+                query,
+                self._workspace,
+                list(candidate_ids),
+                int(limit),
+            )
+
+        rows = await self._run(_operation)
         return [
             {
                 "chunk_id": row["id"],

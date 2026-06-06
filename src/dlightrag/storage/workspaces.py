@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from dlightrag.config import PostgresTarget
+from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
 
 TABLE = "dlightrag_workspace_meta"
 
@@ -51,6 +52,14 @@ _DELETE = f"DELETE FROM {TABLE} WHERE workspace = $1"
 
 _EXISTS = f"SELECT 1 FROM {TABLE} WHERE workspace = $1 LIMIT 1"
 
+_SCHEMA_MIGRATIONS = (
+    Migration(
+        "0001_workspace_meta",
+        "Create and migrate workspace registry",
+        (_CREATE, *_MIGRATIONS),
+    ),
+)
+
 
 class PGWorkspaceRegistry:
     """Durable workspace registry backed by PostgreSQL."""
@@ -59,18 +68,18 @@ class PGWorkspaceRegistry:
         self._pool = pool
         self._target: PostgresTarget | None = target
 
-    async def _get_pool(self) -> Any:
+    async def _run(self, operation):
         if self._pool is not None:
-            return self._pool
+            async with self._pool.acquire() as conn:
+                return await operation(conn)
 
         from dlightrag.storage.pool import pg_pool
 
-        return await pg_pool.get(self._target)
+        return await pg_pool.run(operation, target=self._target)
 
     async def initialize(self, *, read_only: bool = False) -> None:
         """Create or verify the registry table."""
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
+        async def _operation(conn: Any) -> None:
             if read_only:
                 exists = await conn.fetchval(
                     "SELECT EXISTS ("
@@ -81,11 +90,20 @@ class PGWorkspaceRegistry:
                 )
                 if not exists:
                     raise RuntimeError(f"{TABLE} is missing; initialize it on the primary first")
+                await verify_migrations(
+                    conn,
+                    scope="workspace_registry",
+                    migrations=_SCHEMA_MIGRATIONS,
+                )
                 return
 
-            await conn.execute(_CREATE)
-            for sql in _MIGRATIONS:
-                await conn.execute(sql)
+            await apply_migrations(
+                conn,
+                scope="workspace_registry",
+                migrations=_SCHEMA_MIGRATIONS,
+            )
+
+        await self._run(_operation)
 
     async def upsert(
         self,
@@ -95,16 +113,19 @@ class PGWorkspaceRegistry:
         embedding_model: str,
     ) -> None:
         """Insert or update one workspace registry row."""
-        pool = await self._get_pool()
         label = (display_name or workspace).strip() or workspace
-        async with pool.acquire() as conn:
+
+        async def _operation(conn: Any) -> None:
             await conn.execute(_UPSERT, workspace, label, embedding_model)
+
+        await self._run(_operation)
 
     async def list(self) -> list[dict[str, Any]]:
         """Return all registered workspaces."""
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(_LIST)
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(_LIST)
+
+        rows = await self._run(_operation)
         return [dict(row) for row in rows]
 
     async def list_workspaces(self) -> list[str]:
@@ -113,16 +134,18 @@ class PGWorkspaceRegistry:
 
     async def exists(self, workspace: str) -> bool:
         """Return True when a registry row exists."""
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(_EXISTS, workspace)
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(_EXISTS, workspace)
+
+        row = await self._run(_operation)
         return row is not None
 
     async def delete(self, workspace: str) -> None:
         """Delete one workspace registry row."""
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
+        async def _operation(conn: Any) -> None:
             await conn.execute(_DELETE, workspace)
+
+        await self._run(_operation)
 
 
 __all__ = ["PGWorkspaceRegistry"]

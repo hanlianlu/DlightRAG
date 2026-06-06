@@ -18,7 +18,6 @@ import uuid
 from collections.abc import Awaitable, Callable
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
-from urllib.parse import parse_qsl
 
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
@@ -63,13 +62,6 @@ _STORAGE_ATTRS = (
     "llm_response_cache",
     "doc_status",
 )
-
-
-def _parse_postgres_server_settings(raw: Any) -> dict[str, str]:
-    """Parse LightRAG's POSTGRES_SERVER_SETTINGS query-string format."""
-    if raw is None:
-        return {}
-    return {key: value for key, value in parse_qsl(str(raw), keep_blank_values=False)}
 
 
 def _ensure_venv_in_path() -> None:
@@ -431,9 +423,8 @@ class RAGService:
             from dlightrag.core.retrieval.bm25 import PostgresBM25
             from dlightrag.storage.pool import pg_pool
 
-            pool = await pg_pool.get()
             self._bm25 = PostgresBM25(
-                pool=pool,
+                pool=pg_pool,
                 workspace=config.workspace,
                 top_k=config.bm25_top_k,
             )
@@ -450,7 +441,7 @@ class RAGService:
                     # Sample from existing chunks if available; else fall back
                     sample_chunks: list[dict[str, Any]] = []
                     text_config = await detect_bm25_config(sample_chunks)
-                    text_config = await verify_pg_config(pool, text_config)
+                    text_config = await verify_pg_config(pg_pool, text_config)
                 await self._bm25.ensure_index(text_config=text_config)
 
         from dlightrag.core.retrieval.retriever import UnifiedRetriever
@@ -491,48 +482,14 @@ class RAGService:
         must not run that path, so we attach the already-constructed storage
         objects to a read-only PostgreSQLDB pool and verify required tables.
         """
-        import asyncpg
-        from lightrag.kg.postgres_impl import ClientManager, PostgreSQLDB, namespace_to_table_name
+        from lightrag.kg.postgres_impl import ClientManager, namespace_to_table_name
         from lightrag.lightrag import StoragesStatus
 
-        try:
-            from pgvector.asyncpg import register_vector
-        except ImportError:  # pragma: no cover - pgvector is a runtime dependency here
-            register_vector = None  # type: ignore[assignment]
+        from dlightrag.storage.lightrag_postgres import ReadOnlyPostgreSQLDB
 
         db_config = ClientManager.get_config(vector_storage=self.config.vector_storage)
-        db = PostgreSQLDB(db_config)
-
-        async def _init_connection(connection: asyncpg.Connection) -> None:
-            if db.enable_vector and register_vector is not None:
-                await register_vector(connection)
-
-        pool_kwargs: dict[str, Any] = {
-            "user": db.user,
-            "password": db.password,
-            "database": db.database,
-            "host": db.host,
-            "port": db.port,
-            "min_size": 1,
-            "max_size": db.max,
-        }
-        if db.statement_cache_size is not None:
-            pool_kwargs["statement_cache_size"] = int(db.statement_cache_size)
-        ssl_context = db._create_ssl_context()
-        if ssl_context is not None:
-            pool_kwargs["ssl"] = ssl_context
-        elif db.ssl_mode:
-            ssl_mode = str(db.ssl_mode).lower()
-            if ssl_mode in {"require", "prefer"}:
-                pool_kwargs["ssl"] = True
-            elif ssl_mode == "disable":
-                pool_kwargs["ssl"] = False
-        if db.server_settings:
-            settings = _parse_postgres_server_settings(db.server_settings)
-            if settings:
-                pool_kwargs["server_settings"] = settings
-
-        db.pool = await asyncpg.create_pool(**pool_kwargs, init=_init_connection)
+        db = ReadOnlyPostgreSQLDB(db_config)
+        await db.initdb()
 
         storages = [
             lightrag.full_docs,

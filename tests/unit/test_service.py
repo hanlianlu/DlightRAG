@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dlightrag.config import DlightragConfig
-from dlightrag.core.service import RAGService, _parse_postgres_server_settings
+from dlightrag.core.service import RAGService
+from dlightrag.storage.lightrag_postgres import parse_postgres_server_settings
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
@@ -18,7 +19,7 @@ from dlightrag.core.service import RAGService, _parse_postgres_server_settings
 
 
 def test_parse_postgres_server_settings_decodes_query_string() -> None:
-    assert _parse_postgres_server_settings(
+    assert parse_postgres_server_settings(
         "hnsw.ef_search=384&application_name=dlightrag+api&statement_timeout=60000"
     ) == {
         "hnsw.ef_search": "384",

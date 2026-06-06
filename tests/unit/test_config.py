@@ -2,6 +2,7 @@
 """Tests for the new nested provider config schema."""
 
 import os
+import ssl
 
 import pytest
 from pydantic import ValidationError
@@ -410,6 +411,73 @@ def test_pg_connection_kwargs_uses_primary_fields_by_default() -> None:
     }
 
 
+def test_pg_connection_kwargs_includes_ssl_require_and_exports_lightrag_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in (
+        "POSTGRES_SSL_MODE",
+        "POSTGRES_SSL_CERT",
+        "POSTGRES_SSL_KEY",
+        "POSTGRES_SSL_ROOT_CERT",
+        "POSTGRES_SSL_CRL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        postgres_ssl_mode="require",
+        postgres_ssl_cert="/certs/client.crt",
+        postgres_ssl_key="/certs/client.key",
+        postgres_ssl_root_cert="/certs/root.crt",
+        postgres_ssl_crl="/certs/root.crl",
+    )
+
+    assert cfg.pg_connection_kwargs()["ssl"] is True
+    assert os.environ["POSTGRES_SSL_MODE"] == "require"
+    assert os.environ["POSTGRES_SSL_CERT"] == "/certs/client.crt"
+    assert os.environ["POSTGRES_SSL_KEY"] == "/certs/client.key"
+    assert os.environ["POSTGRES_SSL_ROOT_CERT"] == "/certs/root.crt"
+    assert os.environ["POSTGRES_SSL_CRL"] == "/certs/root.crl"
+
+
+def test_pg_connection_kwargs_disables_ssl() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        postgres_ssl_mode="disable",
+    )
+
+    assert cfg.pg_connection_kwargs()["ssl"] is False
+
+
+def test_pg_connection_kwargs_builds_verify_ssl_context() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+        postgres_ssl_mode="verify-ca",
+    )
+
+    ssl_value = cfg.pg_connection_kwargs()["ssl"]
+    assert isinstance(ssl_value, ssl.SSLContext)
+    assert ssl_value.check_hostname is False
+
+
 def test_query_runtime_uses_replica_with_primary_fallback() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
@@ -654,6 +722,10 @@ def test_postgres_session_settings_merge_hnsw_defaults(
 ) -> None:
     monkeypatch.delenv("POSTGRES_SERVER_SETTINGS", raising=False)
     monkeypatch.delenv("POSTGRES_STATEMENT_CACHE_SIZE", raising=False)
+    monkeypatch.delenv("POSTGRES_CONNECTION_RETRIES", raising=False)
+    monkeypatch.delenv("POSTGRES_CONNECTION_RETRY_BACKOFF", raising=False)
+    monkeypatch.delenv("POSTGRES_CONNECTION_RETRY_BACKOFF_MAX", raising=False)
+    monkeypatch.delenv("POSTGRES_POOL_CLOSE_TIMEOUT", raising=False)
 
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
@@ -668,6 +740,10 @@ def test_postgres_session_settings_merge_hnsw_defaults(
             "statement_timeout": "60000",
         },
         postgres_statement_cache_size=256,
+        postgres_connection_retries=12,
+        postgres_connection_retry_backoff=1.5,
+        postgres_connection_retry_backoff_max=9.0,
+        postgres_pool_close_timeout=2.5,
     )
 
     assert cfg.postgres_server_settings_dict() == {
@@ -679,6 +755,10 @@ def test_postgres_session_settings_merge_hnsw_defaults(
         "hnsw.ef_search=384&application_name=dlightrag+api&statement_timeout=60000"
     )
     assert os.environ["POSTGRES_STATEMENT_CACHE_SIZE"] == "256"
+    assert os.environ["POSTGRES_CONNECTION_RETRIES"] == "12"
+    assert os.environ["POSTGRES_CONNECTION_RETRY_BACKOFF"] == "1.5"
+    assert os.environ["POSTGRES_CONNECTION_RETRY_BACKOFF_MAX"] == "9.0"
+    assert os.environ["POSTGRES_POOL_CLOSE_TIMEOUT"] == "2.5"
 
 
 def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatch) -> None:
