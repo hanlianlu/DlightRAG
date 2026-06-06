@@ -122,10 +122,10 @@ class TestBuildImageLabel:
     def test_label_with_other_sidecar_type(self) -> None:
         chunk = {
             "metadata": {},
-            "sidecar": {"type": "direct_image", "path": "/img/x.png"},
+            "sidecar": {"type": "custom_visual", "path": "/img/x.png"},
         }
         result = _build_image_label(cite_tag="[1-1]", chunk=chunk, filename="paper.pdf")
-        assert "(sidecar: direct_image)" in result
+        assert "(sidecar: custom_visual)" in result
 
     def test_label_falls_back_to_filename(self) -> None:
         chunk = {"metadata": {}}

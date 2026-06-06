@@ -8,7 +8,7 @@
         <mxCell id="title" value="DlightRAG Unified LightRAG Main Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
           <mxGeometry x="64" y="24" width="680" height="34" as="geometry"/>
         </mxCell>
-        <mxCell id="subtitle" value="One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.&lt;br&gt;DlightRAG adds metadata governance, query-image memory, direct visual search, BM25 fusion, visual assets, and validated cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
+        <mxCell id="subtitle" value="One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.&lt;br&gt;DlightRAG adds metadata governance, query-image visual search, BM25 fusion, visual assets, and validated cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
           <mxGeometry x="64" y="66" width="1040" height="40" as="geometry"/>
         </mxCell>
 
@@ -50,7 +50,7 @@
         <mxCell id="ingestion" value="&lt;b&gt;Unified Ingestion Engine&lt;/b&gt;&lt;br&gt;single LightRAG-main path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="455" width="276" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="visual_path" value="&lt;b&gt;Direct Visual Path&lt;/b&gt;&lt;br&gt;native and extracted images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="visual_path" value="&lt;b&gt;Image Vector Alignment&lt;/b&gt;&lt;br&gt;existing LightRAG drawing chunks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="535" width="276" height="50" as="geometry"/>
         </mxCell>
 
@@ -73,7 +73,7 @@
         <mxCell id="filter_scope" value="&lt;b&gt;Filter Scope&lt;/b&gt;&lt;br&gt;metadata in-filter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="1034" y="360" width="126" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="retriever" value="&lt;b&gt;UnifiedRetriever&lt;/b&gt;&lt;br&gt;LightRAG mix + BM25 + visual" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="retriever" value="&lt;b&gt;UnifiedRetriever&lt;/b&gt;&lt;br&gt;LightRAG mix + BM25 + query images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="455" width="276" height="60" as="geometry"/>
         </mxCell>
         <mxCell id="fusion" value="&lt;b&gt;Fusion/Rerank&lt;/b&gt;&lt;br&gt;RRF then rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">

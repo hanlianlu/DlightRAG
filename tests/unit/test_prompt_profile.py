@@ -81,7 +81,6 @@ def test_exported_guidance_constants_do_not_declare_identity() -> None:
         "CITATION_GUIDANCE",
         "ANSWER_CITATION_EXAMPLE",
         "PLANNER_GUIDANCE",
-        "VISUAL_SEMANTIC_GUIDANCE",
         "RERANK_GUIDANCE",
         "VISUAL_RERANK_PROMPT_TEMPLATE",
         "LISTWISE_RERANK_PROMPT",

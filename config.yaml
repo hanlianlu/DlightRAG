@@ -142,14 +142,15 @@ parser_sidecars:
   vlm:
     enabled: true
     max_image_bytes: 5242880
-    # surrounding_leading_max_tokens: 2000
-    # surrounding_trailing_max_tokens: 2000
+    surrounding_leading_max_tokens: 128
+    surrounding_trailing_max_tokens: 128
   mineru:
     api_mode: local
     local_endpoint: http://127.0.0.1:8210
     local_backend: hybrid-auto-engine
     local_parse_method: auto
     local_image_analysis: true
+    auxiliary_block_policy: conservative
     enable_table: true
     enable_formula: true
     poll_interval_seconds: 2

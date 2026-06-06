@@ -17,10 +17,11 @@ As of LightRAG 1.5.0 both patched surfaces are still missing upstream.
 
 MinerU parser hygiene: current LightRAG MinerU IR builder serializes unknown
 content-list item types as body text. MinerU emits page furniture such as
-headers, footers, page numbers, side notes, and page footnotes in content_list
-outputs; indexing those as body text pollutes chunks, KG extraction, BM25, and
-citations. DlightRAG patches the builder at the parser boundary when a runtime
-behavior probe shows upstream still indexes those auxiliary blocks.
+headers, footers, and printed page numbers in content_list outputs; indexing
+those as body text pollutes chunks, KG extraction, BM25, and citations.
+DlightRAG patches the builder at the parser boundary when a runtime behavior
+probe shows upstream still indexes those auxiliary blocks. More ambiguous page
+notes are controlled by ``DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY``.
 
 Keep this module small and delete patches as upstream covers them.
 

@@ -217,8 +217,8 @@ class VLMSidecarConfig(BaseModel):
     enabled: bool = True
     max_image_bytes: int = 5_242_880
     min_image_pixel: int = 100
-    surrounding_leading_max_tokens: int | None = None
-    surrounding_trailing_max_tokens: int | None = None
+    surrounding_leading_max_tokens: int | None = 128
+    surrounding_trailing_max_tokens: int | None = 128
 
 
 class MinerUSidecarConfig(BaseModel):
@@ -243,6 +243,7 @@ class MinerUSidecarConfig(BaseModel):
     local_backend: str = "hybrid-auto-engine"
     local_parse_method: Literal["auto", "txt", "ocr"] = "auto"
     local_image_analysis: bool = True
+    auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
     local_start_page_id: int | None = None
     local_end_page_id: int | None = None
 
@@ -1019,6 +1020,10 @@ class DlightragConfig(BaseSettings):
         """Bridge LightRAG runtime filesystem roots controlled by DlightRAG."""
         if force or "INPUT_DIR" not in os.environ:
             os.environ["INPUT_DIR"] = str(self.input_dir_path)
+        if force or "DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY" not in os.environ:
+            os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] = (
+                self.parser_sidecars.mineru.auxiliary_block_policy
+            )
 
     def model_post_init(self, __context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""

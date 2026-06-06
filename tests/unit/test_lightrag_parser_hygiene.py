@@ -33,6 +33,9 @@ def test_mineru_auxiliary_filter_preserves_semantic_and_multimodal_items() -> No
     filtered = filter_mineru_auxiliary_blocks(content_list)
 
     assert [item["type"] for item in filtered] == [
+        "aside_text",
+        "margin_note",
+        "page_footnote",
         "text",
         "list",
         "code",
@@ -41,6 +44,20 @@ def test_mineru_auxiliary_filter_preserves_semantic_and_multimodal_items() -> No
         "image",
         "chart",
     ]
+
+
+def test_mineru_auxiliary_filter_can_drop_extended_page_notes(monkeypatch) -> None:
+    monkeypatch.setenv("DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY", "extended")
+    content_list = [
+        {"type": "header", "text": "Running header"},
+        {"type": "aside_text", "text": "Margin note"},
+        {"type": "page_footnote", "text": "Page footnote"},
+        {"type": "text", "text": "Body text"},
+    ]
+
+    filtered = filter_mineru_auxiliary_blocks(content_list)
+
+    assert [item["type"] for item in filtered] == ["text"]
 
 
 def test_mineru_ir_builder_patch_drops_auxiliary_page_furniture(tmp_path: Path) -> None:
@@ -67,5 +84,5 @@ def test_mineru_ir_builder_patch_drops_auxiliary_page_furniture(tmp_path: Path) 
     assert "Journal header" not in content
     assert "Publisher footer" not in content
     assert "42" not in content
-    assert "Margin note" not in content
-    assert "Author footnote" not in content
+    assert "Margin note" in content
+    assert "Author footnote" in content

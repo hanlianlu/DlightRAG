@@ -269,7 +269,7 @@ async def test_backend_hydrates_v150_drawing_sidecar_from_drawings_json(
                 "drawings": {
                     "im-hash-0001": {
                         "id": "im-hash-0001",
-                        "path": "sample.blocks.assets/img-0001.png",
+                        "img_path": "sample.blocks.assets/img-0001.png",
                         "format": "png",
                     }
                 }
