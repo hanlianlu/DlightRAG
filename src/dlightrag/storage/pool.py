@@ -24,8 +24,6 @@ from typing import Any, TypeVar
 
 import asyncpg
 
-from dlightrag.config import PostgresTarget
-
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MIN_SIZE = 2
@@ -39,10 +37,10 @@ T = TypeVar("T")
 
 
 class PGPool:
-    """Lazy-created asyncpg pools keyed by primary/replica target."""
+    """Lazy-created asyncpg pool for DlightRAG domain stores."""
 
     def __init__(self) -> None:
-        self._pools: dict[PostgresTarget, asyncpg.Pool] = {}
+        self._pool: asyncpg.Pool | None = None
         self._lock: asyncio.Lock | None = None
         self._transient_exceptions = (
             asyncio.TimeoutError,
@@ -62,21 +60,20 @@ class PGPool:
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def get(self, target: PostgresTarget | None = None) -> asyncpg.Pool:
+    async def get(self) -> asyncpg.Pool:
         """Return a shared pool, creating it on first call."""
         from dlightrag.config import get_config
 
         config = get_config()
-        resolved_target = target or config.pg_target_for_runtime()
-        if resolved_target in self._pools:
-            return self._pools[resolved_target]
+        if self._pool is not None:
+            return self._pool
         async with self._get_lock():
-            if resolved_target in self._pools:
-                return self._pools[resolved_target]
+            if self._pool is not None:
+                return self._pool
 
             min_size = getattr(config, "postgres_pool_min_size", _DEFAULT_MIN_SIZE)
             max_size = getattr(config, "postgres_pool_max_size", _DEFAULT_MAX_SIZE)
-            endpoint = config.pg_connection_kwargs(resolved_target)
+            endpoint = config.pg_connection_kwargs()
             pool_kwargs: dict[str, Any] = dict(endpoint)
             pool_kwargs["min_size"] = min_size
             pool_kwargs["max_size"] = max_size
@@ -87,10 +84,9 @@ class PGPool:
             if server_settings:
                 pool_kwargs["server_settings"] = server_settings
             pool = await asyncpg.create_pool(**pool_kwargs)
-            self._pools[resolved_target] = pool
+            self._pool = pool
             logger.info(
-                "DlightRAG %s domain store pool created (min=%d, max=%d)",
-                resolved_target,
+                "DlightRAG domain store pool created (min=%d, max=%d)",
                 min_size,
                 max_size,
             )
@@ -99,14 +95,11 @@ class PGPool:
     async def run(
         self,
         operation: Callable[[Any], Awaitable[T]],
-        *,
-        target: PostgresTarget | None = None,
     ) -> T:
         """Execute an operation through the shared pool with transient retry."""
         from dlightrag.config import get_config
 
         config = get_config()
-        resolved_target = target or config.pg_target_for_runtime()
         attempts = max(
             1,
             int(getattr(config, "postgres_connection_retries", _DEFAULT_RETRY_ATTEMPTS)),
@@ -132,17 +125,16 @@ class PGPool:
 
         for attempt in range(1, attempts + 1):
             try:
-                pool = await self.get(resolved_target)
+                pool = await self.get()
                 async with pool.acquire() as conn:
                     return await operation(conn)
             except self._transient_exceptions as exc:
-                await self.close(resolved_target, timeout=pool_close_timeout)
+                await self.close(timeout=pool_close_timeout)
                 if attempt >= attempts:
                     raise
                 sleep_for = min(backoff * (2 ** (attempt - 1)), backoff_max)
                 logger.warning(
-                    "DlightRAG %s domain store transient PostgreSQL error on attempt %d/%d: %r",
-                    resolved_target,
+                    "DlightRAG domain store transient PostgreSQL error on attempt %d/%d: %r",
                     attempt,
                     attempts,
                     exc,
@@ -154,32 +146,25 @@ class PGPool:
 
     async def close(
         self,
-        target: PostgresTarget | None = None,
         *,
         timeout: float | None = None,
     ) -> None:
-        """Close one pool or all pools. Safe to call multiple times."""
-        targets: list[PostgresTarget] = [target] if target is not None else ["primary", "replica"]
-        for resolved_target in targets:
-            pool = self._pools.get(resolved_target)
-            if pool is None:
-                continue
-            try:
-                if timeout is None:
-                    await pool.close()
-                else:
-                    await asyncio.wait_for(pool.close(), timeout=timeout)
-                logger.info("DlightRAG %s domain store pool closed", resolved_target)
-            except TimeoutError:
-                logger.error(
-                    "DlightRAG %s domain store pool close timed out after %.2fs",
-                    resolved_target,
-                    timeout,
-                )
-            except Exception:
-                logger.warning("DlightRAG domain store pool close failed", exc_info=True)
-            finally:
-                self._pools.pop(resolved_target, None)
+        """Close the shared pool. Safe to call multiple times."""
+        pool = self._pool
+        if pool is None:
+            return
+        try:
+            if timeout is None:
+                await pool.close()
+            else:
+                await asyncio.wait_for(pool.close(), timeout=timeout)
+            logger.info("DlightRAG domain store pool closed")
+        except TimeoutError:
+            logger.error("DlightRAG domain store pool close timed out after %.2fs", timeout)
+        except Exception:
+            logger.warning("DlightRAG domain store pool close failed", exc_info=True)
+        finally:
+            self._pool = None
 
 
 pg_pool = PGPool()

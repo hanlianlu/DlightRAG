@@ -162,7 +162,6 @@ pipeline and wraps the per-file results:
 | `processed` | `int` | Files represented in a directory/upload/prefix batch result |
 | `errors` | `list[string]` | Per-file ingest errors collected by the batch result; batch-level failures raise instead |
 | `results` | `list[object]` | Per-file results |
-| `replica_replay_lsn` | `string` | Present when `read_after_write_mode: wait_for_replay` waited for replica WAL replay |
 
 
 ## Retrieval & Answer

@@ -244,7 +244,7 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
     config = get_config()
 
     try:
-        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
     except Exception as exc:
         logger.warning("Failed to connect via asyncpg for orphan table cleanup: %s", exc)
         return 0
@@ -311,7 +311,7 @@ async def _clean_workspace_meta(workspace: str, config: Any | None = None) -> No
 
         config = get_config()
 
-    conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+    conn = await asyncpg.connect(**config.pg_connection_kwargs())
     try:
         exists = await conn.fetchval(
             "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
@@ -337,7 +337,7 @@ async def _list_all_workspaces(config: Any | None = None) -> list[str]:
 
             config = get_config()
 
-        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
         try:
             rows = await conn.fetch(
                 "SELECT DISTINCT workspace FROM dlightrag_workspace_meta ORDER BY workspace"
@@ -373,7 +373,7 @@ async def _drop_age_graphs(
     dropped: list[str] = []
 
     try:
-        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
     except Exception as exc:
         logger.warning("Failed to connect via asyncpg for AGE graph cleanup: %s", exc)
         return dropped
@@ -454,7 +454,7 @@ async def _drop_workspace_schemas_via_pg(
     dropped: list[str] = []
 
     try:
-        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
     except Exception as exc:
         logger.warning("Failed to connect via asyncpg for schema cleanup: %s", exc)
         return dropped
@@ -587,7 +587,7 @@ async def _drop_age_graphs_for_workspace(
     dropped: list[str] = []
 
     try:
-        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
     except Exception as exc:
         logger.warning("Failed to connect via asyncpg for orphan graph cleanup: %s", exc)
         return dropped
@@ -642,7 +642,7 @@ async def drop_global_orphaned_age_graphs(
     config = get_config()
 
     try:
-        conn = await asyncpg.connect(**config.pg_connection_kwargs("primary"))
+        conn = await asyncpg.connect(**config.pg_connection_kwargs())
     except Exception as exc:
         return {"dropped": [], "errors": [str(exc)]}
 

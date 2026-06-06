@@ -47,7 +47,7 @@ def config() -> MagicMock:
     return cfg
 
 
-async def test_clean_workspace_meta_uses_primary_config(monkeypatch, config) -> None:
+async def test_clean_workspace_meta_uses_configured_pg_endpoint(monkeypatch, config) -> None:
     conn = _Conn()
 
     async def fake_connect(**kwargs):
@@ -60,14 +60,14 @@ async def test_clean_workspace_meta_uses_primary_config(monkeypatch, config) -> 
 
     await _clean_workspace_meta("research", config=config)
 
-    config.pg_connection_kwargs.assert_called_once_with("primary")
+    config.pg_connection_kwargs.assert_called_once_with()
     assert conn.executed == [
         ("DELETE FROM dlightrag_workspace_meta WHERE workspace = $1", ("research",))
     ]
     assert conn.closed is True
 
 
-async def test_list_all_workspaces_uses_primary_config(monkeypatch, config) -> None:
+async def test_list_all_workspaces_uses_configured_pg_endpoint(monkeypatch, config) -> None:
     conn = _Conn()
 
     async def fake_connect(**kwargs):
@@ -80,7 +80,7 @@ async def test_list_all_workspaces_uses_primary_config(monkeypatch, config) -> N
 
     workspaces = await _list_all_workspaces(config=config)
 
-    config.pg_connection_kwargs.assert_called_once_with("primary")
+    config.pg_connection_kwargs.assert_called_once_with()
     assert workspaces == ["default", "research"]
     assert conn.closed is True
 

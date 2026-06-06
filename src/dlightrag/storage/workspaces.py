@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dlightrag.config import PostgresTarget
-from dlightrag.storage.migrations import Migration, apply_migrations, verify_migrations
+from dlightrag.storage.migrations import Migration, apply_migrations
 from dlightrag.utils import normalize_workspace
 
 TABLE = "dlightrag_workspace_meta"
@@ -71,9 +70,8 @@ _SCHEMA_MIGRATIONS = (
 class PGWorkspaceRegistry:
     """Durable workspace registry backed by PostgreSQL."""
 
-    def __init__(self, *, pool: Any = None, target: PostgresTarget | None = None) -> None:
+    def __init__(self, *, pool: Any = None) -> None:
         self._pool = pool
-        self._target: PostgresTarget | None = target
 
     async def _run(self, operation):
         if self._pool is not None:
@@ -82,29 +80,12 @@ class PGWorkspaceRegistry:
 
         from dlightrag.storage.pool import pg_pool
 
-        return await pg_pool.run(operation, target=self._target)
+        return await pg_pool.run(operation)
 
-    async def initialize(self, *, read_only: bool = False) -> None:
+    async def initialize(self) -> None:
         """Create or verify the registry table."""
 
         async def _operation(conn: Any) -> None:
-            if read_only:
-                exists = await conn.fetchval(
-                    "SELECT EXISTS ("
-                    "SELECT 1 FROM information_schema.tables "
-                    "WHERE table_schema = 'public' AND table_name = $1"
-                    ")",
-                    TABLE,
-                )
-                if not exists:
-                    raise RuntimeError(f"{TABLE} is missing; initialize it on the primary first")
-                await verify_migrations(
-                    conn,
-                    scope="workspace_registry",
-                    migrations=_SCHEMA_MIGRATIONS,
-                )
-                return
-
             await apply_migrations(
                 conn,
                 scope="workspace_registry",

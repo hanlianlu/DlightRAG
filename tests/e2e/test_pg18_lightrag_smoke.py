@@ -143,22 +143,7 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
             )
         assert any(row["id"] == chunk_id for row in vector_rows)
 
-        query_cfg = make_e2e_config(
-            working_dir=tmp_path / "query-storage",
-            workspace=workspace,
-            conn_kwargs=conn_kwargs,
-            runtime_role="query",
-        )
-        set_config(query_cfg)
-        install_fake_model_functions(monkeypatch, dim=query_cfg.embedding.dim)
-        query_service = await RAGService.create(config=query_cfg, enable_vlm=True)
-        try:
-            assert (await query_service.aget_metadata(doc_id))["filename"] == image_path.name
-            with pytest.raises(PermissionError, match="runtime_role='query'"):
-                await query_service.aingest(source_type="local", path=str(image_path))
-        finally:
-            await query_service.close()
-            set_config(cfg)
+        assert (await service.aget_metadata(doc_id))["filename"] == image_path.name
     finally:
         if service._initialized:
             await service.areset(keep_files=False)

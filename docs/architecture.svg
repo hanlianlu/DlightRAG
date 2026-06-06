@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" role="img" aria-labelledby="title desc">
   <title id="title">DlightRAG Unified LightRAG Main Architecture</title>
-  <desc id="desc">Layered DlightRAG architecture with interface boundary, runtime lanes for ingest, LightRAG ownership and read-only query, and PostgreSQL primary replica storage.</desc>
+  <desc id="desc">Layered DlightRAG architecture with interface boundary, unified ingest and query orchestration, LightRAG ownership, and a single configured PostgreSQL storage endpoint.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
@@ -61,7 +61,7 @@
   <rect class="box box-indigo" x="382" y="160" width="244" height="64"/>
   <text class="label" text-anchor="middle" x="504" y="184">RAGServiceManager</text>
   <text class="small" text-anchor="middle" x="504" y="202">workspace routing, session images</text>
-  <text class="small" text-anchor="middle" x="504" y="216">federation, read-after-write</text>
+  <text class="small" text-anchor="middle" x="504" y="216">service lifecycle, sessions</text>
 
   <rect class="box box-indigo" x="704" y="160" width="244" height="64"/>
   <text class="label" text-anchor="middle" x="826" y="188">RAGService</text>
@@ -80,7 +80,7 @@
   <text class="band-title" x="84" y="295">Runtime Orchestration</text>
 
   <rect class="band-soft" x="92" y="316" width="330" height="290"/>
-  <text class="lane-title" x="112" y="341">Ingest/Admin Role - Primary Writes</text>
+  <text class="lane-title" x="112" y="341">Ingest/Admin Path</text>
 
   <rect class="box" x="118" y="360" width="130" height="58"/>
   <text class="label" text-anchor="middle" x="183" y="383">Source Intake</text>
@@ -128,7 +128,7 @@
   <path class="line-orange" d="M 631 472 H 649"/>
 
   <rect class="band-soft" x="858" y="316" width="330" height="290"/>
-  <text class="lane-title" x="878" y="341">Query Role - Read-Only Attach</text>
+  <text class="lane-title" x="878" y="341">Query/Answer Path</text>
 
   <rect class="box box-blue" x="884" y="360" width="126" height="58"/>
   <text class="label" text-anchor="middle" x="947" y="383">QueryPlanner</text>
@@ -164,8 +164,8 @@
   <text class="band-title" x="84" y="715" fill="#166534">PostgreSQL 18 Storage Ecosystem</text>
 
   <rect class="box box-green" x="120" y="748" width="250" height="58"/>
-  <text class="label" text-anchor="middle" x="245" y="771">Primary Postgres</text>
-  <text class="small" text-anchor="middle" x="245" y="790">DDL, ingest, metadata writes</text>
+  <text class="label" text-anchor="middle" x="245" y="771">PostgreSQL Endpoint</text>
+  <text class="small" text-anchor="middle" x="245" y="790">write-capable app storage</text>
 
   <rect class="box" x="470" y="734" width="340" height="86" stroke="#22c55e"/>
   <text class="label" text-anchor="middle" x="640" y="759">Storage Surfaces</text>
@@ -173,14 +173,12 @@
   <text class="small" text-anchor="middle" x="640" y="795">DlightRAG metadata index + pg_textsearch BM25</text>
 
   <rect class="box box-green" x="920" y="748" width="240" height="58"/>
-  <text class="label" text-anchor="middle" x="1040" y="771">Read Replica</text>
-  <text class="small" text-anchor="middle" x="1040" y="790">query workers attach read-only</text>
+  <text class="label" text-anchor="middle" x="1040" y="771">External DB Routing</text>
+  <text class="small" text-anchor="middle" x="1040" y="790">managed by infrastructure</text>
 
   <path class="line-green" d="M 256 606 V 748"/>
   <path class="line-green" d="M 640 606 C 560 662 410 706 280 748"/>
   <path class="line-green dash" d="M 370 744 C 520 706 760 706 920 744"/>
   <rect x="558" y="706" width="164" height="16" fill="#f0fdf4"/>
-  <text class="note" text-anchor="middle" x="640" y="718" fill="#166534">streaming replication / WAL</text>
-  <path class="line-green dash" d="M 1040 748 V 606"/>
-  <text class="note" text-anchor="middle" x="1085" y="673" fill="#166534">read-only SELECT</text>
+  <text class="note" text-anchor="middle" x="640" y="718" fill="#166534">optional outside DlightRAG</text>
 </svg>

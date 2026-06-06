@@ -15,7 +15,7 @@ _PNG_B64 = (
 
 async def test_query_image_enhancer_appends_descriptions() -> None:
     vlm = AsyncMock(return_value="a line chart about revenue")
-    enhancer = QueryImageEnhancer(vlm_func=vlm, enabled=True, max_images=1)
+    enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=1)
 
     result = await enhancer.enhance("find similar pages", [_PNG_B64])
 
@@ -29,7 +29,7 @@ async def test_query_image_enhancer_appends_descriptions() -> None:
 
 async def test_query_image_enhancer_is_best_effort() -> None:
     vlm = AsyncMock(side_effect=RuntimeError("vlm unavailable"))
-    enhancer = QueryImageEnhancer(vlm_func=vlm, enabled=True, max_images=1)
+    enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=1)
 
     result = await enhancer.enhance("plain query", [_PNG_B64])
 
@@ -37,9 +37,9 @@ async def test_query_image_enhancer_is_best_effort() -> None:
     assert result.descriptions == []
 
 
-async def test_query_image_enhancer_disabled_returns_original_query() -> None:
+async def test_query_image_enhancer_without_vlm_returns_original_query() -> None:
     vlm = AsyncMock()
-    enhancer = QueryImageEnhancer(vlm_func=vlm, enabled=False, max_images=1)
+    enhancer = QueryImageEnhancer(vlm_func=None, max_images=1)
 
     result = await enhancer.enhance("plain query", [_PNG_B64])
 
@@ -60,7 +60,7 @@ async def test_query_image_enhancer_describes_images_concurrently() -> None:
         active -= 1
         return "visual detail"
 
-    enhancer = QueryImageEnhancer(vlm_func=vlm, enabled=True, max_images=3)
+    enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=3)
 
     result = await enhancer.enhance("query", [_PNG_B64, _PNG_B64, _PNG_B64])
 
