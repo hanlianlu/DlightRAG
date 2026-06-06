@@ -69,7 +69,8 @@ def test_mineru_helper_defaults_to_separate_env_file() -> None:
 def test_mineru_env_example_documents_install_extras() -> None:
     example = (ROOT / ".env.mineru.example").read_text(encoding="utf-8")
 
-    assert "MINERU_VERSION=3.2.3" in example
+    assert "# MINERU_VERSION=3.2.3" in example
+    assert "Leave unset to install latest" in example
     assert "MINERU_INSTALL_EXTRAS=core,mlx" in example
     assert "# MINERU_INSTALL_EXTRAS=core" in example
     assert "MINERU_SERVICE_VENV=.venv-mineru" in example
