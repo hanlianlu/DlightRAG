@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import pytest
 
-from dlightrag.models.embedding_inputs import ImageEmbeddingInput, TextEmbeddingInput
+from dlightrag.models.embedding_inputs import (
+    ImageEmbeddingInput,
+    MultimodalEmbeddingInput,
+    TextEmbeddingInput,
+)
 from dlightrag.models.providers.embed_base import EmbedProvider
 from dlightrag.models.providers.embed_providers import (
     DashScopeQwenEmbedProvider,
@@ -63,6 +67,29 @@ def test_dashscope_qwen_payload_sets_dimension_and_image() -> None:
     assert payload["input"]["contents"] == [{"image": "data:image/png;base64,abc"}]
 
 
+def test_dashscope_qwen_fused_payload_sets_enable_fusion() -> None:
+    payload = DashScopeQwenEmbedProvider().build_payload(
+        "qwen3-vl-embedding",
+        [
+            MultimodalEmbeddingInput(
+                parts=[
+                    TextEmbeddingInput(text="white running shoe"),
+                    ImageEmbeddingInput(data_uri="data:image/png;base64,abc"),
+                ]
+            )
+        ],
+        context="document",
+        asymmetric=False,
+        output_dimension=2048,
+    )
+
+    assert payload["input"]["contents"] == [
+        {"text": "white running shoe"},
+        {"image": "data:image/png;base64,abc"},
+    ]
+    assert payload["parameters"] == {"dimension": 2048, "enable_fusion": True}
+
+
 def test_gemini_embedding_2_payload_is_multimodal_without_task_type() -> None:
     provider = GeminiEmbedProvider()
     payload = provider.build_payload(
@@ -99,7 +126,19 @@ def test_jina_payload_maps_context_only_when_asymmetric() -> None:
 
     assert "task" not in symmetric_payload
     assert payload["task"] == "retrieval.query"
-    assert payload["input"] == [{"image": "data:image/jpeg;base64,abc"}]
+    assert payload["input"] == [{"bytes": "abc"}]
+
+
+def test_jina_payload_uses_url_for_remote_images() -> None:
+    payload = JinaEmbedProvider().build_payload(
+        "jina-embeddings-v4",
+        [ImageEmbeddingInput(url="https://example.com/image.png")],
+        context="document",
+        asymmetric=True,
+        output_dimension=2048,
+    )
+
+    assert payload["input"] == [{"url": "https://example.com/image.png"}]
 
 
 def test_qwen_openai_compatible_payload_preserves_image_data_uri_without_task_hint() -> None:
@@ -122,6 +161,7 @@ class TestDetectProvider:
     def test_explicit_openai_compatible(self) -> None:
         p = detect_embed_provider("any-model", provider="openai_compatible")
         assert isinstance(p, OpenAICompatibleEmbedProvider)
+        assert p.supports_images is False
 
     def test_openai_alias_is_not_an_embedding_provider(self) -> None:
         with pytest.raises(ValueError, match="Unknown embed provider"):
@@ -134,6 +174,7 @@ class TestDetectProvider:
     def test_explicit_qwen_openai_compatible(self) -> None:
         p = detect_embed_provider("any-model", provider="qwen_openai_compatible")
         assert isinstance(p, QwenOpenAICompatibleEmbedProvider)
+        assert p.supports_images is True
 
     def test_auto_detect_voyage_from_model(self) -> None:
         p = detect_embed_provider("voyage-multimodal-3.5")
@@ -146,6 +187,13 @@ class TestDetectProvider:
     def test_auto_detect_dashscope_qwen(self) -> None:
         p = detect_embed_provider("qwen3-vl-embedding")
         assert isinstance(p, DashScopeQwenEmbedProvider)
+
+    def test_auto_detect_qwen_openai_compatible_from_non_dashscope_base_url(self) -> None:
+        p = detect_embed_provider(
+            "qwen3-vl-embedding-2b",
+            base_url="http://localhost:1234/v1",
+        )
+        assert isinstance(p, QwenOpenAICompatibleEmbedProvider)
 
     def test_auto_detect_ollama_from_base_url(self) -> None:
         p = detect_embed_provider("nomic-embed", base_url="http://localhost:11434")

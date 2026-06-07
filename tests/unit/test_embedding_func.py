@@ -110,6 +110,27 @@ def test_embedding_func_uses_lightrag_symmetric_fallback_for_unsupported_auto() 
     assert embedding_func.supports_asymmetric is False
 
 
+async def test_embedding_func_can_reuse_service_embedder() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="ollama",
+            model="nomic-embed-text",
+            api_key="",
+            dim=3,
+            startup_probe=False,
+        )
+    )
+    embedder = MagicMock()
+    embedder.supports_asymmetric = False
+    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+
+    embedding_func = get_embedding_func(cfg, embedder=embedder)
+    result = await embedding_func.func(["hello"], context="query")
+
+    assert result.tolist() == [[0.1, 0.2, 0.3]]
+    embedder.embed_texts.assert_awaited_once_with(["hello"], context="query")
+
+
 def test_embedding_func_rejects_required_asymmetric_for_unsupported_provider() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(

@@ -2,8 +2,8 @@
 
 DlightRAG exposes one runtime path: LightRAG main is the base graph/vector
 engine, always queried in `mix` mode, while DlightRAG adds metadata
-management, direct multimodal image search, PostgreSQL BM25, RRF fusion,
-reranking, citations, and answer generation.
+management, optional direct multimodal image search, PostgreSQL BM25, RRF
+fusion, reranking, citations, and answer generation.
 
 ## Ingestion Shape
 
@@ -14,7 +14,7 @@ source file
        LightRAG raw parser route otherwise
   -> LightRAG ingest
        chunks, entities, relationships, graph, vectors, doc status
-  -> image vector alignment
+  -> image vector alignment when direct image embedding is active
        successful LightRAG drawing multimodal chunks keep their VLM text,
        sidecar provenance, BM25, and KG identity; DlightRAG overwrites the
        existing chunk vector with the raw image embedding
@@ -36,7 +36,9 @@ multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
 `text_chunks`, BM25, and KG extraction. DlightRAG then overwrites that existing
 chunk's vector with the raw image embedding. It does not create a second
 visual-only chunk, so the same VLM description is not exposed twice as independent
-retrieved evidence.
+retrieved evidence. If the embedding provider is text-only, or if the startup
+image probe fails, this overwrite is skipped and the LightRAG semantic visual
+chunk remains untouched.
 
 ## Query Pipeline
 
@@ -51,13 +53,13 @@ RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
   |-- Query image preparation
   |     session image lookup
   |     VLM semantic descriptions for text/BM25/KG retrieval
-  |     raw image payloads for direct multimodal embedding
+  |     raw image payloads for direct multimodal embedding when active
   |
   |-- LightRAGMixBackend
   |     QueryParam(mode="mix")
   |     KG entities + relationships + text chunks
   |
-  |-- Direct image path
+  |-- Direct image path, when image embedding is active
   |     query images -> multimodal embedding -> image/vector chunks
   |
   |-- BM25 path
@@ -112,7 +114,8 @@ use pgvector HNSW with iterative scan settings.
 ## Multimodal Queries
 
 Text queries go through LightRAG `mix`, BM25, and reranking. Image-bearing
-queries add a direct image vector path:
+queries add a direct image vector path only when the configured embedding
+provider supports image inputs and the startup probe succeeds:
 
 ```text
 query + images
@@ -130,6 +133,11 @@ path. That text feeds BM25 and KG extraction. For successful drawing chunks,
 visual similarity search uses the same LightRAG chunk id after DlightRAG
 overwrites its vector with the raw image embedding, preserving sidecar
 provenance and avoiding duplicate VLM text exposure.
+
+With a text-only embedding model, DlightRAG skips both image-vector overwrite
+and query-image vector retrieval. Query images can still be described by the VLM
+for text/BM25/KG retrieval, and document images still follow LightRAG's native
+semantic multimodal path.
 
 ## Reranking
 

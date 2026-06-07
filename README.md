@@ -366,16 +366,19 @@ source file or upload
   -> LightRAG staged ingest
        chunks, multimodal semantic text, KG entities/relations, vector rows
   -> DlightRAG post-ingest alignment
-       raw image embedding overwrites the canonical LightRAG drawing chunk vector
+       active direct image embedding overwrites the canonical LightRAG drawing chunk vector
        chunk language labels update BM25 partial indexes
        declared metadata updates filterable columns
 ```
 
 Source images and parser-extracted images both go through LightRAG's
 multimodal path. DlightRAG does not create a second VLM description chunk.
-Instead, it aligns the existing canonical LightRAG visual chunk with a raw
-image embedding so visual retrieval, citations, and asset serving use the same
-chunk id.
+When the configured embedding provider supports image inputs and the startup
+probe succeeds, DlightRAG aligns the existing canonical LightRAG visual chunk
+with a raw image embedding so visual retrieval, citations, and asset serving use
+the same chunk id. With a text-only embedding model, this alignment is skipped
+and LightRAG's semantic visual chunk remains the complete multimodal ingestion
+path.
 
 ### Retrieval And Answer Flow
 
@@ -384,7 +387,7 @@ query
   -> query planning and optional metadata filter inference
   -> strict metadata in-filtering when filters are explicit
   -> LightRAG mix retrieval
-  -> direct query-image retrieval when the user attaches images
+  -> direct query-image retrieval when image embedding is active
   -> pg_textsearch BM25 over the same candidate scope
   -> RRF fusion
   -> rerank
@@ -477,8 +480,9 @@ Concurrency defaults:
 
 ### Embeddings
 
-The embedding model must be multimodal because text chunks, query text, query
-images, source images, and parser-extracted images share one vector space.
+DlightRAG defaults to a unified multimodal embedding model so text chunks, query
+text, query images, source images, and parser-extracted images share one vector
+space.
 
 Default:
 
@@ -491,9 +495,18 @@ embedding:
 ```
 
 Supported providers include `voyage`, `dashscope_qwen`,
-`qwen_openai_compatible`, `gemini`, and `jina`. Changing `embedding.dim` or the
-embedding model after indexing requires clearing the workspace and rebuilding
-vector indexes.
+`qwen_openai_compatible`, `gemini`, `jina`, `openai_compatible`, and `ollama`.
+Generic `openai_compatible` is treated as text-only because there is no standard
+image embedding payload for that API family; use `qwen_openai_compatible` only
+for an explicitly image-capable Qwen3-VL embedding server; model names starting
+with `qwen3-vl-embedding` on non-DashScope `base_url`s are auto-routed there.
+If the configured provider is text-only, or if `startup_probe` cannot embed a
+small in-memory image with the provider-specific payload, DlightRAG
+automatically disables direct image embedding and leaves image handling to
+LightRAG's VLM semantic chunks. The startup probe does not write to PostgreSQL,
+LightRAG storage, or local files. Changing `embedding.dim` or the embedding
+model after indexing requires clearing the workspace and rebuilding vector
+indexes.
 
 ### Metadata
 

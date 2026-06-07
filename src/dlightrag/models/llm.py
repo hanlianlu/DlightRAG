@@ -231,7 +231,7 @@ def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
     return overrides or None
 
 
-def get_embedding_func(config: DlightragConfig) -> Any:
+def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) -> Any:
     """Build LightRAG EmbeddingFunc from config.
 
     Uses the provider-aware multimodal embedder so text and image vectors
@@ -240,7 +240,7 @@ def get_embedding_func(config: DlightragConfig) -> Any:
     """
     from lightrag.utils import EmbeddingFunc
 
-    embedder = get_multimodal_embedder(config)
+    embedder = embedder or get_multimodal_embedder(config)
 
     cfg = config.embedding
 

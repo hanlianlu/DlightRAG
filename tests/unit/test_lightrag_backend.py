@@ -212,6 +212,23 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 
+async def test_backend_skips_direct_query_images_without_embedder() -> None:
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={"data": {"chunks": [], "entities": [], "relationships": []}}
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[])
+    lightrag.chunks_vdb = MagicMock()
+    lightrag.chunks_vdb.query = AsyncMock()
+
+    backend = LightRAGMixBackend(lightrag=lightrag, embedder=None)
+    result = await backend.aretrieve("find this", multimodal_content=[_image_payload()])
+
+    assert result.trace["direct_visual_chunk_count"] == 0
+    lightrag.chunks_vdb.query.assert_not_awaited()
+
+
 async def test_backend_batches_multiple_query_image_embeddings(tmp_path: Path) -> None:
     image_path = tmp_path / "img.png"
     _write_image(image_path)

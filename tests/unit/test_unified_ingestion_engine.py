@@ -343,6 +343,64 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
     assert vectors == {mm_chunk_id: [0.1, 0.2, 0.3]}
 
 
+async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding_disabled(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    mm_chunk_id = f"{doc_id}-mm-drawing-000"
+    artifact_dir = tmp_path / "sample.parsed"
+    assets_dir = artifact_dir / "sample.blocks.assets"
+    assets_dir.mkdir(parents=True)
+    image_path = assets_dir / "fig.png"
+    Image.new("RGB", (128, 128), "white").save(image_path)
+    (artifact_dir / "sample.drawings.json").write_text(
+        """
+        {
+          "drawings": {
+            "fig-1": {
+              "id": "fig-1",
+              "path": "sample.blocks.assets/fig.png",
+              "llm_analyze_result": {
+                "status": "success",
+                "description": "LightRAG semantic visual chunk"
+              }
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    embedder = AsyncMock()
+    embedder.embed_index_images.return_value = [[0.1, 0.2, 0.3]]
+    engine, deps = _make_engine(
+        multimodal_embedder=embedder,
+        direct_image_embedding_enabled=False,
+    )
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {
+            "chunks_list": ["chunk-a", mm_chunk_id],
+            "content_hash": "sha256:parsed",
+            "status": "processed",
+        },
+    ]
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": artifact_dir.as_uri(),
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["chunks"] == ["chunk-a", mm_chunk_id]
+    embedder.embed_index_images.assert_not_awaited()
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
+
+
 async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> None:
     """Two concurrent ingests of the same failed doc must NOT both clean up.
     The per-doc lock ensures the second sees the first's state changes."""

@@ -165,9 +165,7 @@ async def test_metadata_index_initializes_schema_with_migrations() -> None:
     executed_sql = "\n".join(query for query, _ in conn.executed)
     assert "CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations" in executed_sql
     assert "CREATE TABLE IF NOT EXISTS dlightrag_doc_metadata" in executed_sql
-    assert conn.applied == {
-        ("doc_metadata", migration.version) for migration in _SCHEMA_MIGRATIONS
-    }
+    assert conn.applied == {("doc_metadata", migration.version) for migration in _SCHEMA_MIGRATIONS}
 
 
 async def test_metadata_index_finds_by_exact_file_path() -> None:

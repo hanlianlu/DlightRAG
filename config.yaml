@@ -58,6 +58,7 @@ embedding:
   dim: 1024
   max_token_size: 8192
   asymmetric: auto
+  # Capability check only; does not write to LightRAG storage or PostgreSQL.
   startup_probe: true
 
 rerank:
