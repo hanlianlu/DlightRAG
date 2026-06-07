@@ -11,7 +11,6 @@ from .guidance import (
     LISTWISE_RERANK_PROMPT,
     PLANNER_GUIDANCE,
     RERANK_GUIDANCE,
-    VISUAL_RERANK_PROMPT_TEMPLATE,
 )
 from .identity import CORE_IDENTITY
 from .planner import (
@@ -22,7 +21,6 @@ from .planner import (
 from .rag import (
     ANSWER_CORE,
     HIGHLIGHT_SYSTEM_PROMPT,
-    VISUAL_RERANK_PROMPT,
     get_answer_system_prompt,
 )
 
@@ -35,7 +33,6 @@ __all__ = [
     "ANSWER_CITATION_EXAMPLE",
     "PLANNER_GUIDANCE",
     "RERANK_GUIDANCE",
-    "VISUAL_RERANK_PROMPT_TEMPLATE",
     "LISTWISE_RERANK_PROMPT",
     "HIGHLIGHT_GUIDANCE",
     "HIGHLIGHT_RESPONSE_FORMAT",
@@ -47,6 +44,5 @@ __all__ = [
     # rag
     "ANSWER_CORE",
     "get_answer_system_prompt",
-    "VISUAL_RERANK_PROMPT",
     "HIGHLIGHT_SYSTEM_PROMPT",
 ]
