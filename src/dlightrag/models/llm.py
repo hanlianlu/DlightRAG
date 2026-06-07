@@ -240,13 +240,13 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
     """
     from lightrag.utils import EmbeddingFunc
 
-    embedder = embedder or get_multimodal_embedder(config)
+    active_embedder: Any = embedder if embedder is not None else get_multimodal_embedder(config)
 
     cfg = config.embedding
 
     async def embed_func(texts: list[str], *, context: str = "document") -> np.ndarray:
         embed_context = "query" if context == "query" else "document"
-        result = await embedder.embed_texts(texts, context=embed_context)
+        result = await active_embedder.embed_texts(texts, context=embed_context)
         # LightRAG's EmbeddingFunc validates via result.size — requires numpy
         return np.array(result)
 
@@ -259,7 +259,7 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
         max_token_size=cfg.max_token_size,
         func=traced_embed_func,
         model_name=cfg.model,
-        supports_asymmetric=embedder.supports_asymmetric,
+        supports_asymmetric=active_embedder.supports_asymmetric,
     )
 
 
