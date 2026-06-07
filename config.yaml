@@ -64,6 +64,8 @@ embedding:
 rerank:
   enabled: true
   strategy: chat_llm_reranker
+  # If provider/model are omitted, chat_llm_reranker reuses llm.roles.vlm,
+  # then llm.roles.query, then llm.default.
   # provider:
   # model:
   # base_url:

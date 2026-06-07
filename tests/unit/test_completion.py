@@ -24,7 +24,7 @@ class TestOpenAIProvider:
         with patch.object(p, "_client", mock_client):
             result = await p.complete(
                 messages=[{"role": "user", "content": "Hi"}],
-                model="gpt-4.1-mini",
+                model="gpt-5.4-mini",
             )
         assert result == "Hello"
 
@@ -39,7 +39,7 @@ class TestOpenAIProvider:
         with patch.object(p, "_client", mock_client):
             result = await p.complete(
                 messages=[{"role": "user", "content": "Hi"}],
-                model="gpt-4.1-mini",
+                model="gpt-5.4-mini",
                 response_format={"type": "json_object"},
             )
         assert '"answer"' in result

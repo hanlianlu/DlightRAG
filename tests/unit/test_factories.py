@@ -10,6 +10,7 @@ from dlightrag.config import (
     LLMConfig,
     LLMRolesConfig,
     ModelConfig,
+    RerankConfig,
 )
 
 
@@ -27,7 +28,7 @@ class TestMakeCompletionFunc:
         from dlightrag.models.llm import _make_completion_func
 
         cfg = ModelConfig(
-            provider="openai", model="gpt-4.1-mini", api_key="sk-test", temperature=0.5
+            provider="openai", model="gpt-5.4-mini", api_key="sk-test", temperature=0.5
         )
         func = _make_completion_func(cfg)
         # partial wraps completion_wrapper; calling it should invoke provider.complete()
@@ -44,7 +45,7 @@ class TestMakeCompletionFunc:
     def test_default_api_key(self):
         from dlightrag.models.llm import _make_completion_func
 
-        cfg = ModelConfig(provider="openai", model="gpt-4.1-mini")  # no api_key
+        cfg = ModelConfig(provider="openai", model="gpt-5.4-mini")  # no api_key
         func = _make_completion_func(cfg, default_api_key="sk-default")
         assert callable(func)
 
@@ -52,7 +53,7 @@ class TestMakeCompletionFunc:
         from dlightrag.models import llm
 
         cfg = DlightragConfig(
-            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="sk-test")),
+            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="sk-test")),
             embedding=_embedding_config(),
         )
 
@@ -67,7 +68,7 @@ class TestMakeCompletionFunc:
         from dlightrag.models import llm
 
         cfg = DlightragConfig(
-            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="sk-test")),
+            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="sk-test")),
             embedding=_embedding_config(),
         )
 
@@ -100,7 +101,7 @@ class TestMakeCompletionFunc:
 
         monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: FakeProvider())
         func = llm._make_completion_func(
-            ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test")
+            ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-test")
         )
 
         await func(
@@ -216,7 +217,7 @@ class TestGetDefaultModelFunc:
 
         config = DlightragConfig(
             llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test")
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-test")
             ),
             embedding=_embedding_config(),
         )
@@ -230,7 +231,7 @@ class TestGetExtractModelFunc:
 
         config = DlightragConfig(
             llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat")
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat")
             ),
             embedding=_embedding_config(),
         )
@@ -242,7 +243,7 @@ class TestGetExtractModelFunc:
 
         config = DlightragConfig(
             llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat"),
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
                 roles=LLMRolesConfig(
                     extract=ModelConfig(provider="anthropic", model="claude-3-5-sonnet")
                 ),
@@ -273,7 +274,7 @@ class TestGetKeywordModelFunc:
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
         config = DlightragConfig(
             llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-chat"),
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
                 roles=LLMRolesConfig(
                     keyword=ModelConfig(provider="openai", model="deepseek-v4-flash")
                 ),
@@ -288,23 +289,27 @@ class TestGetKeywordModelFunc:
 
 
 class TestGetRerankFunc:
-    def test_chat_llm_reranker_uses_default_llm_without_override(self, monkeypatch):
+    @staticmethod
+    def _capture_scoring_model(monkeypatch):
         from dlightrag.models import llm
 
         seen_models: list[str] = []
-        seen_ingest_func = None
+        captured: dict[str, object] = {}
 
         def fake_make_completion_func(cfg, default_api_key=None):
             seen_models.append(cfg.model)
             return f"completion:{cfg.model}"
 
         def fake_build_rerank_func(rc, ingest_func=None):
-            nonlocal seen_ingest_func
-            seen_ingest_func = ingest_func
+            captured["ingest_func"] = ingest_func
             return "rerank-func"
 
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
         monkeypatch.setattr("dlightrag.models.rerank.build_rerank_func", fake_build_rerank_func)
+        return llm, seen_models, captured
+
+    def test_chat_llm_reranker_prefers_vlm_role_without_override(self, monkeypatch):
+        llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
 
         config = DlightragConfig(
             llm=LLMConfig(
@@ -317,8 +322,59 @@ class TestGetRerankFunc:
         result = llm.get_rerank_func(config)
 
         assert result == "rerank-func"
-        assert seen_ingest_func == "completion:chat-model"
+        assert captured["ingest_func"] == "completion:vlm-model"
+        assert seen_models == ["vlm-model"]
+
+    def test_chat_llm_reranker_uses_query_role_when_vlm_role_is_unset(self, monkeypatch):
+        llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+                roles=LLMRolesConfig(query=ModelConfig(provider="openai", model="query-model")),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        result = llm.get_rerank_func(config)
+
+        assert result == "rerank-func"
+        assert captured["ingest_func"] == "completion:query-model"
+        assert seen_models == ["query-model"]
+
+    def test_chat_llm_reranker_uses_default_when_no_role_override_exists(self, monkeypatch):
+        llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        result = llm.get_rerank_func(config)
+
+        assert result == "rerank-func"
+        assert captured["ingest_func"] == "completion:chat-model"
         assert seen_models == ["chat-model"]
+
+    def test_chat_llm_reranker_explicit_config_overrides_roles(self, monkeypatch):
+        llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+                roles=LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
+            ),
+            rerank=RerankConfig(provider="openai", model="rerank-model"),
+            embedding=_embedding_config(),
+        )
+
+        result = llm.get_rerank_func(config)
+
+        assert result == "rerank-func"
+        assert captured["ingest_func"] == "completion:rerank-model"
+        assert seen_models == ["rerank-model"]
 
 
 class TestGetEmbeddingFunc:
@@ -327,7 +383,7 @@ class TestGetEmbeddingFunc:
 
         config = DlightragConfig(
             llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-4.1-mini", api_key="sk-test")
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-test")
             ),
             embedding=_embedding_config(),
         )

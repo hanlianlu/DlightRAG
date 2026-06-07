@@ -64,7 +64,7 @@ async def test_chat_wrapper_uses_generation_observation() -> None:
     async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> str:
         return "answer"
 
-    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-4.1", model="gpt-4.1")
+    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-5.4-mini", model="gpt-5.4-mini")
 
     result = await wrapped(messages=[{"role": "user", "content": "hi"}], temperature=0.2)
 
@@ -72,8 +72,8 @@ async def test_chat_wrapper_uses_generation_observation() -> None:
     assert len(client.observations) == 1
     obs = client.observations[0]
     assert obs.kwargs["as_type"] == "generation"
-    assert obs.kwargs["name"] == "llm_gpt-4.1"
-    assert obs.kwargs["model"] == "gpt-4.1"
+    assert obs.kwargs["name"] == "llm_gpt-5.4-mini"
+    assert obs.kwargs["model"] == "gpt-5.4-mini"
     assert obs.kwargs["metadata"] == {"temperature": 0.2}
     assert obs.updates == [{"output": "answer"}]
 
@@ -91,7 +91,7 @@ async def test_chat_wrapper_updates_generation_usage_and_cost_details() -> None:
             cost_details={"total": 0.001},
         )
 
-    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-4.1", model="gpt-4.1")
+    wrapped = observability.wrap_chat_func(complete, name="llm_gpt-5.4-mini", model="gpt-5.4-mini")
 
     result = await wrapped(messages=[{"role": "user", "content": "hi"}])
 

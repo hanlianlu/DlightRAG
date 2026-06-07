@@ -116,7 +116,7 @@ class TestOpenAICompatibleProvider:
         mock_response.choices = [MagicMock(message=MagicMock(content="hello"))]
         with patch.object(p, "_get_client") as mock_client:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
-            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-4.1")
+            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4-mini")
         assert result == "hello"
 
     @pytest.mark.asyncio
@@ -133,7 +133,7 @@ class TestOpenAICompatibleProvider:
 
         with patch.object(p, "_get_client") as mock_client:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
-            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-4.1")
+            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4-mini")
 
         assert isinstance(result, CompletionOutput)
         assert result == "hello"
@@ -154,7 +154,7 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = create_mock
             await p.complete(
                 [{"role": "user", "content": "hi"}],
-                "gpt-4.1",
+                "gpt-5.4-mini",
                 model_kwargs={"enable_thinking": True},
             )
             call_kwargs = create_mock.call_args[1]
@@ -173,7 +173,7 @@ class TestOpenAICompatibleProvider:
         with patch.object(p, "_get_client") as mock_client:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=fake_stream())
             tokens = []
-            async for t in p.stream([{"role": "user", "content": "hi"}], "gpt-4.1"):
+            async for t in p.stream([{"role": "user", "content": "hi"}], "gpt-5.4-mini"):
                 tokens.append(t)
         assert tokens == ["hel", "lo"]
 

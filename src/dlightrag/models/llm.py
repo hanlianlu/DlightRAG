@@ -285,8 +285,9 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
     """Build multimodal rerank callable from config.
 
     For chat_llm_reranker: uses an independent rerank model if provider/model
-    are set in rerank config, otherwise falls back to the default LLM. The
-    selected callable must support image inputs when chunks include page images.
+    are set in rerank config. Otherwise it reuses the most capable configured
+    chat role in order: vlm, query, then default. The selected callable must
+    support image inputs when chunks include page images.
     """
     from dlightrag.models.rerank import build_rerank_func
 
@@ -297,22 +298,21 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
     # For chat_llm_reranker: build scoring callable (messages-first, NOT LightRAG-adapted)
     if rc.strategy == "chat_llm_reranker":
         if rc.provider and rc.model:
-            # Independent model for reranking
-            scoring_func = _make_completion_func(
-                ModelConfig(
-                    provider=rc.provider,
-                    model=rc.model,
-                    api_key=rc.api_key,
-                    base_url=rc.base_url,
-                    temperature=rc.temperature or 0.0,
-                    model_kwargs=rc.model_kwargs,
-                ),
-                default_api_key=config.llm.default.api_key,
+            scoring_cfg = ModelConfig(
+                provider=rc.provider,
+                model=rc.model,
+                api_key=rc.api_key,
+                base_url=rc.base_url,
+                temperature=rc.temperature or 0.0,
+                model_kwargs=rc.model_kwargs,
             )
         else:
-            # Use the default LLM. Do not implicitly consume the vlm role here:
-            # reranker-specific model choices belong under rerank.*.
-            scoring_func = get_default_model_func(config)
+            scoring_cfg = config.llm.roles.vlm or config.llm.roles.query or config.llm.default
+
+        scoring_func = _make_completion_func(
+            scoring_cfg,
+            default_api_key=config.llm.default.api_key,
+        )
         return build_rerank_func(rc, ingest_func=scoring_func)
 
     return build_rerank_func(rc)
