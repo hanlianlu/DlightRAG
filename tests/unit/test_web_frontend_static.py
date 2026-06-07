@@ -82,3 +82,13 @@ def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> Non
 
     assert "workspaceDeleted" in panel_js
     assert "setIngestWorkspace(detail.next_workspace || getPrimaryWorkspace())" in panel_js
+
+
+def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
+    panel_js = (ROOT / "src/dlightrag/web/static/js/panel.js").read_text(encoding="utf-8")
+
+    assert "PANEL_DISMISS_EXEMPT_SELECTOR" in panel_js
+    assert "#composer" in panel_js
+    assert "#files-btn" in panel_js
+    assert ".panel" in panel_js
+    assert "shouldDismissPanelOnOutsideClick(e.target)" in panel_js
