@@ -17,7 +17,7 @@ def normalize_workspace(name: str) -> str:
     Examples::
 
         normalize_workspace("Ian Davis")   -> "ian_davis"
-        normalize_workspace("project-alpha") -> "project_alpha"
+        normalize_workspace("legacy-workspace") -> "legacy_workspace"
         normalize_workspace("123abc")      -> "_123abc"
         normalize_workspace("café-art")    -> "caf__art"
     """

@@ -1122,7 +1122,9 @@ class DlightragConfig(BaseSettings):
             os.environ["POSTGRES_SERVER_SETTINGS"] = self.postgres_server_settings_env_value()
 
     def apply_lightrag_runtime_env(self, *, force: bool = False) -> None:
-        """Bridge LightRAG runtime filesystem roots controlled by DlightRAG."""
+        """Bridge LightRAG runtime settings controlled by DlightRAG."""
+        if force or "LIGHTRAG_PARSER" not in os.environ:
+            os.environ["LIGHTRAG_PARSER"] = self.parser.rules
         if force or "INPUT_DIR" not in os.environ:
             os.environ["INPUT_DIR"] = str(self.input_dir_path)
         if force or "DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY" not in os.environ:
