@@ -161,6 +161,7 @@ class RAGService:
         self._bm25: Any = None
         self._retrieval_orchestrator: Any = None
         self._multimodal_embedder: Any = None
+        self._direct_image_embedding_enabled = False
         self._visual_asset_resolver: Any = None
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
@@ -178,6 +179,35 @@ class RAGService:
         kwargs: dict[str, Any] = {"cosine_better_than_threshold": 0.3}
         kwargs.update(config.vector_db_kwargs)
         return kwargs
+
+    @staticmethod
+    async def _resolve_direct_image_embedding_enabled(
+        embedder: Any,
+        *,
+        startup_probe: bool,
+    ) -> bool:
+        """Return whether DlightRAG direct image vectors are safe to use.
+
+        The probe calls only the embedding provider with an in-memory 1x1
+        image; it does not touch LightRAG storage, PostgreSQL, or local files.
+        """
+        if not getattr(embedder, "supports_images", False):
+            logger.info(
+                "Direct image embedding disabled: %s does not support image inputs",
+                embedder.__class__.__name__,
+            )
+            return False
+        if not startup_probe:
+            return True
+        try:
+            await embedder.probe_image_embedding()
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Direct image embedding probe failed; using LightRAG semantic visual path only",
+                exc_info=True,
+            )
+            return False
+        return True
 
     @staticmethod
     def _build_addon_params(config: DlightragConfig) -> dict[str, Any]:
@@ -332,11 +362,13 @@ class RAGService:
         if role_overrides is not None:
             logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
 
-        embedding_func = get_embedding_func(config)
         multimodal_embedder = get_multimodal_embedder(config)
         self._multimodal_embedder = multimodal_embedder
-        if config.embedding.startup_probe:
-            await multimodal_embedder.probe_image_embedding()
+        embedding_func = get_embedding_func(config, embedder=multimodal_embedder)
+        self._direct_image_embedding_enabled = await self._resolve_direct_image_embedding_enabled(
+            multimodal_embedder,
+            startup_probe=config.embedding.startup_probe,
+        )
 
         # LightRAG configuration.
         # Do NOT pass rerank_model_func — we handle reranking ourselves
@@ -396,7 +428,7 @@ class RAGService:
         self._backend = self._build_retrieval_backend(
             config,
             lightrag=lightrag,
-            embedder=multimodal_embedder,
+            embedder=multimodal_embedder if self._direct_image_embedding_enabled else None,
             rerank_func=rerank_func,
         )
 
@@ -434,6 +466,7 @@ class RAGService:
             stores=self._lightrag_stores,
             metadata_index=self._metadata_index,
             multimodal_embedder=multimodal_embedder,
+            direct_image_embedding_enabled=self._direct_image_embedding_enabled,
             workspace=config.workspace,
             parser_rules=config.parser.rules,
             chunk_options=config.parser.chunk_options,

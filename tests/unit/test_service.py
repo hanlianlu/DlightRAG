@@ -353,6 +353,36 @@ class TestBuildRetrievalBackend:
         assert backend._max_total_tokens == 333
 
 
+class TestDirectImageEmbeddingCapability:
+    """Test direct image embedding capability resolution."""
+
+    async def test_text_only_embedder_disables_direct_image_embedding_without_probe(self) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = False
+        embedder.probe_image_embedding = AsyncMock()
+
+        enabled = await RAGService._resolve_direct_image_embedding_enabled(
+            embedder,
+            startup_probe=True,
+        )
+
+        assert enabled is False
+        embedder.probe_image_embedding.assert_not_awaited()
+
+    async def test_failed_startup_probe_disables_direct_image_embedding(self) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = True
+        embedder.probe_image_embedding = AsyncMock(side_effect=RuntimeError("image rejected"))
+
+        enabled = await RAGService._resolve_direct_image_embedding_enabled(
+            embedder,
+            startup_probe=True,
+        )
+
+        assert enabled is False
+        embedder.probe_image_embedding.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # TestRAGServiceLightRAGMainPath
 # ---------------------------------------------------------------------------

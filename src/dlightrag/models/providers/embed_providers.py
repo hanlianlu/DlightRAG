@@ -61,13 +61,30 @@ def _to_dashscope_item(item: EmbeddingInput) -> dict[str, Any]:
     return values[0] if len(values) == 1 else {"contents": values}
 
 
+def _to_dashscope_part(part: TextEmbeddingInput | ImageEmbeddingInput) -> dict[str, str]:
+    if isinstance(part, TextEmbeddingInput):
+        return {"text": part.text}
+    return {"image": part.as_payload_value()}
+
+
+def _to_jina_image(part: ImageEmbeddingInput) -> dict[str, str]:
+    if part.url:
+        return {"url": part.url}
+    if part.path:
+        raise ValueError("Jina image embeddings require a URL or base64 bytes, not a local path")
+
+    value = part.as_payload_value()
+    parsed = _image_data_uri_parts(value)
+    return {"bytes": parsed[1] if parsed is not None else value}
+
+
 def _to_jina_item(item: EmbeddingInput) -> str | dict[str, str] | list[dict[str, str]]:
     values: list[dict[str, str]] = []
     for part in _parts(item):
         if isinstance(part, TextEmbeddingInput):
             values.append({"text": part.text})
         else:
-            values.append({"image": part.as_payload_value()})
+            values.append(_to_jina_image(part))
     return values[0] if len(values) == 1 else values
 
 
@@ -91,7 +108,7 @@ class OpenAICompatibleEmbedProvider(EmbedProvider):
     """POST /embeddings for OpenAI-compatible embedding servers."""
 
     endpoint = "/embeddings"
-    supports_images = True
+    supports_images = False
     supports_asymmetric = False
     default_dim = None
     known_dims = None
@@ -187,6 +204,7 @@ class DashScopeQwenEmbedProvider(EmbedProvider):
 
     endpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
     supports_images = True
+    supports_fused_inputs = True
     supports_asymmetric = False
     default_dim = 2560
     known_dims = frozenset({2560, 2048, 1536, 1024, 768, 512, 256})
@@ -200,12 +218,24 @@ class DashScopeQwenEmbedProvider(EmbedProvider):
         asymmetric: bool = False,
         output_dimension: int | None = None,
     ) -> dict:
-        payload: dict[str, Any] = {
-            "model": model,
-            "input": {"contents": [_to_dashscope_item(item) for item in inputs]},
-        }
+        if any(isinstance(item, MultimodalEmbeddingInput) for item in inputs):
+            if len(inputs) != 1 or not isinstance(inputs[0], MultimodalEmbeddingInput):
+                raise ValueError("DashScope fused embedding expects exactly one multimodal input")
+            payload = {
+                "model": model,
+                "input": {"contents": [_to_dashscope_part(part) for part in inputs[0].parts]},
+            }
+            parameters: dict[str, Any] = {"enable_fusion": True}
+        else:
+            payload = {
+                "model": model,
+                "input": {"contents": [_to_dashscope_item(item) for item in inputs]},
+            }
+            parameters = {}
         if output_dimension is not None:
-            payload["parameters"] = {"dimension": output_dimension}
+            parameters["dimension"] = output_dimension
+        if parameters:
+            payload["parameters"] = parameters
         return payload
 
     def parse_response(self, data: dict) -> list[list[float]]:
@@ -312,6 +342,7 @@ def detect_embed_provider(
         parsed = urlparse(base_url)
         host = (parsed.hostname or "").lower()
         port = parsed.port
+        name = model.lower()
         if port == 11434:
             return OllamaEmbedProvider()
         if (
@@ -321,6 +352,8 @@ def detect_embed_provider(
             return GeminiEmbedProvider()
         if "dashscope" in host or "aliyuncs" in host:
             return DashScopeQwenEmbedProvider()
+        if "qwen3-vl-embedding" in name:
+            return QwenOpenAICompatibleEmbedProvider()
 
     name = model.lower()
     if "voyage" in name:

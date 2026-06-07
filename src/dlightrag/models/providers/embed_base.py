@@ -17,6 +17,7 @@ class EmbedProvider(ABC):
 
     endpoint: str = ""
     supports_images: bool = False
+    supports_fused_inputs: bool = False
     supports_asymmetric: bool = False
     default_dim: int | None = None
     known_dims: frozenset[int] | None = None

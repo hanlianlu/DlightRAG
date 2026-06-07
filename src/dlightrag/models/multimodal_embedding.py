@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Literal
 
 import httpx
@@ -35,7 +36,7 @@ def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
 
 
 class MultimodalEmbedder:
-    """Embed text and images into one shared multimodal vector space."""
+    """Embed text, and images when the provider supports a shared vector space."""
 
     def __init__(
         self,
@@ -49,12 +50,11 @@ class MultimodalEmbedder:
         batch_size: int = 4,
         timeout: float = 120.0,
     ) -> None:
-        if not provider.supports_images:
-            raise ValueError(f"{provider.__class__.__name__} does not support image embeddings")
         self.model = model
         self.base_url = base_url.rstrip("/") if base_url else "https://api.openai.com/v1"
         self.dim = dim
         self.provider = provider
+        self.supports_images = provider.supports_images
         self.asymmetric = resolve_asymmetric(provider, asymmetric)
         self.supports_asymmetric = self.asymmetric
         self.batch_size = batch_size
@@ -85,13 +85,14 @@ class MultimodalEmbedder:
         )
         data = await self._post(payload)
         vectors = self.provider.parse_response(data)
-        self._validate_vectors(vectors)
+        self._validate_vectors(vectors, expected_count=len(texts))
         return vectors
 
     async def embed_images(
         self, images: list[Image.Image], *, context: EmbeddingContext
     ) -> list[list[float]]:
         """Embed images with explicit query/document context."""
+        self._ensure_image_support()
         if not images:
             return []
 
@@ -99,7 +100,7 @@ class MultimodalEmbedder:
             payload = self._build_image_payload(image, context=context)
             data = await self._post(payload)
             vectors = self.provider.parse_response(data)
-            self._validate_vectors(vectors)
+            self._validate_vectors(vectors, expected_count=1)
             return vectors[0]
 
         results = await bounded_map(
@@ -145,6 +146,7 @@ class MultimodalEmbedder:
         return response.json()
 
     def _build_image_payload(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
+        self._ensure_image_support()
         return self.provider.build_payload(
             self.model,
             [ImageEmbeddingInput.from_pil(image)],
@@ -153,6 +155,24 @@ class MultimodalEmbedder:
             output_dimension=self.dim,
         )
 
-    def _validate_vectors(self, vectors: list[list[float]]) -> None:
-        if vectors and len(vectors[0]) != self.dim:
-            raise ValueError(f"Expected embedding dim {self.dim}, got {len(vectors[0])}")
+    def _validate_vectors(
+        self,
+        vectors: list[list[float]],
+        *,
+        expected_count: int | None = None,
+    ) -> None:
+        if expected_count is not None and len(vectors) != expected_count:
+            raise ValueError(f"Expected {expected_count} embedding vectors, got {len(vectors)}")
+        for index, vector in enumerate(vectors):
+            if len(vector) != self.dim:
+                raise ValueError(
+                    f"Expected embedding dim {self.dim}, got {len(vector)} at index {index}"
+                )
+            if not all(isinstance(value, int | float) and math.isfinite(value) for value in vector):
+                raise ValueError(f"Embedding vector at index {index} contains non-finite values")
+
+    def _ensure_image_support(self) -> None:
+        if not self.supports_images:
+            raise ValueError(
+                f"{self.provider.__class__.__name__} does not support image embeddings"
+            )

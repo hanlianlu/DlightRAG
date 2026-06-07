@@ -77,6 +77,22 @@ parser_sidecars:
     is_ocr: false
 ```
 
+## Embeddings
+
+The root config keeps the embedding provider/model visible because it defines
+the LightRAG vector schema. DlightRAG prefers unified multimodal embeddings for
+direct image retrieval, but text-only providers are valid. At startup,
+`embedding.startup_probe` checks image-embedding capability with a small
+in-memory image through the provider-specific payload serializer and does not
+write to PostgreSQL, LightRAG storage, or local files. Generic
+`openai_compatible` is treated as text-only because OpenAI-compatible
+embedding APIs do not define a standard image payload. A Qwen3-VL embedding
+model on a non-DashScope OpenAI-compatible endpoint is routed to
+`qwen_openai_compatible`; DashScope-hosted Qwen uses `dashscope_qwen`. If the
+provider is text-only or the probe fails, DlightRAG automatically skips direct
+image vector overwrite and query-image vector retrieval while leaving LightRAG's
+semantic multimodal path enabled.
+
 ## PostgreSQL
 
 Core storage is PostgreSQL 18 only. The backend literals are code defaults and

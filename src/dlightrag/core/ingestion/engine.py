@@ -66,6 +66,7 @@ class UnifiedIngestionEngine:
         workspace: str,
         parser_rules: str,
         chunk_options: dict[str, Any] | None,
+        direct_image_embedding_enabled: bool = True,
         metadata_registry: MetadataFieldRegistry | None = None,
         allow_ad_hoc_metadata: bool = True,
         default_metadata_policy: MetadataIngestPolicy = "validate",
@@ -76,6 +77,7 @@ class UnifiedIngestionEngine:
         self._stores = stores
         self._metadata_index = metadata_index
         self._multimodal_embedder = multimodal_embedder
+        self._direct_image_embedding_enabled = direct_image_embedding_enabled
         self._workspace = workspace
         self._parser_rules = parser_rules
         self._chunk_options = chunk_options or {}
@@ -353,6 +355,9 @@ class UnifiedIngestionEngine:
         sidecar_location: str | None,
         chunk_ids: set[str],
     ) -> None:
+        if not self._direct_image_embedding_enabled:
+            return
+
         artifact_dir = sidecar_dir_from_location(sidecar_location)
         if artifact_dir is None or not artifact_dir.exists():
             return

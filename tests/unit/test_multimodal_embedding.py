@@ -11,6 +11,7 @@ from PIL import Image
 from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 from dlightrag.models.providers.embed_providers import (
     GeminiEmbedProvider,
+    OllamaEmbedProvider,
     QwenOpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
@@ -125,6 +126,27 @@ async def test_embed_texts_posts_document_context() -> None:
     assert payload["input_type"] == "document"
 
 
+async def test_text_only_embedder_keeps_text_embedding_and_rejects_images() -> None:
+    embedder = MultimodalEmbedder(
+        model="nomic-embed-text",
+        base_url="http://localhost:11434",
+        api_key="",
+        dim=3,
+        provider=OllamaEmbedProvider(),
+    )
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"embeddings": [[0.1, 0.2, 0.3]]}
+    embedder._client.post = AsyncMock(return_value=response)
+
+    result = await embedder.embed_texts(["hello"], context="document")
+
+    assert result == [[0.1, 0.2, 0.3]]
+    assert embedder.supports_images is False
+    with pytest.raises(ValueError, match="does not support image embeddings"):
+        await embedder.embed_index_images([Image.new("RGB", (1, 1), "white")])
+
+
 async def test_probe_image_embedding_uses_index_context() -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
@@ -138,3 +160,42 @@ async def test_probe_image_embedding_uses_index_context() -> None:
     await embedder.probe_image_embedding()
 
     embedder.embed_index_images.assert_awaited_once()
+
+
+async def test_image_probe_rejects_wrong_vector_count() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {
+        "data": [
+            {"embedding": [0.1, 0.2, 0.3]},
+            {"embedding": [0.4, 0.5, 0.6]},
+        ]
+    }
+    embedder._client.post = AsyncMock(return_value=response)
+
+    with pytest.raises(ValueError, match="Expected 1 embedding vector"):
+        await embedder.probe_image_embedding()
+
+
+async def test_embed_texts_rejects_wrong_vector_count() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {"data": [{"embedding": [0.1, 0.2, 0.3]}]}
+    embedder._client.post = AsyncMock(return_value=response)
+
+    with pytest.raises(ValueError, match="Expected 2 embedding vectors"):
+        await embedder.embed_texts(["hello", "world"])

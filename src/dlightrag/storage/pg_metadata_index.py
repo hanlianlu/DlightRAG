@@ -174,6 +174,7 @@ class PGMetadataIndex:
 
     async def initialize(self) -> None:
         """Create table and indexes. Call once during service startup."""
+
         async def _operation(conn: Any) -> None:
             await apply_migrations(
                 conn,
