@@ -779,7 +779,7 @@ body {
     cursor: pointer;
     font-weight: 600;
     letter-spacing: 0;
-    vertical-align: super;
+    vertical-align: baseline;
     transition: background 0.15s, color 0.15s;
     margin: 0 1px;
 }
@@ -1394,53 +1394,34 @@ body {
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
 }
 
-.image-lightbox-close {
-    position: fixed;
-    top: var(--space-related);
-    right: var(--space-related);
-    width: var(--size-button);
-    height: var(--size-button);
-    border: 1px solid rgba(245, 245, 244, 0.12);
-    border-radius: 999px;
-    background: rgba(28, 25, 23, 0.84);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-heading);
-    line-height: 1;
-    cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
-    z-index: 1001;
-}
-
-.image-lightbox-close:hover {
-    background: rgba(41, 37, 36, 0.92);
-    border-color: rgba(245, 245, 244, 0.18);
-    color: var(--color-text-primary);
-}
-
 .image-lightbox-prev,
 .image-lightbox-next {
     position: fixed;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 48px;
-    height: 48px;
-    border: 1px solid rgba(245, 245, 244, 0.12);
-    border-radius: 999px;
-    background: rgba(28, 25, 23, 0.84);
+    top: max(var(--space-layout), 12vh);
+    bottom: max(var(--space-layout), 12vh);
+    width: clamp(44px, 6vw, 72px);
+    border: none;
+    background: rgba(245, 245, 244, 0.045);
     color: var(--color-text-secondary);
-    font-size: 28px;
+    font-size: clamp(30px, 4vw, 42px);
+    font-weight: 300;
     line-height: 1;
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s;
     z-index: 1001;
 }
-.image-lightbox-prev { left: var(--space-related); }
-.image-lightbox-next { right: var(--space-related); }
+.image-lightbox-prev {
+    left: 0;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+}
+.image-lightbox-next {
+    right: 0;
+    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+}
 .image-lightbox-prev:hover,
 .image-lightbox-next:hover {
-    background: rgba(41, 37, 36, 0.92);
-    border-color: rgba(245, 245, 244, 0.18);
-    color: var(--color-text-primary);
+    background: rgba(210, 182, 97, 0.12);
+    color: var(--color-gold-100);
 }
 
 /* === Drop Overlay === */

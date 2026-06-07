@@ -330,7 +330,7 @@ def test_citation_badge_is_compact_marker_not_framed_chip() -> None:
     assert "font-size: var(--font-size-caption);" in badge_block
     assert "line-height: 1;" in badge_block
     assert "padding: 0 0.16em;" in badge_block
-    assert "vertical-align: super;" in badge_block
+    assert "vertical-align: baseline;" in badge_block
     assert "background: rgba(210, 182, 97, 0.12);" in hover_block
 
 
@@ -542,10 +542,10 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
     assert "border-color: rgba(210, 182, 97, 0.22);" in state_block
 
 
-def test_lightbox_controls_match_dark_ui_not_bright_white_buttons() -> None:
+def test_lightbox_controls_use_large_theme_bars_without_close_button() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    images_js = (ROOT / "src/dlightrag/web/static/js/images.js").read_text(encoding="utf-8")
 
-    close_block = css.split(".image-lightbox-close {", 1)[1].split("}", 1)[0]
     nav_block = css.split(".image-lightbox-prev,\n.image-lightbox-next {", 1)[1].split(
         "}",
         1,
@@ -554,15 +554,20 @@ def test_lightbox_controls_match_dark_ui_not_bright_white_buttons() -> None:
         1
     ].split("}", 1)[0]
 
-    for block in (close_block, nav_block):
-        assert "background: rgba(28, 25, 23, 0.84);" in block
-        assert "border: 1px solid rgba(245, 245, 244, 0.12);" in block
-        assert "color: var(--color-text-secondary);" in block
-        assert "background: rgba(255, 255, 255, 0.92);" not in block
-        assert "color: #0f172a;" not in block
+    assert "image-lightbox-close" not in css
+    assert "image-lightbox-close" not in images_js
+    assert "top: max(var(--space-layout), 12vh);" in nav_block
+    assert "bottom: max(var(--space-layout), 12vh);" in nav_block
+    assert "width: clamp(44px, 6vw, 72px);" in nav_block
+    assert "border: none;" in nav_block
+    assert "border-radius: 999px;" not in nav_block
+    assert "background: rgba(245, 245, 244, 0.045);" in nav_block
+    assert "color: var(--color-text-secondary);" in nav_block
+    assert "background: rgba(255, 255, 255, 0.92);" not in nav_block
+    assert "color: #0f172a;" not in nav_block
 
-    assert "background: rgba(41, 37, 36, 0.92);" in hover_block
-    assert "border-color: rgba(245, 245, 244, 0.18);" in hover_block
+    assert "background: rgba(210, 182, 97, 0.12);" in hover_block
+    assert "color: var(--color-gold-100);" in hover_block
 
 
 def test_drop_overlay_uses_neutral_boundary_with_subtle_text() -> None:
