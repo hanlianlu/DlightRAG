@@ -4,13 +4,58 @@
 from __future__ import annotations
 
 import logging
+from inspect import isawaitable
 from typing import Any
 
 from aiobotocore.session import AioSession
+from botocore.exceptions import BotoCoreError, NoCredentialsError, PartialCredentialsError
 
 from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.uri import parse_remote_uri
 
 logger = logging.getLogger(__name__)
+
+
+class S3PresignError(RuntimeError):
+    """Base error for S3 source URL signing failures."""
+
+
+class S3CredentialsUnavailable(S3PresignError):
+    """Raised when no usable AWS credentials are available for URL signing."""
+
+
+async def generate_s3_presigned_url(
+    *,
+    raw_path: str,
+    expiry_seconds: int = 3600,
+    region: str | None = None,
+    session: Any | None = None,
+) -> str:
+    """Generate a time-limited S3 GET URL for an ``s3://bucket/key`` path."""
+    source_type, parts = parse_remote_uri(raw_path)
+    if source_type != "s3":
+        raise ValueError(f"Expected s3:// path, got: {raw_path!r}")
+
+    client_kwargs: dict[str, Any] = {}
+    if region:
+        client_kwargs["region_name"] = region
+
+    s3_session = session or AioSession()
+    try:
+        async with s3_session.create_client("s3", **client_kwargs) as client:
+            signed_url = client.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": parts["bucket"], "Key": parts["key"]},
+                ExpiresIn=expiry_seconds,
+            )
+            if isawaitable(signed_url):
+                signed_url = await signed_url
+    except (NoCredentialsError, PartialCredentialsError) as exc:
+        raise S3CredentialsUnavailable("S3 credentials not configured") from exc
+    except BotoCoreError as exc:
+        raise S3PresignError("S3 presigned URL generation failed") from exc
+
+    return str(signed_url)
 
 
 class S3DataSource(AsyncDataSource):
@@ -19,14 +64,16 @@ class S3DataSource(AsyncDataSource):
     def __init__(
         self,
         bucket: str,
-        region: str = "us-east-1",
+        region: str | None = None,
         *,
         aws_access_key_id: str | None = None,
         aws_secret_access_key: str | None = None,
     ) -> None:
         self._bucket = bucket
         self._session = AioSession()
-        self._client_kwargs: dict[str, Any] = {"region_name": region}
+        self._client_kwargs: dict[str, Any] = {}
+        if region:
+            self._client_kwargs["region_name"] = region
         if aws_access_key_id:
             self._client_kwargs["aws_access_key_id"] = aws_access_key_id
         if aws_secret_access_key:
@@ -63,4 +110,9 @@ class S3DataSource(AsyncDataSource):
             self._client = None
 
 
-__all__ = ["S3DataSource"]
+__all__ = [
+    "S3CredentialsUnavailable",
+    "S3DataSource",
+    "S3PresignError",
+    "generate_s3_presigned_url",
+]

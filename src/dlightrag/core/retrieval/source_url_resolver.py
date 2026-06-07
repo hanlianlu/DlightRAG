@@ -3,7 +3,8 @@
 
 Normalizes raw storage paths (local, azure://, s3://) into
 /api/files/{path} URLs. The file-serving endpoint handles dispatch:
-local → stream, azure → 302 redirect to SAS URL.
+local → stream, azure → 302 redirect to SAS URL,
+s3 → 302 redirect to presigned URL.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ class SourceUrlResolver:
 
     All paths — local, azure://, s3:// — are mapped to the
     file-serving endpoint. The endpoint handles source-type dispatch
-    internally (local → stream, azure → 302 redirect to SAS URL).
+    internally (local → stream, azure/S3 → 302 redirect to signed URL).
 
     This keeps the front-end completely decoupled from storage backends.
     The front-end only ever sees one URL format: /api/files/{path}.

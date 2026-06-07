@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
+from dlightrag.sourcing.aws_s3 import S3CredentialsUnavailable
 
 
 def _embedding_config() -> EmbeddingConfig:
@@ -100,10 +101,17 @@ class TestFileEndpoint:
         resp = await client.get("/api/files/azure://container/blob.pdf")
         assert resp.status_code == 503
 
-    async def test_s3_returns_501(self, client: AsyncClient) -> None:
-        """S3 presigned URL support not yet implemented — explicit 501."""
-        resp = await client.get("/api/files/s3://my-bucket/key.pdf")
-        assert resp.status_code == 501
+    async def test_s3_503_when_unconfigured(self, client: AsyncClient) -> None:
+        """S3 request without usable AWS credentials -> 503, not 500."""
+        with patch(
+            "dlightrag.api.routes.files.generate_s3_presigned_url",
+            new_callable=AsyncMock,
+        ) as mock_presign:
+            mock_presign.side_effect = S3CredentialsUnavailable("missing credentials")
+
+            resp = await client.get("/api/files/s3://my-bucket/key.pdf")
+
+        assert resp.status_code == 503
 
 
 class TestFileEndpointAzureRedirect:
@@ -133,3 +141,38 @@ class TestFileEndpointAzureRedirect:
                 resp = await c.get("/api/files/azure://mycontainer/doc.pdf")
                 assert resp.status_code == 302
                 assert "blob.core.windows.net" in resp.headers["location"]
+
+
+class TestFileEndpointS3Redirect:
+    @patch(
+        "dlightrag.api.routes.files.generate_s3_presigned_url",
+        new_callable=AsyncMock,
+    )
+    async def test_s3_302_redirect(self, mock_presign, tmp_working_dir: Path) -> None:
+        """S3 objects get 302 redirect to presigned URL — no data proxied."""
+        mock_presign.return_value = "https://my-bucket.s3.amazonaws.com/docs/report.pdf?sig=x"
+        config = DlightragConfig(  # type: ignore[call-arg]
+            working_dir=str(tmp_working_dir),
+            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
+            embedding=_embedding_config(),
+        )
+        with (
+            patch("dlightrag.config.get_config", return_value=config),
+            patch("dlightrag.api.routes.files.get_config", return_value=config),
+            patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
+        ):
+            app = create_app(include_web=False)
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                follow_redirects=False,
+            ) as c:
+                resp = await c.get("/api/files/s3://my-bucket/docs/report.pdf")
+
+        assert resp.status_code == 302
+        assert resp.headers["location"].startswith("https://my-bucket.s3.amazonaws.com/")
+        mock_presign.assert_awaited_once_with(
+            raw_path="s3://my-bucket/docs/report.pdf",
+            expiry_seconds=3600,
+            region=None,
+        )

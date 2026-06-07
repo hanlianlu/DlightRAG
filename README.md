@@ -665,7 +665,7 @@ make langfuse-down
 | `DELETE` | `/files` | Delete documents |
 | `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |
 | `POST` | `/files/retry` | Retry failed documents |
-| `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob sources |
+| `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob / S3 sources |
 | `GET` | `/metadata/{doc_id}` | Read document metadata |
 | `POST` | `/metadata/{doc_id}` | Merge or replace document metadata |
 | `POST` | `/metadata/search` | Find document IDs matching metadata filters |
