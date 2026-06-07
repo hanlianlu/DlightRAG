@@ -418,6 +418,23 @@ def test_chat_typography_uses_semantic_line_height_tokens() -> None:
     assert "padding: var(--space-tight) 0 var(--space-message-block);" in ai_message
 
 
+def test_welcome_brand_has_stronger_first_viewport_presence() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
+    welcome_brand = css.split(".welcome-brand {", 1)[1].split("}", 1)[0]
+    welcome_empty = css.split(".app:not(.has-messages) .welcome {", 1)[1].split("}", 1)[0]
+    composer_empty = css.split(".app:not(.has-messages) .composer {", 1)[1].split("}", 1)[0]
+
+    assert "--font-size-welcome-brand: clamp(1.5rem, 1.35vw + 1.16rem, 2.25rem);" in root_block
+    assert "font-size: var(--font-size-welcome-brand);" in welcome_brand
+    assert "font-weight: 600;" in welcome_brand
+    assert "color: var(--color-text-primary);" in welcome_brand
+    assert "min-height: 42vh;" in welcome_empty
+    assert "padding-top: clamp(17vh, 18vh, 20vh);" in welcome_empty
+    assert "padding-bottom: var(--space-section);" in welcome_empty
+    assert "padding-bottom: clamp(28vh, 30vh, 32vh);" in composer_empty
+
+
 def test_composer_plus_uses_thin_svg_icon_without_enlarging_button() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
     index_html = (ROOT / "src/dlightrag/web/templates/index.html").read_text(encoding="utf-8")
@@ -429,11 +446,12 @@ def test_composer_plus_uses_thin_svg_icon_without_enlarging_button() -> None:
     assert 'class="composer-plus-icon"' in index_html
     assert ">+</button>" not in index_html
     assert 'stroke="currentColor"' in index_html
-    assert "--size-composer-plus-icon: clamp(23px, 2.3vw, 29px);" in root_block
-    assert "--stroke-composer-plus-icon: 1.55;" in root_block
+    assert "--size-composer-plus-icon: clamp(22px, 2.15vw, 27px);" in root_block
+    assert "--stroke-composer-plus-icon: 1.25;" in root_block
     assert "--font-size-action-glyph" not in root_block
     assert "width: var(--size-button);" in plus_block
     assert "height: var(--size-button);" in plus_block
+    assert "color: rgba(210, 182, 97, 0.78);" in plus_block
     assert "font-size:" not in plus_block
     assert "font-weight:" not in plus_block
     assert "width: var(--size-composer-plus-icon);" in plus_icon_block

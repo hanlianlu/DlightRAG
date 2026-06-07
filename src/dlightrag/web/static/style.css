@@ -103,6 +103,7 @@
     --font-size-subhead:  var(--step-1);   /* sub-headings, buttons */
     --font-size-heading:  var(--step-2);   /* welcome brand, panel titles */
     --font-size-section:  var(--step-3);   /* section headers */
+    --font-size-welcome-brand: clamp(1.5rem, 1.35vw + 1.16rem, 2.25rem);
     /* ── Line heights ── */
     --line-height-control: 1.5;
     --line-height-message: 1.58;
@@ -134,10 +135,10 @@
 
     /* ── Interactive sizing ── */
     --size-button: clamp(28px, 2.8vw, 34px);  /* composer buttons, small interactive */
-    --size-composer-plus-icon: clamp(23px, 2.3vw, 29px);
+    --size-composer-plus-icon: clamp(22px, 2.15vw, 27px);
     --size-icon-sm: clamp(12px, 1.2vw, 16px);  /* small icons */
     --size-icon-md: clamp(16px, 1.6vw, 20px);  /* medium icons */
-    --stroke-composer-plus-icon: 1.55;
+    --stroke-composer-plus-icon: 1.25;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -598,9 +599,9 @@ body {
 }
 
 .welcome-brand {
-    font-size: var(--font-size-heading);
+    font-size: var(--font-size-welcome-brand);
     font-weight: 600;
-    color: var(--color-text-secondary);
+    color: var(--color-text-primary);
     letter-spacing: 0;
     margin-bottom: var(--space-tight);
 }
@@ -628,13 +629,14 @@ body {
 }
 
 .app:not(.has-messages) .welcome {
-    min-height: 40vh;
-    padding-top: 12vh;
+    min-height: 42vh;
+    padding-top: clamp(17vh, 18vh, 20vh);
+    padding-bottom: var(--space-section);
 }
 
 .app:not(.has-messages) .composer {
     flex: 0 0 auto;
-    padding-bottom: 28vh;
+    padding-bottom: clamp(28vh, 30vh, 32vh);
 }
 
 .composer-inner {
@@ -1287,7 +1289,7 @@ body {
     height: var(--size-button);
     background: transparent;
     border: none;
-    color: var(--color-text-subtle);
+    color: rgba(210, 182, 97, 0.78);
     line-height: 1;
     cursor: pointer;
     flex-shrink: 0;
@@ -1303,7 +1305,7 @@ body {
 }
 
 .composer-plus:hover {
-    color: var(--color-text-tertiary);
+    color: var(--color-gold-200);
     background: var(--color-bg-elevated);
 }
 
