@@ -93,7 +93,7 @@ Advanced PostgreSQL and index tuning:
 
 ```yaml
 postgres_required_major: 18
-pg_vector_index_type: HNSW
+pg_vector_index_type: HNSW_HALFVEC
 pg_hnsw_m: 32
 pg_hnsw_ef_construction: 256
 pg_hnsw_ef_search: 256
@@ -233,8 +233,8 @@ Advanced highlight controls:
 citations:
   highlights:
     enabled: true
-    timeout: 5.0
-    max_concurrency: 4
+    timeout: 10.0
+    max_concurrency: 8
     max_input_chars: 4096
     cache_size: 500
 ```

@@ -19,9 +19,9 @@ embedding models or dimensions after data has been indexed; changing
 The checked-in Docker Compose stack builds `dlightrag-postgres:pg18` from the
 local `postgres/` image definition and preloads `age,pg_textsearch,pg_jieba`.
 
-Default vector storage is `VECTOR(dim)` with HNSW. `HNSW_HALFVEC` is an
-explicit opt-in index type for deployments that have chosen the precision
-tradeoff and rebuilt indexes accordingly.
+Default vector storage is `HALFVEC(dim)` with HNSW. Plain `HNSW` over
+`VECTOR(dim)` remains available as an explicit fallback for deployments that
+prefer full-precision storage and have rebuilt indexes accordingly.
 
 ## Tuning Boundaries
 
