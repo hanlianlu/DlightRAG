@@ -10,6 +10,8 @@ Tests:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 # Mark all tests in this module as integration
@@ -58,12 +60,21 @@ _TEST_WORKSPACE_BETA = "test_pg_storage_beta"
 _TEST_WORKSPACES = (_TEST_WORKSPACE_ALPHA, _TEST_WORKSPACE_BETA)
 
 
-async def _delete_test_workspaces(conn) -> None:  # noqa: ANN001
+async def _open_workspace_registry() -> tuple[Any, Any]:
+    import asyncpg
+
+    from dlightrag.storage.workspaces import PGWorkspaceRegistry
+
+    pool = await asyncpg.create_pool(**_PG_CONN_KWARGS, min_size=1, max_size=1)
+    registry = PGWorkspaceRegistry(pool=pool)
+    await registry.initialize()
+    return pool, registry
+
+
+async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None:
     """Remove integration-test registry rows from the shared local database."""
-    await conn.execute(
-        "DELETE FROM dlightrag_workspace_meta WHERE workspace = ANY($1::text[])",
-        list(_TEST_WORKSPACES),
-    )
+    for workspace in (*_TEST_WORKSPACES, *extra_workspaces):
+        await registry.delete(workspace)
 
 
 # ---------------------------------------------------------------------------
@@ -76,33 +87,21 @@ class TestPGWorkspaceDiscovery:
 
     async def test_discovers_workspaces_from_workspace_meta(self, pg_check) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
-        import asyncpg
-
         from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
 
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
+        pool, registry = await _open_workspace_registry()
         try:
-            await _delete_test_workspaces(conn)
-            await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
-                workspace TEXT PRIMARY KEY,
-                embedding_model TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )""")
-
-            # Insert test rows for two workspaces.
-            await conn.execute(
-                "INSERT INTO dlightrag_workspace_meta (workspace, embedding_model) "
-                "VALUES ($1, $2) ON CONFLICT (workspace) DO UPDATE SET embedding_model = $2",
-                _TEST_WORKSPACE_ALPHA,
-                "voyage-multimodal-3.5",
+            await _delete_test_workspaces(registry)
+            await registry.upsert(
+                workspace=_TEST_WORKSPACE_ALPHA,
+                display_name="Test PG Storage Alpha",
+                embedding_model="voyage-multimodal-3.5",
             )
-            await conn.execute(
-                "INSERT INTO dlightrag_workspace_meta (workspace, embedding_model) "
-                "VALUES ($1, $2) ON CONFLICT (workspace) DO UPDATE SET embedding_model = $2",
-                _TEST_WORKSPACE_BETA,
-                "voyage-multimodal-3.5",
+            await registry.upsert(
+                workspace=_TEST_WORKSPACE_BETA,
+                display_name="Test PG Storage Beta",
+                embedding_model="voyage-multimodal-3.5",
             )
 
             cfg = DlightragConfig(  # type: ignore[call-arg]
@@ -122,24 +121,17 @@ class TestPGWorkspaceDiscovery:
             assert _TEST_WORKSPACE_ALPHA in workspaces
             assert _TEST_WORKSPACE_BETA in workspaces
         finally:
-            await _delete_test_workspaces(conn)
-            await conn.close()
+            await _delete_test_workspaces(registry)
+            await pool.close()
 
     async def test_empty_table_returns_default_workspace(self, pg_check) -> None:
         """Empty workspace metadata falls back to config.workspace."""
-        import asyncpg
-
         from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
 
-        conn = await asyncpg.connect(**_PG_CONN_KWARGS)
+        pool, registry = await _open_workspace_registry()
         try:
-            await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
-                workspace TEXT PRIMARY KEY,
-                embedding_model TEXT NOT NULL,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                updated_at TIMESTAMPTZ DEFAULT NOW()
-            )""")
+            await _delete_test_workspaces(registry, "test-fallback-ws")
             cfg = DlightragConfig(  # type: ignore[call-arg]
                 kv_storage="PGKVStorage",
                 workspace="test-fallback-ws",
@@ -161,8 +153,5 @@ class TestPGWorkspaceDiscovery:
             assert len(workspaces) >= 1
             assert "test_fallback_ws" in workspaces
         finally:
-            await conn.execute(
-                "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1",
-                "test_fallback_ws",
-            )
-            await conn.close()
+            await _delete_test_workspaces(registry, "test-fallback-ws")
+            await pool.close()
