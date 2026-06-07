@@ -1,8 +1,8 @@
 # Vendored Static Assets
 
-## htmx 2.0.4
+## htmx 2.0.10
 
-Source: https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js
+Source: https://cdn.jsdelivr.net/npm/htmx.org@2.0.10/dist/htmx.min.js
 
 License: Zero-Clause BSD
 

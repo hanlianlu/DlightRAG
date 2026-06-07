@@ -8,6 +8,10 @@ import {createAnswerRenderer, createChatTurn, setAnswerError} from './chat_rende
 
 let queryInFlight = false;
 
+function isImeCompositionKeyEvent(e) {
+    return e.isComposing === true || e.keyCode === 229;
+}
+
 export async function submitQuery(query) {
     if (queryInFlight) return;
     queryInFlight = true;
@@ -69,9 +73,18 @@ export function setupQueryForm() {
     }
 
     if (textarea) {
+        let textareaIsComposing = false;
+
+        textarea.addEventListener('compositionstart', function() {
+            textareaIsComposing = true;
+        });
+        textarea.addEventListener('compositionend', function() {
+            textareaIsComposing = false;
+        });
         textarea.addEventListener('input', autoResize);
         textarea.addEventListener('keydown', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
+                if (textareaIsComposing || isImeCompositionKeyEvent(e)) return;
                 e.preventDefault();
                 form.dispatchEvent(new Event('submit'));
             }

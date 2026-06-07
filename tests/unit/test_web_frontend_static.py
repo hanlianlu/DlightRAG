@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,24 @@ def test_chat_streaming_is_split_into_transport_and_renderer_modules() -> None:
     assert "contentDiv.innerHTML" not in chat_js
 
 
+def test_composer_enter_shortcut_respects_ime_composition() -> None:
+    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+
+    assert "function isImeCompositionKeyEvent(e)" in chat_js
+    assert "e.isComposing === true" in chat_js
+    assert "e.keyCode === 229" in chat_js
+    assert "let textareaIsComposing = false;" in chat_js
+    assert "textarea.addEventListener('compositionstart'" in chat_js
+    assert "textarea.addEventListener('compositionend'" in chat_js
+
+    enter_check = chat_js.index("if (e.key === 'Enter' && !e.shiftKey)")
+    ime_guard = chat_js.index(
+        "if (textareaIsComposing || isImeCompositionKeyEvent(e))", enter_check
+    )
+    submit_dispatch = chat_js.index("form.dispatchEvent(new Event('submit'))", enter_check)
+    assert enter_check < ime_guard < submit_dispatch
+
+
 def test_htmx_behavior_lives_in_dedicated_module() -> None:
     static_js = ROOT / "src/dlightrag/web/static/js"
     main_js = (static_js / "main.js").read_text(encoding="utf-8")
@@ -44,6 +63,18 @@ def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
     assert 'src="https://' not in base_html
     assert 'src="/static/vendor/htmx.min.js' in base_html
     assert (web_root / "static" / "vendor" / "htmx.min.js").is_file()
+
+
+def test_vendored_htmx_version_matches_license_metadata() -> None:
+    vendor_root = ROOT / "src/dlightrag/web/static/vendor"
+    htmx_js = (vendor_root / "htmx.min.js").read_text(encoding="utf-8")
+    licenses = (vendor_root / "LICENSES.md").read_text(encoding="utf-8")
+
+    version = re.search(r'version:"([^"]+)"', htmx_js)
+
+    assert version is not None
+    assert f"## htmx {version.group(1)}" in licenses
+    assert f"https://cdn.jsdelivr.net/npm/htmx.org@{version.group(1)}/dist/htmx.min.js" in licenses
 
 
 def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
@@ -210,6 +241,127 @@ def test_source_panel_default_gold_accents_are_restrained() -> None:
     assert "background: var(--color-bg-hover);" in source_header_hover
     assert "border-left: 3px solid rgba(210, 182, 97, 0.24);" in source_chunk_block
     assert "border-left: 3px solid var(--color-gold-400);" not in css
+
+
+def test_source_panel_active_chunk_uses_subtle_selection_not_gold_fill() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    active_chunk_block = css.split(".source-chunk.active {", 1)[1].split("}", 1)[0]
+
+    assert "border-left-color: rgba(210, 182, 97, 0.42);" in active_chunk_block
+    assert "box-shadow: inset 1px 0 0 rgba(210, 182, 97, 0.18);" in active_chunk_block
+    assert "background: rgba(87, 74, 36, 0.15);" not in active_chunk_block
+    assert "var(--color-gold-200)" not in active_chunk_block
+
+
+def test_source_panel_phrase_highlight_is_scoped_and_quieter_than_global_highlight() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    global_highlight = css.split(".highlight {", 1)[1].split("}", 1)[0]
+    source_highlight = css.split(".source-chunk-content .highlight {", 1)[1].split("}", 1)[0]
+
+    assert "background: rgba(210, 182, 97, 0.12);" in global_highlight
+    assert "background: rgba(210, 182, 97, 0.06);" in source_highlight
+    assert "color: var(--color-text-secondary);" in source_highlight
+    assert "border-bottom: 1px solid rgba(210, 182, 97, 0.24);" in source_highlight
+
+
+def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    assert "--color-bg-hover: rgba(120, 113, 108, 0.10);" in css
+    assert "--color-bg-hover-strong: rgba(120, 113, 108, 0.16);" in css
+    assert "--color-accent-hover: rgba(210, 182, 97, 0.08);" in css
+    assert "--color-accent-hover-strong: rgba(210, 182, 97, 0.14);" in css
+
+
+def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    assert "--radius-xs: 0.375rem;" in css
+    assert "--radius-sm: 0.5rem;" in css
+    assert "--radius-md: 0.625rem;" in css
+    assert "--radius-lg: 0.75rem;" in css
+
+
+def test_radius_usage_matches_visual_hierarchy() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    workspace_selector = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
+    workspace_popover = css.split(".workspace-popover {", 1)[1].split("}", 1)[0]
+    workspace_check = css.split(".workspace-popover-check {", 1)[1].split("}", 1)[0]
+    composer = css.split(".composer-form {", 1)[1].split("}", 1)[0]
+    user_message = css.split(".user-message {", 1)[1].split("}", 1)[0]
+    source_chunk = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
+    file_item = css.split(".file-item {", 1)[1].split("}", 1)[0]
+    upload_zone = css.split(".upload-zone {", 1)[1].split("}", 1)[0]
+
+    assert "border-radius: var(--radius-sm);" in workspace_selector
+    assert "border-radius: var(--radius-md);" in workspace_popover
+    assert "border-radius: var(--radius-xs);" in workspace_check
+    assert "border-radius: var(--radius-lg);" in composer
+    assert (
+        "border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);"
+        in user_message
+    )
+    assert "border-radius: 0 var(--radius-md) var(--radius-md) 0;" in source_chunk
+    assert "border-radius: var(--radius-sm);" in file_item
+    assert "border-radius: var(--radius-md);" in upload_zone
+
+
+def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    selector_block = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
+    state_block = css.split(".workspace-selector:hover,\n.workspace-selector.open {", 1)[1].split(
+        "}",
+        1,
+    )[0]
+
+    assert "background: rgba(41, 37, 36, 0.56);" in selector_block
+    assert "border: 1px solid var(--color-border-subtle);" in selector_block
+    assert "color: var(--color-text-secondary);" in selector_block
+    assert "background: rgba(87, 74, 36, 0.18);" not in selector_block
+    assert "color: var(--color-gold-100);" not in selector_block
+
+    assert "background: var(--color-bg-hover);" in state_block
+    assert "border-color: rgba(210, 182, 97, 0.22);" in state_block
+
+
+def test_lightbox_controls_match_dark_ui_not_bright_white_buttons() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    close_block = css.split(".image-lightbox-close {", 1)[1].split("}", 1)[0]
+    nav_block = css.split(".image-lightbox-prev,\n.image-lightbox-next {", 1)[1].split(
+        "}",
+        1,
+    )[0]
+    hover_block = css.split(".image-lightbox-prev:hover,\n.image-lightbox-next:hover {", 1)[
+        1
+    ].split("}", 1)[0]
+
+    for block in (close_block, nav_block):
+        assert "background: rgba(28, 25, 23, 0.84);" in block
+        assert "border: 1px solid rgba(245, 245, 244, 0.12);" in block
+        assert "color: var(--color-text-secondary);" in block
+        assert "background: rgba(255, 255, 255, 0.92);" not in block
+        assert "color: #0f172a;" not in block
+
+    assert "background: rgba(41, 37, 36, 0.92);" in hover_block
+    assert "border-color: rgba(245, 245, 244, 0.18);" in hover_block
+
+
+def test_drop_overlay_uses_neutral_boundary_with_subtle_text() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    overlay_block = css.split(".drop-overlay {", 1)[1].split("}", 1)[0]
+    content_block = css.split(".drop-overlay-content {", 1)[1].split("}", 1)[0]
+
+    assert "background: rgba(12, 10, 9, 0.62);" in overlay_block
+    assert "border: 1px dashed rgba(168, 162, 158, 0.34);" in overlay_block
+    assert "border: 2px dashed var(--color-gold-400);" not in overlay_block
+    assert "color: var(--color-text-secondary);" in content_block
+    assert "color: var(--color-gold-200);" not in content_block
 
 
 def test_panel_resize_handle_does_not_paint_full_height_drag_block() -> None:
