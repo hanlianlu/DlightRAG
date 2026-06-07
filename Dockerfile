@@ -1,9 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 # DlightRAG - multimodal RAG
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:0.9.3 AS uv-bin
+
+FROM python:3.12-slim-bookworm AS builder
 
 WORKDIR /app
+COPY --from=uv-bin /uv /uvx /bin/
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential python3-dev git \
     && rm -rf /var/lib/apt/lists/*
@@ -12,10 +16,11 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-install-project
 
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM python:3.12-slim-bookworm
 LABEL maintainer="HanlianLyu"
 
 WORKDIR /app
+COPY --from=uv-bin /uv /uvx /bin/
 
 # Runtime utilities for Git-based dependencies and TLS.
 RUN apt-get update && apt-get install -y --no-install-recommends \
