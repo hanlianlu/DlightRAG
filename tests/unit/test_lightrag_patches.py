@@ -174,50 +174,67 @@ class TestExecutePatch:
 class TestNeedsPatch:
     """Test the source-inspection guard."""
 
-    def test_configure_age_detects_missing_precheck(self):
-        from dlightrag.core._lightrag_patches import _configure_age_needs_patch
+    def test_configure_age_detects_missing_precheck(self, monkeypatch: pytest.MonkeyPatch):
+        import dlightrag.core._lightrag_patches as mod
 
         def missing_precheck():
-            # DuplicateSchemaError
             pass
 
-        assert _configure_age_needs_patch(missing_precheck) is True
+        monkeypatch.setattr(
+            mod,
+            "_source_contains",
+            lambda _method, needle: needle == "DuplicateSchemaError",
+        )
+        assert mod._configure_age_needs_patch(missing_precheck) is True
 
-    def test_configure_age_detects_missing_duplicate_schema_guard(self):
-        from dlightrag.core._lightrag_patches import _configure_age_needs_patch
-
-        def missing_duplicate_schema():
-            # SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)
-            pass
-
-        assert _configure_age_needs_patch(missing_duplicate_schema) is True
-
-    def test_configure_age_detects_already_fixed_method(self):
-        from dlightrag.core._lightrag_patches import _configure_age_needs_patch
-
-        def already_fixed():
-            # SELECT EXISTS(SELECT 1 FROM ag_catalog.ag_graph WHERE name = $1)
-            # DuplicateSchemaError
-            pass
-
-        assert _configure_age_needs_patch(already_fixed) is False
-
-    def test_execute_detects_missing_duplicate_schema_guard(self):
-        from dlightrag.core._lightrag_patches import _execute_needs_patch
+    def test_configure_age_detects_missing_duplicate_schema_guard(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        import dlightrag.core._lightrag_patches as mod
 
         def missing_duplicate_schema():
             pass
 
-        assert _execute_needs_patch(missing_duplicate_schema) is True
+        monkeypatch.setattr(
+            mod,
+            "_source_contains",
+            lambda _method, needle: needle == "ag_catalog.ag_graph",
+        )
+        assert mod._configure_age_needs_patch(missing_duplicate_schema) is True
 
-    def test_execute_detects_already_fixed_method(self):
-        from dlightrag.core._lightrag_patches import _execute_needs_patch
+    def test_configure_age_detects_already_fixed_method(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        import dlightrag.core._lightrag_patches as mod
 
         def already_fixed():
-            # DuplicateSchemaError
             pass
 
-        assert _execute_needs_patch(already_fixed) is False
+        monkeypatch.setattr(mod, "_source_contains", lambda _method, _needle: True)
+        assert mod._configure_age_needs_patch(already_fixed) is False
+
+    def test_execute_detects_missing_duplicate_schema_guard(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        import dlightrag.core._lightrag_patches as mod
+
+        def missing_duplicate_schema():
+            pass
+
+        monkeypatch.setattr(mod, "_source_contains", lambda _method, _needle: False)
+        assert mod._execute_needs_patch(missing_duplicate_schema) is True
+
+    def test_execute_detects_already_fixed_method(self, monkeypatch: pytest.MonkeyPatch):
+        import dlightrag.core._lightrag_patches as mod
+
+        def already_fixed():
+            pass
+
+        monkeypatch.setattr(mod, "_source_contains", lambda _method, _needle: True)
+        assert mod._execute_needs_patch(already_fixed) is False
 
     def test_uninspectable_returns_true(self):
         """If getsource fails, assume patch is needed (safe default)."""
