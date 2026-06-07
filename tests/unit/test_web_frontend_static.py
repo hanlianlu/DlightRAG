@@ -261,9 +261,22 @@ def test_source_panel_phrase_highlight_is_scoped_and_quieter_than_global_highlig
     source_highlight = css.split(".source-chunk-content .highlight {", 1)[1].split("}", 1)[0]
 
     assert "background: rgba(210, 182, 97, 0.12);" in global_highlight
-    assert "background: rgba(210, 182, 97, 0.06);" in source_highlight
+    assert "background: rgba(210, 182, 97, 0.10);" in source_highlight
     assert "color: var(--color-text-secondary);" in source_highlight
-    assert "border-bottom: 1px solid rgba(210, 182, 97, 0.24);" in source_highlight
+    assert "border-bottom" not in source_highlight
+
+
+def test_source_download_icon_is_visible_without_hover() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    icon_block = css.split(".source-dl-icon {", 1)[1].split("}", 1)[0]
+    hover_block = css.split(".source-dl-icon:hover {", 1)[1].split("}", 1)[0]
+
+    assert "border: 1px solid var(--color-border-subtle);" in icon_block
+    assert "color: var(--color-text-secondary);" in icon_block
+    assert "opacity: 1;" in icon_block
+    assert "background: rgba(41, 37, 36, 0.38);" in icon_block
+    assert "background: var(--color-accent-hover);" in hover_block
 
 
 def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
@@ -273,6 +286,34 @@ def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
     assert "--color-bg-hover-strong: rgba(120, 113, 108, 0.16);" in css
     assert "--color-accent-hover: rgba(210, 182, 97, 0.08);" in css
     assert "--color-accent-hover-strong: rgba(210, 182, 97, 0.14);" in css
+
+
+def test_type_scale_uses_corrected_compact_utopia_coefficients() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
+    type_block = root_block.split("/* ── Type scale ── */", 1)[1].split("/* ── Space scale", 1)[0]
+
+    assert "Viewport: 390px → 1440px | Base: 15px → 16px | Ratio: 1.2" in root_block
+    assert "Base: 16px → 19px" not in root_block
+    assert "--step-0: clamp(0.93750rem, 0.095238vi + 0.914286rem, 1.00000rem);" in type_block
+    assert "0.00285714vi" not in type_block
+    assert "16.00px → 19.00px" not in type_block
+
+
+def test_chat_typography_uses_semantic_line_height_tokens() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
+    composer_input = css.split(".composer-input {", 1)[1].split("}", 1)[0]
+    user_message = css.split(".user-message {", 1)[1].split("}", 1)[0]
+    ai_message = css.split(".ai-message {", 1)[1].split("}", 1)[0]
+    ai_content = css.split(".ai-message-content {", 1)[1].split("}", 1)[0]
+
+    assert "--line-height-control: 1.55;" in root_block
+    assert "--line-height-message: 1.65;" in root_block
+    assert "line-height: var(--line-height-control);" in composer_input
+    assert "line-height: var(--line-height-control);" in user_message
+    assert "line-height: var(--line-height-message);" in ai_message
+    assert "line-height: var(--line-height-message);" in ai_content
 
 
 def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:

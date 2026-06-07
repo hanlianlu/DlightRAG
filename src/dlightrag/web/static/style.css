@@ -1,35 +1,34 @@
 /* DlightRAG Web Frontend — Immersive Chat Design
  *
  * Fluid design system: type, spacing, and layout scale with viewport width.
- * On phones (360px, ~30cm) → compact but readable.
- * On laptops (1440px, ~60cm) → comfortable reading width.
- * On TVs (3840px, ~3m) → wider content, larger type for distance viewing.
+ * On phones (390px) → compact but readable.
+ * On laptops (1440px) → slightly more relaxed without changing UI character.
  */
 
 :root {
     /* ═══════════════════════════════════════════════════════════════════
        LAYER 1: Primitives
        Type and space use utopia.fyi formulas.
-       Viewport: 390px → 1440px | Base: 16px → 19px | Ratio: 1.25
+       Viewport: 390px → 1440px | Base: 15px → 16px | Ratio: 1.2
        ═══════════════════════════════════════════════════════════════════ */
 
-    /* ── Type scale (minor third, ratio 1.25) ── */
-    /* step -2: 10.24px → 12.16px */
-    --step--2: clamp(0.64000rem, 0.00182857vi + 0.595429rem, 0.76000rem);
-    /* step -1: 12.80px → 15.20px */
-    --step--1: clamp(0.80000rem, 0.00228571vi + 0.744286rem, 0.95000rem);
-    /* step 0: 16.00px → 19.00px */
-    --step-0: clamp(1.00000rem, 0.00285714vi + 0.930357rem, 1.18750rem);
-    /* step 1: 20.00px → 23.75px */
-    --step-1: clamp(1.25000rem, 0.00357143vi + 1.162946rem, 1.48438rem);
-    /* step 2: 25.00px → 29.69px */
-    --step-2: clamp(1.56250rem, 0.00446429vi + 1.453683rem, 1.85547rem);
-    /* step 3: 31.25px → 37.11px */
-    --step-3: clamp(1.95312rem, 0.00558036vi + 1.817104rem, 2.31934rem);
-    /* step 4: 39.06px → 46.39px */
-    --step-4: clamp(2.44141rem, 0.00697545vi + 2.271380rem, 2.89917rem);
-    /* step 5: 48.83px → 57.98px */
-    --step-5: clamp(3.05176rem, 0.00871931vi + 2.839225rem, 3.62396rem);
+    /* ── Type scale ── */
+    /* step -2: 10.42px → 11.11px */
+    --step--2: clamp(0.65104rem, 0.066138vi + 0.634921rem, 0.69444rem);
+    /* step -1: 12.50px → 13.33px */
+    --step--1: clamp(0.78125rem, 0.079365vi + 0.761905rem, 0.83333rem);
+    /* step 0: 15.00px → 16.00px */
+    --step-0: clamp(0.93750rem, 0.095238vi + 0.914286rem, 1.00000rem);
+    /* step 1: 18.00px → 19.20px */
+    --step-1: clamp(1.12500rem, 0.114286vi + 1.097143rem, 1.20000rem);
+    /* step 2: 21.60px → 23.04px */
+    --step-2: clamp(1.35000rem, 0.137143vi + 1.316571rem, 1.44000rem);
+    /* step 3: 25.92px → 27.65px */
+    --step-3: clamp(1.62000rem, 0.164571vi + 1.579886rem, 1.72800rem);
+    /* step 4: 31.10px → 33.18px */
+    --step-4: clamp(1.94400rem, 0.197486vi + 1.895863rem, 2.07360rem);
+    /* step 5: 37.32px → 39.81px */
+    --step-5: clamp(2.33280rem, 0.236983vi + 2.275035rem, 2.48832rem);
 
     /* ── Space scale (unison multipliers on base step-0) ── */
     /* space-3xs: 4.0px → 4.8px */
@@ -103,6 +102,10 @@
     --font-size-subhead:  var(--step-1);   /* sub-headings, buttons */
     --font-size-heading:  var(--step-2);   /* welcome brand, panel titles */
     --font-size-section:  var(--step-3);   /* section headers */
+
+    /* ── Line heights ── */
+    --line-height-control: 1.55;
+    --line-height-message: 1.65;
 
     /* ── Space (semantic aliases to Utopia space scale) ── */
     --space-inline:       var(--space-3xs);  /* icon-to-text, badge internal */
@@ -650,7 +653,7 @@ body {
     color: var(--color-text-primary);
     font-size: var(--font-size-body);
     font-family: inherit;
-    line-height: 1.6;
+    line-height: var(--line-height-control);
     padding: var(--space-tight) 0;
     outline: none;
     resize: none;
@@ -696,7 +699,7 @@ body {
     width: fit-content;
     color: var(--color-text-primary);
     font-size: var(--font-size-body);
-    line-height: 1.6;
+    line-height: var(--line-height-control);
 }
 
 .user-message-wrapper {
@@ -707,7 +710,7 @@ body {
 .ai-message {
     margin: var(--space-tight) 0 0;
     padding: var(--space-tight) 0 var(--space-related);
-    line-height: 1.75;
+    line-height: var(--line-height-message);
 }
 
 .ai-message-header {
@@ -726,7 +729,7 @@ body {
 .ai-message-content {
     font-size: var(--font-size-body);
     color: var(--color-text-tertiary);
-    line-height: 1.75;
+    line-height: var(--line-height-message);
 }
 
 /* === Context Window Indicator === */
@@ -1031,9 +1034,8 @@ body {
 }
 
 .source-chunk-content .highlight {
-    background: rgba(210, 182, 97, 0.06);
+    background: rgba(210, 182, 97, 0.10);
     color: var(--color-text-secondary);
-    border-bottom: 1px solid rgba(210, 182, 97, 0.24);
 }
 
 /* === Show All Button === */
@@ -1891,20 +1893,20 @@ body.panel-open .composer-inner {
     justify-content: center;
     width: var(--size-button);
     height: var(--size-button);
-    border: 1px solid transparent;
+    background: rgba(41, 37, 36, 0.38);
+    border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     font-size: 14px;
     flex-shrink: 0;
-    opacity: 0.72;
+    opacity: 1;
     text-decoration: none;
     transition: color 0.15s, background 0.15s, border-color 0.15s, opacity 0.15s;
 }
 .source-dl-icon:hover {
-    background: rgba(120, 113, 108, 0.16);
-    border-color: var(--color-border-subtle);
+    background: var(--color-accent-hover);
+    border-color: rgba(210, 182, 97, 0.28);
     color: var(--color-text-primary);
-    opacity: 1;
 }
 
 .source-dl-icon-svg {
