@@ -13,6 +13,11 @@ from starlette.responses import RedirectResponse
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import DeleteRequest
 from dlightrag.config import get_config
+from dlightrag.sourcing.aws_s3 import (
+    S3CredentialsUnavailable,
+    S3PresignError,
+    generate_s3_presigned_url,
+)
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
 from dlightrag.utils import normalize_workspace
 
@@ -97,7 +102,7 @@ async def serve_file(
 
     - Local paths under ``input_dir/<workspace>/``: 200 + StreamingResponse
     - azure://: 302 redirect to SAS signed URL
-    - s3://: 501 Not Implemented (S3 download URLs are not implemented)
+    - s3://: 302 redirect to S3 presigned URL
     """
     config = get_config()
 
@@ -112,9 +117,21 @@ async def serve_file(
         )
         return RedirectResponse(url=sas_url, status_code=302)
 
-    # --- S3 remote download URLs are not yet implemented ---
+    # --- S3 object: 302 redirect ---
     if file_path.startswith("s3://"):
-        raise HTTPException(501, "S3 presigned URL support not yet implemented")
+        try:
+            signed_url = await generate_s3_presigned_url(
+                raw_path=file_path,
+                expiry_seconds=config.s3_presign_expiry,
+                region=config.s3_region,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except S3CredentialsUnavailable as exc:
+            raise HTTPException(503, "S3 credentials not configured") from exc
+        except S3PresignError as exc:
+            raise HTTPException(503, "S3 presigned URL generation failed") from exc
+        return RedirectResponse(url=signed_url, status_code=302)
 
     # --- Unknown remote scheme ---
     if "://" in file_path:

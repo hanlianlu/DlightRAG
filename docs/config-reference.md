@@ -41,6 +41,7 @@ they need to change:
 - source highlight timeout/cache internals
 - query-image semantic description limits
 - visual thumbnail cache internals
+- remote source URL signing expiry/region
 
 ## Parser And MinerU
 
@@ -92,6 +93,23 @@ model on a non-DashScope OpenAI-compatible endpoint is routed to
 provider is text-only or the probe fails, DlightRAG automatically skips direct
 image vector overwrite and query-image vector retrieval while leaving LightRAG's
 semantic multimodal path enabled.
+
+## Remote Source URLs
+
+Azure Blob and S3 source files are not copied into DlightRAG storage. Retrieved
+sources point back to `azure://...` or `s3://...`; `GET /api/files/{file_path}`
+redirects to a short-lived provider URL. Azure uses
+`DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
+(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+`AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
+
+Advanced signing defaults:
+
+```yaml
+azure_sas_expiry: 3600
+s3_presign_expiry: 3600
+s3_region:
+```
 
 ## PostgreSQL
 

@@ -790,6 +790,8 @@ class DlightragConfig(BaseSettings):
     # ===== Sourcing (Optional) =====
     blob_connection_string: str | None = Field(default=None)
     azure_sas_expiry: int = Field(default=3600, description="Azure SAS URL expiry in seconds")
+    s3_presign_expiry: int = Field(default=3600, description="S3 presigned URL expiry in seconds")
+    s3_region: str | None = Field(default=None, description="S3 client region")
 
     # ===== MCP Server =====
     mcp_transport: Literal["stdio", "streamable-http"] = Field(default="stdio")
