@@ -257,6 +257,12 @@ curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "local", "path": "/absolute/path/visible/to/api"}'
 
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "s3", "bucket": "my-bucket", "prefix": "docs/"}'
+
+curl http://localhost:8100/ingest/jobs/<job_id>
+
 curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the key findings?"}'
@@ -289,7 +295,15 @@ async def main():
     try:
         workspace = "research_notes"
         await manager.acreate_workspace(workspace, display_name="Research Notes")
-        await manager.aingest(workspace, source_type="local", path="./docs")
+        result = await manager.aingest(workspace, source_type="local", path="./docs")
+        print(result)
+        job = await manager.astart_ingest_job(
+            workspace,
+            source_type="s3",
+            bucket="my-bucket",
+            prefix="docs/",
+        )
+        print(await manager.get_ingest_job(job["job_id"]))
 
         contexts = await manager.aretrieve("What are the key findings?", workspace=workspace)
         print(contexts.contexts)
@@ -325,8 +339,9 @@ DLIGHTRAG_MCP_HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 
-MCP tools: `retrieve`, `answer`, `ingest`, `list_files`, `delete_files`,
-`list_workspaces`, `create_workspace`, and `delete_workspace`.
+MCP tools: `retrieve`, `answer`, `ingest`, `ingest_job_status`,
+`list_files`, `delete_files`, `list_workspaces`, `create_workspace`, and
+`delete_workspace`.
 
 ## Architecture
 
@@ -657,7 +672,8 @@ make langfuse-down
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/ingest` | Ingest local, Azure Blob, or AWS S3 content |
+| `POST` | `/ingest` | Ingest local, Azure Blob, or AWS S3 content; batch-shaped requests return an ingest job unless `wait=true` |
+| `GET` | `/ingest/jobs/{job_id}` | Return ingest job status |
 | `POST` | `/ingest/blob` | Upload one file via multipart form and ingest it |
 | `POST` | `/retrieve` | Return contexts and sources without answer generation |
 | `POST` | `/answer` | Return or stream an LLM answer with contexts and sources |
@@ -675,6 +691,11 @@ make langfuse-down
 | `POST` | `/workspaces` | Create an empty workspace |
 | `DELETE` | `/workspaces/{workspace}` | Delete/reset one workspace |
 | `GET` | `/health` | Health and storage status |
+
+Ingest jobs are durable. If the DlightRAG process restarts, recent
+`queued`/`running` jobs are recovered automatically; remote prefix jobs resume
+from the next unfinished source window, while LightRAG's document status handles
+document-level skips for already processed content.
 
 Workspace-scoped read/write endpoints accept optional `workspace`.
 Workspace lifecycle endpoints name the workspace explicitly. Query endpoints

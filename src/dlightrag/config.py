@@ -843,7 +843,7 @@ class DlightragConfig(BaseSettings):
     log_level: str = Field(default="info")
     ingest_timeout: int | None = Field(
         default=None,
-        description="Timeout in seconds for ingest operations. None means no limit.",
+        description="Seconds to wait for synchronous ingest calls. None waits until completion; timeouts return the running job instead of cancelling ingest.",
     )
     request_timeout: int = Field(
         default=300,

@@ -11,6 +11,7 @@ import asyncio
 import inspect
 import logging
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass, replace
@@ -173,6 +174,10 @@ class RAGServiceManager:
         self._backoff: dict[str, tuple[float, float]] = {}
 
         self._answer_engine: AnswerEngine | None = None
+        self._ingest_job_store: Any | None = None
+        self._ingest_job_tasks: dict[str, asyncio.Task[None]] = {}
+        self._ingest_job_workspaces: dict[str, str] = {}
+        self._ingest_job_recovery_started = False
         self._query_planner: QueryPlanner | None = None
         self._query_image_enhancer: Any = None
         self._session_images: Any = None
@@ -214,6 +219,8 @@ class RAGServiceManager:
         logger.info("Warmed up %d/%d workspace services", ok, len(all_ws))
         if failed:
             logger.warning("Failed to warm up: %s", ", ".join(failed))
+
+        await manager._start_ingest_job_recovery()
 
         if default_ws in manager._services:
             manager._ready = True
@@ -333,20 +340,295 @@ class RAGServiceManager:
         source_type: Literal["local", "azure_blob", "s3"],
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Ingest documents into a specific workspace."""
-        timeout = self._config.ingest_timeout
+        """Start an ingest job, wait according to config, and return the result if ready."""
+        job = await self.astart_ingest_job(workspace, source_type=source_type, **kwargs)
+        row = await self.await_ingest_job(job["job_id"], timeout=self._config.ingest_timeout)
+        if row is None:
+            raise RAGServiceUnavailableError(detail=f"Ingest job disappeared: {job['job_id']}")
+        status = str(row.get("status") or "")
+        if status == "succeeded":
+            result = row.get("result")
+            return result if isinstance(result, dict) else {}
+        if status == "failed":
+            raw_errors = row.get("errors")
+            errors = raw_errors if isinstance(raw_errors, list) else []
+            detail = "; ".join(str(error) for error in errors) or "Ingest job failed"
+            raise RAGServiceUnavailableError(detail=detail)
+        return row
+
+    async def _get_ingest_job_store(self) -> Any:
+        if self._ingest_job_store is None:
+            from dlightrag.storage.ingest_jobs import PGIngestJobStore
+
+            store = PGIngestJobStore()
+            await store.initialize()
+            self._ingest_job_store = store
+            await self._prune_ingest_job_store(store)
+            await self._recover_ingest_jobs(store)
+        return self._ingest_job_store
+
+    async def _start_ingest_job_recovery(self) -> None:
         try:
-            if timeout is None:
-                svc = await self._get_service(workspace)
-                await svc.aregister_workspace()
-                return await svc.aingest(source_type=source_type, **kwargs)
+            await self._get_ingest_job_store()
+        except Exception:
+            self._startup_warnings.append("Ingest job recovery unavailable")
+            logger.warning("Ingest job recovery initialization failed", exc_info=True)
+
+    async def _prune_ingest_job_store(self, store: Any) -> None:
+        try:
+            summary = await store.prune()
+        except Exception:
+            logger.warning("Ingest job cleanup failed", exc_info=True)
+            return
+        if summary.get("failed_abandoned") or summary.get("deleted_completed"):
+            logger.info("Ingest job cleanup: %s", summary)
+
+    async def _recover_ingest_jobs(self, store: Any) -> None:
+        if self._ingest_job_recovery_started:
+            return
+        self._ingest_job_recovery_started = True
+
+        try:
+            rows = await store.list_recoverable()
+        except Exception:
+            logger.warning("Failed to list recoverable ingest jobs", exc_info=True)
+            return
+
+        recovered = 0
+        for row in rows:
+            if self._schedule_recovered_ingest_job(row, store):
+                recovered += 1
+        if recovered:
+            logger.info("Recovered %d ingest job(s)", recovered)
+
+    def _schedule_recovered_ingest_job(self, row: dict[str, Any], store: Any) -> bool:
+        job_id = str(row.get("job_id") or "")
+        if not job_id or job_id in self._ingest_job_tasks:
+            return False
+
+        raw_request = row.get("request")
+        request: dict[str, Any] = raw_request if isinstance(raw_request, dict) else {}
+        workspace = normalize_workspace(str(row.get("workspace") or request.get("workspace") or ""))
+        source_type = str(row.get("source_type") or request.get("source_type") or "")
+        raw_kwargs = request.get("kwargs")
+        kwargs: dict[str, Any] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
+        if not workspace or source_type not in {"local", "azure_blob", "s3"}:
+            logger.warning("Skipping invalid recoverable ingest job row: %s", row)
+            return False
+
+        if "source" in kwargs:
+            task = asyncio.create_task(
+                store.fail(job_id, error="ingest job cannot recover an in-memory source object")
+            )
+            self._ingest_job_tasks[job_id] = task
+            self._ingest_job_workspaces[job_id] = workspace
+            task.add_done_callback(lambda _task, _job_id=job_id: self._forget_ingest_job(_job_id))
+            return True
+
+        recovered_kwargs = dict(kwargs)
+        resume_from_window = max(0, int(row.get("current_window") or 0))
+        if resume_from_window:
+            recovered_kwargs["_resume_from_window"] = resume_from_window
+
+        task = asyncio.create_task(
+            self._run_ingest_job(
+                job_id=job_id,
+                workspace=workspace,
+                source_type=cast(Literal["local", "azure_blob", "s3"], source_type),
+                kwargs=recovered_kwargs,
+            )
+        )
+        self._ingest_job_tasks[job_id] = task
+        self._ingest_job_workspaces[job_id] = workspace
+        task.add_done_callback(lambda _task, _job_id=job_id: self._forget_ingest_job(_job_id))
+        return True
+
+    async def _attach_ingest_job_reset_result(
+        self,
+        *,
+        workspace: str,
+        result: dict[str, Any],
+        dry_run: bool,
+    ) -> None:
+        if dry_run:
+            result["ingest_jobs_deleted"] = 0
+            return
+
+        try:
+            store = await self._get_ingest_job_store()
+            result["ingest_jobs_deleted"] = await store.delete_for_workspace(workspace)
+        except Exception as exc:
+            result["ingest_jobs_deleted"] = 0
+            errors = result.setdefault("errors", [])
+            if isinstance(errors, list):
+                errors.append(f"ingest_jobs: {exc}")
+            logger.warning("Failed to delete ingest jobs for workspace '%s': %s", workspace, exc)
+
+    async def _cancel_ingest_jobs_for_workspace(self, workspace: str) -> int:
+        job_ids = [
+            job_id
+            for job_id, job_workspace in self._ingest_job_workspaces.items()
+            if job_workspace == workspace
+        ]
+        if not job_ids:
+            return 0
+
+        tasks: list[asyncio.Task[None]] = []
+        for job_id in job_ids:
+            task = self._ingest_job_tasks.get(job_id)
+            if task is None:
+                self._forget_ingest_job(job_id)
+            elif not task.done():
+                task.cancel()
+                tasks.append(task)
             else:
-                async with asyncio.timeout(timeout):
-                    svc = await self._get_service(workspace)
-                    await svc.aregister_workspace()
-                    return await svc.aingest(source_type=source_type, **kwargs)
-        except TimeoutError as e:
-            raise RAGServiceUnavailableError(detail=f"Request timed out after {timeout}s") from e
+                self._forget_ingest_job(job_id)
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        for job_id in job_ids:
+            self._forget_ingest_job(job_id)
+        return len(tasks)
+
+    def _forget_ingest_job(self, job_id: str) -> None:
+        self._ingest_job_tasks.pop(job_id, None)
+        self._ingest_job_workspaces.pop(job_id, None)
+
+    async def astart_ingest_job(
+        self,
+        workspace: str,
+        source_type: Literal["local", "azure_blob", "s3"],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Start a background ingest job and return its durable job row."""
+        workspace_id = normalize_workspace(workspace)
+        if not workspace_id:
+            raise ValueError("workspace cannot be empty")
+
+        job_id = uuid.uuid4().hex
+        store = await self._get_ingest_job_store()
+        request = {
+            "workspace": workspace_id,
+            "source_type": source_type,
+            "kwargs": _json_safe(kwargs),
+        }
+        await store.create(
+            job_id=job_id,
+            workspace=workspace_id,
+            source_type=source_type,
+            request=request,
+        )
+
+        task = asyncio.create_task(
+            self._run_ingest_job(
+                job_id=job_id,
+                workspace=workspace_id,
+                source_type=source_type,
+                kwargs=dict(kwargs),
+            )
+        )
+        self._ingest_job_tasks[job_id] = task
+        self._ingest_job_workspaces[job_id] = workspace_id
+        task.add_done_callback(lambda _task, _job_id=job_id: self._forget_ingest_job(_job_id))
+
+        row = await store.get(job_id)
+        return row or {
+            "job_id": job_id,
+            "workspace": workspace_id,
+            "source_type": source_type,
+            "status": "queued",
+        }
+
+    async def await_ingest_job(
+        self,
+        job_id: str,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any] | None:
+        """Wait for an in-process ingest job without cancelling it on timeout."""
+        task = self._ingest_job_tasks.get(job_id)
+        if task is not None:
+            try:
+                if timeout is None:
+                    await asyncio.shield(task)
+                else:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+            except TimeoutError:
+                pass
+        return await self.get_ingest_job(job_id)
+
+    async def _run_ingest_job(
+        self,
+        *,
+        job_id: str,
+        workspace: str,
+        source_type: Literal["local", "azure_blob", "s3"],
+        kwargs: dict[str, Any],
+    ) -> None:
+        store = await self._get_ingest_job_store()
+        await store.mark_running(job_id)
+        progress_seen = False
+
+        async def _record_progress(progress: Any) -> None:
+            nonlocal progress_seen
+            progress_seen = True
+            await store.record_window(
+                job_id,
+                total_delta=progress.total_delta,
+                processed_delta=progress.processed_delta,
+                failed_delta=progress.failed_delta,
+                current_window=progress.batch_index + 1,
+                errors=list(progress.errors),
+            )
+
+        try:
+            svc = await self._get_service(workspace)
+            await svc.aregister_workspace()
+            result = await svc.aingest(
+                source_type=source_type,
+                **kwargs,
+                _progress_callback=_record_progress,
+            )
+            if not progress_seen:
+                total_items, processed_items, failed_items, errors = _infer_ingest_counts(result)
+                await store.record_window(
+                    job_id,
+                    total_delta=total_items,
+                    processed_delta=processed_items,
+                    failed_delta=failed_items,
+                    current_window=1,
+                    errors=errors,
+                )
+            await store.finish(
+                job_id, result=await self._job_result_with_totals(store, job_id, result)
+            )
+        except asyncio.CancelledError:
+            await store.fail(job_id, error="ingest job cancelled")
+            raise
+        except Exception as exc:
+            await store.fail(job_id, error=f"{type(exc).__name__}: {exc}")
+
+    async def _job_result_with_totals(
+        self,
+        store: Any,
+        job_id: str,
+        result: dict[str, Any],
+    ) -> dict[str, Any]:
+        row = await store.get(job_id)
+        if row is None:
+            return result
+
+        final_result = dict(result)
+        if isinstance(final_result.get("processed"), int):
+            final_result["processed"] = int(row.get("processed_items") or 0)
+        if isinstance(final_result.get("errors"), list):
+            final_result["errors"] = list(row.get("errors") or [])
+        return final_result
+
+    async def get_ingest_job(self, job_id: str) -> dict[str, Any] | None:
+        store = await self._get_ingest_job_store()
+        return await store.get(job_id)
 
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
@@ -424,6 +706,9 @@ class RAGServiceManager:
             target_workspace = normalize_workspace(workspace)
             known = await self.list_workspaces()
             if target_workspace not in known and target_workspace not in self._services:
+                cancelled_jobs = (
+                    0 if dry_run else await self._cancel_ingest_jobs_for_workspace(target_workspace)
+                )
                 from dlightrag.core.reset import areset_orphaned_workspace
 
                 result = await areset_orphaned_workspace(
@@ -432,6 +717,12 @@ class RAGServiceManager:
                     dry_run=dry_run,
                     input_dir=str(self._config.input_dir_path),
                 )
+                await self._attach_ingest_job_reset_result(
+                    workspace=target_workspace,
+                    result=result,
+                    dry_run=dry_run,
+                )
+                result["ingest_jobs_cancelled"] = cancelled_jobs
                 return {
                     "workspaces": {target_workspace: result},
                     "total_errors": len(result.get("errors", [])),
@@ -444,13 +735,20 @@ class RAGServiceManager:
         total_errors = 0
 
         for ws in workspaces:
+            cancelled_jobs = 0 if dry_run else await self._cancel_ingest_jobs_for_workspace(ws)
             try:
                 svc = await self._get_service(ws)
                 ws_result = await svc.areset(keep_files=keep_files, dry_run=dry_run)
+                ws_result["ingest_jobs_cancelled"] = cancelled_jobs
+                await self._attach_ingest_job_reset_result(
+                    workspace=ws,
+                    result=ws_result,
+                    dry_run=dry_run,
+                )
                 results[ws] = ws_result
                 total_errors += len(ws_result.get("errors", []))
             except Exception as exc:
-                results[ws] = {"error": str(exc)}
+                results[ws] = {"error": str(exc), "ingest_jobs_cancelled": cancelled_jobs}
                 total_errors += 1
                 logger.warning("Failed to reset workspace '%s': %s", ws, exc)
 
@@ -965,6 +1263,13 @@ class RAGServiceManager:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
 
+        if self._ingest_job_tasks:
+            for task in self._ingest_job_tasks.values():
+                task.cancel()
+            await asyncio.gather(*self._ingest_job_tasks.values(), return_exceptions=True)
+            self._ingest_job_tasks.clear()
+        self._ingest_job_workspaces.clear()
+
         for component in (
             self._answer_engine,
             self._query_planner,
@@ -1013,6 +1318,32 @@ class RAGServiceManager:
                 for ws, (ts, interval) in self._backoff.items()
             },
         }
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return repr(value)
+
+
+def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[str]]:
+    errors = [str(error) for error in result.get("errors") or []]
+    if isinstance(result.get("processed"), int):
+        processed = max(0, int(result["processed"]))
+        failed = len(errors)
+        return processed + failed, processed, failed, errors
+
+    if not result:
+        return 0, 0, 0, errors
+    if str(result.get("status") or "").lower() == "skipped":
+        return 1, 0, 0, errors
+    if result.get("doc_id") or result.get("chunks") or result.get("source_kind"):
+        return 1, 1, 0, errors
+    return 0, 0, len(errors), errors
 
 
 def _storable_image_strings(images: list[str | dict[str, Any]]) -> list[str]:

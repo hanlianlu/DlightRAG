@@ -1,6 +1,7 @@
 # API Reference
 
-Request and response structures for `ingest`, `retrieve`, and `answer` — shared across Python SDK, REST API, MCP server, and Web UI.
+Request and response structures for `ingest`, `retrieve`, and `answer` across
+Python SDK, REST API, MCP server, and Web UI.
 
 
 ## Ingestion
@@ -30,6 +31,15 @@ try:
         bucket="my-bucket",
         key="docs/q1.pdf",       # or prefix="docs/"
     )
+
+    # Explicit non-blocking ingest
+    job = await manager.astart_ingest_job(
+        "default",
+        source_type="s3",
+        bucket="my-bucket",
+        prefix="docs/",
+    )
+    status = await manager.get_ingest_job(job["job_id"])
 finally:
     await manager.close()
 ```
@@ -41,6 +51,13 @@ curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "local", "path": "/data/docs"}'
 ```
+
+All ingest operations are represented internally as jobs. REST and MCP wait by
+default for single-file/single-object requests and return the concrete ingest
+result. Batch-shaped requests (`local` directory, `azure_blob.prefix`, or
+`s3.prefix`) return `202 Accepted` with a job unless `wait=true`; pass
+`wait=false` to force background execution for a single file/object. Poll
+`GET /ingest/jobs/{job_id}` for progress and final result.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -57,6 +74,7 @@ curl -X POST http://localhost:8100/ingest \
 | `author` | `string` | — | User-declared document author stored in metadata |
 | `metadata` | `object` | — | Declared/custom ingest metadata |
 | `metadata_policy` | `string` | — | `validate`, `reject_unknown`, or `store_only` |
+| `wait` | `boolean` | — | Override the default wait policy. Defaults to `true` for single file/object and `false` for batch-shaped ingest. |
 
 REST also supports one-file multipart upload at `POST /ingest/blob`. Fields are
 `file` plus optional `workspace`, `title`, `author`, `metadata` (JSON string),
@@ -66,7 +84,9 @@ directory and ingested through the same local pipeline.
 ### MCP Server
 
 MCP `ingest` exposes the same source and metadata arguments as REST `/ingest`,
-passed as tool arguments.
+passed as tool arguments, including `wait`. Batch-shaped calls return a
+background job by default; call `ingest_job_status` with the returned `job_id`
+to read progress.
 
 ### Metadata Schema And Policy
 
@@ -121,8 +141,8 @@ LightRAG path:
 }
 ```
 
-Directory, Web upload, or remote prefix ingestion uses LightRAG's staged batch
-pipeline and wraps the per-file results:
+Directory and Web upload ingestion use LightRAG's staged batch pipeline and
+wrap the per-file results:
 
 ```json
 {
@@ -162,6 +182,39 @@ pipeline and wraps the per-file results:
 | `processed` | `int` | Files represented in a directory/upload/prefix batch result |
 | `errors` | `list[string]` | Per-file ingest errors collected by the batch result; batch-level failures raise instead |
 | `results` | `list[object]` | Per-file results |
+
+Background ingestion through REST or MCP returns a job first:
+
+```json
+{
+  "job_id": "8f3b7c1d9d9a4e6e8e5f6a7b8c9d0e1f",
+  "workspace": "default",
+  "source_type": "s3",
+  "status": "queued",
+  "total_items": 0,
+  "processed_items": 0,
+  "failed_items": 0,
+  "current_window": 0,
+  "errors": [],
+  "request": {
+    "workspace": "default",
+    "source_type": "s3",
+    "kwargs": {"bucket": "my-bucket", "prefix": "docs/"}
+  },
+  "result": {},
+  "status_url": "/ingest/jobs/8f3b7c1d9d9a4e6e8e5f6a7b8c9d0e1f"
+}
+```
+
+`GET /ingest/jobs/{job_id}` and MCP `ingest_job_status` return the same job row.
+`status` is one of `queued`, `running`, `succeeded`, or `failed`. When the job
+succeeds, `result` contains the same single-file or staged batch response shown
+above. If a synchronous REST/MCP ingest exceeds `ingest_timeout`, the job keeps
+running and the transport returns the same `202` job shape instead of cancelling
+the ingest. On service startup, recent `queued`/`running` rows are recovered
+automatically. Remote prefix jobs resume from `current_window`, so completed
+source windows are not downloaded again; already processed documents are still
+deduplicated by LightRAG's document status and DlightRAG's content-hash guard.
 
 
 ## Retrieval & Answer
@@ -240,6 +293,11 @@ curl -X POST http://localhost:8100/workspaces \
 # Delete/reset a workspace
 curl -X DELETE "http://localhost:8100/workspaces/research_notes?keep_files=false"
 ```
+
+Workspace reset results include `ingest_jobs_cancelled`, the number of active
+in-process ingest jobs cancelled before reset, and `ingest_jobs_deleted`, the
+number of durable ingest job rows removed for that workspace. Dry-run reset
+reports `0` for both fields and does not cancel jobs or mutate the job table.
 
 **Workspace list response:**
 

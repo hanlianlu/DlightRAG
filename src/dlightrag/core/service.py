@@ -14,7 +14,8 @@ import logging
 import os
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -76,6 +77,20 @@ _STORAGE_ATTRS = (
 
 _REMOTE_INGEST_BATCH_SIZE = 64
 _REMOTE_DOWNLOAD_CONCURRENCY = 8
+
+RemoteIngestProgressCallback = Callable[["RemoteIngestWindowProgress"], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class RemoteIngestWindowProgress:
+    """Progress emitted after one remote object ingest window finishes."""
+
+    source_type: str
+    batch_index: int
+    total_delta: int
+    processed_delta: int
+    failed_delta: int
+    errors: tuple[str, ...] = ()
 
 
 def _ensure_venv_in_path() -> None:
@@ -868,25 +883,30 @@ class RAGService:
         *,
         source: Any,
         source_type: str,
-        keys: list[str],
+        keys: Iterable[str] | AsyncIterable[str],
         source_uri_for_key: Callable[[str], str],
         replace: bool,
         title: str | None = None,
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
         metadata_policy: MetadataIngestPolicy | None = None,
+        progress_callback: RemoteIngestProgressCallback | None = None,
+        resume_from_window: int = 0,
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
-        if not keys:
-            return {"processed": 0, "errors": [], "results": []}
-
         from dlightrag.utils.concurrency import bounded_map
 
+        resume_from_window = max(0, int(resume_from_window))
         processed = 0
         results: list[dict[str, Any]] = []
         errors: list[str] = []
+        saw_keys = False
 
-        for batch_index, window in enumerate(_chunked(keys, _REMOTE_INGEST_BATCH_SIZE)):
+        async for batch_index, window in _aiter_chunks(keys, _REMOTE_INGEST_BATCH_SIZE):
+            saw_keys = True
+            if batch_index < resume_from_window:
+                continue
+
             batch_root = remote_ingest_batch_root(
                 input_root=self._workspace_input_root(),
                 source_type=source_type,
@@ -894,6 +914,7 @@ class RAGService:
             )
             source_uris = [source_uri_for_key(key) for key in window]
             prepared_items: list[PreparedIngestFile] = []
+            window_errors: list[str] = []
 
             async def _download(
                 item: tuple[str, str],
@@ -921,12 +942,25 @@ class RAGService:
                     window, source_uris, download_results, strict=True
                 ):
                     if isinstance(downloaded, Exception):
-                        errors.append(f"{source_uri}: {downloaded}")
+                        error = f"{source_uri}: {downloaded}"
+                        errors.append(error)
+                        window_errors.append(error)
                         continue
                     prepared_items.append(downloaded)
                     prepared_source_uris.append(source_uri)
 
                 if not prepared_items:
+                    if progress_callback is not None:
+                        await progress_callback(
+                            RemoteIngestWindowProgress(
+                                source_type=source_type,
+                                batch_index=batch_index,
+                                total_delta=len(window),
+                                processed_delta=0,
+                                failed_delta=len(window),
+                                errors=tuple(window_errors),
+                            )
+                        )
                     continue
 
                 if replace:
@@ -951,7 +985,20 @@ class RAGService:
 
                 processed += int(batch_result.get("processed") or 0)
                 results.extend(batch_result.get("results") or [])
-                errors.extend(str(error) for error in batch_result.get("errors") or [])
+                batch_errors = [str(error) for error in batch_result.get("errors") or []]
+                errors.extend(batch_errors)
+                if progress_callback is not None:
+                    await progress_callback(
+                        RemoteIngestWindowProgress(
+                            source_type=source_type,
+                            batch_index=batch_index,
+                            total_delta=len(window),
+                            processed_delta=int(batch_result.get("processed") or 0),
+                            failed_delta=len(batch_errors)
+                            + max(0, len(window) - len(prepared_items)),
+                            errors=tuple([*window_errors, *batch_errors]),
+                        )
+                    )
             finally:
                 await asyncio.to_thread(_remove_remote_parser_sources, prepared_items)
                 await asyncio.to_thread(
@@ -960,6 +1007,8 @@ class RAGService:
                     self._workspace_input_root(),
                 )
 
+        if not saw_keys:
+            return {"processed": 0, "errors": [], "results": []}
         return {"processed": processed, "errors": errors, "results": results}
 
     @staticmethod
@@ -983,6 +1032,8 @@ class RAGService:
             )
 
         close = getattr(source, "aclose", None)
+        progress_callback = kwargs.get("_progress_callback")
+        resume_from_window = int(kwargs.get("_resume_from_window") or 0)
         try:
             if kwargs.get("blob_path"):
                 key = str(kwargs["blob_path"])
@@ -997,21 +1048,25 @@ class RAGService:
                         author=kwargs.get("author"),
                         metadata=kwargs.get("metadata"),
                         metadata_policy=kwargs.get("metadata_policy"),
+                        progress_callback=progress_callback,
+                        resume_from_window=resume_from_window,
                     )
                 )
 
             prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
-            keys = await source.alist_documents(prefix=prefix)
+            keys = source.aiter_documents(prefix=prefix)
             return await self._aingest_remote_keys(
                 source=source,
                 source_type="azure_blob",
-                keys=[str(key) for key in keys],
+                keys=keys,
                 source_uri_for_key=lambda key: f"azure://{container_name}/{key}",
                 replace=replace,
                 title=kwargs.get("title"),
                 author=kwargs.get("author"),
                 metadata=kwargs.get("metadata"),
                 metadata_policy=kwargs.get("metadata_policy"),
+                progress_callback=progress_callback,
+                resume_from_window=resume_from_window,
             )
         finally:
             if close is not None:
@@ -1028,6 +1083,8 @@ class RAGService:
             source = S3DataSource(bucket=str(bucket), region=kwargs.get("region"))
 
         close = getattr(source, "aclose", None)
+        progress_callback = kwargs.get("_progress_callback")
+        resume_from_window = int(kwargs.get("_resume_from_window") or 0)
         try:
             key = kwargs.get("key") or kwargs.get("blob_path")
             if key:
@@ -1043,21 +1100,25 @@ class RAGService:
                         author=kwargs.get("author"),
                         metadata=kwargs.get("metadata"),
                         metadata_policy=kwargs.get("metadata_policy"),
+                        progress_callback=progress_callback,
+                        resume_from_window=resume_from_window,
                     )
                 )
 
             prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
-            keys = await source.alist_documents(prefix=prefix)
+            keys = source.aiter_documents(prefix=prefix)
             return await self._aingest_remote_keys(
                 source=source,
                 source_type="s3",
-                keys=[str(key) for key in keys],
+                keys=keys,
                 source_uri_for_key=lambda key: f"s3://{bucket}/{key}",
                 replace=replace,
                 title=kwargs.get("title"),
                 author=kwargs.get("author"),
                 metadata=kwargs.get("metadata"),
                 metadata_policy=kwargs.get("metadata_policy"),
+                progress_callback=progress_callback,
+                resume_from_window=resume_from_window,
             )
         finally:
             if close is not None:
@@ -1590,10 +1651,31 @@ class RAGService:
         }
 
 
-def _chunked[T](items: list[T], size: int) -> list[list[T]]:
+async def _aiter_chunks[T](
+    items: Iterable[T] | AsyncIterable[T],
+    size: int,
+) -> AsyncIterator[tuple[int, list[T]]]:
     if size <= 0:
         raise ValueError("chunk size must be positive")
-    return [items[index : index + size] for index in range(0, len(items), size)]
+    batch_index = 0
+    window: list[T] = []
+    async for item in _aiter_items(items):
+        window.append(item)
+        if len(window) >= size:
+            yield batch_index, window
+            batch_index += 1
+            window = []
+    if window:
+        yield batch_index, window
+
+
+async def _aiter_items[T](items: Iterable[T] | AsyncIterable[T]) -> AsyncIterator[T]:
+    if isinstance(items, AsyncIterable):
+        async for item in items:
+            yield item
+        return
+    for item in items:
+        yield item
 
 
 def _remove_empty_parents(path: Path, stop: Path) -> None:

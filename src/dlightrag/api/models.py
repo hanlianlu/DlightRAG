@@ -46,6 +46,7 @@ class IngestRequest(BaseModel):
     author: str | None = None
     metadata: dict[str, Any] | None = None
     metadata_policy: Literal["validate", "reject_unknown", "store_only"] | None = None
+    wait: bool | None = None
 
     @model_validator(mode="after")
     def _validate_source_fields(self) -> IngestRequest:

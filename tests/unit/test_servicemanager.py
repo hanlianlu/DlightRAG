@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,6 +38,82 @@ def test_cfg(tmp_path) -> DlightragConfig:
     )
     set_config(cfg)
     return cfg
+
+
+class _InMemoryIngestJobStore:
+    def __init__(self) -> None:
+        self.rows: dict[str, dict[str, Any]] = {}
+        self.recoverable_rows: list[dict[str, Any]] = []
+        self.deleted_workspaces: list[str] = []
+        self.pruned = False
+
+    async def create(
+        self,
+        *,
+        job_id: str,
+        workspace: str,
+        source_type: str,
+        request: dict[str, Any],
+    ) -> None:
+        self.rows[job_id] = {
+            "job_id": job_id,
+            "workspace": workspace,
+            "source_type": source_type,
+            "status": "queued",
+            "request": request,
+            "total_items": 0,
+            "processed_items": 0,
+            "failed_items": 0,
+            "current_window": 0,
+            "result": {},
+            "errors": [],
+        }
+
+    async def mark_running(self, job_id: str) -> None:
+        self.rows[job_id]["status"] = "running"
+
+    async def record_window(
+        self,
+        job_id: str,
+        *,
+        total_delta: int,
+        processed_delta: int,
+        failed_delta: int,
+        current_window: int,
+        errors: list[str],
+    ) -> None:
+        row = self.rows[job_id]
+        row["total_items"] += total_delta
+        row["processed_items"] += processed_delta
+        row["failed_items"] += failed_delta
+        row["current_window"] = current_window
+        row["errors"].extend(errors)
+
+    async def finish(self, job_id: str, *, result: dict[str, Any]) -> None:
+        self.rows[job_id]["status"] = "succeeded"
+        self.rows[job_id]["result"] = result
+
+    async def fail(self, job_id: str, *, error: str) -> None:
+        self.rows[job_id]["status"] = "failed"
+        self.rows[job_id]["errors"].append(error)
+
+    async def get(self, job_id: str) -> dict[str, Any] | None:
+        return self.rows.get(job_id)
+
+    async def list_recoverable(self) -> list[dict[str, Any]]:
+        return list(self.recoverable_rows)
+
+    async def prune(self) -> dict[str, int]:
+        self.pruned = True
+        return {"failed_abandoned": 0, "deleted_completed": 0}
+
+    async def delete_for_workspace(self, workspace: str) -> int:
+        self.deleted_workspaces.append(workspace)
+        before = len(self.rows)
+        self.rows = {
+            job_id: row for job_id, row in self.rows.items() if row.get("workspace") != workspace
+        }
+        return before - len(self.rows)
 
 
 class TestGetService:
@@ -481,15 +559,25 @@ class TestDelegation:
     """Test write-operation delegation."""
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
-    async def test_aingest_delegates(self, mock_create, test_cfg) -> None:
+    async def test_aingest_uses_job_runner_and_returns_result(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
-        mock_svc.aingest.return_value = {"status": "ok"}
+        mock_svc.aingest.return_value = {"doc_id": "d1", "status": "ok"}
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_job_store = store
+
         result = await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
+
         mock_svc.aregister_workspace.assert_awaited_once()
         mock_svc.aingest.assert_awaited_once()
-        assert result == {"status": "ok"}
+        assert result == {"doc_id": "d1", "status": "ok"}
+        row = next(iter(store.rows.values()))
+        assert row["workspace"] == "ws_a"
+        assert row["status"] == "succeeded"
+        assert row["total_items"] == 1
+        assert row["processed_items"] == 1
+        assert row["result"] == {"doc_id": "d1", "status": "ok"}
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_list_ingested_files_delegates(self, mock_create, test_cfg) -> None:
@@ -508,6 +596,129 @@ class TestDelegation:
         manager = RAGServiceManager(config=test_cfg)
         result = await manager.delete_files("ws_a", filenames=["a.pdf"])
         assert result == [{"status": "deleted"}]
+
+
+class TestIngestJobs:
+    """Test durable background ingest job orchestration."""
+
+    async def test_recover_ingest_jobs_reschedules_running_job_from_window(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        row = {
+            "job_id": "job-1",
+            "workspace": "project_a",
+            "source_type": "s3",
+            "status": "running",
+            "request": {
+                "workspace": "project_a",
+                "source_type": "s3",
+                "kwargs": {"bucket": "bucket", "prefix": "docs/"},
+            },
+            "total_items": 128,
+            "processed_items": 128,
+            "failed_items": 0,
+            "current_window": 2,
+            "errors": [],
+            "result": {},
+        }
+        store.recoverable_rows = [row]
+        store.rows["job-1"] = dict(row)
+        manager._ingest_job_store = store
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        await manager._recover_ingest_jobs(store)
+        task = manager._ingest_job_tasks["job-1"]
+
+        await asyncio.wait_for(task, timeout=1.0)
+
+        svc.aregister_workspace.assert_awaited_once()
+        svc.aingest.assert_awaited_once()
+        ingest_kwargs = svc.aingest.await_args.kwargs
+        assert ingest_kwargs["bucket"] == "bucket"
+        assert ingest_kwargs["prefix"] == "docs/"
+        assert ingest_kwargs["_resume_from_window"] == 2
+        row = await manager.get_ingest_job("job-1")
+        assert row is not None
+        assert row["processed_items"] == 129
+        assert row["result"]["processed"] == 129
+
+    async def test_astart_ingest_job_records_progress_and_result(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_job_store = store
+
+        async def fake_ingest(**kwargs: Any) -> dict[str, Any]:
+            progress_callback = kwargs["_progress_callback"]
+            await progress_callback(
+                SimpleNamespace(
+                    total_delta=2,
+                    processed_delta=1,
+                    failed_delta=1,
+                    batch_index=0,
+                    errors=("s3://bucket/docs/bad.pdf: failed",),
+                )
+            )
+            return {"processed": 1, "failed": 1}
+
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(side_effect=fake_ingest)
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        job = await manager.astart_ingest_job(
+            "Project A",
+            source_type="s3",
+            bucket="bucket",
+            prefix="docs/",
+        )
+        task = manager._ingest_job_tasks[job["job_id"]]
+
+        await asyncio.wait_for(task, timeout=1.0)
+        row = await manager.get_ingest_job(job["job_id"])
+
+        assert row is not None
+        assert row["workspace"] == "project_a"
+        assert row["status"] == "succeeded"
+        assert row["total_items"] == 2
+        assert row["processed_items"] == 1
+        assert row["failed_items"] == 1
+        assert row["current_window"] == 1
+        assert row["result"] == {"processed": 1, "failed": 1}
+        assert row["errors"] == ["s3://bucket/docs/bad.pdf: failed"]
+        svc.aregister_workspace.assert_awaited_once()
+        svc.aingest.assert_awaited_once()
+
+    async def test_aingest_timeout_returns_running_job_without_cancelling_task(
+        self, test_cfg
+    ) -> None:
+        cfg = test_cfg.model_copy(update={"ingest_timeout": 0.01})
+        manager = RAGServiceManager(config=cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_job_store = store
+        release = asyncio.Event()
+
+        async def fake_ingest(**kwargs: Any) -> dict[str, Any]:
+            await release.wait()
+            return {"doc_id": "d1"}
+
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(side_effect=fake_ingest)
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        result = await manager.aingest("default", source_type="local", path="/tmp/slow.pdf")
+
+        assert result["status"] in {"queued", "running"}
+        assert result["job_id"] in manager._ingest_job_tasks
+        task = manager._ingest_job_tasks[result["job_id"]]
+        assert not task.done()
+
+        release.set()
+        await asyncio.wait_for(task, timeout=1.0)
+        row = await manager.get_ingest_job(result["job_id"])
+        assert row is not None
+        assert row["status"] == "succeeded"
+        assert row["result"] == {"doc_id": "d1"}
 
 
 class TestDegradedMode:

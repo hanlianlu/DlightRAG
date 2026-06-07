@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
@@ -25,6 +26,7 @@ from dlightrag.core.client_payloads import (
     project_contexts_for_client,
     retrieval_payload,
 )
+from dlightrag.core.ingest_policy import is_ingest_job_row, should_wait_for_ingest
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .deps import get_manager, request_scope, resolve_workspace
@@ -33,10 +35,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/ingest")
+def _job_response(job: dict[str, Any]) -> JSONResponse:
+    job["status_url"] = f"/ingest/jobs/{job['job_id']}"
+    return JSONResponse(status_code=202, content=jsonable_encoder(job))
+
+
+@router.post("/ingest", response_model=None)
 async def ingest(
     body: IngestRequest, request: Request, user: UserContext = Depends(get_current_user)
-) -> dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     """Bulk document ingestion."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
@@ -74,7 +81,34 @@ async def ingest(
     if body.metadata_policy is not None:
         kwargs["metadata_policy"] = body.metadata_policy
 
-    return await manager.aingest(ws, source_type=body.source_type, **kwargs)
+    wait = should_wait_for_ingest(
+        source_type=body.source_type,
+        path=body.path,
+        prefix=body.prefix,
+        wait=body.wait,
+    )
+    if not wait:
+        job = await manager.astart_ingest_job(ws, source_type=body.source_type, **kwargs)
+        return _job_response(job)
+
+    result = await manager.aingest(ws, source_type=body.source_type, **kwargs)
+    if is_ingest_job_row(result):
+        return _job_response(result)
+    return result
+
+
+@router.get("/ingest/jobs/{job_id}")
+async def get_ingest_job(
+    job_id: str,
+    request: Request,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return durable ingest job status."""
+    manager = get_manager(request)
+    job = await manager.get_ingest_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Ingest job not found")
+    return job
 
 
 @router.post("/retrieve")

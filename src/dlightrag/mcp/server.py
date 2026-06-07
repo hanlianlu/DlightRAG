@@ -23,6 +23,7 @@ from dlightrag.core.client_payloads import (
     metadata_filter_from_payload,
     retrieval_payload,
 )
+from dlightrag.core.ingest_policy import should_wait_for_ingest
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
 
@@ -187,8 +188,26 @@ async def list_tools() -> list[Tool]:
                         "enum": list(_METADATA_POLICY_VALUES),
                         "description": "How undeclared user metadata fields are handled.",
                     },
+                    "wait": {
+                        "type": "boolean",
+                        "description": "Wait for completion. Defaults to true for single files/objects and false for batch-shaped ingests.",
+                    },
                 },
                 "required": ["source_type"],
+            },
+        ),
+        Tool(
+            name="ingest_job_status",
+            description="Return the status of an ingest job.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "job_id": {
+                        "type": "string",
+                        "description": "Ingest job id returned by the ingest tool.",
+                    }
+                },
+                "required": ["job_id"],
             },
         ),
         Tool(
@@ -456,14 +475,19 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if source_type == "local":
                 kwargs["path"] = arguments.get("path", ".")
             elif source_type == "azure_blob":
+                if arguments.get("blob_path") and arguments.get("prefix") is not None:
+                    raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
                 kwargs["container_name"] = arguments.get("container_name", "")
                 if arguments.get("blob_path"):
                     kwargs["blob_path"] = arguments["blob_path"]
                 if arguments.get("prefix") is not None:
                     kwargs["prefix"] = arguments["prefix"]
             elif source_type == "s3":
+                if arguments.get("key") and arguments.get("prefix") is not None:
+                    raise ValueError("'key' and 'prefix' are mutually exclusive")
                 kwargs["bucket"] = arguments.get("bucket", "")
-                kwargs["key"] = arguments.get("key", "")
+                if arguments.get("key"):
+                    kwargs["key"] = arguments["key"]
                 if arguments.get("prefix") is not None:
                     kwargs["prefix"] = arguments["prefix"]
             if arguments.get("replace") is not None:
@@ -479,8 +503,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 if metadata_policy not in _METADATA_POLICY_VALUES:
                     raise ValueError(f"Invalid metadata_policy: {metadata_policy}")
                 kwargs["metadata_policy"] = metadata_policy
-            result = await manager.aingest(ws, source_type=source_type, **kwargs)
-            return [TextContent(type="text", text=json.dumps(result, default=str))]
+            wait = should_wait_for_ingest(
+                source_type=source_type,
+                path=kwargs.get("path"),
+                prefix=kwargs.get("prefix"),
+                wait=arguments.get("wait"),
+            )
+            if wait:
+                result = await manager.aingest(ws, source_type=source_type, **kwargs)
+            else:
+                result = await manager.astart_ingest_job(ws, source_type=source_type, **kwargs)
+            return _json_content(result)
+
+        if name == "ingest_job_status":
+            manager = await _ensure_manager()
+            job_id = str(arguments.get("job_id") or "")
+            if not job_id:
+                raise ValueError("job_id is required")
+            result = await manager.get_ingest_job(job_id)
+            if result is None:
+                raise ValueError(f"Ingest job not found: {job_id}")
+            return _json_content(result)
 
         if name == "list_files":
             manager = await _ensure_manager()

@@ -11,7 +11,7 @@ import pytest
 
 from dlightrag.config import DlightragConfig
 from dlightrag.core.ingestion.engine import PreparedIngestFile
-from dlightrag.core.service import RAGService
+from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
@@ -87,15 +87,27 @@ class TestRAGServiceAingest:
         """When neither blob_path nor prefix provided, prefix defaults to '' (entire container)."""
         service = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
-        mock_source.alist_documents = AsyncMock(return_value=[])
+        seen_prefixes: list[str | None] = []
+
+        async def _aiter_documents(prefix: str | None = None):
+            seen_prefixes.append(prefix)
+            if False:
+                yield ""
+
+        mock_source.aiter_documents = _aiter_documents
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
-        mock_source.alist_documents.assert_awaited_once_with(prefix="")
+        assert seen_prefixes == [""]
 
     async def test_aingest_azure_calls_aclose(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called after successful ingestion."""
         service = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
-        mock_source.alist_documents = AsyncMock(return_value=[])
+
+        async def _aiter_documents(prefix: str | None = None):
+            if False:
+                yield ""
+
+        mock_source.aiter_documents = _aiter_documents
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
         mock_source.aclose.assert_awaited_once()
 
@@ -106,7 +118,11 @@ class TestRAGServiceAingest:
             side_effect=RuntimeError("ingestion failed")
         )
         mock_source = AsyncMock()
-        mock_source.alist_documents = AsyncMock(return_value=["f.pdf"])
+
+        async def _aiter_documents(prefix: str | None = None):
+            yield "f.pdf"
+
+        mock_source.aiter_documents = _aiter_documents
         mock_source.aload_document = AsyncMock(return_value=b"%PDF")
         with pytest.raises(RuntimeError, match="ingestion failed"):
             await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
@@ -453,9 +469,13 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
 
         mock_source = AsyncMock()
-        mock_source.alist_documents = AsyncMock(
-            return_value=["team-a/report.pdf", "team-b/report.pdf"]
-        )
+
+        async def _aiter_documents(prefix: str | None = None):
+            assert prefix == "docs/"
+            yield "team-a/report.pdf"
+            yield "team-b/report.pdf"
+
+        mock_source.aiter_documents = _aiter_documents
         mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
 
         result = await service.aingest(
@@ -503,6 +523,142 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["status"] == "success"
+
+    async def test_aingest_s3_prefix_streams_keys_without_materializing_list(
+        self, test_config: DlightragConfig
+    ) -> None:
+        """S3 prefix ingest consumes streaming keys instead of alist_documents()."""
+
+        class StreamingS3Source:
+            def __init__(self) -> None:
+                self.loaded: list[str] = []
+
+            async def alist_documents(self, prefix: str | None = None) -> list[str]:
+                raise AssertionError("prefix ingest should stream keys")
+
+            async def aiter_documents(self, prefix: str | None = None):
+                assert prefix == "docs/"
+                yield "docs/a.pdf"
+                yield "docs/b.pdf"
+
+            async def aload_document(self, doc_id: str) -> bytes:
+                self.loaded.append(doc_id)
+                return b"%PDF-fake"
+
+            async def aclose(self) -> None:
+                return None
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 2,
+                "errors": [],
+                "results": [{"doc_id": "d1"}, {"doc_id": "d2"}],
+            }
+        )
+        source = StreamingS3Source()
+
+        result = await service.aingest(
+            source_type="s3",
+            bucket="my-bucket",
+            prefix="docs/",
+            source=source,
+        )
+
+        assert result["processed"] == 2
+        assert source.loaded == ["docs/a.pdf", "docs/b.pdf"]
+
+    async def test_aingest_s3_prefix_resume_skips_completed_windows(
+        self, test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Recovered remote jobs resume from the next unfinished source window."""
+        monkeypatch.setattr("dlightrag.core.service._REMOTE_INGEST_BATCH_SIZE", 2)
+
+        class StreamingS3Source:
+            def __init__(self) -> None:
+                self.loaded: list[str] = []
+
+            async def aiter_documents(self, prefix: str | None = None):
+                assert prefix == "docs/"
+                for name in ("a", "b", "c", "d", "e"):
+                    yield f"docs/{name}.pdf"
+
+            async def aload_document(self, doc_id: str) -> bytes:
+                self.loaded.append(doc_id)
+                return b"%PDF-fake"
+
+            async def aclose(self) -> None:
+                return None
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            side_effect=lambda items, **_: {
+                "processed": len(items),
+                "errors": [],
+                "results": [{"doc_id": item.display_filename} for item in items],
+            }
+        )
+        source = StreamingS3Source()
+
+        result = await service.aingest(
+            source_type="s3",
+            bucket="my-bucket",
+            prefix="docs/",
+            source=source,
+            _resume_from_window=2,
+        )
+
+        assert result["processed"] == 1
+        assert source.loaded == ["docs/e.pdf"]
+        service._ingestion_engine.aingest_files.assert_awaited_once()
+
+    async def test_aingest_s3_prefix_progress_includes_download_errors(
+        self, test_config: DlightragConfig
+    ) -> None:
+        class PartiallyFailingS3Source:
+            async def aiter_documents(self, prefix: str | None = None):
+                yield "docs/a.pdf"
+                yield "docs/b.pdf"
+
+            async def aload_document(self, doc_id: str) -> bytes:
+                if doc_id == "docs/b.pdf":
+                    raise RuntimeError("download failed")
+                return b"%PDF-fake"
+
+            async def aclose(self) -> None:
+                return None
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": [{"doc_id": "d1"}]}
+        )
+        progress_events: list[RemoteIngestWindowProgress] = []
+
+        async def _record_progress(progress: RemoteIngestWindowProgress) -> None:
+            progress_events.append(progress)
+
+        result = await service.aingest(
+            source_type="s3",
+            bucket="my-bucket",
+            prefix="docs/",
+            source=PartiallyFailingS3Source(),
+            _progress_callback=_record_progress,
+        )
+
+        assert result["processed"] == 1
+        assert result["errors"] == ["s3://my-bucket/docs/b.pdf: download failed"]
+        assert len(progress_events) == 1
+        progress = progress_events[0]
+        assert progress.total_delta == 2
+        assert progress.processed_delta == 1
+        assert progress.failed_delta == 1
+        assert progress.errors == ("s3://my-bucket/docs/b.pdf: download failed",)
 
     async def test_aingest_unified_blob_batch_failure_leaves_no_temp_dirs(
         self, test_config: DlightragConfig

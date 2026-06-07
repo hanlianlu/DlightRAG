@@ -71,6 +71,23 @@ def mock_manager(mock_service):
     """Create a mock RAGServiceManager that delegates to mock_service."""
     manager = AsyncMock()
     manager.aingest = mock_service.aingest
+    manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "s3",
+            "status": "queued",
+        }
+    )
+    manager.get_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "s3",
+            "status": "running",
+            "processed_items": 64,
+        }
+    )
     manager.aretrieve = mock_service.aretrieve
     manager.aanswer = mock_service.aanswer
     manager.list_ingested_files = mock_service.alist_ingested_files
@@ -475,6 +492,64 @@ class TestIngestEndpoint:
         assert resp.status_code == 200
         mock_manager.aingest.assert_awaited_once()
 
+    async def test_local_directory_defaults_to_background_job(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        tmp_path,
+    ) -> None:
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        mock_manager.astart_ingest_job.return_value = {
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "local",
+            "status": "queued",
+        }
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/ingest",
+            json={"source_type": "local", "path": str(docs_dir)},
+        )
+
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["job_id"] == "job-1"
+        assert body["status_url"] == "/ingest/jobs/job-1"
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
+            "default",
+            source_type="local",
+            path=str(docs_dir),
+        )
+        mock_manager.aingest.assert_not_awaited()
+
+    async def test_single_s3_key_can_force_background_job(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "s3",
+                "bucket": "my-bucket",
+                "key": "docs/file.pdf",
+                "wait": False,
+            },
+        )
+
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] == "job-1"
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
+            "default",
+            source_type="s3",
+            bucket="my-bucket",
+            key="docs/file.pdf",
+        )
+        mock_manager.aingest.assert_not_awaited()
+
     async def test_ingest_forwards_metadata_contract(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -523,13 +598,28 @@ class TestIngestEndpoint:
                 "prefix": "docs/",
             },
         )
-        assert resp.status_code == 200
-        mock_manager.aingest.assert_awaited_once_with(
+        assert resp.status_code == 202
+        body = resp.json()
+        assert body["job_id"] == "job-1"
+        assert body["status_url"] == "/ingest/jobs/job-1"
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
             source_type="s3",
             bucket="my-bucket",
             prefix="docs/",
         )
+        mock_manager.aingest.assert_not_awaited()
+
+    async def test_get_ingest_job_status(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.get("/ingest/jobs/job-1")
+
+        assert resp.status_code == 200
+        assert resp.json()["processed_items"] == 64
+        mock_manager.get_ingest_job.assert_awaited_once_with("job-1")
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_s3_key_and_prefix_mutually_exclusive(

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from datetime import UTC
 
 from dlightrag.sourcing.base import AsyncDataSource, DataSource
@@ -127,9 +128,14 @@ class AzureBlobDataSource(DataSource, AsyncDataSource):
 
     async def alist_documents(self, prefix: str | None = None) -> list[str]:
         """List all blob names in container (async)."""
+        return [name async for name in self.aiter_documents(prefix=prefix)]
+
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+        """Stream blob names in the container."""
         client = await self._get_async_container_client()
         blobs = client.list_blobs(name_starts_with=prefix)
-        return [blob.name async for blob in blobs]
+        async for blob in blobs:
+            yield str(blob.name)
 
     async def _get_async_container_client(self):
         """Lazy init async container client."""
