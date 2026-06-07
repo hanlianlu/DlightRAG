@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {applyPanelHtml} from './panel.js';
 import {getIngestWorkspace} from './state.js';
 import {showToast} from './toast.js';
 
@@ -177,10 +178,7 @@ export async function uploadFolderToWorkspace(files, folderName) {
         });
         if (resp.ok) {
             const html = await resp.text();
-            const panelContent = document.getElementById('panel-content');
-            if (panelContent) {
-                panelContent.innerHTML = html;
-            }
+            applyPanelHtml(html);
             showToast('Uploaded ' + label);
         } else {
             const text = await resp.text();

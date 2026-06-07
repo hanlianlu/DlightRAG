@@ -1,14 +1,16 @@
 {% for src in sources %}
 <div class="source-doc" data-ref="{{ src.id }}">
-  <button class="source-doc-header" type="button" data-action="toggle-doc">
-    <span class="collapse-icon">▶</span>
-    <span class="source-doc-title">{{ src.title or src.path }}</span>
+  <div class="source-doc-header">
+    <button class="source-doc-toggle" type="button" data-action="toggle-doc">
+      <span class="collapse-icon">▶</span>
+      <span class="source-doc-title">{{ src.title or src.path }}</span>
+      <span class="source-doc-badge">[{{ src.id }}]</span>
+      <span class="source-doc-count">{{ src.chunks|length }}</span>
+    </button>
     {% if src.url %}
     <a href="{{ src.url }}" class="source-dl-icon" title="Download source" download>&#x2B07;</a>
     {% endif %}
-    <span class="source-doc-badge">[{{ src.id }}]</span>
-    <span class="source-doc-count">{{ src.chunks|length }}</span>
-  </button>
+  </div>
   <div class="source-doc-chunks">
     {% for chunk in src.chunks %}
     <div class="source-chunk" data-ref="{{ src.id }}" data-chunk="{{ chunk.chunk_idx }}">

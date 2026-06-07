@@ -256,6 +256,14 @@ export function setupImageInputs() {
             }
         }
     });
+    document.addEventListener('click', function(e) {
+        const item = e.target.closest('[data-action="open-lightbox"]');
+        if (!item) return;
+        const src = _getLightboxImageSrc(item);
+        if (!src) return;
+        e.preventDefault();
+        openLightbox(src);
+    });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') { closeLightbox(); return; }
         const box = document.getElementById('image-lightbox');

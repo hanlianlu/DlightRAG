@@ -1,19 +1,13 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {conversationHistory} from './state.js';
-import {renderMessageImages, openLightbox} from './images.js';
+import {renderMessageImages} from './images.js';
+import {renderMath} from './mathjax.js';
 import {parseData} from './sse.js';
 
 function activateChatMode() {
     const app = document.querySelector('.app');
     if (app && !app.classList.contains('has-messages')) app.classList.add('has-messages');
-}
-
-export function renderMath(container) {
-    if (!window.MathJax || !window.MathJax.typesetPromise) return;
-    window.MathJax.typesetPromise([container]).catch(function () {
-        // MathJax may fail on genuinely malformed input; ignore.
-    });
 }
 
 function fixExternalLinks(container) {
@@ -168,17 +162,6 @@ export function createAnswerRenderer(turn) {
             turn.aiDiv.appendChild(sourceData);
         }
 
-        // Delegate lightbox clicks on image gallery
-        turn.contentDiv.addEventListener('click', function (e) {
-            const item = e.target.closest('[data-action="open-lightbox"]');
-            if (item) {
-                e.preventDefault();
-                e.stopPropagation();
-                const src = item.getAttribute('data-src');
-                if (src && /^(?:\/|blob:|data:)/.test(src)) openLightbox(src);
-            }
-        });
-
         renderMath(turn.contentDiv);
         fixExternalLinks(turn.contentDiv);
     }
@@ -188,7 +171,6 @@ export function createAnswerRenderer(turn) {
         const sourceData = turn.aiDiv.querySelector('.source-data');
         if (sourceData) {
             sourceData.innerHTML = typeof highlightsHtml === 'string' ? highlightsHtml : '';
-            renderMath(sourceData);
         }
     }
 

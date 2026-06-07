@@ -1,7 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {openLightbox} from './images.js';
-import {renderMath} from './chat_renderer.js';
+import {renderMath} from './mathjax.js';
 import {getIngestWorkspace, getPrimaryWorkspace, setIngestWorkspace, resetIngestWorkspace} from './state.js';
 import {showToast} from './toast.js';
 import {createWorkspace} from './workspaces.js';
@@ -44,6 +43,33 @@ export function openPanel(title) {
         titleEl.textContent = title;
         if (ingestTarget) ingestTarget.innerHTML = '';
     }
+}
+
+export function applyPanelHtml(html) {
+    const panelContent = document.getElementById('panel-content');
+    if (!panelContent) return;
+    panelContent.innerHTML = html;
+    if (window.htmx && typeof window.htmx.process === 'function') {
+        window.htmx.process(panelContent);
+    }
+    applyProgressBars(panelContent);
+}
+
+function applyProgressBars(root) {
+    if (!root) return;
+    const bars = [];
+    if (root.id === 'ingest-progress') bars.push(root);
+    root.querySelectorAll('#ingest-progress').forEach(function(bar) {
+        bars.push(bar);
+    });
+    bars.forEach(function(bar) {
+        const fill = bar.querySelector('.progress-bar-fill');
+        if (!fill) return;
+        const pct = fill.getAttribute('data-pct');
+        if (pct !== null) {
+            fill.style.width = Math.max(0, Math.min(100, parseInt(pct, 10) || 0)) + '%';
+        }
+    });
 }
 
 function renderIngestPill() {
@@ -263,7 +289,7 @@ function openRefSource(refItem) {
 
     const showAllBtn = panelContent.querySelector('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = false;
-    renderMath(panelContent);
+    renderExpandedSourceMath(panelContent);
     openPanel('SOURCES');
 }
 
@@ -301,8 +327,15 @@ export function filterSource(badge) {
 
     const showAllBtn = panelContent.querySelector('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = false;
-    renderMath(panelContent);
+    renderExpandedSourceMath(panelContent);
     openPanel('SOURCES');
+}
+
+function renderExpandedSourceMath(root) {
+    if (!root) return;
+    root.querySelectorAll('.source-doc.expanded .source-doc-chunks').forEach(function(container) {
+        renderMath(container);
+    });
 }
 
 function toggleDoc(header) {
@@ -326,6 +359,7 @@ function toggleDoc(header) {
                 c.hidden = false;
                 c.classList.remove('active');
             });
+            renderExpandedSourceMath(doc);
         }
     }
 }
@@ -345,6 +379,7 @@ function showAllSources() {
     });
     const showAllBtn = panelContent.querySelector('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = true;
+    renderExpandedSourceMath(panelContent);
 }
 
 export function setupPanel() {
@@ -364,13 +399,6 @@ export function setupPanel() {
             openRefSource(refItem);
             return;
         }
-        const image = closestElement(e.target, '[data-action="open-lightbox"]');
-        if (image && image.hasAttribute('data-full-src')) {
-            e.preventDefault();
-            const lightboxSrc = image.getAttribute('data-full-src');
-            if (lightboxSrc && /^(?:\/|blob:|data:)/.test(lightboxSrc)) openLightbox(lightboxSrc);
-        }
-
         if (shouldDismissPanelOnOutsideClick(e.target)) closePanel();
     });
 
@@ -386,16 +414,7 @@ export function setupPanel() {
 
     // Apply progress-bar width from data-pct and render math in swapped content.
     document.body.addEventListener('htmx:afterSettle', function(ev) {
-        const bar = document.getElementById('ingest-progress');
-        if (bar) {
-            const fill = bar.querySelector('.progress-bar-fill');
-            if (fill) {
-                const pct = fill.getAttribute('data-pct');
-                if (pct !== null) {
-                    fill.style.width = Math.max(0, Math.min(100, parseInt(pct, 10) || 0)) + '%';
-                }
-            }
-        }
+        applyProgressBars(ev.detail.target);
         // Auto-render math in any HTMX-swapped content.
         if (ev.detail.target) renderMath(ev.detail.target);
     });

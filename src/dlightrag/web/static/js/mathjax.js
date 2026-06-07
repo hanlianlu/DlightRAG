@@ -4,6 +4,13 @@ const MATHJAX_SRC = 'https://cdn.jsdelivr.net/npm/mathjax@4.1.2/tex-mml-chtml.js
 
 let loading = false;
 
+export function renderMath(container) {
+    if (!window.MathJax || !window.MathJax.typesetPromise) return;
+    window.MathJax.typesetPromise([container]).catch(function () {
+        // MathJax may fail on genuinely malformed input; ignore.
+    });
+}
+
 function configureMathJax() {
     if (window.MathJax) return;
     window.MathJax = {
