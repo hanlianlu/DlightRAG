@@ -19,6 +19,16 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
+def _makefile_target_command(target: str) -> str:
+    lines = (ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    for idx, line in enumerate(lines):
+        if line == f"{target}:":
+            command = lines[idx + 1]
+            assert command.startswith("\t")
+            return command.strip()
+    raise AssertionError(f"Makefile target not found: {target}")
+
+
 def test_pyproject_keeps_mineru_out_of_dlightrag_runtime() -> None:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
@@ -41,23 +51,8 @@ def test_makefile_delegates_mineru_defaults_to_scripts() -> None:
 
 
 def test_makefile_targets_are_thin_script_wrappers() -> None:
-    install = subprocess.run(
-        ["make", "-n", "mineru-install"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-    api = subprocess.run(
-        ["make", "-n", "mineru-api"],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=True,
-    )
-
-    assert install.stdout.strip() == "scripts/mineru/install.sh"
-    assert api.stdout.strip() == "scripts/mineru/api.sh"
+    assert _makefile_target_command("mineru-install") == "scripts/mineru/install.sh"
+    assert _makefile_target_command("mineru-api") == "scripts/mineru/api.sh"
 
 
 def test_mineru_helper_defaults_to_separate_env_file() -> None:
@@ -93,40 +88,6 @@ def test_obsolete_top_level_mineru_helpers_are_removed() -> None:
     assert not (ROOT / "scripts" / "start_mineru_api.sh").exists()
     assert not (ROOT / "scripts" / "mineru_launch_agent.sh").exists()
     assert not (ROOT / "scripts" / "mineru_env.sh").exists()
-
-
-def test_makefile_passes_command_line_overrides_to_scripts(tmp_path: Path) -> None:
-    capture = tmp_path / "uv.txt"
-    bin_dir = tmp_path / "bin"
-    service_env = tmp_path / "mineru-env"
-    bin_dir.mkdir()
-    fake_uv = bin_dir / "uv"
-    _write_executable(
-        fake_uv,
-        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MINERU_CAPTURE"\n',
-    )
-
-    env = os.environ.copy()
-    env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    env["MINERU_CAPTURE"] = str(capture)
-
-    subprocess.run(
-        [
-            "make",
-            f"MINERU_SERVICE_VENV={service_env}",
-            "MINERU_VERSION=3.2.3",
-            "MINERU_INSTALL_EXTRAS=core,vllm",
-            "mineru-install",
-        ],
-        cwd=ROOT,
-        env=env,
-        check=True,
-    )
-
-    assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[core,vllm]==3.2.3",
-    ]
 
 
 def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:

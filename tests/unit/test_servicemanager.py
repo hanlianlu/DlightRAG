@@ -511,6 +511,19 @@ class TestDelegation:
 
 
 class TestDegradedMode:
+    @pytest.fixture(autouse=True)
+    def _isolate_workspace_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        async def fake_initialize_workspace_registry(manager: RAGServiceManager) -> None:
+            registry = AsyncMock()
+            registry.list.return_value = []
+            manager._workspace_registry = registry
+
+        monkeypatch.setattr(
+            RAGServiceManager,
+            "_initialize_workspace_registry",
+            fake_initialize_workspace_registry,
+        )
+
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_create_sets_ready_on_success(self, mock_create, test_cfg) -> None:
         mock_create.return_value = AsyncMock()
