@@ -10,6 +10,25 @@ let ingestPopoverEl = null;
 
 export {showToast};
 
+const PANEL_DISMISS_EXEMPT_SELECTOR = [
+    '.panel',
+    '#files-btn',
+    '#composer',
+    '[data-action="filter-source"]',
+    '[data-action="open-ref-source"]',
+].join(', ');
+
+function closestElement(target, selector) {
+    return target && target.closest ? target.closest(selector) : null;
+}
+
+function shouldDismissPanelOnOutsideClick(target) {
+    const panel = document.getElementById('panel');
+    if (!panel || !panel.classList.contains('open')) return false;
+    if (document.body.hasAttribute('data-resizing')) return false;
+    return !closestElement(target, PANEL_DISMISS_EXEMPT_SELECTOR);
+}
+
 export function openPanel(title) {
     document.getElementById('panel').classList.add('open');
     document.body.classList.add('panel-open');
@@ -333,34 +352,26 @@ export function setupPanel() {
     if (closeBtn) closeBtn.addEventListener('click', closePanel);
 
     document.addEventListener('click', function(e) {
-        const badge = e.target.closest('[data-action="filter-source"]');
+        const badge = closestElement(e.target, '[data-action="filter-source"]');
         if (badge) {
             e.preventDefault();
             filterSource(badge);
             return;
         }
-        const refItem = e.target.closest('[data-action="open-ref-source"]');
+        const refItem = closestElement(e.target, '[data-action="open-ref-source"]');
         if (refItem) {
             e.preventDefault();
             openRefSource(refItem);
             return;
         }
-        const image = e.target.closest('[data-action="open-lightbox"]');
+        const image = closestElement(e.target, '[data-action="open-lightbox"]');
         if (image && image.hasAttribute('data-full-src')) {
             e.preventDefault();
             const lightboxSrc = image.getAttribute('data-full-src');
             if (lightboxSrc && /^(?:\/|blob:|data:)/.test(lightboxSrc)) openLightbox(lightboxSrc);
         }
 
-        const panel = document.getElementById('panel');
-        if (
-            panel.classList.contains('open') &&
-            !e.target.closest('.panel') &&
-            !e.target.closest('#files-btn')
-        ) {
-            if (document.body.hasAttribute('data-resizing')) return;
-            closePanel();
-        }
+        if (shouldDismissPanelOnOutsideClick(e.target)) closePanel();
     });
 
     document.addEventListener('keydown', function(e) {
