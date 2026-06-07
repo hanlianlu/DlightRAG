@@ -157,14 +157,23 @@ body {
 
 .topbar-spacer { flex: 1; }
 
+.topbar-btn,
+.upload-btn,
+.show-all-btn {
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 .topbar-btn {
     background: transparent;
     border: none;
     color: var(--color-text-subtle);
+    flex-shrink: 0;
     padding: var(--space-tight) var(--space-component);
     border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: var(--font-size-detail);
     transition: color 0.15s, background 0.15s;
 }
 
@@ -181,10 +190,12 @@ body {
     color: var(--color-gold-100);
     cursor: pointer;
     display: inline-flex;
+    flex: 0 1 auto;
     font-size: var(--font-size-detail);
     font-weight: 500;
     gap: var(--space-tight);
     max-width: min(320px, 58vw);
+    min-width: 0;
     padding: var(--space-tight) var(--space-related);
     position: relative;
     transition: background 0.15s, border-color 0.15s;
@@ -823,6 +834,7 @@ body {
 }
 
 .panel-resize-handle {
+    background: transparent;
     position: absolute;
     left: 0;
     top: 0;
@@ -833,6 +845,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
+    touch-action: none;
     transition: background 0.15s;
 }
 .panel-resize-handle::after {
@@ -845,7 +858,7 @@ body {
 }
 .panel-resize-handle:hover,
 .panel-resize-handle.active {
-    background: var(--color-bg-hover);
+    background: transparent;
 }
 .panel-resize-handle:hover::after,
 .panel-resize-handle.active::after {
@@ -875,7 +888,7 @@ body {
 }
 
 .source-doc-header:hover {
-    background: rgba(161, 98, 7, 0.08);
+    background: var(--color-bg-hover);
 }
 
 .source-doc-toggle {
@@ -944,7 +957,7 @@ body {
 
 .source-chunk {
     background: var(--color-bg-elevated);
-    border-left: 3px solid var(--color-gold-400);
+    border-left: 3px solid rgba(210, 182, 97, 0.24);
     padding: var(--space-component) var(--space-related);
     margin-bottom: var(--space-component);
     border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -1025,7 +1038,6 @@ body {
     color: var(--color-text-subtle);
     border-radius: var(--radius-sm);
     cursor: pointer;
-    font-size: var(--font-size-detail);
     transition: color 0.15s, border-color 0.15s;
 }
 
@@ -1044,6 +1056,7 @@ body {
     align-items: center;
     border-radius: var(--radius-sm);
     display: flex;
+    gap: var(--space-tight);
     justify-content: space-between;
     padding: var(--space-tight) var(--space-component);
     transition: background 0.1s;
@@ -1056,25 +1069,45 @@ body {
 .file-name {
     color: var(--color-text-tertiary);
     font-size: var(--font-size-detail);
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .file-delete {
-    background: none;
-    border: none;
+    align-items: center;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
     color: var(--color-text-dim);
     cursor: pointer;
-    font-size: var(--font-size-detail);
-    padding: var(--space-inline) var(--space-tight);
-    border-radius: var(--radius-sm);
-    transition: color 0.15s, background 0.15s;
+    display: inline-flex;
+    flex-shrink: 0;
+    height: var(--size-button);
+    justify-content: center;
+    opacity: 0.72;
+    padding: 0;
+    transition: color 0.15s, background 0.15s, border-color 0.15s, opacity 0.15s;
+    width: var(--size-button);
+}
+
+.file-item:hover .file-delete {
+    background: rgba(120, 113, 108, 0.08);
+    color: var(--color-text-muted);
+    opacity: 1;
 }
 
 .file-delete:hover {
-    color: var(--color-danger);
     background: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.22);
+    color: var(--color-danger);
+}
+
+.file-delete-icon {
+    height: var(--size-icon-sm);
+    pointer-events: none;
+    width: var(--size-icon-sm);
 }
 
 .file-error {
@@ -1646,6 +1679,30 @@ body.panel-open .composer-inner {
     max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
 }
 
+@media (max-width: 640px) {
+    .panel {
+        border-left: none;
+        max-width: none;
+        min-width: 0;
+        width: 100vw;
+    }
+
+    .panel-resize-handle {
+        display: none;
+    }
+
+    body.panel-open .topbar,
+    body.panel-open .chat-area,
+    body.panel-open .composer {
+        margin-right: 0;
+    }
+
+    body.panel-open .chat-messages,
+    body.panel-open .composer-inner {
+        max-width: var(--layout-content-width);
+    }
+}
+
 /* === Answer References (doc-level, visible at bottom) === */
 
 .answer-references {
@@ -1783,10 +1840,9 @@ body.panel-open .composer-inner {
     align-items: center;
     gap: var(--space-inline);
     padding: var(--space-tight) var(--space-related);
-    background: var(--color-bg-elevated);
+    background: rgba(41, 37, 36, 0.64);
     border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-tertiary);
-    font-size: var(--font-size-detail);
+    color: var(--color-text-muted);
     font-family: inherit;
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -1794,9 +1850,9 @@ body.panel-open .composer-inner {
 }
 
 .upload-btn:hover {
-    background: rgba(210, 182, 97, 0.1);
+    background: var(--color-bg-hover);
     border-color: rgba(210, 182, 97, 0.28);
-    color: var(--color-gold-200);
+    color: var(--color-gold-100);
 }
 
 .upload-btn svg {
@@ -1814,17 +1870,26 @@ body.panel-open .composer-inner {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
-    margin-left: 8px;
-    border-radius: 4px;
-    color: var(--color-text-muted, #a8a29e);
-    text-decoration: none;
+    width: var(--size-button);
+    height: var(--size-button);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
     font-size: 14px;
     flex-shrink: 0;
-    transition: color 0.15s, background 0.15s;
+    opacity: 0.72;
+    text-decoration: none;
+    transition: color 0.15s, background 0.15s, border-color 0.15s, opacity 0.15s;
 }
 .source-dl-icon:hover {
-    color: var(--color-text-primary, #f5f5f4);
     background: rgba(120, 113, 108, 0.16);
+    border-color: var(--color-border-subtle);
+    color: var(--color-text-primary);
+    opacity: 1;
+}
+
+.source-dl-icon-svg {
+    height: var(--size-icon-sm);
+    pointer-events: none;
+    width: var(--size-icon-sm);
 }

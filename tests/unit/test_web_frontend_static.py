@@ -145,3 +145,90 @@ def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> No
     button_end = source_panel.index("</button>", button_start)
 
     assert not button_start < download_link < button_end
+
+
+def test_files_panel_controls_use_shared_utility_typography() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    assert ".topbar-btn," in css
+    assert ".upload-btn {" in css
+    assert ".show-all-btn" in css
+    shared_block = css.split(".topbar-btn,", 1)[1].split("}", 1)[0]
+    assert ".upload-btn" in shared_block
+    assert ".show-all-btn" in shared_block
+    assert "font-size: var(--font-size-caption);" in shared_block
+    assert "font-weight: 600;" in shared_block
+    assert "letter-spacing: 0.04em;" in shared_block
+    assert "text-transform: uppercase;" in shared_block
+
+
+def test_mobile_panel_is_full_width_overlay_not_squeezed_layout() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    assert "@media (max-width: 640px)" in css
+    mobile_block = css.split("@media (max-width: 640px)", 1)[1]
+    assert "width: 100vw;" in mobile_block
+    assert "max-width: none;" in mobile_block
+    assert "min-width: 0;" in mobile_block
+    assert "margin-right: 0;" in mobile_block
+    assert ".panel-resize-handle" in mobile_block
+    assert "display: none;" in mobile_block
+
+
+def test_topbar_controls_have_stable_mobile_flex_behavior() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    workspace_block = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
+    topbar_button_block = css.split(".topbar-btn {", 1)[1].split("}", 1)[0]
+
+    assert "min-width: 0;" in workspace_block
+    assert "flex: 0 1 auto;" in workspace_block
+    assert "flex-shrink: 0;" in topbar_button_block
+
+
+def test_panel_action_icons_are_svg_buttons_not_text_glyphs() -> None:
+    file_list = (ROOT / "src/dlightrag/web/templates/partials/file_list.html").read_text(
+        encoding="utf-8"
+    )
+    source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "&#10005;" not in file_list
+    assert "&#x2B07;" not in source_panel
+    assert 'aria-label="Delete {{ file.file_name }}"' in file_list
+    assert 'class="file-delete-icon"' in file_list
+    assert 'class="source-dl-icon-svg"' in source_panel
+
+
+def test_source_panel_default_gold_accents_are_restrained() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    source_header_hover = css.split(".source-doc-header:hover {", 1)[1].split("}", 1)[0]
+    source_chunk_block = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
+
+    assert "background: var(--color-bg-hover);" in source_header_hover
+    assert "border-left: 3px solid rgba(210, 182, 97, 0.24);" in source_chunk_block
+    assert "border-left: 3px solid var(--color-gold-400);" not in css
+
+
+def test_panel_resize_handle_does_not_paint_full_height_drag_block() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    handle_block = css.split(".panel-resize-handle {", 1)[1].split("}", 1)[0]
+    handle_state_block = css.split(".panel-resize-handle:hover,", 1)[1].split("}", 1)[0]
+
+    assert "touch-action: none;" in handle_block
+    assert "background: transparent;" in handle_block
+    assert "background: var(--color-bg-hover);" not in handle_state_block
+    assert "background: transparent;" in handle_state_block
+
+
+def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
+    resize_js = (ROOT / "src/dlightrag/web/static/js/resize.js").read_text(encoding="utf-8")
+
+    assert "handle.setPointerCapture(e.pointerId)" in resize_js
+    assert "handle.releasePointerCapture(activePointerId)" in resize_js
+    assert "'pointerId' in e" in resize_js
+    assert "pointercancel" in resize_js
+    assert "window.addEventListener('blur', finishDrag)" in resize_js
