@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -148,6 +149,34 @@ async def test_bm25_search_maps_rows() -> None:
             "score": 1.5,
         }
     ]
+
+
+async def test_bm25_search_logs_profile_routing_and_results(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"id": "chunk-a", "content": "hello world", "file_path": "a.md", "score": 1.5}
+    ]
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__.return_value = conn
+    bm25 = PostgresBM25(
+        pool=pool,
+        workspace="default",
+        top_k=3,
+        profiles=[BM25Profile(name="en", text_config="english", fallback=True)],
+    )
+
+    with caplog.at_level(logging.INFO, logger="dlightrag.core.retrieval.bm25"):
+        await bm25.search("hello", candidate_ids={"chunk-a"})
+
+    assert "[BM25] search" in caplog.text
+    assert "workspace=default" in caplog.text
+    assert "query='hello'" in caplog.text
+    assert "profiles=en" in caplog.text
+    assert "candidate_scope=1" in caplog.text
+    assert "returned=1" in caplog.text
+    assert "top=chunk-a:en:1.500" in caplog.text
 
 
 async def test_bm25_ensure_index_rebuilds_when_options_change() -> None:

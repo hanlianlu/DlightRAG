@@ -1609,7 +1609,11 @@ body {
     background: transparent;
 }
 
-/* Panel-open layout: chat area and composer shift left */
+/* Panel-open layout: primary app chrome shifts left */
+body.panel-open .topbar {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
 body.panel-open .chat-area {
     margin-right: var(--layout-panel-width);
     transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1620,6 +1624,7 @@ body.panel-open .composer {
 }
 /* During drag-resize: instant tracking, no transition lag */
 body.resizing.panel-open .chat-area,
+body.resizing.panel-open .topbar,
 body.resizing.panel-open .composer {
     transition: none;
 }

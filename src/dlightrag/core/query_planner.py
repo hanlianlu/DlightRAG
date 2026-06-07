@@ -125,6 +125,22 @@ def _is_empty_filter(f: MetadataFilter) -> bool:
     return f.is_empty()
 
 
+def _format_filter_evidence(evidence: list[dict[str, Any]] | None, *, limit: int = 3) -> str:
+    if not evidence:
+        return "[]"
+    parts: list[str] = []
+    for item in evidence[:limit]:
+        if not isinstance(item, dict):
+            continue
+        field = str(item.get("field") or "?")
+        basis = str(item.get("intent_basis") or "?")
+        span = str(item.get("evidence_span") or "").replace("\n", " ")[:80]
+        parts.append(f"{field}:{basis}:{span!r}")
+    if len(evidence) > limit:
+        parts.append(f"+{len(evidence) - limit}")
+    return ",".join(parts) if parts else "[]"
+
+
 class QueryPlanner:
     """Unified query understanding -- rewrite + analyze in one LLM call."""
 
@@ -287,8 +303,13 @@ class QueryPlanner:
             plan.metadata_filter_confidence = "high"
 
         logger.info(
-            "[Planner] result: standalone=%r, filter=%s",
+            "[Planner] result: standalone=%r, bm25_query=%r, filter_source=%s, "
+            "filter_confidence=%s, filter_evidence=%s, filter=%s",
             plan.standalone_query[:60],
+            plan.bm25_query,
+            plan.metadata_filter_source,
+            plan.metadata_filter_confidence,
+            _format_filter_evidence(plan.metadata_filter_evidence),
             plan.metadata_filter,
         )
         return plan

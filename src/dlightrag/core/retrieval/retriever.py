@@ -16,6 +16,25 @@ from dlightrag.core.retrieval.protocols import RetrievalResult
 logger = logging.getLogger(__name__)
 
 
+def _format_bm25_top(chunks: list[dict[str, Any]], *, limit: int = 3) -> str:
+    parts: list[str] = []
+    for chunk in chunks[:limit]:
+        chunk_id = str(chunk.get("chunk_id") or chunk.get("id") or "?")
+        profile = str(chunk.get("bm25_profile") or "?")
+        score = chunk.get("score")
+        if score is None:
+            score_text = "?"
+        else:
+            try:
+                score_text = f"{float(score):.3f}"
+            except (TypeError, ValueError):
+                score_text = "?"
+        parts.append(f"{chunk_id}:{profile}:{score_text}")
+    if len(chunks) > limit:
+        parts.append(f"+{len(chunks) - limit}")
+    return ",".join(parts) if parts else "none"
+
+
 class UnifiedRetriever:
     """Run retrieval-wide metadata filtering, LightRAG mix, BM25, and fusion."""
 
@@ -109,6 +128,20 @@ class UnifiedRetriever:
         fused = dedup_chunks_by_content(fused)
         lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
         trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
+        logger.info(
+            "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
+            "metadata_candidates=%s filter_relaxed=%s semantic_chunks=%d bm25_chunks=%d "
+            "fused_chunks=%d bm25_top=%s",
+            self._bm25 is not None,
+            lexical_query if self._bm25 is not None else None,
+            metadata_filter_source,
+            len(candidate_ids) if candidate_ids is not None else "all",
+            trace.get("metadata_filter_relaxed", False),
+            trace["semantic_chunk_count"],
+            trace["bm25_chunk_count"],
+            trace["fused_chunk_count"],
+            _format_bm25_top(bm25_chunks),
+        )
         lightrag_result.trace = trace
         return lightrag_result
 
