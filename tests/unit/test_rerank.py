@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock
 
 import pytest
@@ -249,6 +250,32 @@ class TestChatLlmRerank:
         # 5 chunks, batch_size=2 → 3 batches (2+2+1)
         assert call_count == 3
         assert len(result) == 5
+
+    async def test_logs_listwise_schedule_summary(self, caplog):
+        caplog.set_level(logging.INFO, logger="dlightrag.models.rerank")
+
+        async def mock_scoring(messages, **kwargs):
+            content_text = "".join(
+                c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
+            )
+            n = content_text.count("--- Item")
+            return "[" + ", ".join(["0.7"] * n) + "]"
+
+        chunks = [{"content": f"doc{i}"} for i in range(46)]
+        await _chat_llm_rerank(
+            "query",
+            chunks,
+            top_k=10,
+            scoring_func=mock_scoring,
+            batch_size=8,
+            max_concurrency=8,
+            score_threshold=0.3,
+        )
+
+        assert (
+            "Rerank listwise schedule: chunks=46 batch_size=8 batches=6 "
+            "max_concurrency=8 active_batches=6"
+        ) in caplog.text
 
     async def test_max_concurrency_runs_batches_in_parallel(self):
         first_entered = asyncio.Event()

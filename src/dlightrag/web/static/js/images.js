@@ -156,13 +156,13 @@ function ensureLightbox() {
     box.id = 'image-lightbox';
     box.className = 'image-lightbox';
     box.setAttribute('aria-hidden', 'true');
-    box.innerHTML = '<button class="image-lightbox-close" type="button" aria-label="Close">×</button>' +
+    box.innerHTML =
         '<button class="image-lightbox-prev" type="button" aria-label="Previous">‹</button>' +
         '<button class="image-lightbox-next" type="button" aria-label="Next">›</button>' +
         '<img class="image-lightbox-img" alt="Source image">';
     document.body.appendChild(box);
     box.addEventListener('click', function(e) {
-        if (e.target === box || e.target.closest('.image-lightbox-close')) {
+        if (e.target === box) {
             closeLightbox();
             return;
         }

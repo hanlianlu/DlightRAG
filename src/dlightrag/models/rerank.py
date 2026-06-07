@@ -142,6 +142,14 @@ async def _chat_llm_rerank(
         (batch_start, chunks[batch_start : batch_start + batch_size])
         for batch_start in range(0, len(chunks), batch_size)
     ]
+    logger.info(
+        "Rerank listwise schedule: chunks=%d batch_size=%d batches=%d max_concurrency=%d active_batches=%d",
+        len(chunks),
+        batch_size,
+        len(batches),
+        max(1, max_concurrency),
+        min(max(1, max_concurrency), len(batches)),
+    )
     batch_results = await bounded_gather(
         [_score_batch(batch_start, batch) for batch_start, batch in batches],
         max_concurrent=max(1, max_concurrency),
