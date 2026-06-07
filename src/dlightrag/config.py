@@ -345,10 +345,11 @@ class CitationHighlightConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    timeout: float = 10.0
-    max_concurrency: int = 8
-    max_input_chars: int = 4096
-    cache_size: int = 500
+    timeout: float = Field(default=10.0, gt=0)
+    max_concurrency: int = Field(default=8, ge=1)
+    batch_size: int = Field(default=8, ge=1)
+    max_input_chars: int = Field(default=4096, ge=1)
+    cache_size: int = Field(default=500, ge=1)
 
 
 class CitationsConfig(BaseModel):

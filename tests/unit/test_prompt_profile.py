@@ -83,6 +83,7 @@ def test_exported_guidance_constants_do_not_declare_identity() -> None:
         "HIGHLIGHT_GUIDANCE",
         "HIGHLIGHT_RESPONSE_FORMAT",
         "HIGHLIGHT_USER_PROMPT",
+        "HIGHLIGHT_BATCH_USER_PROMPT",
     ]
 
     for name in guidance_names:

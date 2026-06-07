@@ -248,6 +248,7 @@ async def stream_answer_events(
                         answer_text=finalized.answer,
                         llm_func=llm_func,
                         max_concurrency=highlight_cfg.max_concurrency,
+                        batch_size=highlight_cfg.batch_size,
                         max_input_chars=highlight_cfg.max_input_chars,
                         cache_size=highlight_cfg.cache_size,
                     ),

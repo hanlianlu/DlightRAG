@@ -123,3 +123,12 @@ HIGHLIGHT_USER_PROMPT = (
     "Source chunk:\n{chunk_content}\n\n"
     "Extract 1-3 supporting phrases from the source chunk (must be exact substrings)."
 )
+
+HIGHLIGHT_BATCH_USER_PROMPT = (
+    "For each item below, identify 1-3 short supporting phrases from source_chunk "
+    "that most directly support citing_sentence. Return only exact substrings from "
+    "source_chunk.\n\n"
+    'Return JSON only in this shape: {{"items": [{{"id": "0", '
+    '"phrases": ["phrase"], "confidence": 0.8}}]}}\n\n'
+    "Items:\n{items_json}"
+)

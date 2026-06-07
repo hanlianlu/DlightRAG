@@ -107,6 +107,7 @@ class TestCitationHighlightConfig:
         assert cfg.enabled is True
         assert cfg.timeout == 10.0
         assert cfg.max_concurrency == 8
+        assert cfg.batch_size == 8
 
 
 class TestAnswerConfig:

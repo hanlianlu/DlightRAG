@@ -31,19 +31,33 @@ def test_chat_streaming_is_split_into_transport_and_renderer_modules() -> None:
 def test_composer_enter_shortcut_respects_ime_composition() -> None:
     chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
 
-    assert "function isImeCompositionKeyEvent(e)" in chat_js
+    assert "function submitComposerForm(form)" in chat_js
+    assert "function isLineBreakInput(e)" in chat_js
+    assert "textarea.addEventListener('beforeinput'" in chat_js
+    assert "e.inputType === 'insertLineBreak'" in chat_js
     assert "e.isComposing === true" in chat_js
-    assert "e.keyCode === 229" in chat_js
-    assert "let textareaIsComposing = false;" in chat_js
-    assert "textarea.addEventListener('compositionstart'" in chat_js
-    assert "textarea.addEventListener('compositionend'" in chat_js
+    assert "let allowNextLineBreak = false;" in chat_js
+    assert "allowNextLineBreak = e.shiftKey === true;" in chat_js
+    assert "submitComposerForm(form);" in chat_js
+    assert "let textareaIsComposing = false;" not in chat_js
+    assert "compositionJustEnded" not in chat_js
+    assert "setTimeout(function() {" not in chat_js
 
-    enter_check = chat_js.index("if (e.key === 'Enter' && !e.shiftKey)")
-    ime_guard = chat_js.index(
-        "if (textareaIsComposing || isImeCompositionKeyEvent(e))", enter_check
+    beforeinput = chat_js.index("textarea.addEventListener('beforeinput'")
+    linebreak_check = chat_js.index("if (!isLineBreakInput(e)) return;", beforeinput)
+    composing_guard = chat_js.index(
+        "if (e.isComposing === true || allowNextLineBreak)", linebreak_check
     )
-    submit_dispatch = chat_js.index("form.dispatchEvent(new Event('submit'))", enter_check)
-    assert enter_check < ime_guard < submit_dispatch
+    prevent_default = chat_js.index("e.preventDefault();", composing_guard)
+    submit_call = chat_js.index("submitComposerForm(form);", prevent_default)
+    assert beforeinput < linebreak_check < composing_guard < prevent_default < submit_call
+
+    keydown = chat_js.index("textarea.addEventListener('keydown'")
+    keydown_block = chat_js[
+        keydown : chat_js.index("textarea.addEventListener('beforeinput'", keydown)
+    ]
+    assert "submitComposerForm(form)" not in keydown_block
+    assert "form.dispatchEvent(new Event('submit'))" not in keydown_block
 
 
 def test_htmx_behavior_lives_in_dedicated_module() -> None:
@@ -54,6 +68,18 @@ def test_htmx_behavior_lives_in_dedicated_module() -> None:
     assert (static_js / "htmx.js").is_file()
     assert "setupHtmxInteractions" in main_js
     assert "htmx:afterRequest" not in panel_js
+
+
+def test_main_module_version_busts_feature_module_imports() -> None:
+    web_root = ROOT / "src/dlightrag/web"
+    base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")
+    main_js = (web_root / "static" / "js" / "main.js").read_text(encoding="utf-8")
+
+    assert "window.__DLIGHTRAG_STATIC_VERSION__" in base_html
+    assert "function versionedModule(path)" in main_js
+    assert "encodeURIComponent(version)" in main_js
+    assert "import(versionedModule('./chat.js'))" in main_js
+    assert "import {setupQueryForm} from './chat.js';" not in main_js
 
 
 def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
@@ -232,6 +258,24 @@ def test_panel_action_icons_are_svg_buttons_not_text_glyphs() -> None:
     assert 'class="source-dl-icon-svg"' in source_panel
 
 
+def test_file_delete_matches_workspace_hover_disclosure() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    file_delete = css.split(".file-delete {", 1)[1].split("}", 1)[0]
+    file_delete_hover = css.split(".file-delete:hover {", 1)[1].split("}", 1)[0]
+
+    assert "border: none;" in file_delete
+    assert "display: flex;" in file_delete
+    assert "height: var(--size-icon-md);" in file_delete
+    assert "opacity: 0.45;" in file_delete
+    assert "transition: all 0.15s;" in file_delete
+    assert "width: var(--size-icon-md);" in file_delete
+    assert ".file-delete {\n        opacity: 0;\n    }" in css
+    assert ".file-item:hover .file-delete {\n        opacity: 1;\n    }" in css
+    assert "background: rgba(248, 113, 113, 0.15);" in file_delete_hover
+    assert "border-color:" not in file_delete_hover
+
+
 def test_source_panel_default_gold_accents_are_restrained() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
 
@@ -240,7 +284,9 @@ def test_source_panel_default_gold_accents_are_restrained() -> None:
 
     assert "background: var(--color-bg-hover);" in source_header_hover
     assert "border-left:" not in source_chunk_block
-    assert "box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.24);" in source_chunk_block
+    assert "background: rgba(12, 10, 9, 0.72);" in source_chunk_block
+    assert "box-shadow: inset 2px 0 0 rgba(120, 113, 108, 0.18);" in source_chunk_block
+    assert "rgba(210, 182, 97" not in source_chunk_block
     assert "border-left: 3px solid var(--color-gold-400);" not in css
 
 
@@ -250,11 +296,11 @@ def test_source_panel_active_chunk_uses_subtle_selection_not_gold_fill() -> None
     source_chunk_block = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
     active_chunk_block = css.split(".source-chunk.active {", 1)[1].split("}", 1)[0]
 
-    assert "background: rgba(28, 25, 23, 0.62);" in source_chunk_block
+    assert "background: rgba(12, 10, 9, 0.72);" in source_chunk_block
     assert "background: var(--color-bg-elevated);" not in source_chunk_block
     assert "border-left-color:" not in active_chunk_block
-    assert "background: rgba(210, 182, 97, 0.035);" in active_chunk_block
-    assert "box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.42);" in active_chunk_block
+    assert "background: rgba(12, 10, 9, 0.86);" in active_chunk_block
+    assert "box-shadow: inset 2px 0 0 rgba(210, 182, 97, 0.28);" in active_chunk_block
     assert "background: rgba(87, 74, 36, 0.15);" not in active_chunk_block
     assert "var(--color-gold-200)" not in active_chunk_block
 
@@ -266,10 +312,37 @@ def test_source_panel_phrase_highlight_is_scoped_without_underline() -> None:
     source_highlight = css.split(".source-chunk-content .highlight {", 1)[1].split("}", 1)[0]
 
     assert "background: rgba(210, 182, 97, 0.14);" in global_highlight
+    assert "padding: 0 0.1em;" in global_highlight
+    assert "box-decoration-break: clone;" in global_highlight
     assert "border-bottom: none;" in global_highlight
     assert "background: rgba(210, 182, 97, 0.18);" in source_highlight
     assert "color: var(--color-text-primary);" in source_highlight
     assert "border-bottom: none;" in source_highlight
+
+
+def test_citation_badge_is_compact_marker_not_framed_chip() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+
+    badge_block = css.split(".citation-badge {", 1)[1].split("}", 1)[0]
+    hover_block = css.split(".citation-badge:hover {", 1)[1].split("}", 1)[0]
+
+    assert "background: transparent;" in badge_block
+    assert "font-size: var(--font-size-caption);" in badge_block
+    assert "line-height: 1;" in badge_block
+    assert "padding: 0 0.16em;" in badge_block
+    assert "vertical-align: super;" in badge_block
+    assert "background: rgba(210, 182, 97, 0.12);" in hover_block
+
+
+def test_reference_labels_do_not_render_square_brackets() -> None:
+    partials = ROOT / "src/dlightrag/web/templates/partials"
+    answer_done = (partials / "answer_done.html").read_text(encoding="utf-8")
+    source_panel = (partials / "source_panel.html").read_text(encoding="utf-8")
+
+    assert "[{{ src.id }}]" not in answer_done
+    assert "[{{ src.id }}]" not in source_panel
+    assert '<span class="answer-ref-id">{{ src.id | reference_label }}</span>' in answer_done
+    assert '<span class="source-doc-badge">{{ src.id | reference_label }}</span>' in source_panel
 
 
 def test_source_download_icon_is_icon_only_not_framed_button() -> None:
@@ -282,10 +355,15 @@ def test_source_download_icon_is_icon_only_not_framed_button() -> None:
     assert "background: transparent;" in icon_block
     assert "border: none;" in icon_block
     assert "color: var(--color-text-tertiary);" in icon_block
-    assert "opacity: 0.9;" in icon_block
+    assert "opacity: 1;" in icon_block
     assert "color: var(--color-gold-200);" in hover_block
     assert "height: var(--size-icon-md);" in svg_block
+    assert "stroke-width: 2;" in svg_block
     assert "width: var(--size-icon-md);" in svg_block
+    source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'stroke="currentColor"' in source_panel
 
 
 def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
@@ -323,14 +401,69 @@ def test_chat_typography_uses_semantic_line_height_tokens() -> None:
     assert "--space-message-block: var(--space-component);" in root_block
     assert "--space-composer-y: calc(var(--space-tight) * 0.625);" in root_block
     assert "--space-composer-x: var(--space-tight);" in root_block
-    assert "padding: var(--space-composer-y) var(--space-composer-x);" in composer_form
+    assert "--space-composer-leading: var(--space-inline);" in root_block
+    assert "--space-composer-trailing: var(--space-composer-x);" in root_block
+    assert (
+        "padding: var(--space-composer-y) var(--space-composer-trailing) "
+        "var(--space-composer-y) var(--space-composer-leading);"
+    ) in composer_form
     assert "line-height: var(--line-height-control);" in composer_input
     assert "padding: 0;" in composer_input
+    assert "min-height: calc(var(--font-size-body) * var(--line-height-control));" in composer_input
+    assert "overflow-y: hidden;" in composer_input
     assert "line-height: var(--line-height-control);" in user_message
     assert "margin: var(--space-message-block) 0 var(--space-tight) auto;" in user_message
     assert "line-height: var(--line-height-message);" in ai_message
     assert "line-height: var(--line-height-message);" in ai_content
     assert "padding: var(--space-tight) 0 var(--space-message-block);" in ai_message
+
+
+def test_composer_plus_uses_thin_svg_icon_without_enlarging_button() -> None:
+    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    index_html = (ROOT / "src/dlightrag/web/templates/index.html").read_text(encoding="utf-8")
+    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
+    plus_block = css.split(".composer-plus {", 1)[1].split("}", 1)[0]
+    assert ".composer-plus-icon {" in css
+    plus_icon_block = css.split(".composer-plus-icon {", 1)[1].split("}", 1)[0]
+
+    assert 'class="composer-plus-icon"' in index_html
+    assert ">+</button>" not in index_html
+    assert 'stroke="currentColor"' in index_html
+    assert "--size-composer-plus-icon: clamp(23px, 2.3vw, 29px);" in root_block
+    assert "--stroke-composer-plus-icon: 1.55;" in root_block
+    assert "--font-size-action-glyph" not in root_block
+    assert "width: var(--size-button);" in plus_block
+    assert "height: var(--size-button);" in plus_block
+    assert "font-size:" not in plus_block
+    assert "font-weight:" not in plus_block
+    assert "width: var(--size-composer-plus-icon);" in plus_icon_block
+    assert "height: var(--size-composer-plus-icon);" in plus_icon_block
+    assert "stroke-width: var(--stroke-composer-plus-icon);" in plus_icon_block
+
+
+def test_composer_autoresize_hides_scrollbar_until_max_height() -> None:
+    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+
+    assert "textarea.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';" in chat_js
+    assert "textarea.style.overflowY = '';" in chat_js
+
+
+def test_composer_autoresize_measures_content_after_height_reset() -> None:
+    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+
+    assert "const computed = getComputedStyle(textarea);" in chat_js
+    assert "const maxHeight = parseFloat(computed.maxHeight) || 160;" in chat_js
+    assert "const contentHeight = textarea.scrollHeight;" in chat_js
+    assert "textarea.value.includes('\\n')" in chat_js
+
+    height_reset = chat_js.index("textarea.style.height = 'auto';")
+    content_measure = chat_js.index("const contentHeight = textarea.scrollHeight;")
+    multiline_update = chat_js.index("form.classList.toggle('multiline'", content_measure)
+    height_apply = chat_js.index(
+        "textarea.style.height = Math.min(contentHeight, maxHeight) + 'px';"
+    )
+
+    assert height_reset < content_measure < multiline_update < height_apply
 
 
 def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:
@@ -374,6 +507,7 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
 
     selector_block = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
+    popover_item_block = css.split(".workspace-popover-item {", 1)[1].split("}", 1)[0]
     state_block = css.split(".workspace-selector:hover,\n.workspace-selector.open {", 1)[1].split(
         "}",
         1,
@@ -381,9 +515,10 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
 
     assert "background: rgba(41, 37, 36, 0.56);" in selector_block
     assert "border: 1px solid var(--color-border-subtle);" in selector_block
-    assert "color: var(--color-text-secondary);" in selector_block
+    assert "color: var(--color-text-subtle);" in selector_block
     assert "background: rgba(87, 74, 36, 0.18);" not in selector_block
     assert "color: var(--color-gold-100);" not in selector_block
+    assert "color: var(--color-text-secondary);" in popover_item_block
 
     assert "background: var(--color-bg-hover);" in state_block
     assert "border-color: rgba(210, 182, 97, 0.22);" in state_block

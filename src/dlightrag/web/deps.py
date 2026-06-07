@@ -116,6 +116,22 @@ def _restore_code_blocks(html: str, protected: list[str]) -> str:
     return html
 
 
+def _reference_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
+    """Return the compact visible label for citation/reference surfaces."""
+    ref = str(ref_id)
+    if chunk_idx is None or chunk_idx == "":
+        return ref
+    return f"{ref}-{chunk_idx}"
+
+
+def _reference_aria_label(ref_id: Any, chunk_idx: Any | None = None) -> str:
+    """Return the accessible label for citation/reference controls."""
+    ref = str(ref_id)
+    if chunk_idx is None or chunk_idx == "":
+        return f"Source {ref}"
+    return f"Source {ref}, chunk {chunk_idx}"
+
+
 def _citation_badges(text: str) -> Markup:
     """Replace citation patterns with clickable badge HTML.
 
@@ -137,11 +153,14 @@ def _citation_badges(text: str) -> Markup:
     def _chunk_badge(m: re.Match) -> str:
         ref_id = m.group(1)
         chunk_idx = m.group(2)
+        label = _reference_label(ref_id, chunk_idx)
+        aria_label = _reference_aria_label(ref_id, chunk_idx)
         return (
             f'<span class="citation-badge" data-ref="{ref_id}" '
             f'data-chunk="{chunk_idx}" data-action="filter-source" '
-            f'role="button" tabindex="0">'
-            f"[{ref_id}-{chunk_idx}]</span>"
+            f'role="button" tabindex="0" '
+            f'aria-label="{aria_label}">'
+            f"{label}</span>"
         )
 
     result = CITATION_PATTERN.sub(_chunk_badge, html)
@@ -149,10 +168,12 @@ def _citation_badges(text: str) -> Markup:
     # Second pass: replace doc-level [n] with badges
     def _doc_badge(m: re.Match) -> str:
         ref_id = m.group(1)
+        label = _reference_label(ref_id)
+        aria_label = _reference_aria_label(ref_id)
         return (
             f'<span class="citation-badge" data-ref="{ref_id}" '
-            f'data-action="filter-source" role="button" tabindex="0">'
-            f"[{ref_id}]</span>"
+            f'data-action="filter-source" role="button" tabindex="0" '
+            f'aria-label="{aria_label}">{label}</span>'
         )
 
     result = DOC_CITATION_PATTERN.sub(_doc_badge, result)
@@ -192,6 +213,7 @@ def _basename(path: str) -> str:
 # Register filters on the Jinja2 environment
 templates.env.filters["citation_badges"] = _citation_badges
 templates.env.filters["highlight_content"] = _highlight_content
+templates.env.filters["reference_label"] = _reference_label
 templates.env.filters["basename"] = _basename
 
 
