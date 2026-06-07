@@ -58,8 +58,8 @@ class IngestRequest(BaseModel):
         elif self.source_type == "s3":
             if not self.bucket:
                 raise ValueError("'bucket' is required for s3")
-            if not self.key:
-                raise ValueError("'key' is required for s3")
+            if not self.key and self.prefix is None:
+                raise ValueError("'key' or 'prefix' is required for s3")
         return self
 
 

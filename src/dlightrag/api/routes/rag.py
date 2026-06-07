@@ -58,8 +58,13 @@ async def ingest(
         if body.prefix is not None:
             kwargs["prefix"] = body.prefix
     elif body.source_type == "s3":
+        if body.key and body.prefix is not None:
+            raise HTTPException(status_code=400, detail="'key' and 'prefix' are mutually exclusive")
         kwargs["bucket"] = body.bucket
-        kwargs["key"] = body.key
+        if body.key:
+            kwargs["key"] = body.key
+        if body.prefix is not None:
+            kwargs["prefix"] = body.prefix
     if body.title is not None:
         kwargs["title"] = body.title
     if body.author is not None:
