@@ -46,11 +46,22 @@ export function setupPanelResize() {
     let startX = 0;
     let startWidth = 0;
     let rafId = null;
+    let activePointerId = null;
+
+    function isOtherPointer(e) {
+        return e && 'pointerId' in e && activePointerId !== null && e.pointerId !== activePointerId;
+    }
 
     function onPointerDown(e) {
+        if (dragging) return;
         dragging = true;
+        activePointerId = e.pointerId;
         startX = e.clientX;
         startWidth = panel.getBoundingClientRect().width;
+        e.preventDefault();
+        if (handle.setPointerCapture) {
+            handle.setPointerCapture(e.pointerId);
+        }
         handle.classList.add('active');
         document.body.style.userSelect = 'none';
         document.body.style.cursor = 'col-resize';
@@ -63,18 +74,28 @@ export function setupPanelResize() {
 
     function onPointerMove(e) {
         if (!dragging) return;
-        cancelAnimationFrame(rafId);
+        if (isOtherPointer(e)) return;
+        if (rafId !== null) cancelAnimationFrame(rafId);
+        const clientX = e.clientX;
         rafId = requestAnimationFrame(function () {
-            const deltaX = startX - e.clientX;
+            const deltaX = startX - clientX;
             const newWidth = clampWidth(startWidth + deltaX);
             document.documentElement.style.setProperty('--panel-width', newWidth + 'px');
         });
     }
 
-    function onPointerUp() {
+    function finishDrag(e) {
         if (!dragging) return;
+        if (isOtherPointer(e)) return;
         dragging = false;
-        cancelAnimationFrame(rafId);
+        if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+        }
+        if (activePointerId !== null && handle.hasPointerCapture && handle.hasPointerCapture(activePointerId)) {
+            handle.releasePointerCapture(activePointerId);
+        }
+        activePointerId = null;
         handle.classList.remove('active');
         document.body.style.userSelect = '';
         document.body.style.cursor = '';
@@ -91,7 +112,9 @@ export function setupPanelResize() {
 
     handle.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('pointermove', onPointerMove);
-    document.addEventListener('pointerup', onPointerUp);
+    document.addEventListener('pointerup', finishDrag);
+    document.addEventListener('pointercancel', finishDrag);
+    window.addEventListener('blur', finishDrag);
 
     window.addEventListener('resize', function () {
         const current = panel.getBoundingClientRect().width;

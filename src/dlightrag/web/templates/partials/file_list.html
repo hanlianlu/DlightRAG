@@ -34,12 +34,18 @@
 <div class="file-item">
     <span class="file-name" title="{{ file.file_path }}">{{ file.file_name }}</span>
     <button class="file-delete"
+            type="button"
+            aria-label="Delete {{ file.file_name }}"
             hx-delete="/web/files"
             hx-vals='{"file_path": {{ file.file_path | tojson }}}'
             hx-target="#panel-content"
             hx-swap="innerHTML"
             hx-confirm="Delete {{ file.file_name }}?">
-        &#10005;
+        <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
     </button>
 </div>
 {% endfor %}

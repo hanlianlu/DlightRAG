@@ -8,7 +8,14 @@
       <span class="source-doc-count">{{ src.chunks|length }}</span>
     </button>
     {% if src.url %}
-    <a href="{{ src.url }}" class="source-dl-icon" title="Download source" download>&#x2B07;</a>
+    <a href="{{ src.url }}" class="source-dl-icon" title="Download source" aria-label="Download source" download>
+      <svg class="source-dl-icon-svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <path d="M7 10l5 5 5-5"/>
+        <path d="M12 15V3"/>
+      </svg>
+    </a>
     {% endif %}
   </div>
   <div class="source-doc-chunks">
