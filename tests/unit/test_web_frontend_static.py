@@ -545,6 +545,7 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
 def test_lightbox_controls_use_large_theme_bars_without_close_button() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
     images_js = (ROOT / "src/dlightrag/web/static/js/images.js").read_text(encoding="utf-8")
+    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
 
     nav_block = css.split(".image-lightbox-prev,\n.image-lightbox-next {", 1)[1].split(
         "}",
@@ -556,9 +557,13 @@ def test_lightbox_controls_use_large_theme_bars_without_close_button() -> None:
 
     assert "image-lightbox-close" not in css
     assert "image-lightbox-close" not in images_js
-    assert "top: max(var(--space-layout), 12vh);" in nav_block
-    assert "bottom: max(var(--space-layout), 12vh);" in nav_block
-    assert "width: clamp(44px, 6vw, 72px);" in nav_block
+    assert "--size-lightbox-nav-width: clamp(44px, 6vw, 72px);" in root_block
+    assert "--inset-lightbox-nav-block: max(var(--space-layout), 12vh);" in root_block
+    assert "--font-size-lightbox-nav-icon: clamp(30px, 4vw, 42px);" in root_block
+    assert "top: var(--inset-lightbox-nav-block);" in nav_block
+    assert "bottom: var(--inset-lightbox-nav-block);" in nav_block
+    assert "width: var(--size-lightbox-nav-width);" in nav_block
+    assert "font-size: var(--font-size-lightbox-nav-icon);" in nav_block
     assert "border: none;" in nav_block
     assert "border-radius: 999px;" not in nav_block
     assert "background: rgba(245, 245, 244, 0.045);" in nav_block
