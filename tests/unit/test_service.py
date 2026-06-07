@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from dlightrag.config import DlightragConfig
+from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.service import RAGService
 
 # ---------------------------------------------------------------------------
@@ -392,18 +393,24 @@ class TestRAGServiceLightRAGMainPath:
     """Test LightRAG-main path behavior in RAGService."""
 
     async def test_aingest_azure_blob_single(self, test_config: DlightragConfig) -> None:
-        """Downloads a single blob and ingests through the unified engine."""
+        """Downloads one blob into an ephemeral parser item and stores remote metadata."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
-        service._ingestion_engine.aingest_files = AsyncMock(
-            return_value={
+        seen_items: list[PreparedIngestFile] = []
+
+        async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
+            seen_items.extend(items)
+            assert len(items) == 1
+            assert items[0].parser_path.exists()
+            return {
                 "processed": 1,
                 "errors": [],
-                "results": [{"doc_id": "d1", "page_count": 2, "file_path": "/tmp/report.pdf"}],
+                "results": [{"doc_id": "d1", "page_count": 2}],
             }
-        )
+
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
 
         mock_source = AsyncMock()
         mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake-content")
@@ -418,26 +425,37 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["doc_id"] == "d1"
+        item = seen_items[0]
+        assert item.metadata_path == "azure://test-container/docs/report.pdf"
+        assert item.display_filename == "report.pdf"
+        assert item.parser_path.suffix == ".pdf"
+        assert "report" in item.parser_path.name
+        assert not item.parser_path.exists()
+        assert not (test_config.working_dir_path / "sources").exists()
 
     async def test_aingest_unified_azure_blob_batch(self, test_config: DlightragConfig) -> None:
-        """Batch-ingests blobs by prefix."""
+        """Prefix ingest calls the engine once with a prepared batch."""
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
         service._ingestion_engine.aingest_file = AsyncMock()
-        service._ingestion_engine.aingest_files = AsyncMock(
-            return_value={
-                "processed": 2,
+        seen_items: list[PreparedIngestFile] = []
+
+        async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
+            seen_items.extend(items)
+            assert all(item.parser_path.exists() for item in items)
+            return {
+                "processed": len(items),
                 "errors": [],
-                "results": [
-                    {"doc_id": "a", "page_count": 1, "file_path": "/tmp/a.pdf"},
-                    {"doc_id": "b", "page_count": 1, "file_path": "/tmp/b.pdf"},
-                ],
+                "results": [{"doc_id": item.display_filename} for item in items],
             }
-        )
+
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
 
         mock_source = AsyncMock()
-        mock_source.alist_documents = AsyncMock(return_value=["a.pdf", "b.pdf"])
+        mock_source.alist_documents = AsyncMock(
+            return_value=["team-a/report.pdf", "team-b/report.pdf"]
+        )
         mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
 
         result = await service.aingest(
@@ -450,6 +468,14 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["processed"] == 2
+        assert [item.metadata_path for item in seen_items] == [
+            "azure://c/team-a/report.pdf",
+            "azure://c/team-b/report.pdf",
+        ]
+        assert [item.display_filename for item in seen_items] == ["report.pdf", "report.pdf"]
+        assert len({item.parser_path.name for item in seen_items}) == 2
+        assert all(item.parser_path.suffix == ".pdf" for item in seen_items)
+        assert all(not item.parser_path.exists() for item in seen_items)
 
     async def test_aingest_unified_s3(self, test_config: DlightragConfig) -> None:
         """S3 single-object ingest uses the same remote batch path."""
@@ -506,6 +532,7 @@ class TestRAGServiceLightRAGMainPath:
         temp_base = test_config.temp_dir
         if temp_base.exists():
             assert len(os.listdir(temp_base)) == 0
+        assert not (test_config.working_dir_path / "sources").exists()
 
     async def test_aingest_unified_delegates_to_engine(
         self, test_config: DlightragConfig, tmp_path: Path

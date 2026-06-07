@@ -33,9 +33,31 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
+class PreparedIngestFile:
+    """Prepared parser input plus the source metadata DlightRAG should store.
+
+    ``parser_path`` must be a local file because LightRAG pending-parse
+    ingestion requires local parser input. ``metadata_path`` is the source of
+    truth exposed back to retrieval clients; for remote sources this remains
+    the original ``s3://`` or ``azure://`` URI.
+    """
+
+    parser_path: Path
+    metadata_path: str | None = None
+    display_filename: str | None = None
+    title: str | None = None
+    author: str | None = None
+    metadata: Mapping[str, Any] | None = None
+    metadata_policy: MetadataIngestPolicy | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "parser_path", Path(self.parser_path))
+
+
+@dataclass(frozen=True)
 class _PendingDocumentIngest:
     index: int
-    file_path: Path
+    parser_path: Path
     doc_id: str
     metadata_record: dict[str, Any]
     parse_engine: str
@@ -130,7 +152,7 @@ class UnifiedIngestionEngine:
 
     async def aingest_files(
         self,
-        paths: Sequence[str | Path],
+        paths: Sequence[str | Path | PreparedIngestFile],
         *,
         replace: bool = False,  # noqa: ARG002
         title: str | None = None,
@@ -149,23 +171,30 @@ class UnifiedIngestionEngine:
             return {"processed": 0, "errors": [], "results": []}
 
         entries: list[_PendingDocumentIngest] = []
-        for index, file_path in enumerate(Path(path) for path in paths):
+        for index, item in enumerate(_prepare_ingest_item(path) for path in paths):
+            parser_path = item.parser_path
             parse_engine, process_options = resolve_file_parser_directives(
-                file_path,
+                parser_path,
                 parser_rules=self._parser_rules,
                 require_external_endpoint=False,
             )
             entries.append(
                 _PendingDocumentIngest(
                     index=index,
-                    file_path=file_path,
-                    doc_id=_canonical_file_doc_id(file_path),
+                    parser_path=parser_path,
+                    doc_id=_canonical_file_doc_id(parser_path),
                     metadata_record=self._prepare_metadata_record(
-                        file_path,
-                        title=title,
-                        author=author,
-                        metadata=metadata,
-                        metadata_policy=metadata_policy,
+                        parser_path,
+                        metadata_path=item.metadata_path,
+                        display_filename=item.display_filename,
+                        title=item.title if item.title is not None else title,
+                        author=item.author if item.author is not None else author,
+                        metadata=item.metadata if item.metadata is not None else metadata,
+                        metadata_policy=(
+                            item.metadata_policy
+                            if item.metadata_policy is not None
+                            else metadata_policy
+                        ),
                     ),
                     parse_engine=parse_engine,
                     process_options=process_options,
@@ -182,7 +211,7 @@ class UnifiedIngestionEngine:
             for entry in entries:
                 existing_status = await self._stores.get_doc_status(entry.doc_id)
                 if existing_status is not None and existing_status.get("status") == "processed":
-                    current_hash = _file_sha256(entry.file_path)
+                    current_hash = _file_sha256(entry.parser_path)
                     stored_hash = existing_status.get("content_hash")
                     if stored_hash and current_hash == stored_hash:
                         results_by_index[entry.index] = {
@@ -201,9 +230,9 @@ class UnifiedIngestionEngine:
             if to_enqueue:
                 await self._lightrag.apipeline_enqueue_documents(
                     input=[""] * len(to_enqueue),
-                    file_paths=[str(entry.file_path) for entry in to_enqueue],
+                    file_paths=[str(entry.parser_path) for entry in to_enqueue],
                     docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
-                    lightrag_document_paths=[str(entry.file_path) for entry in to_enqueue],
+                    lightrag_document_paths=[str(entry.parser_path) for entry in to_enqueue],
                     parse_engine=[entry.parse_engine for entry in to_enqueue],
                     process_options=[entry.process_options for entry in to_enqueue],
                     chunk_options=self._chunk_options or None,
@@ -228,6 +257,8 @@ class UnifiedIngestionEngine:
         self,
         file_path: Path,
         *,
+        metadata_path: str | None = None,
+        display_filename: str | None = None,
         title: str | None,
         author: str | None,
         metadata: Mapping[str, Any] | None,
@@ -245,8 +276,9 @@ class UnifiedIngestionEngine:
             allow_ad_hoc_json=self._allow_ad_hoc_metadata,
         )
         system_metadata = extract_system_metadata(
-            file_path,
+            metadata_path or file_path,
             ingest_strategy="lightrag_sidecar_unified",
+            display_filename=display_filename,
         )
         if title is not None:
             system_metadata["doc_title"] = title
@@ -442,6 +474,15 @@ def _file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
+def _prepare_ingest_item(path: str | Path | PreparedIngestFile) -> PreparedIngestFile:
+    if isinstance(path, PreparedIngestFile):
+        return path
+    return PreparedIngestFile(parser_path=Path(path))
+
+
 def _canonical_file_doc_id(path: Path) -> str:
     """Match LightRAG's file-backed document id derivation."""
     return compute_mdhash_id(normalize_document_file_path(path), prefix="doc-")
+
+
+__all__ = ["PreparedIngestFile", "UnifiedIngestionEngine"]

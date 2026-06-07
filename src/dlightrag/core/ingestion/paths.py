@@ -9,7 +9,9 @@ ad-hoc directory handling.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import uuid
 from pathlib import Path, PurePosixPath
@@ -17,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from lightrag.constants import PARSED_DIR_NAME
 
 UPLOADS_DIR_NAME = "__uploads__"
+REMOTE_INGEST_DIR_NAME = "__remote_ingest__"
 
 
 def workspace_input_root(input_dir: Path, workspace: str) -> Path:
@@ -95,32 +98,43 @@ def stage_input_file(
     return target
 
 
-def remote_namespace_root(
+def remote_ingest_batch_root(
     *,
-    working_dir: Path,
+    input_root: Path,
     source_type: str,
-    namespace: str,
+    batch_id: str,
 ) -> Path:
-    """Return the managed local cache root for one remote source namespace."""
-    return working_dir / "sources" / source_type / _safe_namespace(namespace)
+    """Return the remote parser input root for one ingest batch.
+
+    The directory lives under the workspace input root because LightRAG writes
+    parser sidecars relative to the source file parent. DlightRAG removes the
+    temporary source file after parsing and keeps only the generated artifacts.
+    """
+    return input_root / REMOTE_INGEST_DIR_NAME / source_type / batch_id
 
 
-def remote_object_path(
+def remote_parser_input_path(
     *,
-    working_dir: Path,
-    source_type: str,
-    namespace: str,
+    batch_root: Path,
+    source_uri: str,
     key: str,
 ) -> Path:
-    """Return a managed local path for a remote object key."""
+    """Return an extension-preserving, URI-stable parser input path.
+
+    LightRAG 1.5 pending-parse APIs still require local files and derive doc
+    IDs from canonicalized file names. Hashing the full remote URI avoids
+    collisions for same-basename objects in different prefixes while keeping
+    parser routing extension-based.
+    """
     parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
     if not parts:
         raise ValueError("remote object key is empty")
-    return remote_namespace_root(
-        working_dir=working_dir,
-        source_type=source_type,
-        namespace=namespace,
-    ) / Path(*parts)
+    filename = PurePosixPath(*parts).name
+    suffix = Path(filename).suffix.lower()
+    stem = Path(filename).stem or "document"
+    safe_stem = _safe_filename_stem(stem)
+    digest = hashlib.sha256(source_uri.encode("utf-8")).hexdigest()[:12]
+    return batch_root / f"{safe_stem}__{digest}{suffix}"
 
 
 def _is_ingestable_child(
@@ -137,8 +151,11 @@ def _is_ingestable_child(
         return False
     if any(part.startswith(".") for part in relative_parts):
         return False
+    if REMOTE_INGEST_DIR_NAME in parent_names:
+        return False
     return True
 
 
-def _safe_namespace(namespace: str) -> str:
-    return namespace.replace("/", "_").replace("\\", "_") or "default"
+def _safe_filename_stem(stem: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")
+    return cleaned[:96] or "document"

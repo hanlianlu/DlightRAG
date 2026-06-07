@@ -10,7 +10,7 @@ from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
 
-from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
+from dlightrag.core.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
 
@@ -122,6 +122,43 @@ async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Pat
     assert kwargs["process_options"] == ["iteP", "iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     assert deps["metadata_index"].upsert.await_count == 2
+
+
+async def test_prepared_batch_preserves_remote_metadata_path(tmp_path: Path) -> None:
+    parser_source = tmp_path / "report__s3_abcd1234.pdf"
+    parser_source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        {"chunks_list": ["chunk-report"], "content_hash": "sha256:pdf", "status": "processed"},
+    ]
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": None,
+    }
+
+    result = await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=parser_source,
+                metadata_path="s3://bucket/team-a/report.pdf",
+                display_filename="report.pdf",
+            )
+        ],
+        replace=False,
+    )
+
+    assert result["processed"] == 1
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["file_paths"] == [str(parser_source)]
+    assert kwargs["lightrag_document_paths"] == [str(parser_source)]
+    _, saved = deps["metadata_index"].upsert.await_args.args
+    assert saved["file_path"] == "s3://bucket/team-a/report.pdf"
+    assert saved["filename"] == "report.pdf"
+    assert saved["filename_stem"] == "report"
+    assert saved["file_extension"] == "pdf"
 
 
 async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ from dlightrag.core.ingestion.cleanup import (
     DeletionContext,
     cascade_delete,
     collect_deletion_context,
+    remove_deleted_files,
 )
 
 
@@ -70,6 +71,7 @@ class TestCollectDeletionContext:
 
     async def test_metadata_index_fallback(self) -> None:
         metadata_index = MagicMock()
+        metadata_index.find_by_file_path = AsyncMock(return_value=[])
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-006"])
         ctx = await collect_deletion_context(
             identifier="report.pdf",
@@ -79,6 +81,25 @@ class TestCollectDeletionContext:
         assert ctx.doc_ids == {"doc-006"}
         assert ctx.sources_used == ["metadata_index"]
 
+    async def test_metadata_index_exact_remote_path_precedes_filename(self) -> None:
+        lightrag = _make_lightrag(
+            {"doc-remote": "/inputs/default/__remote_ingest__/s3/b1/report__abc.pdf"}
+        )
+        metadata_index = MagicMock()
+        metadata_index.find_by_file_path = AsyncMock(return_value=["doc-remote"])
+        metadata_index.find_by_filename = AsyncMock(return_value=["doc-wrong"])
+
+        ctx = await collect_deletion_context(
+            identifier="s3://bucket/team-a/report.pdf",
+            lightrag=lightrag,
+            metadata_index=metadata_index,
+        )
+
+        assert ctx.doc_ids == {"doc-remote"}
+        assert ctx.file_paths == {"/inputs/default/__remote_ingest__/s3/b1/report__abc.pdf"}
+        metadata_index.find_by_file_path.assert_awaited_once_with("s3://bucket/team-a/report.pdf")
+        metadata_index.find_by_filename.assert_not_awaited()
+
     async def test_doc_status_exception_falls_back_to_metadata(self) -> None:
         lightrag = MagicMock()
         lightrag.doc_status = MagicMock()
@@ -86,6 +107,7 @@ class TestCollectDeletionContext:
             side_effect=RuntimeError("connection lost")
         )
         metadata_index = MagicMock()
+        metadata_index.find_by_file_path = AsyncMock(return_value=[])
         metadata_index.find_by_filename = AsyncMock(return_value=["doc-007"])
 
         ctx = await collect_deletion_context(
@@ -102,6 +124,43 @@ class TestCollectDeletionContext:
         assert ctx.doc_ids == set()
         assert ctx.file_paths == set()
         assert ctx.sources_used == []
+
+
+class TestRemoveDeletedFiles:
+    """Test physical source cleanup boundaries."""
+
+    def test_remote_uri_does_not_delete_local_same_basename(self, tmp_path) -> None:
+        workspace_input = tmp_path / "inputs" / "default"
+        workspace_input.mkdir(parents=True)
+        local_copy = workspace_input / "report.pdf"
+        local_copy.write_bytes(b"local")
+
+        removed = remove_deleted_files(
+            {"azure://container/team-a/report.pdf", "s3://bucket/team-b/report.pdf"},
+            str(workspace_input),
+        )
+
+        assert removed == 0
+        assert local_copy.read_bytes() == b"local"
+
+    def test_nested_remote_parser_path_removes_artifacts_not_remote_source(self, tmp_path) -> None:
+        workspace_input = tmp_path / "inputs" / "default"
+        batch_root = workspace_input / "__remote_ingest__" / "s3" / "batch-1"
+        parsed_root = batch_root / "__parsed__"
+        artifact_dir = parsed_root / "report__abc.parsed"
+        artifact_dir.mkdir(parents=True)
+        (artifact_dir / "blocks.jsonl").write_text("{}\n")
+        archived_source = parsed_root / "report__abc.pdf"
+        archived_source.write_bytes(b"%PDF")
+        direct_source = batch_root / "report__abc.pdf"
+        direct_source.write_bytes(b"%PDF")
+
+        removed = remove_deleted_files({str(direct_source)}, str(workspace_input))
+
+        assert removed == 3
+        assert not direct_source.exists()
+        assert not archived_source.exists()
+        assert not artifact_dir.exists()
 
 
 def _make_ctx(doc_ids: set[str] | None = None) -> DeletionContext:
