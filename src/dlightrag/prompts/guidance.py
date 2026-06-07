@@ -26,10 +26,10 @@ The reference list uses two levels:
 **Citation Contract**:
 - Cite sources inline using [n-m] markers (page-level) immediately after the facts they support
 - Use [n] (doc-level) only when the fact applies to the document as a whole
-- Every factual claim must have at least one inline citation
+- Key factual claims should have at least one inline citation
 - Correlate markers with the entries in the reference list provided
 - Cite max the 1-2 most directly relevant chunks per claim
-- Avoid long chains of citations from the same source; if the evidence spans many pages, prefer a single [n] document-level citation for that source
+- Avoid long chains of citations from the same source; if the evidence spans many pages or chunks, prefer [n] document-level citation for that source
 - Do not add a "References", "Sources", or bibliography section; the system validates inline citations and builds sources separately
 """
 
@@ -98,12 +98,6 @@ Return valid JSON only, no markdown fences."""
 RERANK_GUIDANCE = (
     "Use 0.00 for completely irrelevant content and 1.00 for perfectly relevant content."
 )
-
-VISUAL_RERANK_PROMPT_TEMPLATE = """\
-Rate how relevant this document page is to the following query.
-Query: {query}
-Respond **ONLY** with a decimal number ranging from 0.00 to 1.00. {rerank_guidance}
-"""
 
 LISTWISE_RERANK_PROMPT = """\
 Score the relevance of {n} items to the query below. Each item may be an image, text, or both.

@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from dlightrag.citations.highlight import (
@@ -119,6 +121,42 @@ class TestHighlightExtractor:
         # Doc-level [1] should match source id="1" and trigger highlights
         assert result[0].chunks[0].highlight_phrases is not None
         assert len(result[0].chunks[0].highlight_phrases) > 0
+
+    @pytest.mark.asyncio
+    async def test_extract_highlights_logs_summary(
+        self,
+        mock_llm,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        from dlightrag.citations.highlight import extract_highlights_for_sources
+        from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+
+        sources = [
+            SourceReference(
+                id="1",
+                path="/docs/report.pdf",
+                title="report.pdf",
+                chunks=[
+                    ChunkSnippet(
+                        chunk_id="c1",
+                        chunk_idx=1,
+                        content="Reports show market growth reached 15% in 2025.",
+                    ),
+                ],
+            ),
+        ]
+        answer_text = "The market growth was impressive [1]."
+
+        with caplog.at_level(logging.INFO, logger="dlightrag.citations.highlight"):
+            await extract_highlights_for_sources(sources, answer_text, mock_llm)
+
+        assert "[Highlight] complete:" in caplog.text
+        assert "sources=1" in caplog.text
+        assert "chunks=1" in caplog.text
+        assert "tasks=1" in caplog.text
+        assert "task_errors=0" in caplog.text
+        assert "highlighted_chunks=1" in caplog.text
+        assert "phrases=1" in caplog.text
 
     @pytest.mark.asyncio
     async def test_invalid_phrases_filtered(self):

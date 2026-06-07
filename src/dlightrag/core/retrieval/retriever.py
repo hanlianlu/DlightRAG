@@ -35,6 +35,34 @@ def _format_bm25_top(chunks: list[dict[str, Any]], *, limit: int = 3) -> str:
     return ",".join(parts) if parts else "none"
 
 
+def _chunk_ids(chunks: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(chunk_id) for chunk in chunks if (chunk_id := chunk.get("chunk_id") or chunk.get("id"))
+    }
+
+
+def _count_fused_sources(
+    fused_chunks: list[dict[str, Any]],
+    *,
+    semantic_chunks: list[dict[str, Any]],
+    bm25_chunks: list[dict[str, Any]],
+) -> dict[str, int]:
+    semantic_ids = _chunk_ids(semantic_chunks)
+    bm25_ids = _chunk_ids(bm25_chunks)
+    counts = {"semantic_only": 0, "bm25_only": 0, "both": 0}
+
+    for chunk_id in _chunk_ids(fused_chunks):
+        in_semantic = chunk_id in semantic_ids
+        in_bm25 = chunk_id in bm25_ids
+        if in_semantic and in_bm25:
+            counts["both"] += 1
+        elif in_semantic:
+            counts["semantic_only"] += 1
+        elif in_bm25:
+            counts["bm25_only"] += 1
+    return counts
+
+
 class UnifiedRetriever:
     """Run retrieval-wide metadata filtering, LightRAG mix, BM25, and fusion."""
 
@@ -128,10 +156,17 @@ class UnifiedRetriever:
         fused = dedup_chunks_by_content(fused)
         lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
         trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
+        fused_source_counts = _count_fused_sources(
+            lightrag_result.contexts["chunks"],
+            semantic_chunks=semantic_chunks,
+            bm25_chunks=bm25_chunks,
+        )
+        trace["fused_source_counts"] = fused_source_counts
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
             "metadata_candidates=%s filter_relaxed=%s semantic_chunks=%d bm25_chunks=%d "
-            "fused_chunks=%d bm25_top=%s",
+            "fused_chunks=%d fused_sources=semantic_only=%d bm25_only=%d both=%d "
+            "bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,
@@ -140,6 +175,9 @@ class UnifiedRetriever:
             trace["semantic_chunk_count"],
             trace["bm25_chunk_count"],
             trace["fused_chunk_count"],
+            fused_source_counts["semantic_only"],
+            fused_source_counts["bm25_only"],
+            fused_source_counts["both"],
             _format_bm25_top(bm25_chunks),
         )
         lightrag_result.trace = trace

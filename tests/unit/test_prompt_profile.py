@@ -11,7 +11,6 @@ from dlightrag.prompts import (
     ANSWER_CORE,
     HIGHLIGHT_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
-    VISUAL_RERANK_PROMPT,
     get_answer_system_prompt,
 )
 from dlightrag.prompts.guidance import (
@@ -22,7 +21,6 @@ from dlightrag.prompts.guidance import (
     HIGHLIGHT_RESPONSE_FORMAT,
     LISTWISE_RERANK_PROMPT,
     PLANNER_GUIDANCE,
-    RERANK_GUIDANCE,
 )
 from dlightrag.prompts.identity import CORE_IDENTITY
 
@@ -52,7 +50,6 @@ def test_planner_prompt_uses_core_identity_and_planner_guidance() -> None:
 
 
 def test_rag_side_prompts_are_assembled_from_guidance() -> None:
-    assert RERANK_GUIDANCE in VISUAL_RERANK_PROMPT
     assert CORE_IDENTITY in HIGHLIGHT_SYSTEM_PROMPT
     assert HIGHLIGHT_GUIDANCE in HIGHLIGHT_SYSTEM_PROMPT
 
@@ -82,7 +79,6 @@ def test_exported_guidance_constants_do_not_declare_identity() -> None:
         "ANSWER_CITATION_EXAMPLE",
         "PLANNER_GUIDANCE",
         "RERANK_GUIDANCE",
-        "VISUAL_RERANK_PROMPT_TEMPLATE",
         "LISTWISE_RERANK_PROMPT",
         "HIGHLIGHT_GUIDANCE",
         "HIGHLIGHT_RESPONSE_FORMAT",
@@ -93,3 +89,8 @@ def test_exported_guidance_constants_do_not_declare_identity() -> None:
         assert name in prompts.__all__
         assert "You are " not in getattr(prompts, name)
     assert "You are " not in LISTWISE_RERANK_PROMPT
+
+
+def test_stale_single_item_visual_rerank_prompt_is_not_exported() -> None:
+    assert "VISUAL_RERANK_PROMPT_TEMPLATE" not in prompts.__all__
+    assert "VISUAL_RERANK_PROMPT" not in prompts.__all__

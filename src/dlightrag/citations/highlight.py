@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 
@@ -149,6 +150,7 @@ async def extract_highlights_for_sources(
     cache_size: int = 500,
 ) -> list[SourceReference]:
     """Extract highlights for all sources in parallel."""
+    started = time.monotonic()
     extractor = HighlightExtractor(
         llm_func=llm_func,
         cache_size=cache_size,
@@ -163,12 +165,16 @@ async def extract_highlights_for_sources(
         return chunk_id, await extractor.extract_highlights(sentence, chunk_content, chunk_id)
 
     items: list[tuple[str, str, str]] = []
+    chunk_count = 0
+    text_chunk_count = 0
     for src in sources:
         if not src.chunks:
             continue
+        chunk_count += len(src.chunks)
         for chunk in src.chunks:
             if not chunk.content:
                 continue
+            text_chunk_count += 1
             # Collect sentences from chunk-level [n-m] and doc-level [n] citations
             chunk_key = f"{src.id}-{chunk.chunk_idx}"
             sentences = list(citing_sentences.get(chunk_key, []))
@@ -179,6 +185,15 @@ async def extract_highlights_for_sources(
                 items.append((chunk.chunk_id, chunk.content, sentence))
 
     if not items:
+        logger.info(
+            "[Highlight] complete: sources=%d chunks=%d text_chunks=%d citing_keys=%d "
+            "tasks=0 task_errors=0 highlighted_chunks=0 phrases=0 duration=%.2fs",
+            len(sources),
+            chunk_count,
+            text_chunk_count,
+            len(citing_sentences),
+            time.monotonic() - started,
+        )
         return sources
 
     results = await bounded_map(
@@ -189,20 +204,41 @@ async def extract_highlights_for_sources(
     )
 
     chunk_phrases: dict[str, set[str]] = {}
+    task_errors = 0
     for res in results:
         if isinstance(res, BaseException):
+            task_errors += 1
             logger.debug("Highlight task failed: %s", res)
             continue
         chunk_id, hp = res
         if hp.phrases:
             chunk_phrases.setdefault(chunk_id, set()).update(hp.phrases)
 
+    highlighted_chunks = 0
+    phrase_count = 0
     for src in sources:
         if not src.chunks:
             continue
         for chunk in src.chunks:
             phrases = chunk_phrases.get(chunk.chunk_id)
             if phrases:
-                chunk.highlight_phrases = list(phrases)
+                phrase_list = sorted(phrases)
+                chunk.highlight_phrases = phrase_list
+                highlighted_chunks += 1
+                phrase_count += len(phrase_list)
+
+    logger.info(
+        "[Highlight] complete: sources=%d chunks=%d text_chunks=%d citing_keys=%d "
+        "tasks=%d task_errors=%d highlighted_chunks=%d phrases=%d duration=%.2fs",
+        len(sources),
+        chunk_count,
+        text_chunk_count,
+        len(citing_sentences),
+        len(items),
+        task_errors,
+        highlighted_chunks,
+        phrase_count,
+        time.monotonic() - started,
+    )
 
     return sources

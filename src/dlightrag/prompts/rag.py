@@ -7,8 +7,6 @@ from .guidance import (
     CITATION_GUIDANCE,
     HIGHLIGHT_GUIDANCE,
     HIGHLIGHT_RESPONSE_FORMAT,
-    RERANK_GUIDANCE,
-    VISUAL_RERANK_PROMPT_TEMPLATE,
 )
 from .identity import CORE_IDENTITY
 
@@ -33,14 +31,6 @@ def get_answer_system_prompt() -> str:
     section.
     """
     return ANSWER_CORE
-
-
-# --- Reranking ---
-
-VISUAL_RERANK_PROMPT = VISUAL_RERANK_PROMPT_TEMPLATE.format(
-    query="{query}",
-    rerank_guidance=RERANK_GUIDANCE,
-)
 
 
 # --- Semantic Highlighting ---

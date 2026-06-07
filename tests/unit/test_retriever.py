@@ -125,7 +125,7 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
     )
 
     with caplog.at_level(logging.INFO, logger="dlightrag.core.retrieval.retriever"):
-        await retriever.aretrieve("query", bm25_query="keyword query", top_k=3)
+        result = await retriever.aretrieve("query", bm25_query="keyword query", top_k=3)
 
     assert "[Retriever] mix" in caplog.text
     assert "bm25_enabled=True" in caplog.text
@@ -133,7 +133,13 @@ async def test_unified_retriever_logs_retrieval_mix_summary(
     assert "semantic_chunks=2" in caplog.text
     assert "bm25_chunks=2" in caplog.text
     assert "fused_chunks=3" in caplog.text
+    assert "fused_sources=semantic_only=1 bm25_only=1 both=1" in caplog.text
     assert "bm25_top=shared:en:2.000,bm25-b:en:1.000" in caplog.text
+    assert result.trace["fused_source_counts"] == {
+        "semantic_only": 1,
+        "bm25_only": 1,
+        "both": 1,
+    }
 
 
 async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:

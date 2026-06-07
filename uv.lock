@@ -389,7 +389,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.5.7"
+version = "1.5.8"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
