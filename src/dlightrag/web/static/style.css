@@ -871,16 +871,26 @@ body {
     width: 100%;
     padding: var(--space-component) var(--space-component);
     background: transparent;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
     transition: background 0.15s ease;
 }
 
 .source-doc-header:hover {
     background: rgba(161, 98, 7, 0.08);
+}
+
+.source-doc-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-tight);
+    min-width: 0;
+    flex: 1;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
 }
 
 .collapse-icon {

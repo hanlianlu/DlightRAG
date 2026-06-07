@@ -92,3 +92,56 @@ def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
     assert "#files-btn" in panel_js
     assert ".panel" in panel_js
     assert "shouldDismissPanelOnOutsideClick(e.target)" in panel_js
+
+
+def test_manual_folder_upload_panel_swap_processes_htmx_fragments() -> None:
+    panel_js = (ROOT / "src/dlightrag/web/static/js/panel.js").read_text(encoding="utf-8")
+    folder_upload_js = (ROOT / "src/dlightrag/web/static/js/folder-upload.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "export function applyPanelHtml(html)" in panel_js
+    assert "htmx.process(panelContent)" in panel_js
+    assert "import {applyPanelHtml} from './panel.js';" in folder_upload_js
+    assert "applyPanelHtml(html)" in folder_upload_js
+    assert "getElementById('panel-content')" not in folder_upload_js
+    assert "innerHTML = html" not in folder_upload_js
+    assert "htmx.process" not in folder_upload_js
+
+
+def test_source_panel_math_rendering_is_lazy_and_scoped() -> None:
+    panel_js = (ROOT / "src/dlightrag/web/static/js/panel.js").read_text(encoding="utf-8")
+    chat_renderer_js = (ROOT / "src/dlightrag/web/static/js/chat_renderer.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "import {renderMath} from './mathjax.js';" in panel_js
+    assert "from './chat_renderer.js'" not in panel_js
+    assert "from './images.js'" not in panel_js
+    assert "renderExpandedSourceMath" in panel_js
+    assert "renderMath(panelContent)" not in panel_js
+    assert "renderMath(sourceData)" not in chat_renderer_js
+
+
+def test_lightbox_click_delegation_lives_in_images_module() -> None:
+    static_js = ROOT / "src/dlightrag/web/static/js"
+    images_js = (static_js / "images.js").read_text(encoding="utf-8")
+    panel_js = (static_js / "panel.js").read_text(encoding="utf-8")
+    chat_renderer_js = (static_js / "chat_renderer.js").read_text(encoding="utf-8")
+
+    assert 'data-action="open-lightbox"' in images_js
+    assert "getAttribute('data-full-src')" in images_js
+    assert "openLightbox" not in panel_js
+    assert "openLightbox" not in chat_renderer_js
+
+
+def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> None:
+    source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
+        encoding="utf-8"
+    )
+
+    button_start = source_panel.index('data-action="toggle-doc"')
+    download_link = source_panel.index('class="source-dl-icon"')
+    button_end = source_panel.index("</button>", button_start)
+
+    assert not button_start < download_link < button_end
