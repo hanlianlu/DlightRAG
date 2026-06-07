@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 
 import pytest
@@ -6,7 +8,9 @@ from dlightrag.citations.highlight import (
     HighlightExtractor,
     HighlightPhrases,
     extract_all_citing_sentences,
+    extract_highlights_for_sources,
 )
+from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 
 
 def test_extract_citing_sentences_basic():
@@ -171,3 +175,104 @@ class TestHighlightExtractor:
         )
         assert "actual text" in result.phrases
         assert "hallucinated phrase" not in result.phrases
+
+    @pytest.mark.asyncio
+    async def test_extract_highlights_for_sources_batches_items(self):
+        """Highlight enrichment should batch citation/chunk pairs per LLM call."""
+        batch_sizes: list[int] = []
+
+        async def batch_llm(*, messages, **kwargs) -> str:
+            user_prompt = messages[-1]["content"]
+            items_json = user_prompt.split("Items:\n", 1)[1]
+            items = json.loads(items_json)
+            batch_sizes.append(len(items))
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "id": item["id"],
+                            "phrases": [f"Evidence {item['id']}"],
+                            "confidence": 0.9,
+                        }
+                        for item in items
+                    ]
+                }
+            )
+
+        chunks = [
+            ChunkSnippet(
+                chunk_id=f"c{i}",
+                chunk_idx=i + 1,
+                content=f"Evidence {i % 8} supports the answer for chunk {i}.",
+            )
+            for i in range(9)
+        ]
+        sources = [
+            SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
+        ]
+        answer_text = "The report is supported by all chunks [1]."
+
+        highlighted = await extract_highlights_for_sources(
+            sources,
+            answer_text,
+            batch_llm,
+            batch_size=8,
+            max_concurrency=2,
+        )
+
+        assert batch_sizes == [8, 1]
+        assert highlighted[0].chunks is not None
+        assert highlighted[0].chunks[0].highlight_phrases == ["Evidence 0"]
+        assert highlighted[0].chunks[8].highlight_phrases == ["Evidence 0"]
+
+    @pytest.mark.asyncio
+    async def test_extract_highlights_for_sources_runs_batches_concurrently(self):
+        """max_concurrency should bound concurrent batch calls, not single-item calls."""
+        active = 0
+        peak_active = 0
+
+        async def batch_llm(*, messages, **kwargs) -> str:
+            nonlocal active, peak_active
+            user_prompt = messages[-1]["content"]
+            items = json.loads(user_prompt.split("Items:\n", 1)[1])
+            active += 1
+            peak_active = max(peak_active, active)
+            try:
+                await asyncio.sleep(0.01)
+                return json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": item["id"],
+                                "phrases": [f"Evidence {item['id']}"],
+                                "confidence": 0.9,
+                            }
+                            for item in items
+                        ]
+                    }
+                )
+            finally:
+                active -= 1
+
+        chunks = [
+            ChunkSnippet(
+                chunk_id=f"c{i}",
+                chunk_idx=i + 1,
+                content=f"Evidence {i % 8} supports the answer for chunk {i}.",
+            )
+            for i in range(16)
+        ]
+        sources = [
+            SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
+        ]
+        answer_text = "The report is supported by all chunks [1]."
+
+        await extract_highlights_for_sources(
+            sources,
+            answer_text,
+            batch_llm,
+            batch_size=8,
+            max_concurrency=2,
+        )
+
+        assert peak_active == 2

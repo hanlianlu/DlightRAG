@@ -75,6 +75,16 @@ async def client(web_app):
         yield c
 
 
+async def test_web_static_assets_are_not_browser_persistent(client):
+    resp = await client.get("/static/js/chat.js")
+
+    assert resp.status_code == 200
+    assert resp.headers["cache-control"] == "no-cache, no-store, must-revalidate"
+    assert resp.headers["pragma"] == "no-cache"
+    assert resp.headers["expires"] == "0"
+    assert "const contentHeight = textarea.scrollHeight;" in resp.text
+
+
 def _configure_web_manager(manager, cfg: DlightragConfig):
     manager.config = cfg
     manager.get_pipeline_status = AsyncMock(

@@ -14,7 +14,7 @@
   <div class="answer-references-title">References</div>
   {% for src in sources %}
   <div class="answer-ref-item" data-action="open-ref-source" data-ref="{{ src.id }}">
-    <span class="answer-ref-id">[{{ src.id }}]</span>
+    <span class="answer-ref-id">{{ src.id | reference_label }}</span>
     <span class="answer-ref-title">{{ src.title or src.path or 'Untitled' }}</span>
   </div>
   {% endfor %}

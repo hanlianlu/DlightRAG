@@ -97,6 +97,16 @@ def test_render_markdown_lists():
     assert "item 1" in result
 
 
+def test_reference_label_helpers_are_shared_across_citation_surfaces():
+    from dlightrag.web.deps import _reference_aria_label, _reference_label, templates
+
+    assert _reference_label("1") == "1"
+    assert _reference_label("1", "2") == "1-2"
+    assert _reference_aria_label("1") == "Source 1"
+    assert _reference_aria_label("1", "2") == "Source 1, chunk 2"
+    assert templates.env.filters["reference_label"] is _reference_label
+
+
 def test_citation_badges_basic():
     """[1-2] in plain text becomes a citation badge."""
     from dlightrag.web.deps import _citation_badges
@@ -105,6 +115,9 @@ def test_citation_badges_basic():
     assert 'class="citation-badge"' in result
     assert 'data-ref="1"' in result
     assert 'data-chunk="2"' in result
+    assert 'aria-label="Source 1, chunk 2"' in result
+    assert ">1-2</span>" in result
+    assert "[1-2]</span>" not in result
 
 
 def test_citation_badges_doc_level():
@@ -114,6 +127,9 @@ def test_citation_badges_doc_level():
     result = str(_citation_badges("See [3] for details."))
     assert 'class="citation-badge"' in result
     assert 'data-ref="3"' in result
+    assert 'aria-label="Source 3"' in result
+    assert ">3</span>" in result
+    assert "[3]</span>" not in result
 
 
 def test_citation_badges_in_inline_code_skipped():

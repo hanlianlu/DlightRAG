@@ -11,11 +11,15 @@ import logging
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from pydantic import BaseModel, Field
 
-from dlightrag.prompts import HIGHLIGHT_SYSTEM_PROMPT, HIGHLIGHT_USER_PROMPT
+from dlightrag.prompts import (
+    HIGHLIGHT_BATCH_USER_PROMPT,
+    HIGHLIGHT_SYSTEM_PROMPT,
+    HIGHLIGHT_USER_PROMPT,
+)
 from dlightrag.utils.concurrency import bounded_map
 
 from .parser import strip_generated_references_section
@@ -24,7 +28,8 @@ from .schemas import SourceReference
 logger = logging.getLogger(__name__)
 
 _MAX_INPUT_CHARS = 4096
-_MAX_CONCURRENT_HIGHLIGHTS = 4
+_MAX_CONCURRENT_HIGHLIGHTS = 8
+_DEFAULT_HIGHLIGHT_BATCH_SIZE = 8
 
 
 class HighlightPhrases(BaseModel):
@@ -32,11 +37,34 @@ class HighlightPhrases(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
+class HighlightBatchItem(BaseModel):
+    id: str
+    phrases: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
+class HighlightBatchResponse(BaseModel):
+    items: list[HighlightBatchItem] = Field(default_factory=list)
+
+
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<=[.!?\u3002\uff01\uff1f])\s+|(?<=[.!?\u3002\uff01\uff1f])(?=\S)"
 )
 # Matches both chunk-level [n-m] and doc-level [n] citations
 _CITATION_RE = re.compile(r"\[\w+-\d+\]|\[\d+\](?![\w-])")
+
+
+def _strip_json_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```\w*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text)
+    return text
+
+
+def _chunks[T](items: Sequence[T], size: int) -> list[list[T]]:
+    size = max(1, size)
+    return [list(items[i : i + size]) for i in range(0, len(items), size)]
 
 
 def extract_all_citing_sentences(answer_text: str) -> dict[str, list[str]]:
@@ -88,6 +116,25 @@ class HighlightExtractor:
                 self._cache.popitem(last=False)
         self._cache[key] = value
 
+    def _validate_phrases(
+        self,
+        result: HighlightPhrases,
+        chunk_content: str,
+    ) -> HighlightPhrases:
+        chunk_lower = chunk_content.lower()
+        validated = []
+        for phrase in result.phrases:
+            words = phrase.split()
+            if len(words) < 1 or len(words) > 25:
+                continue
+            if phrase in chunk_content:
+                validated.append(phrase)
+            elif phrase.lower() in chunk_lower:
+                idx = chunk_lower.index(phrase.lower())
+                validated.append(chunk_content[idx : idx + len(phrase)])
+        result.phrases = validated
+        return result
+
     async def extract_highlights(
         self,
         citing_sentence: str,
@@ -113,31 +160,88 @@ class HighlightExtractor:
 
         try:
             raw_response = await self._llm_func(messages=messages)
-            text = raw_response.strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```\w*\n?", "", text)
-                text = re.sub(r"\n?```$", "", text)
-            parsed = json.loads(text)
+            parsed = json.loads(_strip_json_fences(raw_response))
             result = HighlightPhrases(**parsed)
         except Exception:
             logger.debug("Highlight extraction failed for chunk %s", chunk_id, exc_info=True)
             result = HighlightPhrases()
 
-        chunk_lower = chunk_content.lower()
-        validated = []
-        for phrase in result.phrases:
-            words = phrase.split()
-            if len(words) < 1 or len(words) > 25:
-                continue
-            if phrase in chunk_content:
-                validated.append(phrase)
-            elif phrase.lower() in chunk_lower:
-                idx = chunk_lower.index(phrase.lower())
-                validated.append(chunk_content[idx : idx + len(phrase)])
-        result.phrases = validated
+        result = self._validate_phrases(result, chunk_content)
 
         self._cache_put(cache_key, result)
         return result
+
+    async def extract_highlight_batch(
+        self,
+        items: Sequence[tuple[str, str, str]],
+    ) -> list[tuple[str, HighlightPhrases]]:
+        """Extract highlights for a batch of ``(chunk_id, content, sentence)`` items."""
+        results: list[HighlightPhrases | None] = [None] * len(items)
+        pending: list[tuple[int, str, str, str, str, str]] = []
+
+        for idx, (chunk_id, chunk_content, citing_sentence) in enumerate(items):
+            cache_key = self._cache_key(citing_sentence, chunk_id)
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                results[idx] = cached
+                continue
+            item_id = str(len(pending))
+            pending.append((idx, item_id, cache_key, chunk_id, chunk_content, citing_sentence))
+
+        if pending:
+            payload = [
+                {
+                    "id": item_id,
+                    "citing_sentence": citing_sentence[: self._max_input_chars],
+                    "source_chunk": chunk_content[: self._max_input_chars],
+                }
+                for _, item_id, _, _, chunk_content, citing_sentence in pending
+            ]
+            user_prompt = HIGHLIGHT_BATCH_USER_PROMPT.format(
+                items_json=json.dumps(payload, ensure_ascii=False)
+            )
+            messages = [
+                {"role": "system", "content": HIGHLIGHT_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            parsed_items: dict[str, HighlightPhrases] = {}
+            try:
+                raw_response = await self._llm_func(messages=messages)
+                parsed = json.loads(_strip_json_fences(raw_response))
+                if isinstance(parsed, dict) and "items" in parsed:
+                    batch = HighlightBatchResponse(**parsed)
+                    parsed_items = {
+                        item.id: HighlightPhrases(
+                            phrases=item.phrases,
+                            confidence=item.confidence,
+                        )
+                        for item in batch.items
+                    }
+                elif isinstance(parsed, dict) and "phrases" in parsed and len(pending) == 1:
+                    parsed_items = {"0": HighlightPhrases(**parsed)}
+                elif isinstance(parsed, list):
+                    batch = HighlightBatchResponse(items=parsed)
+                    parsed_items = {
+                        item.id: HighlightPhrases(
+                            phrases=item.phrases,
+                            confidence=item.confidence,
+                        )
+                        for item in batch.items
+                    }
+            except Exception:
+                logger.debug("Highlight batch extraction failed", exc_info=True)
+
+            for idx, item_id, cache_key, _, chunk_content, _ in pending:
+                result = parsed_items.get(item_id, HighlightPhrases())
+                result = self._validate_phrases(result, chunk_content)
+                self._cache_put(cache_key, result)
+                results[idx] = result
+
+        return [
+            (chunk_id, result if result is not None else HighlightPhrases())
+            for result, (chunk_id, _, _) in zip(results, items, strict=True)
+        ]
 
 
 async def extract_highlights_for_sources(
@@ -146,6 +250,7 @@ async def extract_highlights_for_sources(
     llm_func: Callable[..., Awaitable[str]],
     *,
     max_concurrency: int = _MAX_CONCURRENT_HIGHLIGHTS,
+    batch_size: int = _DEFAULT_HIGHLIGHT_BATCH_SIZE,
     max_input_chars: int = _MAX_INPUT_CHARS,
     cache_size: int = 500,
 ) -> list[SourceReference]:
@@ -157,12 +262,6 @@ async def extract_highlights_for_sources(
         max_input_chars=max_input_chars,
     )
     citing_sentences = extract_all_citing_sentences(answer_text)
-
-    async def _extract_one(
-        item: tuple[str, str, str],
-    ) -> tuple[str, HighlightPhrases]:
-        chunk_id, chunk_content, sentence = item
-        return chunk_id, await extractor.extract_highlights(sentence, chunk_content, chunk_id)
 
     items: list[tuple[str, str, str]] = []
     chunk_count = 0
@@ -187,7 +286,8 @@ async def extract_highlights_for_sources(
     if not items:
         logger.info(
             "[Highlight] complete: sources=%d chunks=%d text_chunks=%d citing_keys=%d "
-            "tasks=0 task_errors=0 highlighted_chunks=0 phrases=0 duration=%.2fs",
+            "tasks=0 task_errors=0 batches=0 batch_errors=0 "
+            "highlighted_chunks=0 phrases=0 duration=%.2fs",
             len(sources),
             chunk_count,
             text_chunk_count,
@@ -196,23 +296,32 @@ async def extract_highlights_for_sources(
         )
         return sources
 
-    results = await bounded_map(
-        items,
-        _extract_one,
+    batches = _chunks(items, batch_size)
+
+    async def _extract_batch(
+        batch: list[tuple[str, str, str]],
+    ) -> list[tuple[str, HighlightPhrases]]:
+        return await extractor.extract_highlight_batch(batch)
+
+    batch_results = await bounded_map(
+        batches,
+        _extract_batch,
         max_concurrent=max_concurrency,
-        task_name="highlight",
+        task_name="highlight-batch",
     )
 
     chunk_phrases: dict[str, set[str]] = {}
     task_errors = 0
-    for res in results:
+    batch_errors = 0
+    for batch, res in zip(batches, batch_results, strict=True):
         if isinstance(res, BaseException):
-            task_errors += 1
-            logger.debug("Highlight task failed: %s", res)
+            batch_errors += 1
+            task_errors += len(batch)
+            logger.debug("Highlight batch failed: %s", res)
             continue
-        chunk_id, hp = res
-        if hp.phrases:
-            chunk_phrases.setdefault(chunk_id, set()).update(hp.phrases)
+        for chunk_id, hp in res:
+            if hp.phrases:
+                chunk_phrases.setdefault(chunk_id, set()).update(hp.phrases)
 
     highlighted_chunks = 0
     phrase_count = 0
@@ -229,13 +338,16 @@ async def extract_highlights_for_sources(
 
     logger.info(
         "[Highlight] complete: sources=%d chunks=%d text_chunks=%d citing_keys=%d "
-        "tasks=%d task_errors=%d highlighted_chunks=%d phrases=%d duration=%.2fs",
+        "tasks=%d task_errors=%d batches=%d batch_errors=%d "
+        "highlighted_chunks=%d phrases=%d duration=%.2fs",
         len(sources),
         chunk_count,
         text_chunk_count,
         len(citing_sentences),
         len(items),
         task_errors,
+        len(batches),
+        batch_errors,
         highlighted_chunks,
         phrase_count,
         time.monotonic() - started,

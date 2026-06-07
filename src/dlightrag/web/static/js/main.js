@@ -1,15 +1,31 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {setupQueryForm} from './chat.js';
-import {setupHtmxInteractions} from './htmx.js';
-import {setupImageInputs} from './images.js';
-import {setupMathRendering} from './mathjax.js';
-import {setupPanel} from './panel.js';
-import {setupPanelResize} from './resize.js';
-import {setupFolderInput} from './folder-upload.js';
-import {initWorkspaces} from './workspaces.js';
+function versionedModule(path) {
+    const version = window.__DLIGHTRAG_STATIC_VERSION__ || 'dev';
+    return `${path}?v=${encodeURIComponent(version)}`;
+}
 
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
+    const [
+        {setupQueryForm},
+        {setupHtmxInteractions},
+        {setupImageInputs},
+        {setupMathRendering},
+        {setupPanel},
+        {setupPanelResize},
+        {setupFolderInput},
+        {initWorkspaces},
+    ] = await Promise.all([
+        import(versionedModule('./chat.js')),
+        import(versionedModule('./htmx.js')),
+        import(versionedModule('./images.js')),
+        import(versionedModule('./mathjax.js')),
+        import(versionedModule('./panel.js')),
+        import(versionedModule('./resize.js')),
+        import(versionedModule('./folder-upload.js')),
+        import(versionedModule('./workspaces.js')),
+    ]);
+
     initWorkspaces();
     setupPanel();
     setupPanelResize();

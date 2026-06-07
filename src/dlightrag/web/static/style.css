@@ -103,13 +103,14 @@
     --font-size-subhead:  var(--step-1);   /* sub-headings, buttons */
     --font-size-heading:  var(--step-2);   /* welcome brand, panel titles */
     --font-size-section:  var(--step-3);   /* section headers */
-
     /* ── Line heights ── */
     --line-height-control: 1.5;
     --line-height-message: 1.58;
     --space-message-block: var(--space-component);
     --space-composer-y: calc(var(--space-tight) * 0.625);
     --space-composer-x: var(--space-tight);
+    --space-composer-leading: var(--space-inline);
+    --space-composer-trailing: var(--space-composer-x);
 
     /* ── Space (semantic aliases to Utopia space scale) ── */
     --space-inline:       var(--space-3xs);  /* icon-to-text, badge internal */
@@ -133,8 +134,10 @@
 
     /* ── Interactive sizing ── */
     --size-button: clamp(28px, 2.8vw, 34px);  /* composer buttons, small interactive */
+    --size-composer-plus-icon: clamp(23px, 2.3vw, 29px);
     --size-icon-sm: clamp(12px, 1.2vw, 16px);  /* small icons */
     --size-icon-md: clamp(16px, 1.6vw, 20px);  /* medium icons */
+    --stroke-composer-plus-icon: 1.55;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -202,7 +205,7 @@ body {
     background: rgba(41, 37, 36, 0.56);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
+    color: var(--color-text-subtle);
     cursor: pointer;
     display: inline-flex;
     flex: 0 1 auto;
@@ -646,7 +649,7 @@ body {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-composer);
-    padding: var(--space-composer-y) var(--space-composer-x);
+    padding: var(--space-composer-y) var(--space-composer-trailing) var(--space-composer-y) var(--space-composer-leading);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -664,10 +667,11 @@ body {
     font-family: inherit;
     line-height: var(--line-height-control);
     padding: 0;
+    min-height: calc(var(--font-size-body) * var(--line-height-control));
     outline: none;
     resize: none;
     max-height: 160px;
-    overflow-y: auto;
+    overflow-y: hidden;
 }
 
 .composer-input::placeholder {
@@ -764,21 +768,23 @@ body {
 .citation-badge {
     display: inline-flex;
     align-items: center;
-    background: rgba(87, 74, 36, 0.5);
+    background: transparent;
     color: var(--color-gold-100);
     font-size: var(--font-size-caption);
-    padding: 1px var(--space-tight);
+    line-height: 1;
+    padding: 0 0.16em;
     border-radius: var(--radius-xs);
     cursor: pointer;
     font-weight: 600;
-    letter-spacing: 0.2px;
-    vertical-align: middle;
-    transition: background 0.15s;
+    letter-spacing: 0;
+    vertical-align: super;
+    transition: background 0.15s, color 0.15s;
     margin: 0 1px;
 }
 
 .citation-badge:hover {
-    background: rgba(126, 108, 55, 0.6);
+    background: rgba(210, 182, 97, 0.12);
+    color: var(--color-gold-200);
 }
 
 /* === Slide-Out Panel === */
@@ -971,17 +977,17 @@ body {
 /* === Source Chunks === */
 
 .source-chunk {
-    background: rgba(28, 25, 23, 0.62);
+    background: rgba(12, 10, 9, 0.72);
     padding: var(--space-component) var(--space-related);
     margin-bottom: var(--space-component);
     border-radius: var(--radius-surface);
-    box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.24);
+    box-shadow: inset 2px 0 0 rgba(120, 113, 108, 0.18);
     transition: background 0.15s, box-shadow 0.15s;
 }
 
 .source-chunk.active {
-    background: rgba(210, 182, 97, 0.035);
-    box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.42);
+    background: rgba(12, 10, 9, 0.86);
+    box-shadow: inset 2px 0 0 rgba(210, 182, 97, 0.28);
 }
 
 .source-chunk-header {
@@ -1037,9 +1043,10 @@ body {
 .highlight {
     background: rgba(210, 182, 97, 0.14);
     color: var(--color-gold-100);
-    padding: 1px var(--space-inline);
-    border-radius: 3px;
+    padding: 0 0.1em;
+    border-radius: 2px;
     border-bottom: none;
+    box-decoration-break: clone;
 }
 
 .source-chunk-content .highlight {
@@ -1099,29 +1106,32 @@ body {
 .file-delete {
     align-items: center;
     background: transparent;
-    border: 1px solid transparent;
+    border: none;
     border-radius: var(--radius-sm);
     color: var(--color-text-dim);
     cursor: pointer;
-    display: inline-flex;
+    display: flex;
     flex-shrink: 0;
-    height: var(--size-button);
+    height: var(--size-icon-md);
     justify-content: center;
-    opacity: 0.72;
+    opacity: 0.45;
     padding: 0;
-    transition: color 0.15s, background 0.15s, border-color 0.15s, opacity 0.15s;
-    width: var(--size-button);
+    transition: all 0.15s;
+    width: var(--size-icon-md);
 }
 
-.file-item:hover .file-delete {
-    background: rgba(120, 113, 108, 0.08);
-    color: var(--color-text-muted);
-    opacity: 1;
+@media (hover: hover) {
+    .file-delete {
+        opacity: 0;
+    }
+
+    .file-item:hover .file-delete {
+        opacity: 1;
+    }
 }
 
 .file-delete:hover {
-    background: rgba(248, 113, 113, 0.1);
-    border-color: rgba(248, 113, 113, 0.22);
+    background: rgba(248, 113, 113, 0.15);
     color: var(--color-danger);
 }
 
@@ -1278,12 +1288,18 @@ body {
     background: transparent;
     border: none;
     color: var(--color-text-subtle);
-    font-size: var(--font-size-subhead);
     line-height: 1;
     cursor: pointer;
     flex-shrink: 0;
     border-radius: 50%;
     transition: color 0.15s, background 0.15s;
+}
+
+.composer-plus-icon {
+    height: var(--size-composer-plus-icon);
+    pointer-events: none;
+    stroke-width: var(--stroke-composer-plus-icon);
+    width: var(--size-composer-plus-icon);
 }
 
 .composer-plus:hover {
@@ -1909,7 +1925,7 @@ body.panel-open .composer-inner {
     color: var(--color-text-tertiary);
     font-size: 14px;
     flex-shrink: 0;
-    opacity: 0.9;
+    opacity: 1;
     text-decoration: none;
     transition: color 0.15s, opacity 0.15s, transform 0.15s;
 }
@@ -1922,6 +1938,6 @@ body.panel-open .composer-inner {
 .source-dl-icon-svg {
     height: var(--size-icon-md);
     pointer-events: none;
-    stroke-width: 1.8;
+    stroke-width: 2;
     width: var(--size-icon-md);
 }
