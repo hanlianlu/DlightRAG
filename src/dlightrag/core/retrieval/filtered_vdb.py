@@ -150,14 +150,20 @@ class FilteredVectorStorage:
                 await conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
                 await conn.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
                 return await conn.fetch(
-                    f"SELECT id, content, file_path, "
-                    f"1 - (content_vector <=> $1::{vector_cast}) AS score "
-                    f"FROM {table_name} "
-                    f"WHERE workspace = $2 "
-                    f"AND id = ANY($3::text[]) "
-                    f"AND 1 - (content_vector <=> $1::{vector_cast}) > $4 "
-                    f"ORDER BY content_vector <=> $1::{vector_cast} "
-                    f"LIMIT $5",
+                    f"WITH nearest_results AS MATERIALIZED ("
+                    f"  SELECT id, content, file_path, "
+                    f"  1 - (content_vector <=> $1::{vector_cast}) AS score, "
+                    f"  content_vector <=> $1::{vector_cast} AS distance "
+                    f"  FROM {table_name} "
+                    f"  WHERE workspace = $2 "
+                    f"  AND id = ANY($3::text[]) "
+                    f"  ORDER BY content_vector <=> $1::{vector_cast} "
+                    f"  LIMIT $5"
+                    f") "
+                    f"SELECT id, content, file_path, score "
+                    f"FROM nearest_results "
+                    f"WHERE score > $4 "
+                    f"ORDER BY distance + 0",
                     embedding_vec,
                     workspace,
                     list(candidate_ids),

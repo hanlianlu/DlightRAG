@@ -104,8 +104,8 @@ class TestCitationHighlightConfig:
     def test_defaults_enabled_for_web_source_panel_enrichment(self):
         cfg = CitationHighlightConfig()
         assert cfg.enabled is True
-        assert cfg.timeout == 5.0
-        assert cfg.max_concurrency == 4
+        assert cfg.timeout == 10.0
+        assert cfg.max_concurrency == 8
 
 
 class TestAnswerConfig:
@@ -318,13 +318,14 @@ def test_storage_backends_are_postgres_only() -> None:
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
-    assert cfg.pg_vector_index_type == "HNSW"
+    assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
     assert cfg.pg_hnsw_m == 32
     assert cfg.pg_hnsw_ef_construction == 256
     assert cfg.pg_hnsw_ef_search == 256
     assert cfg.postgres_lightrag_pool_max_size == 16
     assert cfg.postgres_pool_min_size == 2
     assert cfg.postgres_pool_max_size == 10
+    assert os.environ["POSTGRES_VECTOR_INDEX_TYPE"] == "HNSW_HALFVEC"
     assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
     assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
     assert cfg.lightrag_pipeline_kwargs() == {
@@ -492,11 +493,11 @@ def test_pgvector_value_type_is_derived_from_index_type() -> None:
         ),
     )
 
-    assert cfg.pg_vector_index_type == "HNSW"
+    assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
     assert not hasattr(cfg, "pg_vector_value_type")
 
 
-def test_halfvec_requires_explicit_index_type() -> None:
+def test_vector_index_type_can_fall_back_to_plain_hnsw() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
             provider="voyage",
@@ -505,10 +506,10 @@ def test_halfvec_requires_explicit_index_type() -> None:
             dim=3072,
             startup_probe=False,
         ),
-        pg_vector_index_type="HNSW_HALFVEC",
+        pg_vector_index_type="HNSW",
     )
 
-    assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
+    assert cfg.pg_vector_index_type == "HNSW"
 
 
 def test_role_config_uses_lightrag_role_names() -> None:

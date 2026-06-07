@@ -557,10 +557,10 @@ DlightRAG's supported core storage stack is PostgreSQL 18:
 | Document status | `PGDocStatusStorage` |
 | BM25 | pg_textsearch |
 
-Default vector indexing uses HNSW over `VECTOR(dim)`. `HNSW_HALFVEC`,
-`pg_hnsw_*`, pool sizing, statement-cache, retry, and session-GUC overrides
-are advanced deployment settings, documented in [docs/PG.md](docs/PG.md) and
-[docs/config-reference.md](docs/config-reference.md#postgresql). Server-level
+Default vector indexing uses HNSW over `HALFVEC(dim)`. Plain `HNSW` over
+`VECTOR(dim)`, `pg_hnsw_*`, pool sizing, statement-cache, retry, and
+session-GUC overrides are advanced deployment settings, documented in
+[docs/PG.md](docs/PG.md) and [docs/config-reference.md](docs/config-reference.md#postgresql). Server-level
 memory, WAL, preload library, and shared-memory settings belong to the
 PostgreSQL deployment or `docker-compose.yml`.
 

@@ -345,8 +345,8 @@ class CitationHighlightConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    timeout: float = 5.0
-    max_concurrency: int = 4
+    timeout: float = 10.0
+    max_concurrency: int = 8
     max_input_chars: int = 4096
     cache_size: int = 500
 
@@ -620,7 +620,7 @@ class DlightragConfig(BaseSettings):
 
     # pgvector index configuration. LightRAG derives VECTOR/HALFVEC from this.
     pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
-        default="HNSW",
+        default="HNSW_HALFVEC",
         description="pgvector index type — case-sensitive (HNSW, HNSW_HALFVEC, IVFFLAT, VCHORDRQ)",
     )
     pg_hnsw_m: int = Field(default=32, description="HNSW M parameter (connections per node)")
