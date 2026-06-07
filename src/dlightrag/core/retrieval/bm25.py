@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -20,10 +21,30 @@ from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identi
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
 BM25_LANGUAGE_INDEX = pg_identifier("idx_lightrag_doc_chunks_dlightrag_bm25_language")
 BM25_TABLE = pg_identifier("LIGHTRAG_DOC_CHUNKS")
+logger = logging.getLogger(__name__)
 
 
 def _format_float(value: float) -> str:
     return f"{float(value):g}"
+
+
+def _format_bm25_top(chunks: list[dict[str, Any]], *, limit: int = 3) -> str:
+    parts: list[str] = []
+    for chunk in chunks[:limit]:
+        chunk_id = str(chunk.get("chunk_id") or chunk.get("id") or "?")
+        profile = str(chunk.get("bm25_profile") or "?")
+        score = chunk.get("score")
+        if score is None:
+            score_text = "?"
+        else:
+            try:
+                score_text = f"{float(score):.3f}"
+            except (TypeError, ValueError):
+                score_text = "?"
+        parts.append(f"{chunk_id}:{profile}:{score_text}")
+    if len(chunks) > limit:
+        parts.append(f"+{len(chunks) - limit}")
+    return ",".join(parts) if parts else "none"
 
 
 def _sql_language_literal(language: str) -> str:
@@ -320,6 +341,13 @@ class PostgresBM25:
         top_k: int | None = None,
     ) -> list[dict[str, Any]]:
         if candidate_ids is not None and len(candidate_ids) == 0:
+            logger.info(
+                "[BM25] search: workspace=%s query=%r profiles=none candidate_scope=0 "
+                "top_k=%s returned=0 top=none",
+                self._workspace,
+                query,
+                top_k or self._top_k,
+            )
             return []
         limit = self._top_k if top_k is None else top_k
         profiles = self._profiles_for_query(query)
@@ -348,8 +376,21 @@ class PostgresBM25:
 
         rankings = await self._run(_operation)
         if len(rankings) == 1:
-            return rankings[0]
-        return rrf_fuse(rankings)[: int(limit)]
+            result = rankings[0]
+        else:
+            result = rrf_fuse(rankings)[: int(limit)]
+        logger.info(
+            "[BM25] search: workspace=%s query=%r profiles=%s candidate_scope=%s "
+            "top_k=%d returned=%d top=%s",
+            self._workspace,
+            query,
+            ",".join(profile.name for profile in profiles) or "none",
+            len(candidate_ids) if candidate_ids is not None else "all",
+            int(limit),
+            len(result),
+            _format_bm25_top(result),
+        )
+        return result
 
     def _profiles_for_query(self, query: str) -> tuple[BM25Profile, ...]:
         language_profiles = tuple(

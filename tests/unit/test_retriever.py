@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock
+
+import pytest
 
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.retriever import UnifiedRetriever
@@ -91,6 +94,46 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
         "bm25-b",
     ]
     assert result.contexts["entities"] == [{"entity_name": "E"}]
+
+
+async def test_unified_retriever_logs_retrieval_mix_summary(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    metadata_index = AsyncMock()
+    stores = AsyncMock()
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={
+            "chunks": [{"chunk_id": "semantic-a"}, {"chunk_id": "shared"}],
+            "entities": [],
+            "relationships": [],
+        }
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = [
+        {"chunk_id": "shared", "bm25_profile": "en", "score": 2.0},
+        {"chunk_id": "bm25-b", "bm25_profile": "en", "score": 1.0},
+    ]
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+        rrf_k=60,
+    )
+
+    with caplog.at_level(logging.INFO, logger="dlightrag.core.retrieval.retriever"):
+        await retriever.aretrieve("query", bm25_query="keyword query", top_k=3)
+
+    assert "[Retriever] mix" in caplog.text
+    assert "bm25_enabled=True" in caplog.text
+    assert "bm25_query='keyword query'" in caplog.text
+    assert "semantic_chunks=2" in caplog.text
+    assert "bm25_chunks=2" in caplog.text
+    assert "fused_chunks=3" in caplog.text
+    assert "bm25_top=shared:en:2.000,bm25-b:en:1.000" in caplog.text
 
 
 async def test_unified_retriever_lightrag_failure_falls_back_to_bm25() -> None:

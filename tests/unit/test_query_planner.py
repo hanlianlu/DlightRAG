@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from unittest.mock import AsyncMock
+
+import pytest
 
 from dlightrag.core.query_planner import (
     QueryPlan,
@@ -151,6 +154,39 @@ class TestPlanWithLLM:
         assert plan.metadata_filter is not None
         assert plan.metadata_filter.filename == "report.pdf"
         assert plan.metadata_filter.file_extension == "pdf"
+
+    async def test_result_log_includes_bm25_and_filter_intent(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        llm = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "standalone_query": "find report.pdf",
+                    "bm25_query": "report.pdf",
+                    "filters": {"filename": "report.pdf"},
+                    "filter_confidence": "high",
+                    "filter_evidence": [
+                        {
+                            "field": "filename",
+                            "value": "report.pdf",
+                            "evidence_span": "report.pdf",
+                            "intent_basis": "filename_literal",
+                        }
+                    ],
+                }
+            )
+        )
+        planner = QueryPlanner(llm_func=llm)
+
+        with caplog.at_level(logging.INFO, logger="dlightrag.core.query_planner"):
+            await planner.plan("find report.pdf")
+
+        assert "[Planner] result" in caplog.text
+        assert "bm25_query='report.pdf'" in caplog.text
+        assert "filter_source=llm_inferred" in caplog.text
+        assert "filter_confidence=high" in caplog.text
+        assert "filter_evidence=filename:filename_literal:'report.pdf'" in caplog.text
 
     async def test_date_filter_extraction(self):
         llm = AsyncMock(

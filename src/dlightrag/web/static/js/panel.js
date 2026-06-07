@@ -333,11 +333,6 @@ export function setupPanel() {
     if (closeBtn) closeBtn.addEventListener('click', closePanel);
 
     document.addEventListener('click', function(e) {
-        const panel = document.getElementById('panel');
-        if (panel.classList.contains('open') && !e.target.closest('.panel') && !e.target.closest('.citation-badge')) {
-            if (document.body.hasAttribute('data-resizing')) return;
-            closePanel();
-        }
         const badge = e.target.closest('[data-action="filter-source"]');
         if (badge) {
             e.preventDefault();
@@ -355,6 +350,16 @@ export function setupPanel() {
             e.preventDefault();
             const lightboxSrc = image.getAttribute('data-full-src');
             if (lightboxSrc && /^(?:\/|blob:|data:)/.test(lightboxSrc)) openLightbox(lightboxSrc);
+        }
+
+        const panel = document.getElementById('panel');
+        if (
+            panel.classList.contains('open') &&
+            !e.target.closest('.panel') &&
+            !e.target.closest('#files-btn')
+        ) {
+            if (document.body.hasAttribute('data-resizing')) return;
+            closePanel();
         }
     });
 
