@@ -136,6 +136,9 @@
     /* ── Interactive sizing ── */
     --size-button: clamp(28px, 2.8vw, 34px);  /* composer buttons, small interactive */
     --size-composer-plus-icon: clamp(22px, 2.15vw, 27px);
+    --size-lightbox-nav-width: clamp(44px, 6vw, 72px);
+    --inset-lightbox-nav-block: max(var(--space-layout), 12vh);
+    --font-size-lightbox-nav-icon: clamp(30px, 4vw, 42px);
     --size-icon-sm: clamp(12px, 1.2vw, 16px);  /* small icons */
     --size-icon-md: clamp(16px, 1.6vw, 20px);  /* medium icons */
     --stroke-composer-plus-icon: 1.25;
@@ -1397,13 +1400,13 @@ body {
 .image-lightbox-prev,
 .image-lightbox-next {
     position: fixed;
-    top: max(var(--space-layout), 12vh);
-    bottom: max(var(--space-layout), 12vh);
-    width: clamp(44px, 6vw, 72px);
+    top: var(--inset-lightbox-nav-block);
+    bottom: var(--inset-lightbox-nav-block);
+    width: var(--size-lightbox-nav-width);
     border: none;
     background: rgba(245, 245, 244, 0.045);
     color: var(--color-text-secondary);
-    font-size: clamp(30px, 4vw, 42px);
+    font-size: var(--font-size-lightbox-nav-icon);
     font-weight: 300;
     line-height: 1;
     cursor: pointer;
