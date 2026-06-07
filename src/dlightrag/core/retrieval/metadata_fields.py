@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
@@ -149,14 +149,26 @@ def normalize_user_metadata(
     return NormalizedUserMetadata(filterable=filterable, raw_json=raw_json)
 
 
-def extract_system_metadata(path: str | Path, *, ingest_strategy: str) -> dict[str, Any]:
+def extract_system_metadata(
+    path: str | Path,
+    *,
+    ingest_strategy: str,
+    display_filename: str | None = None,
+) -> dict[str, Any]:
     """Build system metadata that DlightRAG owns."""
-    file_path = Path(path)
+    raw_path = str(path)
+    if display_filename:
+        filename = display_filename
+    elif raw_path.startswith(("azure://", "s3://")):
+        filename = PurePosixPath(raw_path.split("://", 1)[1]).name
+    else:
+        filename = Path(path).name
+    file_name = Path(filename)
     return {
-        "filename": file_path.name,
-        "filename_stem": file_path.stem,
-        "file_path": str(file_path),
-        "file_extension": file_path.suffix.lower().lstrip("."),
+        "filename": file_name.name,
+        "filename_stem": file_name.stem,
+        "file_path": raw_path,
+        "file_extension": file_name.suffix.lower().lstrip("."),
         "ingest_strategy": ingest_strategy,
     }
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from inspect import isawaitable
 from pathlib import Path
 from typing import Any
 
@@ -97,9 +98,27 @@ async def collect_deletion_context(
     # Strategy 2: Metadata index lookup (PGMetadataIndex by filename)
     if metadata_index and not ctx.doc_ids:
         try:
-            doc_ids = await metadata_index.find_by_filename(basename)
+            doc_ids: list[str] = []
+            find_by_file_path = getattr(metadata_index, "find_by_file_path", None)
+            if callable(find_by_file_path):
+                maybe_doc_ids = find_by_file_path(identifier)
+                if isawaitable(maybe_doc_ids):
+                    maybe_doc_ids = await maybe_doc_ids
+                if isinstance(maybe_doc_ids, list):
+                    doc_ids = [str(doc_id) for doc_id in maybe_doc_ids]
+            if not doc_ids:
+                doc_ids = await metadata_index.find_by_filename(basename)
             for d_id in doc_ids:
                 ctx.doc_ids.add(d_id)
+            if doc_ids and lightrag and hasattr(lightrag, "doc_status"):
+                try:
+                    await _add_doc_status_file_paths_for_doc_ids(ctx, lightrag.doc_status)
+                except Exception as exc:
+                    logger.debug(
+                        "Best-effort doc_status file path hydration failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
             if doc_ids:
                 ctx.sources_used.append("metadata_index")
         except Exception as e:
@@ -176,18 +195,28 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
     from lightrag.constants import PARSED_ARTIFACT_DIR_SUFFIXES, PARSED_DIR_NAME
 
     removed = 0
-    parsed_root = Path(input_dir) / PARSED_DIR_NAME
+    input_root = Path(input_dir)
+    default_parsed_root = input_root / PARSED_DIR_NAME
     _collision_re = re.compile(r"_\d{3}$")
 
     for fp in file_paths:
+        if _is_remote_source_path(fp):
+            continue
         path = Path(fp)
         filename = path.name
         stem = path.stem
+        source_root = _source_root_for_stored_path(path, input_root)
+        parsed_roots = [source_root / PARSED_DIR_NAME]
+        if default_parsed_root not in parsed_roots:
+            parsed_roots.append(default_parsed_root)
 
         # 1. Remove the source file (may be in input_dir/ or moved into
         #    __parsed__/ by LightRAG after ingest).
-        for candidate_dir in (Path(input_dir), parsed_root):
-            candidate = candidate_dir / filename
+        source_candidates = [source_root / filename]
+        if path.is_absolute():
+            source_candidates.insert(0, path)
+        source_candidates.extend(parsed_root / filename for parsed_root in parsed_roots)
+        for candidate in dict.fromkeys(source_candidates):
             try:
                 if candidate.exists() and candidate.is_file():
                     candidate.unlink()
@@ -199,8 +228,10 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
         #    LightRAG creates:  <stem>.parsed/, <stem>.mineru_raw/,
         #    <stem>.docling_raw/, plus collision-suffixed variants
         #    (<stem>_001.parsed/, etc.).
-        try:
-            if parsed_root.exists() and parsed_root.is_dir():
+        for parsed_root in parsed_roots:
+            try:
+                if not parsed_root.exists() or not parsed_root.is_dir():
+                    continue
                 for entry in sorted(parsed_root.iterdir()):
                     if not entry.is_dir():
                         continue
@@ -214,10 +245,43 @@ def remove_deleted_files(file_paths: set[str], input_dir: str) -> int:
                             shutil.rmtree(entry, ignore_errors=True)
                             removed += 1
                             break
-        except OSError:
-            logger.debug("Failed to scan parsed dir: %s", parsed_root, exc_info=True)
+            except OSError:
+                logger.debug("Failed to scan parsed dir: %s", parsed_root, exc_info=True)
 
     return removed
+
+
+async def _add_doc_status_file_paths_for_doc_ids(ctx: DeletionContext, doc_status: Any) -> None:
+    from lightrag.base import DocStatus
+
+    for status in (DocStatus.PROCESSED, DocStatus.FAILED):
+        maybe_docs = doc_status.get_docs_by_status(status)
+        if isawaitable(maybe_docs):
+            maybe_docs = await maybe_docs
+        if not isinstance(maybe_docs, dict):
+            continue
+        docs = maybe_docs
+        for doc_id in ctx.doc_ids:
+            doc_info = docs.get(doc_id)
+            fp = getattr(doc_info, "file_path", "") if doc_info is not None else ""
+            if fp:
+                ctx.file_paths.add(fp)
+
+
+def _is_remote_source_path(path: str) -> bool:
+    return path.startswith(("azure://", "s3://"))
+
+
+def _source_root_for_stored_path(path: Path, input_root: Path) -> Path:
+    if path.is_absolute():
+        try:
+            path.resolve().relative_to(input_root.resolve())
+        except ValueError:
+            return input_root
+        return path.parent
+    if len(path.parts) > 1:
+        return input_root / Path(*path.parts[:-1])
+    return input_root
 
 
 __all__ = [

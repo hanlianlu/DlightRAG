@@ -13,15 +13,19 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
+from lightrag.constants import PARSED_DIR_NAME
+
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.ingestion.paths import (
     iter_ingestable_files,
-    remote_namespace_root,
-    remote_object_path,
+    remote_ingest_batch_root,
+    remote_parser_input_path,
     stage_input_file,
     staged_input_path,
     workspace_input_root,
@@ -69,6 +73,9 @@ _STORAGE_ATTRS = (
     "llm_response_cache",
     "doc_status",
 )
+
+_REMOTE_INGEST_BATCH_SIZE = 64
+_REMOTE_DOWNLOAD_CONCURRENCY = 8
 
 
 def _ensure_venv_in_path() -> None:
@@ -834,31 +841,33 @@ class RAGService:
     def _workspace_input_root(self) -> Path:
         return workspace_input_root(self.config.input_dir_path, self.config.workspace)
 
-    async def _download_remote_to_local(
+    async def _download_remote_to_prepared_item(
         self,
         *,
         source: Any,
-        source_type: str,
-        namespace: str,
         key: str,
-    ) -> Path:
+        source_uri: str,
+        batch_root: Path,
+    ) -> PreparedIngestFile:
         content = await source.aload_document(key)
-        local_path = remote_object_path(
-            working_dir=self.config.working_dir_path,
-            source_type=source_type,
-            namespace=namespace,
+        parser_path = remote_parser_input_path(
+            batch_root=batch_root,
+            source_uri=source_uri,
             key=key,
         )
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(local_path.write_bytes, content)
-        return local_path
+        parser_path.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(parser_path.write_bytes, content)
+        return PreparedIngestFile(
+            parser_path=parser_path,
+            metadata_path=source_uri,
+            display_filename=Path(key).name,
+        )
 
     async def _aingest_remote_keys(
         self,
         *,
         source: Any,
         source_type: str,
-        namespace: str,
         keys: list[str],
         source_uri_for_key: Callable[[str], str],
         replace: bool,
@@ -867,48 +876,91 @@ class RAGService:
         metadata: dict[str, Any] | None = None,
         metadata_policy: MetadataIngestPolicy | None = None,
     ) -> dict[str, Any]:
-        """Download remote objects and ingest them through one staged batch."""
+        """Download remote objects into ephemeral parser batches and ingest them."""
         if not keys:
             return {"processed": 0, "errors": [], "results": []}
 
-        local_paths: list[Path] = []
-        source_uris: list[str] = []
-        source_root = remote_namespace_root(
-            working_dir=self.config.working_dir_path,
-            source_type=source_type,
-            namespace=namespace,
-        )
-        for key in keys:
-            local_paths.append(
-                await self._download_remote_to_local(
-                    source=source,
-                    source_type=source_type,
-                    namespace=namespace,
-                    key=key,
-                )
+        from dlightrag.utils.concurrency import bounded_map
+
+        processed = 0
+        results: list[dict[str, Any]] = []
+        errors: list[str] = []
+
+        for batch_index, window in enumerate(_chunked(keys, _REMOTE_INGEST_BATCH_SIZE)):
+            batch_root = remote_ingest_batch_root(
+                input_root=self._workspace_input_root(),
+                source_type=source_type,
+                batch_id=f"{batch_index:04d}-{uuid.uuid4().hex}",
             )
-            source_uris.append(source_uri_for_key(key))
+            source_uris = [source_uri_for_key(key) for key in window]
+            prepared_items: list[PreparedIngestFile] = []
 
-        if replace:
-            for local_path, source_uri in zip(local_paths, source_uris, strict=True):
-                await self._purge_existing_for_replace(
-                    file_path=staged_input_path(
-                        input_root=self._workspace_input_root(),
-                        file_path=local_path,
-                        relative_to=source_root,
-                    ),
-                    stored_file_path=source_uri,
+            async def _download(
+                item: tuple[str, str],
+                *,
+                current_batch_root: Path = batch_root,
+            ) -> PreparedIngestFile:
+                key, source_uri = item
+                return await self._download_remote_to_prepared_item(
+                    source=source,
+                    key=key,
+                    source_uri=source_uri,
+                    batch_root=current_batch_root,
                 )
 
-        return await self._aingest_local_files(
-            local_paths,
-            replace=False,
-            source_root=source_root,
-            title=title,
-            author=author,
-            metadata=metadata,
-            metadata_policy=metadata_policy,
-        )
+            try:
+                download_results = await bounded_map(
+                    list(zip(window, source_uris, strict=True)),
+                    _download,
+                    max_concurrent=_REMOTE_DOWNLOAD_CONCURRENCY,
+                    task_name=f"{source_type}-download",
+                )
+
+                prepared_source_uris: list[str] = []
+                for _key, source_uri, downloaded in zip(
+                    window, source_uris, download_results, strict=True
+                ):
+                    if isinstance(downloaded, Exception):
+                        errors.append(f"{source_uri}: {downloaded}")
+                        continue
+                    prepared_items.append(downloaded)
+                    prepared_source_uris.append(source_uri)
+
+                if not prepared_items:
+                    continue
+
+                if replace:
+                    for prepared_item, source_uri in zip(
+                        prepared_items, prepared_source_uris, strict=True
+                    ):
+                        await self._purge_existing_for_replace(
+                            file_path=prepared_item.parser_path,
+                            stored_file_path=source_uri,
+                        )
+
+                batch_result = await self._ingestion_engine.aingest_files(
+                    prepared_items,
+                    replace=False,
+                    title=title,
+                    author=author,
+                    metadata=metadata,
+                    metadata_policy=metadata_policy,
+                )
+                if hasattr(batch_result, "model_dump"):
+                    batch_result = batch_result.model_dump()
+
+                processed += int(batch_result.get("processed") or 0)
+                results.extend(batch_result.get("results") or [])
+                errors.extend(str(error) for error in batch_result.get("errors") or [])
+            finally:
+                await asyncio.to_thread(_remove_remote_parser_sources, prepared_items)
+                await asyncio.to_thread(
+                    _remove_empty_parents,
+                    batch_root,
+                    self._workspace_input_root(),
+                )
+
+        return {"processed": processed, "errors": errors, "results": results}
 
     @staticmethod
     def _single_file_result(batch_result: dict[str, Any]) -> dict[str, Any]:
@@ -938,7 +990,6 @@ class RAGService:
                     await self._aingest_remote_keys(
                         source=source,
                         source_type="azure_blob",
-                        namespace=str(container_name or "default"),
                         keys=[key],
                         source_uri_for_key=lambda item: f"azure://{container_name}/{item}",
                         replace=replace,
@@ -954,7 +1005,6 @@ class RAGService:
             return await self._aingest_remote_keys(
                 source=source,
                 source_type="azure_blob",
-                namespace=str(container_name or "default"),
                 keys=[str(key) for key in keys],
                 source_uri_for_key=lambda key: f"azure://{container_name}/{key}",
                 replace=replace,
@@ -986,7 +1036,6 @@ class RAGService:
                     await self._aingest_remote_keys(
                         source=source,
                         source_type="s3",
-                        namespace=str(bucket or "default"),
                         keys=[key],
                         source_uri_for_key=lambda item: f"s3://{bucket}/{item}",
                         replace=replace,
@@ -1002,7 +1051,6 @@ class RAGService:
             return await self._aingest_remote_keys(
                 source=source,
                 source_type="s3",
-                namespace=str(bucket or "default"),
                 keys=[str(key) for key in keys],
                 source_uri_for_key=lambda key: f"s3://{bucket}/{key}",
                 replace=replace,
@@ -1540,6 +1588,37 @@ class RAGService:
             "pending_enqueues": int(ns.get("pending_enqueues", 0) or 0),
             "history_messages": list(ns.get("history_messages", [])[-10:]),
         }
+
+
+def _chunked[T](items: list[T], size: int) -> list[list[T]]:
+    if size <= 0:
+        raise ValueError("chunk size must be positive")
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _remove_empty_parents(path: Path, stop: Path) -> None:
+    stop = stop.resolve()
+    current = path.resolve()
+    while current != stop and current.is_relative_to(stop):
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _remove_remote_parser_sources(items: list[PreparedIngestFile]) -> None:
+    for item in items:
+        parser_path = item.parser_path
+        for candidate in (
+            parser_path,
+            parser_path.parent / PARSED_DIR_NAME / parser_path.name,
+        ):
+            try:
+                if candidate.exists() and candidate.is_file():
+                    candidate.unlink()
+            except OSError:
+                logger.debug("Failed to remove remote parser source: %s", candidate, exc_info=True)
 
 
 __all__ = ["RAGService"]

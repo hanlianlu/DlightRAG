@@ -4,10 +4,11 @@ import pytest
 from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.core.ingestion.paths import (
+    REMOTE_INGEST_DIR_NAME,
     UPLOADS_DIR_NAME,
     iter_ingestable_files,
-    remote_namespace_root,
-    remote_object_path,
+    remote_ingest_batch_root,
+    remote_parser_input_path,
     stage_input_file,
     staged_input_path,
     workspace_input_root,
@@ -19,12 +20,14 @@ def test_iter_ingestable_files_skips_parser_upload_and_hidden_artifacts(tmp_path
     (root / "nested").mkdir(parents=True)
     (root / PARSED_DIR_NAME / "report.pdf.parsed").mkdir(parents=True)
     (root / UPLOADS_DIR_NAME / "old-batch").mkdir(parents=True)
+    (root / REMOTE_INGEST_DIR_NAME / "s3" / "batch").mkdir(parents=True)
     (root / ".cache").mkdir(parents=True)
 
     keep = root / "nested" / "keep.pdf"
     keep.write_bytes(b"ok")
     (root / PARSED_DIR_NAME / "report.pdf.parsed" / "report.blocks.jsonl").write_text("{}\n")
     (root / UPLOADS_DIR_NAME / "old-batch" / "stale.pdf").write_bytes(b"stale")
+    (root / REMOTE_INGEST_DIR_NAME / "s3" / "batch" / "remote.pdf").write_bytes(b"remote")
     (root / ".cache" / "hidden.pdf").write_bytes(b"hidden")
     (root / ".hidden.pdf").write_bytes(b"hidden")
 
@@ -70,26 +73,34 @@ def test_staged_input_path_falls_back_to_basename_when_source_escapes_root(
     assert target == input_root / "report.pdf"
 
 
-def test_remote_object_path_sanitizes_namespace_and_rejects_empty_key(tmp_path: Path) -> None:
-    root = remote_namespace_root(
-        working_dir=tmp_path,
+def test_remote_parser_input_path_uses_ephemeral_hash_name(tmp_path: Path) -> None:
+    root = remote_ingest_batch_root(
+        input_root=tmp_path / "inputs" / "default",
         source_type="s3",
-        namespace="bucket/name",
+        batch_id="batch-1",
     )
-    assert root == tmp_path / "sources" / "s3" / "bucket_name"
+    assert root == tmp_path / "inputs" / "default" / "__remote_ingest__" / "s3" / "batch-1"
 
-    path = remote_object_path(
-        working_dir=tmp_path,
-        source_type="s3",
-        namespace="bucket/name",
-        key="../folder/./report.pdf",
+    first = remote_parser_input_path(
+        batch_root=root,
+        source_uri="s3://bucket/team-a/report.pdf",
+        key="team-a/report.pdf",
     )
-    assert path == root / "folder" / "report.pdf"
+    second = remote_parser_input_path(
+        batch_root=root,
+        source_uri="s3://bucket/team-b/report.pdf",
+        key="team-b/report.pdf",
+    )
+
+    assert first.parent == root
+    assert second.parent == root
+    assert first.name.startswith("report__")
+    assert first.suffix == ".pdf"
+    assert first.name != second.name
 
     with pytest.raises(ValueError, match="remote object key is empty"):
-        remote_object_path(
-            working_dir=tmp_path,
-            source_type="s3",
-            namespace="bucket/name",
+        remote_parser_input_path(
+            batch_root=root,
+            source_uri="s3://bucket/",
             key="../",
         )
