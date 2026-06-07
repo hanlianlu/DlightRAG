@@ -103,6 +103,12 @@ redirects to a short-lived provider URL. Azure uses
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 
+Remote prefix ingest streams provider listings into bounded local staging
+windows. It uses the same ingest job substrate as local and single-object ingest,
+while keeping source ownership in the cloud provider. DlightRAG delete/reset
+operations remove DlightRAG metadata, LightRAG storage, and local parser
+artifacts only; they do not delete Azure Blob or S3 source objects.
+
 Advanced signing defaults:
 
 ```yaml
@@ -293,6 +299,18 @@ request_timeout: 300
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
 applies to Web uploads.
+`ingest_timeout` limits how long synchronous SDK/REST/MCP ingest calls wait.
+When it expires, the ingest job keeps running and callers receive/read the job
+status instead of cancelling the ingest.
+
+Ingest job state is stored in `dlightrag_ingest_jobs`. DlightRAG keeps this as
+operational state rather than user-facing configuration: recent queued/running
+jobs are recovered automatically on startup, completed jobs are pruned after 14
+days, queued/running jobs that have not updated for 24 hours are marked failed
+on job-store initialization, and workspace reset cancels active in-process jobs
+before deleting the matching workspace's job rows. Remote prefix recovery resumes
+from the next unfinished source window; single-document internals remain owned by
+LightRAG's document status pipeline.
 
 ## LightRAG KG Internals
 

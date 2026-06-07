@@ -3,9 +3,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+
+
+class _ResetJobStore:
+    def __init__(self, deleted_count: int = 2) -> None:
+        self.deleted_count = deleted_count
+        self.deleted_workspaces: list[str] = []
+
+    async def delete_for_workspace(self, workspace: str) -> int:
+        self.deleted_workspaces.append(workspace)
+        return self.deleted_count
 
 
 def _make_manager() -> RAGServiceManager:
@@ -23,6 +34,9 @@ def _make_manager() -> RAGServiceManager:
     manager._startup_warnings = []
     manager._backoff = {}
     manager._answer_engine = None
+    manager._ingest_job_store = _ResetJobStore()
+    manager._ingest_job_tasks = {}
+    manager._ingest_job_workspaces = {}
     manager._lock = None
     return manager
 
@@ -60,15 +74,58 @@ class TestManagerAresetSingleWorkspace:
         assert "ws1" in result["workspaces"]
         assert result["total_errors"] == 0
 
+    async def test_deletes_workspace_ingest_jobs(self) -> None:
+        manager = _make_manager()
+        store = _ResetJobStore(deleted_count=4)
+        manager._ingest_job_store = store
+        svc = _make_mock_service("project_a")
+        manager._services["project_a"] = svc
+
+        with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):
+            result = await manager.areset(workspace="Project A")
+
+        assert store.deleted_workspaces == ["project_a"]
+        assert result["workspaces"]["project_a"]["ingest_jobs_deleted"] == 4
+
+    async def test_cancels_workspace_ingest_jobs_before_reset(self) -> None:
+        manager = _make_manager()
+        svc = _make_mock_service("project_a")
+        manager._services["project_a"] = svc
+        cancelled = asyncio.Event()
+
+        async def running_job() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        task = asyncio.create_task(running_job())
+        manager._ingest_job_tasks["job-1"] = task
+        manager._ingest_job_workspaces["job-1"] = "project_a"
+        await asyncio.sleep(0)
+
+        with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):
+            result = await manager.areset(workspace="project_a")
+
+        assert cancelled.is_set()
+        assert task.done()
+        assert manager._ingest_job_tasks == {}
+        assert manager._ingest_job_workspaces == {}
+        assert result["workspaces"]["project_a"]["ingest_jobs_cancelled"] == 1
+
     async def test_passes_keep_files_and_dry_run(self) -> None:
         manager = _make_manager()
         svc = _make_mock_service()
         manager._services["ws1"] = svc
 
         with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):
-            await manager.areset(workspace="ws1", keep_files=True, dry_run=True)
+            result = await manager.areset(workspace="ws1", keep_files=True, dry_run=True)
 
         svc.areset.assert_awaited_once_with(keep_files=True, dry_run=True)
+        assert manager._ingest_job_store.deleted_workspaces == []
+        assert result["workspaces"]["ws1"]["ingest_jobs_cancelled"] == 0
+        assert result["workspaces"]["ws1"]["ingest_jobs_deleted"] == 0
 
 
 class TestManagerAresetAllWorkspaces:
@@ -141,6 +198,9 @@ class TestManagerAresetNonexistentWorkspace:
         assert "graphs_dropped" in ws_result
         assert "orphan_tables_cleaned" in ws_result
         assert "local_files_removed" in ws_result
+        assert ws_result["ingest_jobs_cancelled"] == 0
+        assert ws_result["ingest_jobs_deleted"] == 2
+        assert manager._ingest_job_store.deleted_workspaces == ["does_not_exist"]
         assert "errors" in ws_result
 
 

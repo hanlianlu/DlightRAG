@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 
 class DataSource(ABC):
@@ -42,6 +43,16 @@ class AsyncDataSource(ABC):
     async def alist_documents(self, prefix: str | None = None) -> list[str]:
         """List available document identifiers (async)."""
         ...
+
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+        """Stream available document identifiers.
+
+        Adapters with paginated backends should override this to avoid
+        materializing large prefixes. The default preserves compatibility for
+        simple async sources.
+        """
+        for doc_id in await self.alist_documents(prefix=prefix):
+            yield doc_id
 
     @abstractmethod
     async def aload_document(self, doc_id: str) -> bytes:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from inspect import isawaitable
 from typing import Any
 
@@ -90,12 +91,15 @@ class S3DataSource(AsyncDataSource):
 
     async def alist_documents(self, prefix: str | None = None) -> list[str]:
         """List object keys in the bucket (paginated, handles >1000 objects)."""
+        return [key async for key in self.aiter_documents(prefix=prefix)]
+
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+        """Stream object keys in the bucket."""
         client = await self._ensure_client()
         paginator = client.get_paginator("list_objects_v2")
-        keys: list[str] = []
         async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix or ""):
-            keys.extend(obj["Key"] for obj in page.get("Contents", []))
-        return keys
+            for obj in page.get("Contents", []):
+                yield str(obj["Key"])
 
     async def aload_document(self, doc_id: str) -> bytes:
         """Download an S3 object as bytes."""

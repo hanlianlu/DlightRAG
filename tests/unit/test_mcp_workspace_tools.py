@@ -42,11 +42,13 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "title" in ingest_props
     assert "author" in ingest_props
     assert "metadata" in ingest_props
+    assert "wait" in ingest_props
     assert ingest_props["metadata_policy"]["enum"] == [
         "validate",
         "reject_unknown",
         "store_only",
     ]
+    assert "ingest_job_status" in names
 
 
 async def test_mcp_create_workspace_uses_manager_registry(mock_mcp_manager) -> None:
@@ -109,6 +111,121 @@ async def test_mcp_ingest_forwards_document_metadata(mock_mcp_manager) -> None:
         metadata={"department": "Finance"},
         metadata_policy="reject_unknown",
     )
+
+
+async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "s3",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.call_tool(
+        "ingest",
+        {
+            "source_type": "s3",
+            "bucket": "bucket",
+            "prefix": "docs/",
+            "workspace": "default",
+        },
+    )
+
+    assert json.loads(result[0].text) == {
+        "job_id": "job-1",
+        "workspace": "default",
+        "source_type": "s3",
+        "status": "queued",
+    }
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        source_type="s3",
+        bucket="bucket",
+        prefix="docs/",
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_local_directory_ingest_starts_background_job(mock_mcp_manager, tmp_path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "local",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.call_tool(
+        "ingest",
+        {
+            "source_type": "local",
+            "path": str(docs_dir),
+            "workspace": "default",
+        },
+    )
+
+    assert json.loads(result[0].text)["job_id"] == "job-1"
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        source_type="local",
+        path=str(docs_dir),
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_single_s3_key_can_force_background_job(mock_mcp_manager) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "s3",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.call_tool(
+        "ingest",
+        {
+            "source_type": "s3",
+            "bucket": "bucket",
+            "key": "docs/file.pdf",
+            "workspace": "default",
+            "wait": False,
+        },
+    )
+
+    assert json.loads(result[0].text)["job_id"] == "job-1"
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        source_type="s3",
+        bucket="bucket",
+        key="docs/file.pdf",
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_ingest_job_status_reads_manager_job(mock_mcp_manager) -> None:
+    mock_mcp_manager.get_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "status": "running",
+            "processed_items": 64,
+        }
+    )
+
+    result = await mcp_server.call_tool("ingest_job_status", {"job_id": "job-1"})
+
+    assert json.loads(result[0].text) == {
+        "job_id": "job-1",
+        "status": "running",
+        "processed_items": 64,
+    }
+    mock_mcp_manager.get_ingest_job.assert_awaited_once_with("job-1")
 
 
 async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_contexts(
