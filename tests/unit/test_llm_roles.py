@@ -21,8 +21,8 @@ def _cfg() -> DlightragConfig:
             startup_probe=False,
         ),
         llm=LLMConfig(
-            default=ModelConfig(provider="openai", model="gpt-4.1"),
-            roles=LLMRolesConfig(keyword=ModelConfig(provider="openai", model="gpt-4.1-mini")),
+            default=ModelConfig(provider="openai", model="gpt-5.4-mini"),
+            roles=LLMRolesConfig(keyword=ModelConfig(provider="openai", model="gpt-5.4-mini")),
         ),
     )
 
@@ -34,5 +34,5 @@ def test_lightrag_role_names_are_canonical() -> None:
 def test_model_for_role_uses_override_then_default() -> None:
     cfg = _cfg()
 
-    assert model_for_role(cfg, "keyword").model == "gpt-4.1-mini"
-    assert model_for_role(cfg, "query").model == "gpt-4.1"
+    assert model_for_role(cfg, "keyword").model == "gpt-5.4-mini"
+    assert model_for_role(cfg, "query").model == "gpt-5.4-mini"

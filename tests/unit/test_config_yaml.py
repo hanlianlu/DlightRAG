@@ -71,11 +71,11 @@ class TestYamlConfigLoading:
         assert config.kg_entity_types == ["Person", "Company"]
 
     def test_env_overrides_yaml(self, yaml_config_dir, monkeypatch):
-        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-4.1")
+        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
         monkeypatch.setenv("DLIGHTRAG_TOP_K", "200")
 
         config = DlightragConfig()
-        assert config.llm.default.model == "gpt-4.1"  # env override
+        assert config.llm.default.model == "gpt-5.4-mini"  # env override
         assert config.llm.default.base_url == "http://localhost:11434/v1"  # from yaml
         assert config.top_k == 200  # env override
 
@@ -161,18 +161,18 @@ class TestConfigSources:
                 "api_key": "test",
                 "startup_probe": False,
             },
-            llm={"default": {"model": "gpt-4.1-mini", "api_key": "test"}},
+            llm={"default": {"model": "gpt-5.4-mini", "api_key": "test"}},
         )
-        assert config.llm.default.model == "gpt-4.1-mini"
+        assert config.llm.default.model == "gpt-5.4-mini"
         assert config.embedding.model == "text-embedding-3-large"
 
     def test_env_vars_still_work_without_yaml(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-4.1")
+        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__PROVIDER", "openai_compatible")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__MODEL", "text-embedding-3-large")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__API_KEY", "test")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__STARTUP_PROBE", "false")
 
         config = DlightragConfig()
-        assert config.llm.default.model == "gpt-4.1"
+        assert config.llm.default.model == "gpt-5.4-mini"

@@ -45,7 +45,7 @@ def test_config(tmp_working_dir: Path) -> DlightragConfig:
         working_dir=str(tmp_working_dir),
         llm=LLMConfig(
             default=ModelConfig(
-                model="gpt-4.1-mini",
+                model="gpt-5.4-mini",
                 api_key=os.getenv("DLIGHTRAG_OPENAI_API_KEY", "test-key-for-unit-tests"),
             )
         ),

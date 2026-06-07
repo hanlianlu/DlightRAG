@@ -32,9 +32,9 @@ def _clean_dlightrag_config_sources(monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestModelConfig:
     def test_defaults(self):
-        cfg = ModelConfig(model="gpt-4.1-mini")
+        cfg = ModelConfig(model="gpt-5.4-mini")
         assert cfg.provider == "openai"
-        assert cfg.model == "gpt-4.1-mini"
+        assert cfg.model == "gpt-5.4-mini"
         assert cfg.api_key is None
         assert cfg.base_url is None
         assert cfg.temperature is None
@@ -51,7 +51,7 @@ class TestModelConfig:
             ModelConfig(provider="invalid", model="test")
 
     def test_model_kwargs(self):
-        cfg = ModelConfig(model="gpt-4.1-mini", model_kwargs={"top_p": 0.9})
+        cfg = ModelConfig(model="gpt-5.4-mini", model_kwargs={"top_p": 0.9})
         assert cfg.model_kwargs == {"top_p": 0.9}
 
 
@@ -145,7 +145,7 @@ class TestDlightragConfigNested:
                 startup_probe=False,
             ),
         )
-        assert cfg.llm.default.model == "gpt-4.1"
+        assert cfg.llm.default.model == "gpt-5.4-mini"
         assert cfg.embedding.model == "voyage-multimodal-3.5"
 
     def test_chat_defaults(self, tmp_path, monkeypatch):
@@ -158,7 +158,7 @@ class TestDlightragConfigNested:
                 startup_probe=False,
             ),
         )
-        assert cfg.llm.default.model == "gpt-4.1"
+        assert cfg.llm.default.model == "gpt-5.4-mini"
         assert cfg.llm.default.temperature == 0.5
 
     def test_langfuse_v4_observability_defaults(self, tmp_path, monkeypatch) -> None:
@@ -193,7 +193,7 @@ class TestDlightragConfigNested:
 
     def test_env_var_nested(self, monkeypatch):
         """Test env var override with __ delimiter."""
-        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-4.1")
+        monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
         monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__API_KEY", "sk-env")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__API_KEY", "sk-emb")
         cfg = DlightragConfig(
@@ -204,7 +204,7 @@ class TestDlightragConfigNested:
                 startup_probe=False,
             ),
         )
-        assert cfg.llm.default.model == "gpt-4.1"
+        assert cfg.llm.default.model == "gpt-5.4-mini"
         assert cfg.llm.default.api_key == "sk-env"
 
     def test_unknown_field_rejected(self):
@@ -522,18 +522,18 @@ def test_role_config_uses_lightrag_role_names() -> None:
             startup_probe=False,
         ),
         llm=LLMConfig(
-            default=ModelConfig(provider="openai", model="gpt-4.1"),
+            default=ModelConfig(provider="openai", model="gpt-5.4-mini"),
             roles=LLMRolesConfig(
-                extract=ModelConfig(provider="openai", model="gpt-4.1-mini"),
-                keyword=ModelConfig(provider="openai", model="gpt-4.1-mini"),
-                query=ModelConfig(provider="openai", model="gpt-4.1"),
+                extract=ModelConfig(provider="openai", model="gpt-5.4-mini"),
+                keyword=ModelConfig(provider="openai", model="gpt-5.4-mini"),
+                query=ModelConfig(provider="openai", model="gpt-5.4-mini"),
                 vlm=ModelConfig(provider="gemini", model="gemini-2.5-flash"),
             ),
         ),
     )
 
     assert cfg.llm.roles.keyword is not None
-    assert cfg.llm.roles.keyword.model == "gpt-4.1-mini"
+    assert cfg.llm.roles.keyword.model == "gpt-5.4-mini"
 
 
 def test_pg_connection_kwargs_uses_primary_fields_by_default() -> None:
@@ -679,7 +679,7 @@ def test_removed_top_level_llm_fields_rejected(removed_field: str) -> None:
             "dim": 1024,
             "startup_probe": False,
         },
-        removed_field: {"provider": "openai", "model": "gpt-4.1-mini"},
+        removed_field: {"provider": "openai", "model": "gpt-5.4-mini"},
     }
 
     with pytest.raises(ValidationError):
@@ -1019,7 +1019,7 @@ def test_config_repr_redacts_api_keys():
         llm={
             "default": {
                 "provider": "openai",
-                "model": "gpt-4.1",
+                "model": "gpt-5.4-mini",
                 "api_key": "sk-llm-secret-abcd1234",
             },
         },

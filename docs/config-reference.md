@@ -197,6 +197,10 @@ vector scoring inside a small metadata candidate set.
 Root config exposes `answer.max_images`. Compression budgets are advanced model
 transport limits:
 
+`chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
+those are omitted, it reuses the configured chat model roles in this order:
+`llm.roles.vlm`, `llm.roles.query`, then `llm.default`.
+
 ```yaml
 rerank:
   score_threshold: 0.5

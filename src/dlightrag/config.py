@@ -170,7 +170,7 @@ class LLMConfig(BaseModel):
     default: ModelConfig = Field(
         default_factory=lambda: ModelConfig(
             provider="openai",
-            model="gpt-4.1",
+            model="gpt-5.4-mini",
             temperature=0.5,
         )
     )

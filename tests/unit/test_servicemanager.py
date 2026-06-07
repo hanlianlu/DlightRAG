@@ -26,7 +26,7 @@ from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailab
 def test_cfg(tmp_path) -> DlightragConfig:
     cfg = DlightragConfig(
         working_dir=str(tmp_path / "dlightrag_storage"),
-        llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test")),
+        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",

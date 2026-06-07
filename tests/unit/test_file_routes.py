@@ -32,7 +32,7 @@ def tmp_working_dir(tmp_path: Path) -> Path:
 async def client(tmp_working_dir: Path) -> AsyncIterator[AsyncClient]:
     config = DlightragConfig(  # type: ignore[call-arg]
         working_dir=str(tmp_working_dir),
-        llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test")),
+        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
         embedding=_embedding_config(),
     )
     with (
@@ -115,7 +115,7 @@ class TestFileEndpointAzureRedirect:
         """Azure blobs get 302 redirect to SAS URL — no data proxied."""
         config = DlightragConfig(  # type: ignore[call-arg]
             working_dir=str(tmp_working_dir),
-            llm=LLMConfig(default=ModelConfig(model="gpt-4.1-mini", api_key="test")),
+            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
             embedding=_embedding_config(),
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
