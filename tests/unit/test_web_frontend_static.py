@@ -239,44 +239,53 @@ def test_source_panel_default_gold_accents_are_restrained() -> None:
     source_chunk_block = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
 
     assert "background: var(--color-bg-hover);" in source_header_hover
-    assert "border-left: 3px solid rgba(210, 182, 97, 0.24);" in source_chunk_block
+    assert "border-left:" not in source_chunk_block
+    assert "box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.24);" in source_chunk_block
     assert "border-left: 3px solid var(--color-gold-400);" not in css
 
 
 def test_source_panel_active_chunk_uses_subtle_selection_not_gold_fill() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
 
+    source_chunk_block = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
     active_chunk_block = css.split(".source-chunk.active {", 1)[1].split("}", 1)[0]
 
-    assert "border-left-color: rgba(210, 182, 97, 0.42);" in active_chunk_block
-    assert "box-shadow: inset 1px 0 0 rgba(210, 182, 97, 0.18);" in active_chunk_block
+    assert "background: rgba(28, 25, 23, 0.62);" in source_chunk_block
+    assert "background: var(--color-bg-elevated);" not in source_chunk_block
+    assert "border-left-color:" not in active_chunk_block
+    assert "background: rgba(210, 182, 97, 0.035);" in active_chunk_block
+    assert "box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.42);" in active_chunk_block
     assert "background: rgba(87, 74, 36, 0.15);" not in active_chunk_block
     assert "var(--color-gold-200)" not in active_chunk_block
 
 
-def test_source_panel_phrase_highlight_is_scoped_and_quieter_than_global_highlight() -> None:
+def test_source_panel_phrase_highlight_is_scoped_without_underline() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
 
     global_highlight = css.split(".highlight {", 1)[1].split("}", 1)[0]
     source_highlight = css.split(".source-chunk-content .highlight {", 1)[1].split("}", 1)[0]
 
-    assert "background: rgba(210, 182, 97, 0.12);" in global_highlight
-    assert "background: rgba(210, 182, 97, 0.10);" in source_highlight
-    assert "color: var(--color-text-secondary);" in source_highlight
-    assert "border-bottom" not in source_highlight
+    assert "background: rgba(210, 182, 97, 0.14);" in global_highlight
+    assert "border-bottom: none;" in global_highlight
+    assert "background: rgba(210, 182, 97, 0.18);" in source_highlight
+    assert "color: var(--color-text-primary);" in source_highlight
+    assert "border-bottom: none;" in source_highlight
 
 
-def test_source_download_icon_is_visible_without_hover() -> None:
+def test_source_download_icon_is_icon_only_not_framed_button() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
 
     icon_block = css.split(".source-dl-icon {", 1)[1].split("}", 1)[0]
     hover_block = css.split(".source-dl-icon:hover {", 1)[1].split("}", 1)[0]
+    svg_block = css.split(".source-dl-icon-svg {", 1)[1].split("}", 1)[0]
 
-    assert "border: 1px solid var(--color-border-subtle);" in icon_block
-    assert "color: var(--color-text-secondary);" in icon_block
-    assert "opacity: 1;" in icon_block
-    assert "background: rgba(41, 37, 36, 0.38);" in icon_block
-    assert "background: var(--color-accent-hover);" in hover_block
+    assert "background: transparent;" in icon_block
+    assert "border: none;" in icon_block
+    assert "color: var(--color-text-tertiary);" in icon_block
+    assert "opacity: 0.9;" in icon_block
+    assert "color: var(--color-gold-200);" in hover_block
+    assert "height: var(--size-icon-md);" in svg_block
+    assert "width: var(--size-icon-md);" in svg_block
 
 
 def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
@@ -293,9 +302,9 @@ def test_type_scale_uses_corrected_compact_utopia_coefficients() -> None:
     root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
     type_block = root_block.split("/* ── Type scale ── */", 1)[1].split("/* ── Space scale", 1)[0]
 
-    assert "Viewport: 390px → 1440px | Base: 15px → 16px | Ratio: 1.2" in root_block
+    assert "Viewport: 390px → 1440px | Base: 15px → 15.5px | Ratio: 1.18" in root_block
     assert "Base: 16px → 19px" not in root_block
-    assert "--step-0: clamp(0.93750rem, 0.095238vi + 0.914286rem, 1.00000rem);" in type_block
+    assert "--step-0: clamp(0.93750rem, 0.047619vi + 0.925893rem, 0.96875rem);" in type_block
     assert "0.00285714vi" not in type_block
     assert "16.00px → 19.00px" not in type_block
 
@@ -303,17 +312,25 @@ def test_type_scale_uses_corrected_compact_utopia_coefficients() -> None:
 def test_chat_typography_uses_semantic_line_height_tokens() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
     root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
+    composer_form = css.split(".composer-form {", 1)[1].split("}", 1)[0]
     composer_input = css.split(".composer-input {", 1)[1].split("}", 1)[0]
     user_message = css.split(".user-message {", 1)[1].split("}", 1)[0]
     ai_message = css.split(".ai-message {", 1)[1].split("}", 1)[0]
     ai_content = css.split(".ai-message-content {", 1)[1].split("}", 1)[0]
 
-    assert "--line-height-control: 1.55;" in root_block
-    assert "--line-height-message: 1.65;" in root_block
+    assert "--line-height-control: 1.5;" in root_block
+    assert "--line-height-message: 1.58;" in root_block
+    assert "--space-message-block: var(--space-component);" in root_block
+    assert "--space-composer-y: calc(var(--space-tight) * 0.625);" in root_block
+    assert "--space-composer-x: var(--space-tight);" in root_block
+    assert "padding: var(--space-composer-y) var(--space-composer-x);" in composer_form
     assert "line-height: var(--line-height-control);" in composer_input
+    assert "padding: 0;" in composer_input
     assert "line-height: var(--line-height-control);" in user_message
+    assert "margin: var(--space-message-block) 0 var(--space-tight) auto;" in user_message
     assert "line-height: var(--line-height-message);" in ai_message
     assert "line-height: var(--line-height-message);" in ai_content
+    assert "padding: var(--space-tight) 0 var(--space-message-block);" in ai_message
 
 
 def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:
@@ -323,6 +340,10 @@ def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:
     assert "--radius-sm: 0.5rem;" in css
     assert "--radius-md: 0.625rem;" in css
     assert "--radius-lg: 0.75rem;" in css
+    assert "--radius-xl: 0.875rem;" in css
+    assert "--radius-surface: var(--radius-md);" in css
+    assert "--radius-composer: var(--radius-xl);" in css
+    assert "--radius-message: var(--radius-xl);" in css
 
 
 def test_radius_usage_matches_visual_hierarchy() -> None:
@@ -340,12 +361,11 @@ def test_radius_usage_matches_visual_hierarchy() -> None:
     assert "border-radius: var(--radius-sm);" in workspace_selector
     assert "border-radius: var(--radius-md);" in workspace_popover
     assert "border-radius: var(--radius-xs);" in workspace_check
-    assert "border-radius: var(--radius-lg);" in composer
-    assert (
-        "border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);"
-        in user_message
-    )
-    assert "border-radius: 0 var(--radius-md) var(--radius-md) 0;" in source_chunk
+    assert "border-radius: var(--radius-composer);" in composer
+    assert "border-radius: var(--radius-message);" in user_message
+    assert "var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg)" not in user_message
+    assert "border-radius: var(--radius-surface);" in source_chunk
+    assert "border-radius: 0 var(--radius-surface)" not in source_chunk
     assert "border-radius: var(--radius-sm);" in file_item
     assert "border-radius: var(--radius-md);" in upload_zone
 
