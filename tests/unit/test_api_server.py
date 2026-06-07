@@ -458,7 +458,7 @@ class TestIngestEndpoint:
         assert resp.status_code == 422
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_s3_requires_bucket_and_key(
+    async def test_s3_requires_bucket_and_key_or_prefix(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         resp = await client.post("/ingest", json={"source_type": "s3"})
@@ -510,6 +510,41 @@ class TestIngestEndpoint:
             },
         )
         assert resp.status_code == 200
+
+    async def test_s3_prefix_success(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "s3",
+                "bucket": "my-bucket",
+                "prefix": "docs/",
+            },
+        )
+        assert resp.status_code == 200
+        mock_manager.aingest.assert_awaited_once_with(
+            "default",
+            source_type="s3",
+            bucket="my-bucket",
+            prefix="docs/",
+        )
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_s3_key_and_prefix_mutually_exclusive(
+        self, client: AsyncClient, mock_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "s3",
+                "bucket": "my-bucket",
+                "key": "docs/file.pdf",
+                "prefix": "docs/",
+            },
+        )
+        assert resp.status_code == 400
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_azure_blob_path_and_prefix_mutually_exclusive(

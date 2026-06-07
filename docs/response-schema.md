@@ -28,7 +28,7 @@ try:
         "default",
         source_type="s3",
         bucket="my-bucket",
-        key="docs/q1.pdf",
+        key="docs/q1.pdf",       # or prefix="docs/"
     )
 finally:
     await manager.close()
@@ -48,9 +48,9 @@ curl -X POST http://localhost:8100/ingest \
 | `path` | `string` | local | File or directory path |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
-| `prefix` | `string` | — | Blob/key prefix filter |
+| `prefix` | `string` | azure_blob/s3 | Blob/key prefix filter; mutually exclusive with `blob_path`/`key` |
 | `bucket` | `string` | s3 | S3 bucket name |
-| `key` | `string` | s3 | S3 object key |
+| `key` | `string` | s3 | S3 object key; mutually exclusive with `prefix` |
 | `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |
