@@ -312,6 +312,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
     assert cfg.parser_sidecars.mineru.enable_table is True
     assert cfg.parser_sidecars.mineru.enable_formula is True
+    assert os.environ["LIGHTRAG_PARSER"] == "docx:native-iteP,*:mineru-iteP"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
@@ -933,6 +934,25 @@ def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatc
     cfg.apply_lightrag_backend_env(force=True)
 
     assert "POSTGRES_WORKSPACE" not in os.environ
+
+
+def test_lightrag_parser_env_follows_dlightrag_parser_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LightRAG parser routing must share DlightRAG's product-level policy."""
+    monkeypatch.setenv("LIGHTRAG_PARSER", "pdf:legacy")
+
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        parser={"rules": "docx:native-iteP,pdf:mineru-iteP,*:mineru-iteP"},
+    )
+
+    assert os.environ["LIGHTRAG_PARSER"] == cfg.parser.rules
 
 
 def test_dotenv_rejects_unknown_dlightrag_keys(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

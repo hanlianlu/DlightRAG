@@ -108,16 +108,13 @@ def _filter_by_source_ids(
     items: list[dict[str, Any]],
     included_chunk_ids: set[str],
 ) -> list[dict[str, Any]]:
-    """Keep KG items that are unsourced or sourced by included chunks."""
+    """Keep KG items sourced by chunks included in the final answer context."""
     if not items:
         return []
     filtered: list[dict[str, Any]] = []
     for item in items:
-        source_id = item.get("source_id")
-        if not source_id:
-            filtered.append(item)
-            continue
-        if any(source in included_chunk_ids for source in split_source_ids(str(source_id))):
+        source_ids = split_source_ids(item.get("source_id"))
+        if any(source in included_chunk_ids for source in source_ids):
             filtered.append(item)
     return filtered
 

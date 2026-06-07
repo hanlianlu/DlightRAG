@@ -130,6 +130,48 @@ def test_packer_backfills_answer_context_after_skipping_image_only_chunks() -> N
     assert packed.trace["answer_context_chunks"] == 2
 
 
+def test_packer_drops_kg_items_without_matching_source_chunks() -> None:
+    contexts: RetrievalContexts = {
+        "chunks": [
+            {
+                "chunk_id": "text-1",
+                "reference_id": "1",
+                "file_path": "/docs/report.pdf",
+                "content": "First text candidate.",
+            },
+        ],
+        "entities": [
+            {"entity_name": "Revenue", "description": "Growth", "source_id": "text-1"},
+            {"entity_name": "Unsourced", "description": "No provenance"},
+            {"entity_name": "Skipped", "description": "Not packed", "source_id": "text-2"},
+        ],
+        "relationships": [
+            {
+                "src_id": "Revenue",
+                "tgt_id": "Report",
+                "description": "Appears in the packed chunk",
+                "source_id": "text-1",
+            },
+            {
+                "src_id": "Unsourced",
+                "tgt_id": "Report",
+                "description": "No provenance",
+            },
+            {
+                "src_id": "Skipped",
+                "tgt_id": "Report",
+                "description": "Not packed",
+                "source_id": "text-2",
+            },
+        ],
+    }
+
+    packed = AnswerContextPacker().pack(contexts, image_budget=_budget(max_images=0))
+
+    assert [e["entity_name"] for e in packed.contexts["entities"]] == ["Revenue"]
+    assert [r["src_id"] for r in packed.contexts["relationships"]] == ["Revenue"]
+
+
 def _budget(*, max_images: int) -> AnswerImageBudget:
     return AnswerImageBudget(
         max_images=max_images,

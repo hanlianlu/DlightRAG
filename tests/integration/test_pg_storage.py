@@ -53,6 +53,18 @@ _PG_CONN_KWARGS = dict(
     database="dlightrag",
 )
 
+_TEST_WORKSPACE_ALPHA = "test_pg_storage_alpha"
+_TEST_WORKSPACE_BETA = "test_pg_storage_beta"
+_TEST_WORKSPACES = (_TEST_WORKSPACE_ALPHA, _TEST_WORKSPACE_BETA)
+
+
+async def _delete_test_workspaces(conn) -> None:  # noqa: ANN001
+    """Remove integration-test registry rows from the shared local database."""
+    await conn.execute(
+        "DELETE FROM dlightrag_workspace_meta WHERE workspace = ANY($1::text[])",
+        list(_TEST_WORKSPACES),
+    )
+
 
 # ---------------------------------------------------------------------------
 # RAGServiceManager.list_workspaces — PG workspace discovery
@@ -71,6 +83,7 @@ class TestPGWorkspaceDiscovery:
 
         conn = await asyncpg.connect(**_PG_CONN_KWARGS)
         try:
+            await _delete_test_workspaces(conn)
             await conn.execute("""CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
                 workspace TEXT PRIMARY KEY,
                 embedding_model TEXT NOT NULL,
@@ -78,17 +91,17 @@ class TestPGWorkspaceDiscovery:
                 updated_at TIMESTAMPTZ DEFAULT NOW()
             )""")
 
-            # Insert test rows for two workspaces
+            # Insert test rows for two workspaces.
             await conn.execute(
                 "INSERT INTO dlightrag_workspace_meta (workspace, embedding_model) "
                 "VALUES ($1, $2) ON CONFLICT (workspace) DO UPDATE SET embedding_model = $2",
-                "project-alpha",
+                _TEST_WORKSPACE_ALPHA,
                 "voyage-multimodal-3.5",
             )
             await conn.execute(
                 "INSERT INTO dlightrag_workspace_meta (workspace, embedding_model) "
                 "VALUES ($1, $2) ON CONFLICT (workspace) DO UPDATE SET embedding_model = $2",
-                "project-beta",
+                _TEST_WORKSPACE_BETA,
                 "voyage-multimodal-3.5",
             )
 
@@ -106,15 +119,10 @@ class TestPGWorkspaceDiscovery:
             manager = RAGServiceManager(config=cfg)
             workspaces = await manager.list_workspaces()
 
-            assert "project_alpha" in workspaces
-            assert "project_beta" in workspaces
+            assert _TEST_WORKSPACE_ALPHA in workspaces
+            assert _TEST_WORKSPACE_BETA in workspaces
         finally:
-            # Cleanup test rows
-            await conn.execute(
-                "DELETE FROM dlightrag_workspace_meta WHERE workspace IN ($1, $2)",
-                "project-alpha",
-                "project-beta",
-            )
+            await _delete_test_workspaces(conn)
             await conn.close()
 
     async def test_empty_table_returns_default_workspace(self, pg_check) -> None:
