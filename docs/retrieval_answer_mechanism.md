@@ -145,7 +145,7 @@ semantic multimodal path.
 
 | Strategy | How it works |
 |---|---|
-| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or the default LLM when no rerank model is set. The selected model must support images when retrieved chunks include page/image data. |
+| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `llm.roles.vlm`, `llm.roles.query`, then `llm.default` when no rerank model is set. The selected model must support images when retrieved chunks include page/image data. |
 | `jina_reranker` / `aliyun_reranker` / `local_reranker` | Calls an OpenAI-compatible `/rerank` endpoint with text documents. |
 | `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. |
 

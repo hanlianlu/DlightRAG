@@ -309,8 +309,8 @@ class RerankConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     score_threshold: float = 0.5
-    max_concurrency: int = 4
-    batch_size: int = 7
+    max_concurrency: int = 8
+    batch_size: int = 8
     image_max_bytes: int = Field(
         default=1_500_000,
         description="Maximum compressed binary bytes per image sent to rerank model calls.",
