@@ -9,26 +9,26 @@
     /* ═══════════════════════════════════════════════════════════════════
        LAYER 1: Primitives
        Type and space use utopia.fyi formulas.
-       Viewport: 390px → 1440px | Base: 15px → 16px | Ratio: 1.2
+       Viewport: 390px → 1440px | Base: 15px → 15.5px | Ratio: 1.18
        ═══════════════════════════════════════════════════════════════════ */
 
     /* ── Type scale ── */
-    /* step -2: 10.42px → 11.11px */
-    --step--2: clamp(0.65104rem, 0.066138vi + 0.634921rem, 0.69444rem);
-    /* step -1: 12.50px → 13.33px */
-    --step--1: clamp(0.78125rem, 0.079365vi + 0.761905rem, 0.83333rem);
-    /* step 0: 15.00px → 16.00px */
-    --step-0: clamp(0.93750rem, 0.095238vi + 0.914286rem, 1.00000rem);
-    /* step 1: 18.00px → 19.20px */
-    --step-1: clamp(1.12500rem, 0.114286vi + 1.097143rem, 1.20000rem);
-    /* step 2: 21.60px → 23.04px */
-    --step-2: clamp(1.35000rem, 0.137143vi + 1.316571rem, 1.44000rem);
-    /* step 3: 25.92px → 27.65px */
-    --step-3: clamp(1.62000rem, 0.164571vi + 1.579886rem, 1.72800rem);
-    /* step 4: 31.10px → 33.18px */
-    --step-4: clamp(1.94400rem, 0.197486vi + 1.895863rem, 2.07360rem);
-    /* step 5: 37.32px → 39.81px */
-    --step-5: clamp(2.33280rem, 0.236983vi + 2.275035rem, 2.48832rem);
+    /* step -2: 10.77px → 11.13px */
+    --step--2: clamp(0.67330rem, 0.034199vi + 0.664962rem, 0.69574rem);
+    /* step -1: 12.71px → 13.14px */
+    --step--1: clamp(0.79449rem, 0.040355vi + 0.784655rem, 0.82097rem);
+    /* step 0: 15.00px → 15.50px */
+    --step-0: clamp(0.93750rem, 0.047619vi + 0.925893rem, 0.96875rem);
+    /* step 1: 17.70px → 18.29px */
+    --step-1: clamp(1.10625rem, 0.056190vi + 1.092554rem, 1.14312rem);
+    /* step 2: 20.89px → 21.58px */
+    --step-2: clamp(1.30537rem, 0.066305vi + 1.289213rem, 1.34889rem);
+    /* step 3: 24.65px → 25.47px */
+    --step-3: clamp(1.54034rem, 0.078240vi + 1.521272rem, 1.59169rem);
+    /* step 4: 29.08px → 30.05px */
+    --step-4: clamp(1.81760rem, 0.092323vi + 1.795100rem, 1.87819rem);
+    /* step 5: 34.32px → 35.46px */
+    --step-5: clamp(2.14477rem, 0.108941vi + 2.118219rem, 2.21627rem);
 
     /* ── Space scale (unison multipliers on base step-0) ── */
     /* space-3xs: 4.0px → 4.8px */
@@ -56,6 +56,7 @@
     --radius-sm: 0.5rem;
     --radius-md: 0.625rem;
     --radius-lg: 0.75rem;
+    --radius-xl: 0.875rem;
 
     /* ═══════════════════════════════════════════════════════════════════
        LAYER 2: Semantic Tokens
@@ -104,8 +105,11 @@
     --font-size-section:  var(--step-3);   /* section headers */
 
     /* ── Line heights ── */
-    --line-height-control: 1.55;
-    --line-height-message: 1.65;
+    --line-height-control: 1.5;
+    --line-height-message: 1.58;
+    --space-message-block: var(--space-component);
+    --space-composer-y: calc(var(--space-tight) * 0.625);
+    --space-composer-x: var(--space-tight);
 
     /* ── Space (semantic aliases to Utopia space scale) ── */
     --space-inline:       var(--space-3xs);  /* icon-to-text, badge internal */
@@ -121,6 +125,11 @@
     --layout-panel-width: var(--panel-width);
     --layout-panel-min: 320px;
     --layout-panel-max: 50vw;
+
+    /* ── Radius semantics ── */
+    --radius-surface: var(--radius-md);
+    --radius-composer: var(--radius-xl);
+    --radius-message: var(--radius-xl);
 
     /* ── Interactive sizing ── */
     --size-button: clamp(28px, 2.8vw, 34px);  /* composer buttons, small interactive */
@@ -636,14 +645,14 @@ body {
     align-items: center;
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-lg);
-    padding: var(--space-tight) var(--space-tight);
+    border-radius: var(--radius-composer);
+    padding: var(--space-composer-y) var(--space-composer-x);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .composer-form:focus-within {
     border-color: rgba(210, 182, 97, 0.35);
-    box-shadow: 0 0 0 3px rgba(210, 182, 97, 0.06);
+    box-shadow: 0 0 0 2px rgba(210, 182, 97, 0.06);
 }
 
 .composer-input {
@@ -654,7 +663,7 @@ body {
     font-size: var(--font-size-body);
     font-family: inherit;
     line-height: var(--line-height-control);
-    padding: var(--space-tight) 0;
+    padding: 0;
     outline: none;
     resize: none;
     max-height: 160px;
@@ -692,9 +701,9 @@ body {
 
 .user-message {
     background: var(--color-bg-elevated);
-    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+    border-radius: var(--radius-message);
     padding: var(--space-component) var(--space-related);
-    margin: var(--space-section) 0 var(--space-tight) auto;
+    margin: var(--space-message-block) 0 var(--space-tight) auto;
     max-width: 85%;
     width: fit-content;
     color: var(--color-text-primary);
@@ -709,7 +718,7 @@ body {
 
 .ai-message {
     margin: var(--space-tight) 0 0;
-    padding: var(--space-tight) 0 var(--space-related);
+    padding: var(--space-tight) 0 var(--space-message-block);
     line-height: var(--line-height-message);
 }
 
@@ -962,17 +971,17 @@ body {
 /* === Source Chunks === */
 
 .source-chunk {
-    background: var(--color-bg-elevated);
-    border-left: 3px solid rgba(210, 182, 97, 0.24);
+    background: rgba(28, 25, 23, 0.62);
     padding: var(--space-component) var(--space-related);
     margin-bottom: var(--space-component);
-    border-radius: 0 var(--radius-md) var(--radius-md) 0;
-    transition: border-color 0.15s;
+    border-radius: var(--radius-surface);
+    box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.24);
+    transition: background 0.15s, box-shadow 0.15s;
 }
 
 .source-chunk.active {
-    border-left-color: rgba(210, 182, 97, 0.42);
-    box-shadow: inset 1px 0 0 rgba(210, 182, 97, 0.18);
+    background: rgba(210, 182, 97, 0.035);
+    box-shadow: inset 3px 0 0 rgba(210, 182, 97, 0.42);
 }
 
 .source-chunk-header {
@@ -1026,16 +1035,17 @@ body {
 /* === Semantic Highlight === */
 
 .highlight {
-    background: rgba(210, 182, 97, 0.12);
+    background: rgba(210, 182, 97, 0.14);
     color: var(--color-gold-100);
     padding: 1px var(--space-inline);
     border-radius: 3px;
-    border-bottom: 1.5px solid rgba(210, 182, 97, 0.4);
+    border-bottom: none;
 }
 
 .source-chunk-content .highlight {
-    background: rgba(210, 182, 97, 0.10);
-    color: var(--color-text-secondary);
+    background: rgba(210, 182, 97, 0.18);
+    color: var(--color-text-primary);
+    border-bottom: none;
 }
 
 /* === Show All Button === */
@@ -1893,24 +1903,25 @@ body.panel-open .composer-inner {
     justify-content: center;
     width: var(--size-button);
     height: var(--size-button);
-    background: rgba(41, 37, 36, 0.38);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    color: var(--color-text-tertiary);
     font-size: 14px;
     flex-shrink: 0;
-    opacity: 1;
+    opacity: 0.9;
     text-decoration: none;
-    transition: color 0.15s, background 0.15s, border-color 0.15s, opacity 0.15s;
+    transition: color 0.15s, opacity 0.15s, transform 0.15s;
 }
 .source-dl-icon:hover {
-    background: var(--color-accent-hover);
-    border-color: rgba(210, 182, 97, 0.28);
-    color: var(--color-text-primary);
+    color: var(--color-gold-200);
+    opacity: 1;
+    transform: translateY(-1px);
 }
 
 .source-dl-icon-svg {
-    height: var(--size-icon-sm);
+    height: var(--size-icon-md);
     pointer-events: none;
-    width: var(--size-icon-sm);
+    stroke-width: 1.8;
+    width: var(--size-icon-md);
 }
