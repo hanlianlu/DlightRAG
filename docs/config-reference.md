@@ -204,8 +204,8 @@ those are omitted, it reuses the configured chat model roles in this order:
 ```yaml
 rerank:
   score_threshold: 0.5
-  max_concurrency: 4
-  batch_size: 7
+  max_concurrency: 8
+  batch_size: 8
   image_max_bytes: 1500000
   image_max_total_bytes: 8000000
   image_max_px: 1280
