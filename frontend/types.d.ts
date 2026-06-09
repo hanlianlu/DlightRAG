@@ -17,14 +17,14 @@ interface HTMXAjaxOptions {
   values?: Record<string, string>;
 }
 
-// nanoevents types (pre-declaration before Phase 2 npm install)
+// nanoevents types (aligned with nanoevents@9.1.0 constraint)
 declare module 'nanoevents' {
   export interface Unsubscribe {
     (): void;
   }
-  export interface Emitter<Events extends Record<string, unknown>> {
+  export interface Emitter<Events extends { [key: string]: any }> {
     on<E extends keyof Events>(event: E, fn: (payload: Events[E]) => void): Unsubscribe;
     emit<E extends keyof Events>(event: E, payload: Events[E]): void;
   }
-  export function createNanoEvents<Events extends Record<string, unknown>>(): Emitter<Events>;
+  export function createNanoEvents<Events extends { [key: string]: any }>(): Emitter<Events>;
 }
