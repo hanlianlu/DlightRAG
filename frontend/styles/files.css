@@ -258,6 +258,21 @@
     text-align: center;
 }
 
+/* === Ingest Queue Notice === */
+
+.ingest-queue-notice {
+    padding: var(--space-tight) var(--space-related) 0;
+    font-size: var(--font-size-caption);
+    color: var(--color-text-dim);
+    text-align: center;
+}
+
+.ingest-queue-notice--inline {
+    padding: var(--space-tight) var(--space-component);
+    border-top: 1px solid var(--color-border-subtle);
+    margin-top: var(--space-tight);
+}
+
 #ingest-progress {
     border-bottom: 1px solid var(--color-border-subtle);
 }
