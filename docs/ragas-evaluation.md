@@ -114,13 +114,13 @@ eval credentials from DlightRAG's own config:
 | ``EVAL_LLM_BINDING_HOST`` | ``config.llm.roles.query.base_url`` → ``config.llm.default.base_url`` |
 | ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
 | ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
-| ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` |
+| ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` (simple), or auto-generated JWT ``sub=ragas-eval`` (jwt) |
 
 This means **no extra ``.env`` entries are needed** when DlightRAG already
 has a working LLM config (OpenAI, OpenRouter, or any OpenAI-compatible endpoint).
 Native-SDK-only providers (Anthropic, Gemini) need an explicit
 ``EVAL_LLM_BINDING_API_KEY`` because RAGAS requires an OpenAI-compatible API.
-The API bearer token auto-resolves from DlightRAG's auth config.
+The API bearer token auto-resolves for both ``simple`` and ``jwt`` auth modes.
 
 ### Explicit overrides
 
