@@ -49,6 +49,10 @@ dlightrag_storage/
 .ruff_cache/
 .mypy_cache/
 
+# Node.js
+node_modules/
+frontend/node_modules/
+
 # Testing
 .pytest_cache/
 htmlcov/
