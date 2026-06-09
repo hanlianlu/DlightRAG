@@ -7,12 +7,12 @@ import pytest
 
 
 @pytest.mark.e2e
-def test_citation_click_opens_source(page):
+def test_citation_click_opens_source(_page):
     """Verify clicking a citation badge opens the source panel."""
     pass
 
 
 @pytest.mark.e2e
-def test_source_expand_collapse(page):
+def test_source_expand_collapse(_page):
     """Verify source panel expand/collapse toggle works."""
     pass

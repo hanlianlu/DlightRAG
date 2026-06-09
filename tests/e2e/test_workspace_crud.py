@@ -7,18 +7,18 @@ import pytest
 
 
 @pytest.mark.e2e
-def test_workspace_popover_opens(page):
+def test_workspace_popover_opens(_page):
     """Verify the workspace popover renders on click."""
     pass
 
 
 @pytest.mark.e2e
-def test_workspace_create(page):
+def test_workspace_create(_page):
     """Verify a new workspace can be created and selected."""
     pass
 
 
 @pytest.mark.e2e
-def test_workspace_delete(page):
+def test_workspace_delete(_page):
     """Verify a workspace can be deleted from the popover."""
     pass
