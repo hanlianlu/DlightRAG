@@ -1,5 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+declare module '*.module.css' {
+  const classes: { readonly [key: string]: string };
+  export default classes;
+}
+
 interface Window {
   __DLIGHTRAG_STATIC_VERSION__: string;
   htmx: HTMXGlobal;
