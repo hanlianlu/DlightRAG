@@ -6,6 +6,13 @@ import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
 import chatStyles from '../styles/chat.module.css';
 
+// Security: all SSE HTML payloads are sanitized server-side by nh3
+// (src/dlightrag/web/safe_html.py → sanitize_html_fragment()) before they
+// reach any innerHTML below.  The sanitizer strips <script>, <style>,
+// <iframe>, on* attributes, and restricts URLs to http/https/data:image/.
+// If you add a new innerHTML call, ensure the data flows through
+// safe_answer_preview / safe_answer_done / safe_source_panel.
+
 function activateChatMode() {
     const app = document.querySelector('.app');
     if (app && !app.classList.contains('has-messages')) app.classList.add('has-messages');

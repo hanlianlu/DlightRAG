@@ -24,7 +24,7 @@ def test_lightrag_dependency_tracks_stable_1_5_release() -> None:
     dependencies = _dependencies()
     lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
 
-    assert lightrag_deps == ["lightrag-hku>=1.5.0"]
+    assert lightrag_deps == ["lightrag-hku>=1.5.1"]
 
 
 def test_langfuse_dependency_has_no_upper_bound() -> None:

@@ -262,6 +262,31 @@
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
+/* === Ingest Status (spinner + status text) === */
+
+.file-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-tight);
+    padding: var(--space-tight) var(--space-related) 0;
+    font-size: var(--font-size-detail);
+    color: var(--color-text-muted);
+}
+
+.spinner {
+    width: calc(var(--size-icon-sm) * 0.75);
+    height: calc(var(--size-icon-sm) * 0.75);
+    border: 1.5px solid var(--color-border-subtle);
+    border-top-color: var(--color-gold-200);
+    border-radius: 50%;
+    flex-shrink: 0;
+    animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
 /* === Upload Zone (Files Panel) === */
 
 .upload-zone {
@@ -273,6 +298,23 @@
     cursor: pointer;
     margin-bottom: var(--space-related);
     transition: border-color 0.2s, background 0.2s;
+}
+
+.upload-icon {
+    color: var(--color-text-dim);
+    margin-bottom: var(--space-tight);
+}
+
+.upload-text {
+    font-size: var(--font-size-body);
+    color: var(--color-text-muted);
+    margin-bottom: var(--space-inline);
+}
+
+.upload-hint {
+    font-size: var(--font-size-caption);
+    color: var(--color-text-dim);
+    margin-bottom: var(--space-component);
 }
 
 .upload-zone:hover {
