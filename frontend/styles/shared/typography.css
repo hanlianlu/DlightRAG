@@ -1,0 +1,17 @@
+/* DlightRAG — Shared typography utilities. */
+
+.caption {
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.monospace {
+  font-family: 'SF Mono', 'Cascadia Code', ui-monospace, monospace;
+  font-size: 0.9em;
+}
+
+.textError {
+  color: #f87171;
+}

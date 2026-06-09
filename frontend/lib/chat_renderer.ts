@@ -4,6 +4,7 @@ import {conversationStore} from '../stores/conversationStore.ts';
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
+import chatStyles from '../styles/chat.module.css';
 
 function activateChatMode() {
     const app = document.querySelector('.app');
@@ -24,10 +25,10 @@ function markOutOfContext(historyKept) {
     if (!chatMessages) return;
     const outOfContextCount = conversationStore.historyWindow.length - historyKept;
     if (outOfContextCount <= 0) {
-        chatMessages.querySelectorAll('.out-of-context').forEach(function(el) {
-            el.classList.remove('out-of-context');
+        chatMessages.querySelectorAll('.' + chatStyles.outOfContext).forEach(function(el) {
+            el.classList.remove(chatStyles.outOfContext);
         });
-        const old = chatMessages.querySelector('.context-divider');
+        const old = chatMessages.querySelector('.' + chatStyles.contextDivider);
         if (old) old.remove();
         return;
     }
@@ -35,21 +36,21 @@ function markOutOfContext(historyKept) {
     let msgIndex = 0;
     let dividerInsertBefore = null;
     Array.from(chatMessages.children).forEach(function(node) {
-        if (node.classList.contains('context-divider')) return;
+        if (node.classList.contains(chatStyles.contextDivider)) return;
         if (msgIndex < outOfContextCount) {
-            node.classList.add('out-of-context');
+            node.classList.add(chatStyles.outOfContext);
         } else {
-            node.classList.remove('out-of-context');
+            node.classList.remove(chatStyles.outOfContext);
             if (dividerInsertBefore === null) dividerInsertBefore = node;
         }
         msgIndex++;
     });
 
-    const existing = chatMessages.querySelector('.context-divider');
+    const existing = chatMessages.querySelector('.' + chatStyles.contextDivider);
     if (existing) existing.remove();
     if (dividerInsertBefore) {
         const divider = document.createElement('div');
-        divider.className = 'context-divider';
+        divider.className = chatStyles.contextDivider;
         divider.textContent = 'Above messages are outside AI memory';
         chatMessages.insertBefore(divider, dividerInsertBefore);
     }
@@ -66,31 +67,31 @@ export function createChatTurn(query) {
     activateChatMode();
 
     const userWrapper = document.createElement('div');
-    userWrapper.className = 'user-message-wrapper';
+    userWrapper.className = chatStyles.userMessageWrapper;
     renderMessageImages(userWrapper);
 
     const userDiv = document.createElement('div');
-    userDiv.className = 'user-message';
+    userDiv.className = chatStyles.userMessage;
     userDiv.textContent = query;
     userWrapper.appendChild(userDiv);
     chatMessages.appendChild(userWrapper);
 
     const aiDiv = document.createElement('div');
-    aiDiv.className = 'ai-message';
+    aiDiv.className = chatStyles.aiMessage;
 
     const headerDiv = document.createElement('div');
-    headerDiv.className = 'ai-message-header';
+    headerDiv.className = chatStyles.aiMessageHeader;
     const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.textContent = '\u25CF';
+    dot.className = chatStyles.dot;
+    dot.textContent = '●';
     headerDiv.appendChild(dot);
     headerDiv.appendChild(document.createTextNode(' DlightRAG'));
     aiDiv.appendChild(headerDiv);
 
     const contentDiv = document.createElement('div');
-    contentDiv.className = 'ai-message-content';
+    contentDiv.className = chatStyles.aiMessageContent;
     const streamingDot = document.createElement('span');
-    streamingDot.className = 'streaming-dot';
+    streamingDot.className = chatStyles.streamingDot;
     contentDiv.appendChild(streamingDot);
     aiDiv.appendChild(contentDiv);
 
@@ -103,7 +104,7 @@ export function createChatTurn(query) {
 
 export function setAnswerError(turn, message) {
     turn.contentDiv.textContent = typeof message === 'string' ? message : 'Service error. Please try again.';
-    turn.contentDiv.classList.add('text-error');
+    turn.contentDiv.classList.add(chatStyles.textError);
 }
 
 export function createAnswerRenderer(turn) {
@@ -187,10 +188,10 @@ export function createAnswerRenderer(turn) {
             generating: 'Generating answer...',
         };
         const label = labels[info.phase] || info.phase;
-        const dot = turn.contentDiv.querySelector('.streaming-dot');
+        const dot = turn.contentDiv.querySelector('.' + chatStyles.streamingDot);
         if (dot) {
             dot.textContent = '';
-            dot.className = 'streaming-dot progress-phase';
+            dot.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
             dot.setAttribute('data-phase', label || '');
         }
     }

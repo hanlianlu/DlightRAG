@@ -1,0 +1,163 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * workspaces.module.css — CSS Module for workspace popover JS-generated DOM.
+ */
+
+.workspacePopover {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
+  display: flex;
+  flex-direction: column;
+  left: 0;
+  max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-tight);
+  position: absolute;
+  top: calc(100% + 6px);
+  width: clamp(220px, 22vw, 280px);
+  z-index: 1000;
+}
+
+.workspacePopoverItem {
+  align-items: center;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--font-size-detail);
+  gap: var(--space-component);
+  padding: var(--space-tight) var(--space-component);
+  transition: background 0.1s;
+}
+
+.workspacePopoverItem:hover,
+.workspacePopoverItem:focus-visible {
+  background: var(--color-bg-hover);
+  outline: none;
+}
+
+.workspacePopoverAll {
+  color: var(--color-gold-100);
+}
+
+.workspacePopoverCheck {
+  align-items: center;
+  border: 1.5px solid var(--color-text-subtle);
+  border-radius: var(--radius-xs);
+  display: flex;
+  flex-shrink: 0;
+  height: var(--size-icon-sm);
+  justify-content: center;
+  transition: all 0.15s;
+  width: var(--size-icon-sm);
+}
+
+.workspacePopoverCheck.on {
+  background: var(--color-gold-200);
+  border-color: var(--color-gold-200);
+}
+
+.workspacePopoverCheck.on::after {
+  color: var(--color-bg-base);
+  content: '\2713';
+  font-size: var(--font-size-caption);
+  font-weight: 700;
+  line-height: 1;
+}
+
+.on {
+  /* Modifier for workspacePopoverCheck — standalone for classList use */
+}
+
+.workspacePopoverName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspacePopoverDelete {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  display: flex;
+  flex-shrink: 0;
+  font-size: var(--font-size-caption);
+  height: var(--size-icon-md);
+  justify-content: center;
+  opacity: 0.45;
+  transition: all 0.15s;
+  width: var(--size-icon-md);
+}
+
+@media (hover: hover) {
+  .workspacePopoverDelete {
+    opacity: 0;
+  }
+
+  .workspacePopoverItem:hover .workspacePopoverDelete {
+    opacity: 1;
+  }
+}
+
+.workspacePopoverDelete:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--color-danger);
+}
+
+.workspacePopoverCreate {
+  align-items: center;
+  border-top: 1px solid var(--color-border-subtle);
+  display: flex;
+  gap: var(--space-tight);
+  margin-top: var(--space-tight);
+  padding: var(--space-tight) 0 0;
+}
+
+.workspacePopoverInput {
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  flex: 1;
+  font-size: var(--font-size-detail);
+  min-width: 0;
+  outline: none;
+  padding: var(--space-tight) var(--space-tight);
+}
+
+.workspacePopoverInput:focus {
+  border-color: rgba(210, 182, 97, 0.38);
+}
+
+.workspacePopoverInput::placeholder {
+  color: var(--color-text-dim);
+}
+
+.workspacePopoverCreateBtn {
+  align-items: center;
+  background: rgba(87, 74, 36, 0.28);
+  border: 1px solid rgba(210, 182, 97, 0.24);
+  border-radius: var(--radius-sm);
+  color: var(--color-gold-100);
+  cursor: pointer;
+  display: flex;
+  flex-shrink: 0;
+  font-size: var(--font-size-body);
+  height: clamp(28px, 2.8vw, 34px);
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+  width: clamp(28px, 2.8vw, 34px);
+}
+
+.workspacePopoverCreateBtn:hover {
+  background: rgba(87, 74, 36, 0.42);
+  border-color: rgba(210, 182, 97, 0.4);
+}

@@ -2,6 +2,7 @@
 
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
+import workspaceStyles from '../styles/workspaces.module.css';
 
 let popoverEl = null;
 
@@ -110,12 +111,12 @@ export function openWorkspacePopover() {
     selector.classList.add('open');
 
     const popover = document.createElement('div');
-    popover.className = 'workspace-popover';
+    popover.className = workspaceStyles.workspacePopover;
     popover.setAttribute('role', 'listbox');
     popover.setAttribute('aria-label', 'Workspaces');
 
     const allItem = document.createElement('div');
-    allItem.className = 'workspace-popover-item workspace-popover-all';
+    allItem.className = `${workspaceStyles.workspacePopoverItem} ${workspaceStyles.workspacePopoverAll}`;
     allItem.setAttribute('tabindex', '0');
     allItem.setAttribute('role', 'option');
     const allCheck = document.createElement('div');
@@ -123,7 +124,7 @@ export function openWorkspacePopover() {
     const isAllSelected = allIds.length > 0 && allIds.every(
         (workspace) => workspaceStore.active.indexOf(workspace) >= 0,
     );
-    allCheck.className = `workspace-popover-check${isAllSelected ? ' on' : ''}`;
+    allCheck.className = `${workspaceStyles.workspacePopoverCheck}${isAllSelected ? ' ' + workspaceStyles.on : ''}`;
     allItem.appendChild(allCheck);
     allItem.appendChild(document.createTextNode('All Workspaces'));
     allItem.addEventListener('click', (event) => {
@@ -140,23 +141,23 @@ export function openWorkspacePopover() {
 
     workspaceStore.records.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)).forEach((record) => {
         const item = document.createElement('div');
-        item.className = 'workspace-popover-item';
+        item.className = workspaceStyles.workspacePopoverItem;
         item.setAttribute('tabindex', '0');
         item.setAttribute('role', 'option');
         item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
         const check = document.createElement('div');
-        check.className = `workspace-popover-check${workspaceStore.active.indexOf(record.workspace) >= 0 ? ' on' : ''}`;
+        check.className = `${workspaceStyles.workspacePopoverCheck}${workspaceStore.active.indexOf(record.workspace) >= 0 ? ' ' + workspaceStyles.on : ''}`;
         item.appendChild(check);
 
         const name = document.createElement('span');
-        name.className = 'workspace-popover-name';
+        name.className = workspaceStyles.workspacePopoverName;
         name.textContent = record.displayName;
         item.appendChild(name);
 
         const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'workspace-popover-delete';
+        deleteBtn.className = workspaceStyles.workspacePopoverDelete;
         deleteBtn.type = 'button';
-        deleteBtn.textContent = '\u2715';
+        deleteBtn.textContent = '✕';
         deleteBtn.title = 'Delete workspace';
         deleteBtn.addEventListener('click', (event) => {
             event.stopPropagation();
@@ -169,14 +170,14 @@ export function openWorkspacePopover() {
             if (event.target === deleteBtn) return;
             event.stopPropagation();
             toggleWorkspace(record.workspace);
-            check.classList.toggle('on', workspaceStore.active.indexOf(record.workspace) >= 0);
+            check.classList.toggle(workspaceStyles.on, workspaceStore.active.indexOf(record.workspace) >= 0);
             item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
         });
         item.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 toggleWorkspace(record.workspace);
-                check.classList.toggle('on', workspaceStore.active.indexOf(record.workspace) >= 0);
+                check.classList.toggle(workspaceStyles.on, workspaceStore.active.indexOf(record.workspace) >= 0);
                 item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
             }
         });
@@ -195,10 +196,10 @@ export function openWorkspacePopover() {
 
 function createRow() {
     const row = document.createElement('div');
-    row.className = 'workspace-popover-create';
+    row.className = workspaceStyles.workspacePopoverCreate;
 
     const input = document.createElement('input');
-    input.className = 'workspace-popover-input';
+    input.className = workspaceStyles.workspacePopoverInput;
     input.type = 'text';
     input.placeholder = 'New workspace...';
     input.addEventListener('click', (event) => event.stopPropagation());
@@ -211,7 +212,7 @@ function createRow() {
     row.appendChild(input);
 
     const button = document.createElement('button');
-    button.className = 'workspace-popover-create-btn';
+    button.className = workspaceStyles.workspacePopoverCreateBtn;
     button.type = 'button';
     button.textContent = '+';
     button.addEventListener('click', (event) => {
@@ -293,7 +294,7 @@ function setupWorkspaceEvents() {
     if (selector && !selector.dataset.bound) {
         selector.dataset.bound = 'true';
         selector.addEventListener('click', (event) => {
-            if (event.target.closest('.workspace-popover')) return;
+            if (event.target.closest('.' + workspaceStyles.workspacePopover)) return;
             openWorkspacePopover();
         });
         selector.addEventListener('keydown', (event) => {

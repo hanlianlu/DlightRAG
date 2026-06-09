@@ -1,0 +1,8 @@
+/* DlightRAG — Shared hover pattern. Use via `composes:` in CSS Modules. */
+
+.hoverRaised {
+  transition: all 0.15s;
+}
+.hoverRaised:hover {
+  background: var(--color-bg-hover);
+}

@@ -6,11 +6,6 @@ import '../styles/layout.css';
 import '../styles/files.css';
 import '../styles/sources.css';
 
-function versionedModule(path: string): string {
-    const version = window.__DLIGHTRAG_STATIC_VERSION__ || 'dev';
-    return `${path}?v=${encodeURIComponent(version)}`;
-}
-
 document.addEventListener('DOMContentLoaded', async function() {
     const [
         {setupQueryForm},
@@ -22,14 +17,14 @@ document.addEventListener('DOMContentLoaded', async function() {
         {setupFolderInput},
         {initWorkspaces},
     ] = await Promise.all([
-        import(versionedModule('./chat.ts')),
-        import(versionedModule('./htmx.ts')),
-        import(versionedModule('./images.ts')),
-        import(versionedModule('./mathjax.ts')),
-        import(versionedModule('./panel.ts')),
-        import(versionedModule('./resize.ts')),
-        import(versionedModule('./folder-upload.ts')),
-        import(versionedModule('./workspaces.ts')),
+        import('./chat.ts'),
+        import('./htmx.ts'),
+        import('./images.ts'),
+        import('./mathjax.ts'),
+        import('./panel.ts'),
+        import('./resize.ts'),
+        import('./folder-upload.ts'),
+        import('./workspaces.ts'),
     ]);
 
     initWorkspaces();
