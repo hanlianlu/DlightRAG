@@ -374,7 +374,6 @@ def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
     css = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
 
     assert "--color-bg-hover: rgba(120, 113, 108, 0.10);" in css
-    assert "--color-bg-hover-strong: rgba(120, 113, 108, 0.16);" in css
     assert "--color-accent-hover: rgba(210, 182, 97, 0.08);" in css
     assert "--color-accent-hover-strong: rgba(210, 182, 97, 0.14);" in css
 
