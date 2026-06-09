@@ -1,10 +1,13 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import chatStyles from '../styles/chat.module.css';
 import {renderMath} from './mathjax.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import {createWorkspace} from './workspaces.ts';
+
+const AI_MESSAGE_SELECTOR = '.' + chatStyles.aiMessage;
 
 let ingestPopoverEl = null;
 
@@ -275,7 +278,7 @@ export function closePanel() {
 
 function openRefSource(refItem) {
     const ref = refItem.dataset.ref;
-    const answerEl = refItem.closest('.ai-message');
+    const answerEl = refItem.closest(AI_MESSAGE_SELECTOR);
     if (!answerEl) return;
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
@@ -308,7 +311,7 @@ export function filterSource(badge) {
     const ref = badge.dataset.ref;
     const chunk = badge.dataset.chunk;
     const panelContent = document.getElementById('panel-content');
-    const answerEl = badge.closest('.ai-message');
+    const answerEl = badge.closest(AI_MESSAGE_SELECTOR);
     if (!panelContent || !answerEl) return;
     const sourceData = answerEl.querySelector('.source-data');
     if (!sourceData) return;
