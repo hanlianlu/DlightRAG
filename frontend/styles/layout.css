@@ -1,0 +1,476 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * Fluid design system: type, spacing, and layout scale with viewport width.
+ * On phones (390px) → compact but readable.
+ * On laptops (1440px) → slightly more relaxed without changing UI character.
+ *
+ * layout.css — Static layout shell: topbar, workspace selector (static parts),
+ * chat area container, composer, panel (slide-out), welcome state, workspace
+ * dialog, and responsive media queries.
+ */
+
+/* === Layout === */
+
+.app {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* === Top Bar — ghost style === */
+
+.topbar {
+    display: flex;
+    align-items: center;
+    padding: var(--space-tight) var(--space-related);
+    flex-shrink: 0;
+}
+
+.topbar-spacer { flex: 1; }
+
+.topbar-btn,
+.upload-btn,
+.show-all-btn {
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.topbar-btn {
+    background: transparent;
+    border: none;
+    color: var(--color-text-subtle);
+    flex-shrink: 0;
+    padding: var(--space-tight) var(--space-component);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.topbar-btn:hover {
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-elevated);
+}
+
+.workspace-selector {
+    align-items: center;
+    background: rgba(41, 37, 36, 0.56);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-subtle);
+    cursor: pointer;
+    display: inline-flex;
+    flex: 0 1 auto;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    gap: var(--space-tight);
+    max-width: min(320px, 58vw);
+    min-width: 0;
+    padding: var(--space-tight) var(--space-related);
+    position: relative;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.workspace-selector:hover,
+.workspace-selector.open {
+    background: var(--color-bg-hover);
+    border-color: rgba(210, 182, 97, 0.22);
+}
+
+.workspace-dot {
+    background: rgba(210, 182, 97, 0.72);
+    border-radius: 50%;
+    flex-shrink: 0;
+    height: var(--space-tight);
+    width: var(--space-tight);
+}
+
+.workspace-dot.multi {
+    background: transparent;
+    border: 1px solid rgba(210, 182, 97, 0.72);
+    border-radius: 999px;
+    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 rgba(210, 182, 97, 0.72);
+    width: var(--space-related);
+}
+
+.workspace-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.workspace-caret {
+    color: var(--color-text-subtle);
+    flex-shrink: 0;
+}
+
+/* === Chat Area === */
+
+.chat-area {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 var(--space-section);
+}
+
+.chat-messages {
+    max-width: var(--layout-content-width);
+    margin: 0 auto;
+    padding-bottom: var(--space-section);
+}
+
+/* === Welcome State === */
+
+.welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 50vh;
+    padding-top: 20vh;
+}
+
+.welcome-brand {
+    font-size: var(--font-size-welcome-brand);
+    font-weight: 600;
+    color: var(--color-text-primary);
+    letter-spacing: 0;
+    margin-bottom: var(--space-tight);
+}
+
+.welcome-sub {
+    font-size: var(--font-size-body);
+    color: var(--color-text-subtle);
+}
+
+.app.has-messages .welcome { display: none; }
+
+/* === Composer — ChatGPT-style input === */
+
+.composer {
+    flex-shrink: 0;
+    padding: 0 var(--space-section) var(--space-section);
+    display: flex;
+    justify-content: center;
+}
+
+/* Initial: keep the welcome copy visible while nudging the composer upward. */
+.app:not(.has-messages) .chat-area {
+    flex: 1;
+    overflow: hidden;
+}
+
+.app:not(.has-messages) .welcome {
+    min-height: 42vh;
+    padding-top: clamp(17vh, 18vh, 20vh);
+    padding-bottom: var(--space-section);
+}
+
+.app:not(.has-messages) .composer {
+    flex: 0 0 auto;
+    padding-bottom: clamp(28vh, 30vh, 32vh);
+}
+
+.composer-inner {
+    width: 100%;
+    max-width: var(--layout-content-width);
+}
+
+.composer-form {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-composer);
+    padding: var(--space-composer-y) var(--space-composer-trailing) var(--space-composer-y) var(--space-composer-leading);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.composer-form:focus-within {
+    border-color: rgba(210, 182, 97, 0.35);
+    box-shadow: 0 0 0 2px rgba(210, 182, 97, 0.06);
+}
+
+.composer-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--color-text-primary);
+    font-size: var(--font-size-body);
+    font-family: inherit;
+    line-height: var(--line-height-control);
+    padding: 0;
+    min-height: calc(var(--font-size-body) * var(--line-height-control));
+    outline: none;
+    resize: none;
+    max-height: 160px;
+    overflow-y: hidden;
+}
+
+.composer-input::placeholder {
+    color: var(--color-text-dim);
+}
+
+.composer-send {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--size-button);
+    height: var(--size-button);
+    border-radius: 50%;
+    border: none;
+    background: var(--color-gold-500);
+    color: var(--color-gold-100);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, transform 0.1s;
+}
+
+.composer-send:hover {
+    background: var(--color-gold-400);
+}
+
+.composer-send:active {
+    transform: scale(0.92);
+}
+
+/* === Composer + Button === */
+
+.composer-plus {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--size-button);
+    height: var(--size-button);
+    background: transparent;
+    border: none;
+    color: rgba(210, 182, 97, 0.78);
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    border-radius: 50%;
+    transition: color 0.15s, background 0.15s;
+}
+
+.composer-plus-icon {
+    height: var(--size-composer-plus-icon);
+    pointer-events: none;
+    stroke-width: var(--stroke-composer-plus-icon);
+    width: var(--size-composer-plus-icon);
+}
+
+.composer-plus:hover {
+    color: var(--color-gold-200);
+    background: var(--color-bg-elevated);
+}
+
+.composer-form.multiline {
+    align-items: flex-end;
+}
+.composer-form.multiline .composer-plus {
+    align-self: flex-start;
+    margin-top: var(--space-inline);
+}
+.composer-form.multiline .composer-send {
+    align-self: flex-end;
+    margin-bottom: var(--space-inline);
+}
+
+/* === Slide-Out Panel === */
+
+.panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: var(--layout-panel-width);
+    max-width: 50vw;
+    min-width: var(--layout-panel-min);
+    height: 100vh;
+    background: var(--color-bg-surface);
+    border-left: 1px solid var(--color-border-subtle);
+    backdrop-filter: blur(20px);
+    transform: translateX(100%);
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.3);
+}
+
+.panel.open {
+    transform: translateX(0);
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-tight);
+    padding: var(--space-related) var(--space-section);
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.panel-close {
+    margin-left: auto;
+}
+
+#panel-title {
+    color: var(--color-text-subtle);
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    letter-spacing: 1.5px;
+}
+
+.panel-close {
+    background: none;
+    border: none;
+    color: var(--color-text-dim);
+    font-size: var(--font-size-body);
+    cursor: pointer;
+    padding: var(--space-inline) var(--space-tight);
+    border-radius: var(--radius-sm);
+    transition: background 0.15s, color 0.15s;
+}
+
+.panel-close:hover {
+    color: var(--color-text-tertiary);
+    background: var(--color-bg-elevated);
+}
+
+.panel-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--space-related) var(--space-section);
+}
+
+/* === Workspace Dialog === */
+
+.workspace-dialog {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52);
+    color: var(--color-text-secondary);
+    max-width: clamp(320px, 32vw, 420px);
+    padding: var(--space-section);
+    width: min(380px, calc(100vw - 32px));
+}
+
+.workspace-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.58);
+}
+
+.workspace-dialog-title {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-subhead);
+    font-weight: 600;
+    margin-bottom: var(--space-component);
+}
+
+.workspace-dialog-text {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: 1.5;
+}
+
+.workspace-dialog-name {
+    color: var(--color-gold-100);
+    font-size: var(--font-size-body);
+    font-weight: 600;
+    margin: var(--space-tight) 0;
+    overflow-wrap: anywhere;
+}
+
+.workspace-dialog-input {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-detail);
+    margin: var(--space-component) 0;
+    outline: none;
+    padding: var(--space-tight) var(--space-component);
+    width: 100%;
+}
+
+.workspace-dialog-input:focus {
+    border-color: rgba(210, 182, 97, 0.38);
+}
+
+.workspace-dialog-actions {
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: flex-end;
+}
+
+.workspace-dialog-cancel,
+.workspace-dialog-delete {
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-component);
+}
+
+.workspace-dialog-cancel {
+    background: transparent;
+    border: 1px solid var(--color-border-strong);
+    color: var(--color-text-secondary);
+}
+
+.workspace-dialog-delete {
+    background: #b91c1c;
+    border: none;
+    color: var(--color-text-primary);
+}
+
+.workspace-dialog-delete:disabled {
+    cursor: not-allowed;
+    opacity: 0.42;
+}
+
+/* Panel-open layout: primary app chrome shifts left */
+body.panel-open .topbar {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+body.panel-open .chat-area {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+body.panel-open .composer {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* Chat content shrinks to fit when panel is open, capped by fluid width */
+body.panel-open .chat-messages {
+    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
+}
+body.panel-open .composer-inner {
+    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
+}
+
+@media (max-width: 640px) {
+    .panel {
+        border-left: none;
+        max-width: none;
+        min-width: 0;
+        width: 100vw;
+    }
+
+    .panel-resize-handle {
+        display: none;
+    }
+
+    body.panel-open .topbar,
+    body.panel-open .chat-area,
+    body.panel-open .composer {
+        margin-right: 0;
+    }
+
+    body.panel-open .chat-messages,
+    body.panel-open .composer-inner {
+        max-width: var(--layout-content-width);
+    }
+}

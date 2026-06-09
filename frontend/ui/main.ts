@@ -2,6 +2,9 @@
 
 import '../tokens/utopia.css';
 import '../styles/global.css';
+import '../styles/layout.css';
+import '../styles/files.css';
+import '../styles/sources.css';
 
 function versionedModule(path: string): string {
     const version = window.__DLIGHTRAG_STATIC_VERSION__ || 'dev';
