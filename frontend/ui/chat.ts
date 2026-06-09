@@ -1,6 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {activeWorkspaces, appendExchange, getHistoryWindow, getSessionId} from '../stores/state.ts';
+import {workspaceStore} from '../stores/workspaceStore.ts';
+import {conversationStore} from '../stores/conversationStore.ts';
+import {sessionStore} from '../stores/sessionStore.ts';
 import {clearImages, getPendingImageData} from './images.ts';
 import {closePanel} from './panel.ts';
 import {streamSSE} from '../lib/sse.ts';
@@ -34,9 +36,9 @@ export async function submitQuery(query) {
             body: JSON.stringify({
                 query: query,
                 images: imageData,
-                workspaces: activeWorkspaces,
-                conversation_history: getHistoryWindow(),
-                session_id: getSessionId(),
+                workspaces: workspaceStore.active,
+                conversation_history: conversationStore.historyWindow,
+                session_id: sessionStore.sessionId,
             }),
         });
 
@@ -57,7 +59,7 @@ export async function submitQuery(query) {
     }
 
     if (success && renderer && renderer.answer) {
-        appendExchange(query, renderer.answer, renderer.imageIds);
+        conversationStore.append(query, renderer.answer, renderer.imageIds);
     }
 }
 
