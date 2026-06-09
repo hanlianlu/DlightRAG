@@ -7,7 +7,7 @@ import pytest
 
 
 @pytest.mark.e2e
-def test_chat_submit_streams_answer(page):
+def test_chat_submit_streams_answer(_page):
     """Submit a query and verify SSE streaming produces answer content."""
     # TODO: Wire app transport, then:
     # page.goto("/")
@@ -18,12 +18,12 @@ def test_chat_submit_streams_answer(page):
 
 
 @pytest.mark.e2e
-def test_chat_answer_shows_citations(page):
+def test_chat_answer_shows_citations(_page):
     """Verify citation badges render after answer completion."""
     pass
 
 
 @pytest.mark.e2e
-def test_chat_history_appends_turns(page):
+def test_chat_history_appends_turns(_page):
     """Verify conversation history accumulates in the DOM."""
     pass

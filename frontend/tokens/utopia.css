@@ -73,6 +73,7 @@
     --color-bg-elevated: #292524;
     --color-bg-subtle: #14110f;
     --color-bg-hover: rgba(120, 113, 108, 0.10);
+    --color-bg-hover-strong: rgba(120, 113, 108, 0.16);
     --color-accent-hover: rgba(210, 182, 97, 0.08);
     --color-accent-hover-strong: rgba(210, 182, 97, 0.14);
 

@@ -7,12 +7,12 @@ import pytest
 
 
 @pytest.mark.e2e
-def test_ingestion_panel_opens(page):
+def test_ingestion_panel_opens(_page):
     """Verify the file ingestion panel renders on click."""
     pass
 
 
 @pytest.mark.e2e
-def test_file_upload_shows_progress(page):
+def test_file_upload_shows_progress(_page):
     """Verify file upload shows progress feedback in the UI."""
     pass
