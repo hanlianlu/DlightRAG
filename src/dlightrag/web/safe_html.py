@@ -50,6 +50,7 @@ _ALLOWED_TAGS = {
     "sub",
     "summary",
     "sup",
+    "svg",
     "table",
     "tbody",
     "td",
@@ -59,10 +60,20 @@ _ALLOWED_TAGS = {
     "tr",
     "u",
     "ul",
+    # SVG shape elements (used by source panel download icons)
+    "path",
+    "line",
+    "polyline",
 }
 
 _ALLOWED_ATTRS: dict[str, set[str]] = {
-    "*": {"class", "hidden", "id", "role", "tabindex", "title"},
+    "*": {
+        "class", "hidden", "id", "role", "tabindex", "title",
+        # SVG presentation attributes (download icon, upload icons)
+        "d", "fill", "points", "stroke", "stroke-linecap",
+        "stroke-linejoin", "stroke-width", "viewbox",
+        "width", "height", "x1", "x2", "y1", "y2",
+    },
     "a": {"download", "href", "title"},
     "button": {"type"},
     "col": {"span"},
