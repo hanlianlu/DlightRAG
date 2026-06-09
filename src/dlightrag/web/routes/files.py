@@ -296,14 +296,14 @@ async def upload_files(
             # the batch-level processed count.
             if results:
                 succeeded = sum(
-                    1 for r in results
-                    if isinstance(r, dict) and r.get("source_kind") != "skipped"
+                    1
+                    for r in results
+                    if isinstance(r, dict)
+                    and r.get("source_kind") != "skipped"
                     and not r.get("error")
                 )
             else:
-                succeeded = (
-                    result.get("processed", 0) if isinstance(result, dict) else 0
-                )
+                succeeded = result.get("processed", 0) if isinstance(result, dict) else 0
             if succeeded < len(saved_paths) or batch_errors:
                 logger.warning(
                     "Background ingest finished for workspace %s: %d/%d succeeded%s",
