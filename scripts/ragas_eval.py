@@ -8,6 +8,11 @@ two-stage pipeline concurrency, progress bars, and CSV/JSON export.
 Only :meth:`generate_rag_response` is overridden to call DlightRAG's
 ``/api/answer`` instead of LightRAG's ``/query``.
 
+When ``EVAL_LLM_BINDING_API_KEY`` is not set, the adapter auto-resolves
+eval credentials from DlightRAG's own config (query role → default LLM,
+cascading down to the embedding config when provider-compatible).
+No extra ``.env`` entries needed in the common case.
+
 Usage::
 
     uv pip install ragas datasets langchain-openai
@@ -30,8 +35,117 @@ from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
-# Load .env so DLIGHTRAG_API_AUTH_TOKEN and EVAL_LLM_* vars are available.
+# Load DlightRAG .env so DLIGHTRAG_* vars are available for fallback resolution.
 load_dotenv(dotenv_path=".env", override=False)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Auto-resolve eval credentials from DlightRAG config
+# ═══════════════════════════════════════════════════════════════════
+
+# OpenAI-compatible embedding providers — their api_key + base_url work
+# with langchain's OpenAIEmbeddings. Native-SDK providers (voyage, gemini,
+# jina, dashscope_qwen) are excluded because their keys don't work with
+# the OpenAI embeddings API.
+_OPENAI_COMPATIBLE_EMBED_PROVIDERS = frozenset(
+    {"openai_compatible", "qwen_openai_compatible", "ollama"}
+)
+
+
+def _resolve_eval_env() -> None:
+    """Set EVAL_* env vars from DlightRAG config when not explicitly configured.
+
+    Cascade (each level only applies when the env var is unset):
+
+    Eval LLM:
+      1. EVAL_LLM_BINDING_API_KEY  ← config.llm.roles.query.api_key
+                                    ← config.llm.default.api_key
+      2. EVAL_LLM_MODEL            ← query role model  ← default model
+      3. EVAL_LLM_BINDING_HOST     ← query role base_url ← default base_url
+
+    Eval embeddings:
+      4. EVAL_EMBEDDING_BINDING_API_KEY  ← EVAL_LLM_BINDING_API_KEY
+                                          ← DlightRAG embedding key (if OpenAI-compatible)
+      5. EVAL_EMBEDDING_BINDING_HOST     ← EVAL_LLM_BINDING_HOST
+                                          ← DlightRAG embedding base_url (if OpenAI-compatible)
+
+    Model names are only set when not already configured, so explicit
+    ``EVAL_LLM_MODEL=gpt-4o`` still wins over DlightRAG's default.
+    """
+    # If both eval keys are already set, nothing to do
+    llm_key_set = bool(os.getenv("EVAL_LLM_BINDING_API_KEY"))
+    embed_key_set = bool(os.getenv("EVAL_EMBEDDING_BINDING_API_KEY"))
+    if llm_key_set and embed_key_set:
+        return
+
+    try:
+        from dlightrag.config import DlightragConfig
+    except ImportError:
+        logger.warning("DlightRAG not importable — skipping eval credential auto-resolution")
+        return
+
+    try:
+        config = DlightragConfig()  # pyright: ignore[reportCallIssue]
+    except Exception:
+        logger.warning(
+            "DlightRAG config failed to load — eval credentials must be set explicitly "
+            "via EVAL_LLM_BINDING_API_KEY. Run from the repo root where config.yaml exists.",
+            exc_info=True,
+        )
+        return
+    query_cfg = config.llm.roles.query or config.llm.default
+
+    # -- Eval LLM --
+    if not llm_key_set:
+        if query_cfg.api_key:
+            os.environ["EVAL_LLM_BINDING_API_KEY"] = query_cfg.api_key
+            logger.info("Eval LLM key: auto-resolved from DlightRAG query/default role")
+        elif os.getenv("OPENAI_API_KEY"):
+            logger.info("Eval LLM key: using OPENAI_API_KEY")
+        else:
+            logger.warning(
+                "No eval LLM key found — set EVAL_LLM_BINDING_API_KEY, "
+                "DLIGHTRAG_LLM__DEFAULT__API_KEY, or OPENAI_API_KEY"
+            )
+
+    if not os.getenv("EVAL_LLM_MODEL"):
+        os.environ["EVAL_LLM_MODEL"] = query_cfg.model
+        logger.info("Eval LLM model: %s (from DlightRAG config)", query_cfg.model)
+
+    if not os.getenv("EVAL_LLM_BINDING_HOST") and query_cfg.base_url:
+        os.environ["EVAL_LLM_BINDING_HOST"] = query_cfg.base_url
+        logger.info("Eval LLM host: %s (from DlightRAG config)", query_cfg.base_url)
+
+    # -- Eval Embeddings --
+    if not embed_key_set:
+        # Cascade: EVAL_LLM key → DlightRAG embedding key (if OpenAI-compatible provider)
+        resolved_embed_key = os.getenv("EVAL_LLM_BINDING_API_KEY")
+        if (
+            not resolved_embed_key
+            and config.embedding.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS
+        ):
+            resolved_embed_key = config.embedding.api_key
+        if resolved_embed_key:
+            os.environ["EVAL_EMBEDDING_BINDING_API_KEY"] = resolved_embed_key
+            logger.info("Eval embedding key: cascaded from eval LLM or DlightRAG embedding config")
+
+    if not os.getenv("EVAL_EMBEDDING_BINDING_HOST"):
+        # Cascade: EVAL_LLM host → DlightRAG embedding host (if OpenAI-compatible)
+        llm_host = os.getenv("EVAL_LLM_BINDING_HOST")
+        embed_cfg = config.embedding
+        if llm_host:
+            os.environ["EVAL_EMBEDDING_BINDING_HOST"] = llm_host
+        elif embed_cfg.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS and embed_cfg.base_url:
+            os.environ["EVAL_EMBEDDING_BINDING_HOST"] = embed_cfg.base_url
+
+
+# Run once at import time — sets env vars before RAGEvaluator.__init__ reads them.
+_resolve_eval_env()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Adapter
+# ═══════════════════════════════════════════════════════════════════
 
 
 class DlightRAGAdapterEvaluator(RAGEvaluator):
@@ -150,7 +264,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Default dataset + local DlightRAG API
+  # Zero-config — eval creds auto-resolved from DlightRAG config
   python scripts/ragas_eval.py --api http://localhost:8100
 
   # Custom dataset
@@ -159,9 +273,9 @@ Examples:
   # With auth
   python scripts/ragas_eval.py --api https://dlightrag.example.com --api-key "$TOKEN"
 
-  # Remote DlightRAG instance
-  DLIGHTRAG_API_TOKEN=... \\
-  python scripts/ragas_eval.py --api https://your-server.example.com
+  # Explicit eval model overrides (overrides auto-resolution)
+  EVAL_LLM_MODEL=gpt-4o EVAL_EMBEDDING_MODEL=text-embedding-3-large \\
+    python scripts/ragas_eval.py --api http://localhost:8100
         """,
     )
 
@@ -197,16 +311,16 @@ Examples:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Shared env guidance (mirrors LightRAG's RAGEvaluator conventions)
+# Shared env reference (informational — shown on startup)
 # ═══════════════════════════════════════════════════════════════════
 
 _EXPECTED_ENV_VARS: dict[str, str] = {
-    "EVAL_LLM_MODEL": "LLM for RAGAS scoring (default: gpt-4o-mini)",
+    "EVAL_LLM_MODEL": "LLM for RAGAS scoring (default: from DlightRAG config, or gpt-4o-mini)",
+    "EVAL_LLM_BINDING_API_KEY": "API key for eval LLM (auto-resolved from DlightRAG config)",
+    "EVAL_LLM_BINDING_HOST": "Custom endpoint for eval LLM (auto-resolved from DlightRAG config)",
     "EVAL_EMBEDDING_MODEL": "Embedding model for RAGAS (default: text-embedding-3-large)",
-    "EVAL_LLM_BINDING_API_KEY": "API key for eval LLM (falls back to OPENAI_API_KEY)",
-    "EVAL_LLM_BINDING_HOST": "Custom endpoint for eval LLM (optional)",
-    "EVAL_EMBEDDING_BINDING_API_KEY": "API key for eval embeddings (falls back to EVAL_LLM_BINDING_API_KEY)",
-    "EVAL_EMBEDDING_BINDING_HOST": "Custom endpoint for eval embeddings (falls back to EVAL_LLM_BINDING_HOST)",
+    "EVAL_EMBEDDING_BINDING_API_KEY": "API key for eval embeddings (cascaded from eval LLM key)",
+    "EVAL_EMBEDDING_BINDING_HOST": "Custom endpoint for eval embeddings (cascaded from eval LLM host)",
     "DLIGHTRAG_API_URL": "DlightRAG API base URL (default for --api)",
     "DLIGHTRAG_API_TOKEN": "Bearer token when auth is enabled on DlightRAG",
     "EVAL_QUERY_TOP_K": "top_k sent to DlightRAG /api/answer (default: 10)",
@@ -218,14 +332,14 @@ _EXPECTED_ENV_VARS: dict[str, str] = {
 
 def _check_env() -> None:
     """Print configured environment variables (informational)."""
-    logger.info("Environment variables (set → value, unset → <not set>):")
+    logger.info("Environment variables (set → value, unset → <auto>):")
     for var, description in _EXPECTED_ENV_VARS.items():
         value = os.getenv(var)
         if value:
             display = value if "KEY" not in var and "TOKEN" not in var else "***"
             logger.info("  %-34s = %s  # %s", var, display, description)
         else:
-            logger.info("  %-34s   <not set>  # %s", var, description)
+            logger.info("  %-34s   <auto>  # %s", var, description)
     logger.info("")
 
 

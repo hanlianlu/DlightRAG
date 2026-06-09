@@ -102,25 +102,27 @@ from LightRAG.
 
 ## Configuration
 
-### Evaluation Model
+### Zero-config default
 
-RAGAS needs its own LLM and embedding model to score answers. These are
-separate from DlightRAG's models:
+When ``EVAL_LLM_BINDING_API_KEY`` is **not** set, the adapter auto-resolves
+eval credentials from DlightRAG's own config:
 
-```bash
-# Required — API key for the eval LLM
-export EVAL_LLM_BINDING_API_KEY="..."
+| Eval setting | Auto-resolved from |
+|---|---|
+| ``EVAL_LLM_BINDING_API_KEY`` | ``config.llm.roles.query.api_key`` → ``config.llm.default.api_key`` |
+| ``EVAL_LLM_MODEL`` | ``config.llm.roles.query.model`` → ``config.llm.default.model`` |
+| ``EVAL_LLM_BINDING_HOST`` | ``config.llm.roles.query.base_url`` → ``config.llm.default.base_url`` |
+| ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
+| ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
 
-# Optional — custom model choices
-export EVAL_LLM_MODEL="gpt-4o-mini"
-export EVAL_EMBEDDING_MODEL="text-embedding-3-large"
+This means **no extra ``.env`` entries are needed** when DlightRAG already
+has a working LLM config (OpenAI, OpenRouter, or any OpenAI-compatible endpoint).
+Native-SDK-only providers (Anthropic, Gemini) need an explicit
+``EVAL_LLM_BINDING_API_KEY`` because RAGAS requires an OpenAI-compatible API.
 
-# Optional — custom OpenAI-compatible endpoints
-export EVAL_LLM_BINDING_HOST="https://your-llm-proxy.example.com/v1"
-export EVAL_EMBEDDING_BINDING_HOST="https://your-embed-proxy.example.com/v1"
-```
+### Explicit overrides
 
-If `EVAL_LLM_BINDING_API_KEY` is not set, it falls back to `OPENAI_API_KEY`.
+All auto-resolved values can be overridden:
 
 ### Concurrency and Tuning
 
