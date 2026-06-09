@@ -324,28 +324,25 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: var(--size-button);
-    height: var(--size-button);
+    padding: var(--space-inline);
+    margin: calc(-1 * var(--space-inline));
+    margin-left: 0;
     background: transparent;
     border: none;
-    border-radius: 50%;
-    color: var(--color-text-tertiary);
-    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
-    font-size: 14px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-muted);
     flex-shrink: 0;
-    opacity: 1;
     text-decoration: none;
-    transition: color 0.15s, opacity 0.15s, transform 0.15s;
+    transition: color 0.15s, background 0.15s;
 }
 .source-dl-icon:hover {
     color: var(--color-gold-200);
-    opacity: 1;
-    transform: translateY(-1px);
+    background: var(--color-accent-hover);
 }
 
 .source-dl-icon-svg {
-    height: var(--size-icon-md);
+    width: 20px;
+    height: 20px;
     pointer-events: none;
-    stroke-width: 2;
-    width: var(--size-icon-md);
+    stroke-width: 1.5;
 }
