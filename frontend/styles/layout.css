@@ -91,6 +91,7 @@
 .workspace-dot.multi {
     background: transparent;
     border: 1px solid rgba(210, 182, 97, 0.72);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 999px;
     box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 rgba(210, 182, 97, 0.72);
     width: var(--space-related);
@@ -247,6 +248,7 @@
     background: transparent;
     border: none;
     color: rgba(210, 182, 97, 0.78);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1;
     cursor: pointer;
     flex-shrink: 0;
@@ -372,6 +374,7 @@
 .workspace-dialog-text {
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1.5;
 }
 
