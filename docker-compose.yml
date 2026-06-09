@@ -60,6 +60,47 @@ services:
         condition: service_healthy
     command: ["dlightrag-mcp"]
 
+  lightrag-gui:
+    restart: unless-stopped
+    build: .
+    ports:
+      - "127.0.0.1:9621:9621"
+    environment:
+      # PostgreSQL — same instance as DlightRAG (read-only, no conflict)
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
+      POSTGRES_PASSWORD: ${DLIGHTRAG_POSTGRES_PASSWORD:-dlightrag}
+      POSTGRES_DATABASE: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
+      # Storage backends — must match DlightRAG exactly
+      LIGHTRAG_GRAPH_STORAGE: PGGraphStorage
+      LIGHTRAG_VECTOR_STORAGE: PGVectorStorage
+      LIGHTRAG_KV_STORAGE: PGKVStorage
+      LIGHTRAG_DOC_STATUS_STORAGE: PGDocStatusStorage
+      # Workspace — same as DlightRAG to see the same graph
+      WORKSPACE: ${DLIGHTRAG_WORKSPACE:-default}
+      # LLM — OpenRouter (initialization only; graph browsing never calls it)
+      LLM_BINDING: openai
+      LLM_BINDING_HOST: https://openrouter.ai/api/v1
+      LLM_BINDING_API_KEY: ${DLIGHTRAG_LLM__DEFAULT__API_KEY}
+      LLM_MODEL: google/gemini-2.5-flash
+      # Embedding — OpenRouter (initialization only)
+      EMBEDDING_BINDING: openai
+      EMBEDDING_BINDING_HOST: https://openrouter.ai/api/v1
+      EMBEDDING_BINDING_API_KEY: ${DLIGHTRAG_LLM__DEFAULT__API_KEY}
+      EMBEDDING_MODEL: openai/text-embedding-3-small
+      # Server
+      HOST: "0.0.0.0"
+      PORT: "9621"
+      WORKING_DIR: /tmp/lightrag_gui
+      INPUT_DIR: /tmp/lightrag_gui/inputs
+      LOG_DIR: /tmp
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["lightrag-server"]
+
   postgres:
     restart: unless-stopped
     image: dlightrag-postgres:pg18

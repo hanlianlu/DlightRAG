@@ -31,6 +31,10 @@ dependencies = [
     "json-repair>=0.58.0",
     # LightRAG v1.5.1 paragraph_semantic chunker fallback
     "langchain-text-splitters",
+    # LightRAG GUI (graph browsing via lightrag-server)
+    # bcrypt + aiofiles are undeclared dependencies of lightrag-hku v1.5.1
+    "bcrypt",
+    "aiofiles",
     # Data sourcing
     "azure-storage-blob>=12.28.0",
     "aiobotocore>=2.13.0",
