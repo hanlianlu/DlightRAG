@@ -1,0 +1,182 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * Fluid design system: type, spacing, and layout scale with viewport width.
+ * On phones (390px) → compact but readable.
+ * On laptops (1440px) → slightly more relaxed without changing UI character.
+ *
+ * global.css — Universal resets, body defaults, and shared utility classes.
+ * Imported by vite build; emitted into dist as part of style.css bundle.
+ */
+
+/* ── Universal reset ── */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* ── Visually hidden (screen-reader / htmx-swap) ── */
+.visually-hidden {
+    display: none;
+}
+
+/* ── Body defaults ── */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    font-size: var(--font-size-body);
+    background: var(--color-bg-base);
+    color: var(--color-text-tertiary);
+    height: 100vh;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* === Context Window Indicator === */
+
+.out-of-context {
+    opacity: 0.4;
+    transition: opacity 0.3s ease;
+}
+
+.context-divider {
+    text-align: center;
+    font-size: var(--font-size-caption);
+    color: var(--color-text-subtle);
+    padding: var(--space-tight) 0;
+    margin: var(--space-component) 0;
+    border-top: 1px dashed var(--color-text-subtle);
+    letter-spacing: 0.3px;
+    opacity: 0.7;
+}
+
+/* === Panel Resize Handle === */
+
+.panel-resize-handle {
+    background: transparent;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--space-tight);
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    touch-action: none;
+    transition: background 0.15s;
+}
+.panel-resize-handle::after {
+    content: '';
+    width: 2px;
+    height: clamp(32px, 3.6vw, 44px);
+    background: rgba(210, 182, 97, 0.3);
+    border-radius: 1px;
+    transition: background 0.15s, height 0.15s;
+}
+.panel-resize-handle:hover,
+.panel-resize-handle.active {
+    background: transparent;
+}
+.panel-resize-handle:hover::after,
+.panel-resize-handle.active::after {
+    background: rgba(210, 182, 97, 0.6);
+    height: clamp(48px, 6vw, 72px);
+}
+
+/* === Text Error === */
+
+.text-error {
+    color: var(--color-danger);
+}
+
+/* === Streaming Indicator === */
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
+}
+
+.streaming-dot {
+    display: inline-block;
+    width: var(--space-tight);
+    height: var(--space-tight);
+    background: var(--color-gold-200);
+    border-radius: 50%;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+.streaming-dot.progress-phase {
+    width: auto;
+    height: auto;
+    background: none;
+    border-radius: 0;
+    animation: none;
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+}
+
+.streaming-dot.progress-phase::before {
+    content: attr(data-phase);
+}
+
+.streaming-dot.progress-phase::after {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    background: var(--color-gold-200);
+    border-radius: 50%;
+    margin-left: var(--space-tight);
+    vertical-align: middle;
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+/* === Toast === */
+
+.toast {
+    position: fixed;
+    bottom: var(--space-section);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--color-bg-elevated);
+    color: var(--color-text-tertiary);
+    padding: var(--space-component) var(--space-section);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-detail);
+    z-index: 200;
+    opacity: 0;
+    transition: opacity 0.3s;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.toast.visible { opacity: 1; }
+
+/* === Drop Overlay === */
+
+.drop-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(12, 10, 9, 0.62);
+    border: 1px dashed rgba(168, 162, 158, 0.34);
+    z-index: 150;
+    align-items: center;
+    justify-content: center;
+}
+
+.drop-overlay.active {
+    display: flex;
+}
+
+.drop-overlay-content {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-body);
+    text-align: center;
+    line-height: 1.8;
+}
+
+/* === Resizing body class (instant tracking during drag-resize) === */
+
+body.resizing.panel-open .chat-area,
+body.resizing.panel-open .topbar,
+body.resizing.panel-open .composer {
+    transition: none;
+}
+
