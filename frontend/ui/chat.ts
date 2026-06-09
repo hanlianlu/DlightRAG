@@ -67,8 +67,16 @@ export function setupQueryForm() {
     const form = document.getElementById('query-form');
     if (!form) return;
     const textarea = form.querySelector('.composer-input');
+    const sendBtn = form.querySelector('.composer-send') as HTMLButtonElement | null;
+
+    function toggleSendButton() {
+        if (sendBtn && textarea) {
+            sendBtn.disabled = !textarea.value.trim();
+        }
+    }
 
     function autoResize() {
+        toggleSendButton();
         const computed = getComputedStyle(textarea);
         const lineHeight = parseFloat(computed.lineHeight) || 24;
         const maxHeight = parseFloat(computed.maxHeight) || 160;
@@ -101,6 +109,9 @@ export function setupQueryForm() {
             if (e.key === 'Enter') allowNextLineBreak = false;
         });
         textarea.addEventListener('input', autoResize);
+
+        // Initial state: send button disabled until user types
+        toggleSendButton();
     }
     form.addEventListener('submit', function(e) {
         e.preventDefault();
@@ -110,6 +121,7 @@ export function setupQueryForm() {
         textarea.style.height = '';
         textarea.style.overflowY = '';
         form.classList.remove('multiline');
+        toggleSendButton();
         closePanel();
         submitQuery(query);
     });

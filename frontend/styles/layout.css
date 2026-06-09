@@ -226,7 +226,7 @@
     color: var(--color-gold-100);
     cursor: pointer;
     flex-shrink: 0;
-    transition: background 0.15s, transform 0.1s;
+    transition: background 0.15s, color 0.15s, transform 0.1s;
 }
 
 .composer-send:hover {
@@ -235,6 +235,13 @@
 
 .composer-send:active {
     transform: scale(0.92);
+}
+
+.composer-send:disabled {
+    background: var(--color-bg-elevated);
+    color: var(--color-text-dim);
+    cursor: default;
+    transform: none;
 }
 
 /* === Composer + Button === */

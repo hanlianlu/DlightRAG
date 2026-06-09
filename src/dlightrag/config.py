@@ -20,7 +20,7 @@ import re
 import ssl
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import Any, ClassVar, Literal, TypedDict
 from urllib.parse import urlencode
 
 from dotenv import dotenv_values
@@ -44,34 +44,9 @@ class LightRAGPipelineKwargs(TypedDict):
     queue_size_insert: int
 
 
-_LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(
-    {
-        "VLM_PROCESS_ENABLE",
-        "VLM_MAX_IMAGE_BYTES",
-        "VLM_MIN_IMAGE_PIXEL",
-        "SURROUNDING_LEADING_MAX_TOKENS",
-        "SURROUNDING_TRAILING_MAX_TOKENS",
-        "LIGHTRAG_FORCE_REPARSE_MINERU",
-        "MINERU_API_MODE",
-        "MINERU_API_TOKEN",
-        "MINERU_OFFICIAL_ENDPOINT",
-        "MINERU_MODEL_VERSION",
-        "MINERU_IS_OCR",
-        "MINERU_POLL_INTERVAL_SECONDS",
-        "MINERU_MAX_POLLS",
-        "MINERU_LANGUAGE",
-        "MINERU_ENABLE_TABLE",
-        "MINERU_ENABLE_FORMULA",
-        "MINERU_PAGE_RANGES",
-        "MINERU_ENGINE_VERSION",
-        "MINERU_LOCAL_ENDPOINT",
-        "MINERU_LOCAL_BACKEND",
-        "MINERU_LOCAL_PARSE_METHOD",
-        "MINERU_LOCAL_IMAGE_ANALYSIS",
-        "MINERU_LOCAL_START_PAGE_ID",
-        "MINERU_LOCAL_END_PAGE_ID",
-    }
-)
+# Auto-derived from VLMSidecarConfig._ENV_MAP and MinerUSidecarConfig._ENV_MAP.
+# No manual maintenance — add a field + env mapping to the model and this picks it up.
+_LIGHTRAG_SIDECAR_ENV_KEYS: frozenset[str] = frozenset()  # populated after class definitions
 
 
 def _find_env_file() -> Path | None:
@@ -236,6 +211,16 @@ class VLMSidecarConfig(BaseModel):
     surrounding_leading_max_tokens: int | None = 128
     surrounding_trailing_max_tokens: int | None = 128
 
+    # Pydantic field → LightRAG env var. Single source of truth;
+    # _lightrag_sidecar_env_map() and _LIGHTRAG_SIDECAR_ENV_KEYS derive from this.
+    _ENV_MAP: ClassVar[dict[str, str]] = {
+        "enabled": "VLM_PROCESS_ENABLE",
+        "max_image_bytes": "VLM_MAX_IMAGE_BYTES",
+        "min_image_pixel": "VLM_MIN_IMAGE_PIXEL",
+        "surrounding_leading_max_tokens": "SURROUNDING_LEADING_MAX_TOKENS",
+        "surrounding_trailing_max_tokens": "SURROUNDING_TRAILING_MAX_TOKENS",
+    }
+
 
 class MinerUSidecarConfig(BaseModel):
     """LightRAG MinerU parser sidecar settings."""
@@ -248,7 +233,7 @@ class MinerUSidecarConfig(BaseModel):
     model_version: str = "vlm"
     is_ocr: bool = False
     poll_interval_seconds: int = 2
-    max_polls: int = 180
+    max_polls: int = 300
     language: str = "ch"
     enable_table: bool = True
     enable_formula: bool = True
@@ -263,6 +248,30 @@ class MinerUSidecarConfig(BaseModel):
     local_start_page_id: int | None = None
     local_end_page_id: int | None = None
 
+    # Pydantic field → LightRAG env var. Single source of truth;
+    # _lightrag_sidecar_env_map() and _LIGHTRAG_SIDECAR_ENV_KEYS derive from this.
+    _ENV_MAP: ClassVar[dict[str, str]] = {
+        "api_mode": "MINERU_API_MODE",
+        "api_token": "MINERU_API_TOKEN",
+        "official_endpoint": "MINERU_OFFICIAL_ENDPOINT",
+        "model_version": "MINERU_MODEL_VERSION",
+        "is_ocr": "MINERU_IS_OCR",
+        "poll_interval_seconds": "MINERU_POLL_INTERVAL_SECONDS",
+        "max_polls": "MINERU_MAX_POLLS",
+        "language": "MINERU_LANGUAGE",
+        "enable_table": "MINERU_ENABLE_TABLE",
+        "enable_formula": "MINERU_ENABLE_FORMULA",
+        "page_ranges": "MINERU_PAGE_RANGES",
+        "engine_version": "MINERU_ENGINE_VERSION",
+        "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
+        "local_endpoint": "MINERU_LOCAL_ENDPOINT",
+        "local_backend": "MINERU_LOCAL_BACKEND",
+        "local_parse_method": "MINERU_LOCAL_PARSE_METHOD",
+        "local_image_analysis": "MINERU_LOCAL_IMAGE_ANALYSIS",
+        "local_start_page_id": "MINERU_LOCAL_START_PAGE_ID",
+        "local_end_page_id": "MINERU_LOCAL_END_PAGE_ID",
+    }
+
 
 class ParserSidecarsConfig(BaseModel):
     """Typed config that DlightRAG bridges into LightRAG parser env vars."""
@@ -271,6 +280,13 @@ class ParserSidecarsConfig(BaseModel):
 
     vlm: VLMSidecarConfig = Field(default_factory=VLMSidecarConfig)
     mineru: MinerUSidecarConfig = Field(default_factory=MinerUSidecarConfig)
+
+
+# Populate the sidecar env keys frozenset from the model _ENV_MAP declarations.
+_SIDECAR_ENV_KEYS: set[str] = set()
+for _cls in (VLMSidecarConfig, MinerUSidecarConfig):
+    _SIDECAR_ENV_KEYS.update(_cls._ENV_MAP.values())
+_LIGHTRAG_SIDECAR_ENV_KEYS = frozenset(_SIDECAR_ENV_KEYS)
 
 
 class MetadataFieldConfig(BaseModel):
@@ -1035,34 +1051,21 @@ class DlightragConfig(BaseSettings):
         }
 
     def _lightrag_sidecar_env_map(self) -> dict[str, str]:
-        vlm = self.parser_sidecars.vlm
-        mineru = self.parser_sidecars.mineru
-        raw: dict[str, str | int | float | bool | None] = {
-            "VLM_PROCESS_ENABLE": vlm.enabled,
-            "VLM_MAX_IMAGE_BYTES": vlm.max_image_bytes,
-            "VLM_MIN_IMAGE_PIXEL": vlm.min_image_pixel,
-            "SURROUNDING_LEADING_MAX_TOKENS": vlm.surrounding_leading_max_tokens,
-            "SURROUNDING_TRAILING_MAX_TOKENS": vlm.surrounding_trailing_max_tokens,
-            "MINERU_API_MODE": mineru.api_mode,
-            "MINERU_API_TOKEN": mineru.api_token,
-            "MINERU_OFFICIAL_ENDPOINT": mineru.official_endpoint,
-            "MINERU_MODEL_VERSION": mineru.model_version,
-            "MINERU_IS_OCR": mineru.is_ocr,
-            "MINERU_POLL_INTERVAL_SECONDS": mineru.poll_interval_seconds,
-            "MINERU_MAX_POLLS": mineru.max_polls,
-            "MINERU_LANGUAGE": mineru.language,
-            "MINERU_ENABLE_TABLE": mineru.enable_table,
-            "MINERU_ENABLE_FORMULA": mineru.enable_formula,
-            "MINERU_PAGE_RANGES": mineru.page_ranges,
-            "MINERU_ENGINE_VERSION": mineru.engine_version,
-            "MINERU_LOCAL_ENDPOINT": mineru.local_endpoint,
-            "MINERU_LOCAL_BACKEND": mineru.local_backend,
-            "MINERU_LOCAL_PARSE_METHOD": mineru.local_parse_method,
-            "MINERU_LOCAL_IMAGE_ANALYSIS": mineru.local_image_analysis,
-            "MINERU_LOCAL_START_PAGE_ID": mineru.local_start_page_id,
-            "MINERU_LOCAL_END_PAGE_ID": mineru.local_end_page_id,
-            "LIGHTRAG_FORCE_REPARSE_MINERU": True if mineru.force_reparse else None,
-        }
+        """Derive LightRAG sidecar env vars from typed config models.
+
+        Iterates VLMSidecarConfig._ENV_MAP and MinerUSidecarConfig._ENV_MAP
+        so adding a field only requires: (1) Pydantic field, (2) one line in _ENV_MAP.
+        """
+        raw: dict[str, str | int | float | bool | None] = {}
+        for config_obj in (self.parser_sidecars.vlm, self.parser_sidecars.mineru):
+            cls = type(config_obj)
+            for field_name, env_name in cls._ENV_MAP.items():
+                value = getattr(config_obj, field_name)
+                # force_reparse=False → don't emit the LightRAG env var
+                # (LightRAG defaults to not force-reparsing on its own)
+                if field_name == "force_reparse":
+                    value = True if value else None
+                raw[env_name] = value
         rendered: dict[str, str] = {}
         for key, value in raw.items():
             text = self._env_value(value)

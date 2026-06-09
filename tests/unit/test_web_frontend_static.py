@@ -545,7 +545,9 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
 
     selector_block = layout.split(".workspace-selector {", 1)[1].split("}", 1)[0]
     popover_item_block = workspace_module.split(".workspacePopoverItem {", 1)[1].split("}", 1)[0]
-    state_block = layout.split(".workspace-selector:hover,\n.workspace-selector.open {", 1)[1].split(
+    state_block = layout.split(".workspace-selector:hover,\n.workspace-selector.open {", 1)[
+        1
+    ].split(
         "}",
         1,
     )[0]
