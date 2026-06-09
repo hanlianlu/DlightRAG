@@ -7,7 +7,7 @@ export default defineConfig({
     outDir: resolve(__dirname, '../src/dlightrag/web/static'),
     emptyOutDir: false,
     rollupOptions: {
-      input: resolve(__dirname, 'main.ts'),
+      input: resolve(__dirname, 'ui/main.ts'),
       output: {
         entryFileNames: 'js/[name].js',
         chunkFileNames: 'js/[name]-[hash].js',
