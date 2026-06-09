@@ -10,5 +10,8 @@
   "devDependencies": {
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
+  },
+  "dependencies": {
+    "nanoevents": "^9.1.0"
   }
 }
