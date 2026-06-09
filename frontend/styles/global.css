@@ -134,7 +134,7 @@ body {
     position: fixed;
     bottom: var(--space-section);
     left: 50%;
-    transform: translateX(-50%);
+    transform: translateX(-50%) translateY(8px);
     background: var(--color-bg-elevated);
     color: var(--color-text-tertiary);
     padding: var(--space-component) var(--space-section);
@@ -142,11 +142,14 @@ body {
     font-size: var(--font-size-detail);
     z-index: 200;
     opacity: 0;
-    transition: opacity 0.3s;
+    transition: opacity 0.2s ease-out, transform 0.2s ease-out;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
-.toast.visible { opacity: 1; }
+.toast.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+}
 
 /* === Drop Overlay === */
 

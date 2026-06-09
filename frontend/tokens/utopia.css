@@ -25,10 +25,6 @@
     --step-2: clamp(1.30537rem, 0.066305vi + 1.289213rem, 1.34889rem);
     /* step 3: 24.65px → 25.47px */
     --step-3: clamp(1.54034rem, 0.078240vi + 1.521272rem, 1.59169rem);
-    /* step 4: 29.08px → 30.05px */
-    --step-4: clamp(1.81760rem, 0.092323vi + 1.795100rem, 1.87819rem);
-    /* step 5: 34.32px → 35.46px */
-    --step-5: clamp(2.14477rem, 0.108941vi + 2.118219rem, 2.21627rem);
 
     /* ── Space scale (unison multipliers on base step-0) ── */
     /* space-3xs: 4.0px → 4.8px */
@@ -43,12 +39,6 @@
     --space-m: clamp(1.50000rem, 0.00428571vi + 1.395536rem, 1.78125rem);
     /* space-l: 32.0px → 38.0px */
     --space-l: clamp(2.00000rem, 0.00571429vi + 1.860714rem, 2.37500rem);
-    /* space-xl: 48.0px → 57.0px */
-    --space-xl: clamp(3.00000rem, 0.00857143vi + 2.791071rem, 3.56250rem);
-    /* space-2xl: 64.0px → 76.0px */
-    --space-2xl: clamp(4.00000rem, 0.01142857vi + 3.721429rem, 4.75000rem);
-    /* space-3xl: 96.0px → 114.0px */
-    --space-3xl: clamp(6.00000rem, 0.01714286vi + 5.582143rem, 7.12500rem);
 
     /* ── Radius scale ── */
     /* Fixed to preserve component character across viewport sizes. */
@@ -69,8 +59,6 @@
     --color-gold-300: #a7904c;
     --color-gold-400: #7e6c37;
     --color-gold-500: #574a24;
-    --color-gold-600: #332b12;
-
     /* ── Color: Text ── */
     --color-text-primary: #f5f5f4;
     --color-text-secondary: #e7e5e4;
@@ -85,7 +73,6 @@
     --color-bg-elevated: #292524;
     --color-bg-subtle: #14110f;
     --color-bg-hover: rgba(120, 113, 108, 0.10);
-    --color-bg-hover-strong: rgba(120, 113, 108, 0.16);
     --color-accent-hover: rgba(210, 182, 97, 0.08);
     --color-accent-hover-strong: rgba(210, 182, 97, 0.14);
 
@@ -101,8 +88,7 @@
     --font-size-detail:   var(--step--1);  /* meta, timestamps, captions */
     --font-size-body:     var(--step-0);   /* messages, inputs, body text */
     --font-size-subhead:  var(--step-1);   /* sub-headings, buttons */
-    --font-size-heading:  var(--step-2);   /* welcome brand, panel titles */
-    --font-size-section:  var(--step-3);   /* section headers */
+
     --font-size-welcome-brand: clamp(1.5rem, 1.35vw + 1.16rem, 2.25rem);
     /* ── Line heights ── */
     --line-height-control: 1.5;
@@ -126,8 +112,6 @@
     --layout-content-width: clamp(340px, 55vw, 880px);
     --layout-panel-width: var(--panel-width);
     --layout-panel-min: 320px;
-    --layout-panel-max: 50vw;
-
     /* ── Radius semantics ── */
     --radius-surface: var(--radius-md);
     --radius-composer: var(--radius-xl);
