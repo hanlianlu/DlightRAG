@@ -19,12 +19,14 @@ Usage:
 
     # Query & answer (requires API server: docker compose up dlightrag-api)
     uv run scripts/cli.py query "What are the key findings?"
-    uv run scripts/cli.py query "Revenue trends" --mode mix --top-k 30
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
     uv run scripts/cli.py answer "What are the key findings?"
-    uv run scripts/cli.py answer "Summarize the report" --mode mix
     uv run scripts/cli.py chat
     uv run scripts/cli.py chat --workspaces project-a project-b
+
+    # RAGAS evaluation
+    uv run scripts/cli.py ragas_eval --api http://localhost:8100
+    uv run scripts/cli.py ragas_eval --api http://localhost:8100 --dataset my_tests.json
 """
 
 from __future__ import annotations
@@ -55,14 +57,31 @@ def _get_api_url() -> str:
 
 
 def _get_auth_token() -> str | None:
-    token = os.environ.get("DLIGHTRAG_API_AUTH_TOKEN")
+    """Resolve API bearer token: env → DlightRAG config (simple/jwt)."""
+    token = os.environ.get("DLIGHTRAG_API_TOKEN") or os.environ.get("DLIGHTRAG_API_AUTH_TOKEN")
     if token:
         return token
 
-    from dotenv import dotenv_values, find_dotenv
+    try:
+        from dlightrag.config import DlightragConfig
 
-    env = dotenv_values(find_dotenv(usecwd=True))
-    return env.get("DLIGHTRAG_API_AUTH_TOKEN")
+        config = DlightragConfig()  # pyright: ignore[reportCallIssue]
+        if config.api_auth_token:
+            return config.api_auth_token
+        if config.jwt_secret and config.auth_mode == "jwt":
+            import time
+
+            import jwt  # PyJWT ≥2.8.0
+
+            now = int(time.time())
+            return jwt.encode(
+                {"sub": "dlightrag-cli", "iat": now, "exp": now + 86400},
+                config.jwt_secret,
+                algorithm=config.jwt_algorithm or "HS256",
+            )
+    except Exception:
+        pass
+    return None
 
 
 def _headers() -> dict[str, str]:
@@ -73,11 +92,8 @@ def _headers() -> dict[str, str]:
     return headers
 
 
-def _print_json(data: dict) -> None:
+def _print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
-
-
-# ── helpers ──────────────────────────────────────────────────────
 
 
 def _die(msg: str) -> None:
@@ -86,56 +102,40 @@ def _die(msg: str) -> None:
 
 
 def _validate_ingest_args(args: argparse.Namespace) -> None:
-    """Validate ingest arguments based on source type."""
     source = args.source_type
-
     if source == "local":
         if not args.path:
-            _die(
-                "local source requires a path argument.\n"
-                "Usage: dlightrag-cli ingest <path> [--replace]"
-            )
+            _die("local source requires a path. Usage: ingest <path> [--replace]")
         if args.container_name or args.blob_path or args.prefix:
             _die("--container, --blob-path, --prefix are only for azure_blob source")
         if args.bucket or args.key:
             _die("--bucket, --key are only for s3 source")
     elif source == "azure_blob":
         if args.path:
-            _die(
-                "positional path is not used with azure_blob source.\n"
-                "Use --blob-path for a specific blob, or --prefix for batch."
-            )
+            _die("positional path is not used with azure_blob. Use --blob-path or --prefix.")
         if not args.container_name:
-            _die(
-                "azure_blob source requires --container.\n"
-                "Usage: dlightrag-cli ingest --source azure_blob --container <name> "
-                "[--blob-path <path> | --prefix <pfx>]"
-            )
+            _die("azure_blob requires --container")
         if args.blob_path and args.prefix:
             _die("--blob-path and --prefix are mutually exclusive")
         if args.bucket or args.key:
             _die("--bucket, --key are only for s3 source")
-
     elif source == "s3":
         if args.path:
-            _die("positional path is not used with s3 source")
+            _die("positional path is not used with s3")
         if not args.bucket:
-            _die(
-                "s3 source requires --bucket.\n"
-                "Usage: dlightrag-cli ingest --source s3 --bucket <name> "
-                "[--key <path> | --prefix <pfx>]"
-            )
+            _die("s3 requires --bucket")
         if args.key and args.prefix:
-            _die("--key and --prefix are mutually exclusive for s3 source")
+            _die("--key and --prefix are mutually exclusive for s3")
         if args.container_name or args.blob_path:
             _die("--container, --blob-path are only for azure_blob source")
 
 
-# ── subcommands ──────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+# ingest
+# ═══════════════════════════════════════════════════════════════════
 
 
 async def _run_ingest(args: argparse.Namespace) -> None:
-    """Run ingestion directly via RAGService (no API server needed)."""
     from dlightrag.config import get_config
     from dlightrag.core.service import RAGService
 
@@ -146,7 +146,6 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         kwargs["path"] = args.path
         kwargs["replace"] = args.replace
         print(f"Ingesting: {args.path} (replace={args.replace})")
-
     elif source == "azure_blob":
         kwargs["container_name"] = args.container_name
         if args.blob_path:
@@ -156,10 +155,8 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         kwargs["replace"] = args.replace
         target = args.blob_path or (f"prefix={args.prefix}" if args.prefix else "entire container")
         print(
-            f"Ingesting from Azure Blob: container={args.container_name}, target={target} "
-            f"(replace={args.replace})"
+            f"Ingesting Azure Blob: container={args.container_name}, {target} (replace={args.replace})"
         )
-
     elif source == "s3":
         kwargs["bucket"] = args.bucket
         if args.key:
@@ -168,15 +165,13 @@ async def _run_ingest(args: argparse.Namespace) -> None:
             kwargs["prefix"] = args.prefix
         kwargs["replace"] = args.replace
         target = args.key or (f"prefix={args.prefix}" if args.prefix else "entire bucket")
-        print(f"Ingesting from S3: bucket={args.bucket}, target={target} (replace={args.replace})")
+        print(f"Ingesting S3: bucket={args.bucket}, {target} (replace={args.replace})")
 
     config = get_config()
     workspace = args.workspace or config.workspace
     if args.workspace:
         config = config.model_copy(update={"workspace": workspace})
-    print(f"Workspace: {workspace}")
-    print(f"RAG mode: {config.rag_mode}")
-    print("Running locally (direct RAGService)\n")
+    print(f"Workspace: {workspace}\n")
 
     service = await RAGService.create(config=config)
     try:
@@ -196,16 +191,20 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     asyncio.run(_run_ingest(args))
 
 
+# ═══════════════════════════════════════════════════════════════════
+# query / answer / chat
+# ═══════════════════════════════════════════════════════════════════
+
+
 def cmd_query(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/retrieve"
-    payload: dict = {"query": args.query, "mode": args.mode}
+    payload: dict[str, Any] = {"query": args.query}
     if args.top_k is not None:
         payload["top_k"] = args.top_k
     if args.workspaces:
         payload["workspaces"] = args.workspaces
 
     print(f"Query: {args.query}")
-    print(f"Mode: {args.mode}")
     if args.workspaces:
         print(f"Workspaces: {', '.join(args.workspaces)}")
     print(f"API: {url}\n")
@@ -217,65 +216,30 @@ def cmd_query(args: argparse.Namespace) -> None:
 
 def cmd_answer(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/answer"
-    payload: dict = {"query": args.query, "mode": args.mode}
+    payload: dict[str, Any] = {"query": args.query, "stream": False}
     if args.top_k is not None:
         payload["top_k"] = args.top_k
     if args.workspaces:
         payload["workspaces"] = args.workspaces
 
     print(f"Question: {args.query}")
-    print(f"Mode: {args.mode}")
     if args.workspaces:
         print(f"Workspaces: {', '.join(args.workspaces)}")
     print(f"API: {url}\n")
 
     resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
     resp.raise_for_status()
-    _print_json(resp.json())
+    data = resp.json()
 
+    # Print answer first, then references, then sources
+    answer = data.get("answer") or "(no answer)"
+    print(f"Answer:\n{answer}\n")
 
-def _rewrite_query_sync(question: str, history: list[dict[str, str]]) -> str:
-    """Rewrite a follow-up question into a standalone query using LLM.
-
-    Called from cmd_chat when there is conversation history.
-    Uses the REST API's /answer endpoint with a rewriting prompt.
-    Falls back to the original question on any error.
-    """
-    if not history:
-        return question
-
-    system = (
-        "You are a query rewriter. Given a conversation history and a follow-up "
-        "message, rewrite the follow-up into a standalone search query that "
-        "captures the full intent. Output ONLY the rewritten query, nothing else. "
-        "If the message is already self-contained, return it unchanged."
-    )
-
-    history_text = "\n".join(f"{m['role']}: {m['content']}" for m in history[-20:])
-
-    rewrite_query = (
-        f"{system}\n\n"
-        f"Conversation history:\n{history_text}\n\n"
-        f"Follow-up message: {question}\n\n"
-        f"Standalone query:"
-    )
-
-    # Use the /answer endpoint as a simple LLM call
-    url = f"{_get_api_url()}/answer"
-    try:
-        resp = httpx.post(
-            url,
-            json={"query": rewrite_query, "mode": "naive"},
-            headers=_headers(),
-            timeout=_get_timeout(),
-        )
-        resp.raise_for_status()
-        rewritten = resp.json().get("answer", "").strip()
-        if rewritten:
-            return rewritten
-    except Exception:
-        pass  # Fall through to original question
-    return question
+    references = data.get("references") or []
+    if references:
+        print(f"References ({len(references)}):")
+        for ref in references:
+            print(f"  [{ref.get('id', '?')}] {ref.get('title', '')}")
 
 
 def cmd_chat(args: argparse.Namespace) -> None:
@@ -283,7 +247,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
     history: list[dict[str, str]] = []
 
     ws_info = f", workspaces={','.join(args.workspaces)}" if args.workspaces else ""
-    print(f"dlightrag chat (mode={args.mode}{ws_info}, API={_get_api_url()})")
+    print(f"dlightrag chat (API={_get_api_url()}{ws_info})")
     print("Type your question, or: /clear to reset history, /quit to exit\n")
 
     while True:
@@ -303,10 +267,14 @@ def cmd_chat(args: argparse.Namespace) -> None:
             print("-- history cleared --\n")
             continue
 
-        # Rewrite follow-up questions into standalone queries
-        standalone_query = _rewrite_query_sync(question, history)
-
-        payload: dict = {"query": standalone_query, "mode": args.mode}
+        payload: dict[str, Any] = {
+            "query": question,
+            "stream": False,
+        }
+        if history:
+            payload["conversation_history"] = [
+                {"role": m["role"], "content": m["content"]} for m in history[-20:]
+            ]
         if args.top_k is not None:
             payload["top_k"] = args.top_k
         if args.workspaces:
@@ -327,19 +295,45 @@ def cmd_chat(args: argparse.Namespace) -> None:
 
         print(f"\nAssistant: {answer_text}")
 
-        sources = (data.get("raw") or {}).get("sources", [])
+        sources = data.get("sources") or []
         if sources:
-            titles = {s["title"] for s in sources if s.get("title")}
+            titles = {s.get("title") for s in sources if s.get("title")}
             if titles:
                 print(f"  Sources: {', '.join(sorted(titles))}")
         print()
 
-        # Append this turn to history (original question, not rewritten)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": answer_text})
 
 
-# ── parser ───────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════
+# ragas_eval
+# ═══════════════════════════════════════════════════════════════════
+
+
+def cmd_ragas_eval(args: argparse.Namespace) -> None:
+    """Delegate to ragas_eval.py with the given args."""
+    import subprocess
+
+    eval_script = os.path.join(os.path.dirname(__file__), "ragas_eval.py")
+    cmd: list[str] = [
+        sys.executable,
+        eval_script,
+        "--api",
+        args.api or _get_api_url(),
+    ]
+    if args.dataset:
+        cmd.extend(["--dataset", args.dataset])
+    if args.output_dir:
+        cmd.extend(["--output-dir", args.output_dir])
+
+    print(f"Running: {' '.join(cmd)}\n")
+    subprocess.run(cmd, check=False)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# parser
+# ═══════════════════════════════════════════════════════════════════
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -349,7 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # ingest
+    # -- ingest --
     p_ingest = sub.add_parser(
         "ingest",
         help="Ingest documents from local, Azure Blob, or S3 sources",
@@ -369,9 +363,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  %(prog)s --source s3 --bucket my-bucket --prefix docs/   # S3 by prefix"
         ),
     )
-    p_ingest.add_argument(
-        "path", nargs="?", default=None, help="Path to file or directory (local source only)"
-    )
+    p_ingest.add_argument("path", nargs="?", default=None, help="Path to file or directory (local)")
     p_ingest.add_argument(
         "--source",
         choices=["local", "azure_blob", "s3"],
@@ -379,58 +371,49 @@ def build_parser() -> argparse.ArgumentParser:
         dest="source_type",
         help="Data source type (default: local)",
     )
-    p_ingest.add_argument(
-        "--container", dest="container_name", help="Azure Blob container name (azure_blob source)"
-    )
-    p_ingest.add_argument(
-        "--blob-path",
-        dest="blob_path",
-        help="Specific blob to ingest (azure_blob, mutually exclusive with --prefix)",
-    )
-    p_ingest.add_argument(
-        "--prefix", help="Blob prefix filter (azure_blob, mutually exclusive with --blob-path)"
-    )
-    p_ingest.add_argument("--bucket", help="S3 bucket name (s3 source)")
-    p_ingest.add_argument(
-        "--key", help="S3 object key (s3 source, mutually exclusive with --prefix)"
-    )
+    p_ingest.add_argument("--container", dest="container_name", help="Azure Blob container name")
+    p_ingest.add_argument("--blob-path", dest="blob_path", help="Specific blob (azure_blob)")
+    p_ingest.add_argument("--prefix", help="Blob prefix filter (azure_blob/s3)")
+    p_ingest.add_argument("--bucket", help="S3 bucket name")
+    p_ingest.add_argument("--key", help="S3 object key")
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
-    p_ingest.add_argument(
-        "--workspace", default=None, help="Target workspace (default: from config)"
-    )
+    p_ingest.add_argument("--workspace", default=None, help="Target workspace")
 
-    # query (retrieve only)
-    p_query = sub.add_parser("query", help="Retrieve contexts and sources (no LLM answer)")
+    # -- query --
+    p_query = sub.add_parser("query", help="Retrieve contexts and sources (no answer)")
     p_query.add_argument("query", help="Search query")
-    p_query.add_argument(
-        "--mode", default="mix", choices=["local", "global", "hybrid", "naive", "mix"]
-    )
     p_query.add_argument("--top-k", type=int, default=None, dest="top_k")
-    p_query.add_argument(
-        "--workspaces", nargs="+", default=None, help="Workspaces to search (federation)"
-    )
+    p_query.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
 
-    # answer (single-shot LLM answer)
-    p_answer = sub.add_parser(
-        "answer", help="Get an LLM-generated answer with contexts and sources"
-    )
+    # -- answer --
+    p_answer = sub.add_parser("answer", help="LLM-generated answer with contexts and sources")
     p_answer.add_argument("query", help="Question to answer")
-    p_answer.add_argument(
-        "--mode", default="mix", choices=["local", "global", "hybrid", "naive", "mix"]
-    )
     p_answer.add_argument("--top-k", type=int, default=None, dest="top_k")
-    p_answer.add_argument(
-        "--workspaces", nargs="+", default=None, help="Workspaces to search (federation)"
-    )
+    p_answer.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
 
-    # chat (multi-turn REPL)
+    # -- chat --
     p_chat = sub.add_parser("chat", help="Interactive multi-turn conversation")
-    p_chat.add_argument(
-        "--mode", default="mix", choices=["local", "global", "hybrid", "naive", "mix"]
-    )
     p_chat.add_argument("--top-k", type=int, default=None, dest="top_k")
-    p_chat.add_argument(
-        "--workspaces", nargs="+", default=None, help="Workspaces to search (federation)"
+    p_chat.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
+
+    # -- ragas_eval --
+    p_eval = sub.add_parser("ragas_eval", help="Run RAGAS evaluation against a DlightRAG API")
+    p_eval.add_argument(
+        "--api",
+        default=None,
+        help="DlightRAG API base URL (default: $DLIGHTRAG_API_URL or http://localhost:8100)",
+    )
+    p_eval.add_argument(
+        "--dataset",
+        "-d",
+        default=None,
+        help="Test dataset JSON (default: LightRAG bundled sample)",
+    )
+    p_eval.add_argument(
+        "--output-dir",
+        "-o",
+        default=None,
+        help="Results directory (default: ./ragas_eval_results/)",
     )
 
     return parser
@@ -445,6 +428,7 @@ def main() -> None:
         "query": cmd_query,
         "answer": cmd_answer,
         "chat": cmd_chat,
+        "ragas_eval": cmd_ragas_eval,
     }
 
     try:
