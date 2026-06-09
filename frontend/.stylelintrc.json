@@ -1,0 +1,11 @@
+{
+  "extends": ["stylelint-config-standard"],
+  "rules": {
+    "declaration-property-value-disallowed-list": {
+      "/^font-size$/": ["/^\\d+px/"],
+      "/^(padding|margin|gap)$/": ["/^\\d+px/"],
+      "/^border-radius$/": ["/^\\d+px/"],
+      "/^line-height$/": ["/^(?!var\\()/"]
+    }
+  }
+}

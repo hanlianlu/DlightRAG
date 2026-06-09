@@ -37,6 +37,7 @@
   color: var(--color-text-secondary);
   font-size: var(--font-size-lightbox-nav-icon);
   font-weight: 300;
+  /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
   cursor: pointer;
   transition: background 0.15s, color 0.15s;

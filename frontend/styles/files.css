@@ -240,12 +240,14 @@
     margin: var(--space-tight) var(--space-related);
     height: var(--space-inline);
     background: var(--color-border-subtle);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 2px;
     overflow: hidden;
 }
 .progress-bar-fill {
     height: 100%;
     background: var(--color-gold-200);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 2px;
     transition: width 0.5s ease;
 }

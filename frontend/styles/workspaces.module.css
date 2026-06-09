@@ -65,6 +65,7 @@
   content: '\2713';
   font-size: var(--font-size-caption);
   font-weight: 700;
+  /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
 }
 

@@ -17,6 +17,7 @@
     background: transparent;
     color: var(--color-gold-100);
     font-size: var(--font-size-caption);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1;
     padding: 0 0.16em;
     border-radius: var(--radius-xs);
@@ -160,6 +161,7 @@
     color: var(--color-text-muted);
     font-size: var(--font-size-detail);
     margin-top: var(--space-tight);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1.65;
     overflow-x: auto;
 }
@@ -190,6 +192,7 @@
     background: rgba(210, 182, 97, 0.14);
     color: var(--color-gold-100);
     padding: 0 0.1em;
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 2px;
     border-bottom: none;
     box-decoration-break: clone;
@@ -246,6 +249,7 @@
     gap: var(--space-tight);
     padding: var(--space-inline) 0;
     font-size: var(--font-size-detail);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1.5;
     cursor: pointer;
     border-radius: var(--radius-sm);
@@ -326,6 +330,7 @@
     border: none;
     border-radius: 50%;
     color: var(--color-text-tertiary);
+    /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     font-size: 14px;
     flex-shrink: 0;
     opacity: 1;
