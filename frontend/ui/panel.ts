@@ -1,7 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {renderMath} from './mathjax.ts';
-import {getIngestWorkspace, getPrimaryWorkspace, setIngestWorkspace, resetIngestWorkspace} from '../stores/state.ts';
+import {ingestStore} from '../stores/ingestStore.ts';
+import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import {createWorkspace} from './workspaces.ts';
 
@@ -36,7 +37,7 @@ export function openPanel(title) {
     const titleEl = document.getElementById('panel-title');
     const ingestTarget = document.getElementById('ingest-target');
     if (title === 'FILES') {
-        resetIngestWorkspace();
+        ingestStore.resetToPrimary();
         titleEl.textContent = 'FILES';
         renderIngestPill();
     } else {
@@ -89,7 +90,7 @@ function renderIngestPill() {
 
     const name = document.createElement('span');
     name.className = 'ingest-target-name';
-    name.textContent = getIngestWorkspace();
+    name.textContent = ingestStore.workspace;
     pill.appendChild(name);
 
     const caret = document.createElement('span');
@@ -147,7 +148,7 @@ function toggleIngestPopover(container) {
     popover.setAttribute('aria-label', 'Select ingest workspace');
 
     const records = getIngestWorkspaceRecords();
-    const current = getIngestWorkspace();
+    const current = ingestStore.workspace;
 
     records.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
         const item = document.createElement('div');
@@ -215,7 +216,7 @@ function toggleIngestPopover(container) {
 }
 
 function selectIngestWorkspace(workspace) {
-    setIngestWorkspace(workspace);
+    ingestStore.set(workspace);
     updateIngestPillLabel();
     closeIngestPopover();
     // Refresh file list for the new workspace.
@@ -229,7 +230,7 @@ function selectIngestWorkspace(workspace) {
 
 function updateIngestPillLabel() {
     const nameEl = document.querySelector('.ingest-target-name');
-    if (nameEl) nameEl.textContent = getIngestWorkspace();
+    if (nameEl) nameEl.textContent = ingestStore.workspace;
 }
 
 function closeIngestPopover() {
@@ -456,7 +457,7 @@ export function setupPanel() {
         const detail = event.detail && (event.detail.value || event.detail);
         const workspace = detail && detail.workspace;
         if (!workspace) return;
-        setIngestWorkspace(workspace);
+        ingestStore.set(workspace);
         updateIngestPillLabel();
         closeIngestPopover();
         htmx.ajax('GET', '/web/files', {
@@ -469,7 +470,7 @@ export function setupPanel() {
     document.body.addEventListener('workspaceDeleted', (event) => {
         const detail = event.detail && (event.detail.value || event.detail);
         if (!detail) return;
-        setIngestWorkspace(detail.next_workspace || getPrimaryWorkspace());
+        ingestStore.set(detail.next_workspace || workspaceStore.primary);
         updateIngestPillLabel();
     });
 }

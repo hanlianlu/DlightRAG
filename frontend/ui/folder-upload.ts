@@ -1,7 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {applyPanelHtml} from './panel.ts';
-import {getIngestWorkspace} from '../stores/state.ts';
+import {ingestStore} from '../stores/ingestStore.ts';
 import {showToast} from './toast.ts';
 
 async function traverseDirectory(entry, basePath) {
@@ -162,7 +162,7 @@ export async function uploadFolderToWorkspace(files, folderName) {
     if (files.length === 0) return;
 
     const formData = new FormData();
-    formData.append('workspace', getIngestWorkspace());
+    formData.append('workspace', ingestStore.workspace);
     files.forEach(function (file) {
         const path = file._relativePath || file.name;
         formData.append('files', file, path);

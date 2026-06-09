@@ -1,16 +1,12 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {activeWorkspaces, setActiveWorkspaces} from '../stores/state.ts';
+import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 
-const PRIMARY_COOKIE = 'dlightrag_workspace';
-const ACTIVE_COOKIE = 'dlightrag_workspace_ids';
-
-let workspaceRecords = [];
 let popoverEl = null;
 
 export function getWorkspaceRecords() {
-    return workspaceRecords;
+    return workspaceStore.records;
 }
 
 function payload(event) {
@@ -20,30 +16,20 @@ function payload(event) {
 
 function normalizeRecord(record) {
     if (typeof record === 'string') {
-        return {workspace: record, display_name: record, embedding_model: ''};
+        return {workspace: record, displayName: record, embeddingModel: ''};
     }
     const workspace = record.workspace || record.id;
     if (!workspace) return null;
     return {
         workspace,
-        display_name: record.display_name || workspace,
-        embedding_model: record.embedding_model || '',
+        displayName: record.display_name || record.displayName || workspace,
+        embeddingModel: record.embedding_model || record.embeddingModel || '',
     };
 }
 
 function workspaceName(workspace) {
-    const match = workspaceRecords.find((item) => item.workspace === workspace);
-    return match ? match.display_name : workspace;
-}
-
-function saveWorkspaceCookies() {
-    if (activeWorkspaces.length === 0) {
-        document.cookie = `${PRIMARY_COOKIE}=;path=/;SameSite=Lax;Max-Age=0`;
-        document.cookie = `${ACTIVE_COOKIE}=;path=/;SameSite=Lax;Max-Age=0`;
-        return;
-    }
-    document.cookie = `${PRIMARY_COOKIE}=${encodeURIComponent(activeWorkspaces[0])};path=/;SameSite=Lax`;
-    document.cookie = `${ACTIVE_COOKIE}=${encodeURIComponent(activeWorkspaces.join(','))};path=/;SameSite=Lax`;
+    const match = workspaceStore.records.find((item) => item.workspace === workspace);
+    return match ? match.displayName : workspace;
 }
 
 export function initWorkspaces() {
@@ -51,57 +37,37 @@ export function initWorkspaces() {
     if (!selector) return;
 
     try {
-        workspaceRecords = JSON.parse(selector.getAttribute('data-all') || '[]')
+        const records = JSON.parse(selector.getAttribute('data-all') || '[]')
             .map(normalizeRecord)
             .filter(Boolean);
+        let active: string[] = [];
+        try {
+            active = JSON.parse(selector.getAttribute('data-active') || '[]');
+        } catch (_) {
+            active = [];
+        }
+        workspaceStore.init(records, active);
     } catch (_) {
-        workspaceRecords = [];
+        // data-all attribute may be absent; start with empty records
     }
-
-    let active = [];
-    try {
-        active = JSON.parse(selector.getAttribute('data-active') || '[]');
-    } catch (_) {
-        active = [];
-    }
-
-    setActiveWorkspaces(active);
     renderWorkspaceSelector();
-    saveWorkspaceCookies();
     setupWorkspaceEvents();
 }
 
 export function toggleWorkspace(workspace) {
-    const idx = activeWorkspaces.indexOf(workspace);
-    if (idx >= 0) {
-        if (activeWorkspaces.length <= 1) return;
-        activeWorkspaces.splice(idx, 1);
-    } else {
-        activeWorkspaces.push(workspace);
-    }
+    workspaceStore.toggle(workspace);
     renderWorkspaceSelector();
-    saveWorkspaceCookies();
 }
 
 export function selectWorkspace(workspace) {
     if (!workspace) return;
-    setActiveWorkspaces([workspace]);
+    workspaceStore.select(workspace);
     renderWorkspaceSelector();
-    saveWorkspaceCookies();
 }
 
 export function removeWorkspace(workspace, nextWorkspace) {
-    workspaceRecords = workspaceRecords.filter((item) => item.workspace !== workspace);
-    const remaining = activeWorkspaces.filter((active) => active !== workspace);
-    if (remaining.length > 0) {
-        setActiveWorkspaces(remaining);
-    } else if (nextWorkspace) {
-        setActiveWorkspaces([nextWorkspace]);
-    } else {
-        setActiveWorkspaces([]);
-    }
+    workspaceStore.remove(workspace, nextWorkspace || '');
     renderWorkspaceSelector();
-    saveWorkspaceCookies();
 }
 
 function renderWorkspaceSelector() {
@@ -109,10 +75,10 @@ function renderWorkspaceSelector() {
     const dot = document.getElementById('workspace-dot');
     if (!label || !dot) return;
 
-    const total = workspaceRecords.length;
-    const activeCount = activeWorkspaces.length;
-    const allSelected = total > 0 && workspaceRecords.every(
-        (item) => activeWorkspaces.indexOf(item.workspace) >= 0,
+    const total = workspaceStore.records.length;
+    const activeCount = workspaceStore.active.length;
+    const allSelected = total > 0 && workspaceStore.records.every(
+        (item) => workspaceStore.active.indexOf(item.workspace) >= 0,
     );
 
     dot.classList.toggle('multi', activeCount > 1 || allSelected);
@@ -120,19 +86,16 @@ function renderWorkspaceSelector() {
     if (activeCount === 0 || allSelected) {
         label.textContent = total > 0 ? `All Workspaces (${total})` : 'All Workspaces';
     } else if (activeCount === 1) {
-        label.textContent = workspaceName(activeWorkspaces[0]);
+        label.textContent = workspaceName(workspaceStore.active[0]);
     } else {
         label.textContent = `Workspaces (${activeCount})`;
     }
 }
 
 function selectAllWorkspaces() {
-    if (workspaceRecords.length === 0) return;
-    const allIds = workspaceRecords.map((item) => item.workspace);
-    const allSelected = allIds.every((workspace) => activeWorkspaces.indexOf(workspace) >= 0);
-    setActiveWorkspaces(allSelected ? [allIds[0]] : allIds);
+    if (workspaceStore.records.length === 0) return;
+    workspaceStore.selectAll();
     renderWorkspaceSelector();
-    saveWorkspaceCookies();
     closeWorkspacePopover();
     openWorkspacePopover();
 }
@@ -156,9 +119,9 @@ export function openWorkspacePopover() {
     allItem.setAttribute('tabindex', '0');
     allItem.setAttribute('role', 'option');
     const allCheck = document.createElement('div');
-    const allIds = workspaceRecords.map((item) => item.workspace);
+    const allIds = workspaceStore.records.map((item) => item.workspace);
     const isAllSelected = allIds.length > 0 && allIds.every(
-        (workspace) => activeWorkspaces.indexOf(workspace) >= 0,
+        (workspace) => workspaceStore.active.indexOf(workspace) >= 0,
     );
     allCheck.className = `workspace-popover-check${isAllSelected ? ' on' : ''}`;
     allItem.appendChild(allCheck);
@@ -175,19 +138,19 @@ export function openWorkspacePopover() {
     });
     popover.appendChild(allItem);
 
-    workspaceRecords.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
+    workspaceStore.records.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)).forEach((record) => {
         const item = document.createElement('div');
         item.className = 'workspace-popover-item';
         item.setAttribute('tabindex', '0');
         item.setAttribute('role', 'option');
-        item.setAttribute('aria-selected', activeWorkspaces.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+        item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
         const check = document.createElement('div');
-        check.className = `workspace-popover-check${activeWorkspaces.indexOf(record.workspace) >= 0 ? ' on' : ''}`;
+        check.className = `workspace-popover-check${workspaceStore.active.indexOf(record.workspace) >= 0 ? ' on' : ''}`;
         item.appendChild(check);
 
         const name = document.createElement('span');
         name.className = 'workspace-popover-name';
-        name.textContent = record.display_name;
+        name.textContent = record.displayName;
         item.appendChild(name);
 
         const deleteBtn = document.createElement('button');
@@ -206,15 +169,15 @@ export function openWorkspacePopover() {
             if (event.target === deleteBtn) return;
             event.stopPropagation();
             toggleWorkspace(record.workspace);
-            check.classList.toggle('on', activeWorkspaces.indexOf(record.workspace) >= 0);
-            item.setAttribute('aria-selected', activeWorkspaces.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+            check.classList.toggle('on', workspaceStore.active.indexOf(record.workspace) >= 0);
+            item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
         });
         item.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 toggleWorkspace(record.workspace);
-                check.classList.toggle('on', activeWorkspaces.indexOf(record.workspace) >= 0);
-                item.setAttribute('aria-selected', activeWorkspaces.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+                check.classList.toggle('on', workspaceStore.active.indexOf(record.workspace) >= 0);
+                item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
             }
         });
         popover.appendChild(item);
@@ -293,8 +256,8 @@ function onEscapeKey(event) {
 }
 
 function showDeleteWorkspaceDialog(workspace) {
-    const record = workspaceRecords.find((item) => item.workspace === workspace);
-    const displayName = record ? record.display_name : workspace;
+    const record = workspaceStore.records.find((item) => item.workspace === workspace);
+    const displayName = record ? record.displayName : workspace;
     const dialog = document.getElementById('delete-workspace-dialog');
     const name = document.getElementById('delete-workspace-name');
     const idInput = document.getElementById('delete-workspace-id');
@@ -316,7 +279,12 @@ function showDeleteWorkspaceDialog(workspace) {
 function syncDataAllAttribute() {
     const selector = document.getElementById('workspace-selector');
     if (selector) {
-        selector.setAttribute('data-all', JSON.stringify(workspaceRecords));
+        const data = workspaceStore.records.map(r => ({
+            workspace: r.workspace,
+            display_name: r.displayName,
+            embedding_model: r.embeddingModel,
+        }));
+        selector.setAttribute('data-all', JSON.stringify(data));
     }
 }
 
@@ -347,14 +315,12 @@ function setupWorkspaceEvents() {
         const detail = payload(event);
         const workspace = detail.workspace;
         if (!workspace) return;
-        if (!workspaceRecords.some((item) => item.workspace === workspace)) {
-            workspaceRecords.push(normalizeRecord({
-                workspace,
-                display_name: detail.display_name || workspace,
-                embedding_model: detail.embedding_model || '',
-            }));
-        }
-        selectWorkspace(workspace);
+        workspaceStore.add({
+            workspace,
+            displayName: detail.display_name || detail.displayName || workspace,
+            embeddingModel: detail.embedding_model || detail.embeddingModel || '',
+        });
+        renderWorkspaceSelector();
         closeWorkspacePopover();
         syncDataAllAttribute();
         showToast(`Workspace ${workspaceName(workspace)} created.`);

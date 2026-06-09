@@ -1,6 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {conversationHistory} from '../stores/state.ts';
+import {conversationStore} from '../stores/conversationStore.ts';
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
@@ -22,7 +22,7 @@ function fixExternalLinks(container) {
 function markOutOfContext(historyKept) {
     const chatMessages = document.getElementById('chat-messages');
     if (!chatMessages) return;
-    const outOfContextCount = conversationHistory.length - historyKept;
+    const outOfContextCount = conversationStore.historyWindow.length - historyKept;
     if (outOfContextCount <= 0) {
         chatMessages.querySelectorAll('.out-of-context').forEach(function(el) {
             el.classList.remove('out-of-context');
