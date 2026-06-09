@@ -129,8 +129,8 @@ def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
     assert 'id="workspace-selector"' in index_html
     assert "workspace-chips" not in index_html
     assert not (web_root / "templates" / "partials" / "workspace_list.html").exists()
-    assert "dlightrag_workspace_ids" in workspaces_js
-    assert "document.cookie" in workspaces_js
+    assert "workspaceStore" in workspaces_js
+    assert "data-all" in workspaces_js
 
 
 def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> None:
@@ -138,11 +138,11 @@ def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> Non
     panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
 
     assert "removeWorkspace(workspace, detail.next_workspace)" in workspaces_js
-    assert "item.workspace !== workspace" in workspaces_js
-    assert "active !== workspace" in workspaces_js
+    assert "workspaceStore.remove(workspace" in workspaces_js
+    assert "workspaceStore.active.indexOf(" in workspaces_js
 
     assert "workspaceDeleted" in panel_js
-    assert "setIngestWorkspace(detail.next_workspace || getPrimaryWorkspace())" in panel_js
+    assert "ingestStore.set(detail.next_workspace || workspaceStore.primary)" in panel_js
 
 
 def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
