@@ -733,18 +733,18 @@ functions by default.
 ### RAGAS Evaluation
 
 DlightRAG reuses LightRAG's built-in [RAGAS](https://docs.ragas.io/)
-evaluation framework. The adapter translates DlightRAG's `/api/answer`
-response format and inherits everything else.
+evaluation framework. The adapter auto-resolves API credentials and URL
+from DlightRAG's own config — no extra `.env` entries needed.
 
 ```bash
 # One-time: install eval dependencies
 uv pip install ragas datasets langchain-openai
 
-# Point at a running DlightRAG (default: bundled sample dataset)
-uv run python scripts/ragas_eval.py --api http://localhost:8100
+# Run against your own test dataset
+uv run python scripts/ragas_eval.py --dataset my_questions.json
 
-# With your own dataset
-uv run python scripts/ragas_eval.py --api http://localhost:8100 --dataset my_tests.json
+# Or via the unified CLI
+uv run python scripts/cli.py ragas_eval --dataset my_questions.json
 ```
 
 Four RAGAS metrics are scored per test case (Faithfulness, AnswerRelevancy,

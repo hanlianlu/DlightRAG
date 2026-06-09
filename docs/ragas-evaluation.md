@@ -12,16 +12,22 @@ export — works unchanged.
 # 1. Install eval dependencies (not in DlightRAG's runtime deps)
 uv pip install ragas datasets langchain-openai
 
-# 2. Point at a running DlightRAG
-uv run python scripts/ragas_eval.py --api http://localhost:8100
+# 2. Run with your test dataset — API URL and creds auto-resolve
+uv run python scripts/ragas_eval.py --dataset my_questions.json
+
+# Or via the unified CLI
+uv run python scripts/cli.py ragas_eval --dataset my_questions.json
 ```
 
-If the DlightRAG API has auth enabled:
+When running from outside the repo or against a remote instance, pass `--api`:
 
 ```bash
-DLIGHTRAG_API_TOKEN="your-bearer-token" \
-  uv run python scripts/ragas_eval.py --api https://your-server.example.com
+uv run python scripts/ragas_eval.py --api https://dlightrag.example.com --dataset my_questions.json
 ```
+
+Auth (including JWT) auto-resolves from DlightRAG's config — no manual
+token setup needed. Override with `--api-key` or `$DLIGHTRAG_API_TOKEN`
+only when auto-resolution can't reach `config.yaml`.
 
 ## Metrics
 
@@ -65,13 +71,10 @@ A JSON file with a `test_cases` array:
 Place the dataset anywhere and pass `--dataset`:
 
 ```bash
-uv run python scripts/ragas_eval.py --api http://localhost:8100 --dataset my_tests.json
+uv run python scripts/ragas_eval.py --dataset my_tests.json
 ```
 
-The stub dataset bundled with LightRAG (`lightrag/evaluation/sample_dataset.json`)
-is used when no `--dataset` is given. It expects documents that were bundled
-with LightRAG's sample corpus — swap in your own dataset after ingesting your
-actual documents.
+A ``--dataset`` is always required — there is no built-in default.
 
 ## How the Adapter Works
 
@@ -114,13 +117,13 @@ eval credentials from DlightRAG's own config:
 | ``EVAL_LLM_BINDING_HOST`` | ``config.llm.roles.query.base_url`` → ``config.llm.default.base_url`` |
 | ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
 | ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
+| ``DLIGHTRAG_API_URL`` | ``config.api_host``:``config.api_port`` |
 | ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` (simple), or auto-generated JWT ``sub=ragas-eval`` (jwt) |
 
-This means **no extra ``.env`` entries are needed** when DlightRAG already
-has a working LLM config (OpenAI, OpenRouter, or any OpenAI-compatible endpoint).
-Native-SDK-only providers (Anthropic, Gemini) need an explicit
+This means **no extra ``.env`` entries are needed** — run from the repo root
+with just ``--dataset``, and everything auto-resolves from ``config.yaml`` +
+``.env``. Native-SDK-only LLM providers (Anthropic, Gemini) need an explicit
 ``EVAL_LLM_BINDING_API_KEY`` because RAGAS requires an OpenAI-compatible API.
-The API bearer token auto-resolves for both ``simple`` and ``jwt`` auth modes.
 
 ### Explicit overrides
 
