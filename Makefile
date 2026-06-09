@@ -74,6 +74,13 @@ ci-full: ci
 	uv run pytest tests/integration -v --tb=short
 	@echo "CI (full) passed."
 
+# ─────────────────────────────────────────────────────────────────
+# Playwright E2E UI tests (headless)
+.PHONY: test-e2e
+
+test-e2e:
+	$(PYTHON) -m pytest tests/e2e/ -v -m e2e --tb=short
+
 # Full + E2E: needs PostgreSQL 18 with AGE; model calls are faked in tests
 ci-e2e: ci-full
 	DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -v --tb=short -m e2e_pg18
