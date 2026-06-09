@@ -732,6 +732,29 @@ The E2E smoke expects PostgreSQL 18 with pgvector, Apache AGE,
 pg_textsearch, and pg_jieba installed. It uses deterministic fake model
 functions by default.
 
+### RAGAS Evaluation
+
+DlightRAG reuses LightRAG's built-in [RAGAS](https://docs.ragas.io/)
+evaluation framework. The adapter translates DlightRAG's `/api/answer`
+response format and inherits everything else.
+
+```bash
+# One-time: install eval dependencies
+uv pip install ragas datasets langchain-openai
+
+# Point at a running DlightRAG (default: bundled sample dataset)
+uv run python scripts/ragas_eval.py --api http://localhost:8100
+
+# With your own dataset
+uv run python scripts/ragas_eval.py --api http://localhost:8100 --dataset my_tests.json
+```
+
+Four RAGAS metrics are scored per test case (Faithfulness, AnswerRelevancy,
+ContextRecall, ContextPrecision) and saved as CSV/JSON in
+`./ragas_eval_results/`. Dataset format, eval model configuration, CI
+integration, and architecture notes are in
+[docs/ragas-evaluation.md](docs/ragas-evaluation.md).
+
 ## References
 
 - [docs/response-schema.md](docs/response-schema.md) - REST, MCP, and SDK payloads.
