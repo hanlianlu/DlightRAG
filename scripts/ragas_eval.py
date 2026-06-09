@@ -16,7 +16,7 @@ No extra ``.env`` entries needed in the common case.
 Usage::
 
     uv pip install ragas datasets langchain-openai
-    uv run python scripts/ragas_eval.py --api http://localhost:8100
+    uv run python scripts/ragas_eval.py --dataset my_questions.json
 
 See `docs/ragas-evaluation.md <../docs/ragas-evaluation.md>`_ for full guide.
 """
@@ -70,8 +70,9 @@ def _resolve_eval_env() -> None:
                                           ← DlightRAG embedding base_url (if OpenAI-compatible)
 
     DlightRAG connection:
-      6. DLIGHTRAG_API_TOKEN             ← config.api_auth_token (simple)
-                                         ← auto-generated JWT (jwt mode, sub=ragas-eval)
+      6. DLIGHTRAG_API_URL              ← config.api_host:api_port
+      7. DLIGHTRAG_API_TOKEN            ← config.api_auth_token (simple)
+                                        ← auto-generated JWT (jwt mode, sub=ragas-eval)
     """
     # If both eval keys are already set, nothing to do
     llm_key_set = bool(os.getenv("EVAL_LLM_BINDING_API_KEY"))
@@ -138,6 +139,13 @@ def _resolve_eval_env() -> None:
             os.environ["EVAL_EMBEDDING_BINDING_HOST"] = llm_host
         elif embed_cfg.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS and embed_cfg.base_url:
             os.environ["EVAL_EMBEDDING_BINDING_HOST"] = embed_cfg.base_url
+
+    # -- DlightRAG API URL (--api / $DLIGHTRAG_API_URL / config) --
+    if not os.getenv("DLIGHTRAG_API_URL") and config.api_host:
+        os.environ["DLIGHTRAG_API_URL"] = f"http://{config.api_host}:{config.api_port}"
+        logger.info(
+            "DlightRAG API URL: auto-resolved from config (%s)", os.environ["DLIGHTRAG_API_URL"]
+        )
 
     # -- DlightRAG API token (simple or JWT) --
     if not os.getenv("DLIGHTRAG_API_TOKEN"):
@@ -294,18 +302,15 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Zero-config — eval creds auto-resolved from DlightRAG config
-  python scripts/ragas_eval.py --api http://localhost:8100
+  # Zero-config — API URL + creds all auto-resolved from DlightRAG config
+  python scripts/ragas_eval.py --dataset my_questions.json
 
-  # Custom dataset
+  # Explicit API URL (when running outside the repo or remote)
   python scripts/ragas_eval.py --api http://localhost:8100 --dataset my_questions.json
-
-  # With auth
-  python scripts/ragas_eval.py --api https://dlightrag.example.com --api-key "$TOKEN"
 
   # Explicit eval model overrides (overrides auto-resolution)
   EVAL_LLM_MODEL=gpt-4o EVAL_EMBEDDING_MODEL=text-embedding-3-large \\
-    python scripts/ragas_eval.py --api http://localhost:8100
+    python scripts/ragas_eval.py --dataset my_questions.json
         """,
     )
 
@@ -313,7 +318,8 @@ Examples:
         "--api",
         type=str,
         default=os.getenv("DLIGHTRAG_API_URL"),
-        help="DlightRAG API base URL (default: $DLIGHTRAG_API_URL). Example: http://localhost:8100",
+        help="DlightRAG API base URL (auto-resolved from $DLIGHTRAG_API_URL or config). "
+        "Example: http://localhost:8100",
     )
     parser.add_argument(
         "--api-key",
@@ -378,7 +384,8 @@ async def _run() -> None:
 
     if not args.api:
         print(
-            "DlightRAG API URL is required. Set --api or DLIGHTRAG_API_URL.",
+            "DlightRAG API URL not found. Run from the repo root so config.yaml is "
+            "visible, or set --api / $DLIGHTRAG_API_URL.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -401,6 +408,17 @@ async def _run() -> None:
     logger.info("Eval Embed:   %s", evaluator.eval_embedding_model)
     logger.info("Results dir:  %s", evaluator.results_dir.absolute())
     logger.info("")
+
+    # LightRAG's default sample_dataset.json isn't shipped in the pip wheel.
+    # When no --dataset is given, the parent falls back to a non-existent path.
+    if not evaluator.test_dataset_path.exists():
+        logger.error("No test dataset found at %s", evaluator.test_dataset_path)
+        logger.error(
+            "Pass --dataset <your_questions.json> with ingested documents.\n"
+            '  Format: {"test_cases": [{"question": "...", "ground_truth": "..."}]}\n'
+            "  See docs/ragas-evaluation.md for the full guide."
+        )
+        sys.exit(1)
 
     await evaluator.run()
 
