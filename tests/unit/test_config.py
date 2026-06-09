@@ -310,10 +310,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.parser_sidecars.vlm.surrounding_trailing_max_tokens == 128
     assert cfg.parser_sidecars.mineru.api_mode == "local"
     assert cfg.parser_sidecars.mineru.local_endpoint == "http://127.0.0.1:8210"
-    assert cfg.parser_sidecars.mineru.local_backend == "hybrid-auto-engine"
     assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
-    assert cfg.parser_sidecars.mineru.enable_table is True
-    assert cfg.parser_sidecars.mineru.enable_formula is True
     assert os.environ["LIGHTRAG_PARSER"] == "docx:native-iteP,*:mineru-iteP"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
@@ -804,15 +801,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
             "mineru": {
                 "api_mode": "local",
                 "local_endpoint": "http://shared-mineru.local:8210",
-                "local_backend": "pipeline",
-                "local_parse_method": "ocr",
-                "local_image_analysis": False,
-                "enable_table": False,
-                "enable_formula": True,
                 "auxiliary_block_policy": "extended",
-                "language": "ch,en",
-                "poll_interval_seconds": 3,
-                "max_polls": 42,
             },
         },
     )
@@ -823,15 +812,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "456"
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://shared-mineru.local:8210"
-    assert os.environ["MINERU_LOCAL_BACKEND"] == "pipeline"
-    assert os.environ["MINERU_LOCAL_PARSE_METHOD"] == "ocr"
-    assert os.environ["MINERU_LOCAL_IMAGE_ANALYSIS"] == "false"
-    assert os.environ["MINERU_ENABLE_TABLE"] == "false"
-    assert os.environ["MINERU_ENABLE_FORMULA"] == "true"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "extended"
-    assert os.environ["MINERU_LANGUAGE"] == "ch,en"
-    assert os.environ["MINERU_POLL_INTERVAL_SECONDS"] == "3"
-    assert os.environ["MINERU_MAX_POLLS"] == "42"
 
 
 def test_sidecar_env_loader_does_not_export_service_helper_keys(

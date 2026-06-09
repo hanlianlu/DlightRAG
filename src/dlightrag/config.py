@@ -223,53 +223,34 @@ class VLMSidecarConfig(BaseModel):
 
 
 class MinerUSidecarConfig(BaseModel):
-    """LightRAG MinerU parser sidecar settings."""
+    """LightRAG MinerU parser sidecar settings.
+
+    Only fields that are *necessary to route or override* are declared here.
+    Everything else — language, backend, parse method, table/formula, OCR,
+    polling, page ranges, image analysis — is left to LightRAG's built-in
+    defaults (see ``lightrag/parser/external/mineru/cache.py``).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     api_mode: Literal["local", "official"] = "local"
     api_token: str | None = None
     official_endpoint: str = "https://mineru.net"
-    model_version: str = "vlm"
-    is_ocr: bool = False
-    poll_interval_seconds: int = 2
-    max_polls: int = 300
-    language: str = "ch"
-    enable_table: bool = True
-    enable_formula: bool = True
-    page_ranges: str | None = None
-    engine_version: str | None = None
-    force_reparse: bool = False
     local_endpoint: str = "http://127.0.0.1:8210"
-    local_backend: str = "hybrid-auto-engine"
-    local_parse_method: Literal["auto", "txt", "ocr"] = "auto"
-    local_image_analysis: bool = True
-    auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
-    local_start_page_id: int | None = None
-    local_end_page_id: int | None = None
+    force_reparse: bool = False
 
-    # Pydantic field → LightRAG env var. Single source of truth;
-    # _lightrag_sidecar_env_map() and _LIGHTRAG_SIDECAR_ENV_KEYS derive from this.
+    # DlightRAG-only: filter header/footer blocks that pollute chunk text.
+    auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
+
+    # Pydantic field → LightRAG env var. Only fields that LightRAG actually
+    # reads via os.getenv() are listed. auxiliary_block_policy is intentionally
+    # absent — it's a DlightRAG post-processing step, not a LightRAG env var.
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "api_mode": "MINERU_API_MODE",
         "api_token": "MINERU_API_TOKEN",
         "official_endpoint": "MINERU_OFFICIAL_ENDPOINT",
-        "model_version": "MINERU_MODEL_VERSION",
-        "is_ocr": "MINERU_IS_OCR",
-        "poll_interval_seconds": "MINERU_POLL_INTERVAL_SECONDS",
-        "max_polls": "MINERU_MAX_POLLS",
-        "language": "MINERU_LANGUAGE",
-        "enable_table": "MINERU_ENABLE_TABLE",
-        "enable_formula": "MINERU_ENABLE_FORMULA",
-        "page_ranges": "MINERU_PAGE_RANGES",
-        "engine_version": "MINERU_ENGINE_VERSION",
-        "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
         "local_endpoint": "MINERU_LOCAL_ENDPOINT",
-        "local_backend": "MINERU_LOCAL_BACKEND",
-        "local_parse_method": "MINERU_LOCAL_PARSE_METHOD",
-        "local_image_analysis": "MINERU_LOCAL_IMAGE_ANALYSIS",
-        "local_start_page_id": "MINERU_LOCAL_START_PAGE_ID",
-        "local_end_page_id": "MINERU_LOCAL_END_PAGE_ID",
+        "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
     }
 
 
