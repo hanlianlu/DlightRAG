@@ -1,0 +1,346 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * Fluid design system: type, spacing, and layout scale with viewport width.
+ * On phones (390px) → compact but readable.
+ * On laptops (1440px) → slightly more relaxed without changing UI character.
+ *
+ * sources.css — Server-rendered answer sources: document grouping, chunk
+ * display, semantic highlights, citation badges, answer references, image
+ * gallery, and source download icons.
+ */
+
+/* === Citation Badge === */
+
+.citation-badge {
+    display: inline-flex;
+    align-items: center;
+    background: transparent;
+    color: var(--color-gold-100);
+    font-size: var(--font-size-caption);
+    line-height: 1;
+    padding: 0 0.16em;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    font-weight: 600;
+    letter-spacing: 0;
+    vertical-align: baseline;
+    transition: background 0.15s, color 0.15s;
+    margin: 0 1px;
+}
+
+.citation-badge:hover {
+    background: rgba(210, 182, 97, 0.12);
+    color: var(--color-gold-200);
+}
+
+/* === Document-Level Source Grouping === */
+
+.source-doc {
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.source-doc + .source-doc {
+    margin-top: var(--space-inline);
+}
+
+.source-doc-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-tight);
+    width: 100%;
+    padding: var(--space-component) var(--space-component);
+    background: transparent;
+    transition: background 0.15s ease;
+}
+
+.source-doc-header:hover {
+    background: var(--color-bg-hover);
+}
+
+.source-doc-toggle {
+    display: flex;
+    align-items: center;
+    gap: var(--space-tight);
+    min-width: 0;
+    flex: 1;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+.collapse-icon {
+    font-size: var(--font-size-caption);
+    transition: transform 0.2s ease;
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+    width: var(--space-component);
+}
+
+.source-doc.expanded .collapse-icon {
+    transform: rotate(90deg);
+}
+
+.source-doc-title {
+    flex: 1;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.source-doc-badge {
+    font-size: var(--font-size-caption);
+    color: var(--color-gold-300);
+    font-weight: 600;
+}
+
+.source-doc-count {
+    font-size: var(--font-size-caption);
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+}
+
+.source-doc-count::after {
+    content: ' chunks';
+}
+
+.source-doc-chunks {
+    display: none;
+    padding: 0 var(--space-tight) var(--space-tight);
+}
+
+.source-doc.expanded .source-doc-chunks {
+    display: block;
+}
+
+/* === Source Chunks === */
+
+.source-chunk {
+    background: rgba(12, 10, 9, 0.72);
+    padding: var(--space-component) var(--space-related);
+    margin-bottom: var(--space-component);
+    border-radius: var(--radius-surface);
+    box-shadow: inset 2px 0 0 rgba(120, 113, 108, 0.18);
+    transition: background 0.15s, box-shadow 0.15s;
+}
+
+.source-chunk.active {
+    background: rgba(12, 10, 9, 0.86);
+    box-shadow: inset 2px 0 0 rgba(210, 182, 97, 0.28);
+}
+
+.source-chunk-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.source-chunk-page {
+    color: var(--color-text-dim);
+    font-size: var(--font-size-caption);
+}
+
+.source-chunk-image {
+    margin-top: var(--space-tight);
+}
+.source-chunk-image img {
+    max-width: 100%;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border-subtle);
+    cursor: zoom-in;
+}
+.source-chunk-content {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    margin-top: var(--space-tight);
+    line-height: 1.65;
+    overflow-x: auto;
+}
+.source-chunk-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: var(--space-tight) 0;
+    font-size: var(--font-size-detail);
+}
+.source-chunk-content th,
+.source-chunk-content td {
+    border: 1px solid var(--color-border-subtle);
+    padding: var(--space-tight) var(--space-component);
+    text-align: left;
+}
+.source-chunk-content th {
+    background: var(--color-bg-hover);
+    color: var(--color-text-secondary);
+    font-weight: 600;
+}
+.source-chunk-content tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* === Semantic Highlight === */
+
+.highlight {
+    background: rgba(210, 182, 97, 0.14);
+    color: var(--color-gold-100);
+    padding: 0 0.1em;
+    border-radius: 2px;
+    border-bottom: none;
+    box-decoration-break: clone;
+}
+
+.source-chunk-content .highlight {
+    background: rgba(210, 182, 97, 0.18);
+    color: var(--color-text-primary);
+    border-bottom: none;
+}
+
+/* === Show All Button === */
+
+.show-all-btn {
+    width: 100%;
+    padding: var(--space-component);
+    margin-top: var(--space-component);
+    background: transparent;
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s;
+}
+
+.show-all-btn:hover {
+    border-color: var(--color-border-strong);
+    color: var(--color-text-tertiary);
+}
+
+.show-all-btn[hidden] {
+    display: none;
+}
+
+/* === Answer References (doc-level, visible at bottom) === */
+
+.answer-references {
+    margin-top: var(--space-related);
+    padding-top: var(--space-component);
+    border-top: 1px solid rgba(120, 113, 108, 0.12);
+}
+
+.answer-references-title {
+    font-size: var(--font-size-caption);
+    font-weight: 600;
+    color: var(--color-text-subtle);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: var(--space-tight);
+}
+
+.answer-ref-item {
+    display: flex;
+    gap: var(--space-tight);
+    padding: var(--space-inline) 0;
+    font-size: var(--font-size-detail);
+    line-height: 1.5;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background 0.1s;
+}
+.answer-ref-item:hover {
+    background: rgba(210, 182, 97, 0.06);
+}
+
+.answer-ref-id {
+    color: var(--color-gold-300);
+    font-weight: 600;
+    flex-shrink: 0;
+    min-width: 24px;
+}
+
+.answer-ref-title {
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* === Answer Image Gallery === */
+
+.answer-image-strip {
+    display: flex;
+    gap: var(--space-tight);
+    padding: var(--space-tight) 0 var(--space-inline);
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    border-top: 1px solid rgba(120, 113, 108, 0.12);
+    margin-top: var(--space-tight);
+}
+
+.answer-image-item {
+    flex-shrink: 0;
+    height: clamp(100px, 10vw, 140px);
+    width: clamp(130px, 13vw, 180px);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid rgba(120, 113, 108, 0.16);
+    transition: border-color 0.15s;
+}
+
+.answer-image-item:hover {
+    border-color: rgba(210, 182, 97, 0.4);
+}
+
+.answer-image-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.answer-image-label {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+    color: #d6d3d1;
+    font-size: var(--font-size-caption);
+    padding: var(--space-tight) var(--space-inline) var(--space-inline);
+}
+
+/* === Source Download Icon === */
+
+.source-dl-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--size-button);
+    height: var(--size-button);
+    background: transparent;
+    border: none;
+    border-radius: 50%;
+    color: var(--color-text-tertiary);
+    font-size: 14px;
+    flex-shrink: 0;
+    opacity: 1;
+    text-decoration: none;
+    transition: color 0.15s, opacity 0.15s, transform 0.15s;
+}
+.source-dl-icon:hover {
+    color: var(--color-gold-200);
+    opacity: 1;
+    transform: translateY(-1px);
+}
+
+.source-dl-icon-svg {
+    height: var(--size-icon-md);
+    pointer-events: none;
+    stroke-width: 2;
+    width: var(--size-icon-md);
+}

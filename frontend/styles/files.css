@@ -1,0 +1,308 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * Fluid design system: type, spacing, and layout scale with viewport width.
+ * On phones (390px) → compact but readable.
+ * On laptops (1440px) → slightly more relaxed without changing UI character.
+ *
+ * files.css — Server-rendered file management: file list items, upload zone,
+ * ingest target (pill + popover), and progress bar styles.
+ */
+
+/* === Files Panel — Ingest Target Pill === */
+
+.ingest-target {
+    position: relative;
+}
+
+#ingest-target:empty {
+    display: none;
+}
+
+.ingest-target-pill {
+    align-items: center;
+    background: var(--color-accent-hover);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-200);
+    cursor: pointer;
+    display: flex;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    gap: var(--space-inline);
+    padding: var(--space-inline) var(--space-tight);
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+    white-space: nowrap;
+}
+
+.ingest-target-pill:hover {
+    background: var(--color-accent-hover-strong);
+    border-color: rgba(210, 182, 97, 0.35);
+}
+
+.ingest-target-dot {
+    background: var(--color-gold-200);
+    border-radius: 50%;
+    flex-shrink: 0;
+    height: calc(var(--size-icon-sm) * 0.45);
+    width: calc(var(--size-icon-sm) * 0.45);
+}
+
+.ingest-target-caret {
+    color: var(--color-gold-300);
+    flex-shrink: 0;
+    transition: transform 0.15s;
+}
+
+.ingest-target.open .ingest-target-caret {
+    transform: rotate(180deg);
+}
+
+/* Popover */
+.ingest-target-popover {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
+    display: flex;
+    flex-direction: column;
+    left: 0;
+    max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-tight);
+    position: absolute;
+    top: calc(100% + var(--space-3xs));
+    width: clamp(200px, 20vw, 260px);
+    z-index: 1000;
+}
+
+.ingest-target-popover-item {
+    align-items: center;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-component);
+    padding: var(--space-tight) var(--space-component);
+    transition: background 0.1s;
+}
+
+.ingest-target-popover-item:hover,
+.ingest-target-popover-item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+/* Radio circle */
+.ingest-target-popover-radio {
+    align-items: center;
+    border: 1.5px solid var(--color-text-subtle);
+    border-radius: 50%;
+    display: flex;
+    flex-shrink: 0;
+    height: var(--size-icon-sm);
+    justify-content: center;
+    transition: all 0.15s;
+    width: var(--size-icon-sm);
+}
+
+.ingest-target-popover-radio.on {
+    border-color: var(--color-gold-200);
+}
+
+.ingest-target-popover-radio.on::after {
+    background: var(--color-gold-200);
+    border-radius: 50%;
+    content: '';
+    height: 50%;
+    width: 50%;
+}
+
+/* Create row — same pattern as workspace popover */
+.ingest-target-popover-create {
+    align-items: center;
+    border-top: 1px solid var(--color-border-subtle);
+    display: flex;
+    gap: var(--space-tight);
+    margin-top: var(--space-tight);
+    padding: var(--space-tight) 0 0;
+}
+
+.ingest-target-popover-input {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    flex: 1;
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    outline: none;
+    padding: var(--space-tight) var(--space-tight);
+}
+
+.ingest-target-popover-input:focus {
+    border-color: rgba(210, 182, 97, 0.38);
+}
+
+.ingest-target-popover-input::placeholder {
+    color: var(--color-text-dim);
+}
+
+.ingest-target-popover-create-btn {
+    align-items: center;
+    background: rgba(87, 74, 36, 0.28);
+    border: 1px solid rgba(210, 182, 97, 0.24);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-100);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    font-size: var(--font-size-body);
+    height: clamp(28px, 2.8vw, 34px);
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+    width: clamp(28px, 2.8vw, 34px);
+}
+
+.ingest-target-popover-create-btn:hover {
+    background: rgba(87, 74, 36, 0.42);
+    border-color: rgba(210, 182, 97, 0.4);
+}
+
+/* === File Management === */
+
+.file-item {
+    align-items: center;
+    border-radius: var(--radius-sm);
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: space-between;
+    padding: var(--space-tight) var(--space-component);
+    transition: background 0.1s;
+}
+
+.file-item:hover {
+    background: var(--color-bg-hover);
+}
+
+.file-name {
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-delete {
+    align-items: center;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-dim);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    height: var(--size-icon-md);
+    justify-content: center;
+    opacity: 0.45;
+    padding: 0;
+    transition: all 0.15s;
+    width: var(--size-icon-md);
+}
+
+@media (hover: hover) {
+    .file-delete {
+        opacity: 0;
+    }
+
+    .file-item:hover .file-delete {
+        opacity: 1;
+    }
+}
+
+.file-delete:hover {
+    background: rgba(248, 113, 113, 0.15);
+    color: var(--color-danger);
+}
+
+.file-delete-icon {
+    height: var(--size-icon-sm);
+    pointer-events: none;
+    width: var(--size-icon-sm);
+}
+
+/* === Progress Bar === */
+
+.progress-bar-track {
+    margin: var(--space-tight) var(--space-related);
+    height: var(--space-inline);
+    background: var(--color-border-subtle);
+    border-radius: 2px;
+    overflow: hidden;
+}
+.progress-bar-fill {
+    height: 100%;
+    background: var(--color-gold-200);
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+.progress-label {
+    padding: 0 var(--space-related) var(--space-tight);
+    font-size: var(--font-size-caption);
+    color: var(--color-text-muted);
+    text-align: center;
+}
+
+#ingest-progress {
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* === Upload Zone (Files Panel) === */
+
+.upload-zone {
+    border: 1.5px dashed var(--color-border-strong);
+    border-radius: var(--radius-md);
+    padding: var(--space-section) var(--space-related) var(--space-related);
+    text-align: center;
+    color: var(--color-text-dim);
+    cursor: pointer;
+    margin-bottom: var(--space-related);
+    transition: border-color 0.2s, background 0.2s;
+}
+
+.upload-zone:hover {
+    border-color: rgba(210, 182, 97, 0.35);
+    background: rgba(210, 182, 97, 0.03);
+}
+
+.upload-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-inline);
+    padding: var(--space-tight) var(--space-related);
+    background: rgba(41, 37, 36, 0.64);
+    border: 1px solid var(--color-border-subtle);
+    color: var(--color-text-muted);
+    font-family: inherit;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.upload-btn:hover {
+    background: var(--color-bg-hover);
+    border-color: var(--color-border-strong);
+    color: var(--color-text-secondary);
+}
+
+.upload-btn svg {
+    flex-shrink: 0;
+    opacity: 0.7;
+}
+
+.upload-btn:hover svg {
+    opacity: 1;
+}
