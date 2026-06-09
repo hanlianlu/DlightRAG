@@ -180,7 +180,7 @@ async def _file_list_response(request: Request, workspace: str):
     status: dict[str, Any] = {}
     try:
         ps = await manager.get_pipeline_status(workspace)
-        ingest_busy = ingest_busy or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+        ingest_busy = ingest_busy or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
         if ingest_busy:
             status = ps
     except Exception:
@@ -228,14 +228,15 @@ async def upload_files(
     if not await _workspace_is_registered(request, selected_workspace):
         return _stale_workspace_response()
 
-    # Reject if an ingest is already running in this workspace.
-    existing = _workspace_upload_tasks.get(selected_workspace)
-    if existing is not None and not existing.done():
-        return error_response(
-            "An ingest is already in progress for this workspace. "
-            "Wait for it to finish before uploading more files.",
-            status_code=409,
-        )
+    # Detect whether the pipeline is already busy so the UI can show a
+    # "queued" state instead of "starting" — LightRAG's request_pending
+    # mechanism picks up new enqueues automatically after the current batch.
+    already_busy = False
+    try:
+        ps = await manager.get_pipeline_status(selected_workspace)
+        already_busy = bool(ps.get("busy"))
+    except Exception:
+        pass
 
     bytes_written = 0
     upload_dir: Path | None = None
@@ -317,7 +318,15 @@ async def upload_files(
             "files": [],
             "workspace": selected_workspace,
             "ingest_busy": True,
-            "status": {"latest_message": "Starting ingest..."},
+            "is_queued": already_busy,
+            "file_count": len(saved_paths),
+            "status": {
+                "latest_message": (
+                    "Queued — processing after current batch"
+                    if already_busy
+                    else "Starting ingest..."
+                ),
+            },
         },
     )
 
@@ -350,7 +359,7 @@ async def ingest_status(
     except Exception:
         ps = {"busy": False, "latest_message": "Status unavailable"}
 
-    still_busy = task_running or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 1
+    still_busy = task_running or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
 
     if still_busy:
         return HTMLResponse(

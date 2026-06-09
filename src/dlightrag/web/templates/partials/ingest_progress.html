@@ -14,4 +14,8 @@
     </div>
     <div class="progress-label">batch {{ status.cur_batch }}/{{ status.batchs }} · {{ status.docs }} doc(s)</div>
     {% endif %}
+    {% set queued = status.pending_enqueues | default(0) | int %}
+    {% if queued > 0 %}
+    <div class="ingest-queue-notice">{{ queued }} upload(s) queued — will process after current batch</div>
+    {% endif %}
 </div>

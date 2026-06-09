@@ -38,7 +38,7 @@ function openPanelAfterRequest(event) {
 
     if (el.id === 'upload-form' || (el.closest && el.closest('#upload-form'))) {
         showToast(
-            event.detail.successful ? 'Ingestion complete.' : 'Ingestion failed.',
+            event.detail.successful ? 'Files received — processing in background' : 'Upload failed.',
             event.detail.successful ? 3000 : 5000,
         );
     }

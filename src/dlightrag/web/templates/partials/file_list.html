@@ -1,6 +1,6 @@
 {% if ingest_busy %}
     {% include "partials/ingest_progress.html" %}
-{% else %}
+{% endif %}
 <div class="upload-zone" id="upload-zone">
     <svg class="upload-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     <p class="upload-text">Drop files or folders here</p>
@@ -27,7 +27,6 @@
     </form>
 </div>
 <div id="upload-spinner" class="file-status htmx-indicator">Uploading...</div>
-{% endif %}
 
 {% if files %}
 {% for file in files %}
@@ -49,6 +48,11 @@
     </button>
 </div>
 {% endfor %}
+{% if ingest_busy %}
+<div class="ingest-queue-notice ingest-queue-notice--inline">
+    {{ file_count | default(0) }} new file(s) queued during active ingest
+</div>
+{% endif %}
 {% elif not ingest_busy %}
 <div class="empty-state file-empty-state">
     No files ingested in workspace "{{ workspace }}".
