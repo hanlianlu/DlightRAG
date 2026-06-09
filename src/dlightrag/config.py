@@ -239,6 +239,12 @@ class MinerUSidecarConfig(BaseModel):
     local_endpoint: str = "http://127.0.0.1:8210"
     force_reparse: bool = False
 
+    # macOS MinerU hard-codes max_concurrent_requests=1 (see mineru/cli/fast_api.py).
+    # Two large PDFs submitted in parallel will serialize, and the second one's poll
+    # clock starts counting from submit time — not from when it actually starts
+    # processing. 1200 polls × 2s = 40 min covers two large PDFs in serial.
+    max_polls: int = 1200
+
     # DlightRAG-only: filter header/footer blocks that pollute chunk text.
     auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
 
@@ -251,6 +257,7 @@ class MinerUSidecarConfig(BaseModel):
         "official_endpoint": "MINERU_OFFICIAL_ENDPOINT",
         "local_endpoint": "MINERU_LOCAL_ENDPOINT",
         "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
+        "max_polls": "MINERU_MAX_POLLS",
     }
 
 
