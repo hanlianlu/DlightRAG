@@ -1,0 +1,145 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * Fluid design system: type, spacing, and layout scale with viewport width.
+ * On phones (390px) → compact but readable.
+ * On laptops (1440px) → slightly more relaxed without changing UI character.
+ */
+
+:root {
+    /* ═══════════════════════════════════════════════════════════════════
+       LAYER 1: Primitives
+       Type and space use utopia.fyi formulas.
+       Viewport: 390px → 1440px | Base: 15px → 15.5px | Ratio: 1.18
+       ═══════════════════════════════════════════════════════════════════ */
+
+    /* ── Type scale ── */
+    /* step -2: 10.77px → 11.13px */
+    --step--2: clamp(0.67330rem, 0.034199vi + 0.664962rem, 0.69574rem);
+    /* step -1: 12.71px → 13.14px */
+    --step--1: clamp(0.79449rem, 0.040355vi + 0.784655rem, 0.82097rem);
+    /* step 0: 15.00px → 15.50px */
+    --step-0: clamp(0.93750rem, 0.047619vi + 0.925893rem, 0.96875rem);
+    /* step 1: 17.70px → 18.29px */
+    --step-1: clamp(1.10625rem, 0.056190vi + 1.092554rem, 1.14312rem);
+    /* step 2: 20.89px → 21.58px */
+    --step-2: clamp(1.30537rem, 0.066305vi + 1.289213rem, 1.34889rem);
+    /* step 3: 24.65px → 25.47px */
+    --step-3: clamp(1.54034rem, 0.078240vi + 1.521272rem, 1.59169rem);
+    /* step 4: 29.08px → 30.05px */
+    --step-4: clamp(1.81760rem, 0.092323vi + 1.795100rem, 1.87819rem);
+    /* step 5: 34.32px → 35.46px */
+    --step-5: clamp(2.14477rem, 0.108941vi + 2.118219rem, 2.21627rem);
+
+    /* ── Space scale (unison multipliers on base step-0) ── */
+    /* space-3xs: 4.0px → 4.8px */
+    --space-3xs: clamp(0.25000rem, 0.00071429vi + 0.232589rem, 0.29688rem);
+    /* space-2xs: 8.0px → 9.5px */
+    --space-2xs: clamp(0.50000rem, 0.00142857vi + 0.465179rem, 0.59375rem);
+    /* space-xs: 12.0px → 14.2px */
+    --space-xs: clamp(0.75000rem, 0.00214286vi + 0.697768rem, 0.89062rem);
+    /* space-s: 16.0px → 19.0px */
+    --space-s: clamp(1.00000rem, 0.00285714vi + 0.930357rem, 1.18750rem);
+    /* space-m: 24.0px → 28.5px */
+    --space-m: clamp(1.50000rem, 0.00428571vi + 1.395536rem, 1.78125rem);
+    /* space-l: 32.0px → 38.0px */
+    --space-l: clamp(2.00000rem, 0.00571429vi + 1.860714rem, 2.37500rem);
+    /* space-xl: 48.0px → 57.0px */
+    --space-xl: clamp(3.00000rem, 0.00857143vi + 2.791071rem, 3.56250rem);
+    /* space-2xl: 64.0px → 76.0px */
+    --space-2xl: clamp(4.00000rem, 0.01142857vi + 3.721429rem, 4.75000rem);
+    /* space-3xl: 96.0px → 114.0px */
+    --space-3xl: clamp(6.00000rem, 0.01714286vi + 5.582143rem, 7.12500rem);
+
+    /* ── Radius scale ── */
+    /* Fixed to preserve component character across viewport sizes. */
+    --radius-xs: 0.375rem;
+    --radius-sm: 0.5rem;
+    --radius-md: 0.625rem;
+    --radius-lg: 0.75rem;
+    --radius-xl: 0.875rem;
+
+    /* ═══════════════════════════════════════════════════════════════════
+       LAYER 2: Semantic Tokens
+       Components reference these — never raw values, never Layer 1 directly.
+       ═══════════════════════════════════════════════════════════════════ */
+
+    /* ── Color: Gold palette ── */
+    --color-gold-100: #f7de9d;
+    --color-gold-200: #d2b661;
+    --color-gold-300: #a7904c;
+    --color-gold-400: #7e6c37;
+    --color-gold-500: #574a24;
+    --color-gold-600: #332b12;
+
+    /* ── Color: Text ── */
+    --color-text-primary: #f5f5f4;
+    --color-text-secondary: #e7e5e4;
+    --color-text-tertiary: #d6d3d1;
+    --color-text-muted: #a8a29e;
+    --color-text-subtle: #78716c;
+    --color-text-dim: #57534e;
+
+    /* ── Color: Background ── */
+    --color-bg-base: #0c0a09;
+    --color-bg-surface: #1c1917;
+    --color-bg-elevated: #292524;
+    --color-bg-subtle: #14110f;
+    --color-bg-hover: rgba(120, 113, 108, 0.10);
+    --color-bg-hover-strong: rgba(120, 113, 108, 0.16);
+    --color-accent-hover: rgba(210, 182, 97, 0.08);
+    --color-accent-hover-strong: rgba(210, 182, 97, 0.14);
+
+    /* ── Color: Border ── */
+    --color-border-subtle: rgba(120, 113, 108, 0.16);
+    --color-border-strong: rgba(120, 113, 108, 0.28);
+
+    /* ── Color: Semantic ── */
+    --color-danger: #f87171;
+
+    /* ── Font sizes (semantic aliases to Utopia type scale) ── */
+    --font-size-caption:  var(--step--2);  /* badges, tiny labels */
+    --font-size-detail:   var(--step--1);  /* meta, timestamps, captions */
+    --font-size-body:     var(--step-0);   /* messages, inputs, body text */
+    --font-size-subhead:  var(--step-1);   /* sub-headings, buttons */
+    --font-size-heading:  var(--step-2);   /* welcome brand, panel titles */
+    --font-size-section:  var(--step-3);   /* section headers */
+    --font-size-welcome-brand: clamp(1.5rem, 1.35vw + 1.16rem, 2.25rem);
+    /* ── Line heights ── */
+    --line-height-control: 1.5;
+    --line-height-message: 1.58;
+    --space-message-block: var(--space-component);
+    --space-composer-y: calc(var(--space-tight) * 0.625);
+    --space-composer-x: var(--space-tight);
+    --space-composer-leading: var(--space-inline);
+    --space-composer-trailing: var(--space-composer-x);
+
+    /* ── Space (semantic aliases to Utopia space scale) ── */
+    --space-inline:       var(--space-3xs);  /* icon-to-text, badge internal */
+    --space-tight:        var(--space-2xs);  /* compact inline gaps */
+    --space-component:    var(--space-xs);   /* padding inside a component */
+    --space-related:      var(--space-s);    /* gap between related items */
+    --space-section:      var(--space-m);    /* gap between sections */
+    --space-layout:       var(--space-l);    /* major layout divisions */
+
+    /* ── Layout ── */
+    --panel-width: clamp(320px, min(420px, 28vw), 50vw);  /* default; resize.js overrides at runtime */
+    --layout-content-width: clamp(340px, 55vw, 880px);
+    --layout-panel-width: var(--panel-width);
+    --layout-panel-min: 320px;
+    --layout-panel-max: 50vw;
+
+    /* ── Radius semantics ── */
+    --radius-surface: var(--radius-md);
+    --radius-composer: var(--radius-xl);
+    --radius-message: var(--radius-xl);
+
+    /* ── Interactive sizing ── */
+    --size-button: clamp(28px, 2.8vw, 34px);  /* composer buttons, small interactive */
+    --size-composer-plus-icon: clamp(22px, 2.15vw, 27px);
+    --size-lightbox-nav-width: clamp(44px, 6vw, 72px);
+    --inset-lightbox-nav-block: max(var(--space-layout), 12vh);
+    --font-size-lightbox-nav-icon: clamp(30px, 4vw, 42px);
+    --size-icon-sm: clamp(12px, 1.2vw, 16px);  /* small icons */
+    --size-icon-md: clamp(16px, 1.6vw, 20px);  /* medium icons */
+    --stroke-composer-plus-icon: 1.25;
+}

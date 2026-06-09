@@ -1,5 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import '../tokens/utopia.css';
+import '../styles/global.css';
+
 function versionedModule(path: string): string {
     const version = window.__DLIGHTRAG_STATIC_VERSION__ || 'dev';
     return `${path}?v=${encodeURIComponent(version)}`;
