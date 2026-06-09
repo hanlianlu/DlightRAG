@@ -46,6 +46,15 @@ export function openPanel(title) {
     }
 }
 
+function showEmptyPanelPlaceholder() {
+    const panelContent = document.getElementById('panel-content');
+    if (!panelContent || panelContent.children.length > 0) return;
+    const placeholder = document.createElement('div');
+    placeholder.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-section) var(--space-component);color:var(--color-text-tertiary);font-size:var(--step--1);text-align:center;gap:var(--space-tight);min-height:120px;';
+    placeholder.textContent = 'No files yet. Drop files or folders here to ingest.';
+    panelContent.appendChild(placeholder);
+}
+
 export function applyPanelHtml(html) {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
@@ -54,6 +63,7 @@ export function applyPanelHtml(html) {
         window.htmx.process(panelContent);
     }
     applyProgressBars(panelContent);
+    showEmptyPanelPlaceholder();
 }
 
 function applyProgressBars(root) {
@@ -418,6 +428,7 @@ export function setupPanel() {
         applyProgressBars(ev.detail.target);
         // Auto-render math in any HTMX-swapped content.
         if (ev.detail.target) renderMath(ev.detail.target);
+        showEmptyPanelPlaceholder();
     });
 
     const panelContent = document.getElementById('panel-content');
