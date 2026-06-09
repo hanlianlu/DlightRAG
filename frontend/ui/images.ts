@@ -1,6 +1,8 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {detectDropItems, uploadFolderToWorkspace} from './folder-upload.ts';
+import chatStyles from '../styles/chat.module.css';
+import lightboxStyles from '../styles/lightbox.module.css';
 
 const MAX_IMAGES = 3;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
@@ -29,10 +31,10 @@ export function getPendingImageData() {
 export function renderMessageImages(container) {
     if (pendingImages.length === 0) return;
     const msgImages = document.createElement('div');
-    msgImages.className = 'message-images';
+    msgImages.className = chatStyles.messageImages;
     pendingImages.forEach(function(img) {
         const imgEl = document.createElement('img');
-        imgEl.className = 'message-img';
+        imgEl.className = chatStyles.messageImg;
         imgEl.src = img.dataUrl;
         imgEl.alt = 'Attached image';
         msgImages.appendChild(imgEl);
@@ -58,16 +60,16 @@ function renderThumbnails() {
     strip.replaceChildren();
     pendingImages.forEach(function(img, idx) {
         const item = document.createElement('div');
-        item.className = 'thumbnail-item';
+        item.className = chatStyles.thumbnailItem;
 
         const imgEl = document.createElement('img');
-        imgEl.className = 'thumbnail-img';
+        imgEl.className = chatStyles.thumbnailImg;
         imgEl.src = img.objectUrl && img.objectUrl.startsWith('blob:') ? img.objectUrl : '';
         imgEl.alt = 'Attached image';
         item.appendChild(imgEl);
 
         const btn = document.createElement('button');
-        btn.className = 'thumbnail-remove';
+        btn.className = chatStyles.thumbnailRemove;
         btn.textContent = 'x';
         btn.setAttribute('data-idx', idx);
         btn.addEventListener('click', function() { removeImage(idx); });
@@ -105,12 +107,12 @@ function _currentGalleryIndex(currentSrc) {
 }
 
 function _updateNavButtons(box) {
-    if (!box || !box.classList.contains('open')) return;
+    if (!box || !box.classList.contains(lightboxStyles.open)) return;
     const currentSrc = box.getAttribute('data-current-src') || '';
     const images = _collectGalleryImages();
     const idx = _currentGalleryIndex(currentSrc);
-    const prev = box.querySelector('.image-lightbox-prev');
-    const next = box.querySelector('.image-lightbox-next');
+    const prev = box.__lightboxPrev;
+    const next = box.__lightboxNext;
     if (images.length <= 1) {
         if (prev) prev.style.display = 'none';
         if (next) next.style.display = 'none';
@@ -127,7 +129,7 @@ function _updateNavButtons(box) {
 function _showLightboxImage(box, src) {
     if (typeof src !== 'string') return;
     if (!_isSafeImageSrc(src)) return;
-    const img = box.querySelector('.image-lightbox-img');
+    const img = box.__lightboxImg;
     if (!img) return;
     img.src = src;
     box.setAttribute('data-current-src', src);
@@ -136,7 +138,7 @@ function _showLightboxImage(box, src) {
 
 function _navigateLightbox(direction) {
     const box = document.getElementById('image-lightbox');
-    if (!box || !box.classList.contains('open')) return;
+    if (!box || !box.classList.contains(lightboxStyles.open)) return;
     const currentSrc = box.getAttribute('data-current-src') || '';
     const images = _collectGalleryImages();
     if (images.length <= 1) return;
@@ -154,23 +156,44 @@ function ensureLightbox() {
 
     box = document.createElement('div');
     box.id = 'image-lightbox';
-    box.className = 'image-lightbox';
+    box.className = lightboxStyles.imageLightbox;
     box.setAttribute('aria-hidden', 'true');
-    box.innerHTML =
-        '<button class="image-lightbox-prev" type="button" aria-label="Previous">‹</button>' +
-        '<button class="image-lightbox-next" type="button" aria-label="Next">›</button>' +
-        '<img class="image-lightbox-img" alt="Source image">';
+
+    const prev = document.createElement('button');
+    prev.className = lightboxStyles.imageLightboxPrev;
+    prev.type = 'button';
+    prev.setAttribute('aria-label', 'Previous');
+    prev.textContent = '‹';
+    box.appendChild(prev);
+
+    const next = document.createElement('button');
+    next.className = lightboxStyles.imageLightboxNext;
+    next.type = 'button';
+    next.setAttribute('aria-label', 'Next');
+    next.textContent = '›';
+    box.appendChild(next);
+
+    const img = document.createElement('img');
+    img.className = lightboxStyles.imageLightboxImg;
+    img.alt = 'Source image';
+    box.appendChild(img);
+
+    // Store element references for later use
+    box.__lightboxPrev = prev;
+    box.__lightboxNext = next;
+    box.__lightboxImg = img;
+
     document.body.appendChild(box);
     box.addEventListener('click', function(e) {
         if (e.target === box) {
             closeLightbox();
             return;
         }
-        if (e.target.closest('.image-lightbox-prev')) {
+        if (e.target.closest('.' + lightboxStyles.imageLightboxPrev)) {
             _navigateLightbox(-1);
             return;
         }
-        if (e.target.closest('.image-lightbox-next')) {
+        if (e.target.closest('.' + lightboxStyles.imageLightboxNext)) {
             _navigateLightbox(1);
             return;
         }
@@ -183,9 +206,9 @@ export function openLightbox(src) {
     if (!_isSafeImageSrc(src)) return;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', src);
-    const img = box.querySelector('.image-lightbox-img');
+    const img = box.__lightboxImg;
     img.src = src;
-    box.classList.add('open');
+    box.classList.add(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'false');
     _updateNavButtons(box);
 }
@@ -193,10 +216,10 @@ export function openLightbox(src) {
 export function closeLightbox() {
     const box = document.getElementById('image-lightbox');
     if (!box) return;
-    box.classList.remove('open');
+    box.classList.remove(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'true');
     box.removeAttribute('data-current-src');
-    const img = box.querySelector('.image-lightbox-img');
+    const img = box.__lightboxImg;
     if (img) img.removeAttribute('src');
 }
 
@@ -267,7 +290,7 @@ export function setupImageInputs() {
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') { closeLightbox(); return; }
         const box = document.getElementById('image-lightbox');
-        if (!box || !box.classList.contains('open')) return;
+        if (!box || !box.classList.contains(lightboxStyles.open)) return;
         if (e.key === 'ArrowLeft') { e.preventDefault(); _navigateLightbox(-1); }
         if (e.key === 'ArrowRight') { e.preventDefault(); _navigateLightbox(1); }
     });

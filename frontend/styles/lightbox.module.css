@@ -1,0 +1,60 @@
+/* DlightRAG Web Frontend — Immersive Chat Design
+ *
+ * lightbox.module.css — CSS Module for image lightbox JS-generated DOM.
+ */
+
+.imageLightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-layout);
+  background: rgba(12, 10, 9, 0.82);
+}
+
+.open {
+  display: flex;
+}
+
+.imageLightboxImg {
+  max-width: min(96vw, 1400px);
+  max-height: 92vh;
+  object-fit: contain;
+  background: var(--color-text-primary);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+.imageLightboxPrev,
+.imageLightboxNext {
+  position: fixed;
+  top: var(--inset-lightbox-nav-block);
+  bottom: var(--inset-lightbox-nav-block);
+  width: var(--size-lightbox-nav-width);
+  border: none;
+  background: rgba(245, 245, 244, 0.045);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-lightbox-nav-icon);
+  font-weight: 300;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  z-index: 1001;
+}
+
+.imageLightboxPrev {
+  left: 0;
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+}
+
+.imageLightboxNext {
+  right: 0;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+}
+
+.imageLightboxPrev:hover,
+.imageLightboxNext:hover {
+  background: rgba(210, 182, 97, 0.12);
+  color: var(--color-gold-100);
+}
