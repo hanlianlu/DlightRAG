@@ -29,6 +29,8 @@ dependencies = [
     "lingua-language-detector>=2.2.0",
     # JSON repair for LLM output
     "json-repair>=0.58.0",
+    # LightRAG v1.5.1 paragraph_semantic chunker fallback
+    "langchain-text-splitters>=0.3",
     # Data sourcing
     "azure-storage-blob>=12.28.0",
     "aiobotocore>=2.13.0",

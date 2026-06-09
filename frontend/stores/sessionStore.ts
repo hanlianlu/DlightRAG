@@ -12,9 +12,17 @@ class SessionStore {
       this.#sessionId = stored;
       return stored;
     }
-    const id = window.crypto?.randomUUID
-      ? window.crypto.randomUUID()
-      : 'session_' + Date.now().toString(36) + '_' + performance.now().toString(36).replace('.', '');
+    let id: string;
+    if (window.crypto?.randomUUID) {
+      id = window.crypto.randomUUID();
+    } else {
+      // crypto.randomUUID is supported in all modern browsers; fall back
+      // to getRandomValues for truly old engines instead of predictable
+      // Date.now() + performance.now().
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      id = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
     window.localStorage.setItem(SESSION_KEY, id);
     this.#sessionId = id;
     return id;

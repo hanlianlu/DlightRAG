@@ -289,15 +289,36 @@ async def upload_files(
                 source_type="local",
                 path=str(upload_dir),
             )
-            processed = result.get("processed", 0) if isinstance(result, dict) else 0
-            errors = result.get("errors", []) if isinstance(result, dict) else []
-            logger.info(
-                "Background ingest finished for workspace %s: %d/%d processed%s",
-                selected_workspace,
-                processed,
-                len(saved_paths),
-                f", errors={errors}" if errors else "",
-            )
+            results = result.get("results", []) if isinstance(result, dict) else []
+            batch_errors = result.get("errors", []) if isinstance(result, dict) else []
+            # Count docs that actually succeeded (not FAILED by chunking/KG errors).
+            # When per-doc results are available, use them; otherwise fall back to
+            # the batch-level processed count.
+            if results:
+                succeeded = sum(
+                    1 for r in results
+                    if isinstance(r, dict) and r.get("source_kind") != "skipped"
+                    and not r.get("error")
+                )
+            else:
+                succeeded = (
+                    result.get("processed", 0) if isinstance(result, dict) else 0
+                )
+            if succeeded < len(saved_paths) or batch_errors:
+                logger.warning(
+                    "Background ingest finished for workspace %s: %d/%d succeeded%s",
+                    selected_workspace,
+                    succeeded,
+                    len(saved_paths),
+                    f", batch errors: {batch_errors}" if batch_errors else "",
+                )
+            else:
+                logger.info(
+                    "Background ingest finished for workspace %s: %d/%d succeeded",
+                    selected_workspace,
+                    succeeded,
+                    len(saved_paths),
+                )
         except Exception:
             logger.warning(
                 "Background ingest failed for workspace %s",
