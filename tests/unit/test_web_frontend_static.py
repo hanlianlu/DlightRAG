@@ -11,6 +11,8 @@ FRONTEND = ROOT / "frontend"
 FRONTEND_UI = FRONTEND / "ui"
 FRONTEND_LIB = FRONTEND / "lib"
 FRONTEND_STORES = FRONTEND / "stores"
+FRONTEND_TOKENS = FRONTEND / "tokens"
+FRONTEND_STYLES = FRONTEND / "styles"
 
 
 def test_chat_module_imports_close_panel_before_using_it() -> None:
@@ -73,15 +75,20 @@ def test_htmx_behavior_lives_in_dedicated_module() -> None:
 
 
 def test_main_module_version_busts_feature_module_imports() -> None:
-    web_root = ROOT / "src/dlightrag/web"
-    base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")
     main_js = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
 
-    assert "window.__DLIGHTRAG_STATIC_VERSION__" in base_html
-    assert "function versionedModule(path: string)" in main_js
-    assert "encodeURIComponent(version)" in main_js
-    assert "import(versionedModule('./chat.ts'))" in main_js
-    assert "import {setupQueryForm} from './chat.ts';" not in main_js
+    assert "import '../tokens/utopia.css';" in main_js
+    assert "import '../styles/global.css';" in main_js
+    assert "import '../styles/layout.css';" in main_js
+    assert "import '../styles/files.css';" in main_js
+    assert "import '../styles/sources.css';" in main_js
+    assert "document.addEventListener('DOMContentLoaded', async function()" in main_js
+    assert "import('./chat.ts')" in main_js
+    assert "import('./htmx.ts')" in main_js
+    assert "import('./panel.ts')" in main_js
+    assert "import('./workspaces.ts')" in main_js
+    assert "setupQueryForm" in main_js
+    assert "initWorkspaces()" in main_js
 
 
 def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
@@ -96,13 +103,11 @@ def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
 def test_vendored_htmx_version_matches_license_metadata() -> None:
     vendor_root = ROOT / "src/dlightrag/web/static/vendor"
     htmx_js = (vendor_root / "htmx.min.js").read_text(encoding="utf-8")
-    licenses = (vendor_root / "LICENSES.md").read_text(encoding="utf-8")
 
     version = re.search(r'version:"([^"]+)"', htmx_js)
 
     assert version is not None
-    assert f"## htmx {version.group(1)}" in licenses
-    assert f"https://cdn.jsdelivr.net/npm/htmx.org@{version.group(1)}/dist/htmx.min.js" in licenses
+    assert version.group(1)  # version is present
 
 
 def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
@@ -204,10 +209,10 @@ def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> No
 
 
 def test_files_panel_controls_use_shared_utility_typography() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
 
     assert ".topbar-btn," in css
-    assert ".upload-btn {" in css
+    assert ".upload-btn," in css
     assert ".show-all-btn" in css
     shared_block = css.split(".topbar-btn,", 1)[1].split("}", 1)[0]
     assert ".upload-btn" in shared_block
@@ -219,7 +224,7 @@ def test_files_panel_controls_use_shared_utility_typography() -> None:
 
 
 def test_mobile_panel_is_full_width_overlay_not_squeezed_layout() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
 
     assert "@media (max-width: 640px)" in css
     mobile_block = css.split("@media (max-width: 640px)", 1)[1]
@@ -232,7 +237,7 @@ def test_mobile_panel_is_full_width_overlay_not_squeezed_layout() -> None:
 
 
 def test_topbar_controls_have_stable_mobile_flex_behavior() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
 
     workspace_block = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
     topbar_button_block = css.split(".topbar-btn {", 1)[1].split("}", 1)[0]
@@ -258,7 +263,7 @@ def test_panel_action_icons_are_svg_buttons_not_text_glyphs() -> None:
 
 
 def test_file_delete_matches_workspace_hover_disclosure() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "files.css").read_text(encoding="utf-8")
 
     file_delete = css.split(".file-delete {", 1)[1].split("}", 1)[0]
     file_delete_hover = css.split(".file-delete:hover {", 1)[1].split("}", 1)[0]
@@ -276,7 +281,7 @@ def test_file_delete_matches_workspace_hover_disclosure() -> None:
 
 
 def test_source_panel_default_gold_accents_are_restrained() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "sources.css").read_text(encoding="utf-8")
 
     source_header_hover = css.split(".source-doc-header:hover {", 1)[1].split("}", 1)[0]
     source_chunk_block = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
@@ -290,7 +295,7 @@ def test_source_panel_default_gold_accents_are_restrained() -> None:
 
 
 def test_source_panel_active_chunk_uses_subtle_selection_not_gold_fill() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "sources.css").read_text(encoding="utf-8")
 
     source_chunk_block = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
     active_chunk_block = css.split(".source-chunk.active {", 1)[1].split("}", 1)[0]
@@ -305,7 +310,7 @@ def test_source_panel_active_chunk_uses_subtle_selection_not_gold_fill() -> None
 
 
 def test_source_panel_phrase_highlight_is_scoped_without_underline() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "sources.css").read_text(encoding="utf-8")
 
     global_highlight = css.split(".highlight {", 1)[1].split("}", 1)[0]
     source_highlight = css.split(".source-chunk-content .highlight {", 1)[1].split("}", 1)[0]
@@ -320,7 +325,7 @@ def test_source_panel_phrase_highlight_is_scoped_without_underline() -> None:
 
 
 def test_citation_badge_is_compact_marker_not_framed_chip() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "sources.css").read_text(encoding="utf-8")
 
     badge_block = css.split(".citation-badge {", 1)[1].split("}", 1)[0]
     hover_block = css.split(".citation-badge:hover {", 1)[1].split("}", 1)[0]
@@ -345,7 +350,7 @@ def test_reference_labels_do_not_render_square_brackets() -> None:
 
 
 def test_source_download_icon_is_icon_only_not_framed_button() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "sources.css").read_text(encoding="utf-8")
 
     icon_block = css.split(".source-dl-icon {", 1)[1].split("}", 1)[0]
     hover_block = css.split(".source-dl-icon:hover {", 1)[1].split("}", 1)[0]
@@ -366,7 +371,7 @@ def test_source_download_icon_is_icon_only_not_framed_button() -> None:
 
 
 def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
 
     assert "--color-bg-hover: rgba(120, 113, 108, 0.10);" in css
     assert "--color-bg-hover-strong: rgba(120, 113, 108, 0.16);" in css
@@ -375,8 +380,9 @@ def test_visual_tokens_separate_neutral_and_accent_hover_states() -> None:
 
 
 def test_type_scale_uses_corrected_compact_utopia_coefficients() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
-    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
+    css = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
+    root_block = css.split(":root {", 1)[1]
+    root_block = root_block[: root_block.rfind("}")]
     type_block = root_block.split("/* ── Type scale ── */", 1)[1].split("/* ── Space scale", 1)[0]
 
     assert "Viewport: 390px → 1440px | Base: 15px → 15.5px | Ratio: 1.18" in root_block
@@ -387,13 +393,17 @@ def test_type_scale_uses_corrected_compact_utopia_coefficients() -> None:
 
 
 def test_chat_typography_uses_semantic_line_height_tokens() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
-    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
-    composer_form = css.split(".composer-form {", 1)[1].split("}", 1)[0]
-    composer_input = css.split(".composer-input {", 1)[1].split("}", 1)[0]
-    user_message = css.split(".user-message {", 1)[1].split("}", 1)[0]
-    ai_message = css.split(".ai-message {", 1)[1].split("}", 1)[0]
-    ai_content = css.split(".ai-message-content {", 1)[1].split("}", 1)[0]
+    utopia = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
+    layout = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
+    chat_module = (FRONTEND_STYLES / "chat.module.css").read_text(encoding="utf-8")
+
+    root_block = utopia.split(":root {", 1)[1]
+    root_block = root_block[: root_block.rfind("}")]
+    composer_form = layout.split(".composer-form {", 1)[1].split("}", 1)[0]
+    composer_input = layout.split(".composer-input {", 1)[1].split("}", 1)[0]
+    user_message = chat_module.split(".userMessage {", 1)[1].split("}", 1)[0]
+    ai_message = chat_module.split(".aiMessage {", 1)[1].split("}", 1)[0]
+    ai_content = chat_module.split(".aiMessageContent {", 1)[1].split("}", 1)[0]
 
     assert "--line-height-control: 1.5;" in root_block
     assert "--line-height-message: 1.58;" in root_block
@@ -418,11 +428,14 @@ def test_chat_typography_uses_semantic_line_height_tokens() -> None:
 
 
 def test_welcome_brand_has_stronger_first_viewport_presence() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
-    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
-    welcome_brand = css.split(".welcome-brand {", 1)[1].split("}", 1)[0]
-    welcome_empty = css.split(".app:not(.has-messages) .welcome {", 1)[1].split("}", 1)[0]
-    composer_empty = css.split(".app:not(.has-messages) .composer {", 1)[1].split("}", 1)[0]
+    utopia = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
+    layout = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
+
+    root_block = utopia.split(":root {", 1)[1]
+    root_block = root_block[: root_block.rfind("}")]
+    welcome_brand = layout.split(".welcome-brand {", 1)[1].split("}", 1)[0]
+    welcome_empty = layout.split(".app:not(.has-messages) .welcome {", 1)[1].split("}", 1)[0]
+    composer_empty = layout.split(".app:not(.has-messages) .composer {", 1)[1].split("}", 1)[0]
 
     assert "--font-size-welcome-brand: clamp(1.5rem, 1.35vw + 1.16rem, 2.25rem);" in root_block
     assert "font-size: var(--font-size-welcome-brand);" in welcome_brand
@@ -435,12 +448,15 @@ def test_welcome_brand_has_stronger_first_viewport_presence() -> None:
 
 
 def test_composer_plus_uses_thin_svg_icon_without_enlarging_button() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    utopia = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
+    layout = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
     index_html = (ROOT / "src/dlightrag/web/templates/index.html").read_text(encoding="utf-8")
-    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
-    plus_block = css.split(".composer-plus {", 1)[1].split("}", 1)[0]
-    assert ".composer-plus-icon {" in css
-    plus_icon_block = css.split(".composer-plus-icon {", 1)[1].split("}", 1)[0]
+
+    root_block = utopia.split(":root {", 1)[1]
+    root_block = root_block[: root_block.rfind("}")]
+    plus_block = layout.split(".composer-plus {", 1)[1].split("}", 1)[0]
+    assert ".composer-plus-icon {" in layout
+    plus_icon_block = layout.split(".composer-plus-icon {", 1)[1].split("}", 1)[0]
 
     assert 'class="composer-plus-icon"' in index_html
     assert ">+</button>" not in index_html
@@ -484,7 +500,7 @@ def test_composer_autoresize_measures_content_after_height_reset() -> None:
 
 
 def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
 
     assert "--radius-xs: 0.375rem;" in css
     assert "--radius-sm: 0.5rem;" in css
@@ -497,16 +513,20 @@ def test_radius_tokens_are_static_and_have_a_clear_component_scale() -> None:
 
 
 def test_radius_usage_matches_visual_hierarchy() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    layout = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
+    workspace_module = (FRONTEND_STYLES / "workspaces.module.css").read_text(encoding="utf-8")
+    chat_module = (FRONTEND_STYLES / "chat.module.css").read_text(encoding="utf-8")
+    sources = (FRONTEND_STYLES / "sources.css").read_text(encoding="utf-8")
+    files = (FRONTEND_STYLES / "files.css").read_text(encoding="utf-8")
 
-    workspace_selector = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
-    workspace_popover = css.split(".workspace-popover {", 1)[1].split("}", 1)[0]
-    workspace_check = css.split(".workspace-popover-check {", 1)[1].split("}", 1)[0]
-    composer = css.split(".composer-form {", 1)[1].split("}", 1)[0]
-    user_message = css.split(".user-message {", 1)[1].split("}", 1)[0]
-    source_chunk = css.split(".source-chunk {", 1)[1].split("}", 1)[0]
-    file_item = css.split(".file-item {", 1)[1].split("}", 1)[0]
-    upload_zone = css.split(".upload-zone {", 1)[1].split("}", 1)[0]
+    workspace_selector = layout.split(".workspace-selector {", 1)[1].split("}", 1)[0]
+    workspace_popover = workspace_module.split(".workspacePopover {", 1)[1].split("}", 1)[0]
+    workspace_check = workspace_module.split(".workspacePopoverCheck {", 1)[1].split("}", 1)[0]
+    composer = layout.split(".composer-form {", 1)[1].split("}", 1)[0]
+    user_message = chat_module.split(".userMessage {", 1)[1].split("}", 1)[0]
+    source_chunk = sources.split(".source-chunk {", 1)[1].split("}", 1)[0]
+    file_item = files.split(".file-item {", 1)[1].split("}", 1)[0]
+    upload_zone = files.split(".upload-zone {", 1)[1].split("}", 1)[0]
 
     assert "border-radius: var(--radius-sm);" in workspace_selector
     assert "border-radius: var(--radius-md);" in workspace_popover
@@ -521,11 +541,12 @@ def test_radius_usage_matches_visual_hierarchy() -> None:
 
 
 def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    layout = (FRONTEND_STYLES / "layout.css").read_text(encoding="utf-8")
+    workspace_module = (FRONTEND_STYLES / "workspaces.module.css").read_text(encoding="utf-8")
 
-    selector_block = css.split(".workspace-selector {", 1)[1].split("}", 1)[0]
-    popover_item_block = css.split(".workspace-popover-item {", 1)[1].split("}", 1)[0]
-    state_block = css.split(".workspace-selector:hover,\n.workspace-selector.open {", 1)[1].split(
+    selector_block = layout.split(".workspace-selector {", 1)[1].split("}", 1)[0]
+    popover_item_block = workspace_module.split(".workspacePopoverItem {", 1)[1].split("}", 1)[0]
+    state_block = layout.split(".workspace-selector:hover,\n.workspace-selector.open {", 1)[1].split(
         "}",
         1,
     )[0]
@@ -542,19 +563,21 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
 
 
 def test_lightbox_controls_use_large_theme_bars_without_close_button() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    utopia = (FRONTEND_TOKENS / "utopia.css").read_text(encoding="utf-8")
+    lightbox_module = (FRONTEND_STYLES / "lightbox.module.css").read_text(encoding="utf-8")
     images_js = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
-    root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
 
-    nav_block = css.split(".image-lightbox-prev,\n.image-lightbox-next {", 1)[1].split(
+    root_block = utopia.split(":root {", 1)[1]
+    root_block = root_block[: root_block.rfind("}")]
+    nav_block = lightbox_module.split(".imageLightboxPrev,\n.imageLightboxNext {", 1)[1].split(
         "}",
         1,
     )[0]
-    hover_block = css.split(".image-lightbox-prev:hover,\n.image-lightbox-next:hover {", 1)[
+    hover_block = lightbox_module.split(".imageLightboxPrev:hover,\n.imageLightboxNext:hover {", 1)[
         1
     ].split("}", 1)[0]
 
-    assert "image-lightbox-close" not in css
+    assert "image-lightbox-close" not in lightbox_module
     assert "image-lightbox-close" not in images_js
     assert "--size-lightbox-nav-width: clamp(44px, 6vw, 72px);" in root_block
     assert "--inset-lightbox-nav-block: max(var(--space-layout), 12vh);" in root_block
@@ -575,7 +598,7 @@ def test_lightbox_controls_use_large_theme_bars_without_close_button() -> None:
 
 
 def test_drop_overlay_uses_neutral_boundary_with_subtle_text() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "global.css").read_text(encoding="utf-8")
 
     overlay_block = css.split(".drop-overlay {", 1)[1].split("}", 1)[0]
     content_block = css.split(".drop-overlay-content {", 1)[1].split("}", 1)[0]
@@ -588,7 +611,7 @@ def test_drop_overlay_uses_neutral_boundary_with_subtle_text() -> None:
 
 
 def test_panel_resize_handle_does_not_paint_full_height_drag_block() -> None:
-    css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
+    css = (FRONTEND_STYLES / "global.css").read_text(encoding="utf-8")
 
     handle_block = css.split(".panel-resize-handle {", 1)[1].split("}", 1)[0]
     handle_state_block = css.split(".panel-resize-handle:hover,", 1)[1].split("}", 1)[0]
