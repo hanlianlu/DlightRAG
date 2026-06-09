@@ -69,8 +69,8 @@ def _resolve_eval_env() -> None:
       5. EVAL_EMBEDDING_BINDING_HOST     ← EVAL_LLM_BINDING_HOST
                                           ← DlightRAG embedding base_url (if OpenAI-compatible)
 
-    Model names are only set when not already configured, so explicit
-    ``EVAL_LLM_MODEL=gpt-4o`` still wins over DlightRAG's default.
+    DlightRAG connection:
+      6. DLIGHTRAG_API_TOKEN             ← config.api_auth_token
     """
     # If both eval keys are already set, nothing to do
     llm_key_set = bool(os.getenv("EVAL_LLM_BINDING_API_KEY"))
@@ -137,6 +137,11 @@ def _resolve_eval_env() -> None:
             os.environ["EVAL_EMBEDDING_BINDING_HOST"] = llm_host
         elif embed_cfg.provider in _OPENAI_COMPATIBLE_EMBED_PROVIDERS and embed_cfg.base_url:
             os.environ["EVAL_EMBEDDING_BINDING_HOST"] = embed_cfg.base_url
+
+    # -- DlightRAG API token --
+    if not os.getenv("DLIGHTRAG_API_TOKEN") and config.api_auth_token:
+        os.environ["DLIGHTRAG_API_TOKEN"] = config.api_auth_token
+        logger.info("DlightRAG API token: auto-resolved from config.api_auth_token")
 
 
 # Run once at import time — sets env vars before RAGEvaluator.__init__ reads them.
@@ -322,7 +327,7 @@ _EXPECTED_ENV_VARS: dict[str, str] = {
     "EVAL_EMBEDDING_BINDING_API_KEY": "API key for eval embeddings (cascaded from eval LLM key)",
     "EVAL_EMBEDDING_BINDING_HOST": "Custom endpoint for eval embeddings (cascaded from eval LLM host)",
     "DLIGHTRAG_API_URL": "DlightRAG API base URL (default for --api)",
-    "DLIGHTRAG_API_TOKEN": "Bearer token when auth is enabled on DlightRAG",
+    "DLIGHTRAG_API_TOKEN": "Bearer token (auto-resolved from config.api_auth_token)",
     "EVAL_QUERY_TOP_K": "top_k sent to DlightRAG /api/answer (default: 10)",
     "EVAL_MAX_CONCURRENT": "RAGAS evaluation concurrency (default: 2)",
     "EVAL_LLM_MAX_RETRIES": "Max retries for eval LLM calls (default: 5)",
