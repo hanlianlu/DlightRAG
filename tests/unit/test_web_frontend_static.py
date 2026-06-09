@@ -7,29 +7,32 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+FRONTEND = ROOT / "frontend"
+FRONTEND_UI = FRONTEND / "ui"
+FRONTEND_LIB = FRONTEND / "lib"
+FRONTEND_STORES = FRONTEND / "stores"
 
 
 def test_chat_module_imports_close_panel_before_using_it() -> None:
-    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
     assert "closePanel();" in chat_js
-    assert "import {closePanel} from './panel.js';" in chat_js
+    assert "import {closePanel} from './panel.ts';" in chat_js
 
 
 def test_chat_streaming_is_split_into_transport_and_renderer_modules() -> None:
-    static_js = ROOT / "src/dlightrag/web/static/js"
-    chat_js = (static_js / "chat.js").read_text(encoding="utf-8")
+    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
-    assert (static_js / "sse.js").is_file()
-    assert (static_js / "chat_renderer.js").is_file()
-    assert "from './sse.js'" in chat_js
-    assert "from './chat_renderer.js'" in chat_js
+    assert (FRONTEND_LIB / "sse.ts").is_file()
+    assert (FRONTEND_LIB / "chat_renderer.ts").is_file()
+    assert "from '../lib/sse.ts'" in chat_js
+    assert "from '../lib/chat_renderer.ts'" in chat_js
     assert "response.body.getReader()" not in chat_js
     assert "contentDiv.innerHTML" not in chat_js
 
 
 def test_composer_enter_shortcut_respects_ime_composition() -> None:
-    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
     assert "function submitComposerForm(form)" in chat_js
     assert "function isLineBreakInput(e)" in chat_js
@@ -61,11 +64,10 @@ def test_composer_enter_shortcut_respects_ime_composition() -> None:
 
 
 def test_htmx_behavior_lives_in_dedicated_module() -> None:
-    static_js = ROOT / "src/dlightrag/web/static/js"
-    main_js = (static_js / "main.js").read_text(encoding="utf-8")
-    panel_js = (static_js / "panel.js").read_text(encoding="utf-8")
+    main_js = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
 
-    assert (static_js / "htmx.js").is_file()
+    assert (FRONTEND_UI / "htmx.ts").is_file()
     assert "setupHtmxInteractions" in main_js
     assert "htmx:afterRequest" not in panel_js
 
@@ -73,13 +75,13 @@ def test_htmx_behavior_lives_in_dedicated_module() -> None:
 def test_main_module_version_busts_feature_module_imports() -> None:
     web_root = ROOT / "src/dlightrag/web"
     base_html = (web_root / "templates" / "base.html").read_text(encoding="utf-8")
-    main_js = (web_root / "static" / "js" / "main.js").read_text(encoding="utf-8")
+    main_js = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
 
     assert "window.__DLIGHTRAG_STATIC_VERSION__" in base_html
-    assert "function versionedModule(path)" in main_js
+    assert "function versionedModule(path: string)" in main_js
     assert "encodeURIComponent(version)" in main_js
-    assert "import(versionedModule('./chat.js'))" in main_js
-    assert "import {setupQueryForm} from './chat.js';" not in main_js
+    assert "import(versionedModule('./chat.ts'))" in main_js
+    assert "import {setupQueryForm} from './chat.ts';" not in main_js
 
 
 def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
@@ -107,7 +109,11 @@ def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
     web_root = ROOT / "src/dlightrag/web"
     checked = [
         web_root / "routes" / "files.py",
-        *(web_root / "static" / "js").glob("*.js"),
+        *(FRONTEND_UI).glob("*.ts"),
+        *(FRONTEND_LIB).glob("*.ts"),
+        *(FRONTEND_STORES).glob("*.ts"),
+        *(FRONTEND).glob("vite.config.ts"),
+        *(FRONTEND).glob("types.d.ts"),
         *(web_root / "templates").rglob("*.html"),
     ]
 
@@ -118,7 +124,7 @@ def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
 def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
     web_root = ROOT / "src/dlightrag/web"
     index_html = (web_root / "templates" / "index.html").read_text(encoding="utf-8")
-    workspaces_js = (web_root / "static" / "js" / "workspaces.js").read_text(encoding="utf-8")
+    workspaces_js = (FRONTEND_UI / "workspaces.ts").read_text(encoding="utf-8")
 
     assert 'id="workspace-selector"' in index_html
     assert "workspace-chips" not in index_html
@@ -128,10 +134,8 @@ def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
 
 
 def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> None:
-    web_root = ROOT / "src/dlightrag/web"
-    static_js = web_root / "static" / "js"
-    workspaces_js = (static_js / "workspaces.js").read_text(encoding="utf-8")
-    panel_js = (static_js / "panel.js").read_text(encoding="utf-8")
+    workspaces_js = (FRONTEND_UI / "workspaces.ts").read_text(encoding="utf-8")
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
 
     assert "removeWorkspace(workspace, detail.next_workspace)" in workspaces_js
     assert "item.workspace !== workspace" in workspaces_js
@@ -142,7 +146,7 @@ def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> Non
 
 
 def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
-    panel_js = (ROOT / "src/dlightrag/web/static/js/panel.js").read_text(encoding="utf-8")
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
 
     assert "PANEL_DISMISS_EXEMPT_SELECTOR" in panel_js
     assert "#composer" in panel_js
@@ -152,14 +156,12 @@ def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
 
 
 def test_manual_folder_upload_panel_swap_processes_htmx_fragments() -> None:
-    panel_js = (ROOT / "src/dlightrag/web/static/js/panel.js").read_text(encoding="utf-8")
-    folder_upload_js = (ROOT / "src/dlightrag/web/static/js/folder-upload.js").read_text(
-        encoding="utf-8"
-    )
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
+    folder_upload_js = (FRONTEND_UI / "folder-upload.ts").read_text(encoding="utf-8")
 
     assert "export function applyPanelHtml(html)" in panel_js
     assert "htmx.process(panelContent)" in panel_js
-    assert "import {applyPanelHtml} from './panel.js';" in folder_upload_js
+    assert "import {applyPanelHtml} from './panel.ts';" in folder_upload_js
     assert "applyPanelHtml(html)" in folder_upload_js
     assert "getElementById('panel-content')" not in folder_upload_js
     assert "innerHTML = html" not in folder_upload_js
@@ -167,24 +169,21 @@ def test_manual_folder_upload_panel_swap_processes_htmx_fragments() -> None:
 
 
 def test_source_panel_math_rendering_is_lazy_and_scoped() -> None:
-    panel_js = (ROOT / "src/dlightrag/web/static/js/panel.js").read_text(encoding="utf-8")
-    chat_renderer_js = (ROOT / "src/dlightrag/web/static/js/chat_renderer.js").read_text(
-        encoding="utf-8"
-    )
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
+    chat_renderer_js = (FRONTEND_LIB / "chat_renderer.ts").read_text(encoding="utf-8")
 
-    assert "import {renderMath} from './mathjax.js';" in panel_js
-    assert "from './chat_renderer.js'" not in panel_js
-    assert "from './images.js'" not in panel_js
+    assert "import {renderMath} from './mathjax.ts';" in panel_js
+    assert "from './chat_renderer.ts'" not in panel_js
+    assert "from './images.ts'" not in panel_js
     assert "renderExpandedSourceMath" in panel_js
     assert "renderMath(panelContent)" not in panel_js
     assert "renderMath(sourceData)" not in chat_renderer_js
 
 
 def test_lightbox_click_delegation_lives_in_images_module() -> None:
-    static_js = ROOT / "src/dlightrag/web/static/js"
-    images_js = (static_js / "images.js").read_text(encoding="utf-8")
-    panel_js = (static_js / "panel.js").read_text(encoding="utf-8")
-    chat_renderer_js = (static_js / "chat_renderer.js").read_text(encoding="utf-8")
+    images_js = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
+    chat_renderer_js = (FRONTEND_LIB / "chat_renderer.ts").read_text(encoding="utf-8")
 
     assert 'data-action="open-lightbox"' in images_js
     assert "getAttribute('data-full-src')" in images_js
@@ -460,14 +459,14 @@ def test_composer_plus_uses_thin_svg_icon_without_enlarging_button() -> None:
 
 
 def test_composer_autoresize_hides_scrollbar_until_max_height() -> None:
-    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
     assert "textarea.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';" in chat_js
     assert "textarea.style.overflowY = '';" in chat_js
 
 
 def test_composer_autoresize_measures_content_after_height_reset() -> None:
-    chat_js = (ROOT / "src/dlightrag/web/static/js/chat.js").read_text(encoding="utf-8")
+    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
     assert "const computed = getComputedStyle(textarea);" in chat_js
     assert "const maxHeight = parseFloat(computed.maxHeight) || 160;" in chat_js
@@ -544,7 +543,7 @@ def test_workspace_selector_is_neutral_by_default_with_subtle_accent_states() ->
 
 def test_lightbox_controls_use_large_theme_bars_without_close_button() -> None:
     css = (ROOT / "src/dlightrag/web/static/style.css").read_text(encoding="utf-8")
-    images_js = (ROOT / "src/dlightrag/web/static/js/images.js").read_text(encoding="utf-8")
+    images_js = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
     root_block = css.split(":root {", 1)[1].split("body {", 1)[0]
 
     nav_block = css.split(".image-lightbox-prev,\n.image-lightbox-next {", 1)[1].split(
@@ -601,7 +600,7 @@ def test_panel_resize_handle_does_not_paint_full_height_drag_block() -> None:
 
 
 def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
-    resize_js = (ROOT / "src/dlightrag/web/static/js/resize.js").read_text(encoding="utf-8")
+    resize_js = (FRONTEND_UI / "resize.ts").read_text(encoding="utf-8")
 
     assert "handle.setPointerCapture(e.pointerId)" in resize_js
     assert "handle.releasePointerCapture(activePointerId)" in resize_js
