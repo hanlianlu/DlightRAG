@@ -719,13 +719,11 @@ make ci-full
 make ci-e2e
 ```
 
-Opt-in PG18 E2E smoke:
+Opt-in PG18 E2E smoke (requires a running postgres from the stack):
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.e2e.yml up -d --build postgres
-DLIGHTRAG_RUN_E2E_PG18=1 \
-DLIGHTRAG_E2E_POSTGRES_PORT=55432 \
-uv run pytest tests/e2e -m e2e_pg18 -q
+docker compose up -d postgres
+DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -m e2e_pg18 -q
 ```
 
 The E2E smoke expects PostgreSQL 18 with pgvector, Apache AGE,
