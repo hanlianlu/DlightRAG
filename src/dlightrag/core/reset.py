@@ -168,9 +168,10 @@ async def areset(
 
     # Phase 5b: Remove checkpoint data for this workspace
     try:
-        from dlightrag.core.checkpoint import ConversationCheckpoint
+        from dlightrag.storage.checkpoint_pg import PGCheckpointStore
 
-        cp = ConversationCheckpoint(Path(service.config.working_dir) / "checkpoints.db")
+        cp = PGCheckpointStore()
+        await cp.initialize()
         removed = await cp.delete_sessions_by_workspace(workspace)
         if removed > 0:
             stats["checkpoint_sessions_removed"] = removed

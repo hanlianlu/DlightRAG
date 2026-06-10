@@ -887,10 +887,9 @@ class RAGServiceManager:
     def _get_checkpoint(self):
         """Lazy-create conversation checkpoint store."""
         if self._checkpoint is None:
-            from dlightrag.core.checkpoint import ConversationCheckpoint
+            from dlightrag.storage.checkpoint_pg import PGCheckpointStore
 
-            db_path = self._config.working_dir_path / "checkpoints.db"
-            self._checkpoint = ConversationCheckpoint(db_path)
+            self._checkpoint = PGCheckpointStore()
         return self._checkpoint
 
     async def save_turn_checkpoint(
