@@ -142,11 +142,12 @@ class TestSaveTurnPair:
             cited_chunk_ids=["c1"],
         )
 
-        # Verify context_chunks JSONB was sent
+        # Verify context_chunks JSONB was sent (now at position 7 after
+        # query_content + answer_content were added at positions 4-5).
         insert_calls = [c for c in conn.executed if "INSERT INTO" in str(c[0]).upper()]
         assert insert_calls
         args = insert_calls[0][1]
-        context_json = args[5]
+        context_json = args[7]
         assert isinstance(context_json, str)
         assert "c1" in context_json
 
@@ -376,3 +377,118 @@ class TestSaveTurnCheckpointIntegration:
             contexts={},
             cited_chunk_ids=[],
         )
+
+
+class TestSaveMultimodalTurn:
+    """Multimodal query_content / answer_content round-trip tests."""
+
+    async def test_saves_query_content_jsonb(self) -> None:
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}]
+        conn.fetches = [
+            [
+                {
+                    "turn_number": 1,
+                    "query": "...",
+                    "answer": "...",
+                    "query_content": [{"type": "text", "text": "look"}],
+                    "answer_content": [{"type": "text", "text": "nice"}],
+                }
+            ]
+        ]
+        store = _make_store(conn)
+
+        await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="look",
+            answer="nice",
+            query_content=[{"type": "text", "text": "look"}],
+            answer_content=[{"type": "text", "text": "nice"}],
+            contexts={},
+            cited_chunk_ids=[],
+        )
+        history = await store.get_history("s1")
+        assert len(history) == 2
+        assert history[0]["content"] == [{"type": "text", "text": "look"}]
+        assert history[1]["content"] == [{"type": "text", "text": "nice"}]
+
+    async def test_falls_back_to_text_when_jsonb_null(self) -> None:
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}]
+        conn.fetches = [
+            [
+                {
+                    "turn_number": 1,
+                    "query": "plain query",
+                    "answer": "plain answer",
+                    "query_content": None,
+                    "answer_content": None,
+                }
+            ]
+        ]
+        store = _make_store(conn)
+
+        history = await store.get_history("s1")
+        assert history[0]["content"] == "plain query"
+        assert history[1]["content"] == "plain answer"
+
+    async def test_migration_includes_new_columns(self) -> None:
+        """0002_checkpoints_multimodal migration exists."""
+        from dlightrag.storage.checkpoint_pg import _SCHEMA_MIGRATIONS
+
+        mig_names = [m.version for m in _SCHEMA_MIGRATIONS]
+        assert "0001_checkpoints" in mig_names
+        assert "0002_checkpoints_multimodal" in mig_names
+
+    async def test_multimodal_round_trip(self) -> None:
+        """Save a multimodal turn and get it back with correct structure."""
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}]
+        conn.fetches = [
+            [
+                {
+                    "turn_number": 1,
+                    "query": "look at this",
+                    "answer": "nice chart",
+                    "query_content": [
+                        {"type": "text", "text": "look at this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "dlightrag-image://img_123"},
+                        },
+                    ],
+                    "answer_content": [{"type": "text", "text": "nice chart"}],
+                }
+            ]
+        ]
+        store = _make_store(conn)
+
+        await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="look at this",
+            answer="nice chart",
+            query_content=[
+                {"type": "text", "text": "look at this"},
+                {"type": "image_url", "image_url": {"url": "dlightrag-image://img_123"}},
+            ],
+            answer_content=[{"type": "text", "text": "nice chart"}],
+            contexts={},
+            cited_chunk_ids=[],
+        )
+
+        history = await store.get_history("s1")
+        assert len(history) == 2
+
+        user_msg = history[0]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
+        assert user_msg["content"][0]["type"] == "text"
+        assert user_msg["content"][1]["type"] == "image_url"
+        assert user_msg["content"][1]["image_url"]["url"] == "dlightrag-image://img_123"
+
+        asst_msg = history[1]
+        assert asst_msg["role"] == "assistant"
+        assert asst_msg["content"][0]["type"] == "text"
+        assert asst_msg["content"][0]["text"] == "nice chart"
