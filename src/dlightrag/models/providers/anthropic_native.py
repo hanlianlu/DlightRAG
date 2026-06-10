@@ -78,6 +78,11 @@ class AnthropicProvider(CompletionProvider):
         super().__init__(**kwargs)
         self._client: Any = None
 
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
     def _get_client(self) -> Any:
         if self._client is None:
             if AsyncAnthropic is None:

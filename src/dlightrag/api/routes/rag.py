@@ -267,19 +267,38 @@ async def ingest_blob(
     if safe_name != file.filename or ".." in safe_name:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
-    # Check file size against config limit
-    contents = await file.read()
-    if len(contents) > cfg.max_upload_bytes:
+    # Persist to input_dir/<workspace>/<safe_name> with chunked streaming
+    # (aligned with web/routes/files.py — avoids reading the entire file into RAM)
+    import aiofiles  # noqa: W515 (late import kept local)
+
+    target_dir = cfg.input_dir_path / ws
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / safe_name
+
+    bytes_written = 0
+    chunk_size = 1024 * 1024  # 1 MiB
+    needs_cleanup = False
+
+    async with aiofiles.open(target_path, "wb") as out_file:
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+            bytes_written += len(chunk)
+            if bytes_written > cfg.max_upload_bytes:
+                needs_cleanup = True
+                break
+            await out_file.write(chunk)
+
+    if needs_cleanup:
+        try:
+            target_path.unlink()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=413,
             detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
         )
-
-    # Persist to input_dir/<workspace>/<safe_name>
-    target_dir = cfg.input_dir_path / ws
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / safe_name
-    target_path.write_bytes(contents)
 
     # Parse optional metadata JSON
     meta_dict: dict[str, Any] | None = None

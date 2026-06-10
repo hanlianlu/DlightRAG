@@ -63,6 +63,11 @@ class OpenAICompatibleProvider(CompletionProvider):
         self._client: AsyncOpenAI | None = None
         self.last_reasoning: str = ""
 
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
     @staticmethod
     def _extract_reasoning(message: Any) -> str:
         """Extract ``reasoning_content`` from an OpenAI SDK message object."""

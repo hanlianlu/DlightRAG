@@ -12,7 +12,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -74,6 +74,21 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     )
 
     # -- Exception handlers --
+
+    @application.exception_handler(HTTPException)
+    async def http_exception_handler(
+        request: Request,  # noqa: ARG001
+        exc: HTTPException,
+    ) -> JSONResponse:
+        """Wrap every HTTPException in ErrorDetail for a uniform response schema."""
+        status = exc.status_code
+        if 400 <= status < 500:
+            error_type = "validation" if status in {400, 422} else "auth"
+        else:
+            error_type = "internal"
+        body = ErrorDetail(detail=str(exc.detail), error_type=error_type)
+        return JSONResponse(status_code=status, content=body.model_dump())
+
     @application.exception_handler(RAGServiceUnavailableError)
     async def rag_unavailable_handler(
         request: Request,  # noqa: ARG001

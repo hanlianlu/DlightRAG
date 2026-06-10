@@ -7,18 +7,51 @@ import pytest
 
 
 @pytest.mark.e2e
-def test_workspace_popover_opens(_page):
-    """Verify the workspace popover renders on click."""
-    pass
+def test_workspace_popover_opens(page):
+    """Click the workspace selector → popover appears with workspace items."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    selector = page.locator("#workspace-selector")
+    selector.click()
+
+    # Popover should be visible with at least one workspace item
+    page.wait_for_selector(".workspace-popover", timeout=5000)
+    popover = page.locator(".workspace-popover")
+    assert popover.is_visible()
+
+    # "Default" workspace should be listed
+    items = popover.locator(".workspace-popover-item")
+    assert items.count() >= 1
 
 
 @pytest.mark.e2e
-def test_workspace_create(_page):
-    """Verify a new workspace can be created and selected."""
-    pass
+def test_workspace_popover_closes(page):
+    """Click outside the popover or press Escape → popover closes."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.wait_for_selector(".workspace-popover", timeout=5000)
+    assert page.locator(".workspace-popover").is_visible()
+
+    # Click outside — the popover should go away
+    page.locator(".app").click(position={"x": 10, "y": 10})
+    page.wait_for_timeout(300)
+    assert page.locator(".workspace-popover").count() == 0
 
 
 @pytest.mark.e2e
-def test_workspace_delete(_page):
-    """Verify a workspace can be deleted from the popover."""
-    pass
+def test_workspace_create_input_visible(page):
+    """Verify the new-workspace input row exists inside the popover."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.wait_for_selector(".workspace-popover", timeout=5000)
+
+    # The create-row with input and button should be present
+    create_row = page.locator(".workspace-popover-create")
+    assert create_row.is_visible()
+    assert create_row.locator(".workspace-popover-input").is_visible()
+    assert create_row.locator(".workspace-popover-create-btn").is_visible()

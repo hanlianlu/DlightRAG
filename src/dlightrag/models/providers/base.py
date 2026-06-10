@@ -38,6 +38,12 @@ class CompletionProvider(ABC):
     [{"role": "system"|"user"|"assistant", "content": str | list}]
 
     Each implementation converts internally to its SDK's native format.
+
+    Lifecycle: callers SHOULD ``await provider.aclose()`` when done to
+    release SDK clients and connection pools.  Skipping it is safe for
+    ephemeral use (the SDK eventually garbage-collects), but long-lived
+    server processes that create many provider instances will leak
+    connections.
     """
 
     def __init__(
@@ -76,3 +82,11 @@ class CompletionProvider(ABC):
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str, None]: ...  # type: ignore[return]
+
+    async def aclose(self) -> None:
+        """Release SDK clients, connection pools, and other resources.
+
+        The default is a no-op. Providers that hold persistent clients
+        (OpenAI, Anthropic, Gemini, etc.) override this.
+        """
+        return
