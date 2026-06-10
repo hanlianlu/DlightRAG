@@ -312,6 +312,15 @@ class RerankConfig(BaseModel):
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
+    multimodal: bool = Field(
+        default=True,
+        description=(
+            "When True, image_data in chunks is sent to the reranker for multimodal scoring. "
+            "When False, image_data is ignored and only text content is used — safe for "
+            "text-only reranker models/APIs. Multimodal chunks always carry VLM-generated "
+            "text descriptions, so text-only fallback retains substantial signal."
+        ),
+    )
     score_threshold: float = 0.5
     max_concurrency: int = 8
     batch_size: int = 8

@@ -64,6 +64,9 @@ embedding:
 rerank:
   enabled: true
   strategy: chat_llm_reranker
+  # multimodal: true   — sends image_data to reranker (default). Set to false
+  #                       for text-only reranker models; VLM-generated text
+  #                       descriptions of images are still used for scoring.
   # If provider/model are omitted, chat_llm_reranker reuses llm.roles.vlm,
   # then llm.roles.query, then llm.default.
   # provider:

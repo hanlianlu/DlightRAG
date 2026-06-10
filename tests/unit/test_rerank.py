@@ -322,6 +322,81 @@ class TestChatLlmRerank:
         )
         assert chunks == original
 
+    async def test_multimodal_false_skips_images_uses_full_text(self):
+        """When multimodal=False, image_url blocks are omitted and full VLM text is sent."""
+        received_messages = []
+
+        async def mock_scoring(messages, **kwargs):
+            received_messages.append(messages)
+            return "[0.8, 0.6]"
+
+        long_vlm_text = "VLM analysis of image: " + "x" * 600
+        chunks = [
+            {"content": "text only chunk", "image_data": _PNG_B64},
+            {"content": long_vlm_text, "image_data": _PNG_B64},
+        ]
+        await _chat_llm_rerank(
+            "query",
+            chunks,
+            top_k=10,
+            scoring_func=mock_scoring,
+            score_threshold=0.3,
+            multimodal=False,
+        )
+
+        content = received_messages[0][0]["content"]
+        # No image_url blocks at all
+        assert not any(c.get("type") == "image_url" for c in content)
+        # Full VLM text (not truncated to 500) — text-only fallback uses full content
+        assert long_vlm_text in [c.get("text", "") for c in content]
+
+    async def test_multimodal_true_default_keeps_images(self):
+        """Default multimodal=True sends images and truncated text."""
+        received_messages = []
+
+        async def mock_scoring(messages, **kwargs):
+            received_messages.append(messages)
+            return "[0.8]"
+
+        chunks = [{"content": "text", "image_data": _PNG_B64}]
+        await _chat_llm_rerank(
+            "query",
+            chunks,
+            top_k=10,
+            scoring_func=mock_scoring,
+            score_threshold=0.3,
+        )
+        content = received_messages[0][0]["content"]
+        assert any(c.get("type") == "image_url" for c in content)
+
+    async def test_multimodal_false_concurrent_batches(self):
+        """Text-only fallback works correctly with batched concurrent scoring."""
+        call_count = 0
+
+        async def mock_scoring(messages, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            content_parts = [
+                c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
+            ]
+            n = sum(1 for t in content_parts for _ in [1] if "--- Item" in t)
+            return "[" + ", ".join(["0.7"] * n) + "]"
+
+        chunks = [{"content": f"doc{i}", "image_data": _PNG_B64} for i in range(5)]
+        result = await _chat_llm_rerank(
+            "query",
+            chunks,
+            top_k=10,
+            scoring_func=mock_scoring,
+            batch_size=2,
+            score_threshold=0.3,
+            multimodal=False,
+        )
+        assert call_count == 3  # 5 chunks, batch_size=2 → 3 batches
+        assert len(result) == 5
+        # All scores should be valid (not zeros from API error)
+        assert all(c["rerank_score"] > 0 for c in result)
+
 
 class TestHttpRerank:
     async def test_bounds_image_payloads(self, monkeypatch):
@@ -360,6 +435,27 @@ class TestHttpRerank:
 
         assert result[0]["rerank_score"] == pytest.approx(0.9)
         assert client.payload["documents"] == [{"image": bounded_uri}]
+        assert raw_image not in str(client.payload)
+
+    async def test_multimodal_false_skips_images_sends_text_only(self):
+        """When multimodal=False, http reranker only sends {"text": ...} documents."""
+        raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.85}]})
+
+        result = await _http_rerank(
+            "query",
+            [{"content": "VLM text description", "image_data": raw_image}],
+            top_k=1,
+            url="https://rerank.example",
+            model="text-only-reranker",
+            score_threshold=0.3,
+            client=client,
+            multimodal=False,
+        )
+
+        assert result[0]["rerank_score"] == pytest.approx(0.85)
+        # Should only have {"text": ...}, no {"image": ...}
+        assert client.payload["documents"] == [{"text": "VLM text description"}]
         assert raw_image not in str(client.payload)
 
 
