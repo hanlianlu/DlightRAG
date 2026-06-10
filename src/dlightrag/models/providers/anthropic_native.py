@@ -77,6 +77,8 @@ class AnthropicProvider(CompletionProvider):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._client: Any = None
+        if self.supports_vision is None:
+            self.supports_vision = True  # All Claude models support vision
 
     async def aclose(self) -> None:
         if self._client is not None:
