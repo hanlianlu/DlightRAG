@@ -396,44 +396,8 @@ class RAGService:
             startup_probe=config.embedding.startup_probe,
         )
 
-        # Vision probe — determine once at startup whether the chat model
-        # accepts image_url blocks.  Result stored as runtime attribute on
-        # config.answer (NOT a Pydantic field — no yaml override needed).
-        # Provider defaults (Anthropic/Gemini=True) already set; we probe
-        # only the OpenAI-compatible path where it's unknown.
-        from dlightrag.core.vision_probe import probe_vision_support
-        from dlightrag.models.providers import get_provider
-
-        # Monkey-patched runtime attribute — not a Pydantic field.
-        # Provider defaults (Anthropic/Gemini=True) are already set on the
-        # provider instance; we only need to probe the OpenAI-compatible path.
-        try:
-            _ = config.answer.supports_vision  # type: ignore[attr-defined]
-        except AttributeError:
-            default = config.llm.default
-            provider = get_provider(
-                default.provider,
-                api_key=default.api_key,
-                base_url=default.base_url,
-                timeout=default.timeout,
-                max_retries=default.max_retries,
-            )
-            try:
-                has_vision = await probe_vision_support(provider, model=default.model)
-                config.answer.supports_vision = has_vision  # type: ignore[attr-defined]
-                logger.info(
-                    "Chat model vision probe: %s (model=%s, provider=%s)",
-                    "supported" if has_vision else "not supported",
-                    default.model,
-                    default.provider,
-                )
-            except Exception:
-                logger.debug(
-                    "Vision probe failed; deferring to per-request check",
-                    exc_info=True,
-                )
-            finally:
-                await provider.aclose()
+        # Vision probe lives in RAGServiceManager._probe_vision_support()
+        # — it runs once at server startup, not per workspace.
 
         # LightRAG configuration.
         # Do NOT pass rerank_model_func — we handle reranking ourselves

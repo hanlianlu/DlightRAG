@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
-from dlightrag.core.servicemanager import _check_vision_support, _history_has_images
+from dlightrag.core.servicemanager import (
+    _check_vision_support,
+    _history_has_images,
+    set_vision_supported,
+)
 
 
 class TestHistoryHasImages:
@@ -50,13 +52,14 @@ class TestHistoryHasImages:
 
 
 class TestVisionGuard:
+    def teardown_method(self) -> None:
+        """Reset module-level flag after each test."""
+        set_vision_supported(True)  # restore to safe default
+
     def test_raises_when_query_images_and_no_vision(self) -> None:
-        """Model has supports_vision=False but call has query_images -> error."""
-        config = MagicMock()
-        config.supports_vision = False
+        set_vision_supported(False)
         with pytest.raises(ValueError) as exc:
             _check_vision_support(
-                provider_or_config=config,
                 query_images=["data:..."],
                 conversation_history=None,
             )
@@ -64,21 +67,17 @@ class TestVisionGuard:
         assert "[IMAGES_NOT_SUPPORTED_BY_MODEL]" in str(exc.value)
 
     def test_passes_when_query_images_and_vision_supported(self) -> None:
-        config = MagicMock()
-        config.supports_vision = True
+        set_vision_supported(True)
         # Should not raise
         _check_vision_support(
-            provider_or_config=config,
             query_images=["data:..."],
             conversation_history=None,
         )
 
     def test_raises_when_history_has_images_but_no_vision(self) -> None:
-        config = MagicMock()
-        config.supports_vision = False
+        set_vision_supported(False)
         with pytest.raises(ValueError) as exc:
             _check_vision_support(
-                provider_or_config=config,
                 query_images=None,
                 conversation_history=[
                     {
@@ -92,20 +91,17 @@ class TestVisionGuard:
         assert "does not support image input" in str(exc.value)
 
     def test_passes_when_no_images_at_all(self) -> None:
-        config = MagicMock()
-        config.supports_vision = False
+        set_vision_supported(False)
         # No images involved — should not raise
         _check_vision_support(
-            provider_or_config=config,
             query_images=None,
             conversation_history=[{"role": "user", "content": "hello"}],
         )
 
     def test_passes_when_vision_none_unknown(self) -> None:
-        config = MagicMock()
-        config.supports_vision = None  # unprobed — allow through
+        set_vision_supported(None)  # type: ignore[arg-type]
+        # unprobed — allow through
         _check_vision_support(
-            provider_or_config=config,
             query_images=["data:..."],
             conversation_history=None,
         )
