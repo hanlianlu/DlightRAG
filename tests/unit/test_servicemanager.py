@@ -380,7 +380,11 @@ class TestRouting:
         await manager.aanswer("query", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with(
-            "query", mock_contexts, query_images=None, context_top_k=30
+            "query",
+            mock_contexts,
+            query_images=None,
+            conversation_history=None,
+            context_top_k=30,
         )
 
 
@@ -407,7 +411,11 @@ class TestAnswerViaEngine:
         result = await manager.aanswer("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with(
-            "what is X?", mock_contexts, query_images=None, context_top_k=30
+            "what is X?",
+            mock_contexts,
+            query_images=None,
+            conversation_history=None,
+            context_top_k=30,
         )
         assert result is expected_result
 
@@ -441,6 +449,7 @@ class TestAnswerViaEngine:
             "query",
             mock_contexts,
             query_images=None,
+            conversation_history=None,
             context_top_k=3,
         )
         assert result is expected_result
@@ -465,7 +474,11 @@ class TestAnswerViaEngine:
         contexts, stream = await manager.aanswer_stream("what is X?", workspace="ws_a")
         mock_svc.aretrieve.assert_awaited_once()
         mock_engine.generate_stream.assert_awaited_once_with(
-            "what is X?", mock_contexts, query_images=None, context_top_k=30
+            "what is X?",
+            mock_contexts,
+            query_images=None,
+            conversation_history=None,
+            context_top_k=30,
         )
         assert contexts is mock_contexts
         assert stream is not None
@@ -490,7 +503,11 @@ class TestAnswerViaEngine:
         result = await manager.aanswer("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
         mock_engine.generate.assert_awaited_once_with(
-            "query", mock_contexts, query_images=None, context_top_k=30
+            "query",
+            mock_contexts,
+            query_images=None,
+            conversation_history=None,
+            context_top_k=30,
         )
         assert result is expected_result
 
@@ -514,7 +531,11 @@ class TestAnswerViaEngine:
         contexts, stream = await manager.aanswer_stream("query", workspaces=["ws_a", "ws_b"])
         mock_fed_retrieve.assert_awaited_once()
         mock_engine.generate_stream.assert_awaited_once_with(
-            "query", mock_contexts, query_images=None, context_top_k=30
+            "query",
+            mock_contexts,
+            query_images=None,
+            conversation_history=None,
+            context_top_k=30,
         )
         assert contexts is mock_contexts
 

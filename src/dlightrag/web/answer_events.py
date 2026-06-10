@@ -98,7 +98,7 @@ async def stream_answer_events(
     manager: Any,
     cfg: Any,
     query: str,
-    conversation_history: list[dict[str, str]] | None,
+    conversation_history: list[dict[str, Any]] | None,
     workspaces: list[str] | None,
     workspace: str,
     query_images: list[str],
@@ -215,10 +215,31 @@ async def stream_answer_events(
             save_checkpoint_func = cast(Callable[..., Awaitable[None]], save_checkpoint)
             try:
                 cited_ids = [s.id for s in finalized.sources if s.id]
+
+                # Build multimodal query_content / answer_content for
+                # future round-trip restoration.  Store image REFERENCES
+                # (dlightrag-image://) not base64 payloads.
+                query_content: list[dict[str, Any]] | None = None
+                if query_images and current_image_ids:
+                    query_content = [{"type": "text", "text": query}]
+                    for img_id in current_image_ids:
+                        query_content.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"dlightrag-image://{img_id}"},
+                            }
+                        )
+
+                answer_content: list[dict[str, Any]] | None = None
+                if finalized.answer:
+                    answer_content = [{"type": "text", "text": finalized.answer}]
+
                 await save_checkpoint_func(
                     session_id=session_id or "",
                     query=query,
                     answer=finalized.answer,
+                    query_content=query_content,
+                    answer_content=answer_content,
                     contexts=contexts,
                     cited_chunk_ids=cited_ids,
                     workspace=workspace or manager.config.workspace,
