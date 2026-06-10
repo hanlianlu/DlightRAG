@@ -709,14 +709,18 @@ git clone https://github.com/hanlianlu/dlightrag.git
 cd dlightrag
 cp .env.example .env
 uv sync
+cd frontend && npm install && cd ..
+make hooks   # install pre-commit checks (one-time)
 ```
 
-Local CI:
+Pre-commit hooks run ruff, pyright, and architecture checks on every
+`git commit`.  Slow checks (pytest, E2E) stay in CI — run them explicitly
+when you want them:
 
 ```bash
-make ci
-make ci-full
-make ci-e2e
+make ci          # lint + type-check + architecture + unit tests
+make ci-full     # above + integration tests (needs PostgreSQL)
+make ci-e2e      # above + E2E smoke (needs PG18 with AGE)
 ```
 
 Opt-in PG18 E2E smoke (requires a running postgres from the stack):
