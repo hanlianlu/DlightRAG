@@ -863,6 +863,16 @@ class DlightragConfig(BaseSettings):
         default=300,
         description="Timeout in seconds for retrieve/answer/query operations.",
     )
+    stalled_doc_timeout_seconds: int = Field(
+        default=3600,
+        ge=300,
+        description=(
+            "Seconds before a document stuck in PARSING/ANALYZING/PROCESSING is "
+            "considered stalled and reset to PENDING at startup. Individual document "
+            "processing typically completes within minutes; 1 hour is conservative. "
+            "Set to 0 to disable stalled-document recovery."
+        ),
+    )
 
     # ===== Observability =====
     langfuse_public_key: str | None = Field(default=None)
