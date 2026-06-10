@@ -35,6 +35,13 @@ class TestIsUnsafeHost:
         assert _is_unsafe_host("example.com") is False
         assert _is_unsafe_host("api.openai.com") is False
 
+    def test_trailing_dot_bypass(self) -> None:
+        """Trailing dot (DNS FQDN marker) must not bypass IP check."""
+        assert _is_unsafe_host("127.0.0.1.") is True
+        assert _is_unsafe_host("10.0.0.1.") is True
+        assert _is_unsafe_host("169.254.169.254.") is True
+        assert _is_unsafe_host("8.8.8.8.") is False
+
     def test_none_is_safe(self) -> None:
         assert _is_unsafe_host(None) is False
 

@@ -960,6 +960,24 @@ class RAGServiceManager:
             )
             return []
 
+    async def adelete_checkpoint_session(
+        self,
+        *,
+        session_id: str,
+        scope: RequestScope | None = None,
+    ) -> int:
+        """Delete all checkpoint rows for a session. Returns count deleted."""
+        if not session_id:
+            return 0
+        try:
+            cp = self._get_checkpoint()
+            scoped = _scope_for_workspaces(scope, None)
+            scoped_session_id = scoped.session_key(session_id) or session_id
+            return await cp.delete_session(scoped_session_id)
+        except Exception:
+            logger.debug("Failed to delete checkpoint session %s", session_id, exc_info=True)
+            return 0
+
     async def save_turn_checkpoint(
         self,
         session_id: str,

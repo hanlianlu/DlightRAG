@@ -20,6 +20,8 @@ export interface DlightragEvents {
   workspaceToggled: { workspaces: readonly string[] };
   ingestWorkspaceChanged: { workspace: string };
   chatExchangeComplete: void;
+  chatHistoryRestored: number;
+  chatHistoryCleared: void;
 }
 
 export const bus: Emitter<DlightragEvents> = createNanoEvents<DlightragEvents>();
