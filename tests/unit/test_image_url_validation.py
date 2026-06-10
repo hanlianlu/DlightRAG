@@ -42,6 +42,19 @@ class TestIsUnsafeHost:
         assert _is_unsafe_host("169.254.169.254.") is True
         assert _is_unsafe_host("8.8.8.8.") is False
 
+    def test_unspecified_address(self) -> None:
+        """0.0.0.0 and :: are unspecified — must be rejected."""
+        assert _is_unsafe_host("0.0.0.0") is True
+        assert _is_unsafe_host("::") is True
+
+    def test_hex_ip_representation(self) -> None:
+        """Non-standard hex IP (e.g. 0x7f000001 = 127.0.0.1) — reject."""
+        assert _is_unsafe_host("0x7f000001") is True
+
+    def test_integer_ip_representation(self) -> None:
+        """DWORD integer IP (e.g. 2130706433 = 127.0.0.1) — reject."""
+        assert _is_unsafe_host("2130706433") is True
+
     def test_none_is_safe(self) -> None:
         assert _is_unsafe_host(None) is False
 

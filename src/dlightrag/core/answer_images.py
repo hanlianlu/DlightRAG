@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
@@ -23,6 +24,11 @@ logger = logging.getLogger(__name__)
 _ALLOWED_SCHEMES = frozenset({"data", "https", "dlightrag-image"})
 
 
+# Non-standard IP representations that ``ipaddress`` rejects but some
+# HTTP clients may still resolve.  No legitimate image URL uses these.
+_NONSTANDARD_IP_RE = re.compile(r"^(?:0[xX][0-9a-fA-F]+|0[0-7]+|[1-9]\d{8,})$")
+
+
 def _is_unsafe_host(host: str | None) -> bool:
     """Return True if *host* is an IP literal in a dangerous range.
 
@@ -33,11 +39,23 @@ def _is_unsafe_host(host: str | None) -> bool:
     if not host:
         return False
     host = host.rstrip(".")
+
+    # Catch non-standard IP representations — hex (0x7f000001),
+    # octal (0177.0.0.1), integer/DWORD (2130706433) — that
+    # ``ipaddress.ip_address()`` rejects but some HTTP clients resolve.
+    if _NONSTANDARD_IP_RE.match(host):
+        return True
+
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        return False  # not an IP literal — safe
-    return addr.is_loopback or addr.is_private or addr.is_link_local
+        return False  # not an IP literal — safe (hostname)
+    return (
+        addr.is_loopback
+        or addr.is_private
+        or addr.is_link_local
+        or addr.is_unspecified  # 0.0.0.0 / ::
+    )
 
 
 def _validate_image_url(text: str, *, label: str) -> str | None:
