@@ -69,6 +69,11 @@ class GeminiProvider(CompletionProvider):
         super().__init__(**kwargs)
         self._client: Any = None
 
+    async def aclose(self) -> None:
+        if self._client is not None:
+            # google-genai Client is not async-closeable; drop reference
+            self._client = None
+
     def _get_client(self) -> Any:
         if self._client is None:
             if genai is None:

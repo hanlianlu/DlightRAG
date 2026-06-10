@@ -13,7 +13,12 @@ EmbedContext = EmbeddingContext
 
 
 class EmbedProvider(ABC):
-    """Strategy for provider-specific multimodal embedding API protocols."""
+    """Strategy for provider-specific multimodal embedding API protocols.
+
+    Lifecycle: callers SHOULD ``await provider.aclose()`` when done to
+    release connection pools.  The default is a no-op; providers that
+    hold persistent clients override this.
+    """
 
     endpoint: str = ""
     supports_images: bool = False
@@ -50,3 +55,7 @@ class EmbedProvider(ABC):
     def parse_response(self, data: dict) -> list[list[float]]:
         """Extract vectors from OpenAI-compatible JSON response."""
         return [item["embedding"] for item in data["data"]]
+
+    async def aclose(self) -> None:
+        """Release provider resources (clients, pools).  No-op by default."""
+        return

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import sys
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
@@ -344,8 +345,11 @@ class RAGService:
                 waited = 0.0
                 backoff = 0.1
                 while waited < 180:
-                    await asyncio.sleep(backoff)
-                    waited += backoff
+                    # Jitter avoids thundering-herd when many workers
+                    # retry on the same beat.
+                    jitter = random.uniform(0, backoff * 0.5)
+                    await asyncio.sleep(backoff + jitter)
+                    waited += backoff + jitter
                     if await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY):
                         await conn.execute("SELECT pg_advisory_unlock($1)", _PG_INIT_LOCK_KEY)
                         break
