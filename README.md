@@ -738,7 +738,7 @@ from DlightRAG's own config — no extra `.env` entries needed.
 
 ```bash
 # One-time: install eval dependencies
-uv pip install ragas datasets langchain-openai
+uv pip install ragas
 
 # Run against your own test dataset
 uv run python scripts/ragas_eval.py --dataset my_questions.json

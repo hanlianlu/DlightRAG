@@ -10,7 +10,7 @@ export — works unchanged.
 
 ```bash
 # 1. Install eval dependencies (not in DlightRAG's runtime deps)
-uv pip install ragas datasets langchain-openai
+uv pip install ragas
 
 # 2. Run with your test dataset — API URL and creds auto-resolve
 uv run python scripts/ragas_eval.py --dataset my_questions.json
@@ -201,7 +201,7 @@ evaluation:
   steps:
     - uses: actions/checkout@v6
     - run: docker compose up -d
-    - run: uv pip install ragas datasets langchain-openai
+    - run: uv pip install ragas
     - run: uv run python scripts/ragas_eval.py --api http://localhost:8100 --dataset tests/eval/regression.json
       env:
         DLIGHTRAG_API_URL: http://localhost:8100
@@ -250,6 +250,7 @@ are ingested (`GET /files`) and that `top_k` is reasonable.
 : Check that the eval LLM API key is set (`EVAL_LLM_BINDING_API_KEY` or
 `OPENAI_API_KEY`). NaN scores often mean the eval LLM call failed silently.
 
-**"ImportError: ragas datasets not installed"**
-: Run `uv pip install ragas datasets langchain-openai`. These are eval-only
-dependencies, intentionally separate from DlightRAG's runtime.
+**"ImportError: ragas not installed"**
+: Run `uv pip install ragas`. Ragas is an eval-only dependency,
+intentionally separate from DlightRAG's runtime. Pip will pull in
+`datasets`, `langchain-openai`, and other transitive deps automatically.
