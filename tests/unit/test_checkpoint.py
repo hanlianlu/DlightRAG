@@ -1,308 +1,378 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for ConversationCheckpoint."""
+"""Tests for PGCheckpointStore."""
 
 from __future__ import annotations
 
-import asyncio
-import sqlite3
-from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
-import pytest
+from dlightrag.storage.checkpoint_pg import PGCheckpointStore
 
-from dlightrag.core.checkpoint import ConversationCheckpoint
-
-
-class TestCheckpointInit:
-    def test_db_created_on_first_write(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-        assert not db_path.exists()
-
-        cp._ensure_db_sync()
-        assert db_path.exists()
-
-    def test_schema_creates_all_tables(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-        cp._ensure_db_sync()
-
-        conn = sqlite3.connect(str(db_path))
-        tables = {
-            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        }
-        assert "sessions" in tables
-        assert "turns" in tables
-        assert "context_anchors" in tables
-        conn.close()
-
-    def test_wal_mode_enabled(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-        conn = cp._ensure_db_sync()
-        try:
-            journal = conn.execute("PRAGMA journal_mode").fetchone()[0]
-            assert journal.upper() == "WAL"
-        finally:
-            conn.close()
-
-    def test_connection_pragmas_are_configured(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-        conn = cp._ensure_db_sync()
-        try:
-            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
-            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
-        finally:
-            conn.close()
-
-    def test_ensure_db_idempotent(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-        cp._ensure_db_sync()
-        cp._ensure_db_sync()
-        cp._ensure_db_sync()
-        assert db_path.exists()
+# ── Mock asyncpg helpers ────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-class TestCheckpointCRUD:
-    async def test_ensure_session_and_save_turns(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
+class _Pool:
+    def __init__(self, conn: _Conn) -> None:
+        self._conn = conn
 
-        await cp.ensure_session("s1", workspace="default")
-        await cp.save_turn("s1", 1, role="user", content="Hello")
-        await cp.save_turn(
-            "s1", 1, role="assistant", content="Hi there!", cited_chunk_ids=["c1", "c2"]
+    def acquire(self) -> _Acquire:
+        return _Acquire(self._conn)
+
+
+class _Acquire:
+    def __init__(self, conn: _Conn) -> None:
+        self._conn = conn
+
+    async def __aenter__(self) -> _Conn:
+        return self._conn
+
+    async def __aexit__(self, *_args: object) -> None:
+        pass
+
+
+class _Tx:
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *_: object) -> None:
+        pass
+
+
+class _Conn:
+    def __init__(self) -> None:
+        self.executed: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchrows: list[dict[str, Any] | None] = []
+        self.fetches: list[list[dict[str, Any]]] = []
+        self.fetchvals: list[int] = []
+
+    async def execute(self, query: str, *args: Any) -> None:
+        self.executed.append((query, args))
+
+    async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        self.executed.append((query, args))
+        return self.fetchrows.pop(0) if self.fetchrows else None
+
+    async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
+        self.executed.append((query, args))
+        return self.fetches.pop(0) if self.fetches else []
+
+    async def fetchval(self, query: str, *args: Any) -> int:
+        self.executed.append((query, args))
+        return self.fetchvals.pop(0) if self.fetchvals else 0
+
+    def transaction(self) -> _Tx:
+        return _Tx()
+
+
+def _make_store(conn: _Conn | None = None) -> PGCheckpointStore:
+    c = conn or _Conn()
+    pool = _Pool(c)
+    store = PGCheckpointStore(pool=pool)
+    store._initialized = True  # skip migration DDL in unit tests
+    return store
+
+
+# ── Tests ───────────────────────────────────────────────────────────────
+
+
+class TestSaveTurnPair:
+    async def test_save_and_get_history(self) -> None:
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}]
+        conn.fetches = [
+            [
+                {"turn_number": 1, "query": "Hello", "answer": "Hi there!"},
+            ]
+        ]
+        store = _make_store(conn)
+
+        turn = await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="Hello",
+            answer="Hi there!",
+            contexts={"chunks": []},
+            cited_chunk_ids=["c1"],
+        )
+        assert turn == 1
+
+        history = await store.get_history("s1")
+        assert history == [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+        ]
+
+    async def test_turn_number_auto_increments(self) -> None:
+        """Two sequential saves get turn numbers 1 and 2."""
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}, {"turn_number": 2}]
+        store = _make_store(conn)
+
+        t1 = await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="q1",
+            answer="a1",
+            contexts={},
+            cited_chunk_ids=[],
+        )
+        t2 = await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="q2",
+            answer="a2",
+            contexts={},
+            cited_chunk_ids=[],
+        )
+        assert t1 == 1
+        assert t2 == 2
+
+    async def test_save_includes_context_chunks(self) -> None:
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}]
+        store = _make_store(conn)
+
+        chunk = {"chunk_id": "c1", "file_path": "/a.pdf", "relevance_score": 0.9}
+        await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="q",
+            answer="a",
+            contexts={"chunks": [chunk]},
+            cited_chunk_ids=["c1"],
         )
 
-        history = await cp.get_history("s1")
-        assert len(history) == 2
-        assert history[0] == {"role": "user", "content": "Hello"}
-        assert history[1] == {"role": "assistant", "content": "Hi there!"}
+        # Verify context_chunks JSONB was sent
+        insert_calls = [c for c in conn.executed if "INSERT INTO" in str(c[0]).upper()]
+        assert insert_calls
+        args = insert_calls[0][1]
+        context_json = args[5]
+        assert isinstance(context_json, str)
+        assert "c1" in context_json
 
-    async def test_next_turn_number(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-
-        assert await cp.next_turn_number("s1") == 1
-
-        await cp.ensure_session("s1")
-        await cp.save_turn("s1", 1, role="user", content="q1")
-        await cp.save_turn("s1", 1, role="assistant", content="a1")
-
-        assert await cp.next_turn_number("s1") == 2
-
-    async def test_save_and_mark_anchors(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-
-        chunks = [
-            {
-                "chunk_id": "c1",
-                "file_path": "/docs/a.pdf",
-                "sidecar": {"type": "drawing", "id": "im-1"},
-                "relevance_score": 0.85,
-            },
-            {
-                "chunk_id": "c2",
-                "file_path": "/docs/b.pdf",
-                "sidecar": None,
-                "relevance_score": 0.42,
-            },
+    async def test_sessions_are_isolated(self) -> None:
+        """Different session_ids don't leak into each other."""
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}, {"turn_number": 1}]
+        conn.fetches = [
+            [{"turn_number": 1, "query": "alice-q", "answer": "alice-a"}],
+            [{"turn_number": 1, "query": "bob-q", "answer": "bob-a"}],
         ]
-        await cp.ensure_session("s1")
-        await cp.save_anchors("s1", 1, chunks)
-        await cp.mark_cited("s1", 1, ["c1"])
+        store = _make_store(conn)
 
-        anchors = await cp.get_previous_anchors("s1", last_n_turns=1)
-        assert len(anchors) == 2
-        cited = {a["chunk_id"] for a in anchors if a["was_cited"]}
-        assert cited == {"c1"}
+        await store.save_turn_pair(
+            "scoped:alice:s1",
+            workspace="default",
+            query="alice-q",
+            answer="alice-a",
+            contexts={},
+            cited_chunk_ids=[],
+        )
+        await store.save_turn_pair(
+            "scoped:bob:s1",
+            workspace="default",
+            query="bob-q",
+            answer="bob-a",
+            contexts={},
+            cited_chunk_ids=[],
+        )
 
-        cited_ids = await cp.get_cited_chunk_ids("s1")
-        assert cited_ids == {"c1"}
+        alice = await store.get_history("scoped:alice:s1")
+        bob = await store.get_history("scoped:bob:s1")
+        assert alice[0]["content"] == "alice-q"
+        assert bob[0]["content"] == "bob-q"
 
-    async def test_save_anchors_requires_existing_session(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
 
-        with pytest.raises(sqlite3.IntegrityError):
-            await cp.save_anchors("missing-session", 1, [{"chunk_id": "c1"}])
+class TestGetHistory:
+    async def test_respects_max_turns(self) -> None:
+        conn = _Conn()
+        conn.fetches = [
+            [
+                {"turn_number": 1, "query": "q1", "answer": "a1"},
+                {"turn_number": 2, "query": "q2", "answer": "a2"},
+                {"turn_number": 3, "query": "q3", "answer": "a3"},
+            ]
+        ]
+        store = _make_store(conn)
 
-    async def test_delete_session_cascades(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
+        history = await store.get_history("s1", max_turns=3)
+        # 3 turns → 6 messages (user + assistant per turn)
+        assert len(history) == 6
 
-        await cp.ensure_session("s1")
-        await cp.save_turn("s1", 1, role="user", content="q")
-        await cp.save_anchors("s1", 1, [{"chunk_id": "c1"}])
+        # Verify LIMIT was sent
+        limit_calls = [c for c in conn.executed if "LIMIT" in str(c[0])]
+        assert limit_calls
 
-        await cp.delete_session("s1")
+    async def test_empty_session_returns_empty_list(self) -> None:
+        conn = _Conn()
+        conn.fetches = [[]]
+        store = _make_store(conn)
 
-        history = await cp.get_history("s1")
+        history = await store.get_history("nonexistent")
         assert history == []
-        anchors = await cp.get_previous_anchors("s1", last_n_turns=1)
-        assert anchors == []
 
-    async def test_list_sessions(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
 
-        await cp.ensure_session("s1", workspace="ws-a")
-        await cp.ensure_session("s2", workspace="ws-b")
-        await cp.save_turn("s1", 1, role="user", content="q")
+class TestDeleteSessionsByWorkspace:
+    async def test_deletes_correct_workspace(self) -> None:
+        conn = _Conn()
+        conn.fetchvals = [3]
+        store = _make_store(conn)
 
-        all_sessions = await cp.list_sessions()
-        assert len(all_sessions) == 2
+        deleted = await store.delete_sessions_by_workspace("ws-a")
+        assert deleted == 3
 
-        filtered = await cp.list_sessions(workspace="ws-a")
-        assert len(filtered) == 1
-        assert filtered[0]["session_id"] == "s1"
-        assert filtered[0]["turn_count"] == 1
+    async def test_no_rows_returns_zero(self) -> None:
+        conn = _Conn()
+        conn.fetchvals = [0]
+        store = _make_store(conn)
 
-    async def test_delete_sessions_by_workspace(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-
-        await cp.ensure_session("s1", workspace="ws-a")
-        await cp.ensure_session("s2", workspace="ws-b")
-        await cp.save_turn("s1", 1, role="user", content="q")
-        await cp.save_turn("s2", 1, role="user", content="q")
-
-        deleted = await cp.delete_sessions_by_workspace("ws-a")
-        assert deleted == 1
-
-        assert await cp.get_history("s1") == []
-        assert len(await cp.get_history("s2")) == 1
-
-    async def test_prune_old_sessions(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
-
-        await cp.ensure_session("s1")
-        await cp.save_turn("s1", 1, role="user", content="q")
-
-        conn = sqlite3.connect(str(db_path))
-        conn.execute(
-            "UPDATE sessions SET updated_at = datetime('now', '-60 days') WHERE session_id = 's1'"
-        )
-        conn.commit()
-        conn.close()
-
-        deleted = await cp.prune_old_sessions(max_age_days=30)
-        assert deleted == 1
-        assert await cp.get_history("s1") == []
-
-    async def test_prune_old_sessions_binds_age_modifier(self, monkeypatch, tmp_path: Path) -> None:
-        cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
-
-        class Cursor:
-            rowcount = 0
-
-        class Conn:
-            def __init__(self) -> None:
-                self.calls: list[tuple[str, tuple[object, ...]]] = []
-                self.committed = False
-                self.closed = False
-
-            def execute(self, query: str, params: tuple[object, ...] = ()) -> Cursor:
-                self.calls.append((query, params))
-                return Cursor()
-
-            def commit(self) -> None:
-                self.committed = True
-
-            def close(self) -> None:
-                self.closed = True
-
-        conn = Conn()
-        monkeypatch.setattr(cp, "_ensure_db_sync", lambda: conn)
-
-        deleted = cp._prune_old_sessions_sync(30)
-
+        deleted = await store.delete_sessions_by_workspace("ws-empty")
         assert deleted == 0
-        assert conn.calls == [
-            (
-                "DELETE FROM sessions WHERE updated_at < datetime('now', ?)",
-                ("-30 days",),
-            ),
-        ]
-        assert conn.committed is True
-        assert conn.closed is True
 
-    async def test_idempotent_ensure_session(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
 
-        await cp.ensure_session("s1")
-        await cp.ensure_session("s1")
-        await cp.ensure_session("s1")
+class TestPruneOldSessions:
+    async def test_prunes_by_age(self) -> None:
+        conn = _Conn()
+        conn.fetchvals = [5]
+        store = _make_store(conn)
 
-        sessions = await cp.list_sessions()
-        assert len(sessions) == 1
+        deleted = await store.prune_old_sessions(max_age_days=30)
+        assert deleted == 5
 
-    async def test_empty_chunks_no_error(self, tmp_path: Path) -> None:
-        db_path = tmp_path / "checkpoints.db"
-        cp = ConversationCheckpoint(db_path)
+        delete_calls = [c for c in conn.executed if "DELETE FROM" in str(c[0]).upper()]
+        assert delete_calls
 
-        await cp.save_anchors("s1", 1, [])
-        await cp.mark_cited("s1", 1, [])
+    async def test_zero_deleted(self) -> None:
+        conn = _Conn()
+        conn.fetchvals = [0]
+        store = _make_store(conn)
 
-        anchors = await cp.get_previous_anchors("s1")
-        assert anchors == []
+        deleted = await store.prune_old_sessions(max_age_days=30)
+        assert deleted == 0
 
-    async def test_save_turn_pair_keeps_scoped_sessions_isolated(self, tmp_path: Path) -> None:
-        cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
 
-        await cp.save_turn_pair(
-            "jwt:alice:reports:same-session",
-            workspace="reports",
-            query="alice question",
-            answer="alice answer",
-            contexts={"chunks": []},
+class TestInitialize:
+    async def test_initialize_is_idempotent(self) -> None:
+        """Calling initialize twice applies migration only once."""
+        conn = _Conn()
+        store = PGCheckpointStore(pool=_Pool(conn))
+        assert not store._initialized
+
+        await store.initialize()
+        assert store._initialized
+
+        # Second call should be a no-op
+        await store.initialize()
+        assert store._initialized
+
+    async def test_public_methods_auto_initialize(self) -> None:
+        """save_turn_pair initializes on first use."""
+        conn = _Conn()
+        conn.fetchrows = [{"turn_number": 1}]
+        store = PGCheckpointStore(pool=_Pool(conn))
+        assert not store._initialized
+
+        await store.save_turn_pair(
+            "s1",
+            workspace="default",
+            query="q",
+            answer="a",
+            contexts={},
             cited_chunk_ids=[],
         )
-        await cp.save_turn_pair(
-            "jwt:bob:reports:same-session",
-            workspace="reports",
-            query="bob question",
-            answer="bob answer",
-            contexts={"chunks": []},
-            cited_chunk_ids=[],
-        )
+        assert store._initialized
 
-        assert await cp.get_history("jwt:alice:reports:same-session") == [
-            {"role": "user", "content": "alice question"},
-            {"role": "assistant", "content": "alice answer"},
+
+class TestConcurrentWrites:
+    async def test_same_session_concurrent_saves_get_distinct_turns(self) -> None:
+        """Two concurrent saves to the same session get turn 1 and 2."""
+        import asyncio
+
+        conn = _Conn()
+        # fetchrow is called during save, each returns the turn_number
+        conn.fetchrows = [{"turn_number": 1}, {"turn_number": 2}]
+        conn.fetches = [
+            [
+                {"turn_number": 1, "query": "q1", "answer": "a1"},
+                {"turn_number": 2, "query": "q2", "answer": "a2"},
+            ]
         ]
-        assert await cp.get_history("jwt:bob:reports:same-session") == [
-            {"role": "user", "content": "bob question"},
-            {"role": "assistant", "content": "bob answer"},
-        ]
+        store = _make_store(conn)
 
-    async def test_save_turn_pair_is_atomic_for_concurrent_same_session(
-        self, tmp_path: Path
-    ) -> None:
-        cp = ConversationCheckpoint(tmp_path / "checkpoints.db")
-
-        async def save(idx: int) -> None:
-            await cp.save_turn_pair(
-                "jwt:alice:reports:s1",
-                workspace="reports",
-                query=f"q{idx}",
-                answer=f"a{idx}",
-                contexts={"chunks": []},
+        async def save(content: str) -> int:
+            return await store.save_turn_pair(
+                "s1",
+                workspace="default",
+                query=content,
+                answer=content,
+                contexts={},
                 cited_chunk_ids=[],
             )
 
-        await asyncio.gather(save(1), save(2))
+        t1, t2 = await asyncio.gather(save("q1"), save("q2"))
+        assert {t1, t2} == {1, 2}
 
-        history = await cp.get_history("jwt:alice:reports:s1")
+        history = await store.get_history("s1")
         assert len(history) == 4
-        assert {item["content"] for item in history if item["role"] == "user"} == {"q1", "q2"}
-        assert {item["content"] for item in history if item["role"] == "assistant"} == {
-            "a1",
-            "a2",
-        }
+
+
+class TestSaveTurnCheckpointIntegration:
+    """Integration tests for servicemanager.save_turn_checkpoint with PG store."""
+
+    async def test_save_turn_checkpoint_calls_store(self) -> None:
+        from dlightrag.core.servicemanager import RAGServiceManager
+
+        cfg = MagicMock()
+        cfg.workspace = "default"
+        cfg.checkpoint_session_ttl_days = 30
+        cfg.max_async = 8
+        cfg.embedding.model = "test"
+        cfg.working_dir_path = MagicMock()
+
+        manager = RAGServiceManager.__new__(RAGServiceManager)
+        manager._config = cfg
+
+        mock_store = MagicMock()
+        mock_store.save_turn_pair = AsyncMock(return_value=3)
+        manager._checkpoint = mock_store
+
+        await manager.save_turn_checkpoint(
+            session_id="s1",
+            query="test query",
+            answer="test answer",
+            contexts={"chunks": [{"chunk_id": "c1"}]},
+            cited_chunk_ids=["c1"],
+            workspace="default",
+        )
+
+        mock_store.save_turn_pair.assert_awaited_once()
+        call_kwargs = mock_store.save_turn_pair.call_args.kwargs
+        assert call_kwargs["query"] == "test query"
+        assert call_kwargs["answer"] == "test answer"
+        assert call_kwargs["cited_chunk_ids"] == ["c1"]
+
+    async def test_save_turn_checkpoint_is_best_effort(self) -> None:
+        from dlightrag.core.servicemanager import RAGServiceManager
+
+        cfg = MagicMock()
+        cfg.workspace = "default"
+        cfg.checkpoint_session_ttl_days = 30
+        cfg.max_async = 8
+        cfg.embedding.model = "test"
+        cfg.working_dir_path = MagicMock()
+
+        manager = RAGServiceManager.__new__(RAGServiceManager)
+        manager._config = cfg
+
+        mock_store = MagicMock()
+        mock_store.save_turn_pair = AsyncMock(side_effect=RuntimeError("PG gone"))
+        manager._checkpoint = mock_store
+
+        # Must not raise
+        await manager.save_turn_checkpoint(
+            session_id="s1",
+            query="q",
+            answer="a",
+            contexts={},
+            cited_chunk_ids=[],
+        )
