@@ -151,6 +151,47 @@ class RAGServiceUnavailableError(Exception):
         super().__init__(self.detail)
 
 
+_ERROR_IMAGES_NOT_SUPPORTED = (
+    "Current model does not support image input. Use a vision-capable model or remove query_images."
+)
+
+
+def _history_has_images(history: list[dict[str, Any]] | None) -> bool:
+    """Return True if any message in *history* contains image_url blocks."""
+    if not history:
+        return False
+    for msg in history:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    return True
+    return False
+
+
+def _check_vision_support(
+    *,
+    provider_or_config: Any,
+    query_images: list[str | dict[str, Any]] | None,
+    conversation_history: list[dict[str, str]] | None,
+) -> None:
+    """Raise ValueError if images are present but model doesn't support vision.
+
+    Checks both ``query_images`` and ``conversation_history`` for image
+    content.  Uses ``config.answer.supports_vision`` when available,
+    falling back to ``provider.supports_vision``.
+    """
+    has_images = bool(query_images) or _history_has_images(conversation_history)
+    if not has_images:
+        return
+    # Prefer config — startup probe result or user override
+    supports = getattr(provider_or_config, "supports_vision", None)
+    if supports is not None and not supports:
+        raise ValueError(f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}")
+    # If None (unprobed), allow through — let the model API surface its
+    # own error rather than falsely blocking.
+
+
 class RAGServiceManager:
     """Multi-workspace RAG coordinator.
 
@@ -892,6 +933,32 @@ class RAGServiceManager:
             self._checkpoint = PGCheckpointStore()
         return self._checkpoint
 
+    async def aget_checkpoint_history(
+        self,
+        *,
+        session_id: str,
+        scope: RequestScope | None = None,
+        max_turns: int = 50,
+    ) -> list[dict[str, str]]:
+        """Return conversation history for a session from the checkpoint store.
+
+        Reconstructs the scoped session key so the same raw ``session_id``
+        returns the same history across requests, matching the scoping used
+        by ``save_turn_checkpoint``.
+        """
+        if not session_id:
+            return []
+        try:
+            cp = self._get_checkpoint()
+            scoped = _scope_for_workspaces(scope, None)
+            scoped_session_id = scoped.session_key(session_id) or session_id
+            return await cp.get_history(scoped_session_id, max_turns=max_turns)
+        except Exception:
+            logger.debug(
+                "Failed to load checkpoint history for session %s", session_id, exc_info=True
+            )
+            return []
+
     async def save_turn_checkpoint(
         self,
         session_id: str,
@@ -1115,6 +1182,14 @@ class RAGServiceManager:
         """
         ws_list = workspaces or [workspace or self._config.workspace]
         scoped = _scope_for_workspaces(scope, ws_list)
+
+        # Guard: reject image input when the model doesn't support it
+        _check_vision_support(
+            provider_or_config=self._config.answer,
+            query_images=query_images,
+            conversation_history=conversation_history,
+        )
+
         from dlightrag.observability import trace_pipeline
 
         try:
@@ -1181,6 +1256,15 @@ class RAGServiceManager:
         See ``aanswer`` for ``query_images`` semantics.
         """
         ws_list = workspaces or [workspace or self._config.workspace]
+        scoped = _scope_for_workspaces(scope, ws_list)
+
+        # Guard: reject image input when the model doesn't support it
+        _check_vision_support(
+            provider_or_config=self._config.answer,
+            query_images=query_images,
+            conversation_history=conversation_history,
+        )
+
         scoped = _scope_for_workspaces(scope, ws_list)
         from dlightrag.observability import trace_pipeline
 
