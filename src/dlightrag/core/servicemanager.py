@@ -879,6 +879,7 @@ class RAGServiceManager:
             self._answer_engine = AnswerEngine(
                 model_func=get_query_model_func(self._config),
                 max_images=answer_cfg.max_images,
+                max_user_images=answer_cfg.max_user_images,
                 image_max_bytes=answer_cfg.image_max_bytes,
                 image_max_total_bytes=answer_cfg.image_max_total_bytes,
                 image_max_px=answer_cfg.image_max_px,
@@ -1060,6 +1061,7 @@ class RAGServiceManager:
         contexts: RetrievalContexts,
         *,
         query_images: list[str | dict[str, Any]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Generate a streaming answer from already-retrieved contexts."""
@@ -1070,6 +1072,7 @@ class RAGServiceManager:
                 query,
                 contexts,
                 query_images=query_images,
+                conversation_history=conversation_history,
                 context_top_k=context_top_k,
             )
         except BaseException:
@@ -1231,6 +1234,7 @@ class RAGServiceManager:
                         plan.standalone_query,
                         retrieval.contexts,
                         query_images=prepared.answer_images or None,
+                        conversation_history=conversation_history,
                         context_top_k=limits.context_top_k,
                     )
                     retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
@@ -1314,6 +1318,7 @@ class RAGServiceManager:
                         plan.standalone_query,
                         retrieval.contexts,
                         query_images=prepared.answer_images or None,
+                        conversation_history=conversation_history,
                         context_top_k=limits.context_top_k,
                     )
                     retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k

@@ -61,6 +61,7 @@ class AnswerEngine:
         *,
         model_func: Callable[..., Any] | None = None,
         max_images: int = 6,
+        max_user_images: int = 3,
         image_max_bytes: int = 3_000_000,
         image_max_total_bytes: int = 24_000_000,
         image_max_px: int = 1536,
@@ -71,6 +72,7 @@ class AnswerEngine:
     ) -> None:
         self.model_func = model_func
         self._max_images = max_images
+        self._max_user_images = max_user_images
         self._image_max_bytes = image_max_bytes
         self._image_max_total_bytes = image_max_total_bytes
         self._image_max_px = image_max_px
@@ -88,6 +90,7 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         query_images: list[str | dict[str, Any]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> RetrievalResult:
         """Non-streaming answer generation.
@@ -118,6 +121,7 @@ class AnswerEngine:
             prepared.user_prompt,
             prepared.contexts,
             indexer=prepared.indexer,
+            conversation_history=conversation_history,
             query_image_blocks=prepared.query_image_blocks,
             chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
         )
@@ -167,6 +171,7 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         query_images: list[str | dict[str, Any]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer generation.
@@ -195,6 +200,7 @@ class AnswerEngine:
             prepared.user_prompt,
             prepared.contexts,
             indexer=prepared.indexer,
+            conversation_history=conversation_history,
             query_image_blocks=prepared.query_image_blocks,
             chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
         )
@@ -231,32 +237,71 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
         query_images: list[str | dict[str, Any]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         query_image_blocks: list[dict[str, Any]] | None = None,
         chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build OpenAI-format messages with per-document grouped images.
+        """Build OpenAI-format messages with independent dual image budgets.
 
-        Instead of flat-listing all images at the start, images are
-        interleaved with their document's text excerpts so the LLM can
-        associate each image with its source context.
-
-        When ``query_images`` is non-empty, those user-attached images are
-        prepended (with a clear section header) so the LLM sees them
-        before retrieved-document context. Any item that already looks
-        like an OpenAI ``image_url`` block keeps its non-URL fields, while
-        data URI/base64 payloads are still bounded by the shared budget.
+        RAG context images (from ``_prepare_prompt_context``) use a separate
+        budget from user images (``query_images`` + ``conversation_history``).
+        Within the user budget, current-turn ``query_images`` take priority;
+        history images consume remaining slots.
         """
-        content: list[dict[str, Any]] = []
-        if query_image_blocks is None or chunk_image_blocks_by_chunk_id is None:
-            prepared = self._prepare_prompt_context("", contexts, query_images=query_images)
+        user_budget = self._new_user_image_budget()
+
+        # ---- Phase 1: current-turn query_images eat first ----
+        resolved_query_blocks: list[dict[str, Any]] = []
+        if query_image_blocks is None:
+            query_image_blocks = []
+        if query_images:
+            for idx, img in enumerate(query_images, start=1):
+                block = user_budget.add_user_image(img, label=f"query_image_{idx}")
+                if block is not None:
+                    resolved_query_blocks.append(block)
+        resolved_query_blocks.extend(query_image_blocks)
+
+        # ---- Phase 2: conversation_history gets leftovers ----
+        history_messages: list[dict[str, Any]] = []
+        if conversation_history:
+            for hmsg in conversation_history:
+                hcontent = hmsg.get("content")
+                if isinstance(hcontent, list):
+                    budgeted: list[Any] = []
+                    for block in hcontent:
+                        if isinstance(block, str):
+                            budgeted.append(block)
+                        elif block.get("type") == "text":
+                            budgeted.append(block)
+                        elif block.get("type") == "image_url":
+                            bounded = user_budget.add_user_image(
+                                block["image_url"],
+                                label=f"history_img_{user_budget.count + 1}",
+                            )
+                            if bounded is not None:
+                                budgeted.append(bounded)
+                        else:
+                            budgeted.append(block)
+                    history_messages.append({"role": hmsg["role"], "content": budgeted})
+                else:
+                    history_messages.append(hmsg)
+
+        # ---- Phase 3: RAG context uses its own budget ----
+        if chunk_image_blocks_by_chunk_id is None:
+            prepared = self._prepare_prompt_context(
+                "",
+                contexts,
+                query_images=None,
+            )
             contexts = prepared.contexts
             indexer = prepared.indexer
-            query_image_blocks = prepared.query_image_blocks
             chunk_image_blocks_by_chunk_id = prepared.chunk_image_blocks
 
-        if query_image_blocks:
+        content: list[dict[str, Any]] = []
+
+        if resolved_query_blocks:
             content.append({"type": "text", "text": "## User-attached images\n"})
-            content.extend(query_image_blocks)
+            content.extend(resolved_query_blocks)
 
         content.extend(
             self._build_excerpt_blocks(
@@ -268,15 +313,31 @@ class AnswerEngine:
 
         content.append({"type": "text", "text": user_prompt})
 
-        return [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content},
         ]
+        if history_messages:
+            messages.extend(history_messages)
+        messages.append({"role": "user", "content": content})
+        return messages
 
-    def _new_image_budget(self) -> AnswerImageBudget:
+    def _new_rag_budget(self) -> AnswerImageBudget:
+        """RAG context images — independent from user images."""
         return AnswerImageBudget(
             max_images=self._max_images,
             max_total_bytes=self._image_max_total_bytes,
+            max_bytes_per_image=self._image_max_bytes,
+            max_px=self._image_max_px,
+            min_px=self._image_min_px,
+            quality=self._image_quality,
+            min_quality=self._image_min_quality,
+        )
+
+    def _new_user_image_budget(self) -> AnswerImageBudget:
+        """User images (query + history) — independent from RAG context."""
+        return AnswerImageBudget(
+            max_images=self._max_user_images,
+            max_total_bytes=self._image_max_total_bytes // 2,
             max_bytes_per_image=self._image_max_bytes,
             max_px=self._image_max_px,
             min_px=self._image_min_px,
@@ -298,7 +359,7 @@ class AnswerEngine:
         query_images: list[str | dict[str, Any]] | None,
         context_top_k: int | None = None,
     ) -> _PreparedAnswerPrompt:
-        image_budget = self._new_image_budget()
+        image_budget = self._new_rag_budget()  # user images handled in _build_messages
         query_image_blocks: list[dict[str, Any]] = []
         for idx, img in enumerate(query_images or [], start=1):
             block = image_budget.add_user_image(img, label=f"query_image_{idx}")
