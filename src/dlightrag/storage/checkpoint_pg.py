@@ -50,12 +50,15 @@ WITH next_turn AS (
     WHERE session_id = $1
 )
 INSERT INTO {TABLE}
-    (session_id, workspace, turn_number, query, answer, cited_chunk_ids, context_chunks)
-SELECT $1, $2, turn_number, $3, $4, $5::jsonb, $6::jsonb
+    (session_id, workspace, turn_number, query, answer,
+     query_content, answer_content, cited_chunk_ids, context_chunks)
+SELECT $1, $2, turn_number, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb
 FROM next_turn
 ON CONFLICT (session_id, turn_number) DO UPDATE SET
     query = EXCLUDED.query,
     answer = EXCLUDED.answer,
+    query_content = EXCLUDED.query_content,
+    answer_content = EXCLUDED.answer_content,
     cited_chunk_ids = EXCLUDED.cited_chunk_ids,
     context_chunks = EXCLUDED.context_chunks,
     updated_at = NOW()
@@ -63,7 +66,7 @@ RETURNING turn_number
 """
 
 _GET_HISTORY = f"""
-SELECT turn_number, query, answer
+SELECT turn_number, query, answer, query_content, answer_content
 FROM {TABLE}
 WHERE session_id = $1
 ORDER BY turn_number ASC
@@ -94,7 +97,39 @@ _SCHEMA_MIGRATIONS = (
         "Create checkpoint sessions table",
         (_CREATE, *_CREATE_INDEXES),
     ),
+    Migration(
+        "0002_checkpoints_multimodal",
+        "Add query_content and answer_content JSONB columns",
+        (
+            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS query_content JSONB",
+            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS answer_content JSONB",
+        ),
+    ),
 )
+
+
+def _resolve_content(jsonb_val: Any, text_fallback: Any) -> str | list[dict[str, Any]]:
+    """Resolve stored content to its canonical form.
+
+    Prefers the JSONB value when it is a non-empty list; falls back to
+    the plain-text column.  Handles ``None`` (missing column or NULL row),
+    asyncpg's occasional ``str``-for-JSONB behaviour, and empty strings.
+    """
+    if jsonb_val is None:
+        return str(text_fallback or "")
+    if isinstance(jsonb_val, list):
+        return jsonb_val
+    if isinstance(jsonb_val, str):
+        try:
+            parsed = json.loads(jsonb_val)
+            if isinstance(parsed, list):
+                return parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+        if jsonb_val.strip():
+            return jsonb_val
+    text = str(text_fallback or "")
+    return text
 
 
 class PGCheckpointStore:
@@ -156,6 +191,8 @@ class PGCheckpointStore:
         workspace: str,
         query: str,
         answer: str,
+        query_content: list[dict[str, Any]] | None = None,
+        answer_content: list[dict[str, Any]] | None = None,
         contexts: dict[str, Any],
         cited_chunk_ids: list[str],
     ) -> int:
@@ -175,6 +212,8 @@ class PGCheckpointStore:
                 workspace,
                 query,
                 answer,
+                json.dumps(query_content) if query_content is not None else None,
+                json.dumps(answer_content) if answer_content is not None else None,
                 json.dumps(cited_chunk_ids or []),
                 json.dumps(chunk_list),
             )
@@ -187,16 +226,25 @@ class PGCheckpointStore:
         session_id: str,
         *,
         max_turns: int = 50,
-    ) -> list[dict[str, str]]:
-        """Return conversation history as list of {role, content} dicts."""
+    ) -> list[dict[str, Any]]:
+        """Return conversation history as list of {role, content} dicts.
+
+        Prefers ``query_content`` / ``answer_content`` JSONB columns when
+        present; falls back to the plain-text ``query`` / ``answer`` columns
+        for backward compatibility with pre-multimodal rows.
+        """
         await self._ensure_initialized()
 
-        async def _operation(conn: Any) -> list[dict[str, str]]:
+        async def _operation(conn: Any) -> list[dict[str, Any]]:
             rows = await conn.fetch(_GET_HISTORY, session_id, max_turns)
-            history: list[dict[str, str]] = []
+            history: list[dict[str, Any]] = []
             for row in rows:
-                history.append({"role": "user", "content": row["query"]})
-                history.append({"role": "assistant", "content": row["answer"]})
+                # query → user
+                qc = _resolve_content(row.get("query_content"), row["query"])
+                history.append({"role": "user", "content": qc})
+                # answer → assistant
+                ac = _resolve_content(row.get("answer_content"), row["answer"])
+                history.append({"role": "assistant", "content": ac})
             return history
 
         return await self._run(_operation)

@@ -397,11 +397,19 @@ class RAGService:
         )
 
         # Vision probe — determine once at startup whether the chat model
-        # accepts image_url blocks.  Config override wins; probe fills the gap.
-        if config.answer.supports_vision is None:
-            from dlightrag.core.vision_probe import probe_vision_support
-            from dlightrag.models.providers import get_provider
+        # accepts image_url blocks.  Result stored as runtime attribute on
+        # config.answer (NOT a Pydantic field — no yaml override needed).
+        # Provider defaults (Anthropic/Gemini=True) already set; we probe
+        # only the OpenAI-compatible path where it's unknown.
+        from dlightrag.core.vision_probe import probe_vision_support
+        from dlightrag.models.providers import get_provider
 
+        # Monkey-patched runtime attribute — not a Pydantic field.
+        # Provider defaults (Anthropic/Gemini=True) are already set on the
+        # provider instance; we only need to probe the OpenAI-compatible path.
+        try:
+            _ = config.answer.supports_vision  # type: ignore[attr-defined]
+        except AttributeError:
             default = config.llm.default
             provider = get_provider(
                 default.provider,
@@ -412,7 +420,7 @@ class RAGService:
             )
             try:
                 has_vision = await probe_vision_support(provider, model=default.model)
-                config.answer.supports_vision = has_vision
+                config.answer.supports_vision = has_vision  # type: ignore[attr-defined]
                 logger.info(
                     "Chat model vision probe: %s (model=%s, provider=%s)",
                     "supported" if has_vision else "not supported",
