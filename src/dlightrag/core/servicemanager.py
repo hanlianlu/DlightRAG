@@ -155,6 +155,16 @@ _ERROR_IMAGES_NOT_SUPPORTED = (
     "Current model does not support image input. Use a vision-capable model or remove query_images."
 )
 
+# Module-level vision support — set once at startup by the server lifecycle.
+# NOT stored on config.answer because Pydantic extra="forbid" rejects monkey-patching.
+_supports_vision: bool | None = None
+
+
+def set_vision_supported(supported: bool | None) -> None:
+    """Store the startup vision probe result (called from server lifespan)."""
+    global _supports_vision
+    _supports_vision = supported
+
 
 def _history_has_images(history: list[dict[str, Any]] | None) -> bool:
     """Return True if any message in *history* contains image_url blocks."""
@@ -171,25 +181,22 @@ def _history_has_images(history: list[dict[str, Any]] | None) -> bool:
 
 def _check_vision_support(
     *,
-    provider_or_config: Any,
     query_images: list[str | dict[str, Any]] | None,
-    conversation_history: list[dict[str, str]] | None,
+    conversation_history: list[dict[str, Any]] | None,
 ) -> None:
     """Raise ValueError if images are present but model doesn't support vision.
 
     Checks both ``query_images`` and ``conversation_history`` for image
-    content.  Uses ``config.answer.supports_vision`` when available,
-    falling back to ``provider.supports_vision``.
+    content.  Reads the startup probe result from the module-level
+    ``_supports_vision`` flag (set by ``set_vision_supported()`` in the
+    server lifespan).
     """
     has_images = bool(query_images) or _history_has_images(conversation_history)
     if not has_images:
         return
-    # Prefer config — startup probe result or user override
-    supports = getattr(provider_or_config, "supports_vision", None)
-    if supports is not None and not supports:
+    if _supports_vision is False:
         raise ValueError(f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}")
-    # If None (unprobed), allow through — let the model API surface its
-    # own error rather than falsely blocking.
+    # None (unprobed) or True — allow through
 
 
 class RAGServiceManager:
@@ -264,6 +271,9 @@ class RAGServiceManager:
         await manager._start_ingest_job_recovery()
         await manager._recover_stalled_docs(all_ws)
         await manager._prune_checkpoint_sessions()
+
+        # ── Vision probe (once at startup, not per workspace) ──────────
+        await manager._probe_vision_support()
 
         if default_ws in manager._services:
             manager._ready = True
@@ -603,6 +613,44 @@ class RAGServiceManager:
         except Exception:
             logger.debug("Checkpoint session pruning skipped", exc_info=True)
 
+    async def _probe_vision_support(self) -> None:
+        """Probe the chat model's vision capability once at startup.
+
+        Sets the module-level ``_supports_vision`` flag consumed by
+        ``_check_vision_support`` on every request.
+        """
+        global _supports_vision
+        if _supports_vision is not None:
+            return  # already probed
+
+        from dlightrag.core.vision_probe import probe_vision_support
+        from dlightrag.models.providers import get_provider
+
+        default = self._config.llm.default
+        provider = get_provider(
+            default.provider,
+            api_key=default.api_key,
+            base_url=default.base_url,
+            timeout=default.timeout,
+            max_retries=default.max_retries,
+        )
+        try:
+            has_vision = await probe_vision_support(provider, model=default.model)
+            _supports_vision = has_vision
+            logger.info(
+                "Chat model vision probe: %s (model=%s, provider=%s)",
+                "supported" if has_vision else "not supported",
+                default.model,
+                default.provider,
+            )
+        except Exception:
+            logger.debug(
+                "Vision probe failed; deferring to per-request check",
+                exc_info=True,
+            )
+        finally:
+            await provider.aclose()
+
     async def astart_ingest_job(
         self,
         workspace: str,
@@ -940,7 +988,7 @@ class RAGServiceManager:
         session_id: str,
         scope: RequestScope | None = None,
         max_turns: int = 50,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Return conversation history for a session from the checkpoint store.
 
         Reconstructs the scoped session key so the same raw ``session_id``
@@ -1210,7 +1258,6 @@ class RAGServiceManager:
 
         # Guard: reject image input when the model doesn't support it
         _check_vision_support(
-            provider_or_config=self._config.answer,
             query_images=query_images,
             conversation_history=conversation_history,
         )
@@ -1286,7 +1333,6 @@ class RAGServiceManager:
 
         # Guard: reject image input when the model doesn't support it
         _check_vision_support(
-            provider_or_config=self._config.answer,
             query_images=query_images,
             conversation_history=conversation_history,
         )
