@@ -221,6 +221,7 @@ class RAGServiceManager:
             logger.warning("Failed to warm up: %s", ", ".join(failed))
 
         await manager._start_ingest_job_recovery()
+        await manager._recover_stalled_docs(all_ws)
 
         if default_ws in manager._services:
             manager._ready = True
@@ -494,6 +495,49 @@ class RAGServiceManager:
     def _forget_ingest_job(self, job_id: str) -> None:
         self._ingest_job_tasks.pop(job_id, None)
         self._ingest_job_workspaces.pop(job_id, None)
+
+    async def _recover_stalled_docs(self, workspaces: list[str]) -> None:
+        """Recover documents stalled in intermediate LightRAG pipeline states.
+
+        Scans ``LIGHTRAG_DOC_STATUS`` for documents stuck in PARSING/ANALYZING/
+        PROCESSING whose ``updated_at`` exceeds ``stalled_doc_timeout_seconds``,
+        and resets them to PENDING so the next pipeline run retries them.
+
+        Best-effort: failures are logged individually and never block startup.
+        """
+        timeout = self._config.stalled_doc_timeout_seconds
+        if timeout <= 0:
+            return  # disabled
+
+        from dlightrag.storage.stalled_doc_scanner import recover_stalled_docs
+
+        total = 0
+        for workspace in workspaces:
+            try:
+                result = await recover_stalled_docs(
+                    workspace=workspace,
+                    timeout_seconds=timeout,
+                    dry_run=False,
+                )
+                count: int = result.get("reset_count", 0)
+                if count:
+                    total += count
+                    ids: list[str] = result.get("stalled_ids", [])
+                    logger.warning(
+                        "Recovered %d stalled doc(s) in workspace '%s': %s",
+                        count,
+                        workspace,
+                        ids,
+                    )
+            except Exception:
+                logger.debug(
+                    "Stalled doc recovery skipped for workspace '%s'",
+                    workspace,
+                    exc_info=True,
+                )
+
+        if total:
+            logger.info("Total stalled docs recovered at startup: %d", total)
 
     async def astart_ingest_job(
         self,
