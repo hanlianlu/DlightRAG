@@ -46,6 +46,25 @@ def estimate_tokens(text: str) -> int:
     )
 
 
+def _content_tokens(content: Any) -> int:
+    """Estimate tokens for a single message content (string or list of blocks)."""
+    if isinstance(content, str):
+        return estimate_tokens(content)
+    if isinstance(content, list):
+        total = 0
+        for block in content:
+            if isinstance(block, str):
+                total += estimate_tokens(block)
+            elif isinstance(block, dict):
+                text = str(block.get("text", ""))
+                total += estimate_tokens(text)
+                if block.get("type") == "image_url":
+                    total += 85  # low-res image ≈ 85 tokens
+            # Skip unknown types
+        return total
+    return estimate_tokens(str(content))
+
+
 def truncate_conversation_history(
     history: list[dict[str, Any]],
     *,
@@ -55,7 +74,8 @@ def truncate_conversation_history(
     """Return the most recent slice of *history* within budget.
 
     Walks backwards from the end and stops when either *max_messages* or
-    *max_tokens* is exceeded.
+    *max_tokens* is exceeded.  Handles both plain-text and multimodal
+    (content-as-list) messages.
     """
     if not history:
         return []
@@ -66,7 +86,7 @@ def truncate_conversation_history(
     total = 0
     cutoff = 0
     for i in range(len(history) - 1, -1, -1):
-        total += estimate_tokens(history[i].get("content", ""))
+        total += _content_tokens(history[i].get("content", ""))
         if total > max_tokens:
             cutoff = i + 1
             break

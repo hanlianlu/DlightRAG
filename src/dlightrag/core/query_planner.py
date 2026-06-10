@@ -33,6 +33,39 @@ from dlightrag.utils.tokens import truncate_conversation_history
 logger = logging.getLogger(__name__)
 
 
+def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
+    """Convert multimodal conversation_history to plain text for the planner LLM.
+
+    Text content is preserved inline.  ``image_url`` blocks are replaced
+    with ``[user shared N image(s)]`` placeholders so the planner can
+    understand referential context without needing vision capability.
+    """
+    if not history:
+        return ""
+    lines: list[str] = []
+    for msg in history:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            text = content
+        else:
+            text_parts: list[str] = []
+            image_count = 0
+            for block in content:
+                if isinstance(block, str):
+                    text_parts.append(block)
+                elif block.get("type") == "text":
+                    text_parts.append(str(block.get("text", "")))
+                elif block.get("type") == "image_url":
+                    image_count += 1
+            text = "".join(text_parts)
+            if image_count > 0:
+                s = "s" if image_count > 1 else ""
+                text += f" [user shared {image_count} image{s}]"
+        lines.append(f"{role}: {text}")
+    return "\n".join(lines)
+
+
 @dataclass
 class QueryPlan:
     """Output of QueryPlanner -- full query understanding in one shot."""
@@ -208,7 +241,7 @@ class QueryPlanner:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, str]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         explicit_filter: MetadataFilter | None = None,
         max_turns: int = 25,
         max_tokens: int = 65536,
@@ -241,7 +274,7 @@ class QueryPlanner:
         custom_keys_hint = _build_custom_keys_hint(schema)
 
         if history:
-            history_text = "\n".join(f"{m['role']}: {m['content']}" for m in history)
+            history_text = _convert_history_to_text(history)
             history_section = PLANNER_HISTORY_TEMPLATE.format(
                 history_text=history_text, query=query
             )
@@ -417,10 +450,10 @@ class QueryPlanner:
 
     @staticmethod
     def _truncate_history(
-        history: list[dict[str, str]] | None,
+        history: list[dict[str, Any]] | None,
         max_turns: int,
         max_tokens: int,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         if not history:
             return []
         max_messages = max_turns * 2
