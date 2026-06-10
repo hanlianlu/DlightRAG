@@ -45,6 +45,32 @@ async def get_checkpoint_history(
         return JSONResponse({"history": []})
 
 
+@router.delete("/history")
+async def delete_checkpoint_history(
+    request: Request,
+    session_id: str = Query(default=""),
+    workspace: str = Depends(get_workspace),
+):
+    """Delete all conversation history checkpoints for a session."""
+    if not session_id:
+        return JSONResponse({"deleted": 0})
+
+    manager = get_manager(request)
+    scope = get_request_scope(request, [workspace])
+
+    try:
+        deleted = await manager.adelete_checkpoint_session(
+            session_id=session_id,
+            scope=scope,
+        )
+        return JSONResponse({"deleted": deleted})
+    except Exception:
+        logger.debug(
+            "Failed to delete checkpoint history for session %s", session_id, exc_info=True
+        )
+        return JSONResponse({"deleted": 0})
+
+
 @router.get("/", response_class=HTMLResponse)
 async def index(request: Request, workspace: str = Depends(get_workspace)):
     """Main page."""

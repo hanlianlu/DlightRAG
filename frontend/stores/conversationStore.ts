@@ -66,6 +66,23 @@ class ConversationStore extends Store {
       // best-effort — page works fine without history
     }
   }
+
+  async clear(): Promise<void> {
+    const sid = sessionStore.sessionId;
+    if (sid) {
+      try {
+        await fetch(`/web/history?session_id=${encodeURIComponent(sid)}`, {
+          method: 'DELETE',
+        });
+      } catch {
+        // best-effort — PG cleanup may fail, local state still clears
+      }
+    }
+
+    this.#history = [];
+    this.#loaded = false;
+    this.emit('chatHistoryCleared', undefined);
+  }
 }
 
 export const conversationStore = new ConversationStore();

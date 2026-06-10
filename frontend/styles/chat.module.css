@@ -117,6 +117,17 @@
   /* Modifier for streamingDot — standalone for classList use */
 }
 
+/* === Clear History Button (topbar) === */
+
+#clear-history-btn {
+  /* Inherits .topbar-btn from layout.css */
+  /* Hidden until first message — shown via JS */
+}
+
+.clear-history-confirm {
+  color: var(--color-gold-100) !important;
+}
+
 /* === Composer Plus Button === */
 
 .composerPlus {

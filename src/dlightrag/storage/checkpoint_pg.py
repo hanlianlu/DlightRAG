@@ -91,6 +91,15 @@ WITH deleted AS (
 SELECT COUNT(*)::int FROM deleted
 """
 
+_DELETE_SESSION = f"""
+WITH deleted AS (
+    DELETE FROM {TABLE}
+    WHERE session_id = $1
+    RETURNING 1
+)
+SELECT COUNT(*)::int FROM deleted
+"""
+
 _SCHEMA_MIGRATIONS = (
     Migration(
         "0001_checkpoints",
@@ -255,6 +264,16 @@ class PGCheckpointStore:
 
         async def _operation(conn: Any) -> int:
             deleted = await conn.fetchval(_DELETE_WORKSPACE, workspace)
+            return int(deleted or 0)
+
+        return await self._run(_operation)
+
+    async def delete_session(self, session_id: str) -> int:
+        """Delete all checkpoint rows for a single session. Returns count deleted."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> int:
+            deleted = await conn.fetchval(_DELETE_SESSION, session_id)
             return int(deleted or 0)
 
         return await self._run(_operation)

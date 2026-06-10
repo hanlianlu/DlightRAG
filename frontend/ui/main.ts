@@ -40,4 +40,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupFolderInput();
     setupQueryForm();
     setupMathRendering();
+
+    // Clear-history button — must run after conversationStore.restoreFromCheckpoint()
+    // so the button shows immediately when history was restored.
+    const {setupClearHistory} = await import('./clearHistory.ts');
+    setupClearHistory();
 });

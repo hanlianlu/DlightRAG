@@ -27,9 +27,12 @@ def _is_unsafe_host(host: str | None) -> bool:
     """Return True if *host* is an IP literal in a dangerous range.
 
     Only called when ``urlparse`` succeeds — no DNS resolution.
+    A trailing dot (DNS FQDN marker) is stripped so that ``127.0.0.1.``
+    is treated the same as ``127.0.0.1``.
     """
     if not host:
         return False
+    host = host.rstrip(".")
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
