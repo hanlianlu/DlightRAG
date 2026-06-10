@@ -24,7 +24,9 @@ from playwright.sync_api import Browser, Page, Playwright
 
 from dlightrag.api.server import create_app
 
-MOCK_WORKSPACES = [{"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"}]
+MOCK_WORKSPACES = [
+    {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"}
+]
 
 MOCK_WORKSPACE_LIST = [{"workspace": "default", "display_name": "Default"}]
 
