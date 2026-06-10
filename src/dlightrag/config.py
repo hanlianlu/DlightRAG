@@ -873,6 +873,16 @@ class DlightragConfig(BaseSettings):
             "Set to 0 to disable stalled-document recovery."
         ),
     )
+    checkpoint_session_ttl_days: int = Field(
+        default=30,
+        ge=1,
+        description=(
+            "Delete checkpoint sessions (SQLite turns + context anchors) older than "
+            "this many days at startup. Session data grows unboundedly without this — "
+            "conversation history, retrieval provenance, and citation anchors accumulate "
+            "per session indefinitely."
+        ),
+    )
 
     # ===== Observability =====
     langfuse_public_key: str | None = Field(default=None)
