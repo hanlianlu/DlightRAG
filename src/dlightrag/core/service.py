@@ -230,6 +230,7 @@ class RAGService:
                 exc_info=True,
             )
             return False
+        logger.info("Direct image embedding probe passed — visual chunk vectors enabled")
         return True
 
     @staticmethod
