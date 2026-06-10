@@ -396,6 +396,37 @@ class RAGService:
             startup_probe=config.embedding.startup_probe,
         )
 
+        # Vision probe — determine once at startup whether the chat model
+        # accepts image_url blocks.  Config override wins; probe fills the gap.
+        if config.answer.supports_vision is None:
+            from dlightrag.core.vision_probe import probe_vision_support
+            from dlightrag.models.providers import get_provider
+
+            default = config.llm.default
+            provider = get_provider(
+                default.provider,
+                api_key=default.api_key,
+                base_url=default.base_url,
+                timeout=default.timeout,
+                max_retries=default.max_retries,
+            )
+            try:
+                has_vision = await probe_vision_support(provider, model=default.model)
+                config.answer.supports_vision = has_vision
+                logger.info(
+                    "Chat model vision probe: %s (model=%s, provider=%s)",
+                    "supported" if has_vision else "not supported",
+                    default.model,
+                    default.provider,
+                )
+            except Exception:
+                logger.debug(
+                    "Vision probe failed; deferring to per-request check",
+                    exc_info=True,
+                )
+            finally:
+                await provider.aclose()
+
         # LightRAG configuration.
         # Do NOT pass rerank_model_func — we handle reranking ourselves
         lightrag = LightRAG(

@@ -393,7 +393,19 @@ class AnswerConfig(BaseModel):
     )
     max_images: int = Field(
         default=6,
-        description="Maximum total images sent to the answer LLM.",
+        description="Maximum RAG context images sent to the answer LLM.",
+    )
+    max_user_images: int = Field(
+        default=3,
+        ge=1,
+        description="Maximum user-attached images (query_images + history) sent to the answer LLM.",
+    )
+    supports_vision: bool | None = Field(
+        default=None,
+        description=(
+            "Whether the chat/answer model supports image (vision) input. "
+            "None = auto-detect via startup probe. True/False = override."
+        ),
     )
     image_max_bytes: int = Field(
         default=3_000_000,
