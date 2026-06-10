@@ -13,217 +13,249 @@ import chatStyles from '../styles/chat.module.css';
 // If you add a new innerHTML call, ensure the data flows through
 // safe_answer_preview / safe_answer_done / safe_source_panel.
 
-function activateChatMode() {
-    const app = document.querySelector('.app');
-    if (app && !app.classList.contains('has-messages')) app.classList.add('has-messages');
+// ── types ────────────────────────────────────────────────────────────
+
+interface ChatTurn {
+  chatArea: HTMLElement;
+  aiDiv: HTMLDivElement;
+  contentDiv: HTMLDivElement;
 }
 
-function fixExternalLinks(container) {
-    container.querySelectorAll('a[href]').forEach(function(a) {
-        if (!a.getAttribute('target')) {
-            a.setAttribute('target', '_blank');
-            a.setAttribute('rel', 'noopener noreferrer');
-        }
-    });
+type SSEData = string;
+
+interface DonePayload {
+  html?: string;
+  answer?: string;
+  current_image_ids?: string[];
 }
 
-function markOutOfContext(historyKept) {
-    const chatMessages = document.getElementById('chat-messages');
-    if (!chatMessages) return;
-    const outOfContextCount = conversationStore.historyWindow.length - historyKept;
-    if (outOfContextCount <= 0) {
-        chatMessages.querySelectorAll('.' + chatStyles.outOfContext).forEach(function(el) {
-            el.classList.remove(chatStyles.outOfContext);
-        });
-        const old = chatMessages.querySelector('.' + chatStyles.contextDivider);
-        if (old) old.remove();
-        return;
+interface MetaPayload {
+  history_kept?: number;
+}
+
+interface ProgressPayload {
+  phase: string;
+}
+
+type PhaseLabel = 'planning' | 'searching' | 'generating';
+
+const PHASE_LABELS: Record<PhaseLabel, string> = {
+  planning: 'Analyzing query...',
+  searching: 'Searching knowledge base...',
+  generating: 'Generating answer...',
+};
+
+// ── helpers ───────────────────────────────────────────────────────────
+
+function activateChatMode(): void {
+  const app = document.querySelector('.app');
+  if (app && !app.classList.contains('has-messages')) app.classList.add('has-messages');
+}
+
+function fixExternalLinks(container: ParentNode): void {
+  container.querySelectorAll('a[href]').forEach(function (el: Element) {
+    const a = el as HTMLAnchorElement;
+    if (!a.getAttribute('target')) {
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener noreferrer');
     }
+  });
+}
 
-    let msgIndex = 0;
-    let dividerInsertBefore = null;
-    Array.from(chatMessages.children).forEach(function(node) {
-        if (node.classList.contains(chatStyles.contextDivider)) return;
-        if (msgIndex < outOfContextCount) {
-            node.classList.add(chatStyles.outOfContext);
-        } else {
-            node.classList.remove(chatStyles.outOfContext);
-            if (dividerInsertBefore === null) dividerInsertBefore = node;
-        }
-        msgIndex++;
+function markOutOfContext(historyKept: number): void {
+  const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return;
+  const outOfContextCount = conversationStore.historyWindow.length - historyKept;
+  if (outOfContextCount <= 0) {
+    chatMessages.querySelectorAll('.' + chatStyles.outOfContext).forEach(function (el) {
+      el.classList.remove(chatStyles.outOfContext);
     });
+    const old = chatMessages.querySelector('.' + chatStyles.contextDivider);
+    if (old) old.remove();
+    return;
+  }
 
-    const existing = chatMessages.querySelector('.' + chatStyles.contextDivider);
-    if (existing) existing.remove();
-    if (dividerInsertBefore) {
-        const divider = document.createElement('div');
-        divider.className = chatStyles.contextDivider;
-        divider.textContent = 'Above messages are outside AI memory';
-        chatMessages.insertBefore(divider, dividerInsertBefore);
+  let msgIndex = 0;
+  let dividerInsertBefore: Element | null = null;
+  Array.from(chatMessages.children).forEach(function (node) {
+    if (node.classList.contains(chatStyles.contextDivider)) return;
+    if (msgIndex < outOfContextCount) {
+      node.classList.add(chatStyles.outOfContext);
+    } else {
+      node.classList.remove(chatStyles.outOfContext);
+      if (dividerInsertBefore === null) dividerInsertBefore = node;
     }
+    msgIndex++;
+  });
+
+  const existing = chatMessages.querySelector('.' + chatStyles.contextDivider);
+  if (existing) existing.remove();
+  if (dividerInsertBefore) {
+    const divider = document.createElement('div');
+    divider.className = chatStyles.contextDivider;
+    divider.textContent = 'Above messages are outside AI memory';
+    chatMessages.insertBefore(divider, dividerInsertBefore);
+  }
 }
 
-function scrollToBottom(turn) {
-    if (turn.chatArea) turn.chatArea.scrollTop = turn.chatArea.scrollHeight;
+function scrollToBottom(turn: ChatTurn): void {
+  if (turn.chatArea) turn.chatArea.scrollTop = turn.chatArea.scrollHeight;
 }
 
-export function createChatTurn(query) {
-    const chatMessages = document.getElementById('chat-messages');
-    const chatArea = document.getElementById('chat-area');
+// ── public API ────────────────────────────────────────────────────────
 
-    activateChatMode();
+export function createChatTurn(query: string): ChatTurn {
+  const chatMessages = document.getElementById('chat-messages')!;
+  const chatArea = document.getElementById('chat-area')!;
 
-    const userWrapper = document.createElement('div');
-    userWrapper.className = chatStyles.userMessageWrapper;
-    renderMessageImages(userWrapper);
+  activateChatMode();
 
-    const userDiv = document.createElement('div');
-    userDiv.className = chatStyles.userMessage;
-    userDiv.textContent = query;
-    userWrapper.appendChild(userDiv);
-    chatMessages.appendChild(userWrapper);
+  const userWrapper = document.createElement('div');
+  userWrapper.className = chatStyles.userMessageWrapper;
+  renderMessageImages(userWrapper);
 
-    const aiDiv = document.createElement('div');
-    aiDiv.className = chatStyles.aiMessage;
+  const userDiv = document.createElement('div');
+  userDiv.className = chatStyles.userMessage;
+  userDiv.textContent = query;
+  userWrapper.appendChild(userDiv);
+  chatMessages.appendChild(userWrapper);
 
-    const headerDiv = document.createElement('div');
-    headerDiv.className = chatStyles.aiMessageHeader;
-    const dot = document.createElement('span');
-    dot.className = chatStyles.dot;
-    dot.textContent = '●';
-    headerDiv.appendChild(dot);
-    headerDiv.appendChild(document.createTextNode(' DlightRAG'));
-    aiDiv.appendChild(headerDiv);
+  const aiDiv = document.createElement('div');
+  aiDiv.className = chatStyles.aiMessage;
 
-    const contentDiv = document.createElement('div');
-    contentDiv.className = chatStyles.aiMessageContent;
-    const streamingDot = document.createElement('span');
-    streamingDot.className = chatStyles.streamingDot;
-    contentDiv.appendChild(streamingDot);
-    aiDiv.appendChild(contentDiv);
+  const headerDiv = document.createElement('div');
+  headerDiv.className = chatStyles.aiMessageHeader;
+  const dot = document.createElement('span');
+  dot.className = chatStyles.dot;
+  dot.textContent = '●';
+  headerDiv.appendChild(dot);
+  headerDiv.appendChild(document.createTextNode(' DlightRAG'));
+  aiDiv.appendChild(headerDiv);
 
-    chatMessages.appendChild(aiDiv);
+  const contentDiv = document.createElement('div');
+  contentDiv.className = chatStyles.aiMessageContent;
+  const streamingDot = document.createElement('span');
+  streamingDot.className = chatStyles.streamingDot;
+  contentDiv.appendChild(streamingDot);
+  aiDiv.appendChild(contentDiv);
 
-    const turn = {chatArea, aiDiv, contentDiv};
+  chatMessages.appendChild(aiDiv);
+
+  const turn: ChatTurn = {chatArea, aiDiv, contentDiv};
+  scrollToBottom(turn);
+  return turn;
+}
+
+export function setAnswerError(turn: ChatTurn, message: unknown): void {
+  turn.contentDiv.textContent = typeof message === 'string' ? message : 'Service error. Please try again.';
+  turn.contentDiv.classList.add(chatStyles.textError);
+}
+
+export function createAnswerRenderer(turn: ChatTurn) {
+  let firstToken = true;
+  let fullAnswer = '';
+  let imageIds: string[] = [];
+  let failed = false;
+
+  function handleToken(data: SSEData): void {
+    const text = parseData(data);
+    const token = typeof text === 'string' ? text : String(text);
+    if (firstToken) {
+      turn.contentDiv.textContent = '';
+      firstToken = false;
+    }
+    fullAnswer += token;
+    const span = document.createElement('span');
+    span.textContent = token;
+    turn.contentDiv.appendChild(span);
     scrollToBottom(turn);
-    return turn;
-}
+  }
 
-export function setAnswerError(turn, message) {
-    turn.contentDiv.textContent = typeof message === 'string' ? message : 'Service error. Please try again.';
-    turn.contentDiv.classList.add(chatStyles.textError);
-}
+  function handlePreview(data: SSEData): void {
+    const previewHtml = parseData(data);
+    turn.contentDiv.innerHTML = typeof previewHtml === 'string' ? previewHtml : '';
+    renderMath(turn.contentDiv);
+    fixExternalLinks(turn.contentDiv);
+    scrollToBottom(turn);
+  }
 
-export function createAnswerRenderer(turn) {
-    let firstToken = true;
-    let fullAnswer = '';
-    let imageIds = [];
-    let failed = false;
-
-    function handleToken(data) {
-        const text = parseData(data);
-        const token = typeof text === 'string' ? text : String(text);
-        if (firstToken) {
-            turn.contentDiv.textContent = '';
-            firstToken = false;
-        }
-        fullAnswer += token;
-        const span = document.createElement('span');
-        span.textContent = token;
-        turn.contentDiv.appendChild(span);
-        scrollToBottom(turn);
+  function handleDone(data: SSEData): void {
+    const payload = parseData(data);
+    const html = typeof payload === 'string' ? payload : (payload as DonePayload).html;
+    if (typeof payload !== 'string') {
+      fullAnswer = (payload as DonePayload).answer || fullAnswer;
+      imageIds = (payload as DonePayload).current_image_ids || [];
     }
 
-    function handlePreview(data) {
-        const previewHtml = parseData(data);
-        turn.contentDiv.innerHTML = typeof previewHtml === 'string' ? previewHtml : '';
-        renderMath(turn.contentDiv);
-        fixExternalLinks(turn.contentDiv);
-        scrollToBottom(turn);
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html || '';
+    const answerContent = tmp.querySelector('#answer-content');
+    const sourceData = tmp.querySelector('#source-data');
+    const imageStrip = tmp.querySelector('.answer-image-strip');
+    const refList = tmp.querySelector('.answer-references');
+
+    if (answerContent) turn.contentDiv.innerHTML = answerContent.innerHTML;
+    if (imageStrip) {
+      turn.contentDiv.appendChild(imageStrip.cloneNode(true));
+    }
+    if (refList) {
+      turn.contentDiv.appendChild(refList.cloneNode(true));
+    }
+    if (sourceData) {
+      (sourceData as HTMLElement).className = 'source-data visually-hidden';
+      sourceData.removeAttribute('id');
+      turn.aiDiv.appendChild(sourceData);
     }
 
-    function handleDone(data) {
-        const payload = parseData(data);
-        const html = typeof payload === 'string' ? payload : payload.html;
-        if (typeof payload !== 'string') {
-            fullAnswer = payload.answer || fullAnswer;
-            imageIds = payload.current_image_ids || [];
-        }
+    renderMath(turn.contentDiv);
+    fixExternalLinks(turn.contentDiv);
+  }
 
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html || '';
-        const answerContent = tmp.querySelector('#answer-content');
-        const sourceData = tmp.querySelector('#source-data');
-        const imageStrip = tmp.querySelector('.answer-image-strip');
-        const refList = tmp.querySelector('.answer-references');
-
-        if (answerContent) turn.contentDiv.innerHTML = answerContent.innerHTML;
-        if (imageStrip) {
-            turn.contentDiv.appendChild(imageStrip.cloneNode(true));
-        }
-        if (refList) {
-            turn.contentDiv.appendChild(refList.cloneNode(true));
-        }
-        if (sourceData) {
-            sourceData.className = 'source-data visually-hidden';
-            sourceData.removeAttribute('id');
-            turn.aiDiv.appendChild(sourceData);
-        }
-
-        renderMath(turn.contentDiv);
-        fixExternalLinks(turn.contentDiv);
+  function handleHighlights(data: SSEData): void {
+    const highlightsHtml = parseData(data);
+    const sourceData = turn.aiDiv.querySelector('.source-data');
+    if (sourceData) {
+      sourceData.innerHTML = typeof highlightsHtml === 'string' ? highlightsHtml : '';
     }
+  }
 
-    function handleHighlights(data) {
-        const highlightsHtml = parseData(data);
-        const sourceData = turn.aiDiv.querySelector('.source-data');
-        if (sourceData) {
-            sourceData.innerHTML = typeof highlightsHtml === 'string' ? highlightsHtml : '';
-        }
+  function handleMeta(data: SSEData): void {
+    const meta = parseData(data) as MetaPayload;
+    if (typeof meta.history_kept === 'number') markOutOfContext(meta.history_kept);
+  }
+
+  function handleProgress(data: SSEData): void {
+    const info = parseData(data) as ProgressPayload;
+    const label: string = PHASE_LABELS[info.phase as PhaseLabel] || info.phase;
+    const dot = turn.contentDiv.querySelector('.' + chatStyles.streamingDot);
+    if (dot) {
+      dot.textContent = '';
+      dot.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
+      dot.setAttribute('data-phase', label || '');
     }
+  }
 
-    function handleMeta(data) {
-        const meta = parseData(data);
-        if (typeof meta.history_kept === 'number') markOutOfContext(meta.history_kept);
-    }
-
-    function handleProgress(data) {
-        const info = parseData(data);
-        const labels = {
-            planning: 'Analyzing query...',
-            searching: 'Searching knowledge base...',
-            generating: 'Generating answer...',
-        };
-        const label = labels[info.phase] || info.phase;
-        const dot = turn.contentDiv.querySelector('.' + chatStyles.streamingDot);
-        if (dot) {
-            dot.textContent = '';
-            dot.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
-            dot.setAttribute('data-phase', label || '');
-        }
-    }
-
-    return {
-        handle(eventType, data) {
-            if (eventType === 'token') handleToken(data);
-            else if (eventType === 'preview') handlePreview(data);
-            else if (eventType === 'done') handleDone(data);
-            else if (eventType === 'highlights') handleHighlights(data);
-            else if (eventType === 'meta') handleMeta(data);
-            else if (eventType === 'progress') handleProgress(data);
-            else if (eventType === 'error') {
-                failed = true;
-                setAnswerError(turn, parseData(data));
-            }
-        },
-        get answer() {
-            return fullAnswer;
-        },
-        get imageIds() {
-            return imageIds;
-        },
-        get failed() {
-            return failed;
-        },
-    };
+  return {
+    handle(eventType: string, data: SSEData): void {
+      if (eventType === 'token') handleToken(data);
+      else if (eventType === 'preview') handlePreview(data);
+      else if (eventType === 'done') handleDone(data);
+      else if (eventType === 'highlights') handleHighlights(data);
+      else if (eventType === 'meta') handleMeta(data);
+      else if (eventType === 'progress') handleProgress(data);
+      else if (eventType === 'error') {
+        failed = true;
+        setAnswerError(turn, parseData(data));
+      }
+    },
+    get answer(): string {
+      return fullAnswer;
+    },
+    get imageIds(): string[] {
+      return imageIds;
+    },
+    get failed(): boolean {
+      return failed;
+    },
+  };
 }

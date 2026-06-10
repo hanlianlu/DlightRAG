@@ -7,7 +7,7 @@ const HISTORY_CAP = 100;
 class ConversationStore extends Store {
   #history: Array<{ role: string; content: string }> = [];
 
-  get historyWindow(): readonly Array<{ role: string; content: string }> {
+  get historyWindow(): ReadonlyArray<{ role: string; content: string }> {
     return this.#history;
   }
 

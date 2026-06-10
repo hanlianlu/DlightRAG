@@ -5,15 +5,33 @@ declare module '*.module.css' {
   export default classes;
 }
 
+// ── Window extensions ────────────────────────────────────────────────
+
+interface MathJaxConfig {
+  tex?: {
+    inlineMath?: [string, string][];
+    displayMath?: [string, string][];
+    processEscapes?: boolean;
+    tags?: string;
+  };
+  options?: {
+    skipHtmlTags?: string[];
+  };
+  typesetPromise?: (elements?: Element[]) => Promise<void>;
+}
+
 interface Window {
   __DLIGHTRAG_STATIC_VERSION__: string;
   htmx: HTMXGlobal;
+  MathJax: MathJaxConfig;
 }
+
+// ── HTMX ──────────────────────────────────────────────────────────────
 
 interface HTMXGlobal {
   process(element: Element): void;
   ajax(method: string, url: string, options?: HTMXAjaxOptions): Promise<void>;
-  trigger(element: Element | null, event: string): void;
+  trigger(element: Element | null, event: string, detail?: unknown): void;
 }
 
 interface HTMXAjaxOptions {
@@ -22,7 +40,17 @@ interface HTMXAjaxOptions {
   values?: Record<string, string>;
 }
 
-// nanoevents types (aligned with nanoevents@9.1.0 constraint)
+// Custom events emitted by HTMX after swaps
+interface HTMXAfterSwapEvent extends Event {
+  detail: {
+    target: Element;
+    xhr: XMLHttpRequest;
+    pathInfo: { requestPath: string };
+  };
+}
+
+// ── nanoevents ────────────────────────────────────────────────────────
+
 declare module 'nanoevents' {
   export interface Unsubscribe {
     (): void;
