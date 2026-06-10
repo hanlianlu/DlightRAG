@@ -967,6 +967,8 @@ class RAGServiceManager:
         contexts: dict[str, Any],
         cited_chunk_ids: list[str],
         *,
+        query_content: list[dict[str, Any]] | None = None,
+        answer_content: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         scope: RequestScope | None = None,
     ) -> None:
@@ -987,6 +989,8 @@ class RAGServiceManager:
                 workspace=effective_workspace,
                 query=query,
                 answer=answer,
+                query_content=query_content,
+                answer_content=answer_content,
                 contexts=contexts,
                 cited_chunk_ids=cited_chunk_ids,
             )
@@ -1036,7 +1040,7 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, str]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
         """Plan a query using the manager-owned planner and config limits."""
@@ -1166,7 +1170,7 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, str]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         query_images: list[str | dict[str, Any]] | None = None,
@@ -1244,7 +1248,7 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, str]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         query_images: list[str | dict[str, Any]] | None = None,
