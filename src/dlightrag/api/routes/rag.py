@@ -269,7 +269,7 @@ async def ingest_blob(
 
     # Persist to input_dir/<workspace>/<safe_name> with chunked streaming
     # (aligned with web/routes/files.py — avoids reading the entire file into RAM)
-    import aiofiles  # noqa: W515 (late import kept local)
+    import aiofiles  # noqa: PLC0415 (late import kept local)
 
     target_dir = cfg.input_dir_path / ws
     target_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,42 @@
+# Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
+#
+# Pre-commit hooks — install once with:  pre-commit install
+#
+# Every hook runs in <5s.  Slow checks (pytest, E2E) belong in CI.
+#
+# Usage:
+#   pre-commit run --all-files     # run all hooks now (first-time)
+#   pre-commit run ruff            # run a single hook
+#   SKIP=pyright git commit -m …   # skip one hook for this commit
+
+repos:
+  # ── ruff (lint + format) ──────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.0
+    hooks:
+      - id: ruff
+      - id: ruff-format
+
+  # ── local tools (run via uv from the project venv) ────────────────
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright (strict type-check)
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: import-linter
+        name: architecture (import-linter)
+        entry: uv run lint-imports
+        language: system
+        types: [python]
+        pass_filenames: false
+
+      - id: check-architecture
+        name: architecture (AST boundary check)
+        entry: uv run python scripts/ci/check-architecture.py
+        language: system
+        types: [python]
+        pass_filenames: false
