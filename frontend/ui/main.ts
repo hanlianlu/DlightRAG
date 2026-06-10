@@ -27,6 +27,11 @@ document.addEventListener('DOMContentLoaded', async function() {
         import('./workspaces.ts'),
     ]);
 
+    // Restore conversation history from checkpoint before rendering UI,
+    // so refreshed pages keep their multi-turn context.
+    const {conversationStore} = await import('../stores/conversationStore.ts');
+    await conversationStore.restoreFromCheckpoint();
+
     initWorkspaces();
     setupPanel();
     setupPanelResize();

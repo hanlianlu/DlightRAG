@@ -60,7 +60,12 @@ export async function submitQuery(query) {
     }
 
     if (success && renderer && renderer.answer) {
-        conversationStore.append(query, renderer.answer, renderer.imageIds);
+        conversationStore.append(
+            query,
+            renderer.answer,
+            renderer.imageIds,
+            imageData.length > 0 ? imageData : undefined,
+        );
     }
 }
 

@@ -3,9 +3,10 @@
 
 import base64
 import logging
+from typing import Any
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.deps import get_manager, get_request_scope, get_workspace, templates
@@ -13,6 +14,35 @@ from dlightrag.web.deps import get_manager, get_request_scope, get_workspace, te
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/history")
+async def get_checkpoint_history(
+    request: Request,
+    session_id: str = Query(default=""),
+    workspace: str = Depends(get_workspace),
+):
+    """Return conversation history for a session from the checkpoint store.
+
+    Reconstructs the scoped session key using the current request scope
+    so that the same session_id returns the same history across page
+    refreshes and browser restarts.
+    """
+    if not session_id:
+        return JSONResponse({"history": []})
+
+    manager = get_manager(request)
+    scope = get_request_scope(request, [workspace])
+
+    try:
+        history = await manager.aget_checkpoint_history(
+            session_id=session_id,
+            scope=scope,
+        )
+        return JSONResponse({"history": history})
+    except Exception:
+        logger.debug("Failed to load checkpoint history for session %s", session_id, exc_info=True)
+        return JSONResponse({"history": []})
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -65,7 +95,7 @@ async def answer_stream(
     if not query:
         return HTMLResponse("<span>Please enter a question.</span>")
 
-    conversation_history: list[dict[str, str]] | None = body.get("conversation_history")
+    conversation_history: list[dict[str, Any]] | None = body.get("conversation_history")
 
     # Extract images (base64 from frontend). Raw base64 is passed to the
     # manager; it handles answer budgeting, semantic VLM enhancement, session

@@ -111,8 +111,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "query_images": {
                         "type": "array",
-                        "items": {},
-                        "description": "User-attached image URLs or data URI blocks for visual retrieval",
+                        "maxItems": 3,
+                        "items": {"type": "string"},
+                        "description": "User-attached image URLs or data URI blocks (max 3) for visual retrieval",
                     },
                     "session_id": {
                         "type": "string",
@@ -263,8 +264,9 @@ async def list_tools() -> list[Tool]:
                     },
                     "query_images": {
                         "type": "array",
-                        "items": {},
-                        "description": "User-attached image URLs or data URI blocks for visual answer context.",
+                        "maxItems": 3,
+                        "items": {"type": "string"},
+                        "description": "User-attached image URLs or data URI blocks (max 3) for visual answer context.",
                     },
                     "session_id": {
                         "type": "string",
@@ -378,7 +380,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if filters is not None:
                 kwargs["filters"] = filters
             if arguments.get("query_images"):
-                kwargs["query_images"] = arguments["query_images"]
+                qi = arguments["query_images"]
+                if len(qi) > 3:
+                    raise ValueError("Maximum 3 query_images per request")
+                kwargs["query_images"] = qi
             if arguments.get("session_id"):
                 kwargs["session_id"] = arguments["session_id"]
             if arguments.get("referenced_image_ids"):
@@ -403,7 +408,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if filters is not None:
                 kwargs["filters"] = filters
             if arguments.get("query_images"):
-                kwargs["query_images"] = arguments["query_images"]
+                qi = arguments["query_images"]
+                if len(qi) > 3:
+                    raise ValueError("Maximum 3 query_images per request")
+                kwargs["query_images"] = qi
             if arguments.get("session_id"):
                 kwargs["session_id"] = arguments["session_id"]
             if arguments.get("referenced_image_ids"):

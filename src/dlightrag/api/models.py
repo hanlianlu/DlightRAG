@@ -91,8 +91,8 @@ class RetrieveRequest(BaseModel):
     def validate_query_images(
         cls, v: list[str | dict[str, Any]] | None
     ) -> list[str | dict[str, Any]] | None:
-        if v and len(v) > 10:
-            raise ValueError("Maximum 10 query_images per request")
+        if v and len(v) > 3:
+            raise ValueError("Maximum 3 query_images per request")
         return v
 
 
@@ -108,7 +108,7 @@ class AnswerRequest(BaseModel):
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[dict[str, Any]] | None = None
-    conversation_history: list[dict[str, str]] | None = None
+    conversation_history: list[dict[str, Any]] | None = None
     session_id: str | None = None
     referenced_image_ids: list[str] | None = None
     query_images: list[str | dict[str, Any]] | None = None
@@ -127,8 +127,8 @@ class AnswerRequest(BaseModel):
     def validate_query_image_count(
         cls, v: list[str | dict[str, Any]] | None
     ) -> list[str | dict[str, Any]] | None:
-        if v and len(v) > 10:
-            raise ValueError("Maximum 10 query_images per request")
+        if v and len(v) > 3:
+            raise ValueError("Maximum 3 query_images per request")
         return v
 
 
