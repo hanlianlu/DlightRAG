@@ -15,7 +15,7 @@ No extra ``.env`` entries needed in the common case.
 
 Usage::
 
-    uv pip install ragas datasets langchain-openai
+    uv pip install ragas
     uv run python scripts/ragas_eval.py --dataset my_questions.json
 
 See `docs/ragas-evaluation.md <../docs/ragas-evaluation.md>`_ for full guide.
