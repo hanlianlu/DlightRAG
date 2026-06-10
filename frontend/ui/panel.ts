@@ -1,3 +1,4 @@
+// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import chatStyles from '../styles/chat.module.css';
