@@ -44,6 +44,45 @@ def _clamp(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _build_scored_chunks(
+    chunks: list[dict[str, Any]],
+    indexed_scores: list[dict[str, Any]],
+    *,
+    score_threshold: float,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Parse HTTP reranker results into scored, thresholded, top-k chunks.
+
+    Shared by ``_http_rerank`` and ``_azure_cohere_rerank``. Both decode
+    the same response contract: ``{"results": [{"index": …, "relevance_score": …}, …]}``.
+    """
+    scored: list[dict[str, Any]] = []
+    for r in indexed_scores:
+        idx = r["index"]
+        score = r["relevance_score"]
+        if score >= score_threshold:
+            chunk = chunks[idx].copy()
+            chunk["rerank_score"] = score
+            scored.append(chunk)
+
+    # Fallback: if threshold filtered everything, keep top-5 by score
+    if not scored and indexed_scores:
+        by_score = sorted(indexed_scores, key=lambda r: r["relevance_score"], reverse=True)
+        for r in by_score[:5]:
+            chunk = chunks[r["index"]].copy()
+            chunk["rerank_score"] = r["relevance_score"]
+            scored.append(chunk)
+        logger.info(
+            "Rerank: all below threshold %.2f, kept top-%d (best=%.3f)",
+            score_threshold,
+            len(scored),
+            scored[0]["rerank_score"] if scored else 0,
+        )
+
+    scored.sort(key=lambda c: c["rerank_score"], reverse=True)
+    return scored[:top_k]
+
+
 def _parse_listwise_scores(text: str, expected: int) -> list[float]:
     """Parse a JSON array of scores from a model response."""
     text = text.strip()
@@ -74,6 +113,7 @@ async def _chat_llm_rerank(
     max_concurrency: int = 4,
     score_threshold: float = 0.5,
     batch_size: int = _DEFAULT_BATCH_SIZE,
+    multimodal: bool = True,
     image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
     image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
     image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
@@ -104,17 +144,27 @@ async def _chat_llm_rerank(
 
         for i, chunk in enumerate(batch):
             content.append({"type": "text", "text": f"\n--- Item {i + 1} ---"})
-            img = chunk.get("image_data")
-            if img:
-                bounded = image_budget.add_base64(
-                    img,
-                    label=f"rerank:{batch_start + i}",
-                )
-                if bounded is not None:
-                    uri, _ = bounded
-                    content.append({"type": "image_url", "image_url": {"url": uri}})
+            image_included = False
+            if multimodal:
+                img = chunk.get("image_data")
+                if img:
+                    bounded = image_budget.add_base64(
+                        img,
+                        label=f"rerank:{batch_start + i}",
+                    )
+                    if bounded is not None:
+                        uri, _ = bounded
+                        content.append({"type": "image_url", "image_url": {"url": uri}})
+                        image_included = True
             if chunk.get("content"):
-                text_preview = chunk["content"][:500]
+                # image_included=True → image carries rich signal, keep text short.
+                # image_included=False → text-only path (either multimodal disabled,
+                # or image exceeded budget, or chunk had no image): send full VLM
+                # text description for accurate reranking.
+                text_limit = 500 if image_included else None
+                text_preview = (
+                    chunk["content"] if text_limit is None else chunk["content"][:text_limit]
+                )
                 content.append({"type": "text", "text": text_preview})
 
         messages = [{"role": "user", "content": content}]
@@ -201,6 +251,7 @@ async def _http_rerank(
     api_key: str | None = None,
     score_threshold: float = 0.5,
     client: httpx.AsyncClient | None = None,
+    multimodal: bool = True,
     image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
     image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
     image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
@@ -228,7 +279,7 @@ async def _http_rerank(
     )
     for idx, c in enumerate(chunks):
         img = c.get("image_data")
-        if img:
+        if multimodal and img:
             bounded = image_budget.add_base64(img, label=f"rerank:{idx}")
             documents.append({"image": bounded[0]} if bounded else {"text": c.get("content", "")})
         else:
@@ -255,32 +306,8 @@ async def _http_rerank(
             resp.raise_for_status()
             data = resp.json()
 
-    scored = []
     all_results = data.get("results", [])
-    for r in all_results:
-        idx = r["index"]
-        score = r["relevance_score"]
-        if score >= score_threshold:
-            chunk = chunks[idx].copy()
-            chunk["rerank_score"] = score
-            scored.append(chunk)
-
-    # Fallback: if threshold filtered everything, keep top-5 by score
-    if not scored and all_results:
-        by_score = sorted(all_results, key=lambda r: r["relevance_score"], reverse=True)
-        for r in by_score[:5]:
-            chunk = chunks[r["index"]].copy()
-            chunk["rerank_score"] = r["relevance_score"]
-            scored.append(chunk)
-        logger.info(
-            "Rerank: all below threshold %.2f, kept top-%d (best=%.3f)",
-            score_threshold,
-            len(scored),
-            scored[0]["rerank_score"] if scored else 0,
-        )
-
-    scored.sort(key=lambda c: c["rerank_score"], reverse=True)
-    return scored[:top_k]
+    return _build_scored_chunks(chunks, all_results, score_threshold=score_threshold, top_k=top_k)
 
 
 # ── HTTP /rerank strategy registry ───────────────────────────────
@@ -316,8 +343,14 @@ async def _azure_cohere_rerank(
     deployment: str,
     score_threshold: float = 0.5,
     client: httpx.AsyncClient | None = None,
+    multimodal: bool = True,  # accepted for uniform interface; Azure Cohere is text-only
 ) -> list[dict[str, Any]]:
     """Azure AI Services Cohere reranker (text-only).
+
+    The *multimodal* parameter is accepted for interface consistency with
+    the other rerank strategies. When False, the behaviour is unchanged
+    because Cohere's REST API only accepts text documents — ``image_data``
+    is always ignored.
 
     Reuses *client* when provided; ephemeral fallback otherwise.
     """
@@ -343,24 +376,7 @@ async def _azure_cohere_rerank(
             resp.raise_for_status()
             results = resp.json().get("results", [])
 
-    scored = []
-    for r in results:
-        idx = r["index"]
-        score = r["relevance_score"]
-        if score >= score_threshold:
-            chunk = chunks[idx].copy()
-            chunk["rerank_score"] = score
-            scored.append(chunk)
-
-    if not scored and results:
-        by_score = sorted(results, key=lambda r: r["relevance_score"], reverse=True)
-        for r in by_score[:5]:
-            chunk = chunks[r["index"]].copy()
-            chunk["rerank_score"] = r["relevance_score"]
-            scored.append(chunk)
-
-    scored.sort(key=lambda c: c["rerank_score"], reverse=True)
-    return scored[:top_k]
+    return _build_scored_chunks(chunks, results, score_threshold=score_threshold, top_k=top_k)
 
 
 # ── Factory ──────────────────────────────────────────────────────
@@ -389,6 +405,7 @@ def build_rerank_func(
             max_concurrency=rc.max_concurrency,
             score_threshold=rc.score_threshold,
             batch_size=rc.batch_size,
+            multimodal=rc.multimodal,
             image_max_bytes=rc.image_max_bytes,
             image_max_total_bytes=rc.image_max_total_bytes,
             image_max_px=rc.image_max_px,
@@ -415,6 +432,7 @@ def build_rerank_func(
             api_key=rc.api_key,
             score_threshold=rc.score_threshold,
             client=client,
+            multimodal=rc.multimodal,
             image_max_bytes=rc.image_max_bytes,
             image_max_total_bytes=rc.image_max_total_bytes,
             image_max_px=rc.image_max_px,
@@ -433,6 +451,7 @@ def build_rerank_func(
             deployment=rc.model or "cohere-rerank-v3.5",
             score_threshold=rc.score_threshold,
             client=client,
+            multimodal=rc.multimodal,
         )
     else:
         raise ValueError(f"Unknown rerank strategy: {strategy}")

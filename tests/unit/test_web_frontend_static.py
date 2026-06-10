@@ -358,12 +358,12 @@ def test_source_download_icon_is_icon_only_not_framed_button() -> None:
 
     assert "background: transparent;" in icon_block
     assert "border: none;" in icon_block
-    assert "color: var(--color-text-tertiary);" in icon_block
-    assert "opacity: 1;" in icon_block
+    assert "color: var(--color-text-muted);" in icon_block
+    assert "border-radius: var(--radius-sm);" in icon_block
     assert "color: var(--color-gold-200);" in hover_block
-    assert "height: var(--size-icon-md);" in svg_block
-    assert "stroke-width: 2;" in svg_block
-    assert "width: var(--size-icon-md);" in svg_block
+    assert "height: 20px;" in svg_block
+    assert "stroke-width: 1.5;" in svg_block
+    assert "width: 20px;" in svg_block
     source_panel = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
         encoding="utf-8"
     )
