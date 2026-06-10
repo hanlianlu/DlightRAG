@@ -222,6 +222,7 @@ class RAGServiceManager:
 
         await manager._start_ingest_job_recovery()
         await manager._recover_stalled_docs(all_ws)
+        await manager._prune_checkpoint_sessions()
 
         if default_ws in manager._services:
             manager._ready = True
@@ -538,6 +539,28 @@ class RAGServiceManager:
 
         if total:
             logger.info("Total stalled docs recovered at startup: %d", total)
+
+    async def _prune_checkpoint_sessions(self) -> None:
+        """Prune old checkpoint sessions at startup.
+
+        Checkpoint data (conversation turns, context anchors) grows unboundedly.
+        Sessions whose ``updated_at`` exceeds ``checkpoint_session_ttl_days``
+        are deleted.  Best-effort: the checkpoint SQLite file may not exist yet
+        (no sessions have been created), and failures are logged but never
+        block startup.
+        """
+        max_age_days = int(self._config.checkpoint_session_ttl_days)
+        try:
+            cp = self._get_checkpoint()
+            deleted = await cp.prune_old_sessions(max_age_days=max_age_days)
+            if deleted:
+                logger.info(
+                    "Pruned %d checkpoint session(s) older than %d days",
+                    deleted,
+                    max_age_days,
+                )
+        except Exception:
+            logger.debug("Checkpoint session pruning skipped", exc_info=True)
 
     async def astart_ingest_job(
         self,

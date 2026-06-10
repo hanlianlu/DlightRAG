@@ -322,3 +322,84 @@ class TestRecoverStalledDocsIntegration:
 
         # ws-bad failed but ws-ok and ws-also-ok should have been scanned
         # No exception propagates
+
+
+class TestCheckpointPruning:
+    """Tests for _prune_checkpoint_sessions startup hook."""
+
+    async def test_prunes_old_sessions_on_startup(self) -> None:
+        """Calls prune_old_sessions with configured TTL and logs the count."""
+        from dlightrag.core.servicemanager import RAGServiceManager
+
+        cfg = MagicMock()
+        cfg.checkpoint_session_ttl_days = 30
+        cfg.working_dir_path = MagicMock()
+        cfg.workspace = "default"
+
+        manager = RAGServiceManager.__new__(RAGServiceManager)
+        manager._config = cfg
+
+        mock_cp = MagicMock()
+        mock_cp.prune_old_sessions = AsyncMock(return_value=12)
+        manager._checkpoint = mock_cp  # pre-seed to bypass lazy init
+
+        await manager._prune_checkpoint_sessions()
+
+        mock_cp.prune_old_sessions.assert_awaited_once_with(max_age_days=30)
+
+    async def test_no_checkpoint_file_yet_is_graceful(self) -> None:
+        """When the checkpoint DB doesn't exist yet (no sessions), no crash."""
+        from dlightrag.core.servicemanager import RAGServiceManager
+
+        cfg = MagicMock()
+        cfg.checkpoint_session_ttl_days = 30
+        cfg.working_dir_path = MagicMock()
+        cfg.workspace = "default"
+
+        manager = RAGServiceManager.__new__(RAGServiceManager)
+        manager._config = cfg
+
+        # _get_checkpoint raises because working_dir doesn't exist
+        with patch.object(
+            manager, "_get_checkpoint", side_effect=FileNotFoundError("No such directory")
+        ):
+            await manager._prune_checkpoint_sessions()
+        # No exception propagates
+
+    async def test_prune_failure_is_logged_not_raised(self) -> None:
+        """SQLite I/O error during prune is caught, not propagated."""
+        from dlightrag.core.servicemanager import RAGServiceManager
+
+        cfg = MagicMock()
+        cfg.checkpoint_session_ttl_days = 30
+        cfg.working_dir_path = MagicMock()
+        cfg.workspace = "default"
+
+        manager = RAGServiceManager.__new__(RAGServiceManager)
+        manager._config = cfg
+
+        mock_cp = MagicMock()
+        mock_cp.prune_old_sessions = AsyncMock(side_effect=OSError("disk full"))
+        manager._checkpoint = mock_cp
+
+        await manager._prune_checkpoint_sessions()
+        # No exception propagates
+
+    async def test_zero_deleted_logs_nothing(self) -> None:
+        """When no sessions are old enough, silent success."""
+        from dlightrag.core.servicemanager import RAGServiceManager
+
+        cfg = MagicMock()
+        cfg.checkpoint_session_ttl_days = 30
+        cfg.working_dir_path = MagicMock()
+        cfg.workspace = "default"
+
+        manager = RAGServiceManager.__new__(RAGServiceManager)
+        manager._config = cfg
+
+        mock_cp = MagicMock()
+        mock_cp.prune_old_sessions = AsyncMock(return_value=0)
+        manager._checkpoint = mock_cp
+
+        await manager._prune_checkpoint_sessions()
+        # No crash, no log spam
