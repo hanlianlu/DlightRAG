@@ -60,6 +60,12 @@ langfuse-health:
 # CI targets — local dev matrix
 # ─────────────────────────────────────────────────────────────────
 # Fast path: what GitHub Actions runs on every PR/push (~2 min)
+# One-time setup for new clones / new developers
+.PHONY: hooks
+hooks:
+	uv run pre-commit install
+	@echo "Pre-commit hooks installed — will run on every git commit."
+
 ci:
 	uv sync --group dev
 	uv run ruff check src/ tests/ scripts/
