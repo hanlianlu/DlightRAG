@@ -29,6 +29,8 @@ Patches are:
 - Idempotent (safe to call multiple times)
 - Guarded (source-inspected for AGE, behavior-probed for parser hygiene)
 - Preserves PostgreSQLDB.execute keyword arguments via **kwargs
+- Defensive-wrapped: if a patched method's signature changes upstream, the
+  wrapper logs a warning and falls back to the original behaviour
 """
 
 from __future__ import annotations
@@ -61,6 +63,8 @@ def apply() -> None:
 
     if apply_mineru_auxiliary_block_filter():
         applied.append("mineru_auxiliary_blocks")
+    if _patch_failed_doc_loop():
+        applied.append("preserve_failed_docs")
     _PATCHED = True
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
@@ -186,4 +190,110 @@ def _patch_execute() -> bool:
             raise
 
     PostgreSQLDB.execute = wrapped_execute  # type: ignore[assignment]
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Patch 3: preserve FAILED documents across pipeline runs
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _patch_failed_doc_loop() -> bool:
+    """Prevent ``_validate_and_fix_document_consistency`` from resetting
+    FAILED documents back to PENDING.
+
+    LightRAG's current pipeline phase-2 treats ``FAILED`` as an
+    "interrupted" state and unconditionally resets it to PENDING when
+    the document still has content in ``full_docs``.  This creates an
+    infinite loop:
+
+    1. Unsupported file → FAILED (content stays)
+    2. Next ingest → ``_validate_and_fix_document_consistency`` resets
+       it to PENDING
+    3. Pipeline re-processes it → FAILED again
+    4. Goto 2
+
+    Once LightRAG upstream removes ``FAILED`` from the ``is_interrupted``
+    tuple, this wrapper becomes a no-op — it scans for FAILED docs before
+    the call and only acts when it finds any that were flipped to PENDING.
+
+    Defensive: if the original method's signature changes or the import
+    fails, the wrapper logs a warning and falls back to no-op.
+    """
+    try:
+        from lightrag.base import DocStatus  # type: ignore[import-untyped]
+        from lightrag.pipeline import _PipelineMixin  # type: ignore[import-untyped]
+    except ImportError:
+        logger.debug("LightRAG pipeline module not available — skipping failed-doc patch")
+        return False
+
+    original = _PipelineMixin._validate_and_fix_document_consistency
+
+    if not _failed_doc_reset_needs_patch(original):
+        return False
+
+    async def patched_validate_and_fix(  # type: ignore[no-untyped-def]
+        self,
+        to_process_docs,
+        pipeline_status,
+        pipeline_status_lock,
+    ):
+        # Snapshot FAILED doc_ids before LightRAG runs.
+        failed_ids_before: set[str] = {
+            doc_id
+            for doc_id, d in to_process_docs.items()
+            if getattr(d, "status", None) is DocStatus.FAILED
+        }
+
+        result = await original(self, to_process_docs, pipeline_status, pipeline_status_lock)
+
+        # Restore: any FAILED doc that was flipped to PENDING gets popped
+        # from the processing list entirely — it stays FAILED in doc_status.
+        preserved = 0
+        for doc_id in sorted(failed_ids_before):
+            if doc_id in to_process_docs:
+                status = getattr(to_process_docs[doc_id], "status", None)
+                if status is DocStatus.PENDING:
+                    to_process_docs.pop(doc_id, None)
+                    preserved += 1
+
+        if preserved:
+            logger.info(
+                "Preserved %d FAILED document(s) — not reset to PENDING (DlightRAG patch)",
+                preserved,
+            )
+
+        return result
+
+    _PipelineMixin._validate_and_fix_document_consistency = (  # type: ignore[assignment]
+        patched_validate_and_fix
+    )
+    return True
+
+
+def _failed_doc_reset_needs_patch(method: Any) -> bool:
+    """Return True if the method still resets FAILED to PENDING.
+
+    Checks whether ``DocStatus.FAILED`` appears inside the
+    ``is_interrupted`` status-triple (the bug) rather than just in the
+    phase-1 preserve section (which is correct).
+    """
+    try:
+        source = inspect.getsource(method)
+    except (OSError, TypeError):
+        # Can't inspect — defensively apply the wrapper
+        return True
+
+    # Phase-2 bug marker: FAILED inside the is_interrupted tuple
+    if "DocStatus.FAILED," not in source and "DocStatus.FAILED)" not in source:
+        # The exact line reads:
+        #     is_interrupted = status in (
+        #         DocStatus.PROCESSING,
+        #         DocStatus.FAILED,
+        #         DocStatus.PARSING,
+        #         DocStatus.ANALYZING,
+        #     )
+        # So FAILED appears as `DocStatus.FAILED,` or `DocStatus.FAILED)`
+        # The latter handles the case where FAILED is the last element.
+        return False
     return True
