@@ -117,7 +117,6 @@ async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Pat
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["input"] == ["", ""]
     assert kwargs["file_paths"] == [str(docx), str(pdf)]
-    assert kwargs["lightrag_document_paths"] == [str(docx), str(pdf)]
     assert kwargs["parse_engine"] == ["native", "mineru"]
     assert kwargs["process_options"] == ["iteP", "iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
@@ -153,7 +152,6 @@ async def test_prepared_batch_preserves_remote_metadata_path(tmp_path: Path) -> 
     assert result["processed"] == 1
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
     assert kwargs["file_paths"] == [str(parser_source)]
-    assert kwargs["lightrag_document_paths"] == [str(parser_source)]
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["file_path"] == "s3://bucket/team-a/report.pdf"
     assert saved["filename"] == "report.pdf"
