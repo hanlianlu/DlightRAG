@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 from dlightrag.core.session_images import SessionImageStore
 
 
@@ -46,15 +44,18 @@ def test_session_image_store_clear_removes_session() -> None:
 
 
 def test_manager_session_image_ttl_tracks_checkpoint_ttl() -> None:
+    from dlightrag.config import DlightragConfig, EmbeddingConfig
     from dlightrag.core.servicemanager import RAGServiceManager
 
     manager = RAGServiceManager.__new__(RAGServiceManager)
     manager._session_images = None
-    manager._config = SimpleNamespace(
+    manager._config = DlightragConfig(
         checkpoint_session_ttl_days=30,
-        query_images=SimpleNamespace(
-            session_max_images=50,
-            session_max_sessions=100,
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
         ),
     )
 
