@@ -21,6 +21,7 @@ _PILLOW_TO_MIME: dict[str, str] = {
 }
 _PASSTHROUGH_FORMATS = {"JPEG", "PNG", "WEBP"}
 _DATA_URI_PREFIX = "data:"
+_IMAGE_DETAIL_VALUES = frozenset({"auto", "low", "high"})
 
 
 def split_data_uri(value: str) -> tuple[str | None, str]:
@@ -212,7 +213,11 @@ def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:
         url = image_url.get("url")
         if not isinstance(url, str) or not url.strip():
             return None
-        return {"type": "image_url", "image_url": {"url": url.strip()}}
+        normalized_image_url: dict[str, str] = {"url": url.strip()}
+        detail = image_url.get("detail")
+        if isinstance(detail, str) and detail in _IMAGE_DETAIL_VALUES:
+            normalized_image_url["detail"] = detail
+        return {"type": "image_url", "image_url": normalized_image_url}
     text = value.strip()
     if not text:
         return None

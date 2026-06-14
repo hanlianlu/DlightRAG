@@ -169,6 +169,10 @@ def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
     return filters or None
 
 
+def _query_image_blocks(values: list[str]) -> list[dict[str, Any]]:
+    return [{"type": "image_url", "image_url": {"url": value}} for value in values]
+
+
 def _apply_query_options(
     payload: dict[str, Any],
     args: argparse.Namespace,
@@ -187,7 +191,7 @@ def _apply_query_options(
         payload["filters"] = filters
 
     if getattr(args, "query_images", None):
-        payload["query_images"] = args.query_images
+        payload["query_images"] = _query_image_blocks(args.query_images)
     if getattr(args, "session_id", None):
         payload["session_id"] = args.session_id
     if getattr(args, "referenced_image_ids", None):

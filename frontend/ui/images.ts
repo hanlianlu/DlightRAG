@@ -17,16 +17,15 @@ export function addImage(file) {
     const reader = new FileReader();
     reader.onload = function(e) {
         const dataUrl = e.target.result;
-        const base64 = dataUrl.split(',')[1];
         const objectUrl = URL.createObjectURL(file);
-        pendingImages.push({file, base64, dataUrl, objectUrl});
+        pendingImages.push({file, dataUrl, objectUrl});
         renderThumbnails();
     };
     reader.readAsDataURL(file);
 }
 
 export function getPendingImageData() {
-    return pendingImages.map(function(img) { return img.base64; });
+    return pendingImages.map(function(img) { return img.dataUrl; });
 }
 
 export function renderMessageImages(container) {

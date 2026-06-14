@@ -1,14 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web routes for chat interface and answer generation."""
 
-import base64
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
 from dlightrag.core.client_contracts import dump_optional_list
+from dlightrag.utils.images import decode_image_base64, image_url_block
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.deps import get_manager, get_request_scope, get_workspace, templates
 from dlightrag.web.requests import WebAnswerRequest
@@ -129,19 +130,20 @@ async def answer_stream(
 
     conversation_history = dump_optional_list(body.conversation_history)
 
-    # Extract images (base64 from frontend). Raw base64 is passed to the
-    # manager; it handles answer budgeting, semantic VLM enhancement, session
-    # memory, and direct visual retrieval.
-    images_b64 = body.images
-    clean_images: list[str] = []
-    if images_b64:
-        for b64 in images_b64[:3]:  # enforce 3-image limit
+    # Extract browser uploads as modern image_url blocks. The manager handles
+    # answer budgeting, semantic VLM enhancement, session memory, and direct
+    # visual retrieval from that single shape.
+    clean_images: list[dict[str, Any]] = []
+    if body.images:
+        for image_payload in body.images:
             try:
-                img_bytes = base64.b64decode(b64)
+                img_bytes, _ = decode_image_base64(image_payload)
                 if len(img_bytes) > 10 * 1024 * 1024:  # 10MB server-side limit
                     logger.warning("Skipping oversized image (%d bytes)", len(img_bytes))
                     continue
-                clean_images.append(b64)
+                block = image_url_block(image_payload)
+                if block is not None:
+                    clean_images.append(block)
             except Exception:
                 logger.warning("Failed to decode uploaded image", exc_info=True)
 

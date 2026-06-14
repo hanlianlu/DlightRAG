@@ -16,6 +16,7 @@ class ClientContractModel(BaseModel):
 
 class ImageURL(ClientContractModel):
     url: str
+    detail: Literal["auto", "low", "high"] | None = None
 
 
 class TextContentBlock(ClientContractModel):
@@ -43,7 +44,7 @@ class ConversationMessage(ClientContractModel):
 def model_dump_json_safe(value: Any) -> Any:
     """Return plain JSON-ready data from Pydantic models and containers."""
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        return value.model_dump(mode="json", exclude_none=True)
     if isinstance(value, list):
         return [model_dump_json_safe(item) for item in value]
     if isinstance(value, tuple):

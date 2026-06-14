@@ -493,7 +493,9 @@ class TestWebAnswerAdapter:
         assert captured["manager"] is web_app.state.manager
         assert captured["cfg"] is test_config
         assert captured["query"] == "hello"
-        assert captured["query_images"] == [image_b64]
+        assert captured["query_images"] == [
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
+        ]
         assert captured["workspaces"] == ["default", "test_ws"]
         assert captured["workspace"] == "default"
         assert captured["session_id"] == "session-1"

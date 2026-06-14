@@ -13,11 +13,15 @@ _PNG_B64 = (
 )
 
 
+def _image_block(payload: str = _PNG_B64) -> dict:
+    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
+
+
 async def test_query_image_enhancer_appends_descriptions() -> None:
     vlm = AsyncMock(return_value="a line chart about revenue")
     enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=1)
 
-    result = await enhancer.enhance("find similar pages", [_PNG_B64])
+    result = await enhancer.enhance("find similar pages", [_image_block()])
 
     assert result.query.startswith("find similar pages")
     assert "Visual context from user-supplied images" in result.query
@@ -31,7 +35,7 @@ async def test_query_image_enhancer_is_best_effort() -> None:
     vlm = AsyncMock(side_effect=RuntimeError("vlm unavailable"))
     enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=1)
 
-    result = await enhancer.enhance("plain query", [_PNG_B64])
+    result = await enhancer.enhance("plain query", [_image_block()])
 
     assert result.query == "plain query"
     assert result.descriptions == []
@@ -41,7 +45,7 @@ async def test_query_image_enhancer_without_vlm_returns_original_query() -> None
     vlm = AsyncMock()
     enhancer = QueryImageEnhancer(vlm_func=None, max_images=1)
 
-    result = await enhancer.enhance("plain query", [_PNG_B64])
+    result = await enhancer.enhance("plain query", [_image_block()])
 
     assert result.query == "plain query"
     assert result.descriptions == []
@@ -62,7 +66,7 @@ async def test_query_image_enhancer_describes_images_concurrently() -> None:
 
     enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=3)
 
-    result = await enhancer.enhance("query", [_PNG_B64, _PNG_B64, _PNG_B64])
+    result = await enhancer.enhance("query", [_image_block(), _image_block(), _image_block()])
 
     assert len(result.descriptions) == 3
     assert peak > 1

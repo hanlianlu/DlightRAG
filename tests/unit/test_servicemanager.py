@@ -24,6 +24,10 @@ from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 
+def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
 @pytest.fixture()
 def test_cfg(tmp_path) -> DlightragConfig:
     cfg = DlightragConfig(
@@ -344,7 +348,7 @@ class TestRouting:
 
         first = await manager._prepare_query_images(
             "query",
-            query_images=["data:image/png;base64,abc"],
+            query_images=[_image_block()],
             session_id="same-session",
             referenced_image_ids=None,
             store_current=True,

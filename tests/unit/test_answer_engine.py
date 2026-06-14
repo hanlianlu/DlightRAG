@@ -14,6 +14,11 @@ _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
 
+
+def _image_block(payload: str = _PNG_B64) -> dict:
+    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -177,7 +182,7 @@ class TestAnswerEngineGenerate:
             "relationships": [],
         }
 
-        result = await engine.generate("describe this", contexts, query_images=[_PNG_B64])
+        result = await engine.generate("describe this", contexts, query_images=[_image_block()])
 
         assert result.contexts["chunks"] == []
         assert result.trace["answer_context_query_images_sent"] == 1
@@ -531,6 +536,28 @@ class TestBuildMessages:
         user_content = messages[1]["content"]
         # Should have at least the user prompt text block
         assert any(e.get("type") == "text" for e in user_content)
+
+    def test_history_image_blocks_are_budgeted(self) -> None:
+        contexts: RetrievalContexts = {"chunks": []}
+        engine = AnswerEngine()
+
+        messages = engine._build_messages(
+            "sys",
+            "prompt",
+            contexts,
+            conversation_history=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "previous"},
+                        _image_block(),
+                    ],
+                }
+            ],
+        )
+
+        history_content = messages[1]["content"]
+        assert any(block.get("type") == "image_url" for block in history_content)
 
 
 # ---------------------------------------------------------------------------

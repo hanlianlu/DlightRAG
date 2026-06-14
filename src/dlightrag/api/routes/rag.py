@@ -40,6 +40,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _query_kwargs(body: RetrieveRequest | AnswerRequest) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    filters = metadata_filter_from_payload(body.filters)
+    if filters is not None:
+        kwargs["filters"] = filters
+    if body.multimodal_content:
+        kwargs["multimodal_content"] = dump_optional_list(body.multimodal_content)
+    if body.query_images:
+        kwargs["query_images"] = dump_optional_list(body.query_images)
+    if body.session_id:
+        kwargs["session_id"] = body.session_id
+    if body.referenced_image_ids:
+        kwargs["referenced_image_ids"] = body.referenced_image_ids
+    return kwargs
+
+
 def _job_response(job: dict[str, Any]) -> JSONResponse:
     job["status_url"] = f"/ingest/jobs/{job['job_id']}"
     return JSONResponse(status_code=202, content=jsonable_encoder(job))
@@ -122,18 +138,7 @@ async def retrieve(
 ) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
-    kwargs: dict[str, Any] = {}
-    filters = metadata_filter_from_payload(body.filters)
-    if filters is not None:
-        kwargs["filters"] = filters
-    if body.multimodal_content:
-        kwargs["multimodal_content"] = dump_optional_list(body.multimodal_content)
-    if body.query_images:
-        kwargs["query_images"] = dump_optional_list(body.query_images)
-    if body.session_id:
-        kwargs["session_id"] = body.session_id
-    if body.referenced_image_ids:
-        kwargs["referenced_image_ids"] = body.referenced_image_ids
+    kwargs = _query_kwargs(body)
     scope = request_scope(user, body.workspaces)
 
     result = await manager.aretrieve(
@@ -154,18 +159,7 @@ async def answer(
 ):
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     manager = get_manager(request)
-    kwargs: dict[str, Any] = {}
-    filters = metadata_filter_from_payload(body.filters)
-    if filters is not None:
-        kwargs["filters"] = filters
-    if body.multimodal_content:
-        kwargs["multimodal_content"] = dump_optional_list(body.multimodal_content)
-    if body.query_images:
-        kwargs["query_images"] = dump_optional_list(body.query_images)
-    if body.session_id:
-        kwargs["session_id"] = body.session_id
-    if body.referenced_image_ids:
-        kwargs["referenced_image_ids"] = body.referenced_image_ids
+    kwargs = _query_kwargs(body)
     scope = request_scope(user, body.workspaces)
 
     if not body.stream:

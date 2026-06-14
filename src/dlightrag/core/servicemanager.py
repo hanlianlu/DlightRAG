@@ -38,7 +38,7 @@ _MAX_RETRY_INTERVAL: float = 300.0
 @dataclass
 class _PreparedQueryImages:
     query: str
-    answer_images: list[str | dict[str, Any]]
+    answer_images: list[dict[str, Any]]
     multimodal_content: list[dict[str, Any]]
     descriptions: list[str]
     current_image_ids: list[str]
@@ -181,7 +181,7 @@ def _history_has_images(history: list[dict[str, Any]] | None) -> bool:
 
 def _check_vision_support(
     *,
-    query_images: list[str | dict[str, Any]] | None,
+    query_images: list[dict[str, Any]] | None,
     conversation_history: list[dict[str, Any]] | None,
 ) -> None:
     """Raise ValueError if images are present but model doesn't support vision.
@@ -1126,7 +1126,7 @@ class RAGServiceManager:
         query: str,
         contexts: RetrievalContexts,
         *,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
@@ -1179,7 +1179,7 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         plan: QueryPlan | None = None,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
         referenced_image_ids: list[str] | None = None,
         scope: RequestScope | None = None,
@@ -1242,14 +1242,14 @@ class RAGServiceManager:
         conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         scope: RequestScope | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate.
 
-        ``query_images`` are user-attached images inlined into the answer LLM
-        call as ``image_url`` blocks (URLs or pre-built dict blocks). Distinct
+        ``query_images`` are user-attached ``image_url`` blocks inlined into
+        the answer LLM call. Distinct
         from retrieval-time ``multimodal_content`` in ``kwargs``: this list
         only affects answer generation, never the retrieval pipeline.
         """
@@ -1320,7 +1320,7 @@ class RAGServiceManager:
         conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         scope: RequestScope | None = None,
         **kwargs: Any,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
@@ -1410,7 +1410,7 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        query_images: list[str | dict[str, Any]] | None,
+        query_images: list[dict[str, Any]] | None,
         session_id: str | None,
         referenced_image_ids: list[str] | None,
         store_current: bool,
@@ -1425,8 +1425,10 @@ class RAGServiceManager:
             if store_current and current_storable
             else []
         )
-        historical = self._get_session_images().get(scoped_session_id, referenced_image_ids)
-        answer_images: list[str | dict[str, Any]] = [*historical, *current_images]
+        historical = _image_blocks_from_strings(
+            self._get_session_images().get(scoped_session_id, referenced_image_ids)
+        )
+        answer_images = [*historical, *current_images]
 
         enhancer = self._get_query_image_enhancer()
         enhanced = await enhancer.enhance(query, answer_images)
@@ -1569,15 +1571,23 @@ def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[st
     return 0, 0, len(errors), errors
 
 
-def _storable_image_strings(images: list[str | dict[str, Any]]) -> list[str]:
+def _image_blocks_from_strings(images: list[str]) -> list[dict[str, Any]]:
+    from dlightrag.utils.images import image_url_block
+
+    blocks: list[dict[str, Any]] = []
+    for image in images:
+        block = image_url_block(image)
+        if block is None:
+            continue
+        blocks.append(block)
+    return blocks
+
+
+def _storable_image_strings(images: list[dict[str, Any]]) -> list[str]:
     from dlightrag.utils.images import image_url_block
 
     values: list[str] = []
     for image in images:
-        if isinstance(image, str):
-            if image.strip():
-                values.append(image)
-            continue
         block = image_url_block(image)
         if block is None:
             continue
@@ -1587,24 +1597,18 @@ def _storable_image_strings(images: list[str | dict[str, Any]]) -> list[str]:
     return values
 
 
-def _images_to_multimodal_content(images: list[str | dict[str, Any]]) -> list[dict[str, Any]]:
+def _images_to_multimodal_content(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert data image payloads to direct visual retrieval content blocks."""
-    from dlightrag.utils.images import image_data_uri, image_url_block
+    from dlightrag.utils.images import image_url_block
 
     items: list[dict[str, Any]] = []
     for image in images:
-        if isinstance(image, dict):
-            block = image_url_block(image)
-            if block is None:
-                continue
-            url = block.get("image_url", {}).get("url")
-            if isinstance(url, str) and url.strip().startswith("data:"):
-                items.append(block)
+        block = image_url_block(image)
+        if block is None:
             continue
-
-        text = image.strip()
-        if text and not text.startswith(("http://", "https://", "dlightrag-image://")):
-            items.append({"type": "image_url", "image_url": {"url": image_data_uri(text)}})
+        url = block.get("image_url", {}).get("url")
+        if isinstance(url, str) and url.strip().startswith("data:"):
+            items.append(block)
     return items
 
 

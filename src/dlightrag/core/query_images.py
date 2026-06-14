@@ -43,14 +43,14 @@ class QueryImageEnhancer:
     async def enhance(
         self,
         query: str,
-        images: list[str | dict[str, Any]] | None,
+        images: list[dict[str, Any]] | None,
     ) -> QueryImageEnhancement:
         """Append concise visual descriptions to the retrieval query."""
         if self._vlm_func is None or not images or self._max_images <= 0:
             return QueryImageEnhancement(query=query)
         vlm_func = self._vlm_func
 
-        async def _describe(item: tuple[int, str | dict[str, Any]]) -> str | None:
+        async def _describe(item: tuple[int, dict[str, Any]]) -> str | None:
             idx, image = item
             block = image_url_block(image)
             if block is None:
