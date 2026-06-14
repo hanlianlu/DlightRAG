@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from unittest.mock import AsyncMock
 
 import pytest
 
 from dlightrag.citations.schemas import SourceReference
+from dlightrag.config import DlightragConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.mcp import server as mcp_server
 from dlightrag.models.schemas import Reference
@@ -59,6 +61,32 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "store_only",
     ]
     assert "ingest_job_status" in names
+
+
+def test_mcp_streamable_http_uses_modern_transport_defaults() -> None:
+    source = inspect.getsource(mcp_server.run_streamable_http)
+
+    assert "StreamableHTTPSessionManager" in source
+    assert "TransportSecuritySettings" in source
+    assert "enable_dns_rebinding_protection=True" in source
+    assert "json_response=True" in source
+    assert "stateless=True" in source
+    assert "MCPPathMiddleware" in source
+    assert 'Mount("/mcp"' in source
+    assert '"/sse"' not in source
+    assert '"/messages"' not in source
+    assert "StreamableHTTPServerTransport" not in source
+
+
+def test_mcp_security_defaults_are_loopback_only() -> None:
+    cfg = DlightragConfig()
+
+    assert cfg.mcp_allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+    assert cfg.mcp_allowed_origins == [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+    ]
 
 
 async def test_mcp_create_workspace_uses_manager_registry(mock_mcp_manager) -> None:

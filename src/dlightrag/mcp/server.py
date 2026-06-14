@@ -615,9 +615,12 @@ async def run_streamable_http(host: str, port: int) -> None:
     Without auth, the server runs open — caller is responsible for binding
     to loopback or trusted network only. We log a loud warning in that case.
     """
+    from contextlib import asynccontextmanager
+
     import uvicorn
     from fastapi import HTTPException
-    from mcp.server.streamable_http import StreamableHTTPServerTransport
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from mcp.server.transport_security import TransportSecuritySettings
     from starlette.applications import Starlette
     from starlette.middleware import Middleware
     from starlette.middleware.base import BaseHTTPMiddleware
@@ -644,8 +647,22 @@ async def run_streamable_http(host: str, port: int) -> None:
                 host,
                 port,
             )
-        else:
-            logger.info("MCP streamable-http on %s:%d (loopback, no auth required)", host, port)
+    else:
+        logger.info("MCP streamable-http on %s:%d (loopback, no auth required)", host, port)
+
+    class MCPPathMiddleware:
+        """Normalize the public MCP endpoint before Starlette's mount redirect."""
+
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope.get("type") == "http" and scope.get("path") == "/mcp":
+                scope = dict(scope)
+                scope["path"] = "/mcp/"
+                if scope.get("raw_path") == b"/mcp":
+                    scope["raw_path"] = b"/mcp/"
+            await self.app(scope, receive, send)
 
     class BearerAuthMiddleware(BaseHTTPMiddleware):
         """Enforce Bearer auth on every request to the MCP transport.
@@ -678,11 +695,30 @@ async def run_streamable_http(host: str, port: int) -> None:
 
     await _ensure_manager()
 
-    transport = StreamableHTTPServerTransport(mcp_session_id=None)
+    transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=cfg.mcp_allowed_hosts,
+        allowed_origins=cfg.mcp_allowed_origins,
+    )
+    session_manager = StreamableHTTPSessionManager(
+        app=server,
+        json_response=True,
+        stateless=True,
+        security_settings=transport_security,
+    )
+
+    @asynccontextmanager
+    async def lifespan(app):
+        async with session_manager.run():
+            yield
 
     starlette_app = Starlette(
-        routes=[Mount("/mcp", app=transport.handle_request)],
-        middleware=[Middleware(BearerAuthMiddleware)],
+        routes=[Mount("/mcp", app=session_manager.handle_request)],
+        middleware=[
+            Middleware(MCPPathMiddleware),
+            Middleware(BearerAuthMiddleware),
+        ],
+        lifespan=lifespan,
     )
 
     config = uvicorn.Config(
@@ -694,16 +730,7 @@ async def run_streamable_http(host: str, port: int) -> None:
     uv_server = uvicorn.Server(config)
 
     try:
-        async with transport.connect() as (read_stream, write_stream):
-            server_task = asyncio.create_task(
-                server.run(
-                    read_stream,
-                    write_stream,
-                    server.create_initialization_options(),
-                )
-            )
-            await uv_server.serve()
-            server_task.cancel()
+        await uv_server.serve()
     finally:
         if _manager is not None:
             await _manager.close()

@@ -264,6 +264,30 @@ visual_assets:
   thumb_cache_size: 256
 ```
 
+## MCP Streamable HTTP
+
+DlightRAG's HTTP MCP server uses the current Streamable HTTP transport on a
+single `/mcp` endpoint. It does not expose the deprecated HTTP+SSE `/sse` and
+`/messages` endpoint pair. Local deployments should keep the default loopback
+binding and Host/Origin allowlist:
+
+```yaml
+mcp_transport: streamable-http
+mcp_host: 127.0.0.1
+mcp_port: 8101
+mcp_allowed_hosts:
+  - "127.0.0.1:*"
+  - "localhost:*"
+  - "[::1]:*"
+mcp_allowed_origins:
+  - "http://127.0.0.1:*"
+  - "http://localhost:*"
+  - "http://[::1]:*"
+```
+
+Set explicit hostnames/origins and enable `auth_mode` before exposing MCP on a
+non-loopback network.
+
 ## Citations
 
 Citation validation is always part of answer finalization. Web source-panel
