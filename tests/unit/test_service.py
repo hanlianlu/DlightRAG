@@ -197,7 +197,7 @@ class TestRAGServiceRetrieve:
 
     async def test_aretrieve_passes_multimodal_content(self, test_config):
         service = self._make_retrieval_service(test_config)
-        mc = [{"type": "image"}]
+        mc = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
         await service.aretrieve("test query", multimodal_content=mc)
         call_kwargs = service._backend.aretrieve.call_args.kwargs
         assert call_kwargs["multimodal_content"] == mc

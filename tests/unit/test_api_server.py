@@ -709,13 +709,43 @@ class TestRetrieveEndpoint:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
-        multimodal_content = [{"type": "image", "img_path": "/tmp/query.png"}]
+        multimodal_content = [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+        ]
         resp = await client.post(
             "/retrieve",
             json={"query": "Find the matching drawing", "multimodal_content": multimodal_content},
         )
         assert resp.status_code == 200
         assert mock_manager.aretrieve.call_args.kwargs["multimodal_content"] == multimodal_content
+
+    async def test_retrieve_rejects_legacy_multimodal_shape(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/retrieve",
+            json={
+                "query": "Find the matching drawing",
+                "multimodal_content": [{"type": "image", "img_path": "/tmp/query.png"}],
+            },
+        )
+        assert resp.status_code == 422
+        mock_manager.aretrieve.assert_not_called()
+
+    async def test_retrieve_rejects_bare_query_image_strings(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/retrieve",
+            json={
+                "query": "Find the matching drawing",
+                "query_images": ["data:image/png;base64,abc"],
+            },
+        )
+        assert resp.status_code == 422
+        mock_manager.aretrieve.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -901,6 +931,73 @@ class TestAnswerEndpoint:
         call_kwargs = mock_manager.aanswer.call_args.kwargs
         assert call_kwargs["answer_candidate_top_k"] == 12
         assert call_kwargs["answer_context_top_k"] == 4
+
+    async def test_answer_forwards_typed_history_and_query_image_blocks(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        history = [
+            {"role": "user", "content": [{"type": "text", "text": "previous"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "dlightrag-image://img_1"},
+                    }
+                ],
+            },
+        ]
+        query_images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "What is shown?",
+                "stream": False,
+                "conversation_history": history,
+                "query_images": query_images,
+            },
+        )
+
+        assert resp.status_code == 200
+        call_kwargs = mock_manager.aanswer.call_args.kwargs
+        assert call_kwargs["conversation_history"] == history
+        assert call_kwargs["query_images"] == query_images
+
+    async def test_answer_rejects_untyped_history_messages(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "hello",
+                "stream": False,
+                "conversation_history": [{"role": "human", "content": "previous"}],
+            },
+        )
+
+        assert resp.status_code == 422
+        mock_manager.aanswer.assert_not_called()
+
+    async def test_answer_rejects_bare_query_image_strings(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "hello",
+                "stream": False,
+                "query_images": ["data:image/png;base64,abc"],
+            },
+        )
+
+        assert resp.status_code == 422
+        mock_manager.aanswer.assert_not_called()
 
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1098,3 +1195,52 @@ class TestAnswerStreamMode:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
         mock_manager.aanswer_stream.assert_awaited_once()
+
+
+class TestAPIContracts:
+    """Request and response contracts are explicit in OpenAPI."""
+
+    async def test_openapi_exposes_pydantic_response_models(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.get("/openapi.json")
+
+        assert resp.status_code == 200
+        spec = resp.json()
+        schemas = spec["components"]["schemas"]
+        assert "RetrievalResponse" in schemas
+        assert "AnswerResponse" in schemas
+        assert (
+            spec["paths"]["/retrieve"]["post"]["responses"]["200"]["content"]["application/json"][
+                "schema"
+            ]["$ref"]
+            == "#/components/schemas/RetrievalResponse"
+        )
+        assert (
+            spec["paths"]["/workspaces"]["get"]["responses"]["200"]["content"]["application/json"][
+                "schema"
+            ]["$ref"]
+            == "#/components/schemas/WorkspacesResponse"
+        )
+
+    async def test_mutating_request_models_reject_unknown_fields(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        delete_resp = await client.request(
+            "DELETE",
+            "/files",
+            json={"filenames": ["a.pdf"], "mode": "legacy"},
+        )
+        reset_resp = await client.post("/reset", json={"workspace": "default", "mode": "legacy"})
+        metadata_resp = await client.post(
+            "/metadata/doc-1",
+            json={"metadata": {"topic": "rag"}, "mode": "merge", "legacy": True},
+        )
+
+        assert delete_resp.status_code == 422
+        assert reset_resp.status_code == 422
+        assert metadata_resp.status_code == 422

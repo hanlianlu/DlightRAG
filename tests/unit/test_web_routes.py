@@ -395,14 +395,20 @@ class TestWebSSEBoundary:
     """Tests for SSE framing and browser HTML fragment safety."""
 
     def test_sse_event_json_encodes_payload(self) -> None:
+        from dlightrag.web.events import AnswerDoneEvent
         from dlightrag.web.sse import sse_event
 
-        event = sse_event("done", {"html": "<b>x</b>"})
+        event = sse_event("done", AnswerDoneEvent(html="<b>x</b>", answer="x"))
 
         assert event.startswith("event: done\n")
         assert event.endswith("\n\n")
         data_line = next(line for line in event.splitlines() if line.startswith("data: "))
-        assert json.loads(data_line.removeprefix("data: ")) == {"html": "<b>x</b>"}
+        assert json.loads(data_line.removeprefix("data: ")) == {
+            "html": "<b>x</b>",
+            "answer": "x",
+            "current_image_ids": [],
+            "image_descriptions": [],
+        }
 
     async def test_answer_done_html_strips_unsafe_urls(
         self,
@@ -492,6 +498,39 @@ class TestWebAnswerAdapter:
         assert captured["workspace"] == "default"
         assert captured["session_id"] == "session-1"
         assert captured["conversation_history"] == [{"role": "user", "content": "previous"}]
+
+    async def test_answer_route_rejects_unknown_request_fields(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        web_app.state.manager.config = test_config
+
+        resp = await client.post(
+            "/web/answer",
+            json={"query": "hello", "legacy_mode": True},
+        )
+
+        assert resp.status_code == 422
+
+    async def test_answer_route_rejects_untyped_history_messages(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        web_app.state.manager.config = test_config
+
+        resp = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_history": [{"role": "human", "content": "previous"}],
+            },
+        )
+
+        assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

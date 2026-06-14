@@ -100,6 +100,36 @@ def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
     assert (web_root / "static" / "vendor" / "htmx.min.js").is_file()
 
 
+def test_web_static_css_build_keeps_only_served_bundles() -> None:
+    static_root = ROOT / "src/dlightrag/web/static"
+
+    css_files = {path.name for path in static_root.glob("*.css")}
+
+    assert css_files == {"pygments.css", "style.css"}
+
+
+def test_web_static_js_build_has_no_orphan_chunks() -> None:
+    static_js = ROOT / "src/dlightrag/web/static/js"
+    import_pattern = re.compile(r"""(?:import\(`\./([^`]+\.js)`\)|from"\./([^"]+\.js)")""")
+
+    expected = {path.name for path in static_js.glob("*.js")}
+    seen: set[str] = set()
+    stack = ["main.js"]
+
+    while stack:
+        filename = stack.pop()
+        if filename in seen:
+            continue
+        seen.add(filename)
+        content = (static_js / filename).read_text(encoding="utf-8")
+        for match in import_pattern.finditer(content):
+            child = next(part for part in match.groups() if part)
+            if child not in seen:
+                stack.append(child)
+
+    assert expected == seen
+
+
 def test_vendored_htmx_version_matches_license_metadata() -> None:
     vendor_root = ROOT / "src/dlightrag/web/static/vendor"
     htmx_js = (vendor_root / "htmx.min.js").read_text(encoding="utf-8")
@@ -158,6 +188,29 @@ def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
     assert "#files-btn" in panel_js
     assert ".panel" in panel_js
     assert "shouldDismissPanelOnOutsideClick(e.target)" in panel_js
+
+
+def test_chat_message_bubbles_wrap_unbroken_queries() -> None:
+    css = (FRONTEND_STYLES / "chat.module.css").read_text(encoding="utf-8")
+
+    user_message_block = css.split(".userMessage {", 1)[1].split("}", 1)[0]
+    wrapper_block = css.split(".userMessageWrapper {", 1)[1].split("}", 1)[0]
+    ai_message_block = css.split(".aiMessageContent {", 1)[1].split("}", 1)[0]
+
+    assert "width: fit-content;" not in user_message_block
+    assert "flex: 0 1 auto;" in user_message_block
+    assert "max-width: 100%;" in user_message_block
+    assert "min-width: 0;" in user_message_block
+    assert "overflow-wrap: anywhere;" in user_message_block
+    assert "white-space: pre-wrap;" in user_message_block
+
+    assert "display: flex;" in wrapper_block
+    assert "justify-content: flex-end;" in wrapper_block
+    assert "width: 100%;" in wrapper_block
+    assert "max-width: 85%;" in wrapper_block
+
+    assert "min-width: 0;" in ai_message_block
+    assert "overflow-wrap: anywhere;" in ai_message_block
 
 
 def test_manual_folder_upload_panel_swap_processes_htmx_fragments() -> None:

@@ -3,11 +3,9 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import logging
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from lightrag import QueryParam
 from PIL import Image
@@ -18,6 +16,7 @@ from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from dlightrag.utils.concurrency import bounded_map
+from dlightrag.utils.images import decode_image_base64, image_url_block
 
 logger = logging.getLogger(__name__)
 
@@ -234,13 +233,20 @@ class LightRAGMixBackend:
 def _extract_images(multimodal_content: list[dict[str, Any]] | None) -> list[Image.Image]:
     images: list[Image.Image] = []
     for item in multimodal_content or []:
-        if item.get("type") != "image":
+        if item.get("type") != "image_url":
             continue
-        raw: bytes | None = None
-        if item.get("img_path"):
-            raw = Path(item["img_path"]).read_bytes()
-        elif item.get("data"):
-            raw = base64.b64decode(cast(str, item["data"]))
-        if raw:
+        block = image_url_block(item)
+        if block is None:
+            continue
+        image_url = block.get("image_url")
+        if not isinstance(image_url, dict):
+            continue
+        url = image_url.get("url")
+        if not isinstance(url, str) or not url.strip().startswith("data:"):
+            continue
+        try:
+            raw, _ = decode_image_base64(url)
             images.append(Image.open(io.BytesIO(raw)))
+        except Exception:
+            logger.warning("Failed to decode direct visual query image", exc_info=True)
     return images

@@ -8,7 +8,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from dlightrag.api.auth import UserContext, get_current_user
-from dlightrag.api.models import WorkspaceCreateRequest
+from dlightrag.api.models import (
+    WorkspaceCreateRequest,
+    WorkspaceCreateResponse,
+    WorkspaceDeleteResponse,
+    WorkspacesResponse,
+)
 from dlightrag.utils import normalize_workspace, validate_workspace_name
 
 from .deps import get_manager
@@ -26,7 +31,7 @@ def _normalize_create_body(body: WorkspaceCreateRequest) -> tuple[str, str]:
     return normalize_workspace(label), display_name
 
 
-@router.get("/workspaces")
+@router.get("/workspaces", response_model=WorkspacesResponse)
 async def list_workspaces(
     request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
@@ -39,7 +44,11 @@ async def list_workspaces(
     }
 
 
-@router.post("/workspaces", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/workspaces",
+    status_code=status.HTTP_201_CREATED,
+    response_model=WorkspaceCreateResponse,
+)
 async def create_workspace(
     body: WorkspaceCreateRequest,
     request: Request,
@@ -60,7 +69,7 @@ async def create_workspace(
     }
 
 
-@router.delete("/workspaces/{workspace}")
+@router.delete("/workspaces/{workspace}", response_model=WorkspaceDeleteResponse)
 async def delete_workspace(
     workspace: str,
     request: Request,

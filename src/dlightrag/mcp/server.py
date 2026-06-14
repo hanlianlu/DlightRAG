@@ -20,6 +20,7 @@ from pydantic import Field
 
 import dlightrag
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.core.client_contracts import ConversationMessage, dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
     metadata_filter_from_payload,
@@ -119,7 +120,7 @@ def _retrieval_kwargs(args: RetrieveInput | AnswerInput) -> dict[str, Any]:
     if filters is not None:
         kwargs["filters"] = filters
     if args.query_images:
-        kwargs["query_images"] = args.query_images
+        kwargs["query_images"] = dump_optional_list(args.query_images)
     if args.session_id:
         kwargs["session_id"] = args.session_id
     if args.referenced_image_ids:
@@ -239,7 +240,7 @@ async def answer_tool(
         Field(default=None, description="Metadata filters for structured queries."),
     ] = None,
     conversation_history: Annotated[
-        list[dict[str, Any]] | None,
+        list[ConversationMessage] | None,
         Field(default=None, description="Prior conversation turns as role/content objects."),
     ] = None,
     query_images: QueryImagesParam = Field(default_factory=list),
@@ -254,7 +255,7 @@ async def answer_tool(
     scope = current_request_scope().for_workspaces(args.workspaces)
     result = await manager.aanswer(
         args.query,
-        conversation_history=args.conversation_history,
+        conversation_history=dump_optional_list(args.conversation_history),
         workspaces=args.workspaces,
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,

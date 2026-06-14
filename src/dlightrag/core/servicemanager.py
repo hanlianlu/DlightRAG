@@ -1570,23 +1570,41 @@ def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[st
 
 
 def _storable_image_strings(images: list[str | dict[str, Any]]) -> list[str]:
-    return [image for image in images if isinstance(image, str) and image.strip()]
+    from dlightrag.utils.images import image_url_block
+
+    values: list[str] = []
+    for image in images:
+        if isinstance(image, str):
+            if image.strip():
+                values.append(image)
+            continue
+        block = image_url_block(image)
+        if block is None:
+            continue
+        url = block.get("image_url", {}).get("url")
+        if isinstance(url, str) and url.strip().startswith("data:"):
+            values.append(url)
+    return values
 
 
 def _images_to_multimodal_content(images: list[str | dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert raw base64/data URI images to direct visual retrieval inputs."""
-    from dlightrag.utils.images import split_data_uri
+    """Convert data image payloads to direct visual retrieval content blocks."""
+    from dlightrag.utils.images import image_data_uri, image_url_block
 
     items: list[dict[str, Any]] = []
     for image in images:
-        if not isinstance(image, str):
+        if isinstance(image, dict):
+            block = image_url_block(image)
+            if block is None:
+                continue
+            url = block.get("image_url", {}).get("url")
+            if isinstance(url, str) and url.strip().startswith("data:"):
+                items.append(block)
             continue
+
         text = image.strip()
-        if not text or text.startswith(("http://", "https://")):
-            continue
-        _, payload = split_data_uri(text)
-        if payload:
-            items.append({"type": "image", "data": payload})
+        if text and not text.startswith(("http://", "https://", "dlightrag-image://")):
+            items.append({"type": "image_url", "image_url": {"url": image_data_uri(text)}})
     return items
 
 
