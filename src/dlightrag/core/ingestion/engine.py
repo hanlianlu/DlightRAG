@@ -300,15 +300,17 @@ class UnifiedIngestionEngine:
 
     async def _cleanup_partial_doc(self, doc_id: str) -> None:
         """Remove all traces of a partial/failed document before re-ingest."""
-        # 1. LightRAG tables: doc_status, doc_full, doc_chunks.
-        await self._stores.cleanup_doc(doc_id)
+        full_doc = await self._stores.get_full_doc(doc_id)
+        sidecar_uri = _mapping_get(full_doc, "sidecar_location")
 
-        # 2. DlightRAG metadata index.
+        result = await self._lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+        status = _mapping_get(result, "status")
+        if status in {"fail", "not_allowed"}:
+            message = _mapping_get(result, "message") or "LightRAG document deletion failed"
+            raise RuntimeError(str(message))
+
         await self._metadata_index.delete(doc_id)
 
-        # 3. Sidecar directory (parsed artifacts).
-        full_doc = await self._stores.get_full_doc(doc_id)
-        sidecar_uri = (full_doc or {}).get("sidecar_location")
         artifact_dir = sidecar_dir_from_location(sidecar_uri)
         if artifact_dir is not None and artifact_dir.exists():
             shutil.rmtree(artifact_dir, ignore_errors=True)
@@ -476,6 +478,12 @@ def _prepare_ingest_item(path: str | Path | PreparedIngestFile) -> PreparedInges
     if isinstance(path, PreparedIngestFile):
         return path
     return PreparedIngestFile(parser_path=Path(path))
+
+
+def _mapping_get(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
 
 
 def _canonical_file_doc_id(path: Path) -> str:

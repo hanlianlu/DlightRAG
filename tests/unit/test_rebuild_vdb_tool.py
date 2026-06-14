@@ -129,6 +129,89 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     ]
 
 
+async def test_relabel_bm25_languages_labels_all_text_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.tools import rebuild_vdb as module
+
+    config = _fake_config()
+    config.bm25_enabled = True
+    config.bm25_profiles = [SimpleNamespace(languages=("zh", "en"), fallback=False)]
+    stores = AsyncMock()
+    stores.text_chunks = AsyncMock()
+    stores.fetch_chunk_contents.return_value = [
+        {"id": "chunk-zh", "content": "现金流 风险"},
+        {"id": "chunk-en", "content": "risk factors"},
+    ]
+
+    class FakeClassifier:
+        def __init__(self, languages) -> None:
+            self.languages = tuple(languages)
+
+        def detect(self, content: str) -> str:
+            return {"现金流 风险": "zh", "risk factors": "en"}[content]
+
+    monkeypatch.setattr(
+        module, "enumerate_kv_keys", AsyncMock(return_value=["chunk-zh", "chunk-en"])
+    )
+    monkeypatch.setattr(module, "BM25LanguageClassifier", FakeClassifier)
+
+    stats = await module.relabel_bm25_chunk_languages(
+        config=config,
+        stores=stores,
+        batch_size=500,
+    )
+
+    assert stats == {"processed_chunks": 2, "updated_chunks": 2}
+    stores.fetch_chunk_contents.assert_awaited_once_with(["chunk-zh", "chunk-en"])
+    stores.update_chunk_bm25_languages.assert_awaited_once_with(
+        {"chunk-zh": "zh", "chunk-en": "en"}
+    )
+
+
+async def test_chunks_rebuild_relabels_bm25_languages_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.tools import rebuild_vdb as module
+
+    config = _fake_config()
+    monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
+    monkeypatch.setattr(
+        module,
+        "relabel_bm25_chunk_languages",
+        AsyncMock(return_value={"processed_chunks": 2, "updated_chunks": 2}),
+    )
+
+    async def fake_setup(self) -> bool:
+        self.graph = AsyncMock()
+        self.entities_vdb = AsyncMock()
+        self.relationships_vdb = AsyncMock()
+        self.chunks_vdb = AsyncMock()
+        self.text_chunks = AsyncMock()
+        self.full_docs = AsyncMock()
+        self.doc_status = AsyncMock()
+        return True
+
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
+    monkeypatch.setattr(
+        module.DlightRAGRebuildTool,
+        "run_rebuild_chunks",
+        AsyncMock(return_value=[{"label": "chunks", "errors": []}]),
+    )
+    monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
+
+    exit_code = await module.run_rebuild(
+        config=config,
+        target="chunks",
+        assume_yes=True,
+        restore_sidecar_alignment=False,
+    )
+
+    assert exit_code == 0
+    module.relabel_bm25_chunk_languages.assert_awaited_once()
+    assert module.relabel_bm25_chunk_languages.await_args.kwargs["config"] is config
+
+
 async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -138,6 +221,7 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
     monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: object())
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", AsyncMock())
+    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", AsyncMock())
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -156,6 +240,7 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
 
     assert exit_code == 0
     module.restore_sidecar_image_vectors.assert_not_awaited()
+    module.relabel_bm25_chunk_languages.assert_not_awaited()
 
 
 async def test_failed_chunks_rebuild_skips_sidecar_alignment(
@@ -169,6 +254,7 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
     monkeypatch.setattr(module.RAGService, "_resolve_direct_image_embedding_enabled", AsyncMock())
     monkeypatch.setattr(module, "restore_sidecar_image_vectors", AsyncMock())
+    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", AsyncMock())
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -193,6 +279,7 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     assert exit_code == 1
     module.RAGService._resolve_direct_image_embedding_enabled.assert_not_awaited()
     module.restore_sidecar_image_vectors.assert_not_awaited()
+    module.relabel_bm25_chunk_languages.assert_not_awaited()
 
 
 def _fake_config() -> SimpleNamespace:
@@ -211,6 +298,8 @@ def _fake_config() -> SimpleNamespace:
             vlm=SimpleNamespace(min_image_pixel=64),
         ),
         embedding=SimpleNamespace(model="text-embedding-3-small"),
+        bm25_enabled=False,
+        bm25_profiles=[],
         apply_lightrag_backend_env=lambda force=False: None,
         apply_lightrag_runtime_env=lambda force=False: None,
         apply_lightrag_sidecar_env=lambda force=False: None,
