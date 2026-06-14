@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import dlightrag
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import DlightragConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -62,6 +63,10 @@ def test_mcp_uses_fastmcp_registry_without_legacy_wrappers() -> None:
     assert "@server.call_tool" not in source
     assert 'if name == "retrieve"' not in source
     assert 'if name == "answer"' not in source
+
+
+def test_mcp_server_info_uses_dlightrag_version() -> None:
+    assert mcp_server.server.version == dlightrag.__version__
 
 
 async def test_mcp_tool_schemas_are_top_level_fastmcp_fields() -> None:

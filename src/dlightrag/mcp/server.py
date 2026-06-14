@@ -18,6 +18,7 @@ from mcp.server.stdio import stdio_server
 from mcp.types import ContentBlock, TextContent
 from pydantic import Field
 
+import dlightrag
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.client_payloads import (
     answer_payload,
@@ -87,6 +88,7 @@ mcp_app = DlightRAGFastMCP(
     warn_on_duplicate_tools=True,
 )
 server = mcp_app._mcp_server
+server.version = dlightrag.__version__
 
 
 def _get_config() -> DlightragConfig:
