@@ -702,6 +702,23 @@ Workspace lifecycle endpoints name the workspace explicitly. Query endpoints
 accept `workspaces` for federated search. `/answer` streams by default; pass
 `stream: false` for a single JSON response.
 
+## Operations
+
+Use `dlightrag-rebuild-vdb` for offline LightRAG vector storage maintenance.
+It checks or rebuilds existing graph/chunk vector rows; it does not ingest files
+or re-run parsers.
+
+```bash
+uv run dlightrag-rebuild-vdb --target check
+uv run dlightrag-rebuild-vdb --target all --yes
+```
+
+Run destructive targets only after stopping DlightRAG API, MCP, ingest workers,
+and any other writer using the same storage. Chunk rebuilds automatically
+restore DlightRAG's sidecar image-vector alignment unless explicitly disabled.
+Full target descriptions, Docker Compose usage, and safety notes are in
+[docs/operations.md](docs/operations.md).
+
 ## Development
 
 ```bash
@@ -762,6 +779,7 @@ integration, and architecture notes are in
 - [docs/response-schema.md](docs/response-schema.md) - REST, MCP, and SDK payloads.
 - [docs/retrieval_answer_mechanism.md](docs/retrieval_answer_mechanism.md) - retrieval, filters, fusion, and answer generation.
 - [docs/module-layers.md](docs/module-layers.md) - code organization and import boundaries.
+- [docs/operations.md](docs/operations.md) - offline vector rebuild and maintenance commands.
 - [docs/PG.md](docs/PG.md) - PostgreSQL requirements and tuning notes.
 - [docs/config-reference.md](docs/config-reference.md) - advanced config overrides not shown in root config.
 - [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and MinerU official API contract.
