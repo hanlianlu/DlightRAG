@@ -75,6 +75,7 @@ Issues = "https://github.com/hanlianlu/dlightrag/issues"
 [project.scripts]
 dlightrag-mcp = "dlightrag.mcp.server:main"
 dlightrag-api = "dlightrag.api.server:main"
+dlightrag-rebuild-vdb = "dlightrag.tools.rebuild_vdb:main"
 
 [build-system]
 requires = ["hatchling"]
