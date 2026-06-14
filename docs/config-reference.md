@@ -250,14 +250,15 @@ answer:
 
 User-attached chat images are always described with the VLM before retrieval
 when a VLM is configured. Session, description, and thumbnail cache settings
-are internal resource limits:
+are internal resource limits. Session image memory uses
+`checkpoint_session_ttl_days`, so checkpoint-restorable image references expire
+with the Web checkpoint history they belong to:
 
 ```yaml
 query_images:
   max_described_images: 3
   session_max_images: 50
   session_max_sessions: 100
-  session_ttl_seconds: 3600
 
 visual_assets:
   thumb_max_px: 300

@@ -446,7 +446,6 @@ class QueryImagesConfig(BaseModel):
     max_described_images: int = 3
     session_max_images: int = 50
     session_max_sessions: int = 100
-    session_ttl_seconds: int = 3600
 
 
 class VisualAssetsConfig(BaseModel):
@@ -908,10 +907,10 @@ class DlightragConfig(BaseSettings):
         default=30,
         ge=1,
         description=(
-            "Delete checkpoint sessions (SQLite turns + context anchors) older than "
-            "this many days at startup. Session data grows unboundedly without this — "
-            "conversation history, retrieval provenance, and citation anchors accumulate "
-            "per session indefinitely."
+            "Delete checkpoint sessions and their referenced web session image memory "
+            "older than this many days at startup. Session data grows unboundedly "
+            "without this — conversation history, retrieval provenance, citation anchors, "
+            "and checkpoint-restorable images accumulate per session indefinitely."
         ),
     )
 
