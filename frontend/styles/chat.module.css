@@ -11,16 +11,20 @@
   border-radius: var(--radius-message);
   padding: var(--space-component) var(--space-related);
   margin: var(--space-message-block) 0 var(--space-tight) auto;
-  max-width: 85%;
+  max-width: 100%;
+  min-width: 0;
   width: fit-content;
   color: var(--color-text-primary);
   font-size: var(--font-size-body);
   line-height: var(--line-height-control);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .userMessageWrapper {
   margin-left: auto;
   max-width: 85%;
+  min-width: 0;
 }
 
 .aiMessage {
