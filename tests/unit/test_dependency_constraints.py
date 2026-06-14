@@ -170,6 +170,15 @@ def test_runtime_dockerfile_does_not_install_removed_office_converter_stack() ->
         assert removed not in dockerfile
 
 
+def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
+    """App image builds should not require GHCR metadata just to obtain uv."""
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+
+    assert "ghcr.io/astral-sh/uv" not in dockerfile
+    assert "uv==${UV_VERSION}" in dockerfile
+    assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/" in dockerfile
+
+
 def test_direct_document_parser_dependencies_removed() -> None:
     """DlightRAG should not directly depend on parser/converter stacks LightRAG owns."""
     dependencies = _dependencies()
