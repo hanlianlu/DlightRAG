@@ -19,9 +19,11 @@ from dlightrag.config import (
     ModelConfig,
     set_config,
 )
+from dlightrag.core.query_image_payloads import prepare_query_images
 from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
+from dlightrag.core.session_images import SessionImageStore
 
 
 def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
@@ -338,28 +340,36 @@ class TestRouting:
         assert retrieve_kwargs["chunk_top_k"] == 4
 
     async def test_query_image_memory_is_request_scoped(self, test_cfg) -> None:
-        manager = RAGServiceManager(config=test_cfg)
-        manager._query_image_enhancer = AsyncMock()
-        manager._query_image_enhancer.enhance = AsyncMock(
+        session_images = SessionImageStore(
+            max_images_per_session=3,
+            max_sessions=10,
+            ttl_seconds=test_cfg.checkpoint_session_ttl_seconds,
+        )
+        enhancer = AsyncMock()
+        enhancer.enhance = AsyncMock(
             side_effect=lambda query, images: MagicMock(query=query, descriptions=[])
         )
         alice_scope = RequestScope(user_id="alice", auth_mode="jwt").for_workspaces(["reports"])
         bob_scope = RequestScope(user_id="bob", auth_mode="jwt").for_workspaces(["reports"])
 
-        first = await manager._prepare_query_images(
+        first = await prepare_query_images(
             "query",
             query_images=[_image_block()],
             session_id="same-session",
             referenced_image_ids=None,
             store_current=True,
+            session_images=session_images,
+            enhancer=enhancer,
             scope=alice_scope,
         )
-        second = await manager._prepare_query_images(
+        second = await prepare_query_images(
             "query",
             query_images=[],
             session_id="same-session",
             referenced_image_ids=first.current_image_ids,
             store_current=False,
+            session_images=session_images,
+            enhancer=enhancer,
             scope=bob_scope,
         )
 
@@ -590,7 +600,7 @@ class TestDelegation:
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
         store = _InMemoryIngestJobStore()
-        manager._ingest_job_store = store
+        manager._ingest_jobs._store = store
 
         result = await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
 
@@ -648,13 +658,13 @@ class TestIngestJobs:
         }
         store.recoverable_rows = [row]
         store.rows["job-1"] = dict(row)
-        manager._ingest_job_store = store
+        manager._ingest_jobs._store = store
         svc = AsyncMock()
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
         manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
 
-        await manager._recover_ingest_jobs(store)
-        task = manager._ingest_job_tasks["job-1"]
+        assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
+        task = manager._ingest_jobs._tasks["job-1"]
 
         await asyncio.wait_for(task, timeout=1.0)
 
@@ -672,7 +682,7 @@ class TestIngestJobs:
     async def test_astart_ingest_job_records_progress_and_result(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
         store = _InMemoryIngestJobStore()
-        manager._ingest_job_store = store
+        manager._ingest_jobs._store = store
 
         async def fake_ingest(**kwargs: Any) -> dict[str, Any]:
             progress_callback = kwargs["_progress_callback"]
@@ -697,7 +707,7 @@ class TestIngestJobs:
             bucket="bucket",
             prefix="docs/",
         )
-        task = manager._ingest_job_tasks[job["job_id"]]
+        task = manager._ingest_jobs._tasks[job["job_id"]]
 
         await asyncio.wait_for(task, timeout=1.0)
         row = await manager.get_ingest_job(job["job_id"])
@@ -720,7 +730,7 @@ class TestIngestJobs:
         cfg = test_cfg.model_copy(update={"ingest_timeout": 0.01})
         manager = RAGServiceManager(config=cfg)
         store = _InMemoryIngestJobStore()
-        manager._ingest_job_store = store
+        manager._ingest_jobs._store = store
         release = asyncio.Event()
 
         async def fake_ingest(**kwargs: Any) -> dict[str, Any]:
@@ -734,8 +744,8 @@ class TestIngestJobs:
         result = await manager.aingest("default", source_type="local", path="/tmp/slow.pdf")
 
         assert result["status"] in {"queued", "running"}
-        assert result["job_id"] in manager._ingest_job_tasks
-        task = manager._ingest_job_tasks[result["job_id"]]
+        assert result["job_id"] in manager._ingest_jobs._tasks
+        task = manager._ingest_jobs._tasks[result["job_id"]]
         assert not task.done()
 
         release.set()

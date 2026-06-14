@@ -43,6 +43,8 @@ from typing import Any
 
 import httpx
 
+from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_image_blocks_from_urls
+
 DEFAULT_API_URL = "http://localhost:8100"
 DEFAULT_QUERY_TIMEOUT = 120
 DEFAULT_INGEST_TIMEOUT = 600
@@ -170,7 +172,7 @@ def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
 
 
 def _query_image_blocks(values: list[str]) -> list[dict[str, Any]]:
-    return [{"type": "image_url", "image_url": {"url": value}} for value in values]
+    return query_image_blocks_from_urls(values)
 
 
 def _apply_query_options(
@@ -223,34 +225,7 @@ def _build_answer_payload(
 
 
 def _build_ingest_kwargs(args: argparse.Namespace) -> dict[str, Any]:
-    source = args.source_type
-    kwargs: dict[str, Any] = {}
-
-    if source == "local":
-        kwargs["path"] = args.path
-    elif source == "azure_blob":
-        kwargs["container_name"] = args.container_name
-        if args.blob_path:
-            kwargs["blob_path"] = args.blob_path
-        if args.prefix is not None:
-            kwargs["prefix"] = args.prefix
-    elif source == "s3":
-        kwargs["bucket"] = args.bucket
-        if args.key:
-            kwargs["key"] = args.key
-        if args.prefix is not None:
-            kwargs["prefix"] = args.prefix
-
-    kwargs["replace"] = args.replace
-    if getattr(args, "title", None) is not None:
-        kwargs["title"] = args.title
-    if getattr(args, "author", None) is not None:
-        kwargs["author"] = args.author
-    if getattr(args, "metadata", None) is not None:
-        kwargs["metadata"] = args.metadata
-    if getattr(args, "metadata_policy", None) is not None:
-        kwargs["metadata_policy"] = args.metadata_policy
-    return kwargs
+    return ingest_kwargs_from_payload(args)
 
 
 # ═══════════════════════════════════════════════════════════════════

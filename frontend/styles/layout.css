@@ -55,7 +55,7 @@
 
 .workspace-selector {
     align-items: center;
-    background: rgba(41, 37, 36, 0.56);
+    background: rgb(41 37 36 / 56%);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-sm);
     color: var(--color-text-subtle);
@@ -77,11 +77,11 @@
 .workspace-selector:hover,
 .workspace-selector.open {
     background: var(--color-bg-hover);
-    border-color: rgba(210, 182, 97, 0.22);
+    border-color: rgb(210 182 97 / 22%);
 }
 
 .workspace-dot {
-    background: rgba(210, 182, 97, 0.72);
+    background: rgb(210 182 97 / 72%);
     border-radius: 50%;
     flex-shrink: 0;
     height: var(--space-tight);
@@ -90,10 +90,10 @@
 
 .workspace-dot.multi {
     background: transparent;
-    border: 1px solid rgba(210, 182, 97, 0.72);
+    border: 1px solid rgb(210 182 97 / 72%);
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 999px;
-    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 rgba(210, 182, 97, 0.72);
+    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 rgb(210 182 97 / 72%);
     width: var(--space-related);
 }
 
@@ -156,6 +156,36 @@
     justify-content: center;
 }
 
+.composer-inner {
+    width: 100%;
+    max-width: var(--layout-content-width);
+}
+
+/* Panel-open layout: primary app chrome shifts left */
+body.panel-open .topbar {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.panel-open .chat-area {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body.panel-open .composer {
+    margin-right: var(--layout-panel-width);
+    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Chat content shrinks to fit when panel is open, capped by fluid width */
+body.panel-open .chat-messages {
+    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
+}
+
+body.panel-open .composer-inner {
+    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
+}
+
 /* Initial: keep the welcome copy visible while nudging the composer upward. */
 .app:not(.has-messages) .chat-area {
     flex: 1;
@@ -173,11 +203,6 @@
     padding-bottom: clamp(28vh, 30vh, 32vh);
 }
 
-.composer-inner {
-    width: 100%;
-    max-width: var(--layout-content-width);
-}
-
 .composer-form {
     position: relative;
     display: flex;
@@ -190,8 +215,8 @@
 }
 
 .composer-form:focus-within {
-    border-color: rgba(210, 182, 97, 0.35);
-    box-shadow: 0 0 0 2px rgba(210, 182, 97, 0.06);
+    border-color: rgb(210 182 97 / 35%);
+    box-shadow: 0 0 0 2px rgb(210 182 97 / 6%);
 }
 
 .composer-input {
@@ -254,7 +279,7 @@
     height: var(--size-button);
     background: transparent;
     border: none;
-    color: rgba(210, 182, 97, 0.78);
+    color: rgb(210 182 97 / 78%);
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1;
     cursor: pointer;
@@ -278,10 +303,12 @@
 .composer-form.multiline {
     align-items: flex-end;
 }
+
 .composer-form.multiline .composer-plus {
     align-self: flex-start;
     margin-top: var(--space-inline);
 }
+
 .composer-form.multiline .composer-send {
     align-self: flex-end;
     margin-bottom: var(--space-inline);
@@ -306,7 +333,7 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.3);
+    box-shadow: -8px 0 32px rgb(0 0 0 / 30%);
 }
 
 .panel.open {
@@ -319,10 +346,6 @@
     gap: var(--space-tight);
     padding: var(--space-related) var(--space-section);
     border-bottom: 1px solid var(--color-border-subtle);
-}
-
-.panel-close {
-    margin-left: auto;
 }
 
 #panel-title {
@@ -338,6 +361,7 @@
     color: var(--color-text-dim);
     font-size: var(--font-size-body);
     cursor: pointer;
+    margin-left: auto;
     padding: var(--space-inline) var(--space-tight);
     border-radius: var(--radius-sm);
     transition: background 0.15s, color 0.15s;
@@ -360,7 +384,7 @@
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.52);
+    box-shadow: 0 18px 48px rgb(0 0 0 / 52%);
     color: var(--color-text-secondary);
     max-width: clamp(320px, 32vw, 420px);
     padding: var(--space-section);
@@ -368,7 +392,7 @@
 }
 
 .workspace-dialog::backdrop {
-    background: rgba(0, 0, 0, 0.58);
+    background: rgb(0 0 0 / 58%);
 }
 
 .workspace-dialog-title {
@@ -406,7 +430,7 @@
 }
 
 .workspace-dialog-input:focus {
-    border-color: rgba(210, 182, 97, 0.38);
+    border-color: rgb(210 182 97 / 38%);
 }
 
 .workspace-dialog-actions {
@@ -440,28 +464,7 @@
     opacity: 0.42;
 }
 
-/* Panel-open layout: primary app chrome shifts left */
-body.panel-open .topbar {
-    margin-right: var(--layout-panel-width);
-    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-body.panel-open .chat-area {
-    margin-right: var(--layout-panel-width);
-    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-body.panel-open .composer {
-    margin-right: var(--layout-panel-width);
-    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-}
-/* Chat content shrinks to fit when panel is open, capped by fluid width */
-body.panel-open .chat-messages {
-    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
-}
-body.panel-open .composer-inner {
-    max-width: min(var(--layout-content-width), calc(100vw - var(--layout-panel-width) - 48px));
-}
-
-@media (max-width: 640px) {
+@media (width <= 640px) {
     .panel {
         border-left: none;
         max-width: none;

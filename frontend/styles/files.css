@@ -37,7 +37,7 @@
 
 .ingest-target-pill:hover {
     background: var(--color-accent-hover-strong);
-    border-color: rgba(210, 182, 97, 0.35);
+    border-color: rgb(210 182 97 / 35%);
 }
 
 .ingest-target-dot {
@@ -63,7 +63,7 @@
     background: var(--color-bg-elevated);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
+    box-shadow: 0 12px 34px rgb(0 0 0 / 46%);
     display: flex;
     flex-direction: column;
     left: 0;
@@ -143,7 +143,7 @@
 }
 
 .ingest-target-popover-input:focus {
-    border-color: rgba(210, 182, 97, 0.38);
+    border-color: rgb(210 182 97 / 38%);
 }
 
 .ingest-target-popover-input::placeholder {
@@ -152,8 +152,8 @@
 
 .ingest-target-popover-create-btn {
     align-items: center;
-    background: rgba(87, 74, 36, 0.28);
-    border: 1px solid rgba(210, 182, 97, 0.24);
+    background: rgb(87 74 36 / 28%);
+    border: 1px solid rgb(210 182 97 / 24%);
     border-radius: var(--radius-sm);
     color: var(--color-gold-100);
     cursor: pointer;
@@ -167,8 +167,8 @@
 }
 
 .ingest-target-popover-create-btn:hover {
-    background: rgba(87, 74, 36, 0.42);
-    border-color: rgba(210, 182, 97, 0.4);
+    background: rgb(87 74 36 / 42%);
+    border-color: rgb(210 182 97 / 40%);
 }
 
 /* === File Management === */
@@ -224,7 +224,7 @@
 }
 
 .file-delete:hover {
-    background: rgba(248, 113, 113, 0.15);
+    background: rgb(248 113 113 / 15%);
     color: var(--color-danger);
 }
 
@@ -244,6 +244,7 @@
     border-radius: 2px;
     overflow: hidden;
 }
+
 .progress-bar-fill {
     height: 100%;
     background: var(--color-gold-200);
@@ -251,6 +252,7 @@
     border-radius: 2px;
     transition: width 0.5s ease;
 }
+
 .progress-label {
     padding: 0 var(--space-related) var(--space-tight);
     font-size: var(--font-size-caption);
@@ -333,8 +335,8 @@
 }
 
 .upload-zone:hover {
-    border-color: rgba(210, 182, 97, 0.35);
-    background: rgba(210, 182, 97, 0.03);
+    border-color: rgb(210 182 97 / 35%);
+    background: rgb(210 182 97 / 3%);
 }
 
 .upload-btn {
@@ -342,7 +344,7 @@
     align-items: center;
     gap: var(--space-inline);
     padding: var(--space-tight) var(--space-related);
-    background: rgba(41, 37, 36, 0.64);
+    background: rgb(41 37 36 / 64%);
     border: 1px solid var(--color-border-subtle);
     color: var(--color-text-muted);
     font-family: inherit;

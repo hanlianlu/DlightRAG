@@ -46,10 +46,6 @@
   text-transform: uppercase;
 }
 
-.aiMessageHeader .dot {
-  color: var(--color-gold-200);
-}
-
 .dot {
   color: var(--color-gold-200);
 }
@@ -131,6 +127,7 @@
 
 #clear-history-btn {
   /* Inherits .topbar-btn from layout.css */
+
   /* Hidden until first message — shown via JS */
 }
 
@@ -148,7 +145,7 @@
   height: var(--size-button);
   background: transparent;
   border: none;
-  color: rgba(210, 182, 97, 0.78);
+  color: rgb(210 182 97 / 78%);
   /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
   cursor: pointer;
@@ -255,10 +252,25 @@
   line-height: 1.3;
 }
 
-.aiMessageContent h1 { font-size: 1.4em; font-weight: 600; }
-.aiMessageContent h2 { font-size: 1.2em; font-weight: 600; }
-.aiMessageContent h3 { font-size: 1.05em; font-weight: 600; }
-.aiMessageContent h4 { font-size: 1em; font-weight: 500; }
+.aiMessageContent h1 {
+  font-size: 1.4em;
+  font-weight: 600;
+}
+
+.aiMessageContent h2 {
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
+.aiMessageContent h3 {
+  font-size: 1.05em;
+  font-weight: 600;
+}
+
+.aiMessageContent h4 {
+  font-size: 1em;
+  font-weight: 500;
+}
 
 .aiMessageContent table {
   border-collapse: collapse;
@@ -284,7 +296,7 @@
 }
 
 .aiMessageContent tr:nth-child(even) {
-  background: rgba(28, 25, 23, 0.5);
+  background: rgb(28 25 23 / 50%);
 }
 
 .aiMessageContent pre {
@@ -374,7 +386,7 @@
   padding: var(--space-tight) 0 var(--space-inline);
   overflow-x: auto;
   scroll-behavior: smooth;
-  border-top: 1px solid rgba(120, 113, 108, 0.12);
+  border-top: 1px solid rgb(120 113 108 / 12%);
   margin-top: var(--space-tight);
 }
 
@@ -386,12 +398,12 @@
   cursor: pointer;
   overflow: hidden;
   position: relative;
-  border: 1px solid rgba(120, 113, 108, 0.16);
+  border: 1px solid rgb(120 113 108 / 16%);
   transition: border-color 0.15s;
 }
 
 .answerImageItem:hover {
-  border-color: rgba(210, 182, 97, 0.4);
+  border-color: rgb(210 182 97 / 40%);
 }
 
 .answerImageItem img {
@@ -405,7 +417,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  background: linear-gradient(transparent, rgb(0 0 0 / 70%));
   color: #d6d3d1;
   font-size: var(--font-size-caption);
   padding: var(--space-tight) var(--space-inline) var(--space-inline);
