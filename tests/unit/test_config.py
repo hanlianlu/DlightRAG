@@ -926,7 +926,7 @@ def test_lightrag_parser_env_follows_dlightrag_parser_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """LightRAG parser routing must share DlightRAG's product-level policy."""
-    monkeypatch.setenv("LIGHTRAG_PARSER", "pdf:legacy")
+    monkeypatch.setenv("LIGHTRAG_PARSER", "pdf:stale-route")
 
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(

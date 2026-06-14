@@ -50,7 +50,8 @@ def _clean_dlightrag_env(monkeypatch):
 
 
 class TestFindYamlConfig:
-    def test_finds_yaml_in_cwd(self, yaml_config_dir):
+    @pytest.mark.usefixtures("yaml_config_dir")
+    def test_finds_yaml_in_cwd(self):
         result = _find_yaml_config()
         assert result is not None
         assert result.name == "config.yaml"
@@ -60,8 +61,9 @@ class TestFindYamlConfig:
         assert _find_yaml_config() is None
 
 
+@pytest.mark.usefixtures("yaml_config_dir")
 class TestYamlConfigLoading:
-    def test_loads_from_yaml(self, yaml_config_dir):
+    def test_loads_from_yaml(self):
         config = DlightragConfig()
         assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"
         assert config.llm.default.base_url == "http://localhost:11434/v1"
@@ -70,7 +72,7 @@ class TestYamlConfigLoading:
         assert config.top_k == 100
         assert config.kg_entity_types == ["Person", "Company"]
 
-    def test_env_overrides_yaml(self, yaml_config_dir, monkeypatch):
+    def test_env_overrides_yaml(self, monkeypatch):
         monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
         monkeypatch.setenv("DLIGHTRAG_TOP_K", "200")
 
@@ -79,7 +81,7 @@ class TestYamlConfigLoading:
         assert config.llm.default.base_url == "http://localhost:11434/v1"  # from yaml
         assert config.top_k == 200  # env override
 
-    def test_constructor_overrides_yaml(self, yaml_config_dir):
+    def test_constructor_overrides_yaml(self):
         config = DlightragConfig(top_k=300)
         assert config.top_k == 300  # constructor override
         assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"  # from yaml

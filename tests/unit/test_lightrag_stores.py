@@ -61,6 +61,7 @@ async def test_overwrite_chunk_vectors_updates_existing_rows_only() -> None:
             self.executed: list[tuple] = []
 
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
         async def executemany(self, sql, values) -> None:  # noqa: ANN001
@@ -93,6 +94,7 @@ async def test_overwrite_chunk_vectors_respects_batch_record_budget(
             self.batches: list[list[tuple]] = []
 
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
         async def executemany(self, sql, values) -> None:  # noqa: ANN001
@@ -124,6 +126,7 @@ async def test_chunk_ids_for_docs_reads_lightrag_text_chunks() -> None:
             self.fetch_args: tuple | None = None
 
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
         async def fetch(self, *args):  # noqa: ANN002, ANN202
@@ -149,6 +152,7 @@ async def test_fetch_chunk_contents_reads_lightrag_doc_chunks() -> None:
             self.fetch_args: tuple | None = None
 
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
         async def fetch(self, *args):  # noqa: ANN002, ANN202
@@ -175,6 +179,7 @@ async def test_update_chunk_bm25_languages_uses_batch_update() -> None:
             self.execute_args: tuple | None = None
 
         async def _run_with_retry(self, operation, timing_label=None):  # noqa: ANN001, ANN202
+            assert timing_label is None or isinstance(timing_label, str)
             return await operation(self)
 
         async def execute(self, *args):  # noqa: ANN002, ANN202

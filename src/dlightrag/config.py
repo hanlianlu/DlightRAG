@@ -1189,7 +1189,7 @@ class DlightragConfig(BaseSettings):
                 self.parser_sidecars.mineru.auxiliary_block_policy
             )
 
-    def model_post_init(self, __context) -> None:
+    def model_post_init(self, _context) -> None:
         """Pydantic lifecycle hook: bridge DLIGHTRAG_* → backend env vars."""
         # Resolve working_dir to absolute path
         path = Path(self.working_dir)

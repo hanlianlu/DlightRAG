@@ -175,19 +175,18 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
     assert deps["metadata_index"].upsert.await_args.args[0] == expected_doc_id
 
 
-async def test_document_ingest_delegates_lightrag_raw_parser_route(tmp_path: Path) -> None:
+async def test_document_ingest_delegates_non_sidecar_parser_route(tmp_path: Path) -> None:
     """LightRAG routing is the ingestability boundary.
 
-    If no DlightRAG parser rule matches, DlightRAG still enqueues the
-    LightRAG-resolved parser route and simply skips sidecar vector overrides
-    when no sidecar location exists.
+    DlightRAG enqueues the LightRAG-resolved parser route and skips sidecar
+    vector overrides when that route does not produce a sidecar location.
     """
-    source = tmp_path / "notes.txt"
-    source.write_text("plain text")
-    engine, deps = _make_engine(parser_rules="docx:native-iteP")  # no wildcard
+    source = tmp_path / "notes.docx"
+    source.write_bytes(b"fake docx")
+    engine, deps = _make_engine()
     deps["stores"].get_full_doc.return_value = {
-        "parse_engine": "legacy",
-        "process_options": "",
+        "parse_engine": "native",
+        "process_options": "iteP",
         "chunk_options": {},
         "sidecar_location": None,
     }
@@ -195,11 +194,12 @@ async def test_document_ingest_delegates_lightrag_raw_parser_route(tmp_path: Pat
     result = await engine.aingest_file(source, replace=False)
 
     assert result["doc_id"] is not None
-    assert result["parse_engine"] == "legacy"
+    assert result["parse_engine"] == "native"
+    assert result["process_options"] == "iteP"
     assert result["chunks"] == ["chunk-a"]
     kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
-    assert kwargs["parse_engine"] == "legacy"
-    assert kwargs["process_options"] == ""
+    assert kwargs["parse_engine"] == "native"
+    assert kwargs["process_options"] == "iteP"
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
@@ -273,6 +273,7 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
     }
 
     async def get_full_doc(doc_id_arg: str) -> dict | None:
+        assert doc_id_arg == doc_id
         events.append("get_full_doc")
         if "adelete_by_doc_id" in events:
             return {
@@ -289,6 +290,8 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
         }
 
     async def delete_doc(doc_id_arg: str, *, delete_llm_cache: bool) -> object:
+        assert doc_id_arg == doc_id
+        assert delete_llm_cache is True
         events.append("adelete_by_doc_id")
         return type("DeletionResult", (), {"status": "success"})()
 
@@ -475,6 +478,10 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
     )
 
     async def status_side_effect(doc_id_arg: str) -> dict | None:
+        assert doc_id_arg == compute_mdhash_id(
+            normalize_document_file_path(source),
+            prefix="doc-",
+        )
         try:
             return next(status_iter)
         except StopIteration:
@@ -489,6 +496,11 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
     }
 
     async def slow_delete(doc_id_arg: str, *, delete_llm_cache: bool) -> object:
+        assert doc_id_arg == compute_mdhash_id(
+            normalize_document_file_path(source),
+            prefix="doc-",
+        )
+        assert delete_llm_cache is True
         await asyncio.sleep(0.03)
         return type("DeletionResult", (), {"status": "success"})()
 
