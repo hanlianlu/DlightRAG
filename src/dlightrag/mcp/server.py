@@ -9,13 +9,14 @@ retrieve() + lightweight ingest().
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Annotated, Any, Literal
 
-from mcp.server import Server
+from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
-from mcp.types import TextContent, Tool
+from mcp.types import ContentBlock, TextContent
+from pydantic import Field
 
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.client_payloads import (
@@ -26,15 +27,66 @@ from dlightrag.core.client_payloads import (
 from dlightrag.core.ingest_policy import should_wait_for_ingest
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
+from dlightrag.mcp.contracts import (
+    AnswerInput,
+    CreateWorkspaceInput,
+    DeleteFilesInput,
+    DeleteWorkspaceInput,
+    IngestInput,
+    IngestJobStatusInput,
+    ListFilesInput,
+    QueryImage,
+    RetrieveInput,
+)
 
 logger = logging.getLogger(__name__)
-_METADATA_POLICY_VALUES = ("validate", "reject_unknown", "store_only")
-_QUERY_IMAGE_ITEMS_SCHEMA = {"anyOf": [{"type": "string"}, {"type": "object"}]}
 
-server = Server(
+MetadataPolicyParam = Literal["validate", "reject_unknown", "store_only"]
+SourceTypeParam = Literal["local", "azure_blob", "s3"]
+QueryImagesParam = Annotated[
+    list[QueryImage],
+    Field(
+        max_length=3,
+        description="User-attached image URLs or data URI blocks (max 3)",
+    ),
+]
+ReferencedImageIdsParam = Annotated[
+    list[str],
+    Field(description="Previously stored image ids to include in the query."),
+]
+
+
+class DlightRAGFastMCP(FastMCP):
+    """FastMCP with DlightRAG's strict input and text-error contract."""
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> Sequence[ContentBlock] | dict[str, Any]:
+        try:
+            self._reject_unknown_arguments(name, arguments or {})
+            return await super().call_tool(name, arguments or {})
+        except Exception as exc:
+            logger.exception("MCP tool '%s' failed: %s", name, exc)
+            return [TextContent(type="text", text=f"Error: {exc}")]
+
+    def _reject_unknown_arguments(self, name: str, arguments: Mapping[str, Any]) -> None:
+        tool = self._tool_manager._tools.get(name)
+        if tool is None:
+            raise ValueError(f"Unknown tool: {name}")
+        allowed = set(tool.parameters.get("properties", {}))
+        unknown = sorted(set(arguments) - allowed)
+        if unknown:
+            raise ValueError(f"Unexpected argument(s) for {name}: {', '.join(unknown)}")
+
+
+mcp_app = DlightRAGFastMCP(
     "dlightrag",
-    version=__import__("dlightrag").__version__,
+    log_level="INFO",
+    warn_on_duplicate_tools=True,
 )
+server = mcp_app._mcp_server
 
 
 def _get_config() -> DlightragConfig:
@@ -51,539 +103,358 @@ async def _ensure_manager() -> RAGServiceManager:
     return _manager
 
 
-def _json_content(payload: dict[str, Any]) -> list[TextContent]:
-    return [TextContent(type="text", text=json.dumps(payload, default=str, indent=2))]
-
-
-def _normalize_workspace_argument(arguments: dict[str, Any]) -> tuple[str, str]:
+def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]:
     from dlightrag.utils import normalize_workspace, validate_workspace_name
 
-    label = validate_workspace_name(str(arguments.get("workspace") or ""))
-    display_name = validate_workspace_name(str(arguments.get("display_name") or label))
+    label = validate_workspace_name(args.workspace)
+    display_name = validate_workspace_name(args.display_name or label)
     return normalize_workspace(label), display_name
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Tool definitions
-# ═══════════════════════════════════════════════════════════════════
+def _retrieval_kwargs(args: RetrieveInput | AnswerInput) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    filters = metadata_filter_from_payload(args.filters)
+    if filters is not None:
+        kwargs["filters"] = filters
+    if args.query_images:
+        kwargs["query_images"] = args.query_images
+    if args.session_id:
+        kwargs["session_id"] = args.session_id
+    if args.referenced_image_ids:
+        kwargs["referenced_image_ids"] = args.referenced_image_ids
+    return kwargs
 
 
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List available MCP tools."""
-    return [
-        Tool(
-            name="retrieve",
-            description="Query the RAG knowledge base for relevant information. Supports structured metadata filters for precise document lookups.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query",
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Number of top results to return",
-                    },
-                    "chunk_top_k": {
-                        "type": "integer",
-                        "description": "Vector chunk candidate count override",
-                    },
-                    "workspaces": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Workspace names to search. Omit to search default workspace.",
-                    },
-                    "filters": {
-                        "type": "object",
-                        "description": "Metadata filters for structured queries (filename, doc_author, etc.)",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "filename_pattern": {
-                                "type": "string",
-                                "description": "Explicit SQL ILIKE pattern",
-                            },
-                            "file_extension": {"type": "string"},
-                            "doc_title": {"type": "string"},
-                            "doc_author": {"type": "string"},
-                            "custom": {"type": "object"},
-                        },
-                    },
-                    "query_images": {
-                        "type": "array",
-                        "maxItems": 3,
-                        "items": _QUERY_IMAGE_ITEMS_SCHEMA,
-                        "description": "User-attached image URLs or data URI blocks (max 3) for visual retrieval",
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session id for image memory.",
-                    },
-                    "referenced_image_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Previously stored image ids to include in the query.",
-                    },
-                },
-                "required": ["query"],
-            },
-        ),
-        Tool(
-            name="ingest",
-            description="Ingest document(s) into the RAG knowledge base.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "source_type": {
-                        "type": "string",
-                        "enum": ["local", "azure_blob", "s3"],
-                        "description": "Type of data source",
-                    },
-                    "path": {
-                        "type": "string",
-                        "description": "File or directory path (for local source)",
-                    },
-                    "container_name": {
-                        "type": "string",
-                        "description": "Azure Blob container name",
-                    },
-                    "blob_path": {
-                        "type": "string",
-                        "description": "Specific blob path (azure_blob)",
-                    },
-                    "bucket": {
-                        "type": "string",
-                        "description": "S3 bucket name (s3)",
-                    },
-                    "key": {
-                        "type": "string",
-                        "description": "S3 object key — single object or prefix (s3)",
-                    },
-                    "prefix": {
-                        "type": "string",
-                        "description": "Path/blob/key prefix filter (azure_blob, s3)",
-                    },
-                    "replace": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Replace existing documents",
-                    },
-                    "workspace": {
-                        "type": "string",
-                        "description": "Target workspace. Omit for default workspace.",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Optional document title metadata.",
-                    },
-                    "author": {
-                        "type": "string",
-                        "description": "Optional document author metadata.",
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "description": "User metadata to attach to ingested documents.",
-                    },
-                    "metadata_policy": {
-                        "type": "string",
-                        "enum": list(_METADATA_POLICY_VALUES),
-                        "description": "How undeclared user metadata fields are handled.",
-                    },
-                    "wait": {
-                        "type": "boolean",
-                        "description": "Wait for completion. Defaults to true for single files/objects and false for batch-shaped ingests.",
-                    },
-                },
-                "required": ["source_type"],
-            },
-        ),
-        Tool(
-            name="ingest_job_status",
-            description="Return the status of an ingest job.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "job_id": {
-                        "type": "string",
-                        "description": "Ingest job id returned by the ingest tool.",
-                    }
-                },
-                "required": ["job_id"],
-            },
-        ),
-        Tool(
-            name="answer",
-            description="Ask a question and get an LLM-generated answer backed by retrieved context from the knowledge base.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The question to answer",
-                    },
-                    "top_k": {
-                        "type": "integer",
-                        "description": "Retrieval candidate count override for this answer",
-                    },
-                    "chunk_top_k": {
-                        "type": "integer",
-                        "description": "Vector chunk candidate count override for this answer",
-                    },
-                    "answer_candidate_top_k": {
-                        "type": "integer",
-                        "description": "Answer retrieval candidates fetched before final prompt packing",
-                    },
-                    "answer_context_top_k": {
-                        "type": "integer",
-                        "description": "Maximum chunks included in the final answer prompt",
-                    },
-                    "workspaces": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Workspace names to search. Omit to search default workspace.",
-                    },
-                    "filters": {
-                        "type": "object",
-                        "description": "Metadata filters for structured queries (filename, doc_author, etc.)",
-                        "properties": {
-                            "filename": {"type": "string"},
-                            "filename_pattern": {
-                                "type": "string",
-                                "description": "Explicit SQL ILIKE pattern",
-                            },
-                            "file_extension": {"type": "string"},
-                            "doc_title": {"type": "string"},
-                            "doc_author": {"type": "string"},
-                            "custom": {"type": "object"},
-                        },
-                    },
-                    "conversation_history": {
-                        "type": "array",
-                        "items": {"type": "object"},
-                        "description": "Prior conversation turns as role/content objects.",
-                    },
-                    "query_images": {
-                        "type": "array",
-                        "maxItems": 3,
-                        "items": _QUERY_IMAGE_ITEMS_SCHEMA,
-                        "description": "User-attached image URLs or data URI blocks (max 3) for visual answer context.",
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session id for image memory.",
-                    },
-                    "referenced_image_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Previously stored image ids to include in the answer.",
-                    },
-                },
-                "required": ["query"],
-            },
-        ),
-        Tool(
-            name="list_workspaces",
-            description="List all registered workspaces.",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="create_workspace",
-            description="Create an empty DlightRAG workspace.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "workspace": {
-                        "type": "string",
-                        "description": "Workspace name to create.",
-                    },
-                    "display_name": {
-                        "type": "string",
-                        "description": "Optional user-facing display name.",
-                    },
-                },
-                "required": ["workspace"],
-            },
-        ),
-        Tool(
-            name="delete_workspace",
-            description="Delete/reset one DlightRAG workspace.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "workspace": {
-                        "type": "string",
-                        "description": "Workspace name to delete.",
-                    },
-                    "keep_files": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Keep source files on disk.",
-                    },
-                    "dry_run": {
-                        "type": "boolean",
-                        "default": False,
-                        "description": "Report what would be deleted without mutating storage.",
-                    },
-                },
-                "required": ["workspace"],
-            },
-        ),
-        Tool(
-            name="list_files",
-            description="List all documents ingested in the knowledge base.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "workspace": {
-                        "type": "string",
-                        "description": "Workspace to list files from. Omit for default workspace.",
-                    },
-                },
-            },
-        ),
-        Tool(
-            name="delete_files",
-            description="Delete documents from the knowledge base.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "filenames": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of filenames to delete",
-                    },
-                    "file_paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of file paths to delete",
-                    },
-                    "workspace": {
-                        "type": "string",
-                        "description": "Workspace to delete from. Omit for default workspace.",
-                    },
-                },
-            },
-        ),
-    ]
+def _ingest_kwargs(args: IngestInput) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if args.source_type == "local":
+        kwargs["path"] = args.path or "."
+    elif args.source_type == "azure_blob":
+        kwargs["container_name"] = args.container_name or ""
+        if args.blob_path:
+            kwargs["blob_path"] = args.blob_path
+        if args.prefix is not None:
+            kwargs["prefix"] = args.prefix
+    elif args.source_type == "s3":
+        kwargs["bucket"] = args.bucket or ""
+        if args.key:
+            kwargs["key"] = args.key
+        if args.prefix is not None:
+            kwargs["prefix"] = args.prefix
+    if args.replace is not None:
+        kwargs["replace"] = args.replace
+    if args.title is not None:
+        kwargs["title"] = args.title
+    if args.author is not None:
+        kwargs["author"] = args.author
+    if args.metadata is not None:
+        kwargs["metadata"] = args.metadata
+    if args.metadata_policy is not None:
+        kwargs["metadata_policy"] = args.metadata_policy
+    return kwargs
 
 
-@server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
-    """Handle MCP tool calls."""
+@mcp_app.tool(
+    name="retrieve",
+    description=(
+        "Query the RAG knowledge base for relevant information. Supports structured "
+        "metadata filters for precise document lookups."
+    ),
+)
+async def retrieve_tool(
+    query: Annotated[str, Field(description="The search query")],
+    top_k: Annotated[
+        int | None,
+        Field(default=None, description="Number of top results to return"),
+    ] = None,
+    chunk_top_k: Annotated[
+        int | None,
+        Field(default=None, description="Vector chunk candidate count override"),
+    ] = None,
+    workspaces: Annotated[
+        list[str] | None,
+        Field(default=None, description="Workspace names to search. Omit for default."),
+    ] = None,
+    filters: Annotated[
+        dict[str, Any] | None,
+        Field(default=None, description="Metadata filters for structured queries."),
+    ] = None,
+    query_images: QueryImagesParam = Field(default_factory=list),
+    session_id: Annotated[
+        str | None,
+        Field(default=None, description="Session id for image memory."),
+    ] = None,
+    referenced_image_ids: ReferencedImageIdsParam = Field(default_factory=list),
+) -> dict[str, Any]:
+    args = RetrieveInput.model_validate(locals())
+    manager = await _ensure_manager()
+    scope = current_request_scope().for_workspaces(args.workspaces)
+    result = await manager.aretrieve(
+        args.query,
+        workspaces=args.workspaces,
+        top_k=args.top_k,
+        chunk_top_k=args.chunk_top_k,
+        scope=scope,
+        **_retrieval_kwargs(args),
+    )
+    return retrieval_payload(result)
+
+
+@mcp_app.tool(
+    name="answer",
+    description=(
+        "Ask a question and get an LLM-generated answer backed by retrieved context "
+        "from the knowledge base."
+    ),
+)
+async def answer_tool(
+    query: Annotated[str, Field(description="The question to answer")],
+    top_k: Annotated[
+        int | None,
+        Field(default=None, description="Retrieval candidate count override for this answer"),
+    ] = None,
+    chunk_top_k: Annotated[
+        int | None,
+        Field(default=None, description="Vector chunk candidate count override for this answer"),
+    ] = None,
+    answer_candidate_top_k: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Answer retrieval candidates fetched before final prompt packing",
+        ),
+    ] = None,
+    answer_context_top_k: Annotated[
+        int | None,
+        Field(default=None, description="Maximum chunks included in the final answer prompt"),
+    ] = None,
+    workspaces: Annotated[
+        list[str] | None,
+        Field(default=None, description="Workspace names to search. Omit for default."),
+    ] = None,
+    filters: Annotated[
+        dict[str, Any] | None,
+        Field(default=None, description="Metadata filters for structured queries."),
+    ] = None,
+    conversation_history: Annotated[
+        list[dict[str, Any]] | None,
+        Field(default=None, description="Prior conversation turns as role/content objects."),
+    ] = None,
+    query_images: QueryImagesParam = Field(default_factory=list),
+    session_id: Annotated[
+        str | None,
+        Field(default=None, description="Session id for image memory."),
+    ] = None,
+    referenced_image_ids: ReferencedImageIdsParam = Field(default_factory=list),
+) -> dict[str, Any]:
+    args = AnswerInput.model_validate(locals())
+    manager = await _ensure_manager()
+    scope = current_request_scope().for_workspaces(args.workspaces)
+    result = await manager.aanswer(
+        args.query,
+        conversation_history=args.conversation_history,
+        workspaces=args.workspaces,
+        top_k=args.top_k,
+        chunk_top_k=args.chunk_top_k,
+        answer_candidate_top_k=args.answer_candidate_top_k,
+        answer_context_top_k=args.answer_context_top_k,
+        scope=scope,
+        **_retrieval_kwargs(args),
+    )
+    return answer_payload(result)
+
+
+@mcp_app.tool(name="list_workspaces", description="List all registered workspaces.")
+async def list_workspaces_tool() -> dict[str, Any]:
+    manager = await _ensure_manager()
+    records = await manager.list_workspace_records()
+    return {
+        "workspaces": [row["workspace"] for row in records],
+        "records": records,
+    }
+
+
+@mcp_app.tool(name="create_workspace", description="Create an empty DlightRAG workspace.")
+async def create_workspace_tool(
+    workspace: Annotated[str, Field(description="Workspace name to create.")],
+    display_name: Annotated[
+        str | None,
+        Field(default=None, description="Optional user-facing display name."),
+    ] = None,
+) -> dict[str, Any]:
+    args = CreateWorkspaceInput.model_validate(locals())
+    manager = await _ensure_manager()
+    normalized_workspace, normalized_display_name = _normalize_workspace_argument(args)
+    existing = await manager.list_workspaces()
+    if normalized_workspace in existing:
+        raise ValueError(f"Workspace '{normalized_display_name}' already exists")
+    await manager.acreate_workspace(normalized_workspace, display_name=normalized_display_name)
+    return {
+        "workspace": normalized_workspace,
+        "display_name": normalized_display_name,
+        "created": True,
+    }
+
+
+@mcp_app.tool(name="delete_workspace", description="Delete/reset one DlightRAG workspace.")
+async def delete_workspace_tool(
+    workspace: Annotated[str, Field(description="Workspace name to delete.")],
+    keep_files: Annotated[
+        bool,
+        Field(default=False, description="Keep source files on disk."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        Field(default=False, description="Report what would be deleted without mutating storage."),
+    ] = False,
+) -> dict[str, Any]:
+    args = DeleteWorkspaceInput.model_validate(locals())
+    manager = await _ensure_manager()
+    from dlightrag.utils import normalize_workspace, validate_workspace_name
+
+    label = validate_workspace_name(args.workspace)
+    normalized_workspace = normalize_workspace(label)
+    result = await manager.areset(
+        workspace=label,
+        keep_files=args.keep_files,
+        dry_run=args.dry_run,
+    )
+    return {
+        "workspace": normalized_workspace,
+        "deleted": not args.dry_run,
+        "result": result,
+    }
+
+
+@mcp_app.tool(name="ingest", description="Ingest document(s) into the RAG knowledge base.")
+async def ingest_tool(
+    source_type: Annotated[SourceTypeParam, Field(description="Type of data source")],
+    path: Annotated[
+        str | None,
+        Field(default=None, description="File or directory path for local source."),
+    ] = None,
+    container_name: Annotated[
+        str | None,
+        Field(default=None, description="Azure Blob container name."),
+    ] = None,
+    blob_path: Annotated[
+        str | None,
+        Field(default=None, description="Specific blob path for azure_blob."),
+    ] = None,
+    bucket: Annotated[
+        str | None,
+        Field(default=None, description="S3 bucket name."),
+    ] = None,
+    key: Annotated[
+        str | None,
+        Field(default=None, description="S3 object key, single object or prefix."),
+    ] = None,
+    prefix: Annotated[
+        str | None,
+        Field(default=None, description="Path/blob/key prefix filter."),
+    ] = None,
+    replace: Annotated[
+        bool | None,
+        Field(default=None, description="Replace existing documents."),
+    ] = None,
+    workspace: Annotated[
+        str | None,
+        Field(default=None, description="Target workspace. Omit for default."),
+    ] = None,
+    title: Annotated[
+        str | None,
+        Field(default=None, description="Optional document title metadata."),
+    ] = None,
+    author: Annotated[
+        str | None,
+        Field(default=None, description="Optional document author metadata."),
+    ] = None,
+    metadata: Annotated[
+        dict[str, Any] | None,
+        Field(default=None, description="User metadata to attach to ingested documents."),
+    ] = None,
+    metadata_policy: Annotated[
+        MetadataPolicyParam | None,
+        Field(default=None, description="How undeclared user metadata fields are handled."),
+    ] = None,
+    wait: Annotated[
+        bool | None,
+        Field(default=None, description="Wait for completion."),
+    ] = None,
+) -> dict[str, Any]:
+    args = IngestInput.model_validate(locals())
+    manager = await _ensure_manager()
+    workspace_name = args.workspace or _get_config().workspace
+    kwargs = _ingest_kwargs(args)
+    wait_for_completion = should_wait_for_ingest(
+        source_type=args.source_type,
+        path=kwargs.get("path"),
+        prefix=kwargs.get("prefix"),
+        wait=args.wait,
+    )
+    if wait_for_completion:
+        return await manager.aingest(workspace_name, source_type=args.source_type, **kwargs)
+    return await manager.astart_ingest_job(workspace_name, source_type=args.source_type, **kwargs)
+
+
+@mcp_app.tool(name="ingest_job_status", description="Return the status of an ingest job.")
+async def ingest_job_status_tool(
+    job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
+) -> dict[str, Any]:
+    args = IngestJobStatusInput.model_validate(locals())
+    manager = await _ensure_manager()
+    if not args.job_id:
+        raise ValueError("job_id is required")
+    result = await manager.get_ingest_job(args.job_id)
+    if result is None:
+        raise ValueError(f"Ingest job not found: {args.job_id}")
+    return result
+
+
+@mcp_app.tool(name="list_files", description="List all documents ingested in the knowledge base.")
+async def list_files_tool(
+    workspace: Annotated[
+        str | None,
+        Field(default=None, description="Workspace to list files from. Omit for default."),
+    ] = None,
+) -> dict[str, Any]:
+    args = ListFilesInput.model_validate(locals())
+    manager = await _ensure_manager()
+    workspace_name = args.workspace or _get_config().workspace
     try:
-        if name == "retrieve":
-            manager = await _ensure_manager()
-            if "mode" in arguments:
-                raise ValueError("MCP retrieve does not accept 'mode'; DlightRAG always uses mix")
-            kwargs: dict[str, Any] = {}
-            filters = metadata_filter_from_payload(arguments.get("filters"))
-            if filters is not None:
-                kwargs["filters"] = filters
-            if arguments.get("query_images"):
-                qi = arguments["query_images"]
-                if len(qi) > 3:
-                    raise ValueError("Maximum 3 query_images per request")
-                kwargs["query_images"] = qi
-            if arguments.get("session_id"):
-                kwargs["session_id"] = arguments["session_id"]
-            if arguments.get("referenced_image_ids"):
-                kwargs["referenced_image_ids"] = arguments["referenced_image_ids"]
-            scope = current_request_scope().for_workspaces(arguments.get("workspaces"))
-            result = await manager.aretrieve(
-                arguments["query"],
-                workspaces=arguments.get("workspaces"),
-                top_k=arguments.get("top_k"),
-                chunk_top_k=arguments.get("chunk_top_k"),
-                scope=scope,
-                **kwargs,
-            )
-            return _json_content(retrieval_payload(result))
+        files = await manager.list_ingested_files(workspace_name)
+    except NotImplementedError:
+        return {"error": "File listing is not supported in unified RAG mode"}
+    return {"files": files, "count": len(files), "workspace": workspace_name}
 
-        if name == "answer":
-            manager = await _ensure_manager()
-            if "mode" in arguments:
-                raise ValueError("MCP answer does not accept 'mode'; DlightRAG always uses mix")
-            kwargs = {}
-            filters = metadata_filter_from_payload(arguments.get("filters"))
-            if filters is not None:
-                kwargs["filters"] = filters
-            if arguments.get("query_images"):
-                qi = arguments["query_images"]
-                if len(qi) > 3:
-                    raise ValueError("Maximum 3 query_images per request")
-                kwargs["query_images"] = qi
-            if arguments.get("session_id"):
-                kwargs["session_id"] = arguments["session_id"]
-            if arguments.get("referenced_image_ids"):
-                kwargs["referenced_image_ids"] = arguments["referenced_image_ids"]
-            scope = current_request_scope().for_workspaces(arguments.get("workspaces"))
-            result = await manager.aanswer(
-                arguments["query"],
-                conversation_history=arguments.get("conversation_history"),
-                workspaces=arguments.get("workspaces"),
-                top_k=arguments.get("top_k"),
-                chunk_top_k=arguments.get("chunk_top_k"),
-                answer_candidate_top_k=arguments.get("answer_candidate_top_k"),
-                answer_context_top_k=arguments.get("answer_context_top_k"),
-                scope=scope,
-                **kwargs,
-            )
-            return _json_content(answer_payload(result))
 
-        if name == "list_workspaces":
-            manager = await _ensure_manager()
-            records = await manager.list_workspace_records()
-            return _json_content(
-                {
-                    "workspaces": [row["workspace"] for row in records],
-                    "records": records,
-                }
-            )
-
-        if name == "create_workspace":
-            manager = await _ensure_manager()
-            workspace, display_name = _normalize_workspace_argument(arguments)
-            existing = await manager.list_workspaces()
-            if workspace in existing:
-                raise ValueError(f"Workspace '{display_name}' already exists")
-            await manager.acreate_workspace(workspace, display_name=display_name)
-            return _json_content(
-                {
-                    "workspace": workspace,
-                    "display_name": display_name,
-                    "created": True,
-                }
-            )
-
-        if name == "delete_workspace":
-            manager = await _ensure_manager()
-            from dlightrag.utils import normalize_workspace, validate_workspace_name
-
-            label = validate_workspace_name(str(arguments.get("workspace") or ""))
-            workspace = normalize_workspace(label)
-            dry_run = bool(arguments.get("dry_run", False))
-            result = await manager.areset(
-                workspace=label,
-                keep_files=bool(arguments.get("keep_files", False)),
-                dry_run=dry_run,
-            )
-            return _json_content(
-                {
-                    "workspace": workspace,
-                    "deleted": not dry_run,
-                    "result": result,
-                }
-            )
-
-        if name == "ingest":
-            manager = await _ensure_manager()
-            ws = arguments.get("workspace") or _get_config().workspace
-            source_type = arguments["source_type"]
-            kwargs: dict[str, Any] = {}
-            if source_type == "local":
-                kwargs["path"] = arguments.get("path", ".")
-            elif source_type == "azure_blob":
-                if arguments.get("blob_path") and arguments.get("prefix") is not None:
-                    raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
-                kwargs["container_name"] = arguments.get("container_name", "")
-                if arguments.get("blob_path"):
-                    kwargs["blob_path"] = arguments["blob_path"]
-                if arguments.get("prefix") is not None:
-                    kwargs["prefix"] = arguments["prefix"]
-            elif source_type == "s3":
-                if arguments.get("key") and arguments.get("prefix") is not None:
-                    raise ValueError("'key' and 'prefix' are mutually exclusive")
-                kwargs["bucket"] = arguments.get("bucket", "")
-                if arguments.get("key"):
-                    kwargs["key"] = arguments["key"]
-                if arguments.get("prefix") is not None:
-                    kwargs["prefix"] = arguments["prefix"]
-            if arguments.get("replace") is not None:
-                kwargs["replace"] = arguments["replace"]
-            if arguments.get("title") is not None:
-                kwargs["title"] = arguments["title"]
-            if arguments.get("author") is not None:
-                kwargs["author"] = arguments["author"]
-            if arguments.get("metadata") is not None:
-                kwargs["metadata"] = arguments["metadata"]
-            if arguments.get("metadata_policy") is not None:
-                metadata_policy = str(arguments["metadata_policy"])
-                if metadata_policy not in _METADATA_POLICY_VALUES:
-                    raise ValueError(f"Invalid metadata_policy: {metadata_policy}")
-                kwargs["metadata_policy"] = metadata_policy
-            wait = should_wait_for_ingest(
-                source_type=source_type,
-                path=kwargs.get("path"),
-                prefix=kwargs.get("prefix"),
-                wait=arguments.get("wait"),
-            )
-            if wait:
-                result = await manager.aingest(ws, source_type=source_type, **kwargs)
-            else:
-                result = await manager.astart_ingest_job(ws, source_type=source_type, **kwargs)
-            return _json_content(result)
-
-        if name == "ingest_job_status":
-            manager = await _ensure_manager()
-            job_id = str(arguments.get("job_id") or "")
-            if not job_id:
-                raise ValueError("job_id is required")
-            result = await manager.get_ingest_job(job_id)
-            if result is None:
-                raise ValueError(f"Ingest job not found: {job_id}")
-            return _json_content(result)
-
-        if name == "list_files":
-            manager = await _ensure_manager()
-            ws = arguments.get("workspace") or _get_config().workspace
-            try:
-                files = await manager.list_ingested_files(ws)
-            except NotImplementedError:
-                return [
-                    TextContent(
-                        type="text",
-                        text=json.dumps(
-                            {"error": "File listing is not supported in unified RAG mode"},
-                        ),
-                    )
-                ]
-            return [
-                TextContent(
-                    type="text",
-                    text=json.dumps(
-                        {"files": files, "count": len(files), "workspace": ws}, default=str
-                    ),
-                )
-            ]
-
-        if name == "delete_files":
-            manager = await _ensure_manager()
-            ws = arguments.get("workspace") or _get_config().workspace
-            try:
-                results = await manager.delete_files(
-                    ws, filenames=arguments.get("filenames"), file_paths=arguments.get("file_paths")
-                )
-            except NotImplementedError:
-                return [
-                    TextContent(
-                        type="text",
-                        text=json.dumps(
-                            {"error": "File deletion is not supported in unified RAG mode"},
-                        ),
-                    )
-                ]
-            return [
-                TextContent(
-                    type="text", text=json.dumps({"results": results, "workspace": ws}, default=str)
-                )
-            ]
-
-        return [TextContent(type="text", text=f"Unknown tool: {name}")]
-
-    except Exception as e:
-        logger.exception(f"MCP tool '{name}' failed: {e}")
-        return [TextContent(type="text", text=f"Error: {e}")]
+@mcp_app.tool(name="delete_files", description="Delete documents from the knowledge base.")
+async def delete_files_tool(
+    filenames: Annotated[
+        list[str] | None,
+        Field(default=None, description="List of filenames to delete."),
+    ] = None,
+    file_paths: Annotated[
+        list[str] | None,
+        Field(default=None, description="List of file paths to delete."),
+    ] = None,
+    workspace: Annotated[
+        str | None,
+        Field(default=None, description="Workspace to delete from. Omit for default."),
+    ] = None,
+) -> dict[str, Any]:
+    args = DeleteFilesInput.model_validate(locals())
+    manager = await _ensure_manager()
+    workspace_name = args.workspace or _get_config().workspace
+    try:
+        results = await manager.delete_files(
+            workspace_name,
+            filenames=args.filenames,
+            file_paths=args.file_paths,
+        )
+    except NotImplementedError:
+        return {"error": "File deletion is not supported in unified RAG mode"}
+    return {"results": results, "workspace": workspace_name}
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -760,4 +631,4 @@ def main() -> None:
         asyncio.run(run_stdio())
 
 
-__all__ = ["main", "server"]
+__all__ = ["main", "mcp_app", "server"]

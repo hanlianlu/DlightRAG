@@ -4,7 +4,7 @@
 
 **Goal:** Replace the MCP hand-written tool list and central `call_tool` switch with FastMCP decorators and Pydantic input contracts while preserving the existing transport and security behavior.
 
-**Architecture:** `src/dlightrag/mcp/server.py` owns the FastMCP app and the transport startup code. `src/dlightrag/mcp/contracts.py` owns tool input models and typed field aliases. A small `DlightRAGFastMCP` subclass enforces strict unknown-argument rejection before delegating to FastMCP, because upstream FastMCP currently ignores extra keys.
+**Architecture:** `src/dlightrag/mcp/server.py` owns the FastMCP app and the transport startup code. `src/dlightrag/mcp/contracts.py` owns tool input models and typed field aliases. A small `DlightRAGFastMCP` subclass enforces strict unknown-argument rejection before delegating to FastMCP, because upstream FastMCP currently ignores extra keys; successful dictionary payloads keep FastMCP's native structured output with text fallback.
 
 **Tech Stack:** Python 3.12, MCP Python SDK `FastMCP`, Pydantic v2, pytest, ruff, pyright, Docker Compose.
 
@@ -366,12 +366,19 @@ tools = await mcp_server.mcp_app.list_tools()
 result = await mcp_server.mcp_app.call_tool("tool_name", {...})
 ```
 
-- [ ] **Step 2: Adjust JSON parsing helper if needed**
+- [ ] **Step 2: Adjust JSON parsing helper for FastMCP structured output**
 
-If FastMCP returns formatted JSON text for dictionaries, keep current parsing:
+FastMCP direct calls can return `(content, structuredContent)` for dictionary
+results. Tests should read the content side without forcing production code to
+unwrap structured output:
 
 ```python
-body = json.loads(result[0].text)
+def _tool_content(result):
+    return result[0] if isinstance(result, tuple) else result
+
+
+def _tool_json(result):
+    return json.loads(_tool_content(result)[0].text)
 ```
 
 No production wrapper should be added for test convenience.

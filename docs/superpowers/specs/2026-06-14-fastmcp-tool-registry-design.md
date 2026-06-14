@@ -60,7 +60,10 @@ Known validation rules move into models or small validators:
 ## Tool Outputs
 
 Tool handlers return plain dictionaries or strings and let FastMCP convert them
-to MCP content blocks. Existing payload builders stay in use:
+to MCP tool results. Successful dictionary payloads should keep FastMCP's native
+structured output instead of being forced back into text-only JSON; the text
+content fallback remains available for broad client compatibility. Existing
+payload builders stay in use:
 
 - `retrieval_payload`
 - `answer_payload`
