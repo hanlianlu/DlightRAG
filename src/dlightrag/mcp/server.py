@@ -29,6 +29,7 @@ from dlightrag.core.servicemanager import RAGServiceManager
 
 logger = logging.getLogger(__name__)
 _METADATA_POLICY_VALUES = ("validate", "reject_unknown", "store_only")
+_QUERY_IMAGE_ITEMS_SCHEMA = {"anyOf": [{"type": "string"}, {"type": "object"}]}
 
 server = Server(
     "dlightrag",
@@ -112,7 +113,7 @@ async def list_tools() -> list[Tool]:
                     "query_images": {
                         "type": "array",
                         "maxItems": 3,
-                        "items": {"type": "string"},
+                        "items": _QUERY_IMAGE_ITEMS_SCHEMA,
                         "description": "User-attached image URLs or data URI blocks (max 3) for visual retrieval",
                     },
                     "session_id": {
@@ -265,7 +266,7 @@ async def list_tools() -> list[Tool]:
                     "query_images": {
                         "type": "array",
                         "maxItems": 3,
-                        "items": {"type": "string"},
+                        "items": _QUERY_IMAGE_ITEMS_SCHEMA,
                         "description": "User-attached image URLs or data URI blocks (max 3) for visual answer context.",
                     },
                     "session_id": {

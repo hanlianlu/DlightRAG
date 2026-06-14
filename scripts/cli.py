@@ -7,6 +7,7 @@ Usage:
     uv run scripts/cli.py ingest ./docs
     uv run scripts/cli.py ingest ./docs --replace
     uv run scripts/cli.py ingest ./docs --workspace project-a
+    uv run scripts/cli.py ingest ./report.pdf --title "Quarterly Report" --metadata-json '{"department":"finance"}'
 
     # Azure Blob ingestion
     uv run scripts/cli.py ingest --source azure_blob --container my-container
@@ -20,7 +21,9 @@ Usage:
     # Query & answer (requires API server: docker compose up dlightrag-api)
     uv run scripts/cli.py query "What are the key findings?"
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
+    uv run scripts/cli.py query "findings?" --filter-doc-author Ada --chunk-top-k 12
     uv run scripts/cli.py answer "What are the key findings?"
+    uv run scripts/cli.py answer "summarize chart" --query-image data:image/png;base64,... --answer-context-top-k 4
     uv run scripts/cli.py chat
     uv run scripts/cli.py chat --workspaces project-a project-b
 
@@ -43,6 +46,7 @@ import httpx
 DEFAULT_API_URL = "http://localhost:8100"
 DEFAULT_QUERY_TIMEOUT = 120
 DEFAULT_INGEST_TIMEOUT = 600
+METADATA_POLICY_VALUES = ("validate", "reject_unknown", "store_only")
 
 
 def _get_timeout(for_ingest: bool = False) -> int:
@@ -96,6 +100,16 @@ def _print_json(data: Any) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
+def _json_object_arg(value: str) -> dict[str, Any]:
+    try:
+        data = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"expected JSON object: {exc.msg}") from exc
+    if not isinstance(data, dict):
+        raise argparse.ArgumentTypeError("expected JSON object")
+    return data
+
+
 def _die(msg: str) -> None:
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(2)
@@ -130,6 +144,111 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             _die("--container, --blob-path are only for azure_blob source")
 
 
+def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
+    filters = dict(getattr(args, "filters_json", None) or {})
+    field_map = {
+        "filter_filename": "filename",
+        "filter_filename_stem": "filename_stem",
+        "filter_filename_pattern": "filename_pattern",
+        "filter_file_extension": "file_extension",
+        "filter_doc_title": "doc_title",
+        "filter_doc_author": "doc_author",
+        "filter_date_from": "date_from",
+        "filter_date_to": "date_to",
+    }
+    for attr, field in field_map.items():
+        value = getattr(args, attr, None)
+        if value is not None:
+            filters[field] = value
+
+    custom = getattr(args, "filter_custom", None)
+    if custom is not None:
+        existing = filters.get("custom")
+        filters["custom"] = {**existing, **custom} if isinstance(existing, dict) else custom
+
+    return filters or None
+
+
+def _apply_query_options(
+    payload: dict[str, Any],
+    args: argparse.Namespace,
+    *,
+    include_answer_limits: bool = False,
+) -> dict[str, Any]:
+    if getattr(args, "top_k", None) is not None:
+        payload["top_k"] = args.top_k
+    if getattr(args, "chunk_top_k", None) is not None:
+        payload["chunk_top_k"] = args.chunk_top_k
+    if getattr(args, "workspaces", None):
+        payload["workspaces"] = args.workspaces
+
+    filters = _metadata_filter_payload(args)
+    if filters is not None:
+        payload["filters"] = filters
+
+    if getattr(args, "query_images", None):
+        payload["query_images"] = args.query_images
+    if getattr(args, "session_id", None):
+        payload["session_id"] = args.session_id
+    if getattr(args, "referenced_image_ids", None):
+        payload["referenced_image_ids"] = args.referenced_image_ids
+
+    if include_answer_limits:
+        if getattr(args, "answer_candidate_top_k", None) is not None:
+            payload["answer_candidate_top_k"] = args.answer_candidate_top_k
+        if getattr(args, "answer_context_top_k", None) is not None:
+            payload["answer_context_top_k"] = args.answer_context_top_k
+
+    return payload
+
+
+def _build_retrieve_payload(args: argparse.Namespace) -> dict[str, Any]:
+    return _apply_query_options({"query": args.query}, args)
+
+
+def _build_answer_payload(
+    args: argparse.Namespace,
+    *,
+    query: str,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"query": query, "stream": False}
+    if conversation_history:
+        payload["conversation_history"] = conversation_history
+    return _apply_query_options(payload, args, include_answer_limits=True)
+
+
+def _build_ingest_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    source = args.source_type
+    kwargs: dict[str, Any] = {}
+
+    if source == "local":
+        kwargs["path"] = args.path
+    elif source == "azure_blob":
+        kwargs["container_name"] = args.container_name
+        if args.blob_path:
+            kwargs["blob_path"] = args.blob_path
+        if args.prefix is not None:
+            kwargs["prefix"] = args.prefix
+    elif source == "s3":
+        kwargs["bucket"] = args.bucket
+        if args.key:
+            kwargs["key"] = args.key
+        if args.prefix is not None:
+            kwargs["prefix"] = args.prefix
+
+    kwargs["replace"] = args.replace
+    if getattr(args, "title", None) is not None:
+        kwargs["title"] = args.title
+    if getattr(args, "author", None) is not None:
+        kwargs["author"] = args.author
+    if getattr(args, "metadata", None) is not None:
+        kwargs["metadata"] = args.metadata
+    if getattr(args, "metadata_policy", None) is not None:
+        kwargs["metadata_policy"] = args.metadata_policy
+    return kwargs
+
+
 # ═══════════════════════════════════════════════════════════════════
 # ingest
 # ═══════════════════════════════════════════════════════════════════
@@ -140,30 +259,16 @@ async def _run_ingest(args: argparse.Namespace) -> None:
     from dlightrag.core.service import RAGService
 
     source = args.source_type
-    kwargs: dict[str, Any] = {}
+    kwargs = _build_ingest_kwargs(args)
 
     if source == "local":
-        kwargs["path"] = args.path
-        kwargs["replace"] = args.replace
         print(f"Ingesting: {args.path} (replace={args.replace})")
     elif source == "azure_blob":
-        kwargs["container_name"] = args.container_name
-        if args.blob_path:
-            kwargs["blob_path"] = args.blob_path
-        if args.prefix is not None:
-            kwargs["prefix"] = args.prefix
-        kwargs["replace"] = args.replace
         target = args.blob_path or (f"prefix={args.prefix}" if args.prefix else "entire container")
         print(
             f"Ingesting Azure Blob: container={args.container_name}, {target} (replace={args.replace})"
         )
     elif source == "s3":
-        kwargs["bucket"] = args.bucket
-        if args.key:
-            kwargs["key"] = args.key
-        if args.prefix is not None:
-            kwargs["prefix"] = args.prefix
-        kwargs["replace"] = args.replace
         target = args.key or (f"prefix={args.prefix}" if args.prefix else "entire bucket")
         print(f"Ingesting S3: bucket={args.bucket}, {target} (replace={args.replace})")
 
@@ -198,11 +303,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 def cmd_query(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/retrieve"
-    payload: dict[str, Any] = {"query": args.query}
-    if args.top_k is not None:
-        payload["top_k"] = args.top_k
-    if args.workspaces:
-        payload["workspaces"] = args.workspaces
+    payload = _build_retrieve_payload(args)
 
     print(f"Query: {args.query}")
     if args.workspaces:
@@ -216,11 +317,7 @@ def cmd_query(args: argparse.Namespace) -> None:
 
 def cmd_answer(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/answer"
-    payload: dict[str, Any] = {"query": args.query, "stream": False}
-    if args.top_k is not None:
-        payload["top_k"] = args.top_k
-    if args.workspaces:
-        payload["workspaces"] = args.workspaces
+    payload = _build_answer_payload(args, query=args.query)
 
     print(f"Question: {args.query}")
     if args.workspaces:
@@ -267,18 +364,16 @@ def cmd_chat(args: argparse.Namespace) -> None:
             print("-- history cleared --\n")
             continue
 
-        payload: dict[str, Any] = {
-            "query": question,
-            "stream": False,
-        }
+        conversation_history = None
         if history:
-            payload["conversation_history"] = [
+            conversation_history = [
                 {"role": m["role"], "content": m["content"]} for m in history[-20:]
             ]
-        if args.top_k is not None:
-            payload["top_k"] = args.top_k
-        if args.workspaces:
-            payload["workspaces"] = args.workspaces
+        payload = _build_answer_payload(
+            args,
+            query=question,
+            conversation_history=conversation_history,
+        )
 
         try:
             resp = httpx.post(url, json=payload, headers=_headers(), timeout=_get_timeout())
@@ -331,6 +426,71 @@ def cmd_ragas_eval(args: argparse.Namespace) -> None:
     subprocess.run(cmd, check=False)
 
 
+def _add_filter_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--filters-json",
+        type=_json_object_arg,
+        default=None,
+        help="Full metadata filters JSON object sent to the API",
+    )
+    parser.add_argument("--filter-filename", dest="filter_filename")
+    parser.add_argument("--filter-filename-stem", dest="filter_filename_stem")
+    parser.add_argument("--filter-filename-pattern", dest="filter_filename_pattern")
+    parser.add_argument("--filter-file-extension", dest="filter_file_extension")
+    parser.add_argument("--filter-doc-title", dest="filter_doc_title")
+    parser.add_argument("--filter-doc-author", dest="filter_doc_author")
+    parser.add_argument("--filter-date-from", dest="filter_date_from")
+    parser.add_argument("--filter-date-to", dest="filter_date_to")
+    parser.add_argument(
+        "--filter-custom-json",
+        type=_json_object_arg,
+        default=None,
+        dest="filter_custom",
+        help="Custom metadata filter JSON object",
+    )
+
+
+def _add_retrieval_options(
+    parser: argparse.ArgumentParser,
+    *,
+    include_answer_limits: bool = False,
+) -> None:
+    parser.add_argument("--top-k", type=int, default=None, dest="top_k")
+    parser.add_argument("--chunk-top-k", type=int, default=None, dest="chunk_top_k")
+    parser.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
+    _add_filter_options(parser)
+    parser.add_argument(
+        "--query-image",
+        action="append",
+        default=None,
+        dest="query_images",
+        help="User-attached image URL or data URI; repeat up to 3 times",
+    )
+    parser.add_argument("--session-id", default=None, help="Session id for image memory")
+    parser.add_argument(
+        "--referenced-image-id",
+        action="append",
+        default=None,
+        dest="referenced_image_ids",
+        help="Previously returned image id to include; repeat as needed",
+    )
+    if include_answer_limits:
+        parser.add_argument(
+            "--answer-candidate-top-k",
+            type=int,
+            default=None,
+            dest="answer_candidate_top_k",
+            help="Answer retrieval candidates fetched before final prompt packing",
+        )
+        parser.add_argument(
+            "--answer-context-top-k",
+            type=int,
+            default=None,
+            dest="answer_context_top_k",
+            help="Maximum chunks included in the final answer prompt",
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # parser
 # ═══════════════════════════════════════════════════════════════════
@@ -378,23 +538,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--key", help="S3 object key")
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
     p_ingest.add_argument("--workspace", default=None, help="Target workspace")
+    p_ingest.add_argument("--title", default=None, help="Optional document title metadata")
+    p_ingest.add_argument("--author", default=None, help="Optional document author metadata")
+    p_ingest.add_argument(
+        "--metadata-json",
+        type=_json_object_arg,
+        default=None,
+        dest="metadata",
+        help="User metadata JSON object to attach to ingested documents",
+    )
+    p_ingest.add_argument(
+        "--metadata-policy",
+        choices=list(METADATA_POLICY_VALUES),
+        default=None,
+        help="How undeclared user metadata fields are handled",
+    )
 
     # -- query --
     p_query = sub.add_parser("query", help="Retrieve contexts and sources (no answer)")
     p_query.add_argument("query", help="Search query")
-    p_query.add_argument("--top-k", type=int, default=None, dest="top_k")
-    p_query.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
+    _add_retrieval_options(p_query)
 
     # -- answer --
     p_answer = sub.add_parser("answer", help="LLM-generated answer with contexts and sources")
     p_answer.add_argument("query", help="Question to answer")
-    p_answer.add_argument("--top-k", type=int, default=None, dest="top_k")
-    p_answer.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
+    _add_retrieval_options(p_answer, include_answer_limits=True)
 
     # -- chat --
     p_chat = sub.add_parser("chat", help="Interactive multi-turn conversation")
-    p_chat.add_argument("--top-k", type=int, default=None, dest="top_k")
-    p_chat.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
+    _add_retrieval_options(p_chat, include_answer_limits=True)
 
     # -- ragas_eval --
     p_eval = sub.add_parser("ragas_eval", help="Run RAGAS evaluation against a DlightRAG API")

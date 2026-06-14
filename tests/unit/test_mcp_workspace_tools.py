@@ -34,9 +34,19 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     answer_props = answer_tool.inputSchema["properties"]
     assert "conversation_history" in answer_props
     assert "query_images" in answer_props
+    assert answer_props["query_images"]["items"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "object"},
+    ]
     assert "session_id" in answer_props
     assert "referenced_image_ids" in answer_props
     assert "filters" in answer_props
+    retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
+    retrieve_props = retrieve_tool.inputSchema["properties"]
+    assert retrieve_props["query_images"]["items"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "object"},
+    ]
     ingest_tool = next(tool for tool in tools if tool.name == "ingest")
     ingest_props = ingest_tool.inputSchema["properties"]
     assert "title" in ingest_props
