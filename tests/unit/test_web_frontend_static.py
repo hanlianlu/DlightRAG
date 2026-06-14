@@ -15,11 +15,11 @@ FRONTEND_TOKENS = FRONTEND / "tokens"
 FRONTEND_STYLES = FRONTEND / "styles"
 
 
-def test_chat_module_imports_close_panel_before_using_it() -> None:
+def test_chat_submit_does_not_auto_close_open_panel() -> None:
     chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
-    assert "closePanel();" in chat_js
-    assert "import {closePanel} from './panel.ts';" in chat_js
+    assert "closePanel();" not in chat_js
+    assert "import {closePanel} from './panel.ts';" not in chat_js
 
 
 def test_chat_streaming_is_split_into_transport_and_renderer_modules() -> None:
