@@ -31,6 +31,12 @@ _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
 _PG_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _PG_QUALIFIED_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
+_LOCAL_MCP_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+_LOCAL_MCP_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+]
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 
 
@@ -830,6 +836,20 @@ class DlightragConfig(BaseSettings):
         "guards the transport.",
     )
     mcp_port: int = Field(default=8101)
+    mcp_allowed_hosts: list[str] = Field(
+        default_factory=lambda: list(_LOCAL_MCP_ALLOWED_HOSTS),
+        description=(
+            "Allowed Host header values for MCP streamable-http DNS rebinding protection. "
+            "Use explicit deployment hostnames before exposing MCP beyond loopback."
+        ),
+    )
+    mcp_allowed_origins: list[str] = Field(
+        default_factory=lambda: list(_LOCAL_MCP_ALLOWED_ORIGINS),
+        description=(
+            "Allowed Origin header values for MCP streamable-http DNS rebinding protection. "
+            "Origin may be absent for non-browser clients."
+        ),
+    )
 
     # ===== REST API Server =====
     api_host: str = Field(default="0.0.0.0")

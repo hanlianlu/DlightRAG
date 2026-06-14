@@ -339,6 +339,13 @@ DLIGHTRAG_MCP_HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 
+The HTTP transport exposes a single MCP endpoint at `/mcp`. DlightRAG does not
+serve the deprecated HTTP+SSE `/sse` + `/messages` transport. Streamable HTTP
+uses JSON responses by default, enables MCP Host/Origin DNS-rebinding
+protection, and allows only loopback hosts/origins unless
+`DLIGHTRAG_MCP_ALLOWED_HOSTS` and `DLIGHTRAG_MCP_ALLOWED_ORIGINS` are set for a
+trusted remote deployment.
+
 MCP tools: `retrieve`, `answer`, `ingest`, `ingest_job_status`,
 `list_files`, `delete_files`, `list_workspaces`, `create_workspace`, and
 `delete_workspace`.
