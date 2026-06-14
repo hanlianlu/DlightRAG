@@ -114,7 +114,7 @@ def _math_inline_rule(state: StateInline, silent: bool) -> bool:
     return True
 
 
-def _render_math_inline(renderer, tokens: list, idx: int, _options, _env) -> str:
+def _render_math_inline(_renderer, tokens: list, idx: int, _options, _env) -> str:
     """Re-wrap math content with its original delimiters for MathJax."""
     token = tokens[idx]
     markup = getattr(token, "markup", "$")

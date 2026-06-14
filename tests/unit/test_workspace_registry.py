@@ -104,7 +104,7 @@ async def test_workspace_registry_initialization_canonicalizes_existing_rows() -
     conn = _Conn()
     conn.rows = [
         {
-            "workspace": "legacy-workspace",
+            "workspace": "imported-workspace",
             "display_name": "Project Alpha",
             "embedding_model": "voyage-multimodal-3.5",
             "created_at": None,
@@ -116,11 +116,11 @@ async def test_workspace_registry_initialization_canonicalizes_existing_rows() -
     await registry.initialize()
 
     assert (
-        "legacy_workspace",
+        "imported_workspace",
         "Project Alpha",
         "voyage-multimodal-3.5",
     ) in [args for _, args in conn.executed]
-    assert ("legacy-workspace",) in [args for _, args in conn.executed]
+    assert ("imported-workspace",) in [args for _, args in conn.executed]
 
 
 async def test_workspace_registry_upserts_lists_and_deletes() -> None:
@@ -149,17 +149,17 @@ async def test_workspace_registry_normalizes_write_operations() -> None:
     registry = PGWorkspaceRegistry(pool=_Pool(conn))
 
     await registry.upsert(
-        workspace="Legacy Workspace",
-        display_name="Legacy Workspace",
+        workspace="Project Workspace",
+        display_name="Project Workspace",
         embedding_model="voyage-multimodal-3.5",
     )
-    exists = await registry.exists("Legacy Workspace")
-    await registry.delete("Legacy Workspace")
+    exists = await registry.exists("Project Workspace")
+    await registry.delete("Project Workspace")
 
     assert exists is False
     assert (
-        "legacy_workspace",
-        "Legacy Workspace",
+        "project_workspace",
+        "Project Workspace",
         "voyage-multimodal-3.5",
     ) in [args for _, args in conn.executed]
-    assert ("legacy_workspace",) in [args for _, args in conn.executed]
+    assert ("project_workspace",) in [args for _, args in conn.executed]

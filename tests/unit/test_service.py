@@ -91,8 +91,8 @@ class TestRAGServiceAingest:
 
         async def _aiter_documents(prefix: str | None = None):
             seen_prefixes.append(prefix)
-            if False:
-                yield ""
+            for item in ():
+                yield item
 
         mock_source.aiter_documents = _aiter_documents
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
@@ -104,8 +104,8 @@ class TestRAGServiceAingest:
         mock_source = AsyncMock()
 
         async def _aiter_documents(prefix: str | None = None):
-            if False:
-                yield ""
+            for item in ():
+                yield item
 
         mock_source.aiter_documents = _aiter_documents
         await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")

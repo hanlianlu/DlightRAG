@@ -82,10 +82,11 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("pg_check")
 class TestPGWorkspaceDiscovery:
     """Test workspace discovery via SELECT DISTINCT workspace."""
 
-    async def test_discovers_workspaces_from_workspace_meta(self, pg_check) -> None:
+    async def test_discovers_workspaces_from_workspace_meta(self) -> None:
         """list_workspaces() returns workspaces found in dlightrag_workspace_meta."""
         from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager
@@ -124,7 +125,7 @@ class TestPGWorkspaceDiscovery:
             await _delete_test_workspaces(registry)
             await pool.close()
 
-    async def test_empty_table_returns_default_workspace(self, pg_check) -> None:
+    async def test_empty_table_returns_default_workspace(self) -> None:
         """Empty workspace metadata falls back to config.workspace."""
         from dlightrag.config import DlightragConfig, EmbeddingConfig, set_config
         from dlightrag.core.servicemanager import RAGServiceManager

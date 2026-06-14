@@ -53,8 +53,8 @@ class TestAnswerStream:
         """Empty stream -- no crash."""
 
         async def fake_stream():
-            return
-            yield  # make it an async generator
+            for token in ():
+                yield token
 
         stream = AnswerStream(fake_stream())
         parts = []
