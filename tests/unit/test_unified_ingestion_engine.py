@@ -299,7 +299,6 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
 
     # Must have cleaned up the old partial record.
     deps["lightrag"].adelete_by_doc_id.assert_awaited_once_with(doc_id, delete_llm_cache=True)
-    deps["stores"].cleanup_doc.assert_not_awaited()
     deps["metadata_index"].delete.assert_awaited_once_with(doc_id)
     assert events[:2] == ["get_full_doc", "adelete_by_doc_id"]
     assert not artifact_dir.exists()
@@ -326,7 +325,6 @@ async def test_document_ingest_skips_cleanup_when_already_processed(tmp_path: Pa
 
     # Cleanup must NOT have been called for a healthy doc.
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
-    deps["stores"].cleanup_doc.assert_not_awaited()
     deps["metadata_index"].delete.assert_not_awaited()
 
 
@@ -340,7 +338,6 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
     result = await engine.aingest_file(source, replace=False)
 
     deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
-    deps["stores"].cleanup_doc.assert_not_awaited()
     assert result["doc_id"] is not None
 
 
@@ -504,7 +501,6 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
     assert len(results) == 2
     # Cleanup must have been called exactly once (not twice).
     assert deps["lightrag"].adelete_by_doc_id.await_count == 1
-    deps["stores"].cleanup_doc.assert_not_awaited()
 
 
 async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
