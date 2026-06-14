@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from dlightrag.core.session_images import SessionImageStore
 
 
@@ -41,3 +43,21 @@ def test_session_image_store_clear_removes_session() -> None:
     store.clear("s1")
 
     assert store.get("s1", ["img_0"]) == []
+
+
+def test_manager_session_image_ttl_tracks_checkpoint_ttl() -> None:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    manager = RAGServiceManager.__new__(RAGServiceManager)
+    manager._session_images = None
+    manager._config = SimpleNamespace(
+        checkpoint_session_ttl_days=30,
+        query_images=SimpleNamespace(
+            session_max_images=50,
+            session_max_sessions=100,
+        ),
+    )
+
+    store = manager._get_session_images()
+
+    assert store._ttl == 30 * 24 * 60 * 60

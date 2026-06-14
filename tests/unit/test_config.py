@@ -351,6 +351,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.answer.image_quality == 89
     assert cfg.answer.image_min_quality == 79
     assert cfg.query_images.max_described_images == 3
+    assert not hasattr(cfg.query_images, "session_ttl_seconds")
     assert cfg.visual_assets.thumb_max_px == 300
     assert not hasattr(cfg, "bm25" + "_text_config")
     assert [profile.name for profile in cfg.bm25_profiles] == [
