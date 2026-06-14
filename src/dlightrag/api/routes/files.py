@@ -11,7 +11,12 @@ from fastapi.responses import StreamingResponse
 from starlette.responses import RedirectResponse
 
 from dlightrag.api.auth import UserContext, get_current_user
-from dlightrag.api.models import DeleteRequest
+from dlightrag.api.models import (
+    DeleteFilesResponse,
+    DeleteRequest,
+    FailedFilesResponse,
+    FileListResponse,
+)
 from dlightrag.config import get_config
 from dlightrag.sourcing.aws_s3 import (
     S3CredentialsUnavailable,
@@ -26,7 +31,7 @@ from .deps import get_manager, resolve_workspace
 router = APIRouter()
 
 
-@router.get("/files")
+@router.get("/files", response_model=FileListResponse)
 async def list_files(
     request: Request,
     workspace: str | None = Query(default=None),
@@ -45,7 +50,7 @@ async def list_files(
     return {"files": files, "count": len(files), "workspace": ws}
 
 
-@router.delete("/files")
+@router.delete("/files", response_model=DeleteFilesResponse)
 async def delete_files(
     body: DeleteRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
@@ -66,7 +71,7 @@ async def delete_files(
     return {"results": results, "workspace": ws}
 
 
-@router.get("/files/failed")
+@router.get("/files/failed", response_model=FailedFilesResponse)
 async def list_failed_files(
     request: Request,
     workspace: str | None = Query(default=None),

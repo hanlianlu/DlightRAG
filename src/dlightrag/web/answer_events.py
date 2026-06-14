@@ -12,6 +12,13 @@ from typing import Any, cast
 from dlightrag.citations import extract_highlights_for_sources, finalize_answer
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
+from dlightrag.web.events import (
+    AnswerDoneEvent,
+    AnswerErrorEvent,
+    AnswerMetaEvent,
+    AnswerProgressEvent,
+    AnswerTraceEvent,
+)
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
 
@@ -109,12 +116,12 @@ async def stream_answer_events(
     full_answer = ""
     try:
         history_kept = len(conversation_history) if conversation_history else 0
-        yield sse_event("meta", {"history_kept": history_kept})
+        yield sse_event("meta", AnswerMetaEvent(history_kept=history_kept))
 
         t0 = time.monotonic()
         logger.info("[SSE] query received: %s", query[:80])
 
-        yield sse_event("progress", {"phase": "planning"})
+        yield sse_event("progress", AnswerProgressEvent(phase="planning"))
 
         ws_list = workspaces or [workspace or manager.config.workspace]
         contexts, token_iter = await manager.aanswer_stream(
@@ -128,7 +135,7 @@ async def stream_answer_events(
         t1 = time.monotonic()
         logger.info("[SSE] retrieval+stream setup done (%.1fs)", t1 - t0)
 
-        yield sse_event("progress", {"phase": "generating"})
+        yield sse_event("progress", AnswerProgressEvent(phase="generating"))
         logger.info("[SSE] stream started")
 
         accumulated_text = ""
@@ -198,16 +205,16 @@ async def stream_answer_events(
         ]
         answer_images = session_images + cited_images
 
-        done_payload = {
-            "html": safe_answer_done(
+        done_payload = AnswerDoneEvent(
+            html=safe_answer_done(
                 answer=finalized.answer,
                 sources=finalized.sources,
                 answer_images=answer_images,
             ),
-            "answer": finalized.answer,
-            "current_image_ids": current_image_ids,
-            "image_descriptions": image_descriptions,
-        }
+            answer=finalized.answer,
+            current_image_ids=current_image_ids,
+            image_descriptions=image_descriptions,
+        )
         yield sse_event("done", done_payload)
 
         save_checkpoint = getattr(manager, "save_turn_checkpoint", None)
@@ -252,7 +259,7 @@ async def stream_answer_events(
 
         trace = getattr(token_iter, "trace", None)
         if isinstance(trace, dict) and trace:
-            yield sse_event("trace", trace)
+            yield sse_event("trace", AnswerTraceEvent(trace=trace))
 
         highlight_cfg = cfg.citations.highlights
         has_text_chunks = any(
@@ -286,7 +293,7 @@ async def stream_answer_events(
 
     except Exception:
         logger.exception("Answer streaming failed")
-        yield sse_event("error", "Service error. Please try again.")
+        yield sse_event("error", AnswerErrorEvent(message="Service error. Please try again."))
 
 
 __all__ = ["stream_answer_events"]

@@ -7,8 +7,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from dlightrag.core.client_contracts import ConversationMessage, QueryImage
+
 MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
-QueryImage = str | dict[str, Any]
 SourceType = Literal["local", "azure_blob", "s3"]
 
 
@@ -30,7 +31,7 @@ class RetrieveInput(MCPInput):
 class AnswerInput(RetrieveInput):
     answer_candidate_top_k: int | None = None
     answer_context_top_k: int | None = None
-    conversation_history: list[dict[str, Any]] | None = None
+    conversation_history: list[ConversationMessage] | None = None
 
 
 class IngestInput(MCPInput):

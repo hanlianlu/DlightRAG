@@ -18,7 +18,8 @@ def _image_payload() -> dict[str, str]:
     image = Image.new("RGB", (2, 2), "white")
     buf = io.BytesIO()
     image.save(buf, format="PNG")
-    return {"type": "image", "data": base64.b64encode(buf.getvalue()).decode("ascii")}
+    payload = base64.b64encode(buf.getvalue()).decode("ascii")
+    return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
 
 
 def _write_image(path: Path) -> None:

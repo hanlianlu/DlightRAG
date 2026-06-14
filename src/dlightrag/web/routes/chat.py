@@ -3,13 +3,15 @@
 
 import base64
 import logging
-from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from pydantic import ValidationError
 
+from dlightrag.core.client_contracts import dump_optional_list
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.deps import get_manager, get_request_scope, get_workspace, templates
+from dlightrag.web.requests import WebAnswerRequest
 
 logger = logging.getLogger(__name__)
 
@@ -116,17 +118,21 @@ async def answer_stream(
     workspace: str = Depends(get_workspace),
 ):
     """Stream answer via SSE, then swap in enriched citations."""
-    body = await request.json()
-    query = str(body.get("query", ""))
+    try:
+        body = WebAnswerRequest.model_validate_json(await request.body())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
+    query = body.query
     if not query:
         return HTMLResponse("<span>Please enter a question.</span>")
 
-    conversation_history: list[dict[str, Any]] | None = body.get("conversation_history")
+    conversation_history = dump_optional_list(body.conversation_history)
 
     # Extract images (base64 from frontend). Raw base64 is passed to the
     # manager; it handles answer budgeting, semantic VLM enhancement, session
     # memory, and direct visual retrieval.
-    images_b64: list[str] = body.get("images", [])
+    images_b64 = body.images
     clean_images: list[str] = []
     if images_b64:
         for b64 in images_b64[:3]:  # enforce 3-image limit
@@ -140,9 +146,8 @@ async def answer_stream(
                 logger.warning("Failed to decode uploaded image", exc_info=True)
 
     # Extract workspaces (multi-select from frontend).
-    requested_workspaces = body.get("workspaces")
-    workspaces = requested_workspaces if isinstance(requested_workspaces, list) else None
-    session_id = str(body.get("session_id") or "")
+    workspaces = body.workspaces
+    session_id = body.session_id
     scope = get_request_scope(request, workspaces or [workspace])
 
     manager = get_manager(request)

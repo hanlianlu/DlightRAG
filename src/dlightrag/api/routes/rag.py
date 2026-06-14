@@ -15,11 +15,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
     AnswerRequest,
+    AnswerResponse,
+    IngestJobStatusResponse,
     IngestRequest,
     ResetRequest,
+    ResetResponse,
+    RetrievalResponse,
     RetrieveRequest,
 )
 from dlightrag.citations import finalize_answer
+from dlightrag.core.client_contracts import dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
     metadata_filter_from_payload,
@@ -97,7 +102,7 @@ async def ingest(
     return result
 
 
-@router.get("/ingest/jobs/{job_id}")
+@router.get("/ingest/jobs/{job_id}", response_model=IngestJobStatusResponse)
 async def get_ingest_job(
     job_id: str,
     request: Request,
@@ -111,7 +116,7 @@ async def get_ingest_job(
     return job
 
 
-@router.post("/retrieve")
+@router.post("/retrieve", response_model=RetrievalResponse)
 async def retrieve(
     body: RetrieveRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:
@@ -122,9 +127,9 @@ async def retrieve(
     if filters is not None:
         kwargs["filters"] = filters
     if body.multimodal_content:
-        kwargs["multimodal_content"] = body.multimodal_content
+        kwargs["multimodal_content"] = dump_optional_list(body.multimodal_content)
     if body.query_images:
-        kwargs["query_images"] = body.query_images
+        kwargs["query_images"] = dump_optional_list(body.query_images)
     if body.session_id:
         kwargs["session_id"] = body.session_id
     if body.referenced_image_ids:
@@ -143,7 +148,7 @@ async def retrieve(
     return retrieval_payload(result, source_url_resolver=resolver)
 
 
-@router.post("/answer", response_model=None)
+@router.post("/answer", response_model=AnswerResponse)
 async def answer(
     body: AnswerRequest, request: Request, user: UserContext = Depends(get_current_user)
 ):
@@ -154,9 +159,9 @@ async def answer(
     if filters is not None:
         kwargs["filters"] = filters
     if body.multimodal_content:
-        kwargs["multimodal_content"] = body.multimodal_content
+        kwargs["multimodal_content"] = dump_optional_list(body.multimodal_content)
     if body.query_images:
-        kwargs["query_images"] = body.query_images
+        kwargs["query_images"] = dump_optional_list(body.query_images)
     if body.session_id:
         kwargs["session_id"] = body.session_id
     if body.referenced_image_ids:
@@ -166,7 +171,7 @@ async def answer(
     if not body.stream:
         result = await manager.aanswer(
             body.query,
-            conversation_history=body.conversation_history,
+            conversation_history=dump_optional_list(body.conversation_history),
             workspaces=body.workspaces,
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
@@ -179,7 +184,7 @@ async def answer(
 
     contexts, token_iter = await manager.aanswer_stream(
         body.query,
-        conversation_history=body.conversation_history,
+        conversation_history=dump_optional_list(body.conversation_history),
         workspaces=body.workspaces,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
@@ -333,7 +338,7 @@ async def ingest_blob(
     return result
 
 
-@router.post("/reset")
+@router.post("/reset", response_model=ResetResponse)
 async def reset_workspace(
     body: ResetRequest, request: Request, user: UserContext = Depends(get_current_user)
 ) -> dict[str, Any]:

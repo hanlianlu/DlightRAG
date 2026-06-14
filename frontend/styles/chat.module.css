@@ -11,9 +11,9 @@
   border-radius: var(--radius-message);
   padding: var(--space-component) var(--space-related);
   margin: var(--space-message-block) 0 var(--space-tight) auto;
+  flex: 0 1 auto;
   max-width: 100%;
   min-width: 0;
-  width: fit-content;
   color: var(--color-text-primary);
   font-size: var(--font-size-body);
   line-height: var(--line-height-control);
@@ -22,15 +22,19 @@
 }
 
 .userMessageWrapper {
+  display: flex;
+  justify-content: flex-end;
   margin-left: auto;
   max-width: 85%;
   min-width: 0;
+  width: 100%;
 }
 
 .aiMessage {
   margin: var(--space-tight) 0 0;
   padding: var(--space-tight) 0 var(--space-message-block);
   line-height: var(--line-height-message);
+  min-width: 0;
 }
 
 .aiMessageHeader {
@@ -54,6 +58,8 @@
   font-size: var(--font-size-body);
   color: var(--color-text-tertiary);
   line-height: var(--line-height-message);
+  min-width: 0;
+  overflow-wrap: anywhere;
   overflow-x: auto;
 }
 

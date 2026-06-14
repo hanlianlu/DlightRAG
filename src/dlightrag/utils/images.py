@@ -204,7 +204,15 @@ def thumbnail_bytes(
 def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:
     """Normalize a URL/data/base64 payload to an OpenAI-style image block."""
     if isinstance(value, dict):
-        return value if value.get("type") == "image_url" else None
+        if value.get("type") != "image_url":
+            return None
+        image_url = value.get("image_url")
+        if not isinstance(image_url, dict):
+            return None
+        url = image_url.get("url")
+        if not isinstance(url, str) or not url.strip():
+            return None
+        return {"type": "image_url", "image_url": {"url": url.strip()}}
     text = value.strip()
     if not text:
         return None

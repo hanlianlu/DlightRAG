@@ -17,14 +17,22 @@ from dlightrag.mcp import server as mcp_server
 from dlightrag.models.schemas import Reference
 
 
-def _query_image_any_of(prop: dict) -> list[dict]:
-    return prop["items"]["anyOf"]
-
-
 def _metadata_policy_enum(prop: dict) -> list[str]:
     if "enum" in prop:
         return prop["enum"]
     return next(item["enum"] for item in prop["anyOf"] if "enum" in item)
+
+
+def _resolve_ref(schema: dict, item: dict) -> dict:
+    ref = item.get("$ref")
+    if not ref:
+        return item
+    name = ref.removeprefix("#/$defs/")
+    return schema["$defs"][name]
+
+
+def _query_image_schema(schema: dict, prop: dict) -> dict:
+    return _resolve_ref(schema, prop["items"])
 
 
 def _tool_content(result):
@@ -102,17 +110,26 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     answer_props = answer_tool.inputSchema["properties"]
     assert "conversation_history" in answer_props
     assert "query_images" in answer_props
-    answer_image_items = _query_image_any_of(answer_props["query_images"])
-    assert answer_image_items[0] == {"type": "string"}
-    assert answer_image_items[1]["type"] == "object"
+    image_block_schema = _query_image_schema(answer_tool.inputSchema, answer_props["query_images"])
+    assert image_block_schema["type"] == "object"
+    assert image_block_schema["properties"]["type"]["const"] == "image_url"
+    assert set(image_block_schema["required"]) == {"type", "image_url"}
+    history_items = _resolve_ref(
+        answer_tool.inputSchema,
+        answer_props["conversation_history"]["anyOf"][0]["items"],
+    )
+    assert history_items["properties"]["role"]["enum"] == ["system", "user", "assistant"]
     assert "session_id" in answer_props
     assert "referenced_image_ids" in answer_props
     assert "filters" in answer_props
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
-    retrieve_image_items = _query_image_any_of(retrieve_props["query_images"])
-    assert retrieve_image_items[0] == {"type": "string"}
-    assert retrieve_image_items[1]["type"] == "object"
+    retrieve_image_block_schema = _query_image_schema(
+        retrieve_tool.inputSchema,
+        retrieve_props["query_images"],
+    )
+    assert retrieve_image_block_schema["type"] == "object"
+    assert retrieve_image_block_schema["properties"]["type"]["const"] == "image_url"
     ingest_tool = next(tool for tool in tools if tool.name == "ingest")
     ingest_props = ingest_tool.inputSchema["properties"]
     assert "title" in ingest_props
@@ -164,13 +181,36 @@ async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager)
 
 
 async def test_mcp_rejects_excess_query_images(mock_mcp_manager) -> None:
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
     result = await mcp_server.mcp_app.call_tool(
         "retrieve",
-        {"query": "x", "query_images": ["1", "2", "3", "4"]},
+        {"query": "x", "query_images": [image, image, image, image]},
     )
 
     assert "Error:" in _tool_text(result)
     assert "query_images" in _tool_text(result)
+    mock_mcp_manager.aretrieve.assert_not_awaited()
+
+
+async def test_mcp_rejects_untyped_query_image_blocks(mock_mcp_manager) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "answer",
+        {"query": "x", "query_images": [{"url": "data:image/png;base64,abc"}]},
+    )
+
+    assert "Error:" in _tool_text(result)
+    assert "image_url" in _tool_text(result)
+    mock_mcp_manager.aanswer.assert_not_awaited()
+
+
+async def test_mcp_rejects_bare_query_image_strings(mock_mcp_manager) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "retrieve",
+        {"query": "x", "query_images": ["data:image/png;base64,abc"]},
+    )
+
+    assert "Error:" in _tool_text(result)
+    assert "valid dictionary" in _tool_text(result)
     mock_mcp_manager.aretrieve.assert_not_awaited()
 
 
@@ -404,8 +444,12 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "top_k": 8,
             "answer_candidate_top_k": 12,
             "answer_context_top_k": 4,
-            "conversation_history": [{"role": "user", "content": "Previous"}],
-            "query_images": ["data:image/png;base64,abc"],
+            "conversation_history": [
+                {"role": "user", "content": [{"type": "text", "text": "Previous"}]}
+            ],
+            "query_images": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+            ],
             "session_id": "session-1",
             "referenced_image_ids": ["img_1"],
             "filters": {"doc_title": "Manual"},
@@ -423,8 +467,12 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["answer_candidate_top_k"] == 12
     assert call_kwargs["answer_context_top_k"] == 4
-    assert call_kwargs["conversation_history"] == [{"role": "user", "content": "Previous"}]
-    assert call_kwargs["query_images"] == ["data:image/png;base64,abc"]
+    assert call_kwargs["conversation_history"] == [
+        {"role": "user", "content": [{"type": "text", "text": "Previous"}]}
+    ]
+    assert call_kwargs["query_images"] == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+    ]
     assert call_kwargs["session_id"] == "session-1"
     assert call_kwargs["referenced_image_ids"] == ["img_1"]
     assert call_kwargs["filters"].doc_title == "Manual"

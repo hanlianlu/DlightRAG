@@ -6,14 +6,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from dlightrag.api.auth import UserContext, get_current_user
-from dlightrag.api.models import MetadataUpdateRequest
+from dlightrag.api.models import MetadataResponse, MetadataUpdateRequest, MetadataUpdateResponse
 
 from .deps import get_manager, resolve_workspace
 
 router = APIRouter()
 
 
-@router.get("/metadata/{doc_id}")
+@router.get("/metadata/{doc_id}", response_model=MetadataResponse)
 async def get_metadata(
     doc_id: str,
     request: Request,
@@ -29,7 +29,7 @@ async def get_metadata(
     return {"doc_id": doc_id, "metadata": data}
 
 
-@router.post("/metadata/{doc_id}")
+@router.post("/metadata/{doc_id}", response_model=MetadataUpdateResponse)
 async def update_metadata(
     doc_id: str,
     body: MetadataUpdateRequest,
@@ -57,7 +57,7 @@ async def update_metadata(
     return {"status": "success", "doc_id": doc_id}
 
 
-@router.post("/metadata/search")
+@router.post("/metadata/search", response_model=list[str])
 async def search_metadata(
     filters: dict[str, Any],
     request: Request,

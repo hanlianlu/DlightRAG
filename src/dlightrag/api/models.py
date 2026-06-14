@@ -3,19 +3,26 @@
 
 from __future__ import annotations
 
+import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
+
+from dlightrag.citations.schemas import SourceReference
+from dlightrag.core.client_contracts import (
+    ClientContractModel,
+    ContentBlock,
+    ConversationMessage,
+    QueryImage,
+)
 
 # ═══════════════════════════════════════════════════════════════════
 # Request Models
 # ═══════════════════════════════════════════════════════════════════
 
 
-class MetadataFilterRequest(BaseModel):
+class MetadataFilterRequest(ClientContractModel):
     """Structured metadata filter for retrieval queries."""
-
-    model_config = ConfigDict(extra="forbid")
 
     filename: str | None = None
     filename_stem: str | None = None
@@ -28,9 +35,7 @@ class MetadataFilterRequest(BaseModel):
     custom: dict[str, Any] | None = None
 
 
-class IngestRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class IngestRequest(ClientContractModel):
     source_type: Literal["local", "azure_blob", "s3"]
     path: str | None = None
     container_name: str | None = None
@@ -64,41 +69,33 @@ class IngestRequest(BaseModel):
         return self
 
 
-class RetrieveRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class RetrieveRequest(ClientContractModel):
     query: str
     top_k: int | None = None
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
-    multimodal_content: list[dict[str, Any]] | None = None
-    query_images: list[str | dict[str, Any]] | None = None
+    multimodal_content: list[ContentBlock] | None = None
+    query_images: list[QueryImage] | None = None
     session_id: str | None = None
     referenced_image_ids: list[str] | None = None
 
     @field_validator("multimodal_content")
     @classmethod
-    def validate_multimodal_count(
-        cls, v: list[dict[str, Any]] | None
-    ) -> list[dict[str, Any]] | None:
+    def validate_multimodal_count(cls, v: list[ContentBlock] | None) -> list[ContentBlock] | None:
         if v and len(v) > 3:
             raise ValueError("Maximum 3 multimodal items per query")
         return v
 
     @field_validator("query_images")
     @classmethod
-    def validate_query_images(
-        cls, v: list[str | dict[str, Any]] | None
-    ) -> list[str | dict[str, Any]] | None:
+    def validate_query_images(cls, v: list[QueryImage] | None) -> list[QueryImage] | None:
         if v and len(v) > 3:
             raise ValueError("Maximum 3 query_images per request")
         return v
 
 
-class AnswerRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class AnswerRequest(ClientContractModel):
     query: str
     stream: bool = True
     top_k: int | None = None
@@ -107,47 +104,43 @@ class AnswerRequest(BaseModel):
     answer_context_top_k: int | None = Field(default=None, ge=1)
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
-    multimodal_content: list[dict[str, Any]] | None = None
-    conversation_history: list[dict[str, Any]] | None = None
+    multimodal_content: list[ContentBlock] | None = None
+    conversation_history: list[ConversationMessage] | None = None
     session_id: str | None = None
     referenced_image_ids: list[str] | None = None
-    query_images: list[str | dict[str, Any]] | None = None
+    query_images: list[QueryImage] | None = None
     """User-attached images used for VLM semantic enhancement, direct visual
     retrieval, session image memory, and bounded answer-model image blocks."""
 
     @field_validator("multimodal_content")
     @classmethod
-    def validate_image_count(cls, v: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    def validate_image_count(cls, v: list[ContentBlock] | None) -> list[ContentBlock] | None:
         if v and len(v) > 3:
             raise ValueError("Maximum 3 multimodal items per query")
         return v
 
     @field_validator("query_images")
     @classmethod
-    def validate_query_image_count(
-        cls, v: list[str | dict[str, Any]] | None
-    ) -> list[str | dict[str, Any]] | None:
+    def validate_query_image_count(cls, v: list[QueryImage] | None) -> list[QueryImage] | None:
         if v and len(v) > 3:
             raise ValueError("Maximum 3 query_images per request")
         return v
 
 
-class DeleteRequest(BaseModel):
+class DeleteRequest(ClientContractModel):
     file_paths: list[str] | None = None
     filenames: list[str] | None = None
     workspace: str | None = None
 
 
-class WorkspaceCreateRequest(BaseModel):
+class WorkspaceCreateRequest(ClientContractModel):
     """Request to create an empty workspace."""
-
-    model_config = ConfigDict(extra="forbid")
 
     workspace: str
     display_name: str | None = None
 
 
-class ResetRequest(BaseModel):
+class ResetRequest(ClientContractModel):
     """Request to reset a workspace."""
 
     workspace: str | None = None
@@ -155,7 +148,7 @@ class ResetRequest(BaseModel):
     dry_run: bool = False
 
 
-class MetadataUpdateRequest(BaseModel):
+class MetadataUpdateRequest(ClientContractModel):
     metadata: dict[str, Any]
     mode: Literal["merge", "replace"] = "merge"
     metadata_policy: Literal["validate", "reject_unknown", "store_only"] | None = None
@@ -166,6 +159,116 @@ class MetadataUpdateRequest(BaseModel):
 # ═══════════════════════════════════════════════════════════════════
 
 
-class ErrorDetail(BaseModel):
+class ReferenceSummary(ClientContractModel):
+    id: str
+    title: str | None = None
+
+
+class RetrievalResponse(ClientContractModel):
+    answer: str | None = None
+    contexts: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    sources: list[SourceReference] = Field(default_factory=list)
+    trace: dict[str, Any] = Field(default_factory=dict)
+    image_descriptions: list[str] = Field(default_factory=list)
+    current_image_ids: list[str] = Field(default_factory=list)
+
+
+class AnswerResponse(RetrievalResponse):
+    references: list[ReferenceSummary] = Field(default_factory=list)
+
+
+class IngestJobStatusResponse(ClientContractModel):
+    job_id: str
+    workspace: str | None = None
+    source_type: str | None = None
+    status: str
+    status_url: str | None = None
+    request: dict[str, Any] | None = None
+    total_items: int | None = None
+    processed_items: int | None = None
+    failed_items: int | None = None
+    current_window: int | None = None
+    errors: list[str] | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime.datetime | str | None = None
+    updated_at: datetime.datetime | str | None = None
+    started_at: datetime.datetime | str | None = None
+    finished_at: datetime.datetime | str | None = None
+
+
+class FileListResponse(ClientContractModel):
+    files: list[Any]
+    count: int
+    workspace: str
+
+
+class FailedFilesResponse(ClientContractModel):
+    failed: list[Any]
+    count: int
+    workspace: str
+
+
+class DeleteFilesResponse(ClientContractModel):
+    results: list[dict[str, Any]]
+    workspace: str
+
+
+class WorkspaceRecord(ClientContractModel):
+    workspace: str
+    display_name: str
+    embedding_model: str
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class WorkspacesResponse(ClientContractModel):
+    workspaces: list[str]
+    records: list[WorkspaceRecord]
+
+
+class WorkspaceCreateResponse(ClientContractModel):
+    workspace: str
+    display_name: str
+    created: bool
+
+
+class WorkspaceDeleteResponse(ClientContractModel):
+    workspace: str
+    deleted: bool
+    result: dict[str, Any]
+
+
+class MetadataResponse(ClientContractModel):
+    doc_id: str
+    metadata: dict[str, Any]
+
+
+class MetadataUpdateResponse(ClientContractModel):
+    status: Literal["success"]
+    doc_id: str
+
+
+class ResetResponse(ClientContractModel):
+    workspaces: dict[str, Any]
+    total_errors: int
+
+
+class HealthStorageResponse(ClientContractModel):
+    vector: str
+    graph: str
+    kv: str
+
+
+class HealthResponse(ClientContractModel):
+    status: Literal["healthy", "degraded"]
+    rag_initialized: bool
+    crafted_by: str
+    maintained_by: str
+    storage: HealthStorageResponse
+    warnings: list[str] | None = None
+    postgres: str
+
+
+class ErrorDetail(ClientContractModel):
     detail: str
     error_type: str  # "unavailable", "validation", "auth", "internal"

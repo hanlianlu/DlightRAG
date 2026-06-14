@@ -1,17 +1,17 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """System status and health API routes."""
 
-from typing import Any
-
 from fastapi import APIRouter, Request
+
+from dlightrag.api.models import HealthResponse
 
 from .deps import get_manager
 
 router = APIRouter()
 
 
-@router.get("/health")
-async def health(request: Request) -> dict[str, Any]:
+@router.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
+async def health(request: Request) -> dict[str, object]:
     """Health check including RAG service status."""
     from dlightrag.config import get_config
 
@@ -21,7 +21,7 @@ async def health(request: Request) -> dict[str, Any]:
     is_degraded = manager.is_degraded()
     warnings = manager.get_warnings()
 
-    status: dict[str, Any] = {
+    status: dict[str, object] = {
         "status": "degraded" if is_degraded else "healthy",
         "rag_initialized": manager.is_ready(),
         "crafted_by": "hllyu",

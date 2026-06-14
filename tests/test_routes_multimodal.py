@@ -24,30 +24,21 @@ def test_image_b64_decode_roundtrip():
 
 
 def test_multimodal_content_construction():
-    """Verify multimodal_content list is built from base64 images."""
-    import tempfile
-    from pathlib import Path
-
+    """Verify multimodal_content list is built from data URI image blocks."""
     b64 = _make_fake_image_b64()
     images_b64 = [b64, b64]
 
     multimodal_content = []
-    tmp_paths = []
     for b64_str in images_b64[:3]:
-        img_bytes = base64.b64decode(b64_str)
-        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-        tmp.write(img_bytes)
-        tmp.close()
-        tmp_paths.append(tmp.name)
-        multimodal_content.append({"type": "image", "img_path": tmp.name})
+        multimodal_content.append(
+            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64_str}"}}
+        )
 
     assert len(multimodal_content) == 2
-    assert all(item["type"] == "image" for item in multimodal_content)
-    assert all(Path(item["img_path"]).exists() for item in multimodal_content)
-
-    # Cleanup
-    for p in tmp_paths:
-        Path(p).unlink(missing_ok=True)
+    assert all(item["type"] == "image_url" for item in multimodal_content)
+    assert all(
+        item["image_url"]["url"].startswith("data:image/png;base64,") for item in multimodal_content
+    )
 
 
 def test_image_count_limit():
