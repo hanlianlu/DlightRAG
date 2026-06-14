@@ -75,3 +75,20 @@ def test_chat_history_appends_turns(page):
     # Should have at least one more user message wrapper
     final_user_messages = page.locator('[class*="userMessageWrapper"]').count()
     assert final_user_messages > initial_user_messages
+
+
+@pytest.mark.e2e
+def test_chat_submit_keeps_open_panel_visible(page):
+    """Submitting a query should not dismiss a panel the user already opened."""
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+
+    page.click("#files-btn")
+    page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
+
+    page.locator(".composer-input").fill("Keep the panel open")
+    page.click(".composer-send")
+
+    page.wait_for_function("document.querySelector('.composer-input').value === ''")
+    assert page.locator("#panel").evaluate("el => el.classList.contains('open')")
+    assert page.locator("body").evaluate("el => el.classList.contains('panel-open')")
