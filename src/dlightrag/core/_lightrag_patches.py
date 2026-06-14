@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""LightRAG patches still required by LightRAG 1.5.0.
+"""Runtime-gated LightRAG compatibility patches.
 
 PostgreSQL AGE bug: LightRAG's PostgreSQLDB.configure_age() calls create_graph() unconditionally,
 which causes Apache AGE (and PG) to log an ERROR on every startup when the graph
@@ -13,7 +13,8 @@ ag_catalog.ag_graph before calling create_graph(), skipping creation entirely
 when the graph already exists.  Wrap execute() to also catch DuplicateSchemaError
 as defence-in-depth.
 
-As of LightRAG 1.5.0 both patched surfaces are still missing upstream.
+As of LightRAG 1.5.3, these patches remain runtime-gated because some
+upstream surfaces still need local guards.
 
 MinerU parser hygiene: current LightRAG MinerU IR builder serializes unknown
 content-list item types as body text. MinerU emits page furniture such as

@@ -10,7 +10,7 @@ license = "Apache-2.0"
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Core RAG
-    "lightrag-hku>=1.5.1",
+    "lightrag-hku>=1.5.3",
     # LLM
     "openai>=2.29.0",
     "anthropic>=0.42.0",
@@ -29,10 +29,10 @@ dependencies = [
     "lingua-language-detector>=2.2.0",
     # JSON repair for LLM output
     "json-repair>=0.58.0",
-    # LightRAG v1.5.1 paragraph_semantic chunker fallback
+    # LightRAG paragraph_semantic chunker fallback
     "langchain-text-splitters",
     # LightRAG GUI (graph browsing via lightrag-server)
-    # bcrypt + aiofiles are undeclared dependencies of lightrag-hku v1.5.1
+    # Runtime deps for lightrag-server when lightrag-hku is installed without the api extra.
     "bcrypt",
     "aiofiles",
     # Data sourcing
