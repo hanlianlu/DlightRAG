@@ -13,6 +13,14 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
+def _css_rule(path: str, selector: str) -> str:
+    css = Path(path).read_text(encoding="utf-8")
+    match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\}}", css, re.S)
+
+    assert match is not None
+    return match.group("body")
+
+
 def test_removed_multimodal_dependency_absent() -> None:
     dependencies = _dependencies()
     removed = "rag" + "anything"
@@ -177,6 +185,18 @@ def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     assert "ghcr.io/astral-sh/uv" not in dockerfile
     assert "uv==${UV_VERSION}" in dockerfile
     assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/" in dockerfile
+
+
+def test_user_message_css_wraps_unbroken_query_text() -> None:
+    """Long pasted query tokens should stay inside the user message bubble."""
+    user_body = _css_rule("frontend/styles/chat.module.css", ".userMessage")
+    wrapper_body = _css_rule("frontend/styles/chat.module.css", ".userMessageWrapper")
+
+    assert "max-width: 100%;" in user_body
+    assert "min-width: 0;" in user_body
+    assert "overflow-wrap: anywhere;" in user_body
+    assert "white-space: pre-wrap;" in user_body
+    assert "min-width: 0;" in wrapper_body
 
 
 def test_direct_document_parser_dependencies_removed() -> None:
