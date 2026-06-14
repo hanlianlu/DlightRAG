@@ -5,7 +5,6 @@ import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {sessionStore} from '../stores/sessionStore.ts';
 import {clearImages, getPendingImageData} from './images.ts';
-import {closePanel} from './panel.ts';
 import {streamSSE} from '../lib/sse.ts';
 import {createAnswerRenderer, createChatTurn, setAnswerError} from '../lib/chat_renderer.ts';
 
@@ -128,7 +127,6 @@ export function setupQueryForm() {
         textarea.style.overflowY = '';
         form.classList.remove('multiline');
         toggleSendButton();
-        closePanel();
         submitQuery(query);
     });
 }
