@@ -108,7 +108,7 @@ async def stream_answer_events(
     conversation_history: list[dict[str, Any]] | None,
     workspaces: list[str] | None,
     workspace: str,
-    query_images: list[str],
+    query_images: list[dict[str, Any]],
     session_id: str,
     scope: RequestScope | None = None,
 ) -> AsyncIterator[str]:

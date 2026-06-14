@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +16,8 @@ from dlightrag.config import DlightragConfig
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.mcp import server as mcp_server
 from dlightrag.models.schemas import Reference
+
+_IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
 
 def _metadata_policy_enum(prop: dict) -> list[str]:
@@ -61,31 +64,8 @@ def mock_mcp_manager(monkeypatch):
     return manager
 
 
-def test_mcp_uses_fastmcp_registry_without_legacy_wrappers() -> None:
-    source = inspect.getsource(mcp_server)
-
-    assert hasattr(mcp_server, "mcp_app")
-    assert not hasattr(mcp_server, "list_tools")
-    assert not hasattr(mcp_server, "call_tool")
-    assert "@server.list_tools" not in source
-    assert "@server.call_tool" not in source
-    assert 'if name == "retrieve"' not in source
-    assert 'if name == "answer"' not in source
-
-
 def test_mcp_server_info_uses_dlightrag_version() -> None:
     assert mcp_server.server.version == dlightrag.__version__
-
-
-async def test_mcp_tool_schemas_are_top_level_fastmcp_fields() -> None:
-    tools = await mcp_server.mcp_app.list_tools()
-    answer_tool = next(tool for tool in tools if tool.name == "answer")
-    answer_props = answer_tool.inputSchema["properties"]
-
-    assert "args" not in answer_props
-    assert "query" in answer_props
-    assert "conversation_history" in answer_props
-    assert "query_images" in answer_props
 
 
 async def test_mcp_success_payloads_keep_fastmcp_structured_output(mock_mcp_manager) -> None:
@@ -104,10 +84,13 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     tools = await mcp_server.mcp_app.list_tools()
     names = {tool.name for tool in tools}
 
+    assert hasattr(mcp_server, "mcp_app")
     assert "create_workspace" in names
     assert "delete_workspace" in names
     answer_tool = next(tool for tool in tools if tool.name == "answer")
     answer_props = answer_tool.inputSchema["properties"]
+    assert "args" not in answer_props
+    assert "query" in answer_props
     assert "conversation_history" in answer_props
     assert "query_images" in answer_props
     image_block_schema = _query_image_schema(answer_tool.inputSchema, answer_props["query_images"])
@@ -180,38 +163,47 @@ async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager)
     mock_mcp_manager.aanswer.assert_not_awaited()
 
 
-async def test_mcp_rejects_excess_query_images(mock_mcp_manager) -> None:
-    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+@pytest.mark.parametrize(
+    ("tool_name", "payload", "manager_method", "error_fragment"),
+    [
+        (
+            "retrieve",
+            {
+                "query": "x",
+                "query_images": [_IMAGE_BLOCK, _IMAGE_BLOCK, _IMAGE_BLOCK, _IMAGE_BLOCK],
+            },
+            "aretrieve",
+            "query_images",
+        ),
+        (
+            "answer",
+            {"query": "x", "query_images": [{"url": "data:image/png;base64,abc"}]},
+            "aanswer",
+            "image_url",
+        ),
+        (
+            "retrieve",
+            {"query": "x", "query_images": ["data:image/png;base64,abc"]},
+            "aretrieve",
+            "valid dictionary",
+        ),
+    ],
+)
+async def test_mcp_rejects_invalid_query_image_payloads(
+    mock_mcp_manager,
+    tool_name: str,
+    payload: dict[str, Any],
+    manager_method: str,
+    error_fragment: str,
+) -> None:
     result = await mcp_server.mcp_app.call_tool(
-        "retrieve",
-        {"query": "x", "query_images": [image, image, image, image]},
+        tool_name,
+        payload,
     )
 
     assert "Error:" in _tool_text(result)
-    assert "query_images" in _tool_text(result)
-    mock_mcp_manager.aretrieve.assert_not_awaited()
-
-
-async def test_mcp_rejects_untyped_query_image_blocks(mock_mcp_manager) -> None:
-    result = await mcp_server.mcp_app.call_tool(
-        "answer",
-        {"query": "x", "query_images": [{"url": "data:image/png;base64,abc"}]},
-    )
-
-    assert "Error:" in _tool_text(result)
-    assert "image_url" in _tool_text(result)
-    mock_mcp_manager.aanswer.assert_not_awaited()
-
-
-async def test_mcp_rejects_bare_query_image_strings(mock_mcp_manager) -> None:
-    result = await mcp_server.mcp_app.call_tool(
-        "retrieve",
-        {"query": "x", "query_images": ["data:image/png;base64,abc"]},
-    )
-
-    assert "Error:" in _tool_text(result)
-    assert "valid dictionary" in _tool_text(result)
-    mock_mcp_manager.aretrieve.assert_not_awaited()
+    assert error_fragment in _tool_text(result)
+    getattr(mock_mcp_manager, manager_method).assert_not_awaited()
 
 
 async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:

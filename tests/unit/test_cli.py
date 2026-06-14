@@ -21,6 +21,10 @@ _build_retrieve_payload = _cli._build_retrieve_payload
 _validate_ingest_args = _cli._validate_ingest_args
 
 
+def _image_block(url: str) -> dict:
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
 def _parse_ingest(args: list[str]):
     """Parse CLI args for the ingest subcommand."""
     return build_parser().parse_args(["ingest", *args])
@@ -79,7 +83,7 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             "doc_title": "Manual",
             "custom": {"department": "finance"},
         },
-        "query_images": ["data:image/png;base64,abc"],
+        "query_images": [_image_block("data:image/png;base64,abc")],
         "session_id": "session-1",
         "referenced_image_ids": ["img_1"],
     }
@@ -109,7 +113,7 @@ def test_answer_payload_supports_current_answer_options() -> None:
         "answer_candidate_top_k": 12,
         "answer_context_top_k": 4,
         "filters": {"doc_author": "Ada"},
-        "query_images": ["https://example.test/chart.png"],
+        "query_images": [_image_block("https://example.test/chart.png")],
     }
 
 

@@ -89,7 +89,7 @@ class AnswerEngine:
         self,
         query: str,
         contexts: RetrievalContexts,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> RetrievalResult:
@@ -99,8 +99,8 @@ class AnswerEngine:
         and ``references`` populated.  Uses the same freetext prompt as
         streaming; references are derived from validated inline markers.
 
-        ``query_images`` are user-attached images (URLs or base64 data URIs)
-        inlined as OpenAI ``image_url`` content blocks ahead of the
+        ``query_images`` are user-attached ``image_url`` content blocks
+        inlined ahead of the
         retrieved-document section, letting the model see the user's input
         images in addition to retrieved chunks. Designed for multi-turn chat
         where the user uploads images alongside their question.
@@ -170,7 +170,7 @@ class AnswerEngine:
         self,
         query: str,
         contexts: RetrievalContexts,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
@@ -180,9 +180,8 @@ class AnswerEngine:
         token stream with :class:`AnswerStream` for post-stream citation
         index validation.
 
-        ``query_images`` mirrors ``generate()``: user-attached images
-        (URLs or base64 data URIs) are inlined as OpenAI ``image_url``
-        content blocks before retrieved-document context.
+        ``query_images`` mirrors ``generate()``: user-attached ``image_url``
+        content blocks are inlined before retrieved-document context.
         """
         if self.model_func is None:
             logger.info("[AE] generate_stream: no model_func, returning None")
@@ -236,7 +235,7 @@ class AnswerEngine:
         user_prompt: str,
         contexts: RetrievalContexts,
         indexer: CitationIndexer | None = None,
-        query_images: list[str | dict[str, Any]] | None = None,
+        query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
         query_image_blocks: list[dict[str, Any]] | None = None,
         chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
@@ -275,7 +274,7 @@ class AnswerEngine:
                             budgeted.append(block)
                         elif block.get("type") == "image_url":
                             bounded = user_budget.add_user_image(
-                                block["image_url"],
+                                block,
                                 label=f"history_img_{user_budget.count + 1}",
                             )
                             if bounded is not None:
@@ -356,7 +355,7 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         *,
-        query_images: list[str | dict[str, Any]] | None,
+        query_images: list[dict[str, Any]] | None,
         context_top_k: int | None = None,
     ) -> _PreparedAnswerPrompt:
         image_budget = self._new_rag_budget()  # user images handled in _build_messages

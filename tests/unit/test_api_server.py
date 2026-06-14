@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+from typing import Any
 from unittest.mock import AsyncMock
 
 import jwt
@@ -719,34 +720,6 @@ class TestRetrieveEndpoint:
         assert resp.status_code == 200
         assert mock_manager.aretrieve.call_args.kwargs["multimodal_content"] == multimodal_content
 
-    async def test_retrieve_rejects_legacy_multimodal_shape(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/retrieve",
-            json={
-                "query": "Find the matching drawing",
-                "multimodal_content": [{"type": "image", "img_path": "/tmp/query.png"}],
-            },
-        )
-        assert resp.status_code == 422
-        mock_manager.aretrieve.assert_not_called()
-
-    async def test_retrieve_rejects_bare_query_image_strings(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/retrieve",
-            json={
-                "query": "Find the matching drawing",
-                "query_images": ["data:image/png;base64,abc"],
-            },
-        )
-        assert resp.status_code == 422
-        mock_manager.aretrieve.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # TestHealthEndpoint
@@ -965,40 +938,6 @@ class TestAnswerEndpoint:
         assert call_kwargs["conversation_history"] == history
         assert call_kwargs["query_images"] == query_images
 
-    async def test_answer_rejects_untyped_history_messages(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/answer",
-            json={
-                "query": "hello",
-                "stream": False,
-                "conversation_history": [{"role": "human", "content": "previous"}],
-            },
-        )
-
-        assert resp.status_code == 422
-        mock_manager.aanswer.assert_not_called()
-
-    async def test_answer_rejects_bare_query_image_strings(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/answer",
-            json={
-                "query": "hello",
-                "stream": False,
-                "query_images": ["data:image/png;base64,abc"],
-            },
-        )
-
-        assert resp.status_code == 422
-        mock_manager.aanswer.assert_not_called()
-
     async def test_answer_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -1006,6 +945,54 @@ class TestAnswerEndpoint:
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "hello", "stream": False})
         assert resp.status_code == 503
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "manager_method"),
+    [
+        (
+            "/retrieve",
+            {
+                "query": "Find the matching drawing",
+                "multimodal_content": [{"type": "image", "img_path": "/tmp/query.png"}],
+            },
+            "aretrieve",
+        ),
+        (
+            "/retrieve",
+            {"query": "Find the matching drawing", "query_images": ["data:image/png;base64,abc"]},
+            "aretrieve",
+        ),
+        (
+            "/answer",
+            {
+                "query": "hello",
+                "stream": False,
+                "conversation_history": [{"role": "human", "content": "previous"}],
+            },
+            "aanswer",
+        ),
+        (
+            "/answer",
+            {"query": "hello", "stream": False, "query_images": ["data:image/png;base64,abc"]},
+            "aanswer",
+        ),
+    ],
+)
+async def test_query_endpoints_reject_legacy_client_shapes(
+    client: AsyncClient,
+    mock_config: DlightragConfig,
+    mock_manager,
+    path: str,
+    payload: dict[str, Any],
+    manager_method: str,
+) -> None:
+    app.state.manager = mock_manager
+
+    resp = await client.post(path, json=payload)
+
+    assert resp.status_code == 422
+    getattr(mock_manager, manager_method).assert_not_called()
 
 
 # ---------------------------------------------------------------------------
