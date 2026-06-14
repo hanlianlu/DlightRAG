@@ -1188,6 +1188,25 @@ class TestAnswerStreamMode:
 class TestAPIContracts:
     """Request and response contracts are explicit in OpenAPI."""
 
+    def test_answer_stream_sources_event_uses_contract_model(self) -> None:
+        import json
+
+        from dlightrag.api.events import AnswerSourcesStreamEvent, sse_data_event
+        from dlightrag.citations.schemas import SourceReference
+
+        frame = sse_data_event(
+            AnswerSourcesStreamEvent(
+                data=[SourceReference(id="1", title="report.pdf", path="/docs/report.pdf")]
+            )
+        )
+
+        assert frame.startswith("data: ")
+        payload = json.loads(frame.removeprefix("data: ").strip())
+        assert payload == {
+            "type": "sources",
+            "data": [{"id": "1", "title": "report.pdf", "path": "/docs/report.pdf"}],
+        }
+
     async def test_openapi_exposes_pydantic_response_models(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
