@@ -3,6 +3,7 @@
 .hoverRaised {
   transition: all 0.15s;
 }
+
 .hoverRaised:hover {
   background: var(--color-bg-hover);
 }

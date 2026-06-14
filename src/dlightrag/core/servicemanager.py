@@ -11,7 +11,6 @@ import asyncio
 import inspect
 import logging
 import time
-import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass, replace
@@ -22,6 +21,8 @@ if TYPE_CHECKING:
 
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
+from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
+from dlightrag.core.query_image_payloads import prepare_query_images
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
@@ -33,15 +34,6 @@ from dlightrag.utils import normalize_workspace
 logger = logging.getLogger(__name__)
 
 _MAX_RETRY_INTERVAL: float = 300.0
-
-
-@dataclass
-class _PreparedQueryImages:
-    query: str
-    answer_images: list[dict[str, Any]]
-    multimodal_content: list[dict[str, Any]]
-    descriptions: list[str]
-    current_image_ids: list[str]
 
 
 @dataclass(frozen=True)
@@ -222,10 +214,7 @@ class RAGServiceManager:
         self._backoff: dict[str, tuple[float, float]] = {}
 
         self._answer_engine: AnswerEngine | None = None
-        self._ingest_job_store: Any | None = None
-        self._ingest_job_tasks: dict[str, asyncio.Task[None]] = {}
-        self._ingest_job_workspaces: dict[str, str] = {}
-        self._ingest_job_recovery_started = False
+        self._ingest_jobs = IngestJobCoordinator(lambda workspace: self._get_service(workspace))
         self._query_planner: QueryPlanner | None = None
         self._query_image_enhancer: Any = None
         self._session_images: Any = None
@@ -409,144 +398,12 @@ class RAGServiceManager:
             raise RAGServiceUnavailableError(detail=detail)
         return row
 
-    async def _get_ingest_job_store(self) -> Any:
-        if self._ingest_job_store is None:
-            from dlightrag.storage.ingest_jobs import PGIngestJobStore
-
-            store = PGIngestJobStore()
-            await store.initialize()
-            self._ingest_job_store = store
-            await self._prune_ingest_job_store(store)
-            await self._recover_ingest_jobs(store)
-        return self._ingest_job_store
-
     async def _start_ingest_job_recovery(self) -> None:
         try:
-            await self._get_ingest_job_store()
+            await self._ingest_jobs.start_recovery()
         except Exception:
             self._startup_warnings.append("Ingest job recovery unavailable")
             logger.warning("Ingest job recovery initialization failed", exc_info=True)
-
-    async def _prune_ingest_job_store(self, store: Any) -> None:
-        try:
-            summary = await store.prune()
-        except Exception:
-            logger.warning("Ingest job cleanup failed", exc_info=True)
-            return
-        if summary.get("failed_abandoned") or summary.get("deleted_completed"):
-            logger.info("Ingest job cleanup: %s", summary)
-
-    async def _recover_ingest_jobs(self, store: Any) -> None:
-        if self._ingest_job_recovery_started:
-            return
-        self._ingest_job_recovery_started = True
-
-        try:
-            rows = await store.list_recoverable()
-        except Exception:
-            logger.warning("Failed to list recoverable ingest jobs", exc_info=True)
-            return
-
-        recovered = 0
-        for row in rows:
-            if self._schedule_recovered_ingest_job(row, store):
-                recovered += 1
-        if recovered:
-            logger.info("Recovered %d ingest job(s)", recovered)
-
-    def _schedule_recovered_ingest_job(self, row: dict[str, Any], store: Any) -> bool:
-        job_id = str(row.get("job_id") or "")
-        if not job_id or job_id in self._ingest_job_tasks:
-            return False
-
-        raw_request = row.get("request")
-        request: dict[str, Any] = raw_request if isinstance(raw_request, dict) else {}
-        workspace = normalize_workspace(str(row.get("workspace") or request.get("workspace") or ""))
-        source_type = str(row.get("source_type") or request.get("source_type") or "")
-        raw_kwargs = request.get("kwargs")
-        kwargs: dict[str, Any] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
-        if not workspace or source_type not in {"local", "azure_blob", "s3"}:
-            logger.warning("Skipping invalid recoverable ingest job row: %s", row)
-            return False
-
-        if "source" in kwargs:
-            task = asyncio.create_task(
-                store.fail(job_id, error="ingest job cannot recover an in-memory source object")
-            )
-            self._ingest_job_tasks[job_id] = task
-            self._ingest_job_workspaces[job_id] = workspace
-            task.add_done_callback(lambda _task, _job_id=job_id: self._forget_ingest_job(_job_id))
-            return True
-
-        recovered_kwargs = dict(kwargs)
-        resume_from_window = max(0, int(row.get("current_window") or 0))
-        if resume_from_window:
-            recovered_kwargs["_resume_from_window"] = resume_from_window
-
-        task = asyncio.create_task(
-            self._run_ingest_job(
-                job_id=job_id,
-                workspace=workspace,
-                source_type=cast(Literal["local", "azure_blob", "s3"], source_type),
-                kwargs=recovered_kwargs,
-            )
-        )
-        self._ingest_job_tasks[job_id] = task
-        self._ingest_job_workspaces[job_id] = workspace
-        task.add_done_callback(lambda _task, _job_id=job_id: self._forget_ingest_job(_job_id))
-        return True
-
-    async def _attach_ingest_job_reset_result(
-        self,
-        *,
-        workspace: str,
-        result: dict[str, Any],
-        dry_run: bool,
-    ) -> None:
-        if dry_run:
-            result["ingest_jobs_deleted"] = 0
-            return
-
-        try:
-            store = await self._get_ingest_job_store()
-            result["ingest_jobs_deleted"] = await store.delete_for_workspace(workspace)
-        except Exception as exc:
-            result["ingest_jobs_deleted"] = 0
-            errors = result.setdefault("errors", [])
-            if isinstance(errors, list):
-                errors.append(f"ingest_jobs: {exc}")
-            logger.warning("Failed to delete ingest jobs for workspace '%s': %s", workspace, exc)
-
-    async def _cancel_ingest_jobs_for_workspace(self, workspace: str) -> int:
-        job_ids = [
-            job_id
-            for job_id, job_workspace in self._ingest_job_workspaces.items()
-            if job_workspace == workspace
-        ]
-        if not job_ids:
-            return 0
-
-        tasks: list[asyncio.Task[None]] = []
-        for job_id in job_ids:
-            task = self._ingest_job_tasks.get(job_id)
-            if task is None:
-                self._forget_ingest_job(job_id)
-            elif not task.done():
-                task.cancel()
-                tasks.append(task)
-            else:
-                self._forget_ingest_job(job_id)
-
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-        for job_id in job_ids:
-            self._forget_ingest_job(job_id)
-        return len(tasks)
-
-    def _forget_ingest_job(self, job_id: str) -> None:
-        self._ingest_job_tasks.pop(job_id, None)
-        self._ingest_job_workspaces.pop(job_id, None)
 
     async def _recover_stalled_docs(self, workspaces: list[str]) -> None:
         """Recover documents stalled in intermediate LightRAG pipeline states.
@@ -658,43 +515,7 @@ class RAGServiceManager:
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Start a background ingest job and return its durable job row."""
-        workspace_id = normalize_workspace(workspace)
-        if not workspace_id:
-            raise ValueError("workspace cannot be empty")
-
-        job_id = uuid.uuid4().hex
-        store = await self._get_ingest_job_store()
-        request = {
-            "workspace": workspace_id,
-            "source_type": source_type,
-            "kwargs": _json_safe(kwargs),
-        }
-        await store.create(
-            job_id=job_id,
-            workspace=workspace_id,
-            source_type=source_type,
-            request=request,
-        )
-
-        task = asyncio.create_task(
-            self._run_ingest_job(
-                job_id=job_id,
-                workspace=workspace_id,
-                source_type=source_type,
-                kwargs=dict(kwargs),
-            )
-        )
-        self._ingest_job_tasks[job_id] = task
-        self._ingest_job_workspaces[job_id] = workspace_id
-        task.add_done_callback(lambda _task, _job_id=job_id: self._forget_ingest_job(_job_id))
-
-        row = await store.get(job_id)
-        return row or {
-            "job_id": job_id,
-            "workspace": workspace_id,
-            "source_type": source_type,
-            "status": "queued",
-        }
+        return await self._ingest_jobs.start_job(workspace, source_type, **kwargs)
 
     async def await_ingest_job(
         self,
@@ -703,88 +524,10 @@ class RAGServiceManager:
         timeout: float | None = None,
     ) -> dict[str, Any] | None:
         """Wait for an in-process ingest job without cancelling it on timeout."""
-        task = self._ingest_job_tasks.get(job_id)
-        if task is not None:
-            try:
-                if timeout is None:
-                    await asyncio.shield(task)
-                else:
-                    await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-            except TimeoutError:
-                pass
-        return await self.get_ingest_job(job_id)
-
-    async def _run_ingest_job(
-        self,
-        *,
-        job_id: str,
-        workspace: str,
-        source_type: Literal["local", "azure_blob", "s3"],
-        kwargs: dict[str, Any],
-    ) -> None:
-        store = await self._get_ingest_job_store()
-        await store.mark_running(job_id)
-        progress_seen = False
-
-        async def _record_progress(progress: Any) -> None:
-            nonlocal progress_seen
-            progress_seen = True
-            await store.record_window(
-                job_id,
-                total_delta=progress.total_delta,
-                processed_delta=progress.processed_delta,
-                failed_delta=progress.failed_delta,
-                current_window=progress.batch_index + 1,
-                errors=list(progress.errors),
-            )
-
-        try:
-            svc = await self._get_service(workspace)
-            await svc.aregister_workspace()
-            result = await svc.aingest(
-                source_type=source_type,
-                **kwargs,
-                _progress_callback=_record_progress,
-            )
-            if not progress_seen:
-                total_items, processed_items, failed_items, errors = _infer_ingest_counts(result)
-                await store.record_window(
-                    job_id,
-                    total_delta=total_items,
-                    processed_delta=processed_items,
-                    failed_delta=failed_items,
-                    current_window=1,
-                    errors=errors,
-                )
-            await store.finish(
-                job_id, result=await self._job_result_with_totals(store, job_id, result)
-            )
-        except asyncio.CancelledError:
-            await store.fail(job_id, error="ingest job cancelled")
-            raise
-        except Exception as exc:
-            await store.fail(job_id, error=f"{type(exc).__name__}: {exc}")
-
-    async def _job_result_with_totals(
-        self,
-        store: Any,
-        job_id: str,
-        result: dict[str, Any],
-    ) -> dict[str, Any]:
-        row = await store.get(job_id)
-        if row is None:
-            return result
-
-        final_result = dict(result)
-        if isinstance(final_result.get("processed"), int):
-            final_result["processed"] = int(row.get("processed_items") or 0)
-        if isinstance(final_result.get("errors"), list):
-            final_result["errors"] = list(row.get("errors") or [])
-        return final_result
+        return await self._ingest_jobs.await_job(job_id, timeout=timeout)
 
     async def get_ingest_job(self, job_id: str) -> dict[str, Any] | None:
-        store = await self._get_ingest_job_store()
-        return await store.get(job_id)
+        return await self._ingest_jobs.get_job(job_id)
 
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
@@ -863,7 +606,7 @@ class RAGServiceManager:
             known = await self.list_workspaces()
             if target_workspace not in known and target_workspace not in self._services:
                 cancelled_jobs = (
-                    0 if dry_run else await self._cancel_ingest_jobs_for_workspace(target_workspace)
+                    0 if dry_run else await self._ingest_jobs.cancel_for_workspace(target_workspace)
                 )
                 from dlightrag.core.reset import areset_orphaned_workspace
 
@@ -873,7 +616,7 @@ class RAGServiceManager:
                     dry_run=dry_run,
                     input_dir=str(self._config.input_dir_path),
                 )
-                await self._attach_ingest_job_reset_result(
+                await self._ingest_jobs.attach_reset_result(
                     workspace=target_workspace,
                     result=result,
                     dry_run=dry_run,
@@ -891,12 +634,12 @@ class RAGServiceManager:
         total_errors = 0
 
         for ws in workspaces:
-            cancelled_jobs = 0 if dry_run else await self._cancel_ingest_jobs_for_workspace(ws)
+            cancelled_jobs = 0 if dry_run else await self._ingest_jobs.cancel_for_workspace(ws)
             try:
                 svc = await self._get_service(ws)
                 ws_result = await svc.areset(keep_files=keep_files, dry_run=dry_run)
                 ws_result["ingest_jobs_cancelled"] = cancelled_jobs
-                await self._attach_ingest_job_reset_result(
+                await self._ingest_jobs.attach_reset_result(
                     workspace=ws,
                     result=ws_result,
                     dry_run=dry_run,
@@ -1199,13 +942,15 @@ class RAGServiceManager:
         ws_list = workspaces or [workspace or self._config.workspace]
         scoped = _scope_for_workspaces(scope, ws_list)
         effective_query = plan.standalone_query if plan is not None else query
-        prepared = await self._prepare_query_images(
+        prepared = await prepare_query_images(
             effective_query,
             query_images=query_images,
             session_id=session_id,
             referenced_image_ids=referenced_image_ids
             or (plan.referenced_image_ids if plan is not None else None),
             store_current=False,
+            session_images=self._get_session_images(),
+            enhancer=self._get_query_image_enhancer(),
             scope=scoped,
         )
         effective_query = prepared.query
@@ -1272,13 +1017,15 @@ class RAGServiceManager:
                         conversation_history=conversation_history,
                         workspaces=ws_list,
                     )
-                    prepared = await self._prepare_query_images(
+                    prepared = await prepare_query_images(
                         plan.standalone_query,
                         query_images=query_images,
                         session_id=kwargs.pop("session_id", None),
                         referenced_image_ids=kwargs.pop("referenced_image_ids", None)
                         or plan.referenced_image_ids,
                         store_current=True,
+                        session_images=self._get_session_images(),
+                        enhancer=self._get_query_image_enhancer(),
                         scope=scoped,
                     )
                     retrieval_plan = replace(plan, standalone_query=prepared.query)
@@ -1356,13 +1103,15 @@ class RAGServiceManager:
                         plan.standalone_query[:60],
                     )
 
-                    prepared = await self._prepare_query_images(
+                    prepared = await prepare_query_images(
                         plan.standalone_query,
                         query_images=query_images,
                         session_id=kwargs.pop("session_id", None),
                         referenced_image_ids=kwargs.pop("referenced_image_ids", None)
                         or plan.referenced_image_ids,
                         store_current=True,
+                        session_images=self._get_session_images(),
+                        enhancer=self._get_query_image_enhancer(),
                         scope=scoped,
                     )
                     retrieval_plan = replace(plan, standalone_query=prepared.query)
@@ -1405,41 +1154,6 @@ class RAGServiceManager:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"
             ) from e
-
-    async def _prepare_query_images(
-        self,
-        query: str,
-        *,
-        query_images: list[dict[str, Any]] | None,
-        session_id: str | None,
-        referenced_image_ids: list[str] | None,
-        store_current: bool,
-        scope: RequestScope | None = None,
-    ) -> _PreparedQueryImages:
-        """Resolve session images and create semantic/direct image query inputs."""
-        scoped_session_id = scope.session_key(session_id) if scope is not None else session_id
-        current_images = list(query_images or [])
-        current_storable = _storable_image_strings(current_images)
-        current_ids = (
-            self._get_session_images().store(scoped_session_id, current_storable)
-            if store_current and current_storable
-            else []
-        )
-        historical = _image_blocks_from_strings(
-            self._get_session_images().get(scoped_session_id, referenced_image_ids)
-        )
-        answer_images = [*historical, *current_images]
-
-        enhancer = self._get_query_image_enhancer()
-        enhanced = await enhancer.enhance(query, answer_images)
-        multimodal_content = _images_to_multimodal_content(answer_images)
-        return _PreparedQueryImages(
-            query=enhanced.query,
-            answer_images=answer_images,
-            multimodal_content=multimodal_content,
-            descriptions=enhanced.descriptions,
-            current_image_ids=current_ids,
-        )
 
     # --- Management ---
 
@@ -1488,12 +1202,7 @@ class RAGServiceManager:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
 
-        if self._ingest_job_tasks:
-            for task in self._ingest_job_tasks.values():
-                task.cancel()
-            await asyncio.gather(*self._ingest_job_tasks.values(), return_exceptions=True)
-            self._ingest_job_tasks.clear()
-        self._ingest_job_workspaces.clear()
+        await self._ingest_jobs.close()
 
         for component in (
             self._answer_engine,
@@ -1543,73 +1252,6 @@ class RAGServiceManager:
                 for ws, (ts, interval) in self._backoff.items()
             },
         }
-
-
-def _json_safe(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    return repr(value)
-
-
-def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[str]]:
-    errors = [str(error) for error in result.get("errors") or []]
-    if isinstance(result.get("processed"), int):
-        processed = max(0, int(result["processed"]))
-        failed = len(errors)
-        return processed + failed, processed, failed, errors
-
-    if not result:
-        return 0, 0, 0, errors
-    if str(result.get("status") or "").lower() == "skipped":
-        return 1, 0, 0, errors
-    if result.get("doc_id") or result.get("chunks") or result.get("source_kind"):
-        return 1, 1, 0, errors
-    return 0, 0, len(errors), errors
-
-
-def _image_blocks_from_strings(images: list[str]) -> list[dict[str, Any]]:
-    from dlightrag.utils.images import image_url_block
-
-    blocks: list[dict[str, Any]] = []
-    for image in images:
-        block = image_url_block(image)
-        if block is None:
-            continue
-        blocks.append(block)
-    return blocks
-
-
-def _storable_image_strings(images: list[dict[str, Any]]) -> list[str]:
-    from dlightrag.utils.images import image_url_block
-
-    values: list[str] = []
-    for image in images:
-        block = image_url_block(image)
-        if block is None:
-            continue
-        url = block.get("image_url", {}).get("url")
-        if isinstance(url, str) and url.strip().startswith("data:"):
-            values.append(url)
-    return values
-
-
-def _images_to_multimodal_content(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert data image payloads to direct visual retrieval content blocks."""
-    from dlightrag.utils.images import image_url_block
-
-    items: list[dict[str, Any]] = []
-    for image in images:
-        block = image_url_block(image)
-        if block is None:
-            continue
-        url = block.get("image_url", {}).get("url")
-        if isinstance(url, str) and url.strip().startswith("data:"):
-            items.append(block)
-    return items
 
 
 def _positive_int_or_none(value: Any) -> int | None:

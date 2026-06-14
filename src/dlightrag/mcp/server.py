@@ -23,9 +23,9 @@ from dlightrag.config import DlightragConfig, get_config, load_config, set_confi
 from dlightrag.core.client_contracts import ConversationMessage, dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
-    metadata_filter_from_payload,
     retrieval_payload,
 )
+from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_kwargs_from_payload
 from dlightrag.core.ingest_policy import should_wait_for_ingest
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -114,49 +114,6 @@ def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]
     return normalize_workspace(label), display_name
 
 
-def _retrieval_kwargs(args: RetrieveInput | AnswerInput) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {}
-    filters = metadata_filter_from_payload(args.filters)
-    if filters is not None:
-        kwargs["filters"] = filters
-    if args.query_images:
-        kwargs["query_images"] = dump_optional_list(args.query_images)
-    if args.session_id:
-        kwargs["session_id"] = args.session_id
-    if args.referenced_image_ids:
-        kwargs["referenced_image_ids"] = args.referenced_image_ids
-    return kwargs
-
-
-def _ingest_kwargs(args: IngestInput) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {}
-    if args.source_type == "local":
-        kwargs["path"] = args.path or "."
-    elif args.source_type == "azure_blob":
-        kwargs["container_name"] = args.container_name or ""
-        if args.blob_path:
-            kwargs["blob_path"] = args.blob_path
-        if args.prefix is not None:
-            kwargs["prefix"] = args.prefix
-    elif args.source_type == "s3":
-        kwargs["bucket"] = args.bucket or ""
-        if args.key:
-            kwargs["key"] = args.key
-        if args.prefix is not None:
-            kwargs["prefix"] = args.prefix
-    if args.replace is not None:
-        kwargs["replace"] = args.replace
-    if args.title is not None:
-        kwargs["title"] = args.title
-    if args.author is not None:
-        kwargs["author"] = args.author
-    if args.metadata is not None:
-        kwargs["metadata"] = args.metadata
-    if args.metadata_policy is not None:
-        kwargs["metadata_policy"] = args.metadata_policy
-    return kwargs
-
-
 @mcp_app.tool(
     name="retrieve",
     description=(
@@ -198,7 +155,7 @@ async def retrieve_tool(
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,
         scope=scope,
-        **_retrieval_kwargs(args),
+        **query_kwargs_from_payload(args, include_multimodal_content=False),
     )
     return retrieval_payload(result)
 
@@ -262,7 +219,7 @@ async def answer_tool(
         answer_candidate_top_k=args.answer_candidate_top_k,
         answer_context_top_k=args.answer_context_top_k,
         scope=scope,
-        **_retrieval_kwargs(args),
+        **query_kwargs_from_payload(args, include_multimodal_content=False),
     )
     return answer_payload(result)
 
@@ -388,7 +345,7 @@ async def ingest_tool(
     args = IngestInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
-    kwargs = _ingest_kwargs(args)
+    kwargs = ingest_kwargs_from_payload(args)
     wait_for_completion = should_wait_for_ingest(
         source_type=args.source_type,
         path=kwargs.get("path"),

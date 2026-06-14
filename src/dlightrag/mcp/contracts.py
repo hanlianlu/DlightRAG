@@ -5,16 +5,16 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
-from dlightrag.core.client_contracts import ConversationMessage, QueryImage
+from dlightrag.core.client_contracts import ClientContractModel, ConversationMessage, QueryImage
 
 MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
 SourceType = Literal["local", "azure_blob", "s3"]
 
 
-class MCPInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+class MCPInput(ClientContractModel):
+    pass
 
 
 class RetrieveInput(MCPInput):
@@ -52,8 +52,16 @@ class IngestInput(MCPInput):
 
     @model_validator(mode="after")
     def validate_selectors(self) -> IngestInput:
+        if self.source_type == "local" and not self.path:
+            raise ValueError("'path' is required for local ingestion")
+        if self.source_type == "azure_blob" and not self.container_name:
+            raise ValueError("'container_name' is required for azure_blob")
         if self.source_type == "azure_blob" and self.blob_path and self.prefix is not None:
             raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
+        if self.source_type == "s3" and not self.bucket:
+            raise ValueError("'bucket' is required for s3")
+        if self.source_type == "s3" and not self.key and self.prefix is None:
+            raise ValueError("'key' or 'prefix' is required for s3")
         if self.source_type == "s3" and self.key and self.prefix is not None:
             raise ValueError("'key' and 'prefix' are mutually exclusive")
         return self

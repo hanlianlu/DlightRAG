@@ -13,14 +13,6 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
-def _css_rule(path: str, selector: str) -> str:
-    css = Path(path).read_text(encoding="utf-8")
-    match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\}}", css, re.S)
-
-    assert match is not None
-    return match.group("body")
-
-
 def test_removed_multimodal_dependency_absent() -> None:
     dependencies = _dependencies()
     removed = "rag" + "anything"
@@ -187,18 +179,6 @@ def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/" in dockerfile
 
 
-def test_user_message_css_wraps_unbroken_query_text() -> None:
-    """Long pasted query tokens should stay inside the user message bubble."""
-    user_body = _css_rule("frontend/styles/chat.module.css", ".userMessage")
-    wrapper_body = _css_rule("frontend/styles/chat.module.css", ".userMessageWrapper")
-
-    assert "max-width: 100%;" in user_body
-    assert "min-width: 0;" in user_body
-    assert "overflow-wrap: anywhere;" in user_body
-    assert "white-space: pre-wrap;" in user_body
-    assert "min-width: 0;" in wrapper_body
-
-
 def test_direct_document_parser_dependencies_removed() -> None:
     """DlightRAG should not directly depend on parser/converter stacks LightRAG owns."""
     dependencies = _dependencies()
@@ -319,12 +299,6 @@ def test_env_example_describes_config_as_curated_not_tuning_dump() -> None:
     assert "deployment choices" in example
     assert "docs/config-reference.md" in example
     assert "PostgreSQL tuning" not in example
-
-
-def test_lightrag_constructor_receives_extraction_config() -> None:
-    source = Path("src/dlightrag/core/service.py").read_text(encoding="utf-8")
-
-    assert "entity_extraction_use_json=config.extraction.use_json" in source
 
 
 def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:

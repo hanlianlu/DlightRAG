@@ -6,7 +6,7 @@ from __future__ import annotations
 import datetime
 from typing import Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.core.client_contracts import (
@@ -61,11 +61,15 @@ class IngestRequest(ClientContractModel):
         elif self.source_type == "azure_blob":
             if not self.container_name:
                 raise ValueError("'container_name' is required for azure_blob")
+            if self.blob_path and self.prefix is not None:
+                raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
         elif self.source_type == "s3":
             if not self.bucket:
                 raise ValueError("'bucket' is required for s3")
             if not self.key and self.prefix is None:
                 raise ValueError("'key' or 'prefix' is required for s3")
+            if self.key and self.prefix is not None:
+                raise ValueError("'key' and 'prefix' are mutually exclusive")
         return self
 
 
@@ -75,24 +79,10 @@ class RetrieveRequest(ClientContractModel):
     chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
-    multimodal_content: list[ContentBlock] | None = None
-    query_images: list[QueryImage] | None = None
+    multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
+    query_images: list[QueryImage] | None = Field(default=None, max_length=3)
     session_id: str | None = None
     referenced_image_ids: list[str] | None = None
-
-    @field_validator("multimodal_content")
-    @classmethod
-    def validate_multimodal_count(cls, v: list[ContentBlock] | None) -> list[ContentBlock] | None:
-        if v and len(v) > 3:
-            raise ValueError("Maximum 3 multimodal items per query")
-        return v
-
-    @field_validator("query_images")
-    @classmethod
-    def validate_query_images(cls, v: list[QueryImage] | None) -> list[QueryImage] | None:
-        if v and len(v) > 3:
-            raise ValueError("Maximum 3 query_images per request")
-        return v
 
 
 class AnswerRequest(ClientContractModel):
@@ -104,27 +94,13 @@ class AnswerRequest(ClientContractModel):
     answer_context_top_k: int | None = Field(default=None, ge=1)
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
-    multimodal_content: list[ContentBlock] | None = None
+    multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     conversation_history: list[ConversationMessage] | None = None
     session_id: str | None = None
     referenced_image_ids: list[str] | None = None
-    query_images: list[QueryImage] | None = None
+    query_images: list[QueryImage] | None = Field(default=None, max_length=3)
     """User-attached images used for VLM semantic enhancement, direct visual
     retrieval, session image memory, and bounded answer-model image blocks."""
-
-    @field_validator("multimodal_content")
-    @classmethod
-    def validate_image_count(cls, v: list[ContentBlock] | None) -> list[ContentBlock] | None:
-        if v and len(v) > 3:
-            raise ValueError("Maximum 3 multimodal items per query")
-        return v
-
-    @field_validator("query_images")
-    @classmethod
-    def validate_query_image_count(cls, v: list[QueryImage] | None) -> list[QueryImage] | None:
-        if v and len(v) > 3:
-            raise ValueError("Maximum 3 query_images per request")
-        return v
 
 
 class DeleteRequest(ClientContractModel):

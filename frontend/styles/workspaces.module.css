@@ -7,7 +7,7 @@
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.46);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 46%);
   display: flex;
   flex-direction: column;
   left: 0;
@@ -109,7 +109,7 @@
 }
 
 .workspacePopoverDelete:hover {
-  background: rgba(248, 113, 113, 0.15);
+  background: rgb(248 113 113 / 15%);
   color: var(--color-danger);
 }
 
@@ -135,7 +135,7 @@
 }
 
 .workspacePopoverInput:focus {
-  border-color: rgba(210, 182, 97, 0.38);
+  border-color: rgb(210 182 97 / 38%);
 }
 
 .workspacePopoverInput::placeholder {
@@ -144,8 +144,8 @@
 
 .workspacePopoverCreateBtn {
   align-items: center;
-  background: rgba(87, 74, 36, 0.28);
-  border: 1px solid rgba(210, 182, 97, 0.24);
+  background: rgb(87 74 36 / 28%);
+  border: 1px solid rgb(210 182 97 / 24%);
   border-radius: var(--radius-sm);
   color: var(--color-gold-100);
   cursor: pointer;
@@ -159,6 +159,6 @@
 }
 
 .workspacePopoverCreateBtn:hover {
-  background: rgba(87, 74, 36, 0.42);
-  border-color: rgba(210, 182, 97, 0.4);
+  background: rgb(87 74 36 / 42%);
+  border-color: rgb(210 182 97 / 40%);
 }

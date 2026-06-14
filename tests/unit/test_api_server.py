@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime
+from collections.abc import Iterator
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -27,7 +28,7 @@ app: FastAPI
 
 
 @pytest.fixture
-def _api_app(test_config: DlightragConfig) -> FastAPI:
+def _api_app(test_config: DlightragConfig) -> Iterator[FastAPI]:
     """Create the API app after test_config has installed the singleton."""
     global app
     app = create_app(include_web=False)
@@ -38,7 +39,7 @@ def _api_app(test_config: DlightragConfig) -> FastAPI:
 
 
 @pytest.fixture
-def mock_config(_api_app: FastAPI, test_config: DlightragConfig):
+def mock_config(_api_app: FastAPI, test_config: DlightragConfig) -> Iterator[DlightragConfig]:
     """Override auth dependency to allow all requests (auth_mode=none)."""
     _api_app.dependency_overrides[get_current_user] = lambda: _ANON
     yield test_config
@@ -635,7 +636,7 @@ class TestIngestEndpoint:
                 "prefix": "docs/",
             },
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_azure_blob_path_and_prefix_mutually_exclusive(
@@ -650,7 +651,7 @@ class TestIngestEndpoint:
                 "prefix": "docs/",
             },
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 422
 
     async def test_ingest_with_workspace(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

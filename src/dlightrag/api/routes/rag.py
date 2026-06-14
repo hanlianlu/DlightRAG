@@ -27,10 +27,10 @@ from dlightrag.citations import finalize_answer
 from dlightrag.core.client_contracts import dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
-    metadata_filter_from_payload,
     project_contexts_for_client,
     retrieval_payload,
 )
+from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_kwargs_from_payload
 from dlightrag.core.ingest_policy import is_ingest_job_row, should_wait_for_ingest
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
@@ -38,22 +38,6 @@ from .deps import get_manager, request_scope, resolve_workspace
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _query_kwargs(body: RetrieveRequest | AnswerRequest) -> dict[str, Any]:
-    kwargs: dict[str, Any] = {}
-    filters = metadata_filter_from_payload(body.filters)
-    if filters is not None:
-        kwargs["filters"] = filters
-    if body.multimodal_content:
-        kwargs["multimodal_content"] = dump_optional_list(body.multimodal_content)
-    if body.query_images:
-        kwargs["query_images"] = dump_optional_list(body.query_images)
-    if body.session_id:
-        kwargs["session_id"] = body.session_id
-    if body.referenced_image_ids:
-        kwargs["referenced_image_ids"] = body.referenced_image_ids
-    return kwargs
 
 
 def _job_response(job: dict[str, Any]) -> JSONResponse:
@@ -68,39 +52,7 @@ async def ingest(
     """Bulk document ingestion."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
-
-    kwargs: dict[str, Any] = {}
-    if body.replace is not None:
-        kwargs["replace"] = body.replace
-
-    if body.source_type == "local":
-        kwargs["path"] = body.path
-    elif body.source_type == "azure_blob":
-        if body.blob_path and body.prefix is not None:
-            raise HTTPException(
-                status_code=400, detail="'blob_path' and 'prefix' are mutually exclusive"
-            )
-        kwargs["container_name"] = body.container_name
-        if body.blob_path:
-            kwargs["blob_path"] = body.blob_path
-        if body.prefix is not None:
-            kwargs["prefix"] = body.prefix
-    elif body.source_type == "s3":
-        if body.key and body.prefix is not None:
-            raise HTTPException(status_code=400, detail="'key' and 'prefix' are mutually exclusive")
-        kwargs["bucket"] = body.bucket
-        if body.key:
-            kwargs["key"] = body.key
-        if body.prefix is not None:
-            kwargs["prefix"] = body.prefix
-    if body.title is not None:
-        kwargs["title"] = body.title
-    if body.author is not None:
-        kwargs["author"] = body.author
-    if body.metadata is not None:
-        kwargs["metadata"] = body.metadata
-    if body.metadata_policy is not None:
-        kwargs["metadata_policy"] = body.metadata_policy
+    kwargs = ingest_kwargs_from_payload(body)
 
     wait = should_wait_for_ingest(
         source_type=body.source_type,
@@ -138,7 +90,7 @@ async def retrieve(
 ) -> dict[str, Any]:
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
-    kwargs = _query_kwargs(body)
+    kwargs = query_kwargs_from_payload(body)
     scope = request_scope(user, body.workspaces)
 
     result = await manager.aretrieve(
@@ -159,7 +111,7 @@ async def answer(
 ):
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     manager = get_manager(request)
-    kwargs = _query_kwargs(body)
+    kwargs = query_kwargs_from_payload(body)
     scope = request_scope(user, body.workspaces)
 
     if not body.stream:
