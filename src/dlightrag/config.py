@@ -1012,6 +1012,10 @@ class DlightragConfig(BaseSettings):
     def input_dir_path(self) -> Path:
         return self.working_dir_path / "inputs"
 
+    @property
+    def checkpoint_session_ttl_seconds(self) -> int:
+        return int(self.checkpoint_session_ttl_days) * 24 * 60 * 60
+
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
         """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""
         if self.postgres_ssl_mode is None:

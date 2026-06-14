@@ -959,7 +959,7 @@ class RAGServiceManager:
             self._session_images = SessionImageStore(
                 max_images_per_session=cfg.session_max_images,
                 max_sessions=cfg.session_max_sessions,
-                ttl_seconds=int(self._config.checkpoint_session_ttl_days) * 24 * 60 * 60,
+                ttl_seconds=self._config.checkpoint_session_ttl_seconds,
             )
         return self._session_images
 
