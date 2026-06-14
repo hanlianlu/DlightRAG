@@ -15,9 +15,13 @@ from __future__ import annotations
 import socket
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Generator
+from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from playwright.sync_api import Browser, Page, Playwright
@@ -28,7 +32,7 @@ MOCK_WORKSPACES = [
     {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"}
 ]
 
-MOCK_WORKSPACE_LIST = [{"workspace": "default", "display_name": "Default"}]
+MOCK_WORKSPACE_LIST = ["default"]
 
 
 def _free_port() -> int:
@@ -41,50 +45,54 @@ def _free_port() -> int:
 @pytest.fixture(scope="module")
 def e2e_base_url() -> Generator[str, Any, None]:
     """Start a real FastAPI server with a mocked manager on a random port."""
-    app = create_app(include_web=True)
-
     manager = AsyncMock()
-    manager.aretrieve.return_value = {"chunks": [], "sources": []}
-    manager.aanswer.return_value = {
-        "answer": "DlightRAG is a multimodal RAG system.",
-        "sources": [],
-    }
+    manager.config = SimpleNamespace(
+        workspace="default",
+        input_dir_path=Path("."),
+        citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
+        embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
+    )
 
-    # SSE streaming: yield token → preview → done → meta
-    async def _mock_answer_stream(**__: Any) -> Any:
-        yield {"type": "progress", "phase": "generating"}
-        yield {"type": "token", "data": "DlightRAG is a "}
-        yield {
-            "type": "preview",
-            "data": "<p>DlightRAG is a <strong>multimodal RAG</strong></p>",
-        }
-        yield {
-            "type": "done",
-            "answer": "DlightRAG is a multimodal RAG system.",
-            "html": '<div id="answer-content"><p>DlightRAG is a <strong>multimodal RAG</strong> system.</p></div>',
-            "current_image_ids": [],
-        }
-        yield {"type": "meta", "history_kept": 0}
+    async def _token_stream() -> Any:
+        yield "DlightRAG is a "
+        yield "multimodal RAG system."
 
-    manager.aanswer_stream.side_effect = lambda **kw: _mock_answer_stream(**kw)
+    async def _mock_answer_stream(*__: Any, **___: Any) -> Any:
+        return ({}, _token_stream())
+
+    manager.aanswer_stream.side_effect = _mock_answer_stream
+    manager.aget_checkpoint_history.return_value = []
     manager.list_workspaces.return_value = MOCK_WORKSPACE_LIST
+    manager.list_workspace_records.return_value = MOCK_WORKSPACES
+    manager.list_ingested_files.return_value = []
+    manager.get_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
     manager.aingest.return_value = {"job_id": "e2e-test-job", "file_count": 1}
     manager.adelete_files.return_value = {"deleted_count": 0}
-    manager.config.max_upload_bytes = 100 * 1024 * 1024
-
-    app.state.manager = manager
 
     port = _free_port()
     import uvicorn
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    t = threading.Thread(target=server.run, daemon=True)
-    t.start()
-    time.sleep(0.5)  # let uvicorn bind
-    yield f"http://127.0.0.1:{port}"
-    server.should_exit = True
-    t.join(timeout=3)
+    with patch("dlightrag.api.server.RAGServiceManager.create", AsyncMock(return_value=manager)):
+        app = create_app(include_web=True)
+        config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+        server = uvicorn.Server(config)
+        t = threading.Thread(target=server.run, daemon=True)
+        t.start()
+        base_url = f"http://127.0.0.1:{port}"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(f"{base_url}/web/", timeout=0.25):
+                    break
+            except (OSError, urllib.error.URLError):
+                time.sleep(0.05)
+        else:
+            server.should_exit = True
+            t.join(timeout=3)
+            raise RuntimeError("E2E server did not become ready")
+        yield base_url
+        server.should_exit = True
+        t.join(timeout=3)
 
 
 @pytest.fixture(scope="module")
