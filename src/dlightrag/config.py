@@ -179,7 +179,7 @@ class ExtractionConfig(BaseModel):
     @field_validator("entity_type_prompt_file")
     @classmethod
     def _validate_entity_type_prompt_file(cls, value: str | None) -> str | None:
-        """Mirror LightRAG 1.5.0's ENTITY_TYPE_PROMPT_FILE contract."""
+        """Mirror LightRAG's ENTITY_TYPE_PROMPT_FILE contract."""
         if value is None:
             return None
         file_name = value.strip()

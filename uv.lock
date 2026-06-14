@@ -514,7 +514,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.58.0" },
     { name = "langchain-text-splitters" },
     { name = "langfuse", specifier = ">=4.0.0" },
-    { name = "lightrag-hku", specifier = ">=1.5.1" },
+    { name = "lightrag-hku", specifier = ">=1.5.3" },
     { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.0" },
