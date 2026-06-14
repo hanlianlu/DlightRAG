@@ -8,7 +8,8 @@ traffic.
 
 `dlightrag-rebuild-vdb` rebuilds LightRAG vector storage from existing
 LightRAG graph and chunk records while using DlightRAG's configured storage,
-workspace, embedding provider, and sidecar alignment rules.
+workspace, embedding provider, BM25 language labeling, and sidecar alignment
+rules.
 
 It does not ingest files, parse documents, create document status records, or
 change source documents. It only checks or rewrites vector rows derived from
@@ -31,8 +32,8 @@ retry endpoints for that case.
 |---|---:|---|
 | `check` | no | Compare graph records with entity and relationship vector rows. |
 | `graph` | yes | Rebuild entity and relationship vectors from the graph store. |
-| `chunks` | yes | Rebuild chunk vectors from LightRAG text chunks, then restore DlightRAG sidecar image-vector alignment. |
-| `all` | yes | Run graph and chunk vector rebuilds. |
+| `chunks` | yes | Rebuild chunk vectors from LightRAG text chunks, then refresh BM25 language labels and restore DlightRAG sidecar image-vector alignment. |
+| `all` | yes | Run graph and chunk vector rebuilds, then run the chunk post-rebuild maintenance. |
 
 `graph`, `chunks`, and `all` require `--yes`. Treat them as offline
 maintenance: stop DlightRAG API, MCP, ingest workers, and any other process
@@ -82,10 +83,17 @@ docker compose up -d dlightrag-api dlightrag-mcp
 If you do not run `lightrag-gui`, omit it from the stop command. If you do run
 it, restart it with the other services after the rebuild.
 
-### DlightRAG Image Vectors
+### DlightRAG Chunk Post-Rebuild Maintenance
 
 Upstream LightRAG's rebuild can rebuild chunk vectors from chunk text. DlightRAG
-adds an extra direct image-vector alignment step after chunk rebuilds:
+adds two post-rebuild steps after successful `chunks` and `all` targets.
+
+First, when BM25 is enabled, it scans LightRAG text chunks and refreshes each
+row's `dlightrag_bm25_language` label with the configured BM25 language
+profiles. This keeps query-language-routed BM25 partial indexes aligned after
+offline chunk rebuilds.
+
+Second, DlightRAG restores direct image-vector alignment:
 
 1. It reads processed documents and their sidecar locations.
 2. It reuses DlightRAG's multimodal embedder and ingestion alignment code.

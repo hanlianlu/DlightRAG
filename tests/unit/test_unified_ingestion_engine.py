@@ -261,6 +261,9 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
     doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    artifact_dir = tmp_path / "old.parsed"
+    artifact_dir.mkdir()
+    events: list[str] = []
 
     # Simulate a partial record from an interrupted ingest.
     deps["stores"].get_doc_status.return_value = {
@@ -268,18 +271,38 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
         "content_hash": "sha256:deadbeef",
         "status": "analyzing",
     }
-    deps["stores"].get_full_doc.return_value = {
-        "parse_engine": "mineru",
-        "process_options": "iteP",
-        "chunk_options": {},
-        "sidecar_location": "file:///tmp/nonexistent.parsed/",
-    }
+
+    async def get_full_doc(doc_id_arg: str) -> dict | None:
+        events.append("get_full_doc")
+        if "adelete_by_doc_id" in events:
+            return {
+                "parse_engine": "mineru",
+                "process_options": "iteP",
+                "chunk_options": {},
+                "sidecar_location": None,
+            }
+        return {
+            "parse_engine": "mineru",
+            "process_options": "iteP",
+            "chunk_options": {},
+            "sidecar_location": artifact_dir.as_uri(),
+        }
+
+    async def delete_doc(doc_id_arg: str, *, delete_llm_cache: bool) -> object:
+        events.append("adelete_by_doc_id")
+        return type("DeletionResult", (), {"status": "success"})()
+
+    deps["stores"].get_full_doc = AsyncMock(side_effect=get_full_doc)
+    deps["lightrag"].adelete_by_doc_id = AsyncMock(side_effect=delete_doc)
 
     result = await engine.aingest_file(source, replace=False)
 
     # Must have cleaned up the old partial record.
-    deps["stores"].cleanup_doc.assert_awaited_once_with(doc_id)
+    deps["lightrag"].adelete_by_doc_id.assert_awaited_once_with(doc_id, delete_llm_cache=True)
+    deps["stores"].cleanup_doc.assert_not_awaited()
     deps["metadata_index"].delete.assert_awaited_once_with(doc_id)
+    assert events[:2] == ["get_full_doc", "adelete_by_doc_id"]
+    assert not artifact_dir.exists()
 
     # Must have proceeded with normal ingest.
     assert result["doc_id"] == doc_id
@@ -302,6 +325,7 @@ async def test_document_ingest_skips_cleanup_when_already_processed(tmp_path: Pa
     await engine.aingest_file(source, replace=False)
 
     # Cleanup must NOT have been called for a healthy doc.
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
     deps["stores"].cleanup_doc.assert_not_awaited()
     deps["metadata_index"].delete.assert_not_awaited()
 
@@ -315,6 +339,7 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
 
     result = await engine.aingest_file(source, replace=False)
 
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
     deps["stores"].cleanup_doc.assert_not_awaited()
     assert result["doc_id"] is not None
 
@@ -466,11 +491,11 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
         "sidecar_location": "file:///tmp/sample.parsed/",
     }
 
-    async def slow_cleanup(doc_id_arg: str) -> int:
+    async def slow_delete(doc_id_arg: str, *, delete_llm_cache: bool) -> object:
         await asyncio.sleep(0.03)
-        return 1
+        return type("DeletionResult", (), {"status": "success"})()
 
-    deps["stores"].cleanup_doc = AsyncMock(side_effect=slow_cleanup)
+    deps["lightrag"].adelete_by_doc_id = AsyncMock(side_effect=slow_delete)
 
     async def ingest() -> dict:
         return await engine.aingest_file(source, replace=False)
@@ -478,7 +503,8 @@ async def test_concurrent_ingest_of_same_doc_is_serialized(tmp_path: Path) -> No
     results = await asyncio.gather(ingest(), ingest())
     assert len(results) == 2
     # Cleanup must have been called exactly once (not twice).
-    assert deps["stores"].cleanup_doc.await_count == 1
+    assert deps["lightrag"].adelete_by_doc_id.await_count == 1
+    deps["stores"].cleanup_doc.assert_not_awaited()
 
 
 async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:

@@ -715,7 +715,8 @@ uv run dlightrag-rebuild-vdb --target all --yes
 
 Run destructive targets only after stopping DlightRAG API, MCP, ingest workers,
 and any other writer using the same storage. Chunk rebuilds automatically
-restore DlightRAG's sidecar image-vector alignment unless explicitly disabled.
+refresh BM25 chunk language labels and restore DlightRAG's sidecar
+image-vector alignment unless explicitly disabled.
 Full target descriptions, Docker Compose usage, and safety notes are in
 [docs/operations.md](docs/operations.md).
 
