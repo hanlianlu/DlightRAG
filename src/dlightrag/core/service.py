@@ -1208,12 +1208,9 @@ class RAGService:
             _plan: Pre-computed QueryPlan from QueryPlanner (via ServiceManager).
         """
         self._ensure_initialized()
-        backend = self._backend
-        if not backend:
-            raise RuntimeError("Retrieval backend not initialized")
+        if self._retrieval_orchestrator is None:
+            raise RuntimeError("Retrieval orchestrator not initialized")
 
-        # --- Step 1: Resolve metadata filter → candidate chunk_ids ---
-        candidate_ids: set[str] | None = None
         effective_filters = filters
         filter_source = "explicit" if filters is not None else None
         if effective_filters is None and _plan is not None:
@@ -1221,56 +1218,19 @@ class RAGService:
             filter_source = getattr(_plan, "metadata_filter_source", None)
         effective_filters = self._normalize_metadata_filter(effective_filters)
 
-        if self._retrieval_orchestrator is not None:
-            kg_result = await self._retrieval_orchestrator.aretrieve(
-                query,
-                multimodal_content=multimodal_content,
-                metadata_filter=effective_filters,
-                metadata_filter_source=filter_source,
-                bm25_query=getattr(_plan, "bm25_query", None) if _plan is not None else None,
-                top_k=top_k,
-                chunk_top_k=chunk_top_k,
-                is_reretrieve=is_reretrieve,
-                **kwargs,
-            )
-        else:
-            if effective_filters:
-                try:
-                    from dlightrag.core.retrieval.metadata_path import metadata_retrieve
+        kg_result = await self._retrieval_orchestrator.aretrieve(
+            query,
+            multimodal_content=multimodal_content,
+            metadata_filter=effective_filters,
+            metadata_filter_source=filter_source,
+            bm25_query=getattr(_plan, "bm25_query", None) if _plan is not None else None,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            is_reretrieve=is_reretrieve,
+            **kwargs,
+        )
 
-                    assert self._metadata_index is not None
-                    assert self._lightrag_stores is not None
-                    chunk_ids = await metadata_retrieve(
-                        metadata_index=self._metadata_index,
-                        stores=self._lightrag_stores,
-                        filters=effective_filters,
-                    )
-                    candidate_ids = set(chunk_ids)
-                    logger.info("In-filter: %d candidate chunks from metadata", len(candidate_ids))
-                except Exception as exc:
-                    logger.warning("Metadata candidate resolution failed; failing closed: %s", exc)
-                    candidate_ids = set()
-
-            from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-
-            async with metadata_filter_scope(candidate_ids):
-                kg_result = await backend.aretrieve(
-                    query,
-                    multimodal_content=multimodal_content,
-                    mode="mix",
-                    top_k=top_k,
-                    chunk_top_k=chunk_top_k,
-                    is_reretrieve=is_reretrieve,
-                    **kwargs,
-                )
-
-            if candidate_ids:
-                returned_cids = {c.get("chunk_id") for c in kg_result.contexts.get("chunks", [])}
-                missing = candidate_ids - returned_cids
-                if missing:
-                    await self._inject_candidate_chunks(kg_result, sorted(missing))
-
-        # --- Step 2.5: Hydrate image data for all retrieved/injected chunks ---
+        # --- Step 2.5: Hydrate image data for all retrieved chunks ---
         # BM25 chunks and other post-fusion additions haven't been through
         # hydration yet, so they lack image_data for visual chunks.
         lr = self.lightrag
@@ -1286,8 +1246,8 @@ class RAGService:
         kg_result.trace["metadata_enriched"] = True
 
         # --- Step 4: Canonicalize reference_id across all merged chunks ---
-        # Required so injected chunks (metadata path / visual-only) get a
-        # stable doc-level ID and become citable as [ref-chunk_idx].
+        # Required so fused chunks get stable doc-level IDs and become citable
+        # as [ref-chunk_idx].
         from dlightrag.core.retrieval import canonicalize_reference_ids
 
         kg_result.contexts["chunks"] = canonicalize_reference_ids(
@@ -1312,35 +1272,6 @@ class RAGService:
         if size == "full":
             return await self._visual_asset_resolver.resolve(chunk_id)
         raise ValueError("size must be 'full' or 'thumb'")
-
-    async def _inject_candidate_chunks(self, result: RetrievalResult, chunk_ids: list[str]) -> None:
-        """Force-inject metadata-resolved chunks missing from retrieval results.
-
-        Uses the shared ``fetch_chunks_by_ids`` helper for base text_chunks
-        retrieval, then hydrates provenance from LightRAG sidecar data.
-        """
-        from dlightrag.core.retrieval.filtered_vdb import fetch_chunks_by_ids
-
-        lr = self.lightrag
-        if lr is None:
-            return
-
-        returned_cids: set[str] = {
-            cid for c in result.contexts.get("chunks", []) if (cid := c.get("chunk_id"))
-        }
-        injected = await fetch_chunks_by_ids(
-            lr.text_chunks,
-            [c for c in chunk_ids if c not in returned_cids],
-        )
-        if not injected:
-            return
-
-        from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
-
-        await hydrate_lightrag_chunk_provenance(lr, injected)
-
-        chunks = result.contexts.get("chunks", [])
-        result.contexts["chunks"] = chunks + injected
 
     async def _enrich_chunks_with_metadata(self, result: RetrievalResult) -> None:
         """Inject document metadata into chunk contexts for LLM consumption.

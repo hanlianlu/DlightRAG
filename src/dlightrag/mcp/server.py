@@ -381,10 +381,7 @@ async def list_files_tool(
     args = ListFilesInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
-    try:
-        files = await manager.list_ingested_files(workspace_name)
-    except NotImplementedError:
-        return {"error": "File listing is not supported in unified RAG mode"}
+    files = await manager.list_ingested_files(workspace_name)
     return {"files": files, "count": len(files), "workspace": workspace_name}
 
 
@@ -406,14 +403,11 @@ async def delete_files_tool(
     args = DeleteFilesInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
-    try:
-        results = await manager.delete_files(
-            workspace_name,
-            filenames=args.filenames,
-            file_paths=args.file_paths,
-        )
-    except NotImplementedError:
-        return {"error": "File deletion is not supported in unified RAG mode"}
+    results = await manager.delete_files(
+        workspace_name,
+        filenames=args.filenames,
+        file_paths=args.file_paths,
+    )
     return {"results": results, "workspace": workspace_name}
 
 

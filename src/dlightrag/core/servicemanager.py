@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
-from dlightrag.core.query_image_payloads import prepare_query_images
+from dlightrag.core.query_image_payloads import PreparedQueryImages, prepare_query_images
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
@@ -913,6 +913,57 @@ class RAGServiceManager:
         kwargs["chunk_top_k"] = candidate_top_k
         return _AnswerLimits(candidate_top_k=candidate_top_k, context_top_k=context_top_k)
 
+    async def _prepare_answer_retrieval(
+        self,
+        query: str,
+        *,
+        conversation_history: list[dict[str, Any]] | None,
+        query_images: list[dict[str, Any]] | None,
+        ws_list: list[str],
+        scope: RequestScope,
+        kwargs: dict[str, Any],
+        log_plan: bool = False,
+    ) -> tuple[QueryPlan, PreparedQueryImages, _AnswerLimits, RetrievalResult]:
+        plan = await self.aplan_query(
+            query,
+            conversation_history=conversation_history,
+            workspaces=ws_list,
+        )
+        if log_plan:
+            logger.info(
+                "Query plan: original=%r, standalone=%r",
+                plan.original_query[:60],
+                plan.standalone_query[:60],
+            )
+
+        prepared = await prepare_query_images(
+            plan.standalone_query,
+            query_images=query_images,
+            session_id=kwargs.pop("session_id", None),
+            referenced_image_ids=kwargs.pop("referenced_image_ids", None)
+            or plan.referenced_image_ids,
+            store_current=True,
+            session_images=self._get_session_images(),
+            enhancer=self._get_query_image_enhancer(),
+            scope=scope,
+        )
+        retrieval_plan = replace(plan, standalone_query=prepared.query)
+        if prepared.multimodal_content:
+            existing_mm = kwargs.get("multimodal_content") or []
+            kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
+        limits = self._resolve_answer_limits(kwargs)
+        retrieval = await self.aretrieve(
+            query,
+            plan=retrieval_plan,
+            workspaces=ws_list,
+            scope=scope,
+            **kwargs,
+        )
+        retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
+        retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
+        retrieval.trace["answer_context_top_k"] = limits.context_top_k
+        return plan, prepared, limits, retrieval
+
     # --- Read operations (single or federated) ---
 
     async def aretrieve(
@@ -1012,35 +1063,14 @@ class RAGServiceManager:
         try:
             async with asyncio.timeout(self._config.request_timeout):
                 async with trace_pipeline("answer_pipeline", workspaces=ws_list, query=query):
-                    plan = await self.aplan_query(
+                    plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
                         query,
                         conversation_history=conversation_history,
-                        workspaces=ws_list,
-                    )
-                    prepared = await prepare_query_images(
-                        plan.standalone_query,
                         query_images=query_images,
-                        session_id=kwargs.pop("session_id", None),
-                        referenced_image_ids=kwargs.pop("referenced_image_ids", None)
-                        or plan.referenced_image_ids,
-                        store_current=True,
-                        session_images=self._get_session_images(),
-                        enhancer=self._get_query_image_enhancer(),
+                        ws_list=ws_list,
                         scope=scoped,
+                        kwargs=kwargs,
                     )
-                    retrieval_plan = replace(plan, standalone_query=prepared.query)
-                    if prepared.multimodal_content:
-                        existing_mm = kwargs.get("multimodal_content") or []
-                        kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
-                    limits = self._resolve_answer_limits(kwargs)
-                    retrieval = await self.aretrieve(
-                        query,
-                        plan=retrieval_plan,
-                        workspaces=ws_list,
-                        scope=scoped,
-                        **kwargs,
-                    )
-                    retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
                     engine = self._get_answer_engine()
                     result = await engine.generate(
                         plan.standalone_query,
@@ -1049,8 +1079,6 @@ class RAGServiceManager:
                         conversation_history=conversation_history,
                         context_top_k=limits.context_top_k,
                     )
-                    retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
-                    retrieval.trace["answer_context_top_k"] = limits.context_top_k
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     result.current_image_ids = prepared.current_image_ids
@@ -1092,41 +1120,15 @@ class RAGServiceManager:
                 async with trace_pipeline(
                     "answer_stream_pipeline", workspaces=ws_list, query=query
                 ):
-                    plan = await self.aplan_query(
+                    plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
                         query,
                         conversation_history=conversation_history,
-                        workspaces=ws_list,
-                    )
-                    logger.info(
-                        "Query plan: original=%r, standalone=%r",
-                        plan.original_query[:60],
-                        plan.standalone_query[:60],
-                    )
-
-                    prepared = await prepare_query_images(
-                        plan.standalone_query,
                         query_images=query_images,
-                        session_id=kwargs.pop("session_id", None),
-                        referenced_image_ids=kwargs.pop("referenced_image_ids", None)
-                        or plan.referenced_image_ids,
-                        store_current=True,
-                        session_images=self._get_session_images(),
-                        enhancer=self._get_query_image_enhancer(),
+                        ws_list=ws_list,
                         scope=scoped,
+                        kwargs=kwargs,
+                        log_plan=True,
                     )
-                    retrieval_plan = replace(plan, standalone_query=prepared.query)
-                    if prepared.multimodal_content:
-                        existing_mm = kwargs.get("multimodal_content") or []
-                        kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
-                    limits = self._resolve_answer_limits(kwargs)
-                    retrieval = await self.aretrieve(
-                        query,
-                        plan=retrieval_plan,
-                        workspaces=ws_list,
-                        scope=scoped,
-                        **kwargs,
-                    )
-                    retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
                     contexts, stream = await self.agenerate_stream_from_contexts(
                         plan.standalone_query,
                         retrieval.contexts,
@@ -1134,8 +1136,6 @@ class RAGServiceManager:
                         conversation_history=conversation_history,
                         context_top_k=limits.context_top_k,
                     )
-                    retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
-                    retrieval.trace["answer_context_top_k"] = limits.context_top_k
                     if stream is not None:
                         stream_meta = cast(Any, stream)
                         stream_meta.current_image_ids = prepared.current_image_ids

@@ -41,8 +41,6 @@ class IngestRequest(ClientContractModel):
     container_name: str | None = None
     blob_path: str | None = None
     prefix: str | None = None
-    query: str | None = None
-    table: str | None = None
     bucket: str | None = None
     key: str | None = None
     replace: bool | None = None
