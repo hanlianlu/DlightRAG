@@ -184,22 +184,26 @@ class TestRAGServiceRetrieve:
     """Test aretrieve delegation to RetrievalEngine."""
 
     def _make_retrieval_service(self, config: DlightragConfig) -> RAGService:
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
         service = RAGService(config=config)
         service._initialized = True
-        service._backend = MagicMock()
-        service._backend.aretrieve = AsyncMock(return_value=MagicMock())
+        service._retrieval_orchestrator = MagicMock()
+        service._retrieval_orchestrator.aretrieve = AsyncMock(
+            return_value=RetrievalResult(contexts={"chunks": []})
+        )
         return service
 
-    async def test_aretrieve_delegates_to_backend(self, test_config):
+    async def test_aretrieve_delegates_to_orchestrator(self, test_config):
         service = self._make_retrieval_service(test_config)
         await service.aretrieve("test query")
-        service._backend.aretrieve.assert_awaited_once()
+        service._retrieval_orchestrator.aretrieve.assert_awaited_once()
 
     async def test_aretrieve_passes_multimodal_content(self, test_config):
         service = self._make_retrieval_service(test_config)
         mc = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
         await service.aretrieve("test query", multimodal_content=mc)
-        call_kwargs = service._backend.aretrieve.call_args.kwargs
+        call_kwargs = service._retrieval_orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["multimodal_content"] == mc
 
     async def test_aretrieve_not_initialized_raises(self, test_config):
@@ -826,7 +830,7 @@ class TestRAGServiceLightRAGMainPath:
         service._metadata_index.delete.assert_awaited_once_with("old-doc")
 
     async def test_aretrieve_unified_delegates(self, test_config: DlightragConfig) -> None:
-        """aretrieve delegates directly to the retrieval backend."""
+        """aretrieve delegates directly to the retrieval orchestrator."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         expected = RetrievalResult(
@@ -836,11 +840,11 @@ class TestRAGServiceLightRAGMainPath:
 
         service = RAGService(config=test_config)
         service._initialized = True
-        service._backend = MagicMock()
-        service._backend.aretrieve = AsyncMock(return_value=expected)
+        service._retrieval_orchestrator = MagicMock()
+        service._retrieval_orchestrator.aretrieve = AsyncMock(return_value=expected)
 
         result = await service.aretrieve("test query")
-        service._backend.aretrieve.assert_awaited_once()
+        service._retrieval_orchestrator.aretrieve.assert_awaited_once()
         assert isinstance(result, RetrievalResult)
         assert result.answer is None
         assert result.contexts == {"chunks": []}

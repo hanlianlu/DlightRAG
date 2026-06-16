@@ -40,13 +40,7 @@ async def list_files(
     """List all ingested documents."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
-    try:
-        files = await manager.list_ingested_files(ws)
-    except NotImplementedError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="File listing is not supported in unified RAG mode",
-        ) from exc
+    files = await manager.list_ingested_files(ws)
     return {"files": files, "count": len(files), "workspace": ws}
 
 
@@ -57,17 +51,11 @@ async def delete_files(
     """Delete documents from knowledge base."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
-    try:
-        results = await manager.delete_files(
-            ws,
-            file_paths=body.file_paths,
-            filenames=body.filenames,
-        )
-    except NotImplementedError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="File deletion is not supported in unified RAG mode",
-        ) from exc
+    results = await manager.delete_files(
+        ws,
+        file_paths=body.file_paths,
+        filenames=body.filenames,
+    )
     return {"results": results, "workspace": ws}
 
 
