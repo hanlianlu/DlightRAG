@@ -74,7 +74,6 @@ class IngestRequest(ClientContractModel):
 class RetrieveRequest(ClientContractModel):
     query: str
     top_k: int | None = None
-    chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
@@ -88,7 +87,6 @@ class AnswerRequest(ClientContractModel):
     stream: bool = True
     top_k: int | None = None
     chunk_top_k: int | None = None
-    answer_candidate_top_k: int | None = Field(default=None, ge=1)
     answer_context_top_k: int | None = Field(default=None, ge=1)
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None

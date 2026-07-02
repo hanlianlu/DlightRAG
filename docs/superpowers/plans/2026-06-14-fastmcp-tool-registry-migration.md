@@ -164,7 +164,6 @@ class RetrieveInput(MCPInput):
 
 
 class AnswerInput(RetrieveInput):
-    answer_candidate_top_k: int | None = None
     answer_context_top_k: int | None = None
     conversation_history: list[dict[str, Any]] | None = None
 

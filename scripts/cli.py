@@ -21,7 +21,7 @@ Usage:
     # Query & answer (requires API server: docker compose up dlightrag-api)
     uv run scripts/cli.py query "What are the key findings?"
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
-    uv run scripts/cli.py query "findings?" --filter-doc-author Ada --chunk-top-k 12
+    uv run scripts/cli.py query "findings?" --filter-doc-author Ada
     uv run scripts/cli.py answer "What are the key findings?"
     uv run scripts/cli.py answer "summarize chart" --query-image data:image/png;base64,... --answer-context-top-k 4
     uv run scripts/cli.py chat
@@ -200,8 +200,6 @@ def _apply_query_options(
         payload["referenced_image_ids"] = args.referenced_image_ids
 
     if include_answer_limits:
-        if getattr(args, "answer_candidate_top_k", None) is not None:
-            payload["answer_candidate_top_k"] = args.answer_candidate_top_k
         if getattr(args, "answer_context_top_k", None) is not None:
             payload["answer_context_top_k"] = args.answer_context_top_k
 
@@ -433,9 +431,11 @@ def _add_retrieval_options(
     parser: argparse.ArgumentParser,
     *,
     include_answer_limits: bool = False,
+    include_chunk_top_k: bool = False,
 ) -> None:
     parser.add_argument("--top-k", type=int, default=None, dest="top_k")
-    parser.add_argument("--chunk-top-k", type=int, default=None, dest="chunk_top_k")
+    if include_chunk_top_k:
+        parser.add_argument("--chunk-top-k", type=int, default=None, dest="chunk_top_k")
     parser.add_argument("--workspaces", nargs="+", default=None, help="Workspaces (federation)")
     _add_filter_options(parser)
     parser.add_argument(
@@ -454,13 +454,6 @@ def _add_retrieval_options(
         help="Previously returned image id to include; repeat as needed",
     )
     if include_answer_limits:
-        parser.add_argument(
-            "--answer-candidate-top-k",
-            type=int,
-            default=None,
-            dest="answer_candidate_top_k",
-            help="Answer retrieval candidates fetched before final prompt packing",
-        )
         parser.add_argument(
             "--answer-context-top-k",
             type=int,
@@ -541,11 +534,11 @@ def build_parser() -> argparse.ArgumentParser:
     # -- answer --
     p_answer = sub.add_parser("answer", help="LLM-generated answer with contexts and sources")
     p_answer.add_argument("query", help="Question to answer")
-    _add_retrieval_options(p_answer, include_answer_limits=True)
+    _add_retrieval_options(p_answer, include_answer_limits=True, include_chunk_top_k=True)
 
     # -- chat --
     p_chat = sub.add_parser("chat", help="Interactive multi-turn conversation")
-    _add_retrieval_options(p_chat, include_answer_limits=True)
+    _add_retrieval_options(p_chat, include_answer_limits=True, include_chunk_top_k=True)
 
     # -- ragas_eval --
     p_eval = sub.add_parser("ragas_eval", help="Run RAGAS evaluation against a DlightRAG API")

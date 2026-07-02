@@ -895,20 +895,16 @@ class RAGServiceManager:
     def _resolve_answer_limits(self, kwargs: dict[str, Any]) -> _AnswerLimits:
         """Resolve answer-specific retrieval and final-prompt chunk limits.
 
-        ``top_k``/``chunk_top_k`` remain retrieval controls. Answer generation
-        defaults to over-fetching candidates, then ``AnswerContextPacker``
-        deterministically trims to the final prompt budget.
+        ``top_k``/``chunk_top_k`` remain retrieval controls. ``context_top_k``
+        only controls final answer-prompt packing.
         """
         answer_cfg = self._config.answer
-        answer_candidate_top_k = _positive_int_or_none(kwargs.pop("answer_candidate_top_k", None))
         answer_context_top_k = _positive_int_or_none(kwargs.pop("answer_context_top_k", None))
         requested_top_k = _positive_int_or_none(kwargs.get("top_k"))
         requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
 
-        candidate_top_k = (
-            answer_candidate_top_k or requested_chunk_top_k or answer_cfg.candidate_top_k
-        )
         context_top_k = answer_context_top_k or answer_cfg.context_top_k
+        candidate_top_k = requested_chunk_top_k or self._config.chunk_top_k
         kwargs["top_k"] = requested_top_k or self._config.top_k
         kwargs["chunk_top_k"] = candidate_top_k
         return _AnswerLimits(candidate_top_k=candidate_top_k, context_top_k=context_top_k)
@@ -960,7 +956,7 @@ class RAGServiceManager:
             **kwargs,
         )
         retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
-        retrieval.trace["answer_candidate_top_k"] = limits.candidate_top_k
+        retrieval.trace["answer_resolved_chunk_top_k"] = limits.candidate_top_k
         retrieval.trace["answer_context_top_k"] = limits.context_top_k
         return plan, prepared, limits, retrieval
 

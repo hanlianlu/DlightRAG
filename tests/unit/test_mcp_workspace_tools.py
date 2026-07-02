@@ -102,11 +102,13 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         answer_props["conversation_history"]["anyOf"][0]["items"],
     )
     assert history_items["properties"]["role"]["enum"] == ["system", "user", "assistant"]
+    assert "chunk_top_k" in answer_props
     assert "session_id" in answer_props
     assert "referenced_image_ids" in answer_props
     assert "filters" in answer_props
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
+    assert "chunk_top_k" not in retrieve_props
     retrieve_image_block_schema = _query_image_schema(
         retrieve_tool.inputSchema,
         retrieve_props["query_images"],
@@ -434,7 +436,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "query": "Follow up",
             "workspaces": ["default"],
             "top_k": 8,
-            "answer_candidate_top_k": 12,
+            "chunk_top_k": 12,
             "answer_context_top_k": 4,
             "conversation_history": [
                 {"role": "user", "content": [{"type": "text", "text": "Previous"}]}
@@ -457,7 +459,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     call_kwargs = mock_mcp_manager.aanswer.call_args.kwargs
     assert call_kwargs["workspaces"] == ["default"]
     assert call_kwargs["top_k"] == 8
-    assert call_kwargs["answer_candidate_top_k"] == 12
+    assert call_kwargs["chunk_top_k"] == 12
     assert call_kwargs["answer_context_top_k"] == 4
     assert call_kwargs["conversation_history"] == [
         {"role": "user", "content": [{"type": "text", "text": "Previous"}]}
