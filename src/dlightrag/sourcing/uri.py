@@ -8,9 +8,9 @@ so that adding a new source scheme is a single-edit change.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
-SourceType = Literal["local", "azure_blob", "s3", "url"]
+from dlightrag.core.client_contracts import SourceType
 
 
 def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:

@@ -82,6 +82,12 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
             kwargs["urls"] = urls
         if filename:
             kwargs["filename"] = filename
+        source_uri = _get(payload, "source_uri")
+        source_uris = _get(payload, "source_uris")
+        if source_uri:
+            kwargs["source_uri"] = source_uri
+        if source_uris is not None:
+            kwargs["source_uris"] = source_uris
 
     for name in ("replace", "title", "author", "metadata", "metadata_policy"):
         value = _get(payload, name)

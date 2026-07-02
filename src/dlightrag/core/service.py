@@ -23,6 +23,7 @@ from typing import Any, Literal, cast
 from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.config import DlightragConfig, get_config
+from dlightrag.core.client_contracts import SourceType
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.ingestion.paths import (
     iter_ingestable_files,
@@ -33,6 +34,7 @@ from dlightrag.core.ingestion.paths import (
     workspace_input_root,
 )
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
+from dlightrag.sourcing.base import AsyncDataSource
 from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
 
@@ -922,7 +924,7 @@ class RAGService:
     async def _download_remote_to_prepared_item(
         self,
         *,
-        source: Any,
+        source: AsyncDataSource,
         key: str,
         source_uri: str,
         batch_root: Path,
@@ -944,7 +946,7 @@ class RAGService:
     async def _aingest_remote_keys(
         self,
         *,
-        source: Any,
+        source: AsyncDataSource,
         source_type: str,
         keys: Iterable[str] | AsyncIterable[str],
         source_uri_for_key: Callable[[str], str],
@@ -1089,7 +1091,7 @@ class RAGService:
 
     async def aingest_source(
         self,
-        source: Any,
+        source: AsyncDataSource,
         *,
         source_type: str = "source",
         keys: Iterable[str] | AsyncIterable[str] | None = None,
@@ -1148,7 +1150,14 @@ class RAGService:
 
         from dlightrag.sourcing.url import URLDataSource
 
-        source = URLDataSource(urls=urls, filename=kwargs.get("filename"))
+        source_kwargs: dict[str, Any] = {"urls": urls}
+        if kwargs.get("filename") is not None:
+            source_kwargs["filename"] = kwargs["filename"]
+        if kwargs.get("source_uri") is not None:
+            source_kwargs["source_uri"] = kwargs["source_uri"]
+        if kwargs.get("source_uris") is not None:
+            source_kwargs["source_uris"] = kwargs["source_uris"]
+        source = URLDataSource(**source_kwargs)
         result = await self.aingest_source(
             source,
             source_type="url",
@@ -1229,7 +1238,7 @@ class RAGService:
 
     async def aingest(
         self,
-        source_type: Literal["local", "azure_blob", "s3", "url"],
+        source_type: SourceType,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Unified ingestion API.

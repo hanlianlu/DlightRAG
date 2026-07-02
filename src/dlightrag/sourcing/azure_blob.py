@@ -7,7 +7,7 @@ import os
 from collections.abc import AsyncIterator
 from datetime import UTC
 
-from dlightrag.sourcing.base import AsyncDataSource, DataSource
+from dlightrag.sourcing.base import AsyncDataSource
 
 try:
     from azure.storage.blob import generate_blob_sas
@@ -94,37 +94,18 @@ def generate_azure_sas_url(
     return f"https://{account_name}.blob.core.windows.net/{container}/{blob}?{sas_token}"
 
 
-class AzureBlobDataSource(DataSource, AsyncDataSource):
-    """Azure Blob Storage adapter (sync + async)."""
+class AzureBlobDataSource(AsyncDataSource):
+    """Azure Blob Storage async adapter."""
 
     def __init__(
         self,
         connection_string: str | None = None,
         container_name: str | None = None,
     ) -> None:
-        from azure.storage.blob import BlobServiceClient, ContainerClient
-
         self.connection_string = connection_string or os.getenv("BLOB_CONNECTION_STRING", "")
         self.container_name = container_name or os.getenv("BLOB_CONTAINER_NAME", "")
-
-        self.blob_service = BlobServiceClient.from_connection_string(self.connection_string)
-        self.container_client: ContainerClient = self.blob_service.get_container_client(
-            self.container_name
-        )
-        # Lazy async clients
         self._async_blob_service = None
         self._async_container_client = None
-
-    def list_documents(self, prefix: str | None = None) -> list[str]:
-        """List all blob names in container (sync)."""
-        blobs = self.container_client.list_blobs(name_starts_with=prefix)
-        return [blob.name for blob in blobs]
-
-    def load_document(self, doc_id: str) -> bytes:
-        """Download blob content as bytes (sync)."""
-        blob_client = self.container_client.get_blob_client(doc_id)
-        stream = blob_client.download_blob()
-        return stream.readall()
 
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
         """Stream blob names in the container."""

@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
@@ -20,7 +20,12 @@ from pydantic import Field
 
 import dlightrag
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
-from dlightrag.core.client_contracts import ConversationMessage, dump_optional_list
+from dlightrag.core.client_contracts import (
+    ConversationMessage,
+    MetadataPolicy,
+    SourceType,
+    dump_optional_list,
+)
 from dlightrag.core.client_payloads import (
     answer_payload,
     retrieval_payload,
@@ -46,8 +51,8 @@ from dlightrag.mcp.contracts import (
 
 logger = logging.getLogger(__name__)
 
-MetadataPolicyParam = Literal["validate", "reject_unknown", "store_only"]
-SourceTypeParam = Literal["local", "azure_blob", "s3", "url"]
+MetadataPolicyParam = MetadataPolicy
+SourceTypeParam = SourceType
 QueryImagesParam = Annotated[
     list[QueryImage],
     Field(
@@ -314,6 +319,14 @@ async def ingest_tool(
     filename: Annotated[
         str | None,
         Field(default=None, description="Parser filename for a single URL."),
+    ] = None,
+    source_uri: Annotated[
+        str | None,
+        Field(default=None, description="Stable source URI stored for a single URL."),
+    ] = None,
+    source_uris: Annotated[
+        list[str] | None,
+        Field(default=None, description="Stable source URIs stored for URL batches."),
     ] = None,
     replace: Annotated[
         bool | None,

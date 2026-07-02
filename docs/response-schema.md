@@ -92,6 +92,10 @@ curl -X POST http://localhost:8100/ingest \
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "url", "url": "https://api.bynder.com/docs/getting-started", "filename": "getting-started.html"}'
+
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "url", "url": "https://cdn.example.com/download?id=asset-1&signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1"}'
 ```
 
 All ingest operations are represented internally as jobs. REST and MCP ingest
@@ -101,6 +105,11 @@ URLs; authenticated SaaS APIs should fetch through a caller-owned SDK
 `AsyncDataSource` connector and use `aingest_source()`. S3 credentials are read
 from the standard AWS credential chain (environment, shared config, or IAM
 role); ingest payloads do not carry access keys.
+
+For URL ingest, `url`/`urls` are fetch endpoints. Persisted provenance defaults
+to the same URL without query or fragment so signed tokens are not stored.
+Pass `source_uri` for one URL or `source_uris` for a URL batch when the durable
+source identity is a SaaS asset id, CMS URI, or another stable reference.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -114,6 +123,8 @@ role); ingest payloads do not carry access keys.
 | `url` | `string` | url | Single public or signed HTTPS document URL |
 | `urls` | `list[string]` | url | Multiple public or signed HTTPS document URLs; mutually exclusive with `url` |
 | `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |
+| `source_uri` | `string` | — | Stable stored source URI for a single URL, independent of the signed fetch URL |
+| `source_uris` | `list[string]` | — | Stable stored source URIs for URL batches; must match `urls` length |
 | `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |

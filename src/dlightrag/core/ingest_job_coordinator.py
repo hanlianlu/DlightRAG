@@ -5,10 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from dlightrag.core.client_contracts import SourceType
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
@@ -16,7 +19,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SourceType = Literal["local", "azure_blob", "s3", "url"]
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 
 
@@ -256,6 +258,7 @@ class IngestJobCoordinator:
         source_type: SourceType,
         kwargs: dict[str, Any],
     ) -> None:
+        cleanup_paths = _extract_cleanup_paths(kwargs)
         store = await self.get_store()
         await store.mark_running(job_id)
         progress_seen = False
@@ -298,6 +301,9 @@ class IngestJobCoordinator:
             raise
         except Exception as exc:
             await store.fail(job_id, error=f"{type(exc).__name__}: {exc}")
+        finally:
+            if cleanup_paths:
+                await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths)
 
     async def _job_result_with_totals(
         self,
@@ -342,6 +348,40 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_json_safe(item) for item in value]
     return repr(value)
+
+
+def _extract_cleanup_paths(kwargs: dict[str, Any]) -> tuple[Path, ...]:
+    raw = kwargs.pop("_cleanup_paths", None)
+    if raw is None:
+        return ()
+    if isinstance(raw, (str, Path)):
+        values = [raw]
+    elif isinstance(raw, (list, tuple)):
+        values = list(raw)
+    else:
+        logger.warning("Ignoring invalid ingest cleanup paths value: %r", raw)
+        return ()
+    return tuple(Path(str(value)) for value in values if str(value))
+
+
+def _cleanup_ingest_paths(paths: tuple[Path, ...]) -> None:
+    from dlightrag.config import get_config
+
+    input_root = get_config().input_dir_path.resolve(strict=False)
+    for path in paths:
+        resolved = path.resolve(strict=False)
+        try:
+            resolved.relative_to(input_root)
+        except ValueError:
+            logger.warning("Skipping ingest cleanup outside input_dir: %s", path)
+            continue
+        try:
+            if resolved.is_dir() and not resolved.is_symlink():
+                shutil.rmtree(resolved, ignore_errors=True)
+            else:
+                resolved.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("Failed to clean ingest path: %s", resolved, exc_info=True)
 
 
 def _infer_ingest_counts(result: dict[str, Any]) -> tuple[int, int, int, list[str]]:
