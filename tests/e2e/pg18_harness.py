@@ -122,7 +122,6 @@ def make_e2e_config(
         embedding_func_max_async=1,
         embedding_batch_num=2,
         bm25_enabled=True,
-        bm25_top_k=5,
         rerank={"enabled": False},
         llm=LLMConfig(
             default=ModelConfig(

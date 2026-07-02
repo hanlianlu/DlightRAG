@@ -758,7 +758,6 @@ class DlightragConfig(BaseSettings):
     top_k: int = Field(default=60)
     chunk_top_k: int = Field(default=30)
     bm25_enabled: bool = Field(default=True)
-    bm25_top_k: int = Field(default=40)
     bm25_profiles: list[BM25ProfileConfig] = Field(
         default_factory=lambda: [
             BM25ProfileConfig(name="zh", text_config="public.jiebacfg", languages=["zh"]),
