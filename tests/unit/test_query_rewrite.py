@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.retrieval.models import MetadataFilter
@@ -59,7 +59,8 @@ class TestQueryPlannerWithHistory:
         llm = AsyncMock(side_effect=RuntimeError("LLM down"))
         planner = QueryPlanner(llm_func=llm)
         history = [{"role": "user", "content": "hello"}]
-        plan = await planner.plan("follow up", conversation_history=history)
+        with patch("dlightrag.core.query_planner.asyncio.sleep", new=AsyncMock()):
+            plan = await planner.plan("follow up", conversation_history=history)
         assert plan.standalone_query == "follow up"
         assert plan.metadata_filter is None
 
