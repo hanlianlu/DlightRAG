@@ -277,6 +277,7 @@ async def main():
             workspace,
             source_type="s3",
             bucket="my-bucket",
+            region="us-east-1",  # optional; credentials come from AWS env/config/IAM
             prefix="docs/",
         )
         print(await manager.get_ingest_job(job["job_id"]))
