@@ -45,7 +45,7 @@ class PreparedIngestFile:
     ``parser_path`` must be a local file because LightRAG pending-parse
     ingestion requires local parser input. ``metadata_path`` is the source of
     truth exposed back to retrieval clients; for remote sources this remains
-    the original ``s3://`` or ``azure://`` URI.
+    the original ``s3://``, ``azure://``, or ``https://`` URI.
     """
 
     parser_path: Path

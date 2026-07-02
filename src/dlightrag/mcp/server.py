@@ -47,7 +47,7 @@ from dlightrag.mcp.contracts import (
 logger = logging.getLogger(__name__)
 
 MetadataPolicyParam = Literal["validate", "reject_unknown", "store_only"]
-SourceTypeParam = Literal["local", "azure_blob", "s3"]
+SourceTypeParam = Literal["local", "azure_blob", "s3", "url"]
 QueryImagesParam = Annotated[
     list[QueryImage],
     Field(
@@ -302,6 +302,18 @@ async def ingest_tool(
     prefix: Annotated[
         str | None,
         Field(default=None, description="Path/blob/key prefix filter."),
+    ] = None,
+    url: Annotated[
+        str | None,
+        Field(default=None, description="Public HTTPS document URL."),
+    ] = None,
+    urls: Annotated[
+        list[str] | None,
+        Field(default=None, description="Public HTTPS document URLs."),
+    ] = None,
+    filename: Annotated[
+        str | None,
+        Field(default=None, description="Parser filename for a single URL."),
     ] = None,
     replace: Annotated[
         bool | None,

@@ -1,23 +1,24 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """URL projection for retrieval source/media paths.
 
-Normalizes raw storage paths (local, azure://, s3://) into
+Normalizes raw storage paths (local, azure://, s3://, https://) into
 /api/files/{path} URLs. The file-serving endpoint handles dispatch:
 local → stream, azure → 302 redirect to SAS URL,
-s3 → 302 redirect to presigned URL.
+s3 → 302 redirect to presigned URL, https → 302 redirect to source URL.
 """
 
 from __future__ import annotations
 
 from pathlib import Path, PureWindowsPath
+from urllib.parse import quote
 
 
 class SourceUrlResolver:
     """Normalize raw storage paths into unified /api/files/ URLs.
 
-    All paths — local, azure://, s3:// — are mapped to the
+    All paths — local, azure://, s3://, https:// — are mapped to the
     file-serving endpoint. The endpoint handles source-type dispatch
-    internally (local → stream, azure/S3 → 302 redirect to signed URL).
+    internally (local → stream, remote sources → 302 redirect).
 
     This keeps the front-end completely decoupled from storage backends.
     The front-end only ever sees one URL format: /api/files/{path}.
@@ -41,6 +42,10 @@ class SourceUrlResolver:
         resolver.resolve("azure://mycontainer/doc.pdf")
         # → "/api/files/azure://mycontainer/doc.pdf"
 
+        # Public URL source:
+        resolver.resolve("https://example.com/doc.pdf")
+        # → "/api/files/https://example.com/doc.pdf"
+
         # Both go through the same endpoint. The endpoint decides
         # whether to stream locally or 302 redirect to a signed URL.
     """
@@ -59,6 +64,8 @@ class SourceUrlResolver:
         """Convert a servable stored path to a /api/files/ URL."""
         if raw_path.startswith(("azure://", "s3://")):
             return f"{self._base_url}/{raw_path}"
+        if raw_path.startswith("https://"):
+            return f"{self._base_url}/{quote(raw_path, safe='/:')}"
         if "://" in raw_path:
             return None
 

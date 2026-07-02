@@ -36,13 +36,16 @@ class MetadataFilterRequest(ClientContractModel):
 
 
 class IngestRequest(ClientContractModel):
-    source_type: Literal["local", "azure_blob", "s3"]
+    source_type: Literal["local", "azure_blob", "s3", "url"]
     path: str | None = None
     container_name: str | None = None
     blob_path: str | None = None
     prefix: str | None = None
     bucket: str | None = None
     key: str | None = None
+    url: str | None = None
+    urls: list[str] | None = None
+    filename: str | None = None
     replace: bool | None = None
     workspace: str | None = None
     title: str | None = None
@@ -67,6 +70,13 @@ class IngestRequest(ClientContractModel):
                 raise ValueError("'key' or 'prefix' is required for s3")
             if self.key and self.prefix is not None:
                 raise ValueError("'key' and 'prefix' are mutually exclusive")
+        elif self.source_type == "url":
+            if not self.url and not self.urls:
+                raise ValueError("'url' or 'urls' is required for url ingestion")
+            if self.url and self.urls is not None:
+                raise ValueError("'url' and 'urls' are mutually exclusive")
+            if self.urls and self.filename:
+                raise ValueError("'filename' can only be used with a single url")
         return self
 
 

@@ -32,6 +32,15 @@ try:
         key="docs/q1.pdf",       # or prefix="docs/"
     )
 
+    # Custom SDK connector; useful for Bynder/SaaS clients that handle
+    # authentication and expose document ids + bytes to DlightRAG.
+    result = await manager.aingest_source(
+        "default",
+        my_source,                # alist_documents/aiter_documents + aload_document
+        source_type="bynder",
+        source_uri_for_key=lambda key: f"bynder://assets/{key}",
+    )
+
     # Explicit non-blocking ingest
     job = await manager.astart_ingest_job(
         "default",
@@ -50,21 +59,30 @@ finally:
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "local", "path": "docs"}'
+
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "url", "url": "https://api.bynder.com/docs/getting-started", "filename": "getting-started.html"}'
 ```
 
 All ingest operations are represented internally as jobs. REST and MCP ingest
 return `202 Accepted`; poll `GET /ingest/jobs/{job_id}` for progress and final
-result.
+result. `source_type="url"` is intentionally limited to public or signed HTTPS
+URLs; authenticated SaaS APIs should fetch through a caller-owned SDK
+`AsyncDataSource` connector and use `aingest_source()`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `source_type` | `string` | yes | `local`, `azure_blob`, `s3` |
+| `source_type` | `string` | yes | `local`, `azure_blob`, `s3`, `url` |
 | `path` | `string` | local | File or directory path relative to DlightRAG's managed `input_dir/<workspace>` |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
 | `prefix` | `string` | azure_blob/s3 | Blob/key prefix filter; mutually exclusive with `blob_path`/`key` |
 | `bucket` | `string` | s3 | S3 bucket name |
 | `key` | `string` | s3 | S3 object key; mutually exclusive with `prefix` |
+| `url` | `string` | url | Single public or signed HTTPS document URL |
+| `urls` | `list[string]` | url | Multiple public or signed HTTPS document URLs; mutually exclusive with `url` |
+| `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |
 | `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |

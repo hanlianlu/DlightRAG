@@ -159,7 +159,7 @@ def extract_system_metadata(
     raw_path = str(path)
     if display_filename:
         filename = display_filename
-    elif raw_path.startswith(("azure://", "s3://")):
+    elif raw_path.startswith(("azure://", "s3://", "https://")):
         filename = PurePosixPath(raw_path.split("://", 1)[1]).name
     else:
         filename = Path(path).name

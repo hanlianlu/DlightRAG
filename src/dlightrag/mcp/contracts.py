@@ -10,7 +10,7 @@ from pydantic import Field, model_validator
 from dlightrag.core.client_contracts import ClientContractModel, ConversationMessage, QueryImage
 
 MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
-SourceType = Literal["local", "azure_blob", "s3"]
+SourceType = Literal["local", "azure_blob", "s3", "url"]
 
 
 class MCPInput(ClientContractModel):
@@ -41,6 +41,9 @@ class IngestInput(MCPInput):
     bucket: str | None = None
     key: str | None = None
     prefix: str | None = None
+    url: str | None = None
+    urls: list[str] | None = None
+    filename: str | None = None
     replace: bool | None = None
     workspace: str | None = None
     title: str | None = None
@@ -62,6 +65,12 @@ class IngestInput(MCPInput):
             raise ValueError("'key' or 'prefix' is required for s3")
         if self.source_type == "s3" and self.key and self.prefix is not None:
             raise ValueError("'key' and 'prefix' are mutually exclusive")
+        if self.source_type == "url" and not self.url and not self.urls:
+            raise ValueError("'url' or 'urls' is required for url ingestion")
+        if self.source_type == "url" and self.url and self.urls is not None:
+            raise ValueError("'url' and 'urls' are mutually exclusive")
+        if self.source_type == "url" and self.urls and self.filename:
+            raise ValueError("'filename' can only be used with a single url")
         return self
 
 

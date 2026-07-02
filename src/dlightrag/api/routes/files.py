@@ -79,7 +79,7 @@ async def retry_failed_files(
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Re-ingest all FAILED documents (replace=True). Source type is derived
-    from each doc's stored file_path scheme (azure://, s3://, otherwise local)."""
+    from each doc's stored file_path scheme (azure://, s3://, https://, otherwise local)."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
     return await manager.retry_failed_docs(ws)
@@ -96,6 +96,7 @@ async def serve_file(
     - Local paths under ``input_dir/<workspace>/``: 200 + StreamingResponse
     - azure://: 302 redirect to SAS signed URL
     - s3://: 302 redirect to S3 presigned URL
+    - https://: 302 redirect to original source URL
     """
     config = get_config()
 
@@ -125,6 +126,9 @@ async def serve_file(
         except S3PresignError as exc:
             raise HTTPException(503, "S3 presigned URL generation failed") from exc
         return RedirectResponse(url=signed_url, status_code=302)
+
+    if file_path.startswith("https://"):
+        return RedirectResponse(url=file_path, status_code=302)
 
     # --- Unknown remote scheme ---
     if "://" in file_path:

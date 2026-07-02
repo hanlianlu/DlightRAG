@@ -120,6 +120,9 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "title" in ingest_props
     assert "author" in ingest_props
     assert "metadata" in ingest_props
+    assert "url" in ingest_props
+    assert "urls" in ingest_props
+    assert "filename" in ingest_props
     assert _metadata_policy_enum(ingest_props["metadata_policy"]) == [
         "validate",
         "reject_unknown",
@@ -359,6 +362,41 @@ async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) 
         source_type="s3",
         bucket="bucket",
         prefix="docs/",
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_url_ingest_starts_background_job(mock_mcp_manager) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "url",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {
+            "source_type": "url",
+            "url": "https://api.bynder.com/docs/getting-started",
+            "filename": "getting-started.html",
+            "workspace": "default",
+        },
+    )
+
+    assert _tool_json(result) == {
+        "job_id": "job-1",
+        "workspace": "default",
+        "source_type": "url",
+        "status": "queued",
+    }
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        source_type="url",
+        url="https://api.bynder.com/docs/getting-started",
+        filename="getting-started.html",
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 

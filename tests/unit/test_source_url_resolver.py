@@ -32,6 +32,19 @@ class TestResolve:
         resolver = SourceUrlResolver()
         assert resolver.resolve("s3://my-bucket/doc.pdf") == "/api/files/s3://my-bucket/doc.pdf"
 
+    def test_https_scheme_wrapped_into_endpoint(self) -> None:
+        resolver = SourceUrlResolver()
+        assert (
+            resolver.resolve("https://api.bynder.com/docs/getting-started")
+            == "/api/files/https://api.bynder.com/docs/getting-started"
+        )
+
+    def test_https_source_query_is_encoded_into_endpoint_path(self) -> None:
+        resolver = SourceUrlResolver()
+        assert resolver.resolve("https://cdn.example.com/report.pdf?sig=x&download=1") == (
+            "/api/files/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
+        )
+
     def test_absolute_artifact_marker_paths_are_not_projected(self) -> None:
         """Only input_dir-scoped local files are projected into /api/files URLs."""
         resolver = SourceUrlResolver()
@@ -90,6 +103,12 @@ class TestInputDir:
         resolver = SourceUrlResolver(input_dir="/data/input")
         result = resolver.resolve("s3://mybucket/key/doc.pdf")
         assert result == "/api/files/s3://mybucket/key/doc.pdf"
+
+    def test_resolve_https_path(self) -> None:
+        """URL sources wrap as-is."""
+        resolver = SourceUrlResolver(input_dir="/data/input")
+        result = resolver.resolve("https://api.bynder.com/docs/getting-started")
+        assert result == "/api/files/https://api.bynder.com/docs/getting-started"
 
     def test_resolve_workspace_scoped(self) -> None:
         """Workspace is baked into the relative path under input_dir."""
