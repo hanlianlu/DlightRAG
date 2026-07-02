@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,6 +13,17 @@ import pytest
 from dlightrag.config import DlightragConfig
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
+
+
+class _FakePostgresConn:
+    def __init__(self, *, max_connections: str = "80") -> None:
+        self.max_connections = max_connections
+
+    async def fetchval(self, sql: str, *args) -> str:
+        if sql == "SHOW max_connections":
+            return self.max_connections
+        raise AssertionError(f"unexpected SQL: {sql!r}")
+
 
 # ---------------------------------------------------------------------------
 # TestRAGServiceAingest
@@ -315,6 +327,29 @@ class TestRequiredPostgresExtensions:
         test_config.bm25_enabled = False
 
         assert RAGService._required_postgres_extensions(test_config) == ()
+
+
+class TestPostgresConcurrencySanity:
+    """Test startup connection-budget warnings."""
+
+    async def test_warns_when_pool_budget_exceeds_postgres_headroom(
+        self,
+        test_config: DlightragConfig,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("WEB_CONCURRENCY", "2")
+        test_config.postgres_lightrag_pool_max_size = 16
+        test_config.postgres_pool_max_size = 10
+        service = RAGService(config=test_config)
+
+        with caplog.at_level(logging.WARNING, logger="dlightrag.core.service"):
+            await service._check_postgres_concurrency_sanity(
+                _FakePostgresConn(max_connections="50")
+            )
+
+        assert "PostgreSQL connection budget is tight" in caplog.text
+        assert "estimated_pool_connections=52" in caplog.text
 
 
 # ---------------------------------------------------------------------------

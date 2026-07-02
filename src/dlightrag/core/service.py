@@ -78,6 +78,7 @@ _STORAGE_ATTRS = (
 
 _REMOTE_INGEST_BATCH_SIZE = 64
 _REMOTE_DOWNLOAD_CONCURRENCY = 8
+_PROCESS_COUNT_ENV_VARS = ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS")
 
 RemoteIngestProgressCallback = Callable[["RemoteIngestWindowProgress"], Awaitable[None]]
 
@@ -92,6 +93,21 @@ class RemoteIngestWindowProgress:
     processed_delta: int
     failed_delta: int
     errors: tuple[str, ...] = ()
+
+
+def _configured_process_count() -> int:
+    """Best-effort process count from common server env vars."""
+    for name in _PROCESS_COUNT_ENV_VARS:
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        try:
+            count = int(raw)
+        except ValueError:
+            continue
+        if count > 0:
+            return count
+    return 1
 
 
 def _ensure_venv_in_path() -> None:
@@ -327,6 +343,7 @@ class RAGService:
             )
             if self.config.pg_vector_index_type == "HNSW_HALFVEC":
                 await ensure_pgvector_halfvec(conn)
+            await self._check_postgres_concurrency_sanity(conn)
 
             acquired = await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY)
 
@@ -361,6 +378,45 @@ class RAGService:
                 await self._do_initialize()
         finally:
             await conn.close()
+
+    async def _check_postgres_concurrency_sanity(self, conn: Any) -> None:
+        """Warn when configured pools can exhaust server connections."""
+        try:
+            max_connections = int(await conn.fetchval("SHOW max_connections"))
+        except Exception:
+            logger.debug("Could not read PostgreSQL max_connections", exc_info=True)
+            return
+
+        config = self.config
+        per_process = config.postgres_lightrag_pool_max_size + config.postgres_pool_max_size
+        process_count = _configured_process_count()
+        estimated = per_process * process_count
+        reserved = max(5, max_connections // 10)
+        usable = max_connections - reserved
+
+        logger.info(
+            "PostgreSQL connection sanity: max_connections=%d usable_after_headroom=%d "
+            "configured_pool_connections_per_process=%d "
+            "(lightrag=%d, dlightrag=%d) process_count=%d estimated_pool_connections=%d",
+            max_connections,
+            usable,
+            per_process,
+            config.postgres_lightrag_pool_max_size,
+            config.postgres_pool_max_size,
+            process_count,
+            estimated,
+        )
+        if estimated > usable:
+            logger.warning(
+                "PostgreSQL connection budget is tight: estimated_pool_connections=%d "
+                "exceeds usable_after_headroom=%d (max_connections=%d, headroom=%d). "
+                "Lower postgres_lightrag_pool_max_size/postgres_pool_max_size/process count "
+                "or raise max_connections.",
+                estimated,
+                usable,
+                max_connections,
+                reserved,
+            )
 
     async def _do_initialize(self) -> None:
         """Create one LightRAG-backed unified pipeline."""

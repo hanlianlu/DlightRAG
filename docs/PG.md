@@ -75,6 +75,31 @@ Connection budgets are split deliberately:
   API + MCP local profile with headroom. Production deployments should size the
   server limit from the number of DlightRAG processes and their two pool caps.
 
+At startup, DlightRAG logs a connection sanity line using the connected
+server's real `max_connections`. If common process-count env vars such as
+`WEB_CONCURRENCY`, `UVICORN_WORKERS`, or `GUNICORN_WORKERS` are set, it
+multiplies the per-process pool budget by that count and warns when the
+estimated pool budget consumes the server after a small admin headroom.
+
+Concurrency knobs affect different bottlenecks:
+
+| Setting | Controls | First bottleneck |
+|---|---|---|
+| `postgres_lightrag_pool_max_size` | LightRAG PostgreSQL connections | PostgreSQL `max_connections` |
+| `postgres_pool_max_size` | DlightRAG metadata/BM25/job connections | PostgreSQL `max_connections` |
+| `max_parallel_insert` | staged insert/vector/KG write workers | PostgreSQL writes and vector indexes |
+| `max_parallel_parse_native` | native parser workers | CPU and file I/O |
+| `max_parallel_parse_mineru` | MinerU parser workers | MinerU service, CPU/GPU, OCR latency |
+| `max_parallel_analyze` | visual/multimodal analysis workers | VLM endpoint limits |
+| `max_async` | LightRAG LLM request concurrency | LLM endpoint limits |
+| `embedding_func_max_async` | embedding request concurrency | embedding endpoint and vector writes |
+
+For a single DlightRAG process, reserve roughly
+`postgres_lightrag_pool_max_size + postgres_pool_max_size` PostgreSQL
+connections. Multiply that by API worker count before comparing it with
+PostgreSQL `max_connections`, leaving room for migrations, admin sessions,
+health checks, and managed-service maintenance.
+
 ## DlightRAG Schema Migrations
 
 DlightRAG-owned PostgreSQL tables use `dlightrag_schema_migrations` as a small
