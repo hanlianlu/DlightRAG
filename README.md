@@ -642,10 +642,9 @@ high-signal breadth controls:
 | `answer.max_user_images` | `3` |
 
 Image compression budgets are advanced transport limits; see
-[docs/config-reference.md](docs/config-reference.md#image-budgets). Use
-`/retrieve` for the configured pre-answer retrieval set. `/answer` uses
-`chunk_top_k` for retrieval candidates, then returns contexts and sources
-aligned with what the answer model saw.
+[docs/config-reference.md](docs/config-reference.md#image-budgets). `/retrieve`
+and `/answer` both accept `chunk_top_k` for retrieval candidates. `/answer`
+then returns contexts and sources aligned with what the answer model saw.
 
 ### Citations
 
@@ -687,7 +686,7 @@ make langfuse-down
 | `POST` | `/retrieve` | Return contexts and sources without answer generation |
 | `POST` | `/answer` | Return or stream an LLM answer with contexts and sources |
 | `GET` | `/files` | List ingested documents |
-| `DELETE` | `/files` | Delete documents |
+| `DELETE` | `/files` | Delete documents; pass `dry_run: true` to preview matches |
 | `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |
 | `POST` | `/files/retry` | Retry failed documents |
 | `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob / S3 sources |

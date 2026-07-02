@@ -43,6 +43,7 @@ class IngestRequest(IngestPayload):
 class RetrieveRequest(ClientContractModel):
     query: str
     top_k: int | None = None
+    chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
@@ -72,6 +73,7 @@ class DeleteRequest(ClientContractModel):
     file_paths: list[str] | None = None
     filenames: list[str] | None = None
     workspace: str | None = None
+    dry_run: bool = False
 
 
 class WorkspaceCreateRequest(ClientContractModel):

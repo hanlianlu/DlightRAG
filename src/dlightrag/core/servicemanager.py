@@ -118,6 +118,10 @@ def _scope_for_workspaces(
     return base.for_workspaces(normalized) if normalized else base
 
 
+def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
 def _merge_schema_rows(schemas: list[dict[str, Any]]) -> dict[str, Any]:
     if not schemas:
         return {}
@@ -388,9 +392,47 @@ class RAGServiceManager:
         self,
         workspace: str,
         source_type: SourceType,
-        **kwargs: Any,
+        *,
+        path: str | None = None,
+        container_name: str | None = None,
+        blob_path: str | None = None,
+        prefix: str | None = None,
+        bucket: str | None = None,
+        key: str | None = None,
+        url: str | None = None,
+        urls: list[str] | None = None,
+        filename: str | None = None,
+        source_uri: str | None = None,
+        source_uris: list[str] | None = None,
+        retain_source_file: bool | None = None,
+        replace: bool | None = None,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
     ) -> dict[str, Any]:
         """Start an ingest job, wait according to config, and return the result if ready."""
+        kwargs = _drop_none(
+            {
+                "path": path,
+                "container_name": container_name,
+                "blob_path": blob_path,
+                "prefix": prefix,
+                "bucket": bucket,
+                "key": key,
+                "url": url,
+                "urls": urls,
+                "filename": filename,
+                "source_uri": source_uri,
+                "source_uris": source_uris,
+                "retain_source_file": retain_source_file,
+                "replace": replace,
+                "title": title,
+                "author": author,
+                "metadata": metadata,
+                "metadata_policy": metadata_policy,
+            }
+        )
         job = await self.astart_ingest_job(workspace, source_type=source_type, **kwargs)
         row = await self.await_ingest_job(job["job_id"], timeout=self._config.ingest_timeout)
         if row is None:
@@ -553,10 +595,62 @@ class RAGServiceManager:
         self,
         workspace: str,
         source_type: SourceType,
-        **kwargs: Any,
+        *,
+        path: str | None = None,
+        container_name: str | None = None,
+        blob_path: str | None = None,
+        prefix: str | None = None,
+        bucket: str | None = None,
+        key: str | None = None,
+        url: str | None = None,
+        urls: list[str] | None = None,
+        filename: str | None = None,
+        source_uri: str | None = None,
+        source_uris: list[str] | None = None,
+        retain_source_file: bool | None = None,
+        replace: bool | None = None,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
     ) -> dict[str, Any]:
         """Start a background ingest job and return its durable job row."""
+        kwargs = _drop_none(
+            {
+                "path": path,
+                "container_name": container_name,
+                "blob_path": blob_path,
+                "prefix": prefix,
+                "bucket": bucket,
+                "key": key,
+                "url": url,
+                "urls": urls,
+                "filename": filename,
+                "source_uri": source_uri,
+                "source_uris": source_uris,
+                "retain_source_file": retain_source_file,
+                "replace": replace,
+                "title": title,
+                "author": author,
+                "metadata": metadata,
+                "metadata_policy": metadata_policy,
+            }
+        )
         return await self._ingest_jobs.start_job(workspace, source_type, **kwargs)
+
+    async def _astart_staged_local_ingest_job(
+        self,
+        workspace: str,
+        *,
+        path: str,
+    ) -> dict[str, Any]:
+        """Start a web-upload ingest job and clean the staged input directory afterward."""
+        return await self._ingest_jobs.start_job(
+            workspace,
+            "local",
+            path=path,
+            cleanup_paths=[path],
+        )
 
     async def await_ingest_job(
         self,
@@ -585,10 +679,21 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.aget_pipeline_status()
 
-    async def delete_files(self, workspace: str, **kwargs: Any) -> list[dict[str, Any]]:
+    async def delete_files(
+        self,
+        workspace: str,
+        *,
+        file_paths: list[str] | None = None,
+        filenames: list[str] | None = None,
+        dry_run: bool = False,
+    ) -> list[dict[str, Any]]:
         """Delete files from a specific workspace."""
         svc = await self._get_service(workspace)
-        return await svc.adelete_files(**kwargs)
+        return await svc.adelete_files(
+            file_paths=file_paths,
+            filenames=filenames,
+            dry_run=dry_run,
+        )
 
     async def list_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
         """List FAILED documents in a specific workspace."""
@@ -1010,11 +1115,14 @@ class RAGServiceManager:
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         plan: QueryPlan | None = None,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        filters: MetadataFilter | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
         referenced_image_ids: list[str] | None = None,
         scope: RequestScope | None = None,
-        **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple).
 
@@ -1023,8 +1131,13 @@ class RAGServiceManager:
                 uses plan.standalone_query for search and plan.metadata_filter
                 for structured filtering.
         """
-        requested_top_k = _positive_int_or_none(kwargs.get("top_k"))
-        requested_chunk_top_k = _positive_int_or_none(kwargs.get("chunk_top_k"))
+        kwargs: dict[str, Any] = {}
+        requested_top_k = _positive_int_or_none(top_k)
+        requested_chunk_top_k = _positive_int_or_none(chunk_top_k)
+        if filters is not None:
+            kwargs["filters"] = filters
+        if multimodal_content:
+            kwargs["multimodal_content"] = multimodal_content
         kwargs["top_k"] = requested_top_k or self._config.top_k
         kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
         ws_list = workspaces or [workspace or self._config.workspace]
@@ -1075,9 +1188,15 @@ class RAGServiceManager:
         conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        answer_context_top_k: int | None = None,
+        filters: MetadataFilter | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
+        referenced_image_ids: list[str] | None = None,
         scope: RequestScope | None = None,
-        **kwargs: Any,
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate.
 
@@ -1088,6 +1207,17 @@ class RAGServiceManager:
         """
         ws_list = workspaces or [workspace or self._config.workspace]
         scoped = _scope_for_workspaces(scope, ws_list)
+        kwargs = _drop_none(
+            {
+                "top_k": top_k,
+                "chunk_top_k": chunk_top_k,
+                "answer_context_top_k": answer_context_top_k,
+                "filters": filters,
+                "multimodal_content": multimodal_content,
+                "session_id": session_id,
+                "referenced_image_ids": referenced_image_ids,
+            }
+        )
 
         # Guard: reject image input when the model doesn't support it
         _check_vision_support(
@@ -1132,9 +1262,15 @@ class RAGServiceManager:
         conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        answer_context_top_k: int | None = None,
+        filters: MetadataFilter | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
+        session_id: str | None = None,
+        referenced_image_ids: list[str] | None = None,
         scope: RequestScope | None = None,
-        **kwargs: Any,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces: plan -> retrieve -> stream.
 
@@ -1142,6 +1278,17 @@ class RAGServiceManager:
         """
         ws_list = workspaces or [workspace or self._config.workspace]
         scoped = _scope_for_workspaces(scope, ws_list)
+        kwargs = _drop_none(
+            {
+                "top_k": top_k,
+                "chunk_top_k": chunk_top_k,
+                "answer_context_top_k": answer_context_top_k,
+                "filters": filters,
+                "multimodal_content": multimodal_content,
+                "session_id": session_id,
+                "referenced_image_ids": referenced_image_ids,
+            }
+        )
 
         # Guard: reject image input when the model doesn't support it
         _check_vision_support(

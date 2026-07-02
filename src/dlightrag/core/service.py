@@ -1667,6 +1667,7 @@ class RAGService:
         *,
         file_paths: list[str] | None = None,
         filenames: list[str] | None = None,
+        dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         """Unified file deletion — DB records and physical files."""
         self._ensure_initialized()
@@ -1684,6 +1685,21 @@ class RAGService:
                 lightrag=self._lightrag,
                 metadata_index=self._metadata_index,
             )
+            if dry_run:
+                results.append(
+                    {
+                        "identifier": identifier,
+                        "status": "would_delete" if ctx.doc_ids else "not_found",
+                        "dry_run": True,
+                        "docs_deleted": 0,
+                        "errors": [],
+                        "matched_doc_ids": sorted(ctx.doc_ids),
+                        "matched_file_paths": sorted(ctx.file_paths),
+                        "sources_used": list(ctx.sources_used),
+                    }
+                )
+                continue
+
             stats = await cascade_delete(
                 ctx=ctx,
                 lightrag=self._lightrag,

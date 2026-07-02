@@ -279,11 +279,9 @@ async def upload_files(
         return error_response(f"Upload failed: {e}", status_code=500)
 
     try:
-        await manager.astart_ingest_job(
+        await manager._astart_staged_local_ingest_job(
             selected_workspace,
-            source_type="local",
             path=str(upload_dir),
-            _cleanup_paths=[str(upload_dir)],
         )
     except Exception as e:
         logger.exception("Failed to start ingest job for workspace %s", selected_workspace)

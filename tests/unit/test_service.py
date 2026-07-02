@@ -1199,6 +1199,38 @@ class TestRAGServiceLightRAGMainPath:
         service._lightrag.adelete_by_doc_id.assert_awaited_once()
         service._metadata_index.delete.assert_awaited_once_with("d1")
 
+    async def test_adelete_files_dry_run_reports_matches_without_mutating(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._lightrag.doc_status = MagicMock()
+        service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
+        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+            return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
+        )
+        service._metadata_index = MagicMock()
+        service._metadata_index.delete = AsyncMock()
+
+        results = await service.adelete_files(filenames=["a.pdf"], dry_run=True)
+
+        assert results == [
+            {
+                "identifier": "a.pdf",
+                "status": "would_delete",
+                "dry_run": True,
+                "docs_deleted": 0,
+                "errors": [],
+                "matched_doc_ids": ["d1"],
+                "matched_file_paths": ["/tmp/a.pdf"],
+                "sources_used": ["doc_status"],
+            }
+        ]
+        service._lightrag.adelete_by_doc_id.assert_not_awaited()
+        service._metadata_index.delete.assert_not_awaited()
+
     async def test_adelete_files_unified_not_found(self, test_config: DlightragConfig) -> None:
         """Deletion returns not_found when doc is not in doc_status or metadata."""
         service = RAGService(config=test_config)

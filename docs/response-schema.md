@@ -324,11 +324,11 @@ async for token in token_iter:
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
 | `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
-| `chunk_top_k` | `int \| None` | config default | `/answer` only. Explicit chunk/visual candidates fetched before answer-stage packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
+| `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
-| `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 10. |
+| `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 3. |
 | `session_id` | `str \| None` | `None` | Conversation/session key for reusing uploaded query images. |
 | `referenced_image_ids` | `list[str] \| None` | `None` | Image IDs from a previous `image_meta` event or JSON response to include again in retrieval and answer generation. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
@@ -364,6 +364,8 @@ Workspace reset results include `ingest_jobs_cancelled`, the number of active
 in-process ingest jobs cancelled before reset, and `ingest_jobs_deleted`, the
 number of durable ingest job rows removed for that workspace. Dry-run reset
 reports `0` for both fields and does not cancel jobs or mutate the job table.
+`DELETE /files` accepts `dry_run: true` to report matched documents and source
+paths without deleting LightRAG rows, metadata, or local files.
 
 **Workspace list response:**
 
@@ -425,7 +427,8 @@ data: {"type":"done","answer":"The key findings are..."}
 ```
 
 REST uses the same fields as the Python manager methods. `retrieve` and
-`answer` both accept `filters`, `query_images`, and `multimodal_content`.
+`answer` both accept `chunk_top_k`, `filters`, `query_images`, and
+`multimodal_content`.
 
 ### MCP Server
 

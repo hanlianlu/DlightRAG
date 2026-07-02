@@ -24,6 +24,7 @@ class MCPInput(ClientContractModel):
 class RetrieveInput(MCPInput):
     query: str
     top_k: int | None = None
+    chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: dict[str, Any] | None = None
     query_images: list[QueryImage] = Field(default_factory=list, max_length=3)
@@ -64,6 +65,7 @@ class DeleteFilesInput(MCPInput):
     filenames: list[str] | None = None
     file_paths: list[str] | None = None
     workspace: str | None = None
+    dry_run: bool = False
 
 
 __all__ = [

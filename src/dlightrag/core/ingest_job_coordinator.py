@@ -7,7 +7,7 @@ import asyncio
 import logging
 import shutil
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -137,6 +137,7 @@ class IngestJobCoordinator:
                 workspace=workspace,
                 source_type=cast(SourceType, source_type),
                 kwargs=recovered_kwargs,
+                cleanup_paths=(),
             )
         )
         self._track(job_id, workspace, task)
@@ -194,6 +195,8 @@ class IngestJobCoordinator:
         self,
         workspace: str,
         source_type: SourceType,
+        *,
+        cleanup_paths: str | Path | Sequence[str | Path] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         workspace_id = normalize_workspace(workspace)
@@ -220,6 +223,7 @@ class IngestJobCoordinator:
                 workspace=workspace_id,
                 source_type=source_type,
                 kwargs=dict(kwargs),
+                cleanup_paths=_normalize_cleanup_paths(cleanup_paths),
             )
         )
         self._track(job_id, workspace_id, task)
@@ -257,8 +261,8 @@ class IngestJobCoordinator:
         workspace: str,
         source_type: SourceType,
         kwargs: dict[str, Any],
+        cleanup_paths: tuple[Path, ...],
     ) -> None:
-        cleanup_paths = _extract_cleanup_paths(kwargs)
         store = await self.get_store()
         await store.mark_running(job_id)
         progress_seen = False
@@ -350,17 +354,12 @@ def _json_safe(value: Any) -> Any:
     return repr(value)
 
 
-def _extract_cleanup_paths(kwargs: dict[str, Any]) -> tuple[Path, ...]:
-    raw = kwargs.pop("_cleanup_paths", None)
+def _normalize_cleanup_paths(
+    raw: str | Path | Sequence[str | Path] | None,
+) -> tuple[Path, ...]:
     if raw is None:
         return ()
-    if isinstance(raw, (str, Path)):
-        values = [raw]
-    elif isinstance(raw, (list, tuple)):
-        values = list(raw)
-    else:
-        logger.warning("Ignoring invalid ingest cleanup paths value: %r", raw)
-        return ()
+    values = [raw] if isinstance(raw, (str, Path)) else raw
     return tuple(Path(str(value)) for value in values if str(value))
 
 

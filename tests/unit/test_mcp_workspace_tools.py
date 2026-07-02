@@ -112,7 +112,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "filters" in answer_props
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
-    assert "chunk_top_k" not in retrieve_props
+    assert "chunk_top_k" in retrieve_props
     retrieve_image_block_schema = _query_image_schema(
         retrieve_tool.inputSchema,
         retrieve_props["query_images"],
@@ -130,6 +130,8 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "source_uri" in ingest_props
     assert "source_uris" in ingest_props
     assert "retain_source_file" in ingest_props
+    delete_files_tool = next(tool for tool in tools if tool.name == "delete_files")
+    assert "dry_run" in delete_files_tool.inputSchema["properties"]
     assert _metadata_policy_enum(ingest_tool.inputSchema, ingest_props["metadata_policy"]) == [
         "validate",
         "reject_unknown",
@@ -215,6 +217,21 @@ async def test_mcp_rejects_invalid_query_image_payloads(
     assert "Error:" in _tool_text(result)
     assert error_fragment in _tool_text(result)
     getattr(mock_mcp_manager, manager_method).assert_not_awaited()
+
+
+async def test_mcp_retrieve_forwards_chunk_top_k(mock_mcp_manager) -> None:
+    mock_mcp_manager.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
+
+    await mcp_server.mcp_app.call_tool(
+        "retrieve",
+        {"query": "x", "top_k": 8, "chunk_top_k": 5},
+    )
+
+    await_args = mock_mcp_manager.aretrieve.await_args
+    assert await_args is not None
+    call_kwargs = await_args.kwargs
+    assert call_kwargs["top_k"] == 8
+    assert call_kwargs["chunk_top_k"] == 5
 
 
 async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:
@@ -617,3 +634,20 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert call_kwargs["session_id"] == "session-1"
     assert call_kwargs["referenced_image_ids"] == ["img_1"]
     assert call_kwargs["filters"].doc_title == "Manual"
+
+
+async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
+    mock_mcp_manager.delete_files = AsyncMock(return_value=[{"status": "would_delete"}])
+
+    result = await mcp_server.mcp_app.call_tool(
+        "delete_files",
+        {"filenames": ["report.pdf"], "dry_run": True},
+    )
+
+    assert _tool_json(result)["results"] == [{"status": "would_delete"}]
+    mock_mcp_manager.delete_files.assert_awaited_once_with(
+        "default",
+        filenames=["report.pdf"],
+        file_paths=None,
+        dry_run=True,
+    )
