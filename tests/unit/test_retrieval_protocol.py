@@ -62,7 +62,7 @@ class TestRetrievalResultReferences:
     def test_references_populated(self) -> None:
         from dlightrag.models.schemas import Reference
 
-        refs = [Reference(id=1, title="doc.pdf")]
+        refs = [Reference(id="1", title="doc.pdf")]
         result = RetrievalResult(answer="text", references=refs)
         assert result.references[0].title == "doc.pdf"
 

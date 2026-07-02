@@ -11,6 +11,7 @@ import pytest
 # Load scripts/cli.py as a module (it's a script, not a package)
 _cli_path = Path(__file__).resolve().parents[2] / "scripts" / "cli.py"
 _spec = importlib.util.spec_from_file_location("cli", _cli_path)
+assert _spec is not None and _spec.loader is not None
 _cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_cli)
 

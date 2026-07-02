@@ -27,7 +27,9 @@ async def test_query_image_enhancer_appends_descriptions() -> None:
     assert "Visual context from user-supplied images" in result.query
     assert result.descriptions == ["Image 1: a line chart about revenue"]
     vlm.assert_awaited_once()
-    content = vlm.await_args.kwargs["messages"][0]["content"]
+    await_args = vlm.await_args
+    assert await_args is not None
+    content = await_args.kwargs["messages"][0]["content"]
     assert content[0]["type"] == "image_url"
 
 

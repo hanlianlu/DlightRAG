@@ -118,6 +118,7 @@ class TestAnswerEngineGenerate:
         contexts = _text_contexts()
         result = await engine.generate("What is AI?", contexts)
 
+        assert result.answer is not None
         assert "AI is artificial intelligence" in result.answer
         assert "### References" not in result.answer
         assert len(result.references) == 1
@@ -279,6 +280,7 @@ class TestAnswerEngineGenerate:
 
         result = await engine.generate("query", _text_contexts())
 
+        assert result.answer is not None
         assert "Growth is 15%" in result.answer
         assert "### References" not in result.answer
         assert len(result.references) == 1

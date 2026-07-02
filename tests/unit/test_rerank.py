@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -424,7 +425,7 @@ class TestHttpRerank:
             url="https://rerank.example",
             model="reranker",
             score_threshold=0.3,
-            client=client,
+            client=cast(Any, client),
             image_max_bytes=456,
             image_max_total_bytes=789,
             image_max_px=1024,
@@ -434,6 +435,7 @@ class TestHttpRerank:
         )
 
         assert result[0]["rerank_score"] == pytest.approx(0.9)
+        assert client.payload is not None
         assert client.payload["documents"] == [{"image": bounded_uri}]
         assert raw_image not in str(client.payload)
 
@@ -449,12 +451,13 @@ class TestHttpRerank:
             url="https://rerank.example",
             model="text-only-reranker",
             score_threshold=0.3,
-            client=client,
+            client=cast(Any, client),
             multimodal=False,
         )
 
         assert result[0]["rerank_score"] == pytest.approx(0.85)
         # Should only have {"text": ...}, no {"image": ...}
+        assert client.payload is not None
         assert client.payload["documents"] == [{"text": "VLM text description"}]
         assert raw_image not in str(client.payload)
 

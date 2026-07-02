@@ -19,7 +19,7 @@ def _make_response(status_code: int, json_data: dict) -> httpx.Response:
     return resp
 
 
-def _mock_async_client(mock_response: httpx.Response) -> MagicMock:
+def _mock_async_client(mock_response: httpx.Response) -> tuple[MagicMock, MagicMock]:
     """Create a mock httpx.AsyncClient that works with `async with`."""
     instance = MagicMock()
     instance.post = AsyncMock(return_value=mock_response)

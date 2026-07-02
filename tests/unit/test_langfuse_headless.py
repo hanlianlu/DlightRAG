@@ -10,6 +10,7 @@ import pytest
 
 _script_path = Path(__file__).resolve().parents[2] / "scripts" / "langfuse" / "headless.py"
 _spec = importlib.util.spec_from_file_location("langfuse_headless", _script_path)
+assert _spec is not None and _spec.loader is not None
 _langfuse_headless = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_langfuse_headless)
 

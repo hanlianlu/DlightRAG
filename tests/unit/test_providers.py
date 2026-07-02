@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +16,7 @@ from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
 class TestCompletionProviderABC:
     def test_cannot_instantiate_abc(self):
         with pytest.raises(TypeError):
-            CompletionProvider(api_key="k", timeout=10.0, max_retries=1)
+            cast(Any, CompletionProvider)(api_key="k", timeout=10.0, max_retries=1)
 
 
 class TestProviderRegistry:
@@ -48,7 +49,7 @@ class TestAnthropicProvider:
         mock_response.content = [MagicMock(text="reply")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
-            p._client = None
+            cast(Any, p)._client = None
             result = await p.complete(
                 [
                     {"role": "system", "content": "You are helpful."},
@@ -68,7 +69,7 @@ class TestAnthropicProvider:
         mock_response.content = [MagicMock(text="ok")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
-            p._client = None
+            cast(Any, p)._client = None
             await p.complete([{"role": "user", "content": "hi"}], "claude-sonnet-4-20250514")
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
             assert call_kwargs["max_tokens"] == 8192
@@ -80,7 +81,7 @@ class TestAnthropicProvider:
         mock_response.content = [MagicMock(text="thought")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
-            p._client = None
+            cast(Any, p)._client = None
             await p.complete(
                 [{"role": "user", "content": "hi"}],
                 "claude-sonnet-4-20250514",
@@ -98,7 +99,7 @@ class TestAnthropicProvider:
         mock_response.content = [MagicMock(text='{"key": "val"}')]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
-            p._client = None
+            cast(Any, p)._client = None
             await p.complete(
                 [{"role": "user", "content": "hi"}],
                 "claude-sonnet-4-20250514",
@@ -173,7 +174,7 @@ class TestOpenAICompatibleProvider:
         with patch.object(p, "_get_client") as mock_client:
             mock_client.return_value.chat.completions.create = AsyncMock(return_value=fake_stream())
             tokens = []
-            async for t in p.stream([{"role": "user", "content": "hi"}], "gpt-5.4-mini"):
+            async for t in cast(Any, p).stream([{"role": "user", "content": "hi"}], "gpt-5.4-mini"):
                 tokens.append(t)
         assert tokens == ["hel", "lo"]
 
@@ -188,7 +189,7 @@ class TestGeminiProvider:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.models.generate_content = AsyncMock(return_value=mock_response)
-            p._client = None
+            cast(Any, p)._client = None
             result = await p.complete(
                 [
                     {"role": "system", "content": "Be concise."},
@@ -209,7 +210,7 @@ class TestGeminiProvider:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
             mock_client.models.generate_content = AsyncMock(return_value=mock_response)
-            p._client = None
+            cast(Any, p)._client = None
             await p.complete(
                 [
                     {"role": "assistant", "content": "I said hi"},

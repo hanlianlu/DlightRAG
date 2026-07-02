@@ -7,6 +7,7 @@ import base64
 import io
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from PIL import Image
@@ -14,7 +15,7 @@ from PIL import Image
 from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
 
 
-def _image_payload() -> dict[str, str]:
+def _image_payload() -> dict[str, Any]:
     image = Image.new("RGB", (2, 2), "white")
     buf = io.BytesIO()
     image.save(buf, format="PNG")
@@ -209,7 +210,9 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
 
     embedder.embed_query_images.assert_awaited_once()
     lightrag.chunks_vdb.query.assert_awaited_once()
-    assert lightrag.chunks_vdb.query.await_args.kwargs["query_embedding"] == [0.1, 0.2, 0.3]
+    query_args = lightrag.chunks_vdb.query.await_args
+    assert query_args is not None
+    assert query_args.kwargs["query_embedding"] == [0.1, 0.2, 0.3]
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 
@@ -312,7 +315,9 @@ async def test_backend_uses_dedicated_direct_visual_top_k_for_image_search(
         multimodal_content=[_image_payload()],
     )
 
-    assert lightrag.chunks_vdb.query.await_args.kwargs["top_k"] == 2
+    query_args = lightrag.chunks_vdb.query.await_args
+    assert query_args is not None
+    assert query_args.kwargs["top_k"] == 2
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 

@@ -123,6 +123,7 @@ class TestHighlightExtractor:
         answer_text = "The market growth was impressive [1]."
         result = await extract_highlights_for_sources(sources, answer_text, mock_llm)
         # Doc-level [1] should match source id="1" and trigger highlights
+        assert result[0].chunks is not None
         assert result[0].chunks[0].highlight_phrases is not None
         assert len(result[0].chunks[0].highlight_phrases) > 0
 

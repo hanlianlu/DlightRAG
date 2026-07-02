@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 from dlightrag.api.middleware import install_request_id_log_record_factory, request_id_var
 
@@ -21,7 +22,7 @@ def test_request_id_log_record_factory_adds_default_request_id() -> None:
             (),
             None,
         )
-        assert record.request_id == "-"
+        assert cast(Any, record).request_id == "-"
     finally:
         logging.setLogRecordFactory(previous_factory)
 
@@ -40,7 +41,7 @@ def test_request_id_log_record_factory_uses_active_request_id() -> None:
             (),
             None,
         )
-        assert record.request_id == "rid-test"
+        assert cast(Any, record).request_id == "rid-test"
     finally:
         request_id_var.reset(token)
         logging.setLogRecordFactory(previous_factory)

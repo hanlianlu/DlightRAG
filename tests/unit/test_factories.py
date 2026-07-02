@@ -1,5 +1,6 @@
 """Tests for model factory functions."""
 
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -165,7 +166,7 @@ class TestMakeCompletionFunc:
 
             answer: str
 
-        seen: list[dict[str, object]] = []
+        seen: list[dict[str, Any]] = []
 
         class FakeProvider:
             async def complete(self, **kwargs):

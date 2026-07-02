@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from dlightrag.core.servicemanager import (
@@ -60,7 +62,7 @@ class TestVisionGuard:
         set_vision_supported(False)
         with pytest.raises(ValueError) as exc:
             _check_vision_support(
-                query_images=["data:..."],
+                query_images=cast(Any, ["data:..."]),
                 conversation_history=None,
             )
         assert "does not support image input" in str(exc.value)
@@ -70,7 +72,7 @@ class TestVisionGuard:
         set_vision_supported(True)
         # Should not raise
         _check_vision_support(
-            query_images=["data:..."],
+            query_images=cast(Any, ["data:..."]),
             conversation_history=None,
         )
 
@@ -102,6 +104,6 @@ class TestVisionGuard:
         set_vision_supported(None)  # type: ignore[arg-type]
         # unprobed — allow through
         _check_vision_support(
-            query_images=["data:..."],
+            query_images=cast(Any, ["data:..."]),
             conversation_history=None,
         )

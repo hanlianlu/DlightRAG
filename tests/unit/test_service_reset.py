@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -146,7 +147,7 @@ class TestAresetPhase2:
     async def test_clears_metadata_index(self) -> None:
         service = _make_service()
         await service.areset()
-        service._metadata_index.clear.assert_awaited_once()
+        cast(Any, service._metadata_index).clear.assert_awaited_once()
 
     async def test_skips_none_metadata_index(self) -> None:
         service = _make_service()
@@ -216,7 +217,7 @@ class TestAresetPhase5:
     async def test_removes_local_files(self, tmp_path: Path) -> None:
         service = _make_service()
         service.config.working_dir = str(tmp_path)
-        service.config.input_dir_path = tmp_path / "inputs"
+        cast(Any, service.config).input_dir_path = tmp_path / "inputs"
         ws_dir = tmp_path / "inputs" / service.config.workspace
 
         # Workspace-scoped files under input_dir/<workspace>/
@@ -237,7 +238,7 @@ class TestAresetPhase5:
 
         service = _make_service()
         service.config.working_dir = str(tmp_path)
-        service.config.input_dir_path = tmp_path / "inputs"
+        cast(Any, service.config).input_dir_path = tmp_path / "inputs"
 
         # Valid SQLite database so Phase 5b doesn't choke
         db_path = tmp_path / "checkpoints.db"
@@ -264,7 +265,7 @@ class TestAresetDryRun:
         assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
         for attr in ("full_docs", "text_chunks"):
             getattr(service._lightrag, attr).drop.assert_not_awaited()
-        service._metadata_index.clear.assert_not_awaited()
+        cast(Any, service._metadata_index).clear.assert_not_awaited()
 
 
 class TestAresetErrorHandling:
@@ -277,12 +278,12 @@ class TestAresetErrorHandling:
         result = await service.areset()
 
         # Phase 2 still ran
-        service._metadata_index.clear.assert_awaited_once()
+        cast(Any, service._metadata_index).clear.assert_awaited_once()
         assert len(result["errors"]) >= 1
 
     async def test_phase2_error_continues(self) -> None:
         service = _make_service()
-        service._metadata_index.clear = AsyncMock(side_effect=RuntimeError("boom"))
+        cast(Any, service._metadata_index).clear = AsyncMock(side_effect=RuntimeError("boom"))
 
         result = await service.areset()
 

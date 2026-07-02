@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -38,7 +38,7 @@ def _query_image_schema(schema: dict, prop: dict) -> dict:
     return _resolve_ref(schema, prop["items"])
 
 
-def _tool_content(result):
+def _tool_content(result: Any) -> Any:
     return result[0] if isinstance(result, tuple) else result
 
 
@@ -147,7 +147,7 @@ def test_mcp_streamable_http_uses_modern_transport_defaults() -> None:
 
 
 def test_mcp_security_defaults_are_loopback_only() -> None:
-    cfg = DlightragConfig()
+    cfg = cast(Any, DlightragConfig)()
 
     assert cfg.mcp_allowed_hosts == ["127.0.0.1:*", "localhost:*", "[::1]:*"]
     assert cfg.mcp_allowed_origins == [

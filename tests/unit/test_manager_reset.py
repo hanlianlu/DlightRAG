@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
@@ -36,7 +37,7 @@ def _make_manager() -> RAGServiceManager:
     manager._backoff = {}
     manager._answer_engine = None
     manager._ingest_jobs = IngestJobCoordinator(lambda workspace: manager._get_service(workspace))
-    manager._ingest_jobs._store = _ResetJobStore()
+    cast(Any, manager._ingest_jobs)._store = _ResetJobStore()
     return manager
 
 
@@ -76,7 +77,7 @@ class TestManagerAresetSingleWorkspace:
     async def test_deletes_workspace_ingest_jobs(self) -> None:
         manager = _make_manager()
         store = _ResetJobStore(deleted_count=4)
-        manager._ingest_jobs._store = store
+        cast(Any, manager._ingest_jobs)._store = store
         svc = _make_mock_service("project_a")
         manager._services["project_a"] = svc
 

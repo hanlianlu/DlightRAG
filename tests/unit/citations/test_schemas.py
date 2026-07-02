@@ -44,5 +44,6 @@ def test_source_reference_with_chunks():
         chunks=[chunk],
         cited_chunk_ids=["c1"],
     )
+    assert sr.chunks is not None
     assert len(sr.chunks) == 1
     assert sr.cited_chunk_ids == ["c1"]
