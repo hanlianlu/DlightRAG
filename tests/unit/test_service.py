@@ -137,7 +137,9 @@ class TestRAGServiceAingest:
             yield "f.pdf"
 
         mock_source.aiter_documents = _aiter_documents
-        mock_source.aload_document = AsyncMock(return_value=b"%PDF")
+        mock_source.amaterialize_document = AsyncMock(
+            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF")
+        )
         with pytest.raises(RuntimeError, match="ingestion failed"):
             await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
         mock_source.aclose.assert_awaited_once()
@@ -470,7 +472,9 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
 
         mock_source = AsyncMock()
-        mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake-content")
+        mock_source.amaterialize_document = AsyncMock(
+            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF-fake-content")
+        )
 
         result = await service.aingest(
             source_type="azure_blob",
@@ -517,7 +521,9 @@ class TestRAGServiceLightRAGMainPath:
             yield "team-b/report.pdf"
 
         mock_source.aiter_documents = _aiter_documents
-        mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
+        mock_source.amaterialize_document = AsyncMock(
+            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF-fake")
+        )
 
         result = await service.aingest(
             source_type="azure_blob",
@@ -553,7 +559,9 @@ class TestRAGServiceLightRAGMainPath:
         )
 
         mock_source = AsyncMock()
-        mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
+        mock_source.amaterialize_document = AsyncMock(
+            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF-fake")
+        )
         mock_source.aclose = AsyncMock()
 
         with patch("dlightrag.sourcing.aws_s3.S3DataSource", return_value=mock_source):
@@ -582,9 +590,9 @@ class TestRAGServiceLightRAGMainPath:
                 yield "docs/a.pdf"
                 yield "docs/b.pdf"
 
-            async def aload_document(self, doc_id: str) -> bytes:
+            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
                 self.loaded.append(doc_id)
-                return b"%PDF-fake"
+                destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
                 return None
@@ -626,9 +634,9 @@ class TestRAGServiceLightRAGMainPath:
                 for name in ("a", "b", "c", "d", "e"):
                     yield f"docs/{name}.pdf"
 
-            async def aload_document(self, doc_id: str) -> bytes:
+            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
                 self.loaded.append(doc_id)
-                return b"%PDF-fake"
+                destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
                 return None
@@ -665,10 +673,10 @@ class TestRAGServiceLightRAGMainPath:
                 yield "docs/a.pdf"
                 yield "docs/b.pdf"
 
-            async def aload_document(self, doc_id: str) -> bytes:
+            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
                 if doc_id == "docs/b.pdf":
                     raise RuntimeError("download failed")
-                return b"%PDF-fake"
+                destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
                 return None
@@ -715,9 +723,9 @@ class TestRAGServiceLightRAGMainPath:
                 assert prefix == "approved/"
                 yield "asset-123/report.pdf"
 
-            async def aload_document(self, doc_id: str) -> bytes:
+            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
                 self.loaded.append(doc_id)
-                return b"%PDF-fake"
+                destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
                 self.closed = True
@@ -774,7 +782,9 @@ class TestRAGServiceLightRAGMainPath:
             yield "getting-started.html"
 
         mock_source.aiter_documents = _aiter_documents
-        mock_source.aload_document = AsyncMock(return_value=b"<html></html>")
+        mock_source.amaterialize_document = AsyncMock(
+            side_effect=lambda _doc_id, destination: destination.write_bytes(b"<html></html>")
+        )
         mock_source.source_uri_for_key = lambda key: "https://api.bynder.com/docs/getting-started"
         mock_source.aclose = AsyncMock()
 
@@ -809,7 +819,9 @@ class TestRAGServiceLightRAGMainPath:
         )
 
         mock_source = AsyncMock()
-        mock_source.aload_document = AsyncMock(return_value=b"%PDF-fake")
+        mock_source.amaterialize_document = AsyncMock(
+            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF-fake")
+        )
 
         with pytest.raises(RuntimeError, match="render failed"):
             await service.aingest(

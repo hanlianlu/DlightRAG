@@ -165,10 +165,10 @@ class TestAnswerEngineGenerate:
         assert any(item.get("type") == "text" for item in user_content)
 
     @pytest.mark.asyncio
-    async def test_query_images_take_budget_before_retrieved_visual_chunks(self) -> None:
+    async def test_query_images_do_not_consume_retrieved_visual_chunk_budget(self) -> None:
         raw = "ok"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, max_images=1)
+        engine = AnswerEngine(model_func=model_func, max_images=1, max_user_images=1)
         contexts: RetrievalContexts = {
             "chunks": [
                 {
@@ -185,13 +185,13 @@ class TestAnswerEngineGenerate:
 
         result = await engine.generate("describe this", contexts, query_images=[_image_block()])
 
-        assert result.contexts["chunks"] == []
-        assert result.trace["answer_context_query_images_sent"] == 1
-        assert result.trace["answer_context_images_skipped"] == 1
-        assert result.trace["answer_context_images_skipped"] == 1
+        assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == ["visual-only"]
+        assert result.trace["answer_user_images_sent"] == 1
+        assert result.trace["answer_context_images_sent"] == 1
+        assert result.trace["answer_context_images_skipped"] == 0
         messages = model_func.call_args.kwargs["messages"]
         user_content = messages[1]["content"]
-        assert sum(1 for item in user_content if item.get("type") == "image_url") == 1
+        assert sum(1 for item in user_content if item.get("type") == "image_url") == 2
         assert any(
             item.get("type") == "text" and "User-attached images" in item.get("text", "")
             for item in user_content
@@ -560,6 +560,34 @@ class TestBuildMessages:
 
         history_content = messages[1]["content"]
         assert any(block.get("type") == "image_url" for block in history_content)
+
+    def test_current_query_images_use_user_budget_before_history_images(self) -> None:
+        contexts: RetrievalContexts = {"chunks": []}
+        engine = AnswerEngine(max_user_images=1)
+        trace: dict[str, int] = {}
+
+        messages = engine._build_messages(
+            "sys",
+            "prompt",
+            contexts,
+            query_images=[_image_block()],
+            conversation_history=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "previous"},
+                        _image_block(),
+                    ],
+                }
+            ],
+            trace=trace,
+        )
+
+        history_content = messages[1]["content"]
+        final_user_content = messages[2]["content"]
+        assert not any(block.get("type") == "image_url" for block in history_content)
+        assert sum(1 for block in final_user_content if block.get("type") == "image_url") == 1
+        assert trace["answer_user_images_sent"] == 1
 
 
 # ---------------------------------------------------------------------------

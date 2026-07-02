@@ -172,22 +172,26 @@ The answer prompt receives:
   source numbering
 - document/source metadata
 - quality-preserving bounded inline page or image previews when available
-- user-supplied `query_images`, also bounded by the same shared image budget
+- user-supplied `query_images`, bounded by the independent user-image budget
 
-The answer image budget preserves budgeted JPEG, PNG, and WebP payloads as-is.
-When recompression is needed, DlightRAG enforces both a long-edge floor and a
-JPEG quality floor; an image that cannot fit within those limits is skipped
-instead of being degraded into a low-quality preview.
+Answer generation has two image budgets. Retrieved visual chunks use
+`answer.max_images` plus the answer image byte/quality limits. User-supplied
+`query_images` and history images use `answer.max_user_images`; current-turn
+`query_images` take those user slots before history images. The two budgets do
+not compete, so an uploaded user image does not evict a retrieved page preview.
+Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When recompression is
+needed, DlightRAG enforces both a long-edge floor and a JPEG quality floor; an
+image that cannot fit within those limits is skipped instead of being degraded
+into a low-quality preview.
 
 For `/answer`, retrieval deliberately over-fetches chunk/visual candidates,
 then the answer stage packs up to `answer.context_top_k` chunks. An explicit
 `chunk_top_k` request overrides that candidate budget; otherwise DlightRAG uses
 `config.chunk_top_k`. That budget maps to LightRAG `QueryParam.chunk_top_k`;
-LightRAG `top_k` remains the separate KG entity/relationship breadth. User
-`query_images` consume the shared image budget first, then retrieved visual
-chunks are admitted in reranked order. Pure visual chunks whose image cannot be
-sent are removed from the answer context and the packer backfills from later
-candidates; mixed text+image
+LightRAG `top_k` remains the separate KG entity/relationship breadth. Retrieved
+visual chunks are admitted in reranked order within the RAG context image
+budget. Pure visual chunks whose image cannot be sent are removed from the
+answer context and the packer backfills from later candidates; mixed text+image
 chunks keep their text even if the image is skipped. KG entities and
 relationships are filtered to the packed chunk ids, so citation indexes,
 reference lists, streamed contexts, and returned sources describe the material

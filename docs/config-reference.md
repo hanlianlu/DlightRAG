@@ -43,11 +43,12 @@ they need to change:
 - visual thumbnail cache internals
 - remote source URL signing expiry/region
 
-## Parser And MinerU
+## Parser Routing And Sidecars
 
 DlightRAG defaults to LightRAG native parsing for DOCX, Markdown, and textpack
-bundles, and MinerU for other supported document formats. Change parser routing
-only when validating a new LightRAG parser strategy.
+bundles, and a MinerU-compatible external parser endpoint for other supported
+document formats. Change parser routing only when validating a new LightRAG
+parser strategy.
 
 Advanced parser fields with code defaults:
 
@@ -245,8 +246,10 @@ vector scoring inside a small metadata candidate set.
 
 ## Image Budgets
 
-Root config exposes `answer.max_images`. Compression budgets are advanced model
-transport limits:
+Root config exposes `answer.max_images` for retrieved RAG context images and
+`answer.max_user_images` for user-supplied `query_images` plus history images.
+Those slot budgets are independent; user images do not evict retrieved page
+previews. Compression budgets are advanced model transport limits:
 
 `chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
 those are omitted, it reuses the configured chat model roles in this order:
@@ -265,6 +268,8 @@ rerank:
   image_min_quality: 76
 
 answer:
+  max_images: 6
+  max_user_images: 3
   image_max_bytes: 3000000
   image_max_total_bytes: 24000000
   image_max_px: 1536

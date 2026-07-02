@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from inspect import isawaitable
+from pathlib import Path
 from typing import Any
 
 from aiobotocore.session import AioSession
@@ -97,11 +98,14 @@ class S3DataSource(AsyncDataSource):
             for obj in page.get("Contents", []):
                 yield str(obj["Key"])
 
-    async def aload_document(self, doc_id: str) -> bytes:
-        """Download an S3 object as bytes."""
+    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+        """Download an S3 object to a local parser input file."""
         client = await self._ensure_client()
         resp = await client.get_object(Bucket=self._bucket, Key=doc_id)
-        return await resp["Body"].read()
+        body = resp["Body"]
+        with destination.open("wb") as out:
+            while chunk := await body.read(1024 * 1024):
+                out.write(chunk)
 
     async def aclose(self) -> None:
         """Close the S3 session."""

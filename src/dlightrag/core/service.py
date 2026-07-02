@@ -13,7 +13,6 @@ import asyncio
 import logging
 import os
 import random
-import sys
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -111,16 +110,6 @@ def _configured_process_count() -> int:
             return count
     return 1
 
-
-def _ensure_venv_in_path() -> None:
-    """Add venv bin to PATH for MinerU CLI."""
-    venv_bin = Path(sys.executable).parent
-    current_path = os.environ.get("PATH", "")
-    if str(venv_bin) not in current_path.split(":"):
-        os.environ["PATH"] = f"{venv_bin}:{current_path}" if current_path else str(venv_bin)
-
-
-_ensure_venv_in_path()
 
 from dlightrag.core.contract_guard import LightRAGContractGuard  # noqa: E402
 from dlightrag.core.retrieval.models import MetadataFilter  # noqa: E402
@@ -929,14 +918,13 @@ class RAGService:
         source_uri: str,
         batch_root: Path,
     ) -> PreparedIngestFile:
-        content = await source.aload_document(key)
         parser_path = remote_parser_input_path(
             batch_root=batch_root,
             source_uri=source_uri,
             key=key,
         )
         parser_path.parent.mkdir(parents=True, exist_ok=True)
-        await asyncio.to_thread(parser_path.write_bytes, content)
+        await source.amaterialize_document(key, parser_path)
         return PreparedIngestFile(
             parser_path=parser_path,
             metadata_path=source_uri,
@@ -1107,9 +1095,9 @@ class RAGService:
     ) -> dict[str, Any]:
         """Ingest documents from a caller-provided async data source.
 
-        SDK connectors only need to expose stable document ids and bytes through
-        ``AsyncDataSource``. DlightRAG handles temporary parser files, metadata
-        provenance, replace semantics, and cleanup.
+        SDK connectors expose stable document ids and write bytes into the
+        destination path DlightRAG provides. DlightRAG handles temporary parser
+        files, metadata provenance, replace semantics, and cleanup.
         """
         self._ensure_initialized()
         if self._ingestion_engine is None:

@@ -68,17 +68,20 @@ class URLDataSource(AsyncDataSource):
             if prefix is None or key.startswith(prefix):
                 yield key
 
-    async def aload_document(self, doc_id: str) -> bytes:
+    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
         try:
             url = self._url_by_key[doc_id]
         except KeyError as exc:
             raise KeyError(f"unknown URL document id: {doc_id}") from exc
 
         client = self._ensure_client()
-        response = await client.get(url)
-        response.raise_for_status()
-        _validate_public_https_url(str(getattr(response, "url", url)))
-        return bytes(response.content)
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            _validate_public_https_url(str(getattr(response, "url", url)))
+            with destination.open("wb") as out:
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        out.write(chunk)
 
     def source_uri_for_key(self, key: str) -> str:
         try:
