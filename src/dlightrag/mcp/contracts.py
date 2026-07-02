@@ -20,7 +20,6 @@ class MCPInput(ClientContractModel):
 class RetrieveInput(MCPInput):
     query: str
     top_k: int | None = None
-    chunk_top_k: int | None = None
     workspaces: list[str] | None = None
     filters: dict[str, Any] | None = None
     query_images: list[QueryImage] = Field(default_factory=list, max_length=3)
@@ -29,7 +28,7 @@ class RetrieveInput(MCPInput):
 
 
 class AnswerInput(RetrieveInput):
-    answer_candidate_top_k: int | None = None
+    chunk_top_k: int | None = None
     answer_context_top_k: int | None = None
     conversation_history: list[ConversationMessage] | None = None
 

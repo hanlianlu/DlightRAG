@@ -127,10 +127,6 @@ async def retrieve_tool(
         int | None,
         Field(default=None, description="Number of top results to return"),
     ] = None,
-    chunk_top_k: Annotated[
-        int | None,
-        Field(default=None, description="Vector chunk candidate count override"),
-    ] = None,
     workspaces: Annotated[
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),
@@ -153,7 +149,6 @@ async def retrieve_tool(
         args.query,
         workspaces=args.workspaces,
         top_k=args.top_k,
-        chunk_top_k=args.chunk_top_k,
         scope=scope,
         **query_kwargs_from_payload(args, include_multimodal_content=False),
     )
@@ -176,13 +171,6 @@ async def answer_tool(
     chunk_top_k: Annotated[
         int | None,
         Field(default=None, description="Vector chunk candidate count override for this answer"),
-    ] = None,
-    answer_candidate_top_k: Annotated[
-        int | None,
-        Field(
-            default=None,
-            description="Answer retrieval candidates fetched before final prompt packing",
-        ),
     ] = None,
     answer_context_top_k: Annotated[
         int | None,
@@ -216,7 +204,6 @@ async def answer_tool(
         workspaces=args.workspaces,
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,
-        answer_candidate_top_k=args.answer_candidate_top_k,
         answer_context_top_k=args.answer_context_top_k,
         scope=scope,
         **query_kwargs_from_payload(args, include_multimodal_content=False),

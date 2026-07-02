@@ -695,6 +695,7 @@ class TestRetrieveEndpoint:
         assert "answer" in body
         assert "contexts" in body
         assert "sources" in body
+        assert "chunk_top_k" not in mock_manager.aretrieve.call_args.kwargs
 
     async def test_retrieve_rejects_mode_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -703,6 +704,17 @@ class TestRetrieveEndpoint:
         resp = await client.post(
             "/retrieve",
             json={"query": "hello", "mode": "local"},
+        )
+        assert resp.status_code == 422
+        mock_manager.aretrieve.assert_not_called()
+
+    async def test_retrieve_rejects_chunk_top_k_field(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/retrieve",
+            json={"query": "hello", "chunk_top_k": 5},
         )
         assert resp.status_code == 422
         mock_manager.aretrieve.assert_not_called()
@@ -897,13 +909,13 @@ class TestAnswerEndpoint:
             json={
                 "query": "What is RAG?",
                 "stream": False,
-                "answer_candidate_top_k": 12,
+                "chunk_top_k": 12,
                 "answer_context_top_k": 4,
             },
         )
         assert resp.status_code == 200
         call_kwargs = mock_manager.aanswer.call_args.kwargs
-        assert call_kwargs["answer_candidate_top_k"] == 12
+        assert call_kwargs["chunk_top_k"] == 12
         assert call_kwargs["answer_context_top_k"] == 4
 
     async def test_answer_forwards_typed_history_and_query_image_blocks(
@@ -1089,13 +1101,13 @@ class TestAnswerStreamMode:
             json={
                 "query": "Stream with limits",
                 "stream": True,
-                "answer_candidate_top_k": 16,
+                "chunk_top_k": 16,
                 "answer_context_top_k": 5,
             },
         )
         assert resp.status_code == 200
         call_kwargs = mock_manager.aanswer_stream.call_args.kwargs
-        assert call_kwargs["answer_candidate_top_k"] == 16
+        assert call_kwargs["chunk_top_k"] == 16
         assert call_kwargs["answer_context_top_k"] == 5
 
     async def test_stream_event_sequence(

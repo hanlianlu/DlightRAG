@@ -161,11 +161,10 @@ max_parallel_analyze: 5
 # ─────────────────────────────────────────────────────────────────
 
 top_k: 60        # LightRAG KG entity/relationship breadth.
-chunk_top_k: 30  # Direct /retrieve chunk breadth; /answer uses answer.candidate_top_k.
+chunk_top_k: 30  # Direct /retrieve breadth; /answer derives candidates from this.
 direct_visual_top_k: 20
 
 answer:
-  candidate_top_k: 60
   context_top_k: 30
   max_images: 6
 

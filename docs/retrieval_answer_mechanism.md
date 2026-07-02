@@ -65,7 +65,7 @@ RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
   |-- BM25 path
   |     pg_textsearch over candidate-scoped chunks
   |
-  |-- RRF fusion + dedup + answer.candidate_top_k
+  |-- RRF fusion + dedup + chunk candidate budget
   |
   |-- Rerank
   |     multimodal listwise or external reranker
@@ -177,14 +177,15 @@ When recompression is needed, DlightRAG enforces both a long-edge floor and a
 JPEG quality floor; an image that cannot fit within those limits is skipped
 instead of being degraded into a low-quality preview.
 
-For `/answer`, retrieval deliberately over-fetches with
-`answer.candidate_top_k`, then the answer stage packs up to
-`answer.context_top_k` chunks. That over-fetch is a chunk/visual candidate
-budget and maps to LightRAG `QueryParam.chunk_top_k`; LightRAG `top_k` remains
-the separate KG entity/relationship breadth. User `query_images` consume the
-shared image budget first, then retrieved visual chunks are admitted in reranked
-order. Pure visual chunks whose image cannot be sent are removed from the
-answer context and the packer backfills from later candidates; mixed text+image
+For `/answer`, retrieval deliberately over-fetches chunk/visual candidates,
+then the answer stage packs up to `answer.context_top_k` chunks. An explicit
+`chunk_top_k` request overrides that candidate budget; otherwise DlightRAG uses
+`config.chunk_top_k`. That budget maps to LightRAG `QueryParam.chunk_top_k`;
+LightRAG `top_k` remains the separate KG entity/relationship breadth. User
+`query_images` consume the shared image budget first, then retrieved visual
+chunks are admitted in reranked order. Pure visual chunks whose image cannot be
+sent are removed from the answer context and the packer backfills from later
+candidates; mixed text+image
 chunks keep their text even if the image is skipped. KG entities and
 relationships are filtered to the packed chunk ids, so citation indexes,
 reference lists, streamed contexts, and returned sources describe the material

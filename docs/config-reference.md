@@ -167,9 +167,9 @@ embedding_request_timeout: 120
 ## BM25
 
 BM25 is part of the supported DlightRAG retrieval path. BM25 candidate breadth
-follows the active chunk budget: `chunk_top_k` for `/retrieve`, and
-`answer.candidate_top_k` for `/answer`. Language profiles and scoring constants
-are advanced index signatures.
+follows the configured chunk budget for `/retrieve`, and the `/answer`
+candidate chunk budget from `chunk_top_k`. Language profiles and scoring
+constants are advanced index signatures.
 
 Defaults:
 

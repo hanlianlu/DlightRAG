@@ -56,8 +56,6 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             "find diagrams",
             "--top-k",
             "8",
-            "--chunk-top-k",
-            "5",
             "--workspaces",
             "finance",
             "legal",
@@ -77,7 +75,6 @@ def test_query_payload_supports_current_retrieval_options() -> None:
     assert _build_retrieve_payload(args) == {
         "query": "find diagrams",
         "top_k": 8,
-        "chunk_top_k": 5,
         "workspaces": ["finance", "legal"],
         "filters": {
             "doc_title": "Manual",
@@ -89,14 +86,17 @@ def test_query_payload_supports_current_retrieval_options() -> None:
     }
 
 
+def test_query_rejects_answer_chunk_candidate_option() -> None:
+    with pytest.raises(SystemExit):
+        _parse_query(["find diagrams", "--chunk-top-k", "5"])
+
+
 def test_answer_payload_supports_current_answer_options() -> None:
     args = _parse_answer(
         [
             "summarize",
             "--chunk-top-k",
             "9",
-            "--answer-candidate-top-k",
-            "12",
             "--answer-context-top-k",
             "4",
             "--filter-doc-author",
@@ -110,7 +110,6 @@ def test_answer_payload_supports_current_answer_options() -> None:
         "query": "summarize",
         "stream": False,
         "chunk_top_k": 9,
-        "answer_candidate_top_k": 12,
         "answer_context_top_k": 4,
         "filters": {"doc_author": "Ada"},
         "query_images": [_image_block("https://example.test/chart.png")],

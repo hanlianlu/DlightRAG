@@ -111,11 +111,9 @@ class TestCitationHighlightConfig:
 
 
 class TestAnswerConfig:
-    def test_defaults_keep_retrieval_candidates_separate_from_prompt_contexts(self):
+    def test_defaults_keep_prompt_context_controls(self):
         cfg = AnswerConfig()
-        assert cfg.candidate_top_k == 60
         assert cfg.context_top_k == 30
-        assert cfg.candidate_top_k >= cfg.context_top_k
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
 

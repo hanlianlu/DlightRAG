@@ -106,7 +106,6 @@ async def retrieve(
         body.query,
         workspaces=body.workspaces,
         top_k=body.top_k,
-        chunk_top_k=body.chunk_top_k,
         scope=scope,
         **kwargs,
     )
@@ -130,7 +129,6 @@ async def answer(
             workspaces=body.workspaces,
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
-            answer_candidate_top_k=body.answer_candidate_top_k,
             answer_context_top_k=body.answer_context_top_k,
             scope=scope,
             **kwargs,
@@ -143,7 +141,6 @@ async def answer(
         workspaces=body.workspaces,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
-        answer_candidate_top_k=body.answer_candidate_top_k,
         answer_context_top_k=body.answer_context_top_k,
         scope=scope,
         **kwargs,

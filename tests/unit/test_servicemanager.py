@@ -434,13 +434,11 @@ class TestAnswerViaEngine:
         assert result is expected_result
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
-    async def test_aanswer_uses_answer_candidate_and_context_limits(
+    async def test_aanswer_derives_candidate_and_context_limits(
         self, mock_create, test_cfg
     ) -> None:
         """Answer over-fetches retrieval candidates and caps final prompt contexts."""
-        cfg = test_cfg.model_copy(
-            update={"answer": AnswerConfig(candidate_top_k=7, context_top_k=3)}
-        )
+        cfg = test_cfg.model_copy(update={"answer": AnswerConfig(context_top_k=3)})
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
@@ -455,6 +453,39 @@ class TestAnswerViaEngine:
         manager._query_planner = QueryPlanner(llm_func=None)
 
         result = await manager.aanswer("query", workspace="ws_a")
+
+        retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
+        assert retrieve_kwargs["top_k"] == test_cfg.top_k
+        assert retrieve_kwargs["chunk_top_k"] == test_cfg.chunk_top_k
+        mock_engine.generate.assert_awaited_once_with(
+            "query",
+            mock_contexts,
+            query_images=None,
+            conversation_history=None,
+            context_top_k=3,
+        )
+        assert result is expected_result
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_uses_chunk_top_k_as_candidate_override(
+        self, mock_create, test_cfg
+    ) -> None:
+        """Answer chunk_top_k remains the explicit retrieval candidate override."""
+        cfg = test_cfg.model_copy(update={"answer": AnswerConfig(context_top_k=3)})
+        mock_svc = AsyncMock()
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
+        mock_create.return_value = mock_svc
+
+        mock_engine = AsyncMock()
+        expected_result = MagicMock(trace={})
+        mock_engine.generate.return_value = expected_result
+
+        manager = RAGServiceManager(config=cfg)
+        manager._answer_engine = mock_engine
+        manager._query_planner = QueryPlanner(llm_func=None)
+
+        result = await manager.aanswer("query", workspace="ws_a", chunk_top_k=7)
 
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["top_k"] == test_cfg.top_k

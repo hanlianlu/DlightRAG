@@ -148,7 +148,6 @@ class TestYamlConfigLoading:
 
         assert "kg_entity_types" in config
         assert config["answer"] == {
-            "candidate_top_k": 60,
             "context_top_k": 30,
             "max_images": 6,
         }

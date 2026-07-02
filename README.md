@@ -636,14 +636,15 @@ high-signal breadth controls:
 
 | Setting | Default |
 |---|---:|
-| `answer.candidate_top_k` | `60` |
+| `chunk_top_k` | `30` |
 | `answer.context_top_k` | `30` |
 | `answer.max_images` | `6` |
 
 Image compression budgets are advanced transport limits; see
 [docs/config-reference.md](docs/config-reference.md#image-budgets). Use
-`/retrieve` for the broader pre-answer retrieval set. `/answer` returns
-contexts and sources aligned with what the answer model saw.
+`/retrieve` for the configured pre-answer retrieval set. `/answer` uses
+`chunk_top_k` for retrieval candidates, then returns contexts and sources
+aligned with what the answer model saw.
 
 ### Citations
 

@@ -24,7 +24,7 @@ def test_lightrag_dependency_tracks_stable_1_5_release() -> None:
     dependencies = _dependencies()
     lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
 
-    assert lightrag_deps == ["lightrag-hku>=1.5.3"]
+    assert lightrag_deps == ["lightrag-hku>=1.5.4"]
 
 
 def test_langfuse_dependency_has_no_upper_bound() -> None:
@@ -32,7 +32,7 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     dependencies = _dependencies()
     langfuse_deps = [dep for dep in dependencies if dep.startswith("langfuse")]
 
-    assert langfuse_deps == ["langfuse>=4.0.0"]
+    assert langfuse_deps == ["langfuse>=4.12.0"]
 
 
 def test_language_detection_uses_lingua_not_legacy_detector() -> None:

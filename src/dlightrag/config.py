@@ -384,14 +384,6 @@ class AnswerConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    candidate_top_k: int = Field(
-        default=60,
-        ge=1,
-        description=(
-            "Retrieval candidate chunks fetched for answer generation before answer-stage "
-            "packing. Keep this at or above context_top_k to allow visual backfill."
-        ),
-    )
     context_top_k: int = Field(
         default=30,
         ge=1,
