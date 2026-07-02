@@ -16,19 +16,23 @@ from dlightrag.sourcing import AsyncDataSource
 
 
 class BynderSource(AsyncDataSource):
-    def __init__(self, client) -> None:
-        self.client = client
+    """Adapter around your own Bynder client; not a built-in DlightRAG connector."""
+
+    def __init__(self, bynder_client) -> None:
+        self.bynder_client = bynder_client
         self.asset_id_by_key: dict[str, str] = {}
 
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
-        async for asset in self.client.iter_assets(prefix=prefix):
+        async for asset in self.bynder_client.iter_assets(prefix=prefix):
+            # Discovery only: DlightRAG calls aload_document(key) later for bytes.
             # Keep a parser-friendly filename/extension in the key.
             key = f"{asset['id']}/{asset['filename']}"
             self.asset_id_by_key[key] = asset["id"]
             yield key
 
     async def aload_document(self, doc_id: str) -> bytes:
-        return await self.client.download_asset(self.asset_id_by_key[doc_id])
+        # User-owned client method. DlightRAG only requires this to return bytes.
+        return await self.bynder_client.download_asset_bytes(self.asset_id_by_key[doc_id])
 
 
 manager = await RAGServiceManager.create(DlightragConfig())
@@ -73,6 +77,10 @@ try:
 finally:
     await manager.close()
 ```
+
+`iter_assets()` and `download_asset_bytes()` in the example are methods on your
+own Bynder client wrapper. DlightRAG only calls `aiter_documents()` to discover
+keys and `aload_document(key)` to load each document's bytes.
 
 ### REST API
 
