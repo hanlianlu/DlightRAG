@@ -56,6 +56,14 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
 @pytest.fixture(autouse=True)
 def _pg_cleanup_patches():
     """Avoid real PostgreSQL cleanup calls in unit tests."""
+
+    class FakeCheckpointStore:
+        async def initialize(self) -> None:
+            return None
+
+        async def delete_sessions_by_workspace(self, workspace: str) -> int:
+            return 0
+
     with (
         patch(
             "dlightrag.core.reset._clean_orphan_tables",
@@ -71,6 +79,7 @@ def _pg_cleanup_patches():
             new_callable=AsyncMock,
             return_value=[],
         ),
+        patch("dlightrag.storage.checkpoint_pg.PGCheckpointStore", FakeCheckpointStore),
     ):
         yield
 

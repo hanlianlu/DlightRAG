@@ -71,7 +71,7 @@ jobs:
           enable-cache: true
           python-version: '3.12'
       - run: uv sync --group dev
-      - run: uv run pytest tests/unit -v --tb=short --cov=dlightrag --cov-report=term-missing
+      - run: uv run pytest tests/unit -v --tb=short
 
   # ------------------------------------------------------------------
   # Integration tests: PostgreSQL service container (~90s)
