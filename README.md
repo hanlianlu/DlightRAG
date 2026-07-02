@@ -285,7 +285,7 @@ async def main():
         # DlightRAG-native Bynder/SaaS connector.
         await manager.aingest_source(
             workspace,
-            my_source,  # implements alist_documents/aiter_documents + aload_document
+            my_source,  # implements aiter_documents + aload_document
             source_type="bynder",
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
         )
