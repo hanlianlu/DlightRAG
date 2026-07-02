@@ -110,7 +110,6 @@ reportIncompatibleMethodOverride = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=dlightrag --cov-report=term-missing"
 markers = [
     "e2e: Playwright-driven end-to-end UI tests",
     "integration: requires running PostgreSQL",

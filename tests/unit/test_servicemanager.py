@@ -800,6 +800,13 @@ class TestDegradedMode:
             "_initialize_workspace_registry",
             fake_initialize_workspace_registry,
         )
+        for name in (
+            "_start_ingest_job_recovery",
+            "_recover_stalled_docs",
+            "_prune_checkpoint_sessions",
+            "_probe_vision_support",
+        ):
+            monkeypatch.setattr(RAGServiceManager, name, AsyncMock())
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_create_sets_ready_on_success(self, mock_create, test_cfg) -> None:
