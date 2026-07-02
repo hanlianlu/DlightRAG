@@ -20,6 +20,7 @@ from lightrag.constants import PARSED_DIR_NAME
 
 UPLOADS_DIR_NAME = "__uploads__"
 REMOTE_INGEST_DIR_NAME = "__remote_ingest__"
+REMOTE_SOURCES_DIR_NAME = "__remote_sources__"
 
 
 def workspace_input_root(input_dir: Path, workspace: str) -> Path:
@@ -126,15 +127,23 @@ def remote_parser_input_path(
     collisions for same-basename objects in different prefixes while keeping
     parser routing extension-based.
     """
-    parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
-    if not parts:
-        raise ValueError("remote object key is empty")
-    filename = PurePosixPath(*parts).name
-    suffix = Path(filename).suffix.lower()
-    stem = Path(filename).stem or "document"
-    safe_stem = _safe_filename_stem(stem)
-    digest = hashlib.sha256(source_uri.encode("utf-8")).hexdigest()[:12]
-    return batch_root / f"{safe_stem}__{digest}{suffix}"
+    return batch_root / _remote_source_filename(source_uri=source_uri, key=key)
+
+
+def retained_remote_source_path(
+    *,
+    input_root: Path,
+    source_type: str,
+    source_uri: str,
+    key: str,
+) -> Path:
+    """Return the persistent workspace path for a retained remote source file."""
+    return (
+        input_root
+        / REMOTE_SOURCES_DIR_NAME
+        / _safe_filename_stem(source_type)
+        / _remote_source_filename(source_uri=source_uri, key=key)
+    )
 
 
 def _is_ingestable_child(
@@ -151,9 +160,21 @@ def _is_ingestable_child(
         return False
     if any(part.startswith(".") for part in relative_parts):
         return False
-    if REMOTE_INGEST_DIR_NAME in parent_names:
+    if REMOTE_INGEST_DIR_NAME in parent_names or REMOTE_SOURCES_DIR_NAME in parent_names:
         return False
     return True
+
+
+def _remote_source_filename(*, source_uri: str, key: str) -> str:
+    parts = [part for part in PurePosixPath(key).parts if part not in {"", ".", ".."}]
+    if not parts:
+        raise ValueError("remote object key is empty")
+    filename = PurePosixPath(*parts).name
+    suffix = Path(filename).suffix.lower()
+    stem = Path(filename).stem or "document"
+    safe_stem = _safe_filename_stem(stem)
+    digest = hashlib.sha256(source_uri.encode("utf-8")).hexdigest()[:12]
+    return f"{safe_stem}__{digest}{suffix}"
 
 
 def _safe_filename_stem(stem: str) -> str:

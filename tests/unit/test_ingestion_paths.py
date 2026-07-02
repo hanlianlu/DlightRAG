@@ -5,10 +5,12 @@ from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.core.ingestion.paths import (
     REMOTE_INGEST_DIR_NAME,
+    REMOTE_SOURCES_DIR_NAME,
     UPLOADS_DIR_NAME,
     iter_ingestable_files,
     remote_ingest_batch_root,
     remote_parser_input_path,
+    retained_remote_source_path,
     stage_input_file,
     staged_input_path,
     workspace_input_root,
@@ -21,6 +23,7 @@ def test_iter_ingestable_files_skips_parser_upload_and_hidden_artifacts(tmp_path
     (root / PARSED_DIR_NAME / "report.pdf.parsed").mkdir(parents=True)
     (root / UPLOADS_DIR_NAME / "old-batch").mkdir(parents=True)
     (root / REMOTE_INGEST_DIR_NAME / "s3" / "batch").mkdir(parents=True)
+    (root / REMOTE_SOURCES_DIR_NAME / "s3").mkdir(parents=True)
     (root / ".cache").mkdir(parents=True)
 
     keep = root / "nested" / "keep.pdf"
@@ -28,6 +31,7 @@ def test_iter_ingestable_files_skips_parser_upload_and_hidden_artifacts(tmp_path
     (root / PARSED_DIR_NAME / "report.pdf.parsed" / "report.blocks.jsonl").write_text("{}\n")
     (root / UPLOADS_DIR_NAME / "old-batch" / "stale.pdf").write_bytes(b"stale")
     (root / REMOTE_INGEST_DIR_NAME / "s3" / "batch" / "remote.pdf").write_bytes(b"remote")
+    (root / REMOTE_SOURCES_DIR_NAME / "s3" / "retained.pdf").write_bytes(b"retained")
     (root / ".cache" / "hidden.pdf").write_bytes(b"hidden")
     (root / ".hidden.pdf").write_bytes(b"hidden")
 
@@ -104,3 +108,25 @@ def test_remote_parser_input_path_uses_ephemeral_hash_name(tmp_path: Path) -> No
             source_uri="s3://bucket/",
             key="../",
         )
+
+
+def test_retained_remote_source_path_uses_stable_workspace_location(tmp_path: Path) -> None:
+    input_root = tmp_path / "inputs" / "default"
+
+    first = retained_remote_source_path(
+        input_root=input_root,
+        source_type="s3",
+        source_uri="s3://bucket/team-a/report.pdf",
+        key="team-a/report.pdf",
+    )
+    second = retained_remote_source_path(
+        input_root=input_root,
+        source_type="s3",
+        source_uri="s3://bucket/team-a/report.pdf",
+        key="team-a/report.pdf",
+    )
+
+    assert first == second
+    assert first.parent == input_root / REMOTE_SOURCES_DIR_NAME / "s3"
+    assert first.name.startswith("report__")
+    assert first.suffix == ".pdf"
