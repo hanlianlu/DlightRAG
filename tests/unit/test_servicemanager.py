@@ -661,10 +661,12 @@ class TestDelegation:
             source_type="bynder",
             keys=["asset.pdf"],
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
+            retain_source_file=True,
         )
 
         assert result == {"processed": 1}
         mock_svc.aingest_source.assert_awaited_once()
+        assert mock_svc.aingest_source.await_args.kwargs["retain_source_file"] is True
         assert manager._ingest_jobs._tasks == {}
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)

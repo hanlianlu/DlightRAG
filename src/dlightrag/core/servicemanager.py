@@ -420,6 +420,7 @@ class RAGServiceManager:
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
         metadata_policy: MetadataIngestPolicy | None = None,
+        retain_source_file: bool | None = None,
     ) -> dict[str, Any]:
         """Ingest from an in-memory SDK data source without durable job recovery."""
         svc = await self._get_service(workspace)
@@ -435,6 +436,7 @@ class RAGServiceManager:
             author=author,
             metadata=metadata,
             metadata_policy=metadata_policy,
+            retain_source_file=retain_source_file,
         )
 
     async def _start_ingest_job_recovery(self) -> None:

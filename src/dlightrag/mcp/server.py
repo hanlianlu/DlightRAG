@@ -352,6 +352,10 @@ async def ingest_tool(
         MetadataPolicyParam | None,
         Field(default=None, description="How undeclared user metadata fields are handled."),
     ] = None,
+    retain_source_file: Annotated[
+        bool | None,
+        Field(default=None, description="Override remote source file retention for this ingest."),
+    ] = None,
 ) -> dict[str, Any]:
     args = IngestInput.model_validate(locals())
     manager = await _ensure_manager()

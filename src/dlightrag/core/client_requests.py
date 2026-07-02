@@ -89,7 +89,14 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
         if source_uris is not None:
             kwargs["source_uris"] = source_uris
 
-    for name in ("replace", "title", "author", "metadata", "metadata_policy"):
+    for name in (
+        "replace",
+        "retain_source_file",
+        "title",
+        "author",
+        "metadata",
+        "metadata_policy",
+    ):
         value = _get(payload, name)
         if value is not None:
             kwargs[name] = value

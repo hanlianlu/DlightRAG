@@ -293,6 +293,7 @@ async def main():
             my_source,  # implements aiter_documents + amaterialize_document
             source_type="bynder",
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
+            retain_source_file=True,  # optional per-call override
         )
 
         contexts = await manager.aretrieve("What are the key findings?", workspace=workspace)
@@ -705,8 +706,10 @@ Ingest jobs are durable. If the DlightRAG process restarts, recent
 from the next unfinished source window, while LightRAG's document status handles
 document-level skips for already processed content.
 Remote S3/Azure/URL source files are transient by default; set
-`retain_remote_source_files: true` to keep fetched files in the workspace input
-root and store that workspace-local path as metadata `file_path`.
+`retain_remote_source_files: true` as the default, or pass
+`retain_source_file: true` on one SDK/REST/MCP ingest call, to keep fetched
+files in the workspace input root and store that workspace-local path as
+metadata `file_path`.
 
 Workspace-scoped read/write endpoints accept optional `workspace`.
 Workspace lifecycle endpoints name the workspace explicitly. Query endpoints

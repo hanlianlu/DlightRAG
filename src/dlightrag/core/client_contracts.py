@@ -60,6 +60,7 @@ class IngestPayload(ClientContractModel):
     filename: str | None = None
     source_uri: str | None = None
     source_uris: list[str] | None = None
+    retain_source_file: bool | None = None
     replace: bool | None = None
     workspace: str | None = None
     title: str | None = None
