@@ -116,6 +116,11 @@ to the same URL without query or fragment so signed tokens are not stored.
 Pass `source_uri` for one URL or `source_uris` for a URL batch when the durable
 source identity is a SaaS asset id, CMS URI, or another stable reference.
 
+Remote source files are transient by default for S3, Azure Blob, URL, and SDK
+connectors. Set `retain_remote_source_files: true` in config to keep fetched
+files under the workspace input root; stored metadata `file_path` then points at
+that retained local file.
+
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `source_type` | `string` | yes | `local`, `azure_blob`, `s3`, `url` |

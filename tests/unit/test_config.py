@@ -322,6 +322,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
+    assert cfg.retain_remote_source_files is False
     assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
     assert cfg.pg_hnsw_m == 32
     assert cfg.pg_hnsw_ef_construction == 256

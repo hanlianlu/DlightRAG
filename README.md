@@ -704,6 +704,9 @@ Ingest jobs are durable. If the DlightRAG process restarts, recent
 `queued`/`running` jobs are recovered automatically; remote prefix jobs resume
 from the next unfinished source window, while LightRAG's document status handles
 document-level skips for already processed content.
+Remote S3/Azure/URL source files are transient by default; set
+`retain_remote_source_files: true` to keep fetched files in the workspace input
+root and store that workspace-local path as metadata `file_path`.
 
 Workspace-scoped read/write endpoints accept optional `workspace`.
 Workspace lifecycle endpoints name the workspace explicitly. Query endpoints

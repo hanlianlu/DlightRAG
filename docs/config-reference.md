@@ -98,12 +98,15 @@ semantic multimodal path enabled.
 
 ## Remote Source URLs
 
-Azure Blob, S3, and URL source files are not copied into DlightRAG storage.
-Retrieved sources point back to `azure://...`, `s3://...`, URL provenance, or a
-caller-supplied stable URI such as `bynder://asset/...`. `GET /api/files/{file_path}`
-redirects only when the stored source is a direct provider/source URL. Azure uses
-`DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
-(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+By default, Azure Blob, S3, and URL source files are not copied into DlightRAG
+storage. Retrieved sources point back to `azure://...`, `s3://...`, URL
+provenance, or a caller-supplied stable URI such as `bynder://asset/...`.
+Set `retain_remote_source_files: true` to keep fetched remote files under the
+workspace input root. In that mode the stored metadata `file_path` points at the
+retained workspace-local file, not the remote URI. `GET /api/files/{file_path}`
+redirects only when the stored source is a direct provider/source URL. Azure
+uses `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential
+chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only. SaaS APIs
 that require auth headers should be wrapped by an SDK `AsyncDataSource`
@@ -120,6 +123,7 @@ artifacts only; they do not delete Azure Blob, S3, or URL source objects.
 Advanced signing defaults:
 
 ```yaml
+retain_remote_source_files: false
 azure_sas_expiry: 3600
 s3_presign_expiry: 3600
 s3_region:

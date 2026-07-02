@@ -756,6 +756,13 @@ class DlightragConfig(BaseSettings):
         "Increase for slow local models (CPU inference).",
     )
     ingestion_replace_default: bool = Field(default=False)
+    retain_remote_source_files: bool = Field(
+        default=False,
+        description=(
+            "Keep S3/Azure/URL/SDK remote source files under the workspace input root. "
+            "When false, only parser artifacts and remote source URI metadata are retained."
+        ),
+    )
     max_upload_bytes: int = Field(
         default=100 * 1024 * 1024,
         description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",

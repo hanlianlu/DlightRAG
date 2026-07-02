@@ -28,6 +28,7 @@ from dlightrag.core.ingestion.paths import (
     iter_ingestable_files,
     remote_ingest_batch_root,
     remote_parser_input_path,
+    retained_remote_source_path,
     stage_input_file,
     staged_input_path,
     workspace_input_root,
@@ -915,19 +916,31 @@ class RAGService:
         *,
         source: AsyncDataSource,
         key: str,
+        source_type: str,
         source_uri: str,
         batch_root: Path,
+        retain_source_file: bool,
     ) -> PreparedIngestFile:
-        parser_path = remote_parser_input_path(
-            batch_root=batch_root,
-            source_uri=source_uri,
-            key=key,
-        )
+        if retain_source_file:
+            parser_path = retained_remote_source_path(
+                input_root=self._workspace_input_root(),
+                source_type=source_type,
+                source_uri=source_uri,
+                key=key,
+            )
+            metadata_path = str(parser_path)
+        else:
+            parser_path = remote_parser_input_path(
+                batch_root=batch_root,
+                source_uri=source_uri,
+                key=key,
+            )
+            metadata_path = source_uri
         parser_path.parent.mkdir(parents=True, exist_ok=True)
         await source.amaterialize_document(key, parser_path)
         return PreparedIngestFile(
             parser_path=parser_path,
-            metadata_path=source_uri,
+            metadata_path=metadata_path,
             display_filename=Path(key).name,
         )
 
@@ -954,6 +967,7 @@ class RAGService:
         results: list[dict[str, Any]] = []
         errors: list[str] = []
         saw_keys = False
+        retain_source_files = self.config.retain_remote_source_files
 
         async for batch_index, window in _aiter_chunks(keys, _REMOTE_INGEST_BATCH_SIZE):
             saw_keys = True
@@ -978,8 +992,10 @@ class RAGService:
                 return await self._download_remote_to_prepared_item(
                     source=source,
                     key=key,
+                    source_type=source_type,
                     source_uri=source_uri,
                     batch_root=current_batch_root,
+                    retain_source_file=retain_source_files,
                 )
 
             try:
@@ -991,6 +1007,7 @@ class RAGService:
                 )
 
                 prepared_source_uris: list[str] = []
+                prepared_keys: list[str] = []
                 for _key, source_uri, downloaded in zip(
                     window, source_uris, download_results, strict=True
                 ):
@@ -1001,6 +1018,7 @@ class RAGService:
                         continue
                     prepared_items.append(downloaded)
                     prepared_source_uris.append(source_uri)
+                    prepared_keys.append(_key)
 
                 if not prepared_items:
                     if progress_callback is not None:
@@ -1017,13 +1035,22 @@ class RAGService:
                     continue
 
                 if replace:
-                    for prepared_item, source_uri in zip(
-                        prepared_items, prepared_source_uris, strict=True
+                    for key, prepared_item, source_uri in zip(
+                        prepared_keys, prepared_items, prepared_source_uris, strict=True
                     ):
                         await self._purge_existing_for_replace(
                             file_path=prepared_item.parser_path,
                             stored_file_path=source_uri,
                         )
+                        if not retain_source_files:
+                            await self._purge_existing_for_replace(
+                                file_path=retained_remote_source_path(
+                                    input_root=self._workspace_input_root(),
+                                    source_type=source_type,
+                                    source_uri=source_uri,
+                                    key=key,
+                                )
+                            )
 
                 batch_result = await self._ingestion_engine.aingest_files(
                     prepared_items,
@@ -1053,7 +1080,8 @@ class RAGService:
                         )
                     )
             finally:
-                await asyncio.to_thread(_remove_remote_parser_sources, prepared_items)
+                if not retain_source_files:
+                    await asyncio.to_thread(_remove_remote_parser_sources, prepared_items)
                 await asyncio.to_thread(
                     _remove_empty_parents,
                     batch_root,
