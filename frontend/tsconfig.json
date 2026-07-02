@@ -9,11 +9,7 @@
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["./*"]
-    }
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
   "include": ["**/*.ts"],
   "exclude": ["node_modules"]

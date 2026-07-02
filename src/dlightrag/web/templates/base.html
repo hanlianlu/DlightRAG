@@ -12,7 +12,6 @@
 <body>
     {% block content %}{% endblock %}
     <script src="/static/vendor/htmx.min.js?v={{ static_version() }}"></script>
-    <script src="/static/vendor/htmx-global.js?v={{ static_version() }}"></script>
     <script>
         window.__DLIGHTRAG_STATIC_VERSION__ = "{{ static_version() }}";
     </script>

@@ -78,7 +78,7 @@ Choose `MINERU_INSTALL_EXTRAS` in `.env.mineru` for the local machine:
 - Linux GPU service, when supported by the target MinerU release:
   `core,vllm` or `core,lmdeploy`
 
-For a temporary foreground process on any local OS, run:
+For a foreground process on macOS, Linux, or WSL, run:
 
 ```bash
 make mineru-api
@@ -87,45 +87,10 @@ make mineru-api
 `make mineru-api` blocks in the current terminal and serves
 `http://127.0.0.1:8210` by default.
 
-On macOS, service-manage the same API through launchd:
-
-```bash
-make mineru-service-install
-make mineru-service-status
-make mineru-service-logs
-```
-
-`make mineru-service-install` writes the LaunchAgent plist and starts the API.
-Use `make mineru-service-start` later to restart an already installed service.
-
-On Linux or WSL with systemd, service-manage the same API with a user service:
-
-```bash
-repo="$(pwd)"
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/dlightrag-mineru.service <<EOF
-[Unit]
-Description=DlightRAG MinerU API sidecar
-
-[Service]
-WorkingDirectory=${repo}
-Environment=MINERU_ENV_FILE=${repo}/.env.mineru
-ExecStart=${repo}/scripts/mineru/api.sh
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=default.target
-EOF
-
-systemctl --user daemon-reload
-systemctl --user enable --now dlightrag-mineru.service
-systemctl --user status dlightrag-mineru.service
-journalctl --user -u dlightrag-mineru.service -f
-```
-
-On a headless Linux host where the user service must survive logout, enable
-lingering once with `loginctl enable-linger "$USER"`.
+DlightRAG does not manage the MinerU process. If you want it to run in the
+background, use your OS process manager or an independent MinerU API/router.
+On native Windows, install MinerU with its official Python package and point
+`parser_sidecars.mineru.local_endpoint` at the `mineru-api` endpoint you start.
 
 Endpoint alignment:
 
@@ -747,8 +712,28 @@ git clone https://github.com/hanlianlu/dlightrag.git
 cd dlightrag
 cp .env.example .env
 uv sync
-cd frontend && npm install && cd ..
+cd frontend && npm ci && cd ..
 make hooks   # install pre-commit checks (one-time)
+```
+
+Frontend packages use `package.json` ranges and `package-lock.json` for the
+actual pinned resolution. Use `npm ci` for normal installs and CI. Use
+`npm install` only when intentionally updating the lockfile.
+
+The Web UI is built with Vite and served from `src/dlightrag/web/static`.
+After editing files under `frontend/`, rebuild and check the bundle:
+
+```bash
+cd frontend
+npm run typecheck
+npm run build
+npm run lint:css
+```
+
+If HTMX is upgraded, refresh the vendored browser file after `npm install`:
+
+```bash
+cp node_modules/htmx.org/dist/htmx.min.js ../src/dlightrag/web/static/vendor/htmx.min.js
 ```
 
 Pre-commit hooks run ruff, pyright, and architecture checks on every
