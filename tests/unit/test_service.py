@@ -723,8 +723,6 @@ class TestRAGServiceLightRAGMainPath:
         source_type: str,
         source_uri: str,
     ) -> None:
-        test_config.retain_remote_source_files = True
-
         class RemoteSource(AsyncDataSource):
             async def aiter_documents(self, prefix: str | None = None):
                 yield "docs/report.pdf"
@@ -748,6 +746,7 @@ class TestRAGServiceLightRAGMainPath:
             RemoteSource(),
             source_type=source_type,
             source_uri_for_key=lambda _key: source_uri,
+            retain_source_file=True,
         )
 
         assert result["processed"] == 1
@@ -759,6 +758,42 @@ class TestRAGServiceLightRAGMainPath:
             test_config.input_dir_path / test_config.workspace / "__remote_sources__" / source_type
         )
         assert "__remote_ingest__" not in str(item.parser_path)
+
+    async def test_remote_source_retention_call_override_can_disable_config(
+        self, test_config: DlightragConfig
+    ) -> None:
+        test_config.retain_remote_source_files = True
+
+        class RemoteSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield "docs/report.pdf"
+
+            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+                destination.write_bytes(b"%PDF-transient")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        seen_items: list[PreparedIngestFile] = []
+
+        async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
+            seen_items.extend(items)
+            assert items[0].parser_path.exists()
+            return {"processed": 1, "errors": [], "results": [{"doc_id": "d1"}]}
+
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
+
+        result = await service.aingest_source(
+            RemoteSource(),
+            source_type="s3",
+            source_uri_for_key=lambda _key: "s3://my-bucket/docs/report.pdf",
+            retain_source_file=False,
+        )
+
+        assert result["processed"] == 1
+        item = seen_items[0]
+        assert item.metadata_path == "s3://my-bucket/docs/report.pdf"
+        assert not item.parser_path.exists()
 
     async def test_aingest_source_accepts_sdk_async_data_source(
         self, test_config: DlightragConfig

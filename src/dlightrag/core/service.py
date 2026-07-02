@@ -958,6 +958,7 @@ class RAGService:
         metadata_policy: MetadataIngestPolicy | None = None,
         progress_callback: RemoteIngestProgressCallback | None = None,
         resume_from_window: int = 0,
+        retain_source_file: bool | None = None,
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
         from dlightrag.utils.concurrency import bounded_map
@@ -967,7 +968,11 @@ class RAGService:
         results: list[dict[str, Any]] = []
         errors: list[str] = []
         saw_keys = False
-        retain_source_files = self.config.retain_remote_source_files
+        retain_source_files = (
+            self.config.retain_remote_source_files
+            if retain_source_file is None
+            else bool(retain_source_file)
+        )
 
         async for batch_index, window in _aiter_chunks(keys, _REMOTE_INGEST_BATCH_SIZE):
             saw_keys = True
@@ -1118,6 +1123,7 @@ class RAGService:
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
         metadata_policy: MetadataIngestPolicy | None = None,
+        retain_source_file: bool | None = None,
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
     ) -> dict[str, Any]:
@@ -1153,6 +1159,7 @@ class RAGService:
                 metadata_policy=metadata_policy,
                 progress_callback=_progress_callback,
                 resume_from_window=_resume_from_window,
+                retain_source_file=retain_source_file,
             )
         finally:
             if close is not None:
@@ -1183,6 +1190,7 @@ class RAGService:
             author=kwargs.get("author"),
             metadata=kwargs.get("metadata"),
             metadata_policy=kwargs.get("metadata_policy"),
+            retain_source_file=kwargs.get("retain_source_file"),
             _progress_callback=kwargs.get("_progress_callback"),
             _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
         )
@@ -1211,6 +1219,7 @@ class RAGService:
             "author": kwargs.get("author"),
             "metadata": kwargs.get("metadata"),
             "metadata_policy": kwargs.get("metadata_policy"),
+            "retain_source_file": kwargs.get("retain_source_file"),
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
         }
@@ -1240,6 +1249,7 @@ class RAGService:
             "author": kwargs.get("author"),
             "metadata": kwargs.get("metadata"),
             "metadata_policy": kwargs.get("metadata_policy"),
+            "retain_source_file": kwargs.get("retain_source_file"),
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
         }

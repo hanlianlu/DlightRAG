@@ -129,6 +129,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "filename" in ingest_props
     assert "source_uri" in ingest_props
     assert "source_uris" in ingest_props
+    assert "retain_source_file" in ingest_props
     assert _metadata_policy_enum(ingest_tool.inputSchema, ingest_props["metadata_policy"]) == [
         "validate",
         "reject_unknown",
@@ -368,6 +369,39 @@ async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) 
         source_type="s3",
         bucket="bucket",
         prefix="docs/",
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_remote_ingest_forwards_retain_source_file_override(
+    mock_mcp_manager,
+) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "s3",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {
+            "source_type": "s3",
+            "bucket": "bucket",
+            "key": "docs/report.pdf",
+            "retain_source_file": True,
+        },
+    )
+
+    assert _tool_json(result)["job_id"] == "job-1"
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        source_type="s3",
+        bucket="bucket",
+        key="docs/report.pdf",
+        retain_source_file=True,
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 

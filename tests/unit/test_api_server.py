@@ -606,6 +606,30 @@ class TestIngestEndpoint:
         )
         mock_manager.aingest.assert_not_awaited()
 
+    async def test_s3_ingest_forwards_retain_source_file_override(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "s3",
+                "bucket": "my-bucket",
+                "key": "docs/file.pdf",
+                "retain_source_file": True,
+            },
+        )
+
+        assert resp.status_code == 202
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
+            "default",
+            source_type="s3",
+            bucket="my-bucket",
+            key="docs/file.pdf",
+            retain_source_file=True,
+        )
+
     async def test_url_ingest_defaults_to_background_job(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:

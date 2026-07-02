@@ -117,9 +117,10 @@ Pass `source_uri` for one URL or `source_uris` for a URL batch when the durable
 source identity is a SaaS asset id, CMS URI, or another stable reference.
 
 Remote source files are transient by default for S3, Azure Blob, URL, and SDK
-connectors. Set `retain_remote_source_files: true` in config to keep fetched
-files under the workspace input root; stored metadata `file_path` then points at
-that retained local file.
+connectors. Set `retain_remote_source_files: true` in config, or pass
+`retain_source_file` on one ingest call, to keep fetched files under the
+workspace input root; stored metadata `file_path` then points at that retained
+local file.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -135,6 +136,7 @@ that retained local file.
 | `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |
 | `source_uri` | `string` | — | Stable stored source URI for a single URL, independent of the signed fetch URL |
 | `source_uris` | `list[string]` | — | Stable stored source URIs for URL batches; must match `urls` length |
+| `retain_source_file` | `boolean` | — | Per-call remote source retention override. `true` keeps fetched remote files under the workspace input root; `false` keeps them transient even if config defaults to retention. |
 | `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |
