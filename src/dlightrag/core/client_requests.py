@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from dlightrag.core.client_contracts import dump_optional_list
@@ -79,6 +80,36 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
     return kwargs
 
 
+def should_wait_for_ingest(
+    *,
+    source_type: str,
+    path: str | None = None,
+    prefix: str | None = None,
+    wait: bool | None = None,
+) -> bool:
+    """Return whether a transport should wait for ingest completion."""
+    if wait is not None:
+        return wait
+    return not is_batch_ingest(source_type=source_type, path=path, prefix=prefix)
+
+
+def is_batch_ingest(
+    *,
+    source_type: str,
+    path: str | None = None,
+    prefix: str | None = None,
+) -> bool:
+    """Return whether an ingest request is naturally batch-shaped."""
+    if prefix is not None:
+        return True
+    return source_type == "local" and bool(path) and Path(path).is_dir()
+
+
+def is_ingest_job_row(value: Any) -> bool:
+    """Return whether a payload is an ingest job row rather than an ingest result."""
+    return isinstance(value, dict) and isinstance(value.get("job_id"), str)
+
+
 def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
     """Wrap CLI-supplied image URLs/data URIs as modern image_url content blocks."""
     return [{"type": "image_url", "image_url": {"url": value}} for value in values]
@@ -86,6 +117,9 @@ def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
 
 __all__ = [
     "ingest_kwargs_from_payload",
+    "is_batch_ingest",
+    "is_ingest_job_row",
     "query_image_blocks_from_urls",
     "query_kwargs_from_payload",
+    "should_wait_for_ingest",
 ]

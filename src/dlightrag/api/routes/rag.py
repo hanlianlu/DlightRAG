@@ -39,8 +39,12 @@ from dlightrag.core.client_payloads import (
     project_contexts_for_client,
     retrieval_payload,
 )
-from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_kwargs_from_payload
-from dlightrag.core.ingest_policy import is_ingest_job_row, should_wait_for_ingest
+from dlightrag.core.client_requests import (
+    ingest_kwargs_from_payload,
+    is_ingest_job_row,
+    query_kwargs_from_payload,
+    should_wait_for_ingest,
+)
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .deps import get_manager, request_scope, resolve_workspace
