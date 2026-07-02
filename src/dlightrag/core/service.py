@@ -1100,6 +1100,8 @@ class RAGService:
         author: str | None = None,
         metadata: dict[str, Any] | None = None,
         metadata_policy: MetadataIngestPolicy | None = None,
+        _progress_callback: RemoteIngestProgressCallback | None = None,
+        _resume_from_window: int = 0,
     ) -> dict[str, Any]:
         """Ingest documents from a caller-provided async data source.
 
@@ -1138,6 +1140,8 @@ class RAGService:
                 author=author,
                 metadata=metadata,
                 metadata_policy=metadata_policy,
+                progress_callback=_progress_callback,
+                resume_from_window=_resume_from_window,
             )
         finally:
             if close is not None:
@@ -1155,13 +1159,14 @@ class RAGService:
         result = await self.aingest_source(
             source,
             source_type="url",
-            keys=source.aiter_documents(),
             source_uri_for_key=source.source_uri_for_key,
             replace=replace,
             title=kwargs.get("title"),
             author=kwargs.get("author"),
             metadata=kwargs.get("metadata"),
             metadata_policy=kwargs.get("metadata_policy"),
+            _progress_callback=kwargs.get("_progress_callback"),
+            _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
         )
         if len(urls) == 1:
             return self._single_file_result(result)
@@ -1180,46 +1185,24 @@ class RAGService:
                 container_name=container_name,
             )
 
-        close = getattr(source, "aclose", None)
-        progress_callback = kwargs.get("_progress_callback")
-        resume_from_window = int(kwargs.get("_resume_from_window") or 0)
-        try:
-            if kwargs.get("blob_path"):
-                key = str(kwargs["blob_path"])
-                return self._single_file_result(
-                    await self._aingest_remote_keys(
-                        source=source,
-                        source_type="azure_blob",
-                        keys=[key],
-                        source_uri_for_key=lambda item: f"azure://{container_name}/{item}",
-                        replace=replace,
-                        title=kwargs.get("title"),
-                        author=kwargs.get("author"),
-                        metadata=kwargs.get("metadata"),
-                        metadata_policy=kwargs.get("metadata_policy"),
-                        progress_callback=progress_callback,
-                        resume_from_window=resume_from_window,
-                    )
-                )
-
-            prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
-            keys = source.aiter_documents(prefix=prefix)
-            return await self._aingest_remote_keys(
-                source=source,
-                source_type="azure_blob",
-                keys=keys,
-                source_uri_for_key=lambda key: f"azure://{container_name}/{key}",
-                replace=replace,
-                title=kwargs.get("title"),
-                author=kwargs.get("author"),
-                metadata=kwargs.get("metadata"),
-                metadata_policy=kwargs.get("metadata_policy"),
-                progress_callback=progress_callback,
-                resume_from_window=resume_from_window,
+        common_kwargs = {
+            "source_type": "azure_blob",
+            "source_uri_for_key": lambda key: f"azure://{container_name}/{key}",
+            "replace": replace,
+            "title": kwargs.get("title"),
+            "author": kwargs.get("author"),
+            "metadata": kwargs.get("metadata"),
+            "metadata_policy": kwargs.get("metadata_policy"),
+            "_progress_callback": kwargs.get("_progress_callback"),
+            "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
+        }
+        if kwargs.get("blob_path"):
+            return self._single_file_result(
+                await self.aingest_source(source, keys=[str(kwargs["blob_path"])], **common_kwargs)
             )
-        finally:
-            if close is not None:
-                await close()
+
+        prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
+        return await self.aingest_source(source, prefix=prefix, **common_kwargs)
 
     async def _aingest_s3(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         bucket = kwargs.get("bucket")
@@ -1231,47 +1214,25 @@ class RAGService:
 
             source = S3DataSource(bucket=str(bucket), region=kwargs.get("region"))
 
-        close = getattr(source, "aclose", None)
-        progress_callback = kwargs.get("_progress_callback")
-        resume_from_window = int(kwargs.get("_resume_from_window") or 0)
-        try:
-            key = kwargs.get("key") or kwargs.get("blob_path")
-            if key:
-                key = str(key)
-                return self._single_file_result(
-                    await self._aingest_remote_keys(
-                        source=source,
-                        source_type="s3",
-                        keys=[key],
-                        source_uri_for_key=lambda item: f"s3://{bucket}/{item}",
-                        replace=replace,
-                        title=kwargs.get("title"),
-                        author=kwargs.get("author"),
-                        metadata=kwargs.get("metadata"),
-                        metadata_policy=kwargs.get("metadata_policy"),
-                        progress_callback=progress_callback,
-                        resume_from_window=resume_from_window,
-                    )
-                )
-
-            prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
-            keys = source.aiter_documents(prefix=prefix)
-            return await self._aingest_remote_keys(
-                source=source,
-                source_type="s3",
-                keys=keys,
-                source_uri_for_key=lambda key: f"s3://{bucket}/{key}",
-                replace=replace,
-                title=kwargs.get("title"),
-                author=kwargs.get("author"),
-                metadata=kwargs.get("metadata"),
-                metadata_policy=kwargs.get("metadata_policy"),
-                progress_callback=progress_callback,
-                resume_from_window=resume_from_window,
+        common_kwargs = {
+            "source_type": "s3",
+            "source_uri_for_key": lambda key: f"s3://{bucket}/{key}",
+            "replace": replace,
+            "title": kwargs.get("title"),
+            "author": kwargs.get("author"),
+            "metadata": kwargs.get("metadata"),
+            "metadata_policy": kwargs.get("metadata_policy"),
+            "_progress_callback": kwargs.get("_progress_callback"),
+            "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
+        }
+        key = kwargs.get("key") or kwargs.get("blob_path")
+        if key:
+            return self._single_file_result(
+                await self.aingest_source(source, keys=[str(key)], **common_kwargs)
             )
-        finally:
-            if close is not None:
-                await close()
+
+        prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
+        return await self.aingest_source(source, prefix=prefix, **common_kwargs)
 
     async def aingest(
         self,
