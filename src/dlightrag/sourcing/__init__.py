@@ -3,12 +3,12 @@
 
 from typing import TYPE_CHECKING
 
-from dlightrag.sourcing.base import AsyncDataSource, DataSource
+from dlightrag.sourcing.base import AsyncDataSource
 
 if TYPE_CHECKING:
     from dlightrag.sourcing.url import URLDataSource
 
-__all__ = ["AsyncDataSource", "DataSource", "URLDataSource"]
+__all__ = ["AsyncDataSource", "URLDataSource"]
 
 
 def __getattr__(name: str):
@@ -21,10 +21,6 @@ def __getattr__(name: str):
         from dlightrag.sourcing.aws_s3 import S3DataSource
 
         return S3DataSource
-    if name == "LocalDataSource":
-        from dlightrag.sourcing.local import LocalDataSource
-
-        return LocalDataSource
     if name == "URLDataSource":
         from dlightrag.sourcing.url import URLDataSource
 

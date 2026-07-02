@@ -98,14 +98,17 @@ semantic multimodal path enabled.
 ## Remote Source URLs
 
 Azure Blob, S3, and URL source files are not copied into DlightRAG storage.
-Retrieved sources point back to `azure://...`, `s3://...`, or `https://...`;
-`GET /api/files/{file_path}` redirects to a provider/source URL. Azure uses
+Retrieved sources point back to `azure://...`, `s3://...`, URL provenance, or a
+caller-supplied stable URI such as `bynder://asset/...`. `GET /api/files/{file_path}`
+redirects only when the stored source is a direct provider/source URL. Azure uses
 `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only. SaaS APIs
 that require auth headers should be wrapped by an SDK `AsyncDataSource`
-connector and ingested with `RAGServiceManager.aingest_source()`.
+connector and ingested with `RAGServiceManager.aingest_source()`. URL ingest
+stores fetch URLs without query/fragment by default; pass `source_uri` or
+`source_uris` when a stable source identity should be persisted instead.
 
 Remote prefix ingest streams provider listings into bounded local staging
 windows. It uses the same ingest job substrate as local and single-object ingest,

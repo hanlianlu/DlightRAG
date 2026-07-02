@@ -6,13 +6,14 @@ from __future__ import annotations
 import datetime
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.core.client_contracts import (
     ClientContractModel,
     ContentBlock,
     ConversationMessage,
+    IngestPayload,
     QueryImage,
 )
 
@@ -35,49 +36,8 @@ class MetadataFilterRequest(ClientContractModel):
     custom: dict[str, Any] | None = None
 
 
-class IngestRequest(ClientContractModel):
-    source_type: Literal["local", "azure_blob", "s3", "url"]
-    path: str | None = None
-    container_name: str | None = None
-    blob_path: str | None = None
-    prefix: str | None = None
-    bucket: str | None = None
-    key: str | None = None
-    url: str | None = None
-    urls: list[str] | None = None
-    filename: str | None = None
-    replace: bool | None = None
-    workspace: str | None = None
-    title: str | None = None
-    author: str | None = None
-    metadata: dict[str, Any] | None = None
-    metadata_policy: Literal["validate", "reject_unknown", "store_only"] | None = None
-
-    @model_validator(mode="after")
-    def _validate_source_fields(self) -> IngestRequest:
-        if self.source_type == "local":
-            if not self.path:
-                raise ValueError("'path' is required for local ingestion")
-        elif self.source_type == "azure_blob":
-            if not self.container_name:
-                raise ValueError("'container_name' is required for azure_blob")
-            if self.blob_path and self.prefix is not None:
-                raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
-        elif self.source_type == "s3":
-            if not self.bucket:
-                raise ValueError("'bucket' is required for s3")
-            if not self.key and self.prefix is None:
-                raise ValueError("'key' or 'prefix' is required for s3")
-            if self.key and self.prefix is not None:
-                raise ValueError("'key' and 'prefix' are mutually exclusive")
-        elif self.source_type == "url":
-            if not self.url and not self.urls:
-                raise ValueError("'url' or 'urls' is required for url ingestion")
-            if self.url and self.urls is not None:
-                raise ValueError("'url' and 'urls' are mutually exclusive")
-            if self.urls and self.filename:
-                raise ValueError("'filename' can only be used with a single url")
-        return self
+class IngestRequest(IngestPayload):
+    pass
 
 
 class RetrieveRequest(ClientContractModel):

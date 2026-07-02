@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import base64
 import datetime
 import json
@@ -51,6 +50,8 @@ def mock_manager():
         return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
     )
     manager.delete_files = AsyncMock(return_value=[])
+    manager.aingest = AsyncMock()
+    manager.astart_ingest_job = AsyncMock(return_value={"job_id": "job-1", "status": "queued"})
     return manager
 
 
@@ -612,31 +613,26 @@ class TestWebFiles:
     async def test_upload_preserves_filename_for_directory_ingest(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        async def ingest_upload_dir(workspace: str, source_type: str, **kwargs):
-            upload_dir = Path(kwargs["path"])
-            assert workspace == "default"
-            assert source_type == "local"
-            assert upload_dir.is_dir()
-            assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
-            return {"processed": 1, "results": []}
-
-        mock_manager.aingest = AsyncMock(side_effect=ingest_upload_dir)
-
         resp = await client.post(
             "/web/files/upload",
             files=[("files", ("report.pdf", b"%PDF-fake", "application/pdf"))],
         )
 
         assert resp.status_code == 200
-        # aingest now runs in a background task — give it a tick to start.
-        await asyncio.sleep(0.05)
-        mock_manager.aingest.assert_awaited_once()
+        mock_manager.aingest.assert_not_awaited()
+        mock_manager.astart_ingest_job.assert_awaited_once()
+        call = mock_manager.astart_ingest_job.await_args
+        assert call.args == ("default",)
+        assert call.kwargs["source_type"] == "local"
+        upload_dir = Path(call.kwargs["path"])
+        assert upload_dir.is_dir()
+        assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
+        assert call.kwargs["_cleanup_paths"] == [str(upload_dir)]
 
     async def test_upload_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
         mock_manager.list_workspaces = AsyncMock(return_value=["default"])
-        mock_manager.aingest = AsyncMock()
 
         resp = await client.post(
             "/web/files/upload",
@@ -647,6 +643,7 @@ class TestWebFiles:
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
         mock_manager.aingest.assert_not_awaited()
+        mock_manager.astart_ingest_job.assert_not_awaited()
 
     def test_safe_relative_path_rejects_absolute_paths(self) -> None:
         from dlightrag.web.routes.files import _safe_relative_path

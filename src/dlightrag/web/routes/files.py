@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import shutil
 import uuid
@@ -24,10 +23,6 @@ from dlightrag.web.deps import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Track per-workspace background ingest tasks so the Upload button doesn't
-# launch a duplicate while an ingest is already running.
-_workspace_upload_tasks: dict[str, asyncio.Task[Any] | None] = {}
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:
@@ -170,17 +165,13 @@ async def _file_list_response(request: Request, workspace: str):
     except Exception:
         files = []
 
-    # Check whether an ingest is currently active so reopening the panel
-    # shows the progress bar again instead of the previous panel state.
-    # Always query pipeline_status — the in-memory task dict may
-    # be empty after a server restart or task-tracker race, but LightRAG's
-    # shared-storage pipeline_status is the authoritative source.
-    task = _workspace_upload_tasks.get(workspace)
-    ingest_busy = task is not None and not task.done()
+    # LightRAG's shared-storage pipeline_status is the authoritative ingest
+    # activity signal across API, MCP, Web, restart, and scale-out.
+    ingest_busy = False
     status: dict[str, Any] = {}
     try:
         ps = await manager.get_pipeline_status(workspace)
-        ingest_busy = ingest_busy or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
+        ingest_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
         if ingest_busy:
             status = ps
     except Exception:
@@ -267,6 +258,8 @@ async def upload_files(
                     if bytes_written > max_bytes:
                         out.close()
                         dest.unlink(missing_ok=True)
+                        if upload_dir is not None:
+                            shutil.rmtree(upload_dir, ignore_errors=True)
                         return error_response(
                             f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
                             status_code=413,
@@ -275,62 +268,28 @@ async def upload_files(
             saved_paths.append(dest)
 
         if not saved_paths:
+            if upload_dir is not None:
+                shutil.rmtree(upload_dir, ignore_errors=True)
             return error_response("No valid files selected")
 
     except Exception as e:
         logger.exception("Upload staging failed")
+        if upload_dir is not None:
+            shutil.rmtree(upload_dir, ignore_errors=True)
         return error_response(f"Upload failed: {e}", status_code=500)
 
-    # Fire-and-forget: schedule ingest, return immediately with progress UI.
-    async def _background_ingest() -> None:
-        try:
-            result = await manager.aingest(
-                workspace=selected_workspace,
-                source_type="local",
-                path=str(upload_dir),
-            )
-            results = result.get("results", []) if isinstance(result, dict) else []
-            batch_errors = result.get("errors", []) if isinstance(result, dict) else []
-            # Count docs that actually succeeded (not FAILED by chunking/KG errors).
-            # When per-doc results are available, use them; otherwise fall back to
-            # the batch-level processed count.
-            if results:
-                succeeded = sum(
-                    1
-                    for r in results
-                    if isinstance(r, dict)
-                    and r.get("source_kind") != "skipped"
-                    and not r.get("error")
-                )
-            else:
-                succeeded = result.get("processed", 0) if isinstance(result, dict) else 0
-            if succeeded < len(saved_paths) or batch_errors:
-                logger.warning(
-                    "Background ingest finished for workspace %s: %d/%d succeeded%s",
-                    selected_workspace,
-                    succeeded,
-                    len(saved_paths),
-                    f", batch errors: {batch_errors}" if batch_errors else "",
-                )
-            else:
-                logger.info(
-                    "Background ingest finished for workspace %s: %d/%d succeeded",
-                    selected_workspace,
-                    succeeded,
-                    len(saved_paths),
-                )
-        except Exception:
-            logger.warning(
-                "Background ingest failed for workspace %s",
-                selected_workspace,
-                exc_info=True,
-            )
-        finally:
-            if upload_dir is not None:
-                shutil.rmtree(upload_dir, ignore_errors=True)
-            _workspace_upload_tasks.pop(selected_workspace, None)
-
-    _workspace_upload_tasks[selected_workspace] = asyncio.create_task(_background_ingest())
+    try:
+        await manager.astart_ingest_job(
+            selected_workspace,
+            source_type="local",
+            path=str(upload_dir),
+            _cleanup_paths=[str(upload_dir)],
+        )
+    except Exception as e:
+        logger.exception("Failed to start ingest job for workspace %s", selected_workspace)
+        if upload_dir is not None:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+        return error_response(f"Upload staged but ingest did not start: {e}", status_code=500)
 
     return templates.TemplateResponse(
         request,
@@ -370,17 +329,12 @@ async def ingest_status(
         return _stale_workspace_response()
     manager = get_manager(request)
 
-    # The in-memory task only tracks this server process. LightRAG's shared
-    # pipeline_status remains the cross-process signal after restart/scale-out.
-    task = _workspace_upload_tasks.get(selected_workspace)
-    task_running = task is not None and not task.done()
-
     try:
         ps = await manager.get_pipeline_status(selected_workspace)
     except Exception:
         ps = {"busy": False, "latest_message": "Status unavailable"}
 
-    still_busy = task_running or ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
+    still_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
 
     if still_busy:
         return HTMLResponse(
@@ -392,7 +346,6 @@ async def ingest_status(
         )
 
     # Ingest finished -- reload the full file list into the panel.
-    # _background_ingest owns local task cleanup.
     response = await _file_list_response(request, selected_workspace)
     response.headers["HX-Retarget"] = "#panel-content"
     return response

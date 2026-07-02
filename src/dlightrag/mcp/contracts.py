@@ -3,14 +3,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
-from dlightrag.core.client_contracts import ClientContractModel, ConversationMessage, QueryImage
-
-MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
-SourceType = Literal["local", "azure_blob", "s3", "url"]
+from dlightrag.core.client_contracts import (
+    ClientContractModel,
+    ConversationMessage,
+    IngestPayload,
+    MetadataPolicy,
+    QueryImage,
+    SourceType,
+)
 
 
 class MCPInput(ClientContractModel):
@@ -33,45 +37,8 @@ class AnswerInput(RetrieveInput):
     conversation_history: list[ConversationMessage] | None = None
 
 
-class IngestInput(MCPInput):
-    source_type: SourceType
-    path: str | None = None
-    container_name: str | None = None
-    blob_path: str | None = None
-    bucket: str | None = None
-    key: str | None = None
-    prefix: str | None = None
-    url: str | None = None
-    urls: list[str] | None = None
-    filename: str | None = None
-    replace: bool | None = None
-    workspace: str | None = None
-    title: str | None = None
-    author: str | None = None
-    metadata: dict[str, Any] | None = None
-    metadata_policy: MetadataPolicy | None = None
-
-    @model_validator(mode="after")
-    def validate_selectors(self) -> IngestInput:
-        if self.source_type == "local" and not self.path:
-            raise ValueError("'path' is required for local ingestion")
-        if self.source_type == "azure_blob" and not self.container_name:
-            raise ValueError("'container_name' is required for azure_blob")
-        if self.source_type == "azure_blob" and self.blob_path and self.prefix is not None:
-            raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
-        if self.source_type == "s3" and not self.bucket:
-            raise ValueError("'bucket' is required for s3")
-        if self.source_type == "s3" and not self.key and self.prefix is None:
-            raise ValueError("'key' or 'prefix' is required for s3")
-        if self.source_type == "s3" and self.key and self.prefix is not None:
-            raise ValueError("'key' and 'prefix' are mutually exclusive")
-        if self.source_type == "url" and not self.url and not self.urls:
-            raise ValueError("'url' or 'urls' is required for url ingestion")
-        if self.source_type == "url" and self.url and self.urls is not None:
-            raise ValueError("'url' and 'urls' are mutually exclusive")
-        if self.source_type == "url" and self.urls and self.filename:
-            raise ValueError("'filename' can only be used with a single url")
-        return self
+class IngestInput(IngestPayload):
+    pass
 
 
 class IngestJobStatusInput(MCPInput):
@@ -107,6 +74,8 @@ __all__ = [
     "IngestInput",
     "IngestJobStatusInput",
     "ListFilesInput",
+    "MetadataPolicy",
     "QueryImage",
     "RetrieveInput",
+    "SourceType",
 ]

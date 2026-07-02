@@ -28,6 +28,8 @@ class URLDataSource(AsyncDataSource):
         *,
         urls: Sequence[str],
         filename: str | None = None,
+        source_uri: str | None = None,
+        source_uris: Sequence[str] | None = None,
         client: Any | None = None,
         timeout: float = 120.0,
     ) -> None:
@@ -35,17 +37,31 @@ class URLDataSource(AsyncDataSource):
             raise ValueError("'url' or 'urls' is required for url ingestion")
         if filename is not None and len(urls) != 1:
             raise ValueError("'filename' can only be used with a single url")
+        if source_uri is not None and len(urls) != 1:
+            raise ValueError("'source_uri' can only be used with a single url")
+        if source_uri is not None and source_uris is not None:
+            raise ValueError("'source_uri' and 'source_uris' are mutually exclusive")
+        if source_uris is not None and len(source_uris) != len(urls):
+            raise ValueError("'source_uris' must match the number of urls")
 
         self._client = client
         self._owns_client = client is None
         self._timeout = timeout
         self._url_by_key: dict[str, str] = {}
+        self._source_uri_by_key: dict[str, str] = {}
 
         for index, raw_url in enumerate(urls):
             url = _validate_public_https_url(raw_url)
             key = _document_key_from_url(url, index=index, filename=filename)
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
+            if source_uri is not None:
+                stable_source_uri = source_uri
+            elif source_uris is not None:
+                stable_source_uri = source_uris[index]
+            else:
+                stable_source_uri = _default_source_uri_from_url(url)
+            self._source_uri_by_key[key] = _validate_source_uri(stable_source_uri)
 
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
         for key in self._url_by_key:
@@ -61,11 +77,12 @@ class URLDataSource(AsyncDataSource):
         client = self._ensure_client()
         response = await client.get(url)
         response.raise_for_status()
+        _validate_public_https_url(str(getattr(response, "url", url)))
         return bytes(response.content)
 
     def source_uri_for_key(self, key: str) -> str:
         try:
-            return self._url_by_key[key]
+            return self._source_uri_by_key[key]
         except KeyError as exc:
             raise KeyError(f"unknown URL document id: {key}") from exc
 
@@ -108,6 +125,17 @@ def _validate_public_https_url(raw_url: str) -> str:
     if not ip.is_global:
         raise ValueError("url ingestion requires a public host")
     return raw_url
+
+
+def _default_source_uri_from_url(url: str) -> str:
+    parsed = urlparse(url)
+    return parsed._replace(query="", fragment="").geturl()
+
+
+def _validate_source_uri(value: str) -> str:
+    if not value or "\0" in value:
+        raise ValueError("source_uri is invalid")
+    return value
 
 
 def _document_key_from_url(

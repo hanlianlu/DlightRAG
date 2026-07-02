@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,6 +14,7 @@ import pytest
 from dlightrag.config import DlightragConfig
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
+from dlightrag.sourcing.base import AsyncDataSource
 
 
 class _FakePostgresConn:
@@ -704,12 +706,12 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         """SDK callers can ingest custom connector output without pretending it is S3."""
 
-        class BynderSource:
+        class BynderSource(AsyncDataSource):
             def __init__(self) -> None:
                 self.loaded: list[str] = []
                 self.closed = False
 
-            async def aiter_documents(self, prefix: str | None = None):
+            async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
                 assert prefix == "approved/"
                 yield "asset-123/report.pdf"
 

@@ -237,6 +237,10 @@ curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "url", "url": "https://api.bynder.com/docs/getting-started", "filename": "getting-started.html"}'
 
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "url", "url": "https://cdn.example.com/download?id=asset-1&signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1"}'
+
 curl http://localhost:8100/ingest/jobs/<job_id>
 
 curl -X POST http://localhost:8100/retrieve \

@@ -20,10 +20,14 @@ from dlightrag.models.schemas import Reference
 _IMAGE_BLOCK = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
 
 
-def _metadata_policy_enum(prop: dict) -> list[str]:
+def _metadata_policy_enum(schema: dict, prop: dict) -> list[str]:
     if "enum" in prop:
         return prop["enum"]
-    return next(item["enum"] for item in prop["anyOf"] if "enum" in item)
+    return next(
+        resolved["enum"]
+        for item in prop["anyOf"]
+        if "enum" in (resolved := _resolve_ref(schema, item))
+    )
 
 
 def _resolve_ref(schema: dict, item: dict) -> dict:
@@ -123,7 +127,9 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "url" in ingest_props
     assert "urls" in ingest_props
     assert "filename" in ingest_props
-    assert _metadata_policy_enum(ingest_props["metadata_policy"]) == [
+    assert "source_uri" in ingest_props
+    assert "source_uris" in ingest_props
+    assert _metadata_policy_enum(ingest_tool.inputSchema, ingest_props["metadata_policy"]) == [
         "validate",
         "reject_unknown",
         "store_only",
@@ -397,6 +403,38 @@ async def test_mcp_url_ingest_starts_background_job(mock_mcp_manager) -> None:
         source_type="url",
         url="https://api.bynder.com/docs/getting-started",
         filename="getting-started.html",
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_url_ingest_accepts_stable_source_uri(mock_mcp_manager) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "url",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {
+            "source_type": "url",
+            "url": "https://cdn.example.com/download?id=asset-1&signature=secret",
+            "filename": "asset.pdf",
+            "source_uri": "bynder://asset/asset-1",
+            "workspace": "default",
+        },
+    )
+
+    assert _tool_json(result)["job_id"] == "job-1"
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        source_type="url",
+        url="https://cdn.example.com/download?id=asset-1&signature=secret",
+        filename="asset.pdf",
+        source_uri="bynder://asset/asset-1",
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 

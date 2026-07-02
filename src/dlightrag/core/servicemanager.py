@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag.core.answer import AnswerEngine
+from dlightrag.core.client_contracts import SourceType
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.query_images import PreparedQueryImages, prepare_query_images
@@ -33,6 +34,7 @@ from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import RAGService
+from dlightrag.sourcing.base import AsyncDataSource
 from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
@@ -385,7 +387,7 @@ class RAGServiceManager:
     async def aingest(
         self,
         workspace: str,
-        source_type: Literal["local", "azure_blob", "s3", "url"],
+        source_type: SourceType,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Start an ingest job, wait according to config, and return the result if ready."""
@@ -407,7 +409,7 @@ class RAGServiceManager:
     async def aingest_source(
         self,
         workspace: str,
-        source: Any,
+        source: AsyncDataSource,
         *,
         source_type: str = "source",
         keys: Iterable[str] | AsyncIterable[str] | None = None,
@@ -548,7 +550,7 @@ class RAGServiceManager:
     async def astart_ingest_job(
         self,
         workspace: str,
-        source_type: Literal["local", "azure_blob", "s3", "url"],
+        source_type: SourceType,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Start a background ingest job and return its durable job row."""
