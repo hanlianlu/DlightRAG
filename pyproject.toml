@@ -98,15 +98,6 @@ line-length = 100
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501", "B008"]
 
-[tool.pyright]
-include = ["src"]
-exclude = ["**/__pycache__", "**/node_modules", "**/.*", ".venv"]
-venvPath = "."
-venv = ".venv"
-pythonVersion = "3.12"
-typeCheckingMode = "standard"
-reportIncompatibleMethodOverride = false
-
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
