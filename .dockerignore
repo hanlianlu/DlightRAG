@@ -1,9 +1,11 @@
 # Version control
 .git
+.github/
 .gitignore
 
 # Python
 .venv
+.venv-*/
 venv/
 ENV/
 __pycache__
@@ -47,6 +49,8 @@ postgres/
 # Dev/test files
 tests/
 docs/
+frontend/
+scripts/
 *.md
 !README.md
 
