@@ -35,10 +35,6 @@ from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
-# Load DlightRAG .env so DLIGHTRAG_* vars are available for fallback resolution.
-load_dotenv(dotenv_path=".env", override=False)
-
-
 # ═══════════════════════════════════════════════════════════════════
 # Auto-resolve eval credentials from DlightRAG config
 # ═══════════════════════════════════════════════════════════════════
@@ -151,10 +147,6 @@ def _resolve_eval_env() -> None:
         if config.auth_mode == "simple" and config.api_auth_token:
             os.environ["DLIGHTRAG_API_TOKEN"] = config.api_auth_token
             logger.info("DlightRAG API token: auto-resolved from config (simple auth)")
-
-
-# Run once at import time — sets env vars before RAGEvaluator.__init__ reads them.
-_resolve_eval_env()
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -357,7 +349,12 @@ def _check_env() -> None:
 
 
 async def _run() -> None:
+    # Load .env before argparse reads env-backed defaults; resolve project config
+    # after argparse so `--help` exits before credential auto-resolution logs.
+    load_dotenv(dotenv_path=".env", override=False)
     args = _build_parser().parse_args()
+    _resolve_eval_env()
+    args.api = args.api or os.getenv("DLIGHTRAG_API_URL")
 
     if not args.api:
         print(

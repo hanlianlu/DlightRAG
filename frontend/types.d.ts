@@ -5,6 +5,8 @@ declare module '*.module.css' {
   export default classes;
 }
 
+declare module '*.css' {}
+
 // ── Window extensions ────────────────────────────────────────────────
 
 interface MathJaxConfig {
