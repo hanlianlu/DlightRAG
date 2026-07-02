@@ -80,34 +80,30 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
     return kwargs
 
 
-def should_wait_for_ingest(
+def managed_local_ingest_path(
     *,
     source_type: str,
-    path: str | None = None,
-    prefix: str | None = None,
-    wait: bool | None = None,
-) -> bool:
-    """Return whether a transport should wait for ingest completion."""
-    if wait is not None:
-        return wait
-    return not is_batch_ingest(source_type=source_type, path=path, prefix=prefix)
+    path: str | None,
+    input_dir: Path,
+    workspace: str,
+) -> str | None:
+    """Return a local ingest path constrained to this workspace's input root."""
+    if source_type != "local" or not path:
+        return path
 
+    from dlightrag.utils import normalize_workspace
 
-def is_batch_ingest(
-    *,
-    source_type: str,
-    path: str | None = None,
-    prefix: str | None = None,
-) -> bool:
-    """Return whether an ingest request is naturally batch-shaped."""
-    if prefix is not None:
-        return True
-    return source_type == "local" and bool(path) and Path(path).is_dir()
-
-
-def is_ingest_job_row(value: Any) -> bool:
-    """Return whether a payload is an ingest job row rather than an ingest result."""
-    return isinstance(value, dict) and isinstance(value.get("job_id"), str)
+    root = (input_dir / normalize_workspace(workspace)).resolve()
+    raw_path = Path(path).expanduser()
+    candidate = raw_path if raw_path.is_absolute() else root / raw_path
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(
+            "local ingest paths from REST/MCP must be under input_dir/<workspace>"
+        ) from None
+    return str(resolved)
 
 
 def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
@@ -117,9 +113,7 @@ def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
 
 __all__ = [
     "ingest_kwargs_from_payload",
-    "is_batch_ingest",
-    "is_ingest_job_row",
+    "managed_local_ingest_path",
     "query_image_blocks_from_urls",
     "query_kwargs_from_payload",
-    "should_wait_for_ingest",
 ]

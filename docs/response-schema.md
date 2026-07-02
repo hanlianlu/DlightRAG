@@ -49,20 +49,17 @@ finally:
 ```bash
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "/data/docs"}'
+  -d '{"source_type": "local", "path": "/absolute/path/to/dlightrag_storage/inputs/default/docs"}'
 ```
 
-All ingest operations are represented internally as jobs. REST and MCP wait by
-default for single-file/single-object requests and return the concrete ingest
-result. Batch-shaped requests (`local` directory, `azure_blob.prefix`, or
-`s3.prefix`) return `202 Accepted` with a job unless `wait=true`; pass
-`wait=false` to force background execution for a single file/object. Poll
-`GET /ingest/jobs/{job_id}` for progress and final result.
+All ingest operations are represented internally as jobs. REST and MCP ingest
+return `202 Accepted`; poll `GET /ingest/jobs/{job_id}` for progress and final
+result.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `source_type` | `string` | yes | `local`, `azure_blob`, `s3` |
-| `path` | `string` | local | File or directory path |
+| `path` | `string` | local | File or directory path under DlightRAG's managed `input_dir/<workspace>` |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
 | `prefix` | `string` | azure_blob/s3 | Blob/key prefix filter; mutually exclusive with `blob_path`/`key` |
@@ -74,19 +71,17 @@ result. Batch-shaped requests (`local` directory, `azure_blob.prefix`, or
 | `author` | `string` | — | User-declared document author stored in metadata |
 | `metadata` | `object` | — | Declared/custom ingest metadata |
 | `metadata_policy` | `string` | — | `validate`, `reject_unknown`, or `store_only` |
-| `wait` | `boolean` | — | Override the default wait policy. Defaults to `true` for single file/object and `false` for batch-shaped ingest. |
-
 REST also supports one-file multipart upload at `POST /ingest/blob`. Fields are
 `file` plus optional `workspace`, `title`, `author`, `metadata` (JSON string),
 and `metadata_policy`. The file is staged under DlightRAG's managed input
-directory and ingested through the same local pipeline.
+workspace directory and returns an ingest job.
 
 ### MCP Server
 
 MCP `ingest` exposes the same source and metadata arguments as REST `/ingest`,
-passed as tool arguments, including `wait`. Batch-shaped calls return a
-background job by default; call `ingest_job_status` with the returned `job_id`
-to read progress.
+passed as tool arguments. Local path arguments must point under the managed
+`input_dir/<workspace>`. Calls return a background job; call
+`ingest_job_status` with the returned `job_id` to read progress.
 
 ### Metadata Schema And Policy
 

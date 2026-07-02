@@ -27,8 +27,8 @@ from dlightrag.core.client_payloads import (
 )
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
+    managed_local_ingest_path,
     query_kwargs_from_payload,
-    should_wait_for_ingest,
 )
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -327,23 +327,18 @@ async def ingest_tool(
         MetadataPolicyParam | None,
         Field(default=None, description="How undeclared user metadata fields are handled."),
     ] = None,
-    wait: Annotated[
-        bool | None,
-        Field(default=None, description="Wait for completion."),
-    ] = None,
 ) -> dict[str, Any]:
     args = IngestInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
     kwargs = ingest_kwargs_from_payload(args)
-    wait_for_completion = should_wait_for_ingest(
-        source_type=args.source_type,
-        path=kwargs.get("path"),
-        prefix=kwargs.get("prefix"),
-        wait=args.wait,
-    )
-    if wait_for_completion:
-        return await manager.aingest(workspace_name, source_type=args.source_type, **kwargs)
+    if args.source_type == "local":
+        kwargs["path"] = managed_local_ingest_path(
+            source_type=args.source_type,
+            path=kwargs.get("path"),
+            input_dir=_get_config().input_dir_path,
+            workspace=workspace_name,
+        )
     return await manager.astart_ingest_job(workspace_name, source_type=args.source_type, **kwargs)
 
 
