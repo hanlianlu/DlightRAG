@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -281,7 +281,8 @@ class TestPlanFallback:
     async def test_llm_exception_returns_fallback(self):
         llm = AsyncMock(side_effect=RuntimeError("LLM error"))
         planner = QueryPlanner(llm_func=llm)
-        plan = await planner.plan("query")
+        with patch("dlightrag.core.query_planner.asyncio.sleep", new=AsyncMock()):
+            plan = await planner.plan("query")
         assert plan.standalone_query == "query"
         assert plan.metadata_filter is None
 
