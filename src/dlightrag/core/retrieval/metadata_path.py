@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter
+from dlightrag.core.retrieval.protocols import MetadataChunkStore
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def metadata_retrieve(
     *,
     metadata_index: MetadataIndexProtocol,
-    stores: Any,
+    stores: MetadataChunkStore,
     filters: MetadataFilter,
 ) -> list[str]:
     """Resolve metadata filters to chunk IDs through LightRAG text_chunks."""

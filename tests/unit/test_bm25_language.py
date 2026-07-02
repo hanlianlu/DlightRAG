@@ -51,6 +51,28 @@ def test_bm25_language_classifier_uses_configured_lingua_language_set() -> None:
     assert classifier.detect("Wie hoch ist der Umsatz im letzten Quartal?") == "de"
 
 
+@pytest.mark.parametrize(
+    ("language", "query"),
+    [
+        ("it", "Quali sono i ricavi e i margini operativi del trimestre?"),
+        ("pt", "Quais foram as receitas e os custos operacionais do trimestre?"),
+        ("nl", "Wat waren de omzet en operationele kosten in het kwartaal?"),
+        ("ru", "Какова выручка и операционная прибыль за квартал?"),
+        ("da", "Hvad var virksomhedens omsætning og driftsresultat i kvartalet?"),
+        ("fi", "Mitkä olivat yhtiön liikevaihto ja liiketulos neljänneksellä?"),
+    ],
+)
+def test_bm25_language_classifier_routes_expanded_default_profiles(
+    language: str,
+    query: str,
+) -> None:
+    classifier = BM25LanguageClassifier(
+        ("zh", "en", "de", "sv", "es", "fr", "it", "pt", "nl", "ru", "da", "fi")
+    )
+
+    assert classifier.detect(query) == language
+
+
 def test_bm25_language_classifier_routes_ambiguous_query_to_simple() -> None:
     classifier = BM25LanguageClassifier(("fr", "de", "en"))
 

@@ -148,14 +148,19 @@ def test_env_example_defaults_mineru_to_local_sidecar() -> None:
     assert "parser_sidecars:" in config
     assert re.search(r"(?m)^    api_mode: local$", config)
     assert re.search(r"(?m)^    local_endpoint: http://127\.0\.0\.1:8210$", config)
+    assert re.search(r"(?m)^    language: ch$", config)
+    assert "local_image_analysis:" not in config
+    assert "local_effort:" not in config
     for active_non_secret in (
         "MINERU_API_MODE",
         "MINERU_LOCAL_ENDPOINT",
         "MINERU_LOCAL_BACKEND",
         "MINERU_LOCAL_PARSE_METHOD",
         "MINERU_LOCAL_IMAGE_ANALYSIS",
+        "MINERU_LOCAL_EFFORT",
         "MINERU_ENABLE_TABLE",
         "MINERU_ENABLE_FORMULA",
+        "MINERU_LANGUAGE",
         "VLM_PROCESS_ENABLE",
         "VLM_MAX_IMAGE_BYTES",
     ):

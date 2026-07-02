@@ -84,8 +84,9 @@ DlightRAG-managed pg_textsearch profiles. During ingest, DlightRAG labels each
 chunk with `dlightrag_bm25_language` using the shared Lingua-based classifier.
 Primary startup creates one partial BM25 index per configured language profile
 and one full-table `simple` fallback index. Query-time language detection routes
-Chinese, English, German, Swedish, Spanish, and French queries to the matching
-partial index; unsupported, unknown, or ambiguous queries use the `simple`
+Chinese, English, German, Swedish, Spanish, French, Italian, Portuguese, Dutch,
+Russian, Danish, and Finnish queries to the matching partial index;
+unsupported, unknown, or ambiguous queries use the `simple`
 fallback. `bm25_profiles`, `bm25_k1`, and `bm25_b` define the index signatures;
 changing them requires a primary-role startup so DlightRAG can rebuild profile
 indexes before query workers attach. Each non-fallback BM25 profile maps to

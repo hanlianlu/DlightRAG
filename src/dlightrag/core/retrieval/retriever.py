@@ -11,12 +11,19 @@ from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
 from dlightrag.core.retrieval.fusion import dedup_chunks_by_content, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.protocols import (
+    BM25Retriever,
+    ContextRow,
+    MetadataChunkStore,
+    RetrievalBackend,
+    RetrievalResult,
+)
+from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
 
 
-def _format_bm25_top(chunks: list[dict[str, Any]], *, limit: int = 3) -> str:
+def _format_bm25_top(chunks: list[ContextRow], *, limit: int = 3) -> str:
     parts: list[str] = []
     for chunk in chunks[:limit]:
         chunk_id = str(chunk.get("chunk_id") or chunk.get("id") or "?")
@@ -35,17 +42,17 @@ def _format_bm25_top(chunks: list[dict[str, Any]], *, limit: int = 3) -> str:
     return ",".join(parts) if parts else "none"
 
 
-def _chunk_ids(chunks: list[dict[str, Any]]) -> set[str]:
+def _chunk_ids(chunks: list[ContextRow]) -> set[str]:
     return {
         str(chunk_id) for chunk in chunks if (chunk_id := chunk.get("chunk_id") or chunk.get("id"))
     }
 
 
 def _count_fused_sources(
-    fused_chunks: list[dict[str, Any]],
+    fused_chunks: list[ContextRow],
     *,
-    semantic_chunks: list[dict[str, Any]],
-    bm25_chunks: list[dict[str, Any]],
+    semantic_chunks: list[ContextRow],
+    bm25_chunks: list[ContextRow],
 ) -> dict[str, int]:
     semantic_ids = _chunk_ids(semantic_chunks)
     bm25_ids = _chunk_ids(bm25_chunks)
@@ -69,10 +76,10 @@ class UnifiedRetriever:
     def __init__(
         self,
         *,
-        backend: Any,
-        bm25: Any | None,
-        metadata_index: Any,
-        stores: Any,
+        backend: RetrievalBackend,
+        bm25: BM25Retriever | None,
+        metadata_index: MetadataIndexProtocol,
+        stores: MetadataChunkStore,
         rrf_k: int = 60,
     ) -> None:
         self._backend = backend

@@ -38,6 +38,20 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://[::1]:*",
 ]
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
+MinerULanguage = Literal[
+    "ch",
+    "ch_server",
+    "korean",
+    "ta",
+    "te",
+    "ka",
+    "th",
+    "el",
+    "arabic",
+    "east_slavic",
+    "cyrillic",
+    "devanagari",
+]
 
 
 class LightRAGPipelineKwargs(TypedDict):
@@ -232,9 +246,8 @@ class MinerUSidecarConfig(BaseModel):
     """LightRAG MinerU parser sidecar settings.
 
     Only fields that are *necessary to route or override* are declared here.
-    Everything else — language, backend, parse method, table/formula, OCR,
-    polling, page ranges, image analysis — is left to LightRAG's built-in
-    defaults (see ``lightrag/parser/external/mineru/cache.py``).
+    Everything else — backend, parse method, table/formula, OCR, page ranges,
+    and MinerU-side image analysis — is left to LightRAG's built-in defaults.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -243,6 +256,7 @@ class MinerUSidecarConfig(BaseModel):
     api_token: str | None = None
     official_endpoint: str = "https://mineru.net"
     local_endpoint: str = "http://127.0.0.1:8210"
+    language: MinerULanguage = "ch"
     force_reparse: bool = False
 
     # macOS MinerU hard-codes max_concurrent_requests=1 (see mineru/cli/fast_api.py).
@@ -254,14 +268,14 @@ class MinerUSidecarConfig(BaseModel):
     # DlightRAG-only: filter header/footer blocks that pollute chunk text.
     auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
 
-    # Pydantic field → LightRAG env var. Only fields that LightRAG actually
-    # reads via os.getenv() are listed. auxiliary_block_policy is intentionally
-    # absent — it's a DlightRAG post-processing step, not a LightRAG env var.
+    # Pydantic field → LightRAG/MinerU env var. auxiliary_block_policy is
+    # intentionally absent — it's a DlightRAG post-processing step.
     _ENV_MAP: ClassVar[dict[str, str]] = {
         "api_mode": "MINERU_API_MODE",
         "api_token": "MINERU_API_TOKEN",
         "official_endpoint": "MINERU_OFFICIAL_ENDPOINT",
         "local_endpoint": "MINERU_LOCAL_ENDPOINT",
+        "language": "MINERU_LANGUAGE",
         "force_reparse": "LIGHTRAG_FORCE_REPARSE_MINERU",
         "max_polls": "MINERU_MAX_POLLS",
     }
@@ -759,6 +773,12 @@ class DlightragConfig(BaseSettings):
             BM25ProfileConfig(name="sv", text_config="swedish", languages=["sv"]),
             BM25ProfileConfig(name="es", text_config="spanish", languages=["es"]),
             BM25ProfileConfig(name="fr", text_config="french", languages=["fr"]),
+            BM25ProfileConfig(name="it", text_config="italian", languages=["it"]),
+            BM25ProfileConfig(name="pt", text_config="portuguese", languages=["pt"]),
+            BM25ProfileConfig(name="nl", text_config="dutch", languages=["nl"]),
+            BM25ProfileConfig(name="ru", text_config="russian", languages=["ru"]),
+            BM25ProfileConfig(name="da", text_config="danish", languages=["da"]),
+            BM25ProfileConfig(name="fi", text_config="finnish", languages=["fi"]),
             BM25ProfileConfig(name="simple", text_config="simple", fallback=True),
         ],
         description="Query-language-routed pg_textsearch BM25 profiles.",

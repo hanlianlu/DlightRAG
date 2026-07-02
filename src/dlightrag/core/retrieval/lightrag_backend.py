@@ -13,7 +13,7 @@ from PIL import Image
 from dlightrag.core.retrieval import canonicalize_reference_ids
 from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 from dlightrag.core.retrieval.fusion import rrf_fuse
-from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.retrieval.protocols import ContextRow, RetrievalResult
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import decode_image_base64, image_url_block
@@ -98,7 +98,7 @@ class LightRAGMixBackend:
         trace["reranked_chunk_count"] = len(chunks)
         chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
 
-        context_chunks = []
+        context_chunks: list[ContextRow] = []
         for c in chunks[:limit]:
             context_chunk = {
                 "chunk_id": c["chunk_id"],
@@ -125,8 +125,8 @@ class LightRAGMixBackend:
         )
 
     @staticmethod
-    def _chunks_from_lightrag(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        chunks: list[dict[str, Any]] = []
+    def _chunks_from_lightrag(rows: list[ContextRow]) -> list[ContextRow]:
+        chunks: list[ContextRow] = []
         seen: set[str] = set()
         for raw in rows:
             cid = raw.get("chunk_id") or raw.get("id")
@@ -151,7 +151,7 @@ class LightRAGMixBackend:
         multimodal_content: list[dict[str, Any]] | None,
         *,
         top_k: int,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ContextRow]:
         if self._embedder is None:
             return []
         if top_k <= 0:
@@ -169,7 +169,7 @@ class LightRAGMixBackend:
             for image in images:
                 image.close()
 
-        async def _query_vector(vector: list[float]) -> list[dict[str, Any]]:
+        async def _query_vector(vector: list[float]) -> list[ContextRow]:
             return (
                 await self._lightrag.chunks_vdb.query(
                     query="",
@@ -186,7 +186,7 @@ class LightRAGMixBackend:
             task_name="direct-visual-query",
         )
 
-        merged: dict[str, dict[str, Any]] = {}
+        merged: dict[str, ContextRow] = {}
         for raw_chunks in query_results:
             if isinstance(raw_chunks, Exception):
                 continue
@@ -211,16 +211,16 @@ class LightRAGMixBackend:
             :top_k
         ]
 
-    async def _hydrate_chunk_provenance(self, chunks: list[dict[str, Any]]) -> None:
+    async def _hydrate_chunk_provenance(self, chunks: list[ContextRow]) -> None:
         await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
 
     async def _rerank(
         self,
         query: str,
-        chunks: list[dict[str, Any]],
+        chunks: list[ContextRow],
         *,
         top_k: int,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ContextRow]:
         if self._rerank_func is None or not chunks:
             return chunks[:top_k]
         try:

@@ -54,12 +54,15 @@ class RelationshipContext(TypedDict):
     _workspace: NotRequired[str]
 
 
+ContextRow = dict[str, Any]
+
+
 # RetrievalContexts is intentionally a plain type alias rather than a TypedDict.
 # Contexts flow through JSON/DB boundaries as ``dict[str, Any]`` and are built
 # incrementally in federation merges, so a strict TypedDict creates invariance
 # errors throughout the codebase.  The per-field TypedDicts above (ChunkContext,
 # EntityContext, RelationshipContext) still document the expected shape.
-RetrievalContexts = dict[str, list[dict[str, Any]]]
+RetrievalContexts = dict[str, list[ContextRow]]
 
 
 # ── Result dataclass ──────────────────────────────────────────────
@@ -98,9 +101,32 @@ class RetrievalBackend(Protocol):
     ) -> RetrievalResult: ...
 
 
+@runtime_checkable
+class BM25Retriever(Protocol):
+    """Lexical chunk retriever used by UnifiedRetriever."""
+
+    async def search(
+        self,
+        query: str,
+        *,
+        candidate_ids: set[str] | None,
+        top_k: int | None = None,
+    ) -> list[ContextRow]: ...
+
+
+@runtime_checkable
+class MetadataChunkStore(Protocol):
+    """Store methods needed to resolve metadata hits into chunk ids."""
+
+    async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]: ...
+
+
 __all__ = [
     "ChunkContext",
+    "ContextRow",
+    "BM25Retriever",
     "EntityContext",
+    "MetadataChunkStore",
     "RelationshipContext",
     "RetrievalBackend",
     "RetrievalContexts",

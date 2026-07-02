@@ -65,18 +65,19 @@ parser_sidecars:
     max_image_bytes: 5242880
     min_image_pixel: 100
   mineru:
-    local_backend: hybrid-auto-engine
-    local_parse_method: auto
-    local_image_analysis: true
-    enable_table: true
-    enable_formula: true
-    poll_interval_seconds: 2
-    max_polls: 180
+    api_mode: local
+    local_endpoint: http://127.0.0.1:8210
     language: ch
-    page_ranges:
-    model_version: vlm
-    is_ocr: false
+    max_polls: 1200
+    auxiliary_block_policy: conservative
 ```
+
+`parser_sidecars.mineru.language` is MinerU's OCR language hint for scanned or
+image-based documents. It is separate from `extraction.language`, which controls
+LightRAG's KG extraction prompt language. DlightRAG does not expose
+MinerU-side image/chart analysis as a product setting; LightRAG 1.5.4 defaults
+that parser-time path off, while LightRAG's separate multimodal analyze stage
+handles images, tables, and equations after parse.
 
 ## Embeddings
 
@@ -194,6 +195,24 @@ bm25_profiles:
   - name: fr
     text_config: french
     languages: ["fr"]
+  - name: it
+    text_config: italian
+    languages: ["it"]
+  - name: pt
+    text_config: portuguese
+    languages: ["pt"]
+  - name: nl
+    text_config: dutch
+    languages: ["nl"]
+  - name: ru
+    text_config: russian
+    languages: ["ru"]
+  - name: da
+    text_config: danish
+    languages: ["da"]
+  - name: fi
+    text_config: finnish
+    languages: ["fi"]
   - name: simple
     text_config: simple
     fallback: true

@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
-from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .processor import CitationProcessor
@@ -21,13 +20,13 @@ class FinalizedAnswer:
     answer: str
     sources: list[SourceReference]
     cited_chunks: dict[str, list[str]] = field(default_factory=dict)
-    flat_contexts: list[dict[str, Any]] = field(default_factory=list)
+    flat_contexts: list[ContextRow] = field(default_factory=list)
     all_sources: list[SourceReference] = field(default_factory=list)
 
 
-def flatten_context_chunks(contexts: RetrievalContexts) -> list[dict[str, Any]]:
+def flatten_context_chunks(contexts: RetrievalContexts) -> list[ContextRow]:
     """Flatten retrieval context lists into citation processor input."""
-    flat_contexts: list[dict[str, Any]] = []
+    flat_contexts: list[ContextRow] = []
     for items in contexts.values():
         if isinstance(items, list):
             flat_contexts.extend(item for item in items if isinstance(item, dict))

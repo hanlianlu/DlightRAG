@@ -306,6 +306,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.parser_sidecars.vlm.surrounding_trailing_max_tokens == 128
     assert cfg.parser_sidecars.mineru.api_mode == "local"
     assert cfg.parser_sidecars.mineru.local_endpoint == "http://127.0.0.1:8210"
+    assert cfg.parser_sidecars.mineru.language == "ch"
     assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
     assert (
         os.environ["LIGHTRAG_PARSER"]
@@ -352,29 +353,24 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.checkpoint_session_ttl_seconds == 30 * 24 * 60 * 60
     assert cfg.query_images.max_described_images == 3
     assert cfg.visual_assets.thumb_max_px == 300
-    assert [profile.name for profile in cfg.bm25_profiles] == [
-        "zh",
-        "en",
-        "de",
-        "sv",
-        "es",
-        "fr",
-        "simple",
+    assert [
+        (profile.name, profile.text_config, profile.languages, profile.fallback)
+        for profile in cfg.bm25_profiles
+    ] == [
+        ("zh", "public.jiebacfg", ["zh"], False),
+        ("en", "english", ["en"], False),
+        ("de", "german", ["de"], False),
+        ("sv", "swedish", ["sv"], False),
+        ("es", "spanish", ["es"], False),
+        ("fr", "french", ["fr"], False),
+        ("it", "italian", ["it"], False),
+        ("pt", "portuguese", ["pt"], False),
+        ("nl", "dutch", ["nl"], False),
+        ("ru", "russian", ["ru"], False),
+        ("da", "danish", ["da"], False),
+        ("fi", "finnish", ["fi"], False),
+        ("simple", "simple", [], True),
     ]
-    assert cfg.bm25_profiles[0].text_config == "public.jiebacfg"
-    assert cfg.bm25_profiles[0].languages == ["zh"]
-    assert cfg.bm25_profiles[1].text_config == "english"
-    assert cfg.bm25_profiles[1].languages == ["en"]
-    assert cfg.bm25_profiles[2].text_config == "german"
-    assert cfg.bm25_profiles[2].languages == ["de"]
-    assert cfg.bm25_profiles[3].text_config == "swedish"
-    assert cfg.bm25_profiles[3].languages == ["sv"]
-    assert cfg.bm25_profiles[4].text_config == "spanish"
-    assert cfg.bm25_profiles[4].languages == ["es"]
-    assert cfg.bm25_profiles[5].text_config == "french"
-    assert cfg.bm25_profiles[5].languages == ["fr"]
-    assert cfg.bm25_profiles[6].fallback is True
-    assert cfg.bm25_profiles[6].text_config == "simple"
     assert cfg.bm25_k1 == 1.2
     assert cfg.bm25_b == 0.75
 
@@ -638,6 +634,7 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
                 "MINERU_LOCAL_BACKEND=hybrid-auto-engine",
                 "MINERU_LOCAL_PARSE_METHOD=auto",
                 "MINERU_LOCAL_IMAGE_ANALYSIS=true",
+                "MINERU_LANGUAGE=arabic",
             ]
         ),
         encoding="utf-8",
@@ -650,6 +647,7 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
         "MINERU_LOCAL_BACKEND",
         "MINERU_LOCAL_PARSE_METHOD",
         "MINERU_LOCAL_IMAGE_ANALYSIS",
+        "MINERU_LANGUAGE",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
@@ -670,6 +668,8 @@ def test_dotenv_allows_upstream_lightrag_parser_env(
     assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "128"
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://127.0.0.1:8210"
+    assert os.environ["MINERU_LANGUAGE"] == "arabic"
+    assert "MINERU_LOCAL_IMAGE_ANALYSIS" not in os.environ
 
 
 def test_typed_parser_sidecar_config_exports_lightrag_env(
@@ -711,6 +711,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
             "mineru": {
                 "api_mode": "local",
                 "local_endpoint": "http://shared-mineru.local:8210",
+                "language": "cyrillic",
                 "auxiliary_block_policy": "extended",
             },
         },
@@ -722,6 +723,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     assert os.environ["SURROUNDING_TRAILING_MAX_TOKENS"] == "456"
     assert os.environ["MINERU_API_MODE"] == "local"
     assert os.environ["MINERU_LOCAL_ENDPOINT"] == "http://shared-mineru.local:8210"
+    assert os.environ["MINERU_LANGUAGE"] == "cyrillic"
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "extended"
 
 
