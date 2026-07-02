@@ -121,7 +121,7 @@ class UnifiedIngestionEngine:
         self,
         path: str | Path,
         *,
-        replace: bool = False,  # noqa: ARG002
+        replace: bool = False,
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -133,7 +133,9 @@ class UnifiedIngestionEngine:
 
         # Idempotency: skip re-ingest if file content hasn't changed.
         existing_status = await self._stores.get_doc_status(doc_id)
-        if existing_status is not None and existing_status.get("status") == "processed":
+        if existing_status is not None and replace:
+            await self._cleanup_partial_doc(doc_id)
+        elif existing_status is not None and existing_status.get("status") == "processed":
             current_hash = _file_sha256(file_path)
             stored_hash = existing_status.get("content_hash")
             if stored_hash and current_hash == stored_hash:
@@ -161,7 +163,7 @@ class UnifiedIngestionEngine:
         self,
         paths: Sequence[str | Path | PreparedIngestFile],
         *,
-        replace: bool = False,  # noqa: ARG002
+        replace: bool = False,
         title: str | None = None,
         author: str | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -214,7 +216,9 @@ class UnifiedIngestionEngine:
 
             for entry in entries:
                 existing_status = await self._stores.get_doc_status(entry.doc_id)
-                if existing_status is not None and existing_status.get("status") == "processed":
+                if existing_status is not None and replace:
+                    await self._cleanup_partial_doc(entry.doc_id)
+                elif existing_status is not None and existing_status.get("status") == "processed":
                     current_hash = _file_sha256(entry.parser_path)
                     stored_hash = existing_status.get("content_hash")
                     if stored_hash and current_hash == stored_hash:
