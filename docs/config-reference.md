@@ -45,15 +45,15 @@ they need to change:
 
 ## Parser And MinerU
 
-DlightRAG defaults to LightRAG native parsing for DOCX and MinerU for other
-supported document formats. Change parser routing only when validating a new
-LightRAG parser strategy.
+DlightRAG defaults to LightRAG native parsing for DOCX, Markdown, and textpack
+bundles, and MinerU for other supported document formats. Change parser routing
+only when validating a new LightRAG parser strategy.
 
 Advanced parser fields with code defaults:
 
 ```yaml
 parser:
-  rules: "docx:native-iteP,*:mineru-iteP"
+  rules: "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
   chunk_options: {}
 
 extraction:
@@ -167,9 +167,10 @@ embedding_request_timeout: 120
 ## BM25
 
 BM25 is part of the supported DlightRAG retrieval path. BM25 candidate breadth
-follows the configured chunk budget for `/retrieve`, and the `/answer`
-candidate chunk budget from `chunk_top_k`. Language profiles and scoring
-constants are advanced index signatures.
+follows the configured chunk candidate budget. `/retrieve` does not re-cap
+fused chunks after semantic/BM25 merge; `/answer` still packs final prompt
+chunks with `answer.context_top_k`. Language profiles and scoring constants
+are advanced index signatures.
 
 Defaults:
 

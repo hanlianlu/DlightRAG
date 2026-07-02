@@ -31,6 +31,23 @@ def sidecar_dir_from_location(location: str | None) -> Path | None:
     return Path(raw)
 
 
+def resolve_sidecar_asset_path(artifact_dir: Path, raw_path: str) -> Path | None:
+    """Resolve a sidecar asset path only when it stays inside artifact_dir."""
+    raw = raw_path.strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if path.is_absolute():
+        return None
+    root = artifact_dir.resolve()
+    candidate = (root / path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    return candidate if candidate.is_file() else None
+
+
 def load_block_provenance_index(artifact_dir: Path) -> dict[str, BlockProvenance]:
     """Load ``blockid -> BlockProvenance`` from LightRAG ``*.blocks.jsonl`` files."""
     index: dict[str, BlockProvenance] = {}

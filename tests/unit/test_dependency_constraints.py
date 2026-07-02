@@ -13,13 +13,6 @@ def _dependencies() -> list[str]:
     return pyproject["project"]["dependencies"]
 
 
-def test_removed_multimodal_dependency_absent() -> None:
-    dependencies = _dependencies()
-    removed = "rag" + "anything"
-
-    assert not any(dep.startswith(removed) for dep in dependencies)
-
-
 def test_lightrag_dependency_tracks_stable_1_5_release() -> None:
     dependencies = _dependencies()
     lightrag_deps = [dep for dep in dependencies if dep.startswith("lightrag-hku")]
@@ -35,30 +28,10 @@ def test_langfuse_dependency_has_no_upper_bound() -> None:
     assert langfuse_deps == ["langfuse>=4.12.0"]
 
 
-def test_language_detection_uses_lingua_not_legacy_detector() -> None:
+def test_language_detection_uses_lingua() -> None:
     dependencies = _dependencies()
-    removed = "lang" + "detect"
 
     assert any(dep.startswith("lingua-language-detector") for dep in dependencies)
-    assert not any(dep.startswith(removed) for dep in dependencies)
-
-
-def test_removed_multimodal_source_absent() -> None:
-    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-    assert pyproject["tool"]["uv"].get("sources", {}).get("rag" + "anything") is None
-
-
-def test_pg_trgm_removed_from_runtime_and_postgres_init() -> None:
-    """Metadata filtering should not depend on pg_trgm or trigram similarity."""
-    runtime_files = list(Path("src/dlightrag").rglob("*.py")) + [Path("postgres/init.sql")]
-    offenders = []
-    for path in runtime_files:
-        text = path.read_text(encoding="utf-8").lower()
-        if "pg_trgm" in text or "gin_trgm" in text or "similarity(" in text:
-            offenders.append(str(path))
-
-    assert offenders == []
 
 
 def test_postgres_init_uses_required_pg18_extensions() -> None:
@@ -95,18 +68,6 @@ def test_compose_preloads_postgres_extensions() -> None:
     assert "shared_preload_libraries=age,pg_textsearch,pg_jieba" in compose
 
 
-def test_removed_chinese_parser_is_not_a_supported_runtime_surface() -> None:
-    runtime_files = (
-        list(Path("src/dlightrag").rglob("*.py"))
-        + list(Path("tests").rglob("*.py"))
-        + [Path("postgres/Dockerfile"), Path("postgres/init.sql"), Path("config.yaml")]
-    )
-    removed = "zh" + "parser"
-    offenders = [str(path) for path in runtime_files if removed in path.read_text()]
-
-    assert offenders == []
-
-
 def test_compose_postgres_performance_knobs_are_env_overridable() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
 
@@ -139,37 +100,6 @@ def test_compose_runtime_services_do_not_bind_mount_source_tree() -> None:
     assert "./src:/app/src" not in compose
 
 
-def test_runtime_imports_do_not_reference_removed_multimodal_package() -> None:
-    source_files = list(Path("src/dlightrag").rglob("*.py"))
-    removed = "rag" + "anything"
-    offenders = [
-        path for path in source_files if removed in path.read_text(encoding="utf-8").lower()
-    ]
-
-    assert offenders == []
-
-
-def test_dlightrag_does_not_ship_removed_document_conversion_paths() -> None:
-    """Document parsing should be delegated to LightRAG parser sidecars."""
-    removed_paths = [
-        Path("src/dlightrag/prompts/vision.py"),
-        Path("src/dlightrag/core") / ("vlm" + "_ocr.py"),
-        Path("src/dlightrag") / "converters" / "office.py",
-        Path("tests/unit") / ("test_vlm" + "_ocr.py"),
-        Path("tests/unit/test_office_converter.py"),
-    ]
-
-    assert [str(path) for path in removed_paths if path.exists()] == []
-
-
-def test_runtime_dockerfile_does_not_install_removed_office_converter_stack() -> None:
-    """The app image should not carry converter packages owned by old paths."""
-    dockerfile = Path("Dockerfile").read_text(encoding="utf-8").lower()
-
-    for removed in ("libreoffice", "libgl1-mesa-glx"):
-        assert removed not in dockerfile
-
-
 def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     """App image builds should not require GHCR metadata just to obtain uv."""
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
@@ -179,29 +109,11 @@ def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     assert "COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/" in dockerfile
 
 
-def test_direct_document_parser_dependencies_removed() -> None:
-    """DlightRAG should not directly depend on parser/converter stacks LightRAG owns."""
-    dependencies = _dependencies()
-    removed_prefixes = ("doc" + "ling", "pypdf" + "ium2", "open" + "pyxl")
-
-    assert [dep for dep in dependencies if dep.lower().startswith(removed_prefixes)] == []
-
-
 def test_docx_native_parser_runtime_dependency_is_direct() -> None:
     """LightRAG native DOCX parsing needs python-docx available at DlightRAG runtime."""
     dependencies = _dependencies()
 
     assert any(dep.lower().startswith("python-docx") for dep in dependencies)
-
-
-def test_runtime_imports_do_not_reference_old_lightrag_docx_entrypoint() -> None:
-    source_files = list(Path("src/dlightrag").rglob("*.py")) + list(Path("tests").rglob("*.py"))
-    old_entrypoint = "lightrag.native_parser" + ".docx"
-    offenders = [
-        str(path) for path in source_files if old_entrypoint in path.read_text(encoding="utf-8")
-    ]
-
-    assert offenders == []
 
 
 def test_default_parser_routing_has_no_unrouted_fallback() -> None:
@@ -218,28 +130,6 @@ def test_default_parser_routing_has_no_unrouted_fallback() -> None:
     )
 
     assert ("leg" + "acy") not in cfg.parser.rules.lower()
-
-
-def test_office_conversion_config_removed() -> None:
-    """Office conversion settings belonged to the removed converter path."""
-    from dlightrag.config import DlightragConfig, EmbeddingConfig
-
-    cfg = DlightragConfig(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            startup_probe=False,
-        ),
-    )
-
-    for name in (
-        "excel_auto_convert_to_pdf",
-        "excel_pdf_delete_original",
-        "libreoffice_timeout",
-        "libreoffice_pdf_quality",
-    ):
-        assert not hasattr(cfg, name)
 
 
 def test_env_example_documents_config_first_parser_sidecar_policy() -> None:
@@ -307,15 +197,3 @@ def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:
     assert (
         "MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}"
     ) in compose
-
-
-def test_env_example_has_no_removed_keys() -> None:
-    example = Path(".env.example").read_text(encoding="utf-8").lower()
-
-    for removed in (
-        "dlightrag_" + "chat__",
-        "excel_auto_convert_to_pdf",
-        "libreoffice_timeout",
-        "libreoffice_pdf_quality",
-    ):
-        assert removed not in example

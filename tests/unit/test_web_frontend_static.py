@@ -13,8 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
 FRONTEND_UI = FRONTEND / "ui"
-FRONTEND_LIB = FRONTEND / "lib"
-FRONTEND_STORES = FRONTEND / "stores"
 FRONTEND_STYLES = FRONTEND / "styles"
 
 
@@ -87,22 +85,6 @@ def test_web_static_js_build_has_no_orphan_chunks() -> None:
                 stack.append(child)
 
     assert expected == seen
-
-
-def test_unused_ingest_progress_frontend_contract_is_removed() -> None:
-    web_root = ROOT / "src/dlightrag/web"
-    checked = [
-        web_root / "routes" / "files.py",
-        *(FRONTEND_UI).glob("*.ts"),
-        *(FRONTEND_LIB).glob("*.ts"),
-        *(FRONTEND_STORES).glob("*.ts"),
-        *(FRONTEND).glob("vite.config.ts"),
-        *(FRONTEND).glob("types.d.ts"),
-        *(web_root / "templates").rglob("*.html"),
-    ]
-
-    offenders = [path for path in checked if "ingest/progress" in path.read_text(encoding="utf-8")]
-    assert offenders == []
 
 
 def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:

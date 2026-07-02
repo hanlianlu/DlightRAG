@@ -1,13 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Federated retrieval across multiple workspaces.
-
-Orchestrates parallel queries to multiple RAGService instances (one per
-workspace) and merges results. Supports two merge strategies:
-- Pure round-robin (fair, no quality signals needed)
-- Quality-weighted seat allocation + round-robin (when quality scores available)
-
-Backported L1-weighted merge from ArtRAG's federation module.
-"""
+"""Federated retrieval across multiple workspaces."""
 
 from __future__ import annotations
 
@@ -24,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 # Type alias for RBAC hook: given requested workspaces, return accessible subset
 WorkspaceFilter = Callable[[list[str]], Awaitable[list[str]]]
-
-DEFAULT_QUALITY_SCORE = 0.5
 
 
 def merge_results(
@@ -100,127 +90,6 @@ def merge_results(
     )
 
 
-def merge_results_weighted(
-    results: list[RetrievalResult],
-    workspaces: list[str],
-    *,
-    quality_scores: dict[str, float | None],
-    chunk_top_k: int | None = None,
-) -> RetrievalResult:
-    """Merge results with quality-weighted seat allocation + round-robin.
-
-    Each workspace gets seats proportional to its quality score.
-    Higher quality workspaces get more representation in the final result.
-    Minimum 1 seat per workspace guarantees representation.
-    """
-    if not results:
-        return RetrievalResult(
-            answer=None, contexts={"chunks": [], "entities": [], "relationships": []}
-        )
-
-    top_k = chunk_top_k or sum(len(r.contexts.get("chunks", [])) for r in results)
-
-    # Resolve quality scores (None -> DEFAULT_QUALITY_SCORE)
-    resolved: dict[str, float] = {}
-    for ws in workspaces:
-        score = quality_scores.get(ws)
-        resolved[ws] = score if score is not None else DEFAULT_QUALITY_SCORE
-
-    # When num_workspaces > top_k, drop lowest quality workspaces
-    if len(workspaces) > top_k:
-        sorted_ws = sorted(workspaces, key=lambda w: resolved[w], reverse=True)
-        kept = set(sorted_ws[:top_k])
-        paired = [(r, w) for r, w in zip(results, workspaces, strict=False) if w in kept]
-        results = [r for r, _ in paired]
-        workspaces = [w for _, w in paired]
-
-    # Seat allocation via Hamilton Largest Remainder Method.
-    # Phase 1: each workspace gets 1 guaranteed seat.
-    seats: dict[str, int] = {ws: 1 for ws in workspaces}
-    remaining = top_k - len(workspaces)
-
-    if remaining > 0:
-        total_score = sum(resolved[w] for w in workspaces)
-        if total_score <= 0:
-            total_score = float(len(workspaces))
-        # Phase 2: proportional distribution of remaining seats.
-        quotas = {ws: resolved[ws] / total_score * remaining for ws in workspaces}
-        for ws in workspaces:
-            seats[ws] += int(quotas[ws])
-        # Phase 3: largest fractional remainders get the leftover seats.
-        leftover = remaining - sum(int(quotas[ws]) for ws in workspaces)
-        if leftover > 0:
-            by_remainder = sorted(
-                workspaces, key=lambda w: quotas[w] - int(quotas[w]), reverse=True
-            )
-            for ws in by_remainder[:leftover]:
-                seats[ws] += 1
-
-    # Tag and collect per-workspace chunks (top N per workspace)
-    ws_chunks: dict[str, list[dict[str, Any]]] = {}
-    for result, ws in zip(results, workspaces, strict=True):
-        chunks = result.contexts.get("chunks", [])
-        tagged = [dict(c, _workspace=ws) for c in chunks]
-        ws_chunks[ws] = tagged[: seats[ws]]
-
-    # Round-robin interleave (sorted by quality score desc)
-    sorted_ws = sorted(workspaces, key=lambda w: resolved[w], reverse=True)
-    merged: list[dict[str, Any]] = []
-    rnd = 0
-    while len(merged) < top_k:
-        added = False
-        for ws in sorted_ws:
-            if rnd < len(ws_chunks.get(ws, [])):
-                merged.append(ws_chunks[ws][rnd])
-                added = True
-                if len(merged) >= top_k:
-                    break
-        if not added:
-            break
-        rnd += 1
-
-    # Dedup by chunk_id (safety net for cross-workspace duplicates)
-    seen: set[str] = set()
-    deduped: list[dict[str, Any]] = []
-    for c in merged:
-        cid = c.get("chunk_id", "")
-        if cid and cid in seen:
-            continue
-        if cid:
-            seen.add(cid)
-        deduped.append(c)
-    merged = deduped
-
-    # Re-canonicalize reference_id under the federation namespace.
-    from dlightrag.core.retrieval import canonicalize_reference_ids
-
-    merged = canonicalize_reference_ids(merged, federated=True)
-
-    merged_entities = _round_robin_merge_key(results, workspaces, "entities")
-    merged_relations = _round_robin_merge_key(results, workspaces, "relationships")
-
-    return RetrievalResult(
-        answer=None,
-        contexts={
-            "chunks": merged,
-            "entities": merged_entities,
-            "relationships": merged_relations,
-        },
-        trace={
-            "federated": True,
-            "weighted": True,
-            "workspaces": workspaces,
-            "quality_scores": resolved,
-            "seat_allocation": seats,
-            "per_workspace": {
-                ws: getattr(result, "trace", {})
-                for ws, result in zip(workspaces, results, strict=True)
-            },
-            "merged_chunk_count": len(merged),
-        },
-    )
-
-
 def _round_robin_merge_key(
     results: list[RetrievalResult],
     workspaces: list[str],
@@ -252,7 +121,6 @@ async def federated_retrieve(
     max_concurrency: int = 8,
     per_workspace_timeout: float | None = None,
     workspace_filter: WorkspaceFilter | None = None,
-    get_quality_score: Callable[[str], Awaitable[float | None]] | None = None,
     **kwargs: Any,
 ) -> RetrievalResult:
     """Execute federated retrieval across multiple workspaces.
@@ -270,9 +138,6 @@ async def federated_retrieve(
             backend cannot block the federation. ``None`` disables the cap.
         workspace_filter: Optional RBAC filter — given requested workspaces,
             returns the accessible subset.
-        get_quality_score: Optional async callable returning a quality score
-            (0-1) for a workspace. When provided, uses weighted seat allocation
-            instead of pure round-robin. None = pure round-robin.
         **kwargs: Additional kwargs passed to each RAGService.aretrieve().
     """
     # Apply RBAC filter if provided
@@ -368,22 +233,6 @@ async def federated_retrieve(
         return RetrievalResult(
             answer=None,
             contexts={"chunks": [], "entities": [], "relationships": []},
-        )
-
-    # Weighted merge when quality scores available, otherwise pure round-robin
-    if get_quality_score is not None:
-        scores: dict[str, float | None] = {}
-        for ws in successful_workspaces:
-            try:
-                scores[ws] = await get_quality_score(ws)
-            except Exception as exc:
-                logger.debug("Quality score lookup failed for %s: %s", ws, exc)
-                scores[ws] = None
-        return merge_results_weighted(
-            successful_results,
-            successful_workspaces,
-            quality_scores=scores,
-            chunk_top_k=chunk_top_k,
         )
 
     return merge_results(successful_results, successful_workspaces, chunk_top_k=chunk_top_k)

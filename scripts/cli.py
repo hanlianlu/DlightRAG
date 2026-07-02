@@ -63,30 +63,16 @@ def _get_api_url() -> str:
 
 
 def _get_auth_token() -> str | None:
-    """Resolve API bearer token: env → DlightRAG config (simple/jwt)."""
+    """Resolve API bearer token from env or simple-auth config."""
     token = os.environ.get("DLIGHTRAG_API_TOKEN") or os.environ.get("DLIGHTRAG_API_AUTH_TOKEN")
     if token:
         return token
 
-    try:
-        from dlightrag.config import DlightragConfig
+    from dlightrag.config import DlightragConfig
 
-        config = DlightragConfig()  # pyright: ignore[reportCallIssue]
-        if config.api_auth_token:
-            return config.api_auth_token
-        if config.jwt_secret and config.auth_mode == "jwt":
-            import time
-
-            import jwt  # PyJWT ≥2.8.0
-
-            now = int(time.time())
-            return jwt.encode(
-                {"sub": "dlightrag-cli", "iat": now, "exp": now + 86400},
-                config.jwt_secret,
-                algorithm=config.jwt_algorithm or "HS256",
-            )
-    except Exception:
-        pass
+    config = DlightragConfig()  # pyright: ignore[reportCallIssue]
+    if config.auth_mode == "simple" and config.api_auth_token:
+        return config.api_auth_token
     return None
 
 

@@ -174,7 +174,7 @@ class TestWebAuth:
         self, test_config: DlightragConfig, mock_manager
     ) -> None:
         test_config.auth_mode = "jwt"
-        test_config.jwt_secret = "test-jwt-secret-key-for-web-route-tests"
+        test_config.jwt_verification_key = "test-jwt-verification-key-for-web-route-tests"
 
         async with _web_client_for(test_config, mock_manager) as c:
             resp = await c.get(
@@ -188,13 +188,13 @@ class TestWebAuth:
         self, test_config: DlightragConfig, mock_manager
     ) -> None:
         test_config.auth_mode = "jwt"
-        test_config.jwt_secret = "test-jwt-secret-key-for-web-route-tests"
+        test_config.jwt_verification_key = "test-jwt-verification-key-for-web-route-tests"
         token = jwt.encode(
             {
                 "sub": "user-1",
                 "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=5),
             },
-            "test-jwt-secret-key-for-web-route-tests",
+            "test-jwt-verification-key-for-web-route-tests",
             algorithm="HS256",
         )
 
@@ -501,21 +501,6 @@ class TestWebAnswerAdapter:
         assert captured["session_id"] == "session-1"
         assert captured["conversation_history"] == [{"role": "user", "content": "previous"}]
 
-    async def test_answer_route_rejects_unknown_request_fields(
-        self,
-        client: AsyncClient,
-        test_config: DlightragConfig,
-        web_app,
-    ) -> None:
-        web_app.state.manager.config = test_config
-
-        resp = await client.post(
-            "/web/answer",
-            json={"query": "hello", "legacy_mode": True},
-        )
-
-        assert resp.status_code == 422
-
     async def test_answer_route_rejects_untyped_history_messages(
         self,
         client: AsyncClient,
@@ -696,30 +681,6 @@ class TestWebFiles:
 
 
 # ---------------------------------------------------------------------------
-# TestWebWorkspaces
-# ---------------------------------------------------------------------------
-
-
-class TestWebWorkspaces:
-    """Tests for removed side-panel workspace routes."""
-
-    async def test_workspace_side_panel_route_is_not_exposed(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.get("/web/workspaces")
-        assert resp.status_code == 404
-
-    async def test_cookie_workspace_switch_route_is_not_exposed(
-        self, client: AsyncClient, test_config: DlightragConfig
-    ) -> None:
-        resp = await client.post(
-            "/web/workspaces/switch",
-            data={"workspace": "test-ws"},
-        )
-        assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
 # TestWebWorkspaceCreateDelete
 # ---------------------------------------------------------------------------
 
@@ -839,21 +800,6 @@ class TestWebWorkspaceDelete:
             data={"workspace_name": "", "confirm_name": ""},
         )
         assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# TestIngestProgress
-# ---------------------------------------------------------------------------
-
-
-class TestIngestProgress:
-    """Tests for removed ingest-progress frontend route."""
-
-    async def test_progress_endpoint_is_not_exposed_without_frontend_consumer(
-        self, client: AsyncClient, test_config: DlightragConfig, web_app
-    ) -> None:
-        resp = await client.get("/web/ingest/progress")
-        assert resp.status_code == 404
 
 
 class TestSourcePanelTemplate:

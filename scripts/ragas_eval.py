@@ -72,7 +72,6 @@ def _resolve_eval_env() -> None:
     DlightRAG connection:
       6. DLIGHTRAG_API_URL              ← config.api_host:api_port
       7. DLIGHTRAG_API_TOKEN            ← config.api_auth_token (simple)
-                                        ← auto-generated JWT (jwt mode, sub=ragas-eval)
     """
     # If both eval keys are already set, nothing to do
     llm_key_set = bool(os.getenv("EVAL_LLM_BINDING_API_KEY"))
@@ -147,33 +146,11 @@ def _resolve_eval_env() -> None:
             "DlightRAG API URL: auto-resolved from config (%s)", os.environ["DLIGHTRAG_API_URL"]
         )
 
-    # -- DlightRAG API token (simple or JWT) --
+    # -- DlightRAG API token (simple auth only; JWT tokens come from the issuer) --
     if not os.getenv("DLIGHTRAG_API_TOKEN"):
-        if config.api_auth_token:
+        if config.auth_mode == "simple" and config.api_auth_token:
             os.environ["DLIGHTRAG_API_TOKEN"] = config.api_auth_token
             logger.info("DlightRAG API token: auto-resolved from config (simple auth)")
-        elif config.jwt_secret and config.auth_mode == "jwt":
-            token = _generate_jwt(config)
-            os.environ["DLIGHTRAG_API_TOKEN"] = token
-            logger.info("DlightRAG API token: auto-generated JWT (sub=ragas-eval)")
-
-
-def _generate_jwt(config: Any) -> str:
-    """Generate a one-off JWT for RAGAS eval (lazy import — only on jwt mode)."""
-    import time
-
-    import jwt  # PyJWT ≥2.8.0 (installed via DlightRAG deps)
-
-    now = int(time.time())
-    return jwt.encode(
-        {
-            "sub": "ragas-eval",
-            "iat": now,
-            "exp": now + 86400,  # 24h — eval runs are bounded
-        },
-        config.jwt_secret,
-        algorithm=config.jwt_algorithm or "HS256",
-    )
 
 
 # Run once at import time — sets env vars before RAGEvaluator.__init__ reads them.
@@ -302,7 +279,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Zero-config — API URL + creds all auto-resolved from DlightRAG config
+  # Zero-config for no-auth/simple-auth setups
   python scripts/ragas_eval.py --dataset my_questions.json
 
   # Explicit API URL (when running outside the repo or remote)
@@ -358,7 +335,7 @@ _EXPECTED_ENV_VARS: dict[str, str] = {
     "EVAL_EMBEDDING_BINDING_API_KEY": "API key for eval embeddings (cascaded from eval LLM key)",
     "EVAL_EMBEDDING_BINDING_HOST": "Custom endpoint for eval embeddings (cascaded from eval LLM host)",
     "DLIGHTRAG_API_URL": "DlightRAG API base URL (default for --api)",
-    "DLIGHTRAG_API_TOKEN": "Bearer token (auto from config, or auto-generated JWT)",
+    "DLIGHTRAG_API_TOKEN": "Bearer token (auto from simple config, explicit for JWT)",
     "EVAL_QUERY_TOP_K": "top_k sent to DlightRAG /api/answer (default: 10)",
     "EVAL_MAX_CONCURRENT": "RAGAS evaluation concurrency (default: 2)",
     "EVAL_LLM_MAX_RETRIES": "Max retries for eval LLM calls (default: 5)",

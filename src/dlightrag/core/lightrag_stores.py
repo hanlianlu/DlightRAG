@@ -6,7 +6,7 @@
 This module depends on the following LightRAG internals that are NOT part
 of the public API.  A LightRAG major-version bump may break these:
 
-Storage attributes (accessed via __getattr__):
+Storage attributes (copied from the LightRAG instance):
     ``chunks_vdb``       — PGVectorStorage instance
     ``text_chunks``      — PGKVStorage instance
     ``full_docs``        — PGKVStorage instance
@@ -26,8 +26,7 @@ Storage internals (reached through storage attributes):
     ``chunks_vdb.workspace``   — workspace name string
     ``text_chunks.db``         — PostgreSQL ClientManager
     ``text_chunks.workspace``  — workspace name string
-    ``chunks_vdb.db._run_with_retry()`` — optional retry wrapper
-    ``chunks_vdb.db.pool``     — asyncpg connection pool
+    ``chunks_vdb.db._run_with_retry()`` — PostgreSQL retry wrapper
 
 LightRAG API methods (public, but shape-dependent):
     ``LightRAG._build_global_config()`` — returns config dict
@@ -55,6 +54,19 @@ logger = logging.getLogger(__name__)
 
 class LightRAGStores:
     """Typed accessor for the LightRAG storage surface DlightRAG touches directly."""
+
+    chunks_vdb: Any
+    text_chunks: Any
+    full_docs: Any
+    doc_status: Any
+    entities_vdb: Any
+    relationships_vdb: Any
+    chunk_entity_relation_graph: Any
+    full_entities: Any
+    full_relations: Any
+    entity_chunks: Any
+    relation_chunks: Any
+    llm_response_cache: Any
 
     _VECTOR_WRITE_MAX_BYTES: ClassVar[int] = 16 * 1024 * 1024
     _VECTOR_WRITE_MAX_RECORDS: ClassVar[int] = 200
@@ -85,11 +97,6 @@ class LightRAGStores:
         for name in self._REQUIRED - {"_build_global_config"}:
             setattr(self, name, getattr(lightrag, name))
         self._vector_write_lock = asyncio.Lock()
-
-    def __getattr__(self, name: str) -> Any:
-        if name in self._REQUIRED:
-            return getattr(self.raw, name)
-        raise AttributeError(name)
 
     def build_global_config(self) -> dict[str, Any]:
         return self.raw._build_global_config()
@@ -129,14 +136,10 @@ class LightRAGStores:
                 await connection.executemany(sql, batch)
 
         async with self._vector_write_lock:
-            if hasattr(chunks_vdb.db, "_run_with_retry"):
-                await chunks_vdb.db._run_with_retry(
-                    _execute,
-                    timing_label=f"{chunks_vdb.workspace} chunk_vector_overwrite",
-                )
-            else:
-                async with chunks_vdb.db.pool.acquire() as connection:
-                    await _execute(connection)
+            await chunks_vdb.db._run_with_retry(
+                _execute,
+                timing_label=f"{chunks_vdb.workspace} chunk_vector_overwrite",
+            )
 
     async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]:
         """Resolve full_doc ids to LightRAG text chunk ids."""
@@ -158,14 +161,10 @@ class LightRAGStores:
         async def _execute(connection: Any) -> list[Any]:
             return await connection.fetch(sql, workspace, list(doc_ids))
 
-        if hasattr(db, "_run_with_retry"):
-            rows = await db._run_with_retry(
-                _execute,
-                timing_label=f"{workspace} text_chunk_ids_for_docs",
-            )
-        else:
-            async with db.pool.acquire() as connection:
-                rows = await _execute(connection)
+        rows = await db._run_with_retry(
+            _execute,
+            timing_label=f"{workspace} text_chunk_ids_for_docs",
+        )
         return [str(row["id"]) for row in rows]
 
     async def fetch_chunk_contents(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
@@ -188,14 +187,10 @@ class LightRAGStores:
         async def _execute(connection: Any) -> list[Any]:
             return await connection.fetch(sql, workspace, list(chunk_ids))
 
-        if hasattr(db, "_run_with_retry"):
-            rows = await db._run_with_retry(
-                _execute,
-                timing_label=f"{workspace} chunk_content_for_bm25_language",
-            )
-        else:
-            async with db.pool.acquire() as connection:
-                rows = await _execute(connection)
+        rows = await db._run_with_retry(
+            _execute,
+            timing_label=f"{workspace} chunk_content_for_bm25_language",
+        )
         return [{"id": str(row["id"]), "content": str(row["content"] or "")} for row in rows]
 
     async def update_chunk_bm25_languages(self, labels: dict[str, str]) -> None:
@@ -221,14 +216,10 @@ class LightRAGStores:
         async def _execute(connection: Any) -> None:
             await connection.execute(sql, workspace, chunk_ids, languages)
 
-        if hasattr(db, "_run_with_retry"):
-            await db._run_with_retry(
-                _execute,
-                timing_label=f"{workspace} chunk_bm25_language_update",
-            )
-        else:
-            async with db.pool.acquire() as connection:
-                await _execute(connection)
+        await db._run_with_retry(
+            _execute,
+            timing_label=f"{workspace} chunk_bm25_language_update",
+        )
 
     def _build_vector_update_values(
         self,

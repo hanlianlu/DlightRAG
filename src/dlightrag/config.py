@@ -163,7 +163,7 @@ class ParserConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    rules: str = "docx:native-iteP,*:mineru-iteP"
+    rules: str = "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
     chunk_options: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -520,6 +520,7 @@ class DlightragConfig(BaseSettings):
         "api_key",
         "api_secret",
         "secret",
+        "verification_key",
         "password",
         "connection_string",
         "account_key",
@@ -855,7 +856,14 @@ class DlightragConfig(BaseSettings):
         default="none",
         description="API auth strategy: 'none', 'simple' (bearer token), 'jwt'.",
     )
-    jwt_secret: str | None = Field(default=None)
+    jwt_verification_key: str | None = Field(
+        default=None,
+        description=(
+            "JWT signature verification key. For HS* algorithms this is the shared "
+            "HMAC key; for RS*/ES* algorithms this is the public key PEM. DlightRAG "
+            "verifies externally issued JWTs and does not sign or renew tokens."
+        ),
+    )
     jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = Field(
         default="HS256",
         description="JWT signature algorithm — restricted to safe HMAC/RSA/ECDSA variants. "
@@ -974,9 +982,9 @@ class DlightragConfig(BaseSettings):
             raise ValueError("api_auth_token is set; configure auth_mode='simple' explicitly")
         if self.auth_mode == "simple" and not self.api_auth_token:
             raise ValueError("auth_mode='simple' requires api_auth_token to be set")
-        # Fail-fast: jwt mode requires a secret; otherwise every request 500s.
-        if self.auth_mode == "jwt" and not self.jwt_secret:
-            raise ValueError("auth_mode='jwt' requires jwt_secret to be set")
+        # Fail-fast: jwt mode requires verification material; otherwise every request 500s.
+        if self.auth_mode == "jwt" and not self.jwt_verification_key:
+            raise ValueError("auth_mode='jwt' requires jwt_verification_key to be set")
         # Browsers reject allow_origins=['*'] with credentials. When auth is
         # on, an explicit origin list MUST replace the wildcard.
         if self.auth_mode != "none" and self.cors_allow_origins == ["*"]:

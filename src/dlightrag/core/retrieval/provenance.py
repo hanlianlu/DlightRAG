@@ -17,6 +17,7 @@ from dlightrag.core.sidecar_provenance import (
     explicit_item_page_index,
     first_provenance_for_blocks,
     load_block_provenance_index,
+    resolve_sidecar_asset_path,
     sidecar_dir_from_location,
 )
 from dlightrag.utils.images import detect_image_mime_type
@@ -234,8 +235,8 @@ def _load_sidecar_drawing_path(
         if isinstance(item, dict):
             rel_path = _drawing_asset_path(item)
             if isinstance(rel_path, str):
-                candidate = artifact_dir / rel_path
-                if candidate.is_file():
+                candidate = resolve_sidecar_asset_path(artifact_dir, rel_path)
+                if candidate is not None:
                     item_page = explicit_item_page_index(item)
                     if item_page is None:
                         item_page = _page_index_from_filename(drawings_path.stem)

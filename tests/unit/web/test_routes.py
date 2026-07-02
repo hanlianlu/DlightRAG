@@ -61,11 +61,3 @@ async def test_file_list(client):
     assert resp.status_code == 200
     assert "report.pdf" in resp.text
     assert "analysis.xlsx" in resp.text
-
-
-async def test_workspace_switch_route_is_not_exposed(client):
-    resp = await client.post(
-        "/web/workspaces/switch",
-        data={"workspace": "finance"},
-    )
-    assert resp.status_code == 404

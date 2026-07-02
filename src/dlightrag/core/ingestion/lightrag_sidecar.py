@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from dlightrag.core.sidecar_provenance import resolve_sidecar_asset_path
+
 
 @dataclass(frozen=True)
 class LightRAGDrawingAsset:
@@ -75,8 +77,4 @@ def _resolve_drawing_image_path(artifact_dir: Path, item: dict[str, object]) -> 
     raw_path = item.get("path") or item.get("img_path") or item.get("image_path")
     if not isinstance(raw_path, str) or not raw_path.strip():
         return None
-    path = Path(raw_path)
-    if path.is_absolute():
-        return path if path.is_file() else None
-    candidate = artifact_dir / raw_path
-    return candidate.resolve() if candidate.is_file() else None
+    return resolve_sidecar_asset_path(artifact_dir, raw_path)

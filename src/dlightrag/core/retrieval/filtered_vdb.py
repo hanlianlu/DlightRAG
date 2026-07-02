@@ -182,11 +182,7 @@ class FilteredVectorStorage:
 
     async def _run_pg_operation(self, operation: Callable[[Any], Awaitable[Any]]) -> Any:
         db = self._original.db
-        run_with_retry = getattr(db, "_run_with_retry", None)
-        if run_with_retry is not None:
-            return await run_with_retry(operation)
-        async with db.pool.acquire() as conn:
-            return await operation(conn)
+        return await db._run_with_retry(operation)
 
     @staticmethod
     def _format_rows(rows: Any) -> list[dict[str, Any]]:

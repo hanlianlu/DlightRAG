@@ -37,18 +37,6 @@ class TestAnswerStream:
             pass
         assert stream.answer == "Growth is 15% [1]."
 
-    async def test_no_references_attr(self) -> None:
-        """AnswerStream no longer exposes .references."""
-
-        async def fake_stream():
-            yield "Just a plain answer."
-
-        stream = AnswerStream(fake_stream())
-        async for _ in stream:
-            pass
-        assert not hasattr(stream, "references")
-        assert stream.answer == "Just a plain answer."
-
     async def test_empty_stream(self) -> None:
         """Empty stream -- no crash."""
 

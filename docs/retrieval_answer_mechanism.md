@@ -28,8 +28,9 @@ image sidecars stay aligned with the LightRAG document record.
 LightRAG raw-route documents can have no sidecar artifacts; those documents
 still participate in LightRAG text/KG/vector retrieval but do not receive
 image-vector alignment.
-With DlightRAG's default `docx:native-iteP,*:mineru-iteP` rules, this is a
-defensive path rather than the normal document parser route.
+With DlightRAG's default
+`docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP` rules,
+this is a defensive path rather than the normal document parser route.
 
 Successful drawing sidecars have one canonical chunk identity. LightRAG's
 multimodal semantic chunk owns `llm_analyze_result` text and exposes it through

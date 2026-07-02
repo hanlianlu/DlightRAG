@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
 
 
@@ -59,6 +61,31 @@ def test_requires_blocks_anchor_to_match_lightrag_builder(tmp_path) -> None:
                     "fig-1": {
                         "id": "fig-1",
                         "path": "sample.blocks.assets/fig.png",
+                        "llm_analyze_result": {"status": "success"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert collect_lightrag_drawing_assets(artifact_dir, doc_id="doc-abc") == []
+
+
+@pytest.mark.parametrize("field", ["path", "img_path", "image_path"])
+def test_rejects_drawing_assets_outside_artifact_dir(tmp_path, field: str) -> None:
+    artifact_dir = tmp_path / "doc"
+    artifact_dir.mkdir()
+    (artifact_dir / "sample.blocks.jsonl").write_text("", encoding="utf-8")
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(b"not a sidecar asset")
+    (artifact_dir / "sample.drawings.json").write_text(
+        json.dumps(
+            {
+                "drawings": {
+                    "fig-1": {
+                        "id": "fig-1",
+                        field: "../outside.png",
                         "llm_analyze_result": {"status": "success"},
                     }
                 }

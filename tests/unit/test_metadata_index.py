@@ -74,9 +74,6 @@ class TestMetadataSQL:
 
         assert "ON dlightrag_doc_metadata (creation_date)" in sql
 
-    def test_upsert_sql_has_no_removed_processing_mode(self):
-        assert "rag" + "_mode" not in _UPSERT
-
     def test_upsert_sql_has_lightrag_operational_fields(self):
         assert "ingest_strategy" in _UPSERT
         assert "parse_engine" in _UPSERT

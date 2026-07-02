@@ -25,9 +25,9 @@ When running from outside the repo or against a remote instance, pass `--api`:
 uv run python scripts/ragas_eval.py --api https://dlightrag.example.com --dataset my_questions.json
 ```
 
-Auth (including JWT) auto-resolves from DlightRAG's config — no manual
-token setup needed. Override with `--api-key` or `$DLIGHTRAG_API_TOKEN`
-only when auto-resolution can't reach `config.yaml`.
+No-auth and simple-auth setups auto-resolve from DlightRAG's config — no
+manual token setup needed. JWT setups must pass an externally issued bearer
+token with `--api-key` or `$DLIGHTRAG_API_TOKEN`.
 
 ## Metrics
 
@@ -118,12 +118,14 @@ eval credentials from DlightRAG's own config:
 | ``EVAL_EMBEDDING_BINDING_API_KEY`` | ``EVAL_LLM_BINDING_API_KEY`` → DlightRAG embedding key (if OpenAI-compatible provider) |
 | ``EVAL_EMBEDDING_BINDING_HOST`` | ``EVAL_LLM_BINDING_HOST`` → DlightRAG embedding base_url (if OpenAI-compatible) |
 | ``DLIGHTRAG_API_URL`` | ``config.api_host``:``config.api_port`` |
-| ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` (simple), or auto-generated JWT ``sub=ragas-eval`` (jwt) |
+| ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` (simple); explicit external bearer token for jwt |
 
-This means **no extra ``.env`` entries are needed** — run from the repo root
-with just ``--dataset``, and everything auto-resolves from ``config.yaml`` +
-``.env``. Native-SDK-only LLM providers (Anthropic, Gemini) need an explicit
-``EVAL_LLM_BINDING_API_KEY`` because RAGAS requires an OpenAI-compatible API.
+This means **no extra ``.env`` entries are needed** for no-auth and simple-auth
+setups — run from the repo root with just ``--dataset``, and everything
+auto-resolves from ``config.yaml`` + ``.env``. JWT deployments must provide an
+externally issued bearer token via ``DLIGHTRAG_API_TOKEN``. Native-SDK-only LLM
+providers (Anthropic, Gemini) need an explicit ``EVAL_LLM_BINDING_API_KEY``
+because RAGAS requires an OpenAI-compatible API.
 
 ### Explicit overrides
 
