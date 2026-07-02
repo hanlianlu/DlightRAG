@@ -65,7 +65,15 @@ async def _open_workspace_registry() -> tuple[Any, Any]:
 
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
-    pool = await asyncpg.create_pool(**_PG_CONN_KWARGS, min_size=1, max_size=1)
+    pool = await asyncpg.create_pool(
+        host=str(_PG_CONN_KWARGS["host"]),
+        port=int(_PG_CONN_KWARGS["port"]),
+        user=str(_PG_CONN_KWARGS["user"]),
+        password=str(_PG_CONN_KWARGS["password"]),
+        database=str(_PG_CONN_KWARGS["database"]),
+        min_size=1,
+        max_size=1,
+    )
     registry = PGWorkspaceRegistry(pool=pool)
     await registry.initialize()
     return pool, registry

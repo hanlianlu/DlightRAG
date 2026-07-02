@@ -43,7 +43,7 @@ jobs:
           enable-cache: true
           python-version: '3.12'
       - run: uv sync --group dev
-      - run: uv run pyright src/
+      - run: uv run pyright
 
   # ------------------------------------------------------------------
   # Architecture: import-linter boundary enforcement (~10s)

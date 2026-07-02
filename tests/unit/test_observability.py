@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from types import SimpleNamespace
 from typing import Any
 
@@ -50,7 +51,7 @@ class _RecordingLangfuse:
 
 
 @pytest.fixture(autouse=True)
-def reset_langfuse_client() -> None:
+def reset_langfuse_client() -> Generator[None]:
     previous = observability._client
     observability._client = None
     yield

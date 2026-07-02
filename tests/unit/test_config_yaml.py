@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -12,6 +13,10 @@ import yaml
 from dlightrag.config import DlightragConfig, _find_yaml_config
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _settings_config(**kwargs: Any) -> DlightragConfig:
+    return cast(Any, DlightragConfig)(**kwargs)
 
 
 @pytest.fixture
@@ -64,7 +69,7 @@ class TestFindYamlConfig:
 @pytest.mark.usefixtures("yaml_config_dir")
 class TestYamlConfigLoading:
     def test_loads_from_yaml(self):
-        config = DlightragConfig()
+        config = _settings_config()
         assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"
         assert config.llm.default.base_url == "http://localhost:11434/v1"
         assert config.embedding.dim == 512
@@ -76,13 +81,13 @@ class TestYamlConfigLoading:
         monkeypatch.setenv("DLIGHTRAG_LLM__DEFAULT__MODEL", "gpt-5.4-mini")
         monkeypatch.setenv("DLIGHTRAG_TOP_K", "200")
 
-        config = DlightragConfig()
+        config = _settings_config()
         assert config.llm.default.model == "gpt-5.4-mini"  # env override
         assert config.llm.default.base_url == "http://localhost:11434/v1"  # from yaml
         assert config.top_k == 200  # env override
 
     def test_constructor_overrides_yaml(self):
-        config = DlightragConfig(top_k=300)
+        config = _settings_config(top_k=300)
         assert config.top_k == 300  # constructor override
         assert config.llm.default.model == "gemma4:26b-a4b-it-q8_0"  # from yaml
 
@@ -156,7 +161,7 @@ class TestYamlConfigLoading:
 class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        config = DlightragConfig(
+        config = _settings_config(
             embedding={
                 "provider": "openai_compatible",
                 "model": "text-embedding-3-large",
@@ -176,5 +181,5 @@ class TestConfigSources:
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__API_KEY", "test")
         monkeypatch.setenv("DLIGHTRAG_EMBEDDING__STARTUP_PROBE", "false")
 
-        config = DlightragConfig()
+        config = _settings_config()
         assert config.llm.default.model == "gpt-5.4-mini"

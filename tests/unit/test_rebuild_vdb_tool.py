@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -44,7 +45,7 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
 
     fake_embedding = object()
     config = _fake_config()
-    calls: dict[str, object] = {}
+    calls: dict[str, Any] = {}
 
     async def fake_setup(self) -> bool:
         calls["workspace"] = self.workspace
@@ -64,7 +65,7 @@ async def test_runner_uses_dlightrag_embedding_and_config(monkeypatch: pytest.Mo
     monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
     monkeypatch.setattr(module.DlightRAGRebuildTool, "run_check", AsyncMock())
 
-    exit_code = await module.run_rebuild(config=config, target="check", assume_yes=False)
+    exit_code = await module.run_rebuild(config=cast(Any, config), target="check", assume_yes=False)
 
     assert exit_code == 0
     assert calls["workspace"] == "research"
@@ -113,7 +114,7 @@ async def test_chunks_rebuild_restores_sidecar_image_vectors(
     )
 
     stats = await module.restore_sidecar_image_vectors(
-        config=config,
+        config=cast(Any, config),
         lightrag=lightrag,
         stores=stores,
         multimodal_embedder=embedder,
@@ -157,7 +158,7 @@ async def test_relabel_bm25_languages_labels_all_text_chunks(
     monkeypatch.setattr(module, "BM25LanguageClassifier", FakeClassifier)
 
     stats = await module.relabel_bm25_chunk_languages(
-        config=config,
+        config=cast(Any, config),
         stores=stores,
         batch_size=500,
     )
@@ -176,10 +177,11 @@ async def test_chunks_rebuild_relabels_bm25_languages_after_success(
 
     config = _fake_config()
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
+    relabel_mock = AsyncMock(return_value={"processed_chunks": 2, "updated_chunks": 2})
     monkeypatch.setattr(
         module,
         "relabel_bm25_chunk_languages",
-        AsyncMock(return_value={"processed_chunks": 2, "updated_chunks": 2}),
+        relabel_mock,
     )
 
     async def fake_setup(self) -> bool:
@@ -201,15 +203,17 @@ async def test_chunks_rebuild_relabels_bm25_languages_after_success(
     monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: False)
 
     exit_code = await module.run_rebuild(
-        config=config,
+        config=cast(Any, config),
         target="chunks",
         assume_yes=True,
         restore_sidecar_alignment=False,
     )
 
     assert exit_code == 0
-    module.relabel_bm25_chunk_languages.assert_awaited_once()
-    assert module.relabel_bm25_chunk_languages.await_args.kwargs["config"] is config
+    relabel_mock.assert_awaited_once()
+    await_args = relabel_mock.await_args
+    assert await_args is not None
+    assert await_args.kwargs["config"] is config
 
 
 async def test_graph_rebuild_does_not_restore_sidecar_alignment(
@@ -220,8 +224,10 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     config = _fake_config()
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
     monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: object())
-    monkeypatch.setattr(module, "restore_sidecar_image_vectors", AsyncMock())
-    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", AsyncMock())
+    restore_mock = AsyncMock()
+    relabel_mock = AsyncMock()
+    monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore_mock)
+    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", relabel_mock)
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -236,11 +242,11 @@ async def test_graph_rebuild_does_not_restore_sidecar_alignment(
     monkeypatch.setattr(module.DlightRAGRebuildTool, "setup_storages", fake_setup)
     monkeypatch.setattr(module.DlightRAGRebuildTool, "run_rebuild_entities_relations", AsyncMock())
 
-    exit_code = await module.run_rebuild(config=config, target="graph", assume_yes=True)
+    exit_code = await module.run_rebuild(config=cast(Any, config), target="graph", assume_yes=True)
 
     assert exit_code == 0
-    module.restore_sidecar_image_vectors.assert_not_awaited()
-    module.relabel_bm25_chunk_languages.assert_not_awaited()
+    restore_mock.assert_not_awaited()
+    relabel_mock.assert_not_awaited()
 
 
 async def test_failed_chunks_rebuild_skips_sidecar_alignment(
@@ -252,9 +258,12 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     embedder = AsyncMock()
     monkeypatch.setattr(module, "get_multimodal_embedder", lambda cfg: embedder)
     monkeypatch.setattr(module, "get_embedding_func", lambda cfg, *, embedder=None: object())
-    monkeypatch.setattr(module.RAGService, "_resolve_direct_image_embedding_enabled", AsyncMock())
-    monkeypatch.setattr(module, "restore_sidecar_image_vectors", AsyncMock())
-    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", AsyncMock())
+    resolve_mock = AsyncMock()
+    restore_mock = AsyncMock()
+    relabel_mock = AsyncMock()
+    monkeypatch.setattr(module.RAGService, "_resolve_direct_image_embedding_enabled", resolve_mock)
+    monkeypatch.setattr(module, "restore_sidecar_image_vectors", restore_mock)
+    monkeypatch.setattr(module, "relabel_bm25_chunk_languages", relabel_mock)
 
     async def fake_setup(self) -> bool:
         self.graph = AsyncMock()
@@ -274,12 +283,12 @@ async def test_failed_chunks_rebuild_skips_sidecar_alignment(
     )
     monkeypatch.setattr(module.DlightRAGRebuildTool, "report_rebuild", lambda self, stats: True)
 
-    exit_code = await module.run_rebuild(config=config, target="chunks", assume_yes=True)
+    exit_code = await module.run_rebuild(config=cast(Any, config), target="chunks", assume_yes=True)
 
     assert exit_code == 1
-    module.RAGService._resolve_direct_image_embedding_enabled.assert_not_awaited()
-    module.restore_sidecar_image_vectors.assert_not_awaited()
-    module.relabel_bm25_chunk_languages.assert_not_awaited()
+    resolve_mock.assert_not_awaited()
+    restore_mock.assert_not_awaited()
+    relabel_mock.assert_not_awaited()
 
 
 def _fake_config() -> SimpleNamespace:

@@ -788,7 +788,9 @@ class TestRAGServiceLightRAGMainPath:
             filename="getting-started.html",
         )
         assert result["status"] == "success"
-        call_items = service._ingestion_engine.aingest_files.await_args.args[0]
+        await_args = service._ingestion_engine.aingest_files.await_args
+        assert await_args is not None
+        call_items = await_args.args[0]
         assert call_items[0].metadata_path == "https://api.bynder.com/docs/getting-started"
         assert call_items[0].display_filename == "getting-started.html"
         mock_source.aclose.assert_awaited_once()
@@ -880,7 +882,9 @@ class TestRAGServiceLightRAGMainPath:
         staged_root = test_config.input_dir_path / test_config.workspace
         service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
-        assert list(service._ingestion_engine.aingest_files.await_args.args[0]) == [
+        await_args = service._ingestion_engine.aingest_files.await_args
+        assert await_args is not None
+        assert list(await_args.args[0]) == [
             staged_root / "a.docx",
             staged_root / "b.pdf",
             staged_root / "nested" / "c.pptx",
@@ -911,9 +915,9 @@ class TestRAGServiceLightRAGMainPath:
         assert result["processed"] == 1
         staged_root = test_config.input_dir_path / test_config.workspace
         service._ingestion_engine.aingest_files.assert_awaited_once()
-        assert list(service._ingestion_engine.aingest_files.await_args.args[0]) == [
-            staged_root / "uploaded.pdf"
-        ]
+        await_args = service._ingestion_engine.aingest_files.await_args
+        assert await_args is not None
+        assert list(await_args.args[0]) == [staged_root / "uploaded.pdf"]
         assert (staged_root / "uploaded.pdf").read_bytes() == b"%PDF-fake"
 
     async def test_aingest_replace_purges_existing_doc_before_ingest(
@@ -1002,7 +1006,9 @@ class TestRAGServiceLightRAGMainPath:
             filters=MetadataFilter(custom={"department": " Finance "}),
         )
 
-        call_kwargs = service._retrieval_orchestrator.aretrieve.await_args.kwargs
+        await_args = service._retrieval_orchestrator.aretrieve.await_args
+        assert await_args is not None
+        call_kwargs = await_args.kwargs
         assert call_kwargs["metadata_filter"].custom == {"department": "finance"}
 
     async def test_metadata_search_normalizes_custom_metadata_filters(

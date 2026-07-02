@@ -7,13 +7,12 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from dlightrag.utils import normalize_workspace
 
 if TYPE_CHECKING:
     from dlightrag.core.service import RAGService
-    from dlightrag.storage.ingest_jobs import PGIngestJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -21,17 +20,48 @@ SourceType = Literal["local", "azure_blob", "s3", "url"]
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 
 
+class IngestJobStore(Protocol):
+    async def create(
+        self,
+        *,
+        job_id: str,
+        workspace: str,
+        source_type: str,
+        request: dict[str, Any],
+    ) -> None: ...
+
+    async def mark_running(self, job_id: str) -> None: ...
+
+    async def record_window(
+        self,
+        job_id: str,
+        *,
+        total_delta: int,
+        processed_delta: int,
+        failed_delta: int,
+        current_window: int,
+        errors: list[str],
+    ) -> None: ...
+
+    async def finish(self, job_id: str, *, result: dict[str, Any]) -> None: ...
+    async def fail(self, job_id: str, *, error: str) -> None: ...
+    async def get(self, job_id: str) -> dict[str, Any] | None: ...
+    async def list_recoverable(self) -> list[dict[str, Any]]: ...
+    async def prune(self) -> dict[str, int]: ...
+    async def delete_for_workspace(self, workspace: str) -> int: ...
+
+
 class IngestJobCoordinator:
     """Manage durable ingest jobs, recovery, and in-process task lifecycle."""
 
     def __init__(self, get_service: Callable[[str], Awaitable[RAGService]]) -> None:
         self._get_service = get_service
-        self._store: PGIngestJobStore | None = None
+        self._store: IngestJobStore | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._workspaces: dict[str, str] = {}
         self._recovery_started = False
 
-    async def get_store(self) -> PGIngestJobStore:
+    async def get_store(self) -> IngestJobStore:
         if self._store is None:
             from dlightrag.storage.ingest_jobs import PGIngestJobStore
 
@@ -45,7 +75,7 @@ class IngestJobCoordinator:
     async def start_recovery(self) -> None:
         await self.get_store()
 
-    async def _prune_store(self, store: PGIngestJobStore) -> None:
+    async def _prune_store(self, store: IngestJobStore) -> None:
         try:
             summary = await store.prune()
         except Exception:
@@ -54,7 +84,7 @@ class IngestJobCoordinator:
         if summary.get("failed_abandoned") or summary.get("deleted_completed"):
             logger.info("Ingest job cleanup: %s", summary)
 
-    async def _recover_jobs(self, store: PGIngestJobStore) -> None:
+    async def _recover_jobs(self, store: IngestJobStore) -> None:
         if self._recovery_started:
             return
         self._recovery_started = True
@@ -72,7 +102,7 @@ class IngestJobCoordinator:
         if recovered:
             logger.info("Recovered %d ingest job(s)", recovered)
 
-    def schedule_recovered_job(self, row: dict[str, Any], store: PGIngestJobStore) -> bool:
+    def schedule_recovered_job(self, row: dict[str, Any], store: IngestJobStore) -> bool:
         job_id = str(row.get("job_id") or "")
         if not job_id or job_id in self._tasks:
             return False
@@ -271,7 +301,7 @@ class IngestJobCoordinator:
 
     async def _job_result_with_totals(
         self,
-        store: PGIngestJobStore,
+        store: IngestJobStore,
         job_id: str,
         result: dict[str, Any],
     ) -> dict[str, Any]:

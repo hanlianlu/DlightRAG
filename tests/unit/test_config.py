@@ -3,6 +3,7 @@
 
 import os
 import ssl
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -30,6 +31,10 @@ def _clean_dlightrag_config_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", None)
 
 
+def _settings_config(**kwargs: Any) -> DlightragConfig:
+    return cast(Any, DlightragConfig)(**kwargs)
+
+
 class TestModelConfig:
     def test_defaults(self):
         cfg = ModelConfig(model="gpt-5.4-mini")
@@ -48,7 +53,7 @@ class TestModelConfig:
 
     def test_invalid_provider(self):
         with pytest.raises(ValidationError):
-            ModelConfig(provider="invalid", model="test")
+            ModelConfig(provider=cast(Any, "invalid"), model="test")
 
     def test_model_kwargs(self):
         cfg = ModelConfig(model="gpt-5.4-mini", model_kwargs={"top_p": 0.9})
@@ -204,7 +209,7 @@ class TestDlightragConfigNested:
     def test_unknown_field_rejected(self):
         """Unknown fields and typos should raise via extra=forbid."""
         with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
-            DlightragConfig(
+            _settings_config(
                 openai_api_key="sk-old",
                 embedding=EmbeddingConfig(
                     provider="voyage",
@@ -257,7 +262,7 @@ class TestDlightragConfigNested:
     ) -> None:
         """LightRAG loads YAML file names from PROMPT_DIR/entity_type only."""
         with pytest.raises(ValidationError, match="entity_type_prompt_file"):
-            DlightragConfig(
+            _settings_config(
                 extraction={"entity_type_prompt_file": prompt_file},
                 embedding=EmbeddingConfig(
                     provider="voyage",
@@ -268,7 +273,7 @@ class TestDlightragConfigNested:
             )
 
     def test_entity_type_prompt_file_accepts_yaml_file_name(self) -> None:
-        cfg = DlightragConfig(
+        cfg = _settings_config(
             extraction={"entity_type_prompt_file": "domain-entities.yaml"},
             embedding=EmbeddingConfig(
                 provider="voyage",
@@ -282,7 +287,7 @@ class TestDlightragConfigNested:
 
 
 def test_storage_backends_are_postgres_only() -> None:
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -376,7 +381,7 @@ def test_storage_backends_are_postgres_only() -> None:
 
 
 def test_bm25_profiles_accept_safe_pg_textsearch_config_names() -> None:
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -399,7 +404,7 @@ def test_bm25_profiles_accept_safe_pg_textsearch_config_names() -> None:
 
 def test_bm25_profiles_reject_multi_language_profile() -> None:
     with pytest.raises(ValidationError, match="exactly one language"):
-        DlightragConfig(
+        _settings_config(
             embedding=EmbeddingConfig(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -416,7 +421,7 @@ def test_bm25_profiles_reject_multi_language_profile() -> None:
 
 def test_bm25_profiles_reject_fallback_languages() -> None:
     with pytest.raises(ValidationError, match="fallback profiles must not declare languages"):
-        DlightragConfig(
+        _settings_config(
             embedding=EmbeddingConfig(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -432,7 +437,7 @@ def test_bm25_profiles_reject_fallback_languages() -> None:
 
 def test_bm25_profiles_reject_unsafe_text_config_names() -> None:
     with pytest.raises(ValidationError, match="text_config"):
-        DlightragConfig(
+        _settings_config(
             embedding=EmbeddingConfig(
                 provider="voyage",
                 model="voyage-multimodal-3.5",
@@ -475,7 +480,7 @@ def test_non_postgres_storage_rejected(field: str, value: str) -> None:
 
 
 def test_pgvector_value_type_is_derived_from_index_type() -> None:
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -489,7 +494,7 @@ def test_pgvector_value_type_is_derived_from_index_type() -> None:
 
 
 def test_vector_index_type_can_fall_back_to_plain_hnsw() -> None:
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -504,7 +509,7 @@ def test_vector_index_type_can_fall_back_to_plain_hnsw() -> None:
 
 
 def test_role_config_uses_lightrag_role_names() -> None:
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -694,7 +699,7 @@ def test_typed_parser_sidecar_config_exports_lightrag_env(
     ):
         monkeypatch.delenv(key, raising=False)
 
-    DlightragConfig(
+    _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -778,7 +783,7 @@ def test_postgres_session_settings_merge_hnsw_defaults(
     monkeypatch.delenv("POSTGRES_POOL_CLOSE_TIMEOUT", raising=False)
     monkeypatch.delenv("POSTGRES_MAX_CONNECTIONS", raising=False)
 
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -838,7 +843,7 @@ def test_lightrag_parser_env_follows_dlightrag_parser_rules(
     """LightRAG parser routing must share DlightRAG's product-level policy."""
     monkeypatch.setenv("LIGHTRAG_PARSER", "pdf:stale-route")
 
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding=EmbeddingConfig(
             provider="voyage",
             model="voyage-multimodal-3.5",
@@ -908,7 +913,7 @@ def test_load_config_uses_explicit_env_file_without_global_dotenv(
 
 def test_config_repr_redacts_api_keys():
     """repr(config) must not expose plaintext API keys."""
-    cfg = DlightragConfig(
+    cfg = _settings_config(
         embedding={
             "provider": "openai_compatible",
             "model": "text-embed-v4",

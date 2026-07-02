@@ -103,7 +103,9 @@ class TestPlanWithLLM:
 
         await planner.plan("what is X")
 
-        structured_output = llm.await_args.kwargs["structured_output"]
+        await_args = llm.await_args
+        assert await_args is not None
+        structured_output = await_args.kwargs["structured_output"]
         assert isinstance(structured_output, StructuredOutput)
         assert structured_output.name == "query_plan"
 

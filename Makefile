@@ -70,7 +70,7 @@ ci:
 	uv sync --group dev
 	uv run ruff check src/ tests/ scripts/
 	uv run ruff format --check src/ tests/ scripts/
-	uv run pyright src/
+	uv run pyright
 	uv run lint-imports
 	uv run pytest tests/unit -v --tb=short
 	@echo "CI (fast) passed."

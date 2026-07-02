@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 
 from dlightrag.models.embedding_inputs import (
@@ -26,7 +28,7 @@ from dlightrag.models.providers.embed_providers import (
 class TestEmbedProviderABC:
     def test_cannot_instantiate(self) -> None:
         with pytest.raises(TypeError):
-            EmbedProvider()
+            cast(Any, EmbedProvider)()
 
 
 def test_voyage_payload_omits_input_type_in_symmetric_mode() -> None:

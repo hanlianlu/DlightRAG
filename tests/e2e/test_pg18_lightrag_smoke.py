@@ -109,6 +109,7 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
         doc_ids = await service.asearch_metadata(MetadataFilter(custom={"e2e_case": "pg18"}))
         assert doc_ids == [doc_id]
 
+        assert service._metadata_index is not None
         candidate_chunks = await metadata_retrieve(
             metadata_index=service._metadata_index,
             stores=service._lightrag_stores,

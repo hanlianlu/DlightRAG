@@ -317,6 +317,7 @@ class TestWebAnswer:
         assert "Uploaded diagram" in resp.text
         manager.get_session_image_data.assert_awaited_once()
         args = manager.get_session_image_data.await_args
+        assert args is not None
         assert args.args == ("session-1", ["img_0"])
         assert args.kwargs["scope"].session_key("session-1")
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.citations.source_builder import build_sources, build_sources_from_chunks
 
@@ -13,7 +15,7 @@ def _chunk(
     content: str = "text",
     image_data: str | None = None,
     page_idx: int | None = None,
-) -> dict:
+) -> dict[str, Any]:
     return {
         "chunk_id": chunk_id,
         "reference_id": reference_id,
@@ -23,6 +25,11 @@ def _chunk(
         "page_idx": page_idx,
         "metadata": {"file_name": file_path.rsplit("/", 1)[-1]},
     }
+
+
+def _chunks(source: SourceReference):
+    assert source.chunks is not None
+    return source.chunks
 
 
 class TestBuildSources:
@@ -40,9 +47,9 @@ class TestBuildSources:
 
         assert len(sources) == 2
         assert sources[0].id == "ref-1"
-        assert len(sources[0].chunks) == 2
+        assert len(_chunks(sources[0])) == 2
         assert sources[1].id == "ref-2"
-        assert len(sources[1].chunks) == 1
+        assert len(_chunks(sources[1])) == 1
 
     def test_chunks_keep_citation_index_order(self) -> None:
         contexts = {
@@ -54,8 +61,8 @@ class TestBuildSources:
         }
         sources = build_sources(contexts)
 
-        assert [c.chunk_id for c in sources[0].chunks] == ["c2", "c1", "c3"]
-        assert [c.chunk_idx for c in sources[0].chunks] == [1, 2, 3]
+        assert [c.chunk_id for c in _chunks(sources[0])] == ["c2", "c1", "c3"]
+        assert [c.chunk_idx for c in _chunks(sources[0])] == [1, 2, 3]
 
     def test_source_title_from_filename(self) -> None:
         contexts = {"chunks": [_chunk("c1", "ref-1", file_path="/long/path/report.pdf")]}
@@ -70,8 +77,8 @@ class TestBuildSources:
         contexts = {"chunks": [chunk]}
         sources = build_sources(contexts)
 
-        assert sources[0].chunks[0].image_url == "/images/default/c1?size=full"
-        assert sources[0].chunks[0].thumbnail_url == "/images/default/c1?size=thumb"
+        assert _chunks(sources[0])[0].image_url == "/images/default/c1?size=full"
+        assert _chunks(sources[0])[0].thumbnail_url == "/images/default/c1?size=thumb"
 
     def test_empty_contexts(self) -> None:
         assert build_sources({}) == []
@@ -99,8 +106,8 @@ class TestBuildSources:
         }
         sources = build_sources(contexts)
 
-        assert sources[0].chunks[0].chunk_idx == 1
-        assert sources[0].chunks[1].chunk_idx == 2
+        assert _chunks(sources[0])[0].chunk_idx == 1
+        assert _chunks(sources[0])[1].chunk_idx == 2
 
     def test_none_page_idx_does_not_reorder_citation_index(self) -> None:
         contexts = {
@@ -111,15 +118,15 @@ class TestBuildSources:
         }
         sources = build_sources(contexts)
 
-        assert [c.chunk_id for c in sources[0].chunks] == ["c1", "c2"]
-        assert [c.chunk_idx for c in sources[0].chunks] == [1, 2]
+        assert [c.chunk_id for c in _chunks(sources[0])] == ["c1", "c2"]
+        assert [c.chunk_idx for c in _chunks(sources[0])] == [1, 2]
 
     def test_page_idx_falls_back_to_metadata(self) -> None:
         chunk = _chunk("c1", "ref-1", page_idx=None)
         chunk["metadata"]["page_idx"] = 7
         sources = build_sources({"chunks": [chunk]})
 
-        assert sources[0].chunks[0].page_idx == 7
+        assert _chunks(sources[0])[0].page_idx == 7
 
     def test_cited_subset_preserves_source_catalog_fields(self) -> None:
         chunks = [
@@ -148,7 +155,7 @@ class TestBuildSources:
         assert sources[0].type == "pdf"
         assert sources[0].url == "/files/report.pdf"
         assert sources[0].cited_chunk_ids == ["c2"]
-        assert [c.chunk_id for c in sources[0].chunks] == ["c2"]
+        assert [c.chunk_id for c in _chunks(sources[0])] == ["c2"]
 
     def test_with_source_url_resolver(self) -> None:
         contexts = {"chunks": [_chunk("c1", "ref-1", file_path="/data/report.pdf")]}
@@ -157,7 +164,7 @@ class TestBuildSources:
             def resolve(self, path: str) -> str:
                 return f"https://cdn.example.com/{path}"
 
-        sources = build_sources(contexts, source_url_resolver=FakeResolver())
+        sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
 
         assert sources[0].url == "https://cdn.example.com//data/report.pdf"
 

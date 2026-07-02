@@ -9,7 +9,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from PIL import Image
@@ -106,7 +106,7 @@ def make_e2e_config(
     conn_kwargs: Mapping[str, Any],
 ) -> DlightragConfig:
     """Create a compact config for the local fake-model E2E smoke."""
-    return DlightragConfig(  # type: ignore[call-arg]
+    return cast(Any, DlightragConfig)(
         _env_file=None,
         postgres_host=str(conn_kwargs["host"]),
         postgres_port=int(conn_kwargs["port"]),
@@ -142,13 +142,16 @@ def make_e2e_config(
         ),
         metadata=MetadataConfig(
             allow_ad_hoc_json=True,
-            fields={
-                "e2e_case": {
-                    "type": "string",
-                    "normalizer": "casefold_trim",
-                    "filter_ops": ["exact"],
-                }
-            },
+            fields=cast(
+                Any,
+                {
+                    "e2e_case": {
+                        "type": "string",
+                        "normalizer": "casefold_trim",
+                        "filter_ops": ["exact"],
+                    }
+                },
+            ),
         ),
     )
 
