@@ -135,6 +135,10 @@ async def retrieve_tool(
         int | None,
         Field(default=None, description="Number of top results to return"),
     ] = None,
+    chunk_top_k: Annotated[
+        int | None,
+        Field(default=None, description="Vector chunk candidate count override."),
+    ] = None,
     workspaces: Annotated[
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),
@@ -157,6 +161,7 @@ async def retrieve_tool(
         args.query,
         workspaces=args.workspaces,
         top_k=args.top_k,
+        chunk_top_k=args.chunk_top_k,
         scope=scope,
         **query_kwargs_from_payload(args, include_multimodal_content=False),
     )
@@ -413,6 +418,10 @@ async def delete_files_tool(
         str | None,
         Field(default=None, description="Workspace to delete from. Omit for default."),
     ] = None,
+    dry_run: Annotated[
+        bool,
+        Field(default=False, description="Report matching documents without deleting them."),
+    ] = False,
 ) -> dict[str, Any]:
     args = DeleteFilesInput.model_validate(locals())
     manager = await _ensure_manager()
@@ -421,6 +430,7 @@ async def delete_files_tool(
         workspace_name,
         filenames=args.filenames,
         file_paths=args.file_paths,
+        dry_run=args.dry_run,
     )
     return {"results": results, "workspace": workspace_name}
 

@@ -184,11 +184,12 @@ needed, DlightRAG enforces both a long-edge floor and a JPEG quality floor; an
 image that cannot fit within those limits is skipped instead of being degraded
 into a low-quality preview.
 
-For `/answer`, retrieval deliberately over-fetches chunk/visual candidates,
-then the answer stage packs up to `answer.context_top_k` chunks. An explicit
-`chunk_top_k` request overrides that candidate budget; otherwise DlightRAG uses
-`config.chunk_top_k`. That budget maps to LightRAG `QueryParam.chunk_top_k`;
-LightRAG `top_k` remains the separate KG entity/relationship breadth. Retrieved
+`/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
+override the configured chunk/visual candidate budget; otherwise DlightRAG uses
+`config.chunk_top_k`. For `/answer`, retrieval deliberately over-fetches those
+candidates, then the answer stage packs up to `answer.context_top_k` chunks.
+That budget maps to LightRAG `QueryParam.chunk_top_k`; LightRAG `top_k` remains
+the separate KG entity/relationship breadth. Retrieved
 visual chunks are admitted in reranked order within the RAG context image
 budget. Pure visual chunks whose image cannot be sent are removed from the
 answer context and the packer backfills from later candidates; mixed text+image

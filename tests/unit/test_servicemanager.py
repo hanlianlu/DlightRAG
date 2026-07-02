@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -28,6 +29,54 @@ from dlightrag.core.session_images import SessionImageStore
 
 def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
+
+
+def test_public_sdk_signatures_expose_primary_kwargs() -> None:
+    for method in (
+        RAGServiceManager.aingest,
+        RAGServiceManager.astart_ingest_job,
+        RAGServiceManager.aretrieve,
+        RAGServiceManager.aanswer,
+        RAGServiceManager.aanswer_stream,
+        RAGServiceManager.delete_files,
+    ):
+        params = inspect.signature(method).parameters.values()
+        assert all(param.kind is not inspect.Parameter.VAR_KEYWORD for param in params)
+
+    ingest_params = inspect.signature(RAGServiceManager.aingest).parameters
+    for name in (
+        "path",
+        "bucket",
+        "key",
+        "prefix",
+        "url",
+        "urls",
+        "source_uri",
+        "source_uris",
+        "retain_source_file",
+        "metadata_policy",
+        "replace",
+    ):
+        assert name in ingest_params
+
+    retrieve_params = inspect.signature(RAGServiceManager.aretrieve).parameters
+    for name in ("top_k", "chunk_top_k", "filters", "multimodal_content"):
+        assert name in retrieve_params
+
+    answer_params = inspect.signature(RAGServiceManager.aanswer).parameters
+    for name in (
+        "top_k",
+        "chunk_top_k",
+        "answer_context_top_k",
+        "filters",
+        "multimodal_content",
+        "session_id",
+        "referenced_image_ids",
+    ):
+        assert name in answer_params
+
+    delete_params = inspect.signature(RAGServiceManager.delete_files).parameters
+    assert "dry_run" in delete_params
 
 
 @pytest.fixture()
@@ -684,8 +733,13 @@ class TestDelegation:
         mock_svc.adelete_files.return_value = [{"status": "deleted"}]
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        result = await manager.delete_files("ws_a", filenames=["a.pdf"])
+        result = await manager.delete_files("ws_a", filenames=["a.pdf"], dry_run=True)
         assert result == [{"status": "deleted"}]
+        mock_svc.adelete_files.assert_awaited_once_with(
+            file_paths=None,
+            filenames=["a.pdf"],
+            dry_run=True,
+        )
 
 
 class TestIngestJobs:
@@ -817,6 +871,31 @@ class TestIngestJobs:
         assert row["errors"] == ["s3://bucket/docs/bad.pdf: failed"]
         svc.aregister_workspace.assert_awaited_once()
         svc.aingest.assert_awaited_once()
+
+    async def test_staged_local_ingest_cleanup_is_not_durable_request(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_jobs._store = store
+        staged_dir = test_cfg.input_dir_path / "project_a" / "__uploads__" / "batch-1"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "report.pdf").write_text("pdf", encoding="utf-8")
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        job = await manager._astart_staged_local_ingest_job(
+            "Project A",
+            path=str(staged_dir),
+        )
+        await asyncio.wait_for(manager._ingest_jobs._tasks[job["job_id"]], timeout=1.0)
+        row = await manager.get_ingest_job(job["job_id"])
+
+        assert row is not None
+        assert row["request"]["kwargs"] == {"path": str(staged_dir)}
+        assert svc.aingest.await_args.kwargs["path"] == str(staged_dir)
+        assert "_cleanup_paths" not in svc.aingest.await_args.kwargs
+        assert "cleanup_paths" not in svc.aingest.await_args.kwargs
+        assert not staged_dir.exists()
 
     async def test_aingest_timeout_returns_running_job_without_cancelling_task(
         self, test_cfg

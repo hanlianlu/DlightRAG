@@ -55,6 +55,7 @@ async def delete_files(
         ws,
         file_paths=body.file_paths,
         filenames=body.filenames,
+        dry_run=body.dry_run,
     )
     return {"results": results, "workspace": ws}
 

@@ -108,6 +108,7 @@ async def retrieve(
         body.query,
         workspaces=body.workspaces,
         top_k=body.top_k,
+        chunk_top_k=body.chunk_top_k,
         scope=scope,
         **kwargs,
     )

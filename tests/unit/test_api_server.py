@@ -867,7 +867,7 @@ class TestRetrieveEndpoint:
         assert "answer" in body
         assert "contexts" in body
         assert "sources" in body
-        assert "chunk_top_k" not in mock_manager.aretrieve.call_args.kwargs
+        assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] is None
 
     async def test_retrieve_rejects_mode_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -880,7 +880,7 @@ class TestRetrieveEndpoint:
         assert resp.status_code == 422
         mock_manager.aretrieve.assert_not_called()
 
-    async def test_retrieve_rejects_chunk_top_k_field(
+    async def test_retrieve_forwards_chunk_top_k_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
@@ -888,8 +888,8 @@ class TestRetrieveEndpoint:
             "/retrieve",
             json={"query": "hello", "chunk_top_k": 5},
         )
-        assert resp.status_code == 422
-        mock_manager.aretrieve.assert_not_called()
+        assert resp.status_code == 200
+        assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] == 5
 
     async def test_retrieve_forwards_multimodal_content(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1034,6 +1034,18 @@ class TestDeleteEndpoint:
         assert resp.status_code == 200
         call_kwargs = mock_manager.delete_files.call_args
         assert call_kwargs[0][0] == "project_y"  # normalized: hyphens → underscores
+
+    async def test_delete_forwards_dry_run(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.request(
+            "DELETE",
+            "/files",
+            json={"filenames": ["report.pdf"], "dry_run": True},
+        )
+        assert resp.status_code == 200
+        assert mock_manager.delete_files.call_args.kwargs["dry_run"] is True
 
 
 # ---------------------------------------------------------------------------
