@@ -49,7 +49,7 @@ finally:
 ```bash
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "/absolute/path/to/dlightrag_storage/inputs/default/docs"}'
+  -d '{"source_type": "local", "path": "docs"}'
 ```
 
 All ingest operations are represented internally as jobs. REST and MCP ingest
@@ -59,7 +59,7 @@ result.
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `source_type` | `string` | yes | `local`, `azure_blob`, `s3` |
-| `path` | `string` | local | File or directory path under DlightRAG's managed `input_dir/<workspace>` |
+| `path` | `string` | local | File or directory path relative to DlightRAG's managed `input_dir/<workspace>` |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
 | `prefix` | `string` | azure_blob/s3 | Blob/key prefix filter; mutually exclusive with `blob_path`/`key` |
@@ -79,7 +79,7 @@ workspace directory and returns an ingest job.
 ### MCP Server
 
 MCP `ingest` exposes the same source and metadata arguments as REST `/ingest`,
-passed as tool arguments. Local path arguments must point under the managed
+passed as tool arguments. Local path arguments are relative to the managed
 `input_dir/<workspace>`. Calls return a background job; call
 `ingest_job_status` with the returned `job_id` to read progress.
 

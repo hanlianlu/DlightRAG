@@ -274,13 +274,13 @@ async def test_mcp_ingest_forwards_document_metadata(
             "status": "queued",
         }
     )
-    path = str(test_config.input_dir_path / "finance" / "report.pdf")
+    path = test_config.input_dir_path / "finance" / "report.pdf"
 
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
         {
             "source_type": "local",
-            "path": path,
+            "path": "report.pdf",
             "workspace": "finance",
             "title": "Quarterly Report",
             "author": "Ada",
@@ -293,7 +293,7 @@ async def test_mcp_ingest_forwards_document_metadata(
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "finance",
         source_type="local",
-        path=path,
+        path=str(path),
         title="Quarterly Report",
         author="Ada",
         metadata={"department": "Finance"},
@@ -308,24 +308,22 @@ async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_manager) -> Non
         {"source_type": "local", "path": "/tmp/report.pdf"},
     )
 
-    assert "under input_dir" in _tool_text(result)
+    assert "relative to input_dir" in _tool_text(result)
     mock_mcp_manager.astart_ingest_job.assert_not_awaited()
     mock_mcp_manager.aingest.assert_not_awaited()
 
 
-async def test_mcp_rejects_local_path_outside_workspace_input_dir(
-    mock_mcp_manager, test_config: DlightragConfig
-) -> None:
+async def test_mcp_rejects_local_path_traversal(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
         {
             "source_type": "local",
-            "path": str(test_config.input_dir_path / "default" / "report.pdf"),
+            "path": "../default/report.pdf",
             "workspace": "finance",
         },
     )
 
-    assert "under input_dir" in _tool_text(result)
+    assert "relative to input_dir" in _tool_text(result)
     mock_mcp_manager.astart_ingest_job.assert_not_awaited()
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -383,7 +381,7 @@ async def test_mcp_local_directory_ingest_starts_background_job(
         "ingest",
         {
             "source_type": "local",
-            "path": str(docs_dir),
+            "path": "docs",
             "workspace": "default",
         },
     )

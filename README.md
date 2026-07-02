@@ -220,14 +220,14 @@ same filesystem as your shell.
 
 For remote clients, prefer Web upload or `POST /ingest/blob`; uploaded files are
 staged under `working_dir/inputs/<workspace>/` and processed through the local
-pipeline. JSON/MCP `source_type="local"` accepts only paths under that managed
+pipeline. JSON/MCP `source_type="local"` accepts paths relative to that managed
 workspace input directory. REST/MCP ingest requests return an ingest job; poll
 the job endpoint for completion.
 
 ```bash
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "/absolute/path/to/dlightrag_storage/inputs/default/report.pdf"}'
+  -d '{"source_type": "local", "path": "report.pdf"}'
 
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \

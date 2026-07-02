@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from dlightrag.core.client_contracts import dump_optional_list
@@ -94,8 +95,23 @@ def managed_local_ingest_path(
     from dlightrag.utils import normalize_workspace
 
     root = (input_dir / normalize_workspace(workspace)).resolve()
-    raw_path = Path(path).expanduser()
-    candidate = raw_path if raw_path.is_absolute() else root / raw_path
+    if "\0" in path or path.startswith(("~", "/", "\\")):
+        raise ValueError(
+            "local ingest paths from REST/MCP must be relative to input_dir/<workspace>"
+        )
+    posix_path = PurePosixPath(path)
+    windows_path = PureWindowsPath(path)
+    if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
+        raise ValueError(
+            "local ingest paths from REST/MCP must be relative to input_dir/<workspace>"
+        )
+
+    parts = tuple(part for part in re.split(r"[\\/]+", path) if part)
+    if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError(
+            "local ingest paths from REST/MCP must be relative to input_dir/<workspace>"
+        )
+    candidate = root.joinpath(*parts)
     resolved = candidate.resolve(strict=False)
     try:
         resolved.relative_to(root)
