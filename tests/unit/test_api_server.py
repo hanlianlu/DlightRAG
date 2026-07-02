@@ -485,18 +485,18 @@ class TestIngestEndpoint:
     async def test_local_defaults_to_background_job(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        path = str(mock_config.input_dir_path / "default" / "file.pdf")
+        path = mock_config.input_dir_path / "default" / "file.pdf"
         app.state.manager = mock_manager
         resp = await client.post(
             "/ingest",
-            json={"source_type": "local", "path": path},
+            json={"source_type": "local", "path": "file.pdf"},
         )
         assert resp.status_code == 202
         assert resp.json()["job_id"] == "job-1"
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
             source_type="local",
-            path=path,
+            path=str(path),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -509,25 +509,23 @@ class TestIngestEndpoint:
             json={"source_type": "local", "path": "/data/file.pdf"},
         )
         assert resp.status_code == 400
-        assert "under input_dir" in resp.json()["detail"]
+        assert "relative to input_dir" in resp.json()["detail"]
         mock_manager.astart_ingest_job.assert_not_awaited()
         mock_manager.aingest.assert_not_awaited()
 
-    async def test_local_path_must_be_under_workspace_input_dir(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
+    async def test_local_path_rejects_traversal(self, client: AsyncClient, mock_manager) -> None:
         app.state.manager = mock_manager
         resp = await client.post(
             "/ingest",
             json={
                 "source_type": "local",
-                "path": str(mock_config.input_dir_path / "default" / "file.pdf"),
+                "path": "../default/file.pdf",
                 "workspace": "project-x",
             },
         )
 
         assert resp.status_code == 400
-        assert "under input_dir" in resp.json()["detail"]
+        assert "relative to input_dir" in resp.json()["detail"]
         mock_manager.astart_ingest_job.assert_not_awaited()
         mock_manager.aingest.assert_not_awaited()
 
@@ -549,7 +547,7 @@ class TestIngestEndpoint:
 
         resp = await client.post(
             "/ingest",
-            json={"source_type": "local", "path": str(docs_dir)},
+            json={"source_type": "local", "path": "docs"},
         )
 
         assert resp.status_code == 202
@@ -617,13 +615,13 @@ class TestIngestEndpoint:
     async def test_ingest_forwards_metadata_contract(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        path = str(mock_config.input_dir_path / "default" / "file.pdf")
+        path = mock_config.input_dir_path / "default" / "file.pdf"
         app.state.manager = mock_manager
         resp = await client.post(
             "/ingest",
             json={
                 "source_type": "local",
-                "path": path,
+                "path": "file.pdf",
                 "title": "Field Notes",
                 "author": "Ada",
                 "metadata": {"project": "apollo"},
@@ -632,6 +630,7 @@ class TestIngestEndpoint:
         )
         assert resp.status_code == 202
         call_kwargs = mock_manager.astart_ingest_job.call_args.kwargs
+        assert call_kwargs["path"] == str(path)
         assert call_kwargs["title"] == "Field Notes"
         assert call_kwargs["author"] == "Ada"
         assert call_kwargs["metadata"] == {"project": "apollo"}
@@ -727,32 +726,32 @@ class TestIngestEndpoint:
     async def test_ingest_with_workspace(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        path = str(mock_config.input_dir_path / "project_x" / "file.pdf")
+        path = mock_config.input_dir_path / "project_x" / "file.pdf"
         app.state.manager = mock_manager
         resp = await client.post(
             "/ingest",
             json={
                 "source_type": "local",
-                "path": path,
+                "path": "file.pdf",
                 "workspace": "project-x",
             },
         )
         assert resp.status_code == 202
         call_kwargs = mock_manager.astart_ingest_job.call_args
         assert call_kwargs[0][0] == "project_x"  # normalized: hyphens → underscores
+        assert call_kwargs.kwargs["path"] == str(path)
         mock_manager.aingest.assert_not_awaited()
 
     async def test_ingest_service_unavailable_503(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        path = str(mock_config.input_dir_path / "default" / "file.pdf")
         mock_manager.astart_ingest_job = AsyncMock(
             side_effect=RAGServiceUnavailableError("RAG not ready")
         )
         app.state.manager = mock_manager
         resp = await client.post(
             "/ingest",
-            json={"source_type": "local", "path": path},
+            json={"source_type": "local", "path": "file.pdf"},
         )
         assert resp.status_code == 503
 
