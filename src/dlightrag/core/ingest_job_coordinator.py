@@ -7,9 +7,13 @@ import asyncio
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from dlightrag.utils import normalize_workspace
+
+if TYPE_CHECKING:
+    from dlightrag.core.service import RAGService
+    from dlightrag.storage.ingest_jobs import PGIngestJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +24,14 @@ _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 class IngestJobCoordinator:
     """Manage durable ingest jobs, recovery, and in-process task lifecycle."""
 
-    def __init__(self, get_service: Callable[[str], Awaitable[Any]]) -> None:
+    def __init__(self, get_service: Callable[[str], Awaitable[RAGService]]) -> None:
         self._get_service = get_service
-        self._store: Any | None = None
+        self._store: PGIngestJobStore | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._workspaces: dict[str, str] = {}
         self._recovery_started = False
 
-    async def get_store(self) -> Any:
+    async def get_store(self) -> PGIngestJobStore:
         if self._store is None:
             from dlightrag.storage.ingest_jobs import PGIngestJobStore
 
@@ -41,7 +45,7 @@ class IngestJobCoordinator:
     async def start_recovery(self) -> None:
         await self.get_store()
 
-    async def _prune_store(self, store: Any) -> None:
+    async def _prune_store(self, store: PGIngestJobStore) -> None:
         try:
             summary = await store.prune()
         except Exception:
@@ -50,7 +54,7 @@ class IngestJobCoordinator:
         if summary.get("failed_abandoned") or summary.get("deleted_completed"):
             logger.info("Ingest job cleanup: %s", summary)
 
-    async def _recover_jobs(self, store: Any) -> None:
+    async def _recover_jobs(self, store: PGIngestJobStore) -> None:
         if self._recovery_started:
             return
         self._recovery_started = True
@@ -68,7 +72,7 @@ class IngestJobCoordinator:
         if recovered:
             logger.info("Recovered %d ingest job(s)", recovered)
 
-    def schedule_recovered_job(self, row: dict[str, Any], store: Any) -> bool:
+    def schedule_recovered_job(self, row: dict[str, Any], store: PGIngestJobStore) -> bool:
         job_id = str(row.get("job_id") or "")
         if not job_id or job_id in self._tasks:
             return False
@@ -267,7 +271,7 @@ class IngestJobCoordinator:
 
     async def _job_result_with_totals(
         self,
-        store: Any,
+        store: PGIngestJobStore,
         job_id: str,
         result: dict[str, Any],
     ) -> dict[str, Any]:

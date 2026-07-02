@@ -7,10 +7,13 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.utils.concurrency import bounded_gather
+
+if TYPE_CHECKING:
+    from dlightrag.core.service import RAGService
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +117,7 @@ def _round_robin_merge_key(
 async def federated_retrieve(
     query: str,
     workspaces: list[str],
-    get_service: Callable[[str], Awaitable[Any]],
+    get_service: Callable[[str], Awaitable[RAGService]],
     *,
     top_k: int | None = None,
     chunk_top_k: int | None = None,
