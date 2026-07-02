@@ -33,6 +33,7 @@ from dlightrag.api.models import (
     RetrieveRequest,
 )
 from dlightrag.citations import finalize_answer
+from dlightrag.config import get_config
 from dlightrag.core.client_contracts import dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
@@ -41,9 +42,8 @@ from dlightrag.core.client_payloads import (
 )
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
-    is_ingest_job_row,
+    managed_local_ingest_path,
     query_kwargs_from_payload,
-    should_wait_for_ingest,
 )
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
@@ -66,21 +66,19 @@ async def ingest(
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
     kwargs = ingest_kwargs_from_payload(body)
+    if body.source_type == "local":
+        try:
+            kwargs["path"] = managed_local_ingest_path(
+                source_type=body.source_type,
+                path=kwargs.get("path"),
+                input_dir=get_config().input_dir_path,
+                workspace=ws,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
-    wait = should_wait_for_ingest(
-        source_type=body.source_type,
-        path=body.path,
-        prefix=body.prefix,
-        wait=body.wait,
-    )
-    if not wait:
-        job = await manager.astart_ingest_job(ws, source_type=body.source_type, **kwargs)
-        return _job_response(job)
-
-    result = await manager.aingest(ws, source_type=body.source_type, **kwargs)
-    if is_ingest_job_row(result):
-        return _job_response(result)
-    return result
+    job = await manager.astart_ingest_job(ws, source_type=body.source_type, **kwargs)
+    return _job_response(job)
 
 
 @router.get("/ingest/jobs/{job_id}", response_model=IngestJobStatusResponse)
@@ -205,7 +203,7 @@ async def answer(
     )
 
 
-@router.post("/ingest/blob")
+@router.post("/ingest/blob", response_model=None)
 async def ingest_blob(
     request: Request,
     file: UploadFile = File(...),
@@ -215,7 +213,7 @@ async def ingest_blob(
     metadata: str | None = Form(None),
     metadata_policy: str | None = Form(None),
     user: UserContext = Depends(get_current_user),
-) -> dict[str, Any]:
+) -> JSONResponse:
     """Direct file upload ingestion via multipart/form-data.
 
     File is persisted to input_dir/<workspace>/<filename> for citation
@@ -295,10 +293,10 @@ async def ingest_blob(
     if policy is not None:
         kwargs["metadata_policy"] = policy
 
-    result = await manager.aingest(ws, source_type="local", **kwargs)
-    result["uploaded_file"] = str(target_path)
-    result["filename"] = safe_name
-    return result
+    job = await manager.astart_ingest_job(ws, source_type="local", **kwargs)
+    job["uploaded_file"] = str(target_path)
+    job["filename"] = safe_name
+    return _job_response(job)
 
 
 @router.post("/reset", response_model=ResetResponse)

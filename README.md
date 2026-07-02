@@ -218,13 +218,16 @@ same filesystem as your shell.
 
 ### First API Calls
 
-Local-source ingestion paths must be visible to the API process. In Docker,
-prefer Web upload or mount a host directory into the API container.
+For remote clients, prefer Web upload or `POST /ingest/blob`; uploaded files are
+staged under `working_dir/inputs/<workspace>/` and processed through the local
+pipeline. JSON/MCP `source_type="local"` accepts only paths under that managed
+workspace input directory. REST/MCP ingest requests return an ingest job; poll
+the job endpoint for completion.
 
 ```bash
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "local", "path": "/absolute/path/visible/to/api"}'
+  -d '{"source_type": "local", "path": "/absolute/path/to/dlightrag_storage/inputs/default/report.pdf"}'
 
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
@@ -657,9 +660,9 @@ make langfuse-down
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/ingest` | Ingest local, Azure Blob, or AWS S3 content; batch-shaped requests return an ingest job unless `wait=true` |
+| `POST` | `/ingest` | Ingest managed workspace-local paths, Azure Blob, or AWS S3 content; returns an ingest job |
 | `GET` | `/ingest/jobs/{job_id}` | Return ingest job status |
-| `POST` | `/ingest/blob` | Upload one file via multipart form and ingest it |
+| `POST` | `/ingest/blob` | Upload one file via multipart form and return an ingest job |
 | `POST` | `/retrieve` | Return contexts and sources without answer generation |
 | `POST` | `/answer` | Return or stream an LLM answer with contexts and sources |
 | `GET` | `/files` | List ingested documents |

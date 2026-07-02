@@ -120,7 +120,6 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "title" in ingest_props
     assert "author" in ingest_props
     assert "metadata" in ingest_props
-    assert "wait" in ingest_props
     assert _metadata_policy_enum(ingest_props["metadata_policy"]) == [
         "validate",
         "reject_unknown",
@@ -264,14 +263,24 @@ async def test_mcp_delete_workspace_resets_workspace(mock_mcp_manager) -> None:
     )
 
 
-async def test_mcp_ingest_forwards_document_metadata(mock_mcp_manager) -> None:
-    mock_mcp_manager.aingest = AsyncMock(return_value={"ingested": 1})
+async def test_mcp_ingest_forwards_document_metadata(
+    mock_mcp_manager, test_config: DlightragConfig
+) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "finance",
+            "source_type": "local",
+            "status": "queued",
+        }
+    )
+    path = str(test_config.input_dir_path / "finance" / "report.pdf")
 
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
         {
             "source_type": "local",
-            "path": "/tmp/report.pdf",
+            "path": path,
             "workspace": "finance",
             "title": "Quarterly Report",
             "author": "Ada",
@@ -280,16 +289,45 @@ async def test_mcp_ingest_forwards_document_metadata(mock_mcp_manager) -> None:
         },
     )
 
-    assert _tool_json(result) == {"ingested": 1}
-    mock_mcp_manager.aingest.assert_awaited_once_with(
+    assert _tool_json(result)["job_id"] == "job-1"
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "finance",
         source_type="local",
-        path="/tmp/report.pdf",
+        path=path,
         title="Quarterly Report",
         author="Ada",
         metadata={"department": "Finance"},
         metadata_policy="reject_unknown",
     )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_manager) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {"source_type": "local", "path": "/tmp/report.pdf"},
+    )
+
+    assert "under input_dir" in _tool_text(result)
+    mock_mcp_manager.astart_ingest_job.assert_not_awaited()
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_rejects_local_path_outside_workspace_input_dir(
+    mock_mcp_manager, test_config: DlightragConfig
+) -> None:
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {
+            "source_type": "local",
+            "path": str(test_config.input_dir_path / "default" / "report.pdf"),
+            "workspace": "finance",
+        },
+    )
+
+    assert "under input_dir" in _tool_text(result)
+    mock_mcp_manager.astart_ingest_job.assert_not_awaited()
+    mock_mcp_manager.aingest.assert_not_awaited()
 
 
 async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) -> None:
@@ -327,9 +365,11 @@ async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) 
     mock_mcp_manager.aingest.assert_not_awaited()
 
 
-async def test_mcp_local_directory_ingest_starts_background_job(mock_mcp_manager, tmp_path) -> None:
-    docs_dir = tmp_path / "docs"
-    docs_dir.mkdir()
+async def test_mcp_local_directory_ingest_starts_background_job(
+    mock_mcp_manager, test_config: DlightragConfig
+) -> None:
+    docs_dir = test_config.input_dir_path / "default" / "docs"
+    docs_dir.mkdir(parents=True)
     mock_mcp_manager.astart_ingest_job = AsyncMock(
         return_value={
             "job_id": "job-1",
@@ -357,7 +397,7 @@ async def test_mcp_local_directory_ingest_starts_background_job(mock_mcp_manager
     mock_mcp_manager.aingest.assert_not_awaited()
 
 
-async def test_mcp_single_s3_key_can_force_background_job(mock_mcp_manager) -> None:
+async def test_mcp_single_s3_key_defaults_to_background_job(mock_mcp_manager) -> None:
     mock_mcp_manager.astart_ingest_job = AsyncMock(
         return_value={
             "job_id": "job-1",
@@ -374,7 +414,6 @@ async def test_mcp_single_s3_key_can_force_background_job(mock_mcp_manager) -> N
             "bucket": "bucket",
             "key": "docs/file.pdf",
             "workspace": "default",
-            "wait": False,
         },
     )
 
