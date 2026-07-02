@@ -9,7 +9,27 @@ Python SDK, REST API, MCP server, and Web UI.
 ### Python SDK
 
 ```python
+from collections.abc import AsyncIterator
+
 from dlightrag import RAGServiceManager, DlightragConfig
+from dlightrag.sourcing import AsyncDataSource
+
+
+class BynderSource(AsyncDataSource):
+    def __init__(self, client) -> None:
+        self.client = client
+        self.asset_id_by_key: dict[str, str] = {}
+
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+        async for asset in self.client.iter_assets(prefix=prefix):
+            # Keep a parser-friendly filename/extension in the key.
+            key = f"{asset['id']}/{asset['filename']}"
+            self.asset_id_by_key[key] = asset["id"]
+            yield key
+
+    async def aload_document(self, doc_id: str) -> bytes:
+        return await self.client.download_asset(self.asset_id_by_key[doc_id])
+
 
 manager = await RAGServiceManager.create(DlightragConfig())
 try:
@@ -29,6 +49,7 @@ try:
         "default",
         source_type="s3",
         bucket="my-bucket",
+        region="us-east-1",      # optional; credentials come from AWS env/config/IAM
         key="docs/q1.pdf",       # or prefix="docs/"
     )
 
@@ -36,9 +57,9 @@ try:
     # authentication and expose document ids + bytes to DlightRAG.
     result = await manager.aingest_source(
         "default",
-        my_source,                # aiter_documents + aload_document
+        BynderSource(bynder_client),
         source_type="bynder",
-        source_uri_for_key=lambda key: f"bynder://assets/{key}",
+        source_uri_for_key=lambda key: f"bynder://assets/{key.split('/', 1)[0]}",
     )
 
     # Explicit non-blocking ingest
@@ -69,7 +90,9 @@ All ingest operations are represented internally as jobs. REST and MCP ingest
 return `202 Accepted`; poll `GET /ingest/jobs/{job_id}` for progress and final
 result. `source_type="url"` is intentionally limited to public or signed HTTPS
 URLs; authenticated SaaS APIs should fetch through a caller-owned SDK
-`AsyncDataSource` connector and use `aingest_source()`.
+`AsyncDataSource` connector and use `aingest_source()`. S3 credentials are read
+from the standard AWS credential chain (environment, shared config, or IAM
+role); ingest payloads do not carry access keys.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
