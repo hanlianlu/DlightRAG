@@ -23,8 +23,8 @@ Keep these in normal `config.yaml`:
 - PostgreSQL endpoint and workspace identity: `workspace`, `postgres_*`
 - high-level concurrency: `max_async`, `embedding_func_max_async`,
   `max_parallel_*`
-- retrieval/answer breadth: `top_k`, `chunk_top_k`, `bm25_top_k`,
-  `direct_visual_top_k`, `answer.*`
+- retrieval/answer breadth: `top_k`, `chunk_top_k`, `direct_visual_top_k`,
+  `answer.*`
 - auth and observability mode switches when they are not secret
 
 Keep these out of normal `config.yaml` unless debugging or load-testing proves
@@ -166,9 +166,10 @@ embedding_request_timeout: 120
 
 ## BM25
 
-BM25 is part of the supported DlightRAG retrieval path. Root config exposes
-`bm25_top_k`; language profiles and scoring constants are advanced index
-signatures.
+BM25 is part of the supported DlightRAG retrieval path. BM25 candidate breadth
+follows the active chunk budget: `chunk_top_k` for `/retrieve`, and
+`answer.candidate_top_k` for `/answer`. Language profiles and scoring constants
+are advanced index signatures.
 
 Defaults:
 

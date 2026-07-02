@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.5.12"
+version = "1.5.13"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -10,11 +10,11 @@ license = "Apache-2.0"
 maintainers = [{ name = "HanlianLyu" }, { name = "hllyu" }]
 dependencies = [
     # Core RAG
-    "lightrag-hku>=1.5.3",
+    "lightrag-hku>=1.5.4",
     # LLM
-    "openai>=2.29.0",
-    "anthropic>=0.42.0",
-    "google-genai>=1.14.0",
+    "openai>=2.44.0",
+    "anthropic>=0.115.1",
+    "google-genai>=2.10.0",
     # PostgreSQL
     "asyncpg>=0.31.0",
     "pgvector>=0.4.2",
@@ -25,7 +25,7 @@ dependencies = [
     "pyyaml>=6.0",
     # Utils
     "httpx>=0.28.0",
-    "pillow>=11.0.0",
+    "pillow>=12.3.0",
     "lingua-language-detector>=2.2.0",
     # JSON repair for LLM output
     "json-repair>=0.58.0",
@@ -51,7 +51,7 @@ dependencies = [
     "nh3>=0.2",
     "pygments>=2.17",
     # Observability
-    "langfuse>=4.0.0",
+    "langfuse>=4.12.0",
     "python-docx>=1.2.0",
 ]
 

@@ -514,7 +514,6 @@ class RAGService:
             self._bm25 = PostgresBM25(
                 pool=pg_pool,
                 workspace=config.workspace,
-                top_k=config.bm25_top_k,
                 profiles=bm25_profiles,
             )
             await self._bm25.ensure_indexes(

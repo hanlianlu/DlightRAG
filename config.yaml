@@ -162,7 +162,6 @@ max_parallel_analyze: 5
 
 top_k: 60        # LightRAG KG entity/relationship breadth.
 chunk_top_k: 30  # Direct /retrieve chunk breadth; /answer uses answer.candidate_top_k.
-bm25_top_k: 40   # BM25 is part of the supported DlightRAG retrieval path.
 direct_visual_top_k: 20
 
 answer:

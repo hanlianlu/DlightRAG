@@ -110,6 +110,7 @@ class TestYamlConfigLoading:
 
         omitted_internal_defaults = {
             "bm25_enabled",
+            "bm25_top_k",
             "bm25_profiles",
             "bm25_k1",
             "bm25_b",
