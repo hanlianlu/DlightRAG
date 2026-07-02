@@ -39,7 +39,6 @@ class _PreparedAnswerPrompt:
     contexts: RetrievalContexts
     user_prompt: str
     indexer: CitationIndexer
-    query_image_blocks: list[dict[str, Any]]
     chunk_image_blocks: dict[str, dict[str, Any]]
     trace: dict[str, Any]
 
@@ -113,7 +112,6 @@ class AnswerEngine:
         prepared = self._prepare_prompt_context(
             query,
             contexts,
-            query_images=query_images,
             context_top_k=context_top_k,
         )
         messages = self._build_messages(
@@ -122,8 +120,9 @@ class AnswerEngine:
             prepared.contexts,
             indexer=prepared.indexer,
             conversation_history=conversation_history,
-            query_image_blocks=prepared.query_image_blocks,
+            query_images=query_images,
             chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
+            trace=prepared.trace,
         )
 
         logger.info(
@@ -191,7 +190,6 @@ class AnswerEngine:
         prepared = self._prepare_prompt_context(
             query,
             contexts,
-            query_images=query_images,
             context_top_k=context_top_k,
         )
         messages = self._build_messages(
@@ -200,8 +198,9 @@ class AnswerEngine:
             prepared.contexts,
             indexer=prepared.indexer,
             conversation_history=conversation_history,
-            query_image_blocks=prepared.query_image_blocks,
+            query_images=query_images,
             chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
+            trace=prepared.trace,
         )
 
         logger.info(
@@ -237,8 +236,8 @@ class AnswerEngine:
         indexer: CitationIndexer | None = None,
         query_images: list[dict[str, Any]] | None = None,
         conversation_history: list[dict[str, Any]] | None = None,
-        query_image_blocks: list[dict[str, Any]] | None = None,
         chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
+        trace: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build OpenAI-format messages with independent dual image budgets.
 
@@ -249,16 +248,13 @@ class AnswerEngine:
         """
         user_budget = self._new_user_image_budget()
 
-        # ---- Phase 1: current-turn query_images eat first ----
+        # ---- Phase 1: current-turn query_images reserve user image slots first ----
         resolved_query_blocks: list[dict[str, Any]] = []
-        if query_image_blocks is None:
-            query_image_blocks = []
         if query_images:
             for idx, img in enumerate(query_images, start=1):
                 block = user_budget.add_user_image(img, label=f"query_image_{idx}")
                 if block is not None:
                     resolved_query_blocks.append(block)
-        resolved_query_blocks.extend(query_image_blocks)
 
         # ---- Phase 2: conversation_history gets leftovers ----
         history_messages: list[dict[str, Any]] = []
@@ -290,7 +286,6 @@ class AnswerEngine:
             prepared = self._prepare_prompt_context(
                 "",
                 contexts,
-                query_images=None,
             )
             contexts = prepared.contexts
             indexer = prepared.indexer
@@ -318,6 +313,9 @@ class AnswerEngine:
         if history_messages:
             messages.extend(history_messages)
         messages.append({"role": "user", "content": content})
+        if trace is not None:
+            trace["answer_user_images_sent"] = user_budget.count
+            trace["answer_user_image_budget_used_bytes"] = user_budget.used_bytes
         return messages
 
     def _new_rag_budget(self) -> AnswerImageBudget:
@@ -355,16 +353,9 @@ class AnswerEngine:
         query: str,
         contexts: RetrievalContexts,
         *,
-        query_images: list[dict[str, Any]] | None,
         context_top_k: int | None = None,
     ) -> _PreparedAnswerPrompt:
         image_budget = self._new_rag_budget()  # user images handled in _build_messages
-        query_image_blocks: list[dict[str, Any]] = []
-        for idx, img in enumerate(query_images or [], start=1):
-            block = image_budget.add_user_image(img, label=f"query_image_{idx}")
-            if block is not None:
-                query_image_blocks.append(block)
-
         effective_context_top_k = self._context_top_k if context_top_k is None else context_top_k
         packed = AnswerContextPacker().pack(
             contexts,
@@ -373,14 +364,12 @@ class AnswerEngine:
         )
         user_prompt, indexer = self._build_user_prompt(query, packed.contexts)
         trace = dict(packed.trace)
-        trace["answer_context_query_images_sent"] = len(query_image_blocks)
         trace["answer_context_image_budget_count"] = image_budget.count
         trace["answer_context_image_budget_used_bytes"] = image_budget.used_bytes
         return _PreparedAnswerPrompt(
             contexts=packed.contexts,
             user_prompt=user_prompt,
             indexer=indexer,
-            query_image_blocks=query_image_blocks,
             chunk_image_blocks=packed.image_blocks_by_chunk_id,
             trace=trace,
         )

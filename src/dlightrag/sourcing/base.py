@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 
 class AsyncDataSource(ABC):
@@ -28,8 +29,8 @@ class AsyncDataSource(ABC):
         ...
 
     @abstractmethod
-    async def aload_document(self, doc_id: str) -> bytes:
-        """Load document content as bytes (async)."""
+    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+        """Write document content to *destination* without returning bytes."""
         ...
 
 

@@ -10,6 +10,7 @@ Python SDK, REST API, MCP server, and Web UI.
 
 ```python
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from dlightrag import RAGServiceManager, DlightragConfig
 from dlightrag.sourcing import AsyncDataSource
@@ -24,15 +25,18 @@ class BynderSource(AsyncDataSource):
 
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
         async for asset in self.bynder_client.iter_assets(prefix=prefix):
-            # Discovery only: DlightRAG calls aload_document(key) later for bytes.
+            # Discovery only: DlightRAG materializes each key later.
             # Keep a parser-friendly filename/extension in the key.
             key = f"{asset['id']}/{asset['filename']}"
             self.asset_id_by_key[key] = asset["id"]
             yield key
 
-    async def aload_document(self, doc_id: str) -> bytes:
-        # User-owned client method. DlightRAG only requires this to return bytes.
-        return await self.bynder_client.download_asset_bytes(self.asset_id_by_key[doc_id])
+    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+        # User-owned client method. Stream or write bytes to the supplied path.
+        await self.bynder_client.download_asset_to_file(
+            self.asset_id_by_key[doc_id],
+            destination,
+        )
 
 
 manager = await RAGServiceManager.create(DlightragConfig())
@@ -57,8 +61,8 @@ try:
         key="docs/q1.pdf",       # or prefix="docs/"
     )
 
-    # Custom SDK connector; useful for Bynder/SaaS clients that handle
-    # authentication and expose document ids + bytes to DlightRAG.
+    # Custom SDK connector; useful for Bynder/SaaS clients that handle auth
+    # and write document bytes into DlightRAG's parser staging path.
     result = await manager.aingest_source(
         "default",
         BynderSource(bynder_client),
@@ -78,9 +82,10 @@ finally:
     await manager.close()
 ```
 
-`iter_assets()` and `download_asset_bytes()` in the example are methods on your
-own Bynder client wrapper. DlightRAG only calls `aiter_documents()` to discover
-keys and `aload_document(key)` to load each document's bytes.
+`iter_assets()` and `download_asset_to_file()` in the example are methods on
+your own Bynder client wrapper. DlightRAG calls `aiter_documents()` to discover
+keys and `amaterialize_document(key, destination)` to write each document into
+parser staging without loading the whole object into memory.
 
 ### REST API
 
@@ -316,7 +321,7 @@ async for token in token_iter:
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
-| `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded before being sent to the answer LLM. Capped at 10. |
+| `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 10. |
 | `session_id` | `str \| None` | `None` | Conversation/session key for reusing uploaded query images. |
 | `referenced_image_ids` | `list[str] \| None` | `None` | Image IDs from a previous `image_meta` event or JSON response to include again in retrieval and answer generation. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
@@ -600,8 +605,8 @@ with paths, chunks, pages, images, and optional highlights.
 returns answer-packed contexts plus only cited sources after citation
 validation. `references` is a compact document-level projection of that cited
 `sources` list. Answer packing removes pure visual chunks whose image could not
-fit the answer image budget, while preserving text from mixed text+image
-chunks.
+fit the retrieved-context image budget, while preserving text from mixed
+text+image chunks.
 
 
 ## Citations

@@ -286,11 +286,11 @@ async def main():
         )
         print(await manager.get_ingest_job(job["job_id"]))
 
-        # Custom SDK connectors can feed bytes directly without adding a
+        # Custom SDK connectors can materialize files without adding a
         # DlightRAG-native Bynder/SaaS connector.
         await manager.aingest_source(
             workspace,
-            my_source,  # implements aiter_documents + aload_document
+            my_source,  # implements aiter_documents + amaterialize_document
             source_type="bynder",
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
         )
@@ -443,12 +443,13 @@ DLIGHTRAG_EMBEDDING__API_KEY=...
 DLIGHTRAG_RERANK__API_KEY=...
 ```
 
-### Parser And MinerU
+### Parser Routing And Sidecars
 
 DlightRAG defaults to LightRAG native parsing for DOCX, Markdown, and textpack
-bundles, and MinerU for other supported document formats. Parser routing is a
-product default, not a normal user-facing setting. DlightRAG exposes the
-sidecar endpoint and visual context controls needed for local/cloud deployment.
+bundles, and a MinerU-compatible external parser endpoint for other supported
+document formats. Parser routing is a product default, not a normal user-facing
+setting. DlightRAG exposes the sidecar endpoint and visual context controls
+needed for local/cloud deployment.
 
 Important parser settings:
 
@@ -488,7 +489,7 @@ Concurrency defaults:
 | `embedding_func_max_async` | `16` | Embedding queue concurrency |
 | `max_parallel_insert` | `3` | LightRAG staged insert workers |
 | `max_parallel_parse_native` | `5` | Native parser workers |
-| `max_parallel_parse_mineru` | `2` | MinerU parser workers |
+| `max_parallel_parse_mineru` | `2` | External parser workers for the MinerU-compatible route |
 | `max_parallel_analyze` | `5` | VLM analyze workers |
 
 ### Embeddings
@@ -637,6 +638,7 @@ high-signal breadth controls:
 | `chunk_top_k` | `30` |
 | `answer.context_top_k` | `30` |
 | `answer.max_images` | `6` |
+| `answer.max_user_images` | `3` |
 
 Image compression budgets are advanced transport limits; see
 [docs/config-reference.md](docs/config-reference.md#image-budgets). Use

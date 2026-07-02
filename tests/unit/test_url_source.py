@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from dlightrag.sourcing.uri import parse_remote_uri
@@ -11,11 +13,22 @@ from dlightrag.sourcing.url import URLDataSource
 
 class _Response:
     def __init__(self, content: bytes, *, url: str = "https://cdn.example.com/report.pdf") -> None:
-        self.content = content
+        self._content = content
         self.url = url
+
+    async def __aenter__(self) -> _Response:
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
 
     def raise_for_status(self) -> None:
         return None
+
+    async def aiter_bytes(self):
+        midpoint = len(self._content) // 2
+        yield self._content[:midpoint]
+        yield self._content[midpoint:]
 
 
 class _Client:
@@ -24,7 +37,8 @@ class _Client:
         self.urls: list[str] = []
         self.closed = False
 
-    async def get(self, url: str) -> _Response:
+    def stream(self, method: str, url: str) -> _Response:
+        assert method == "GET"
         self.urls.append(url)
         return _Response(b"document", url=self.final_url)
 
@@ -32,7 +46,7 @@ class _Client:
         self.closed = True
 
 
-async def test_url_data_source_maps_extensionless_url_to_html_filename() -> None:
+async def test_url_data_source_maps_extensionless_url_to_html_filename(tmp_path: Path) -> None:
     client = _Client()
     source = URLDataSource(
         urls=["https://api.bynder.com/docs/getting-started"],
@@ -43,7 +57,9 @@ async def test_url_data_source_maps_extensionless_url_to_html_filename() -> None
     assert source.source_uri_for_key("getting-started.html") == (
         "https://api.bynder.com/docs/getting-started"
     )
-    assert await source.aload_document("getting-started.html") == b"document"
+    destination = tmp_path / "getting-started.html"
+    await source.amaterialize_document("getting-started.html", destination)
+    assert destination.read_bytes() == b"document"
     assert client.urls == ["https://api.bynder.com/docs/getting-started"]
 
 
@@ -69,14 +85,14 @@ async def test_url_data_source_accepts_explicit_stable_source_uri() -> None:
     assert source.source_uri_for_key("asset.pdf") == "bynder://asset/asset-1"
 
 
-async def test_url_data_source_revalidates_final_response_url() -> None:
+async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) -> None:
     source = URLDataSource(
         urls=["https://cdn.example.com/report.pdf"],
         client=_Client(final_url="https://127.0.0.1/report.pdf"),
     )
 
     with pytest.raises(ValueError, match="public"):
-        await source.aload_document("report.pdf")
+        await source.amaterialize_document("report.pdf", tmp_path / "report.pdf")
 
 
 def test_url_data_source_rejects_insecure_or_private_urls() -> None:

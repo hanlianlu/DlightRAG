@@ -724,7 +724,7 @@ class DlightragConfig(BaseSettings):
     max_parallel_parse_mineru: int = Field(
         default=2,
         ge=1,
-        description="LightRAG MinerU parser worker concurrency.",
+        description="LightRAG external parser worker concurrency for the MinerU-compatible route.",
     )
     max_parallel_analyze: int = Field(
         default=5,

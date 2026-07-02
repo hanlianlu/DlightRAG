@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -17,8 +18,8 @@ class StreamingOnlySource(AsyncDataSource):
         yield f"{base}a.pdf"
         yield f"{base}b.pdf"
 
-    async def aload_document(self, doc_id: str) -> bytes:
-        return doc_id.encode()
+    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+        destination.write_bytes(doc_id.encode())
 
 
 async def test_async_data_source_list_collects_streaming_documents() -> None:

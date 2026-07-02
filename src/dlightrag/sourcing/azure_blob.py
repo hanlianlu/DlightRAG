@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC
+from pathlib import Path
 
 from dlightrag.sourcing.base import AsyncDataSource
 
@@ -127,12 +128,15 @@ class AzureBlobDataSource(AsyncDataSource):
             )
         return self._async_container_client
 
-    async def aload_document(self, doc_id: str) -> bytes:
-        """Async download blob content as bytes."""
+    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+        """Download blob content to a local parser input file."""
         client = await self._get_async_container_client()
         blob_client = client.get_blob_client(doc_id)
         stream = await blob_client.download_blob()
-        return await stream.readall()
+        with destination.open("wb") as out:
+            async for chunk in stream.chunks():
+                if chunk:
+                    out.write(chunk)
 
     async def aupload_document(
         self,

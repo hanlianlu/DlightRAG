@@ -89,7 +89,7 @@ Concurrency knobs affect different bottlenecks:
 | `postgres_pool_max_size` | DlightRAG metadata/BM25/job connections | PostgreSQL `max_connections` |
 | `max_parallel_insert` | staged insert/vector/KG write workers | PostgreSQL writes and vector indexes |
 | `max_parallel_parse_native` | native parser workers | CPU and file I/O |
-| `max_parallel_parse_mineru` | MinerU parser workers | MinerU service, CPU/GPU, OCR latency |
+| `max_parallel_parse_mineru` | External parser workers for the MinerU-compatible route | Parser service, CPU/GPU, OCR latency |
 | `max_parallel_analyze` | visual/multimodal analysis workers | VLM endpoint limits |
 | `max_async` | LightRAG LLM request concurrency | LLM endpoint limits |
 | `embedding_func_max_async` | embedding request concurrency | embedding endpoint and vector writes |
