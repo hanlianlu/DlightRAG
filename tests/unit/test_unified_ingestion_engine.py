@@ -54,6 +54,19 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     deps["metadata_index"].upsert.assert_awaited_once()
 
 
+async def test_document_ingest_preserves_lightrag_parser_engine_params(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample.[mineru(page_range=1-3)-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+
+    await engine.aingest_file(source, replace=False)
+
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["parse_engine"] == "mineru(page_range=1-3)"
+
+
 async def test_document_ingest_labels_bm25_chunk_languages(tmp_path: Path) -> None:
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
@@ -121,6 +134,53 @@ async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Pat
     assert kwargs["process_options"] == ["iteP", "iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     assert deps["metadata_index"].upsert.await_count == 2
+
+
+async def test_batch_document_ingest_preserves_per_file_chunk_params(
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "b.[mineru-iteP(chunk_ts=1234,drop_rf=true)].pdf"
+    docx = tmp_path / "a.docx"
+    pdf.write_bytes(b"%PDF-1.4")
+    docx.write_bytes(b"fake-docx")
+    engine, deps = _make_engine(
+        parser_rules="docx:native-iteP,*:mineru-iteP",
+        chunk_options={"paragraph_semantic": {"chunk_overlap_token_size": 99}},
+    )
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {"chunks_list": ["chunk-docx"], "content_hash": "sha256:docx", "status": "processed"},
+        {"chunks_list": ["chunk-pdf"], "content_hash": "sha256:pdf", "status": "processed"},
+    ]
+    deps["stores"].get_full_doc.side_effect = [
+        {
+            "parse_engine": "native",
+            "process_options": "iteP",
+            "chunk_options": {},
+            "sidecar_location": None,
+        },
+        {
+            "parse_engine": "mineru",
+            "process_options": "iteP",
+            "chunk_options": {},
+            "sidecar_location": None,
+        },
+    ]
+
+    await engine.aingest_files([docx, pdf], replace=False)
+
+    kwargs = deps["lightrag"].apipeline_enqueue_documents.await_args.kwargs
+    assert kwargs["chunk_options"] == [
+        {"paragraph_semantic": {"chunk_overlap_token_size": 99}},
+        {
+            "paragraph_semantic": {
+                "chunk_overlap_token_size": 99,
+                "chunk_token_size": 1234,
+                "drop_references": True,
+            }
+        },
+    ]
 
 
 async def test_prepared_batch_preserves_remote_metadata_path(tmp_path: Path) -> None:

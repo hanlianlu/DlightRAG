@@ -223,7 +223,7 @@ or:
 
 ```bash
 DLIGHTRAG_AUTH_MODE=jwt
-DLIGHTRAG_JWT_SECRET=<openssl-rand-base64-64>
+DLIGHTRAG_JWT_VERIFICATION_KEY=<openssl-rand-base64-64>
 DLIGHTRAG_JWT_ALGORITHM=HS256
 ```
 
@@ -455,10 +455,10 @@ DLIGHTRAG_RERANK__API_KEY=...
 
 ### Parser And MinerU
 
-DlightRAG defaults to LightRAG native parsing for DOCX and MinerU for other
-supported document formats. Parser routing is a product default, not a normal
-user-facing setting. DlightRAG exposes the sidecar endpoint and visual context
-controls needed for local/cloud deployment.
+DlightRAG defaults to LightRAG native parsing for DOCX, Markdown, and textpack
+bundles, and MinerU for other supported document formats. Parser routing is a
+product default, not a normal user-facing setting. DlightRAG exposes the
+sidecar endpoint and visual context controls needed for local/cloud deployment.
 
 Important parser settings:
 
@@ -622,12 +622,13 @@ JWT:
 ```bash
 openssl rand -base64 64
 DLIGHTRAG_AUTH_MODE=jwt
-DLIGHTRAG_JWT_SECRET=<generated>
+DLIGHTRAG_JWT_VERIFICATION_KEY=<generated>
 DLIGHTRAG_JWT_ALGORITHM=HS256
 ```
 
 Clients send `Authorization: Bearer <token>`. JWT tokens must include `sub`,
-which becomes the authenticated `user_id`.
+which becomes the authenticated `user_id`. For RS*/ES* algorithms,
+`DLIGHTRAG_JWT_VERIFICATION_KEY` must be the issuer's public key PEM.
 
 ### Rerank And Answer Breadth
 

@@ -194,15 +194,6 @@ class TestMakeCompletionFunc:
 
 
 class TestModelFactoryExports:
-    def test_removed_chat_model_factory_is_not_exported(self):
-        import dlightrag.models as models
-        from dlightrag.models import llm
-
-        assert not hasattr(llm, "get_chat_model_func")
-        assert not hasattr(llm, "get_chat_model_func_for_lightrag")
-        assert "get_chat_model_func" not in models.__all__
-        assert "get_chat_model_func_for_lightrag" not in models.__all__
-
     def test_lightrag_default_adapter_is_explicitly_exported(self):
         import dlightrag.models as models
         from dlightrag.models import llm

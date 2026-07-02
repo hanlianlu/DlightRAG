@@ -381,3 +381,61 @@ async def test_backend_hydrates_v150_drawing_sidecar_from_drawings_json(
     # file_path should be remapped from the sidecar asset path to the document path
     assert chunk["file_path"] == "/docs/report.pdf"
     assert result.contexts["chunks"][0]["image_data"]
+
+
+async def test_backend_rejects_drawing_sidecar_image_path_outside_artifact_dir(
+    tmp_path: Path,
+) -> None:
+    parsed_dir = tmp_path / "sample.parsed"
+    parsed_dir.mkdir()
+    outside = tmp_path / "outside.png"
+    _write_image(outside)
+
+    (parsed_dir / "sample.drawings.json").write_text(
+        json.dumps(
+            {
+                "drawings": {
+                    "im-hash-0001": {
+                        "id": "im-hash-0001",
+                        "img_path": "../outside.png",
+                        "format": "png",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={
+            "data": {
+                "chunks": [{"id": "mm1", "content": "visual", "file_path": "/docs/report.pdf"}],
+                "entities": [],
+                "relationships": [],
+            }
+        }
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(
+        return_value=[
+            {
+                "id": "mm1",
+                "content": "visual",
+                "file_path": "/docs/report.pdf",
+                "full_doc_id": "doc-1",
+                "sidecar": {
+                    "type": "drawing",
+                    "id": "im-hash-0001",
+                    "refs": [{"type": "drawing", "id": "im-hash-0001"}],
+                },
+            }
+        ]
+    )
+    lightrag.full_docs = MagicMock()
+    lightrag.full_docs.get_by_id = AsyncMock(return_value={"sidecar_location": parsed_dir.as_uri()})
+
+    backend = LightRAGMixBackend(lightrag=lightrag)
+    result = await backend.aretrieve("question")
+
+    assert result.contexts["chunks"][0]["image_data"] is None

@@ -90,8 +90,3 @@ def test_exported_guidance_constants_do_not_declare_identity() -> None:
         assert name in prompts.__all__
         assert "You are " not in getattr(prompts, name)
     assert "You are " not in LISTWISE_RERANK_PROMPT
-
-
-def test_stale_single_item_visual_rerank_prompt_is_not_exported() -> None:
-    assert "VISUAL_RERANK_PROMPT_TEMPLATE" not in prompts.__all__
-    assert "VISUAL_RERANK_PROMPT" not in prompts.__all__

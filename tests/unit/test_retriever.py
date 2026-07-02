@@ -96,6 +96,39 @@ async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
     assert result.contexts["entities"] == [{"entity_name": "E"}]
 
 
+async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    metadata_index = AsyncMock()
+    stores = AsyncMock()
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={
+            "chunks": [{"chunk_id": "semantic-a"}, {"chunk_id": "semantic-b"}],
+            "entities": [],
+            "relationships": [],
+        }
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = [{"chunk_id": "bm25-a"}, {"chunk_id": "bm25-b"}]
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+    )
+
+    result = await retriever.aretrieve("query", top_k=2)
+
+    assert bm25.search.await_args.kwargs["top_k"] == 2
+    assert [c["chunk_id"] for c in result.contexts["chunks"]] == [
+        "semantic-a",
+        "bm25-a",
+        "semantic-b",
+        "bm25-b",
+    ]
+
+
 async def test_unified_retriever_logs_retrieval_mix_summary(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

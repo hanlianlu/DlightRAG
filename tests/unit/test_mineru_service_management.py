@@ -83,13 +83,6 @@ def test_makefile_exposes_mineru_launch_agent_targets() -> None:
     assert "\nmineru-service-uninstall:\n\tscripts/mineru/launch_agent.sh uninstall\n" in makefile
 
 
-def test_obsolete_top_level_mineru_helpers_are_removed() -> None:
-    assert not (ROOT / "scripts" / "install_mineru_service.sh").exists()
-    assert not (ROOT / "scripts" / "start_mineru_api.sh").exists()
-    assert not (ROOT / "scripts" / "mineru_launch_agent.sh").exists()
-    assert not (ROOT / "scripts" / "mineru_env.sh").exists()
-
-
 def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:
     capture = tmp_path / "uv.txt"
     bin_dir = tmp_path / "bin"

@@ -61,10 +61,10 @@ def verify_bearer_token(
         return UserContext(user_id=default_user_id, auth_mode="simple")
 
     if mode == "jwt":
-        if not cfg.jwt_secret:
-            raise HTTPException(status_code=500, detail="JWT secret not configured")
+        if not cfg.jwt_verification_key:
+            raise HTTPException(status_code=500, detail="JWT verification key not configured")
         try:
-            claims = jwt.decode(raw_token, cfg.jwt_secret, algorithms=[cfg.jwt_algorithm])
+            claims = jwt.decode(raw_token, cfg.jwt_verification_key, algorithms=[cfg.jwt_algorithm])
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expired") from None
         except jwt.InvalidTokenError:

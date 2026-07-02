@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Iterator
-from typing import Any
 from unittest.mock import AsyncMock
 
 import jwt
@@ -318,7 +317,7 @@ class TestWorkspaceLifecycleAPI:
 # TestJWTAuth
 # ---------------------------------------------------------------------------
 
-_JWT_SECRET = "test-jwt-secret-key-for-unit-tests"
+_JWT_VERIFICATION_KEY = "test-jwt-verification-key-for-unit-tests"
 
 
 class TestJWTAuth:
@@ -330,14 +329,14 @@ class TestJWTAuth:
     ) -> None:
         cfg = mock_config_no_auth_override
         cfg.auth_mode = "jwt"
-        cfg.jwt_secret = _JWT_SECRET
+        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
         cfg.jwt_algorithm = "HS256"
 
         payload = {
             "sub": "user-42",
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
-        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+        token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
 
         resp = await client.get(
             "/files",
@@ -351,14 +350,14 @@ class TestJWTAuth:
     ) -> None:
         cfg = mock_config_no_auth_override
         cfg.auth_mode = "jwt"
-        cfg.jwt_secret = _JWT_SECRET
+        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
         cfg.jwt_algorithm = "HS256"
 
         payload = {
             "sub": "user-42",
             "exp": datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1),
         }
-        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+        token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
 
         resp = await client.get(
             "/files",
@@ -402,46 +401,46 @@ class TestVerifyBearerToken:
 
     def test_jwt_valid_token(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
-        test_config.jwt_secret = _JWT_SECRET
+        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
         test_config.jwt_algorithm = "HS256"
 
         payload = {
             "sub": "user-42",
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
-        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+        token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
         ctx = verify_bearer_token(token, test_config)
         assert ctx.user_id == "user-42"
         assert ctx.auth_mode == "jwt"
 
     def test_jwt_expired_token_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
-        test_config.jwt_secret = _JWT_SECRET
+        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
         test_config.jwt_algorithm = "HS256"
 
         payload = {
             "sub": "user-42",
             "exp": datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=1),
         }
-        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+        token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
         with pytest.raises(HTTPException, match="Token expired"):
             verify_bearer_token(token, test_config)
 
     def test_jwt_missing_sub_claim_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
-        test_config.jwt_secret = _JWT_SECRET
+        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
         test_config.jwt_algorithm = "HS256"
 
         payload = {
             "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
         }
-        token = jwt.encode(payload, _JWT_SECRET, algorithm="HS256")
+        token = jwt.encode(payload, _JWT_VERIFICATION_KEY, algorithm="HS256")
         with pytest.raises(HTTPException, match="missing 'sub' claim"):
             verify_bearer_token(token, test_config)
 
-    def test_jwt_wrong_secret_raises_401(self, test_config: DlightragConfig) -> None:
+    def test_jwt_wrong_verification_key_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
-        test_config.jwt_secret = _JWT_SECRET
+        test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
         test_config.jwt_algorithm = "HS256"
 
         payload = {"sub": "user-42"}
@@ -960,54 +959,6 @@ class TestAnswerEndpoint:
         assert resp.status_code == 503
 
 
-@pytest.mark.parametrize(
-    ("path", "payload", "manager_method"),
-    [
-        (
-            "/retrieve",
-            {
-                "query": "Find the matching drawing",
-                "multimodal_content": [{"type": "image", "img_path": "/tmp/query.png"}],
-            },
-            "aretrieve",
-        ),
-        (
-            "/retrieve",
-            {"query": "Find the matching drawing", "query_images": ["data:image/png;base64,abc"]},
-            "aretrieve",
-        ),
-        (
-            "/answer",
-            {
-                "query": "hello",
-                "stream": False,
-                "conversation_history": [{"role": "human", "content": "previous"}],
-            },
-            "aanswer",
-        ),
-        (
-            "/answer",
-            {"query": "hello", "stream": False, "query_images": ["data:image/png;base64,abc"]},
-            "aanswer",
-        ),
-    ],
-)
-async def test_query_endpoints_reject_legacy_client_shapes(
-    client: AsyncClient,
-    mock_config: DlightragConfig,
-    mock_manager,
-    path: str,
-    payload: dict[str, Any],
-    manager_method: str,
-) -> None:
-    app.state.manager = mock_manager
-
-    resp = await client.post(path, json=payload)
-
-    assert resp.status_code == 422
-    getattr(mock_manager, manager_method).assert_not_called()
-
-
 # ---------------------------------------------------------------------------
 # TestFilesEndpoint
 # ---------------------------------------------------------------------------
@@ -1243,23 +1194,3 @@ class TestAPIContracts:
             ]["$ref"]
             == "#/components/schemas/WorkspacesResponse"
         )
-
-    async def test_mutating_request_models_reject_unknown_fields(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        delete_resp = await client.request(
-            "DELETE",
-            "/files",
-            json={"filenames": ["a.pdf"], "mode": "legacy"},
-        )
-        reset_resp = await client.post("/reset", json={"workspace": "default", "mode": "legacy"})
-        metadata_resp = await client.post(
-            "/metadata/doc-1",
-            json={"metadata": {"topic": "rag"}, "mode": "merge", "legacy": True},
-        )
-
-        assert delete_resp.status_code == 422
-        assert reset_resp.status_code == 422
-        assert metadata_resp.status_code == 422

@@ -107,7 +107,7 @@ class UnifiedRetriever:
                 trace["strict_filter_empty"] = True
                 return RetrievalResult(trace=trace)
 
-        chunk_limit = chunk_top_k or top_k
+        chunk_candidate_limit = chunk_top_k or top_k
         lexical_query = bm25_query or query
         async with metadata_filter_scope(candidate_ids):
             lightrag_task = asyncio.create_task(
@@ -125,7 +125,7 @@ class UnifiedRetriever:
                     self._bm25.search(
                         lexical_query,
                         candidate_ids=candidate_ids,
-                        top_k=chunk_limit,
+                        top_k=chunk_candidate_limit,
                     )
                 )
                 if self._bm25 is not None
@@ -154,7 +154,7 @@ class UnifiedRetriever:
         else:
             fused = list(semantic_chunks)
         fused = dedup_chunks_by_content(fused)
-        lightrag_result.contexts["chunks"] = fused[: chunk_limit or len(fused)]
+        lightrag_result.contexts["chunks"] = fused
         trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
         fused_source_counts = _count_fused_sources(
             lightrag_result.contexts["chunks"],

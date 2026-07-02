@@ -13,7 +13,7 @@ ag_catalog.ag_graph before calling create_graph(), skipping creation entirely
 when the graph already exists.  Wrap execute() to also catch DuplicateSchemaError
 as defence-in-depth.
 
-As of LightRAG 1.5.3, these patches remain runtime-gated because some
+As of LightRAG 1.5.4, these patches remain runtime-gated because some
 upstream surfaces still need local guards.
 
 MinerU parser hygiene: current LightRAG MinerU IR builder serializes unknown

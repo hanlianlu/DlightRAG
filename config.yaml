@@ -161,7 +161,7 @@ max_parallel_analyze: 5
 # ─────────────────────────────────────────────────────────────────
 
 top_k: 60        # LightRAG KG entity/relationship breadth.
-chunk_top_k: 30  # Direct /retrieve breadth; /answer derives candidates from this.
+chunk_top_k: 30  # Chunk/BM25 candidate breadth; not a final /retrieve cap.
 direct_visual_top_k: 20
 
 answer:
@@ -175,7 +175,7 @@ answer:
 # Auth secrets are best kept in .env.
 # auth_mode: simple
 # api_auth_token: ""
-# jwt_secret: ""
+# jwt_verification_key: ""
 # jwt_algorithm: "HS256"
 
 # Langfuse keys belong in .env. Non-secret SDK behavior can be set here when

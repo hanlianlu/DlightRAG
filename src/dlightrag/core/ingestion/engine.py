@@ -9,6 +9,7 @@ import logging
 import shutil
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,12 @@ from typing import Any
 from lightrag.constants import (
     FULL_DOCS_FORMAT_PENDING_PARSE,
 )
-from lightrag.parser.routing import resolve_file_parser_directives
+from lightrag.parser.routing import (
+    chunk_strategy_key,
+    encode_parse_engine,
+    resolve_chunk_options,
+    resolve_parser_directives,
+)
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 
@@ -62,6 +68,7 @@ class _PendingDocumentIngest:
     metadata_record: dict[str, Any]
     parse_engine: str
     process_options: str
+    chunk_options: dict[str, Any] | None
 
 
 def _image_dims(path: Path) -> tuple[int, int] | None:
@@ -173,11 +180,7 @@ class UnifiedIngestionEngine:
         entries: list[_PendingDocumentIngest] = []
         for index, item in enumerate(_prepare_ingest_item(path) for path in paths):
             parser_path = item.parser_path
-            parse_engine, process_options = resolve_file_parser_directives(
-                parser_path,
-                parser_rules=self._parser_rules,
-                require_external_endpoint=False,
-            )
+            parse_engine, process_options, chunk_options = self._parser_directives_for(parser_path)
             entries.append(
                 _PendingDocumentIngest(
                     index=index,
@@ -198,6 +201,7 @@ class UnifiedIngestionEngine:
                     ),
                     parse_engine=parse_engine,
                     process_options=process_options,
+                    chunk_options=chunk_options,
                 )
             )
 
@@ -228,13 +232,14 @@ class UnifiedIngestionEngine:
                 to_enqueue.append(entry)
 
             if to_enqueue:
+                chunk_options = self._batch_chunk_options(to_enqueue)
                 await self._lightrag.apipeline_enqueue_documents(
                     input=[""] * len(to_enqueue),
                     file_paths=[str(entry.parser_path) for entry in to_enqueue],
                     docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
                     parse_engine=[entry.parse_engine for entry in to_enqueue],
                     process_options=[entry.process_options for entry in to_enqueue],
-                    chunk_options=self._chunk_options or None,
+                    chunk_options=chunk_options,
                 )
                 await self._lightrag.apipeline_process_enqueue_documents()
 
@@ -328,18 +333,16 @@ class UnifiedIngestionEngine:
             if existing_status is not None and existing_status.get("status") != "processed":
                 await self._cleanup_partial_doc(doc_id)
 
-            parse_engine, process_options = resolve_file_parser_directives(
-                file_path,
-                parser_rules=self._parser_rules,
-                require_external_endpoint=False,
-            )
+            parse_engine, process_options, chunk_options = self._parser_directives_for(file_path)
             await self._lightrag.apipeline_enqueue_documents(
                 input="",
                 file_paths=[str(file_path)],
                 docs_format=FULL_DOCS_FORMAT_PENDING_PARSE,
                 parse_engine=parse_engine,
                 process_options=process_options,
-                chunk_options=self._chunk_options or None,
+                chunk_options=chunk_options
+                if chunk_options is not None
+                else self._chunk_options or None,
             )
             await self._lightrag.apipeline_process_enqueue_documents()
 
@@ -379,6 +382,58 @@ class UnifiedIngestionEngine:
             "parse_engine": parse_engine,
             "process_options": process_options,
         }
+
+    def _parser_directives_for(self, file_path: Path) -> tuple[str, str, dict[str, Any] | None]:
+        directives = resolve_parser_directives(
+            file_path,
+            parser_rules=self._parser_rules,
+            require_external_endpoint=False,
+        )
+        parse_engine = encode_parse_engine(directives.engine, directives.engine_params)
+        chunk_options = self._chunk_options_for_directives(
+            directives.process_options,
+            directives.chunk_params,
+        )
+        return parse_engine, directives.process_options, chunk_options
+
+    def _chunk_options_for_directives(
+        self,
+        process_options: str,
+        chunk_params: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not chunk_params:
+            return None
+
+        merged = self._base_chunk_options(process_options)
+        for selector, params in chunk_params.items():
+            key = chunk_strategy_key(selector)
+            current = merged.get(key)
+            merged[key] = {
+                **(current if isinstance(current, dict) else {}),
+                **params,
+            }
+        return merged
+
+    def _base_chunk_options(self, process_options: str) -> dict[str, Any]:
+        if self._chunk_options:
+            return deepcopy(self._chunk_options)
+        return resolve_chunk_options(
+            getattr(self._lightrag, "addon_params", None),
+            process_options=process_options,
+        )
+
+    def _batch_chunk_options(
+        self,
+        entries: Sequence[_PendingDocumentIngest],
+    ) -> list[dict[str, Any]] | dict[str, Any] | None:
+        if not any(entry.chunk_options is not None for entry in entries):
+            return deepcopy(self._chunk_options) if self._chunk_options else None
+        return [
+            entry.chunk_options
+            if entry.chunk_options is not None
+            else self._base_chunk_options(entry.process_options)
+            for entry in entries
+        ]
 
     async def _overwrite_sidecar_image_vectors(
         self,

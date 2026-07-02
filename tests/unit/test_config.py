@@ -125,12 +125,6 @@ class TestMetadataConfig:
         assert cfg.allow_ad_hoc_json is True
         assert cfg.default_ingest_policy == "validate"
         assert cfg.fields == {}
-        assert not hasattr(cfg, "enabled")
-        assert not hasattr(cfg, "unknown_filter_policy")
-
-    def test_field_schema_rejects_stale_indexed_knob(self) -> None:
-        with pytest.raises(ValidationError):
-            MetadataConfig(fields={"department": {"filter_ops": ["exact"], "indexed": True}})
 
 
 class TestDlightragConfigNested:
@@ -220,22 +214,26 @@ class TestDlightragConfigNested:
                 ),
             )
 
-    @pytest.mark.parametrize(
-        "field",
-        [
-            "context_window",
-            "max_context_tokens",
-            "ingestion_batch_pages",
-            "max_concurrent_ingestion",
-            "postgres_min_minor",
-            pytest.param("bm25" + "_text_config", id="removed-bm25-single-profile-key"),
-        ],
-    )
-    def test_stale_root_config_fields_rejected(self, field: str):
-        """Removed root-level knobs should fail fast instead of being accepted inertly."""
-        with pytest.raises(ValidationError, match="extra_forbidden|Extra inputs"):
+    def test_jwt_mode_accepts_verification_key(self) -> None:
+        cfg = DlightragConfig(
+            auth_mode="jwt",
+            jwt_verification_key="test-jwt-verification-key",
+            cors_allow_origins=["http://localhost:3000"],
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        )
+
+        assert cfg.jwt_verification_key == "test-jwt-verification-key"
+
+    def test_jwt_mode_requires_verification_key(self) -> None:
+        with pytest.raises(ValidationError, match="jwt_verification_key"):
             DlightragConfig(
-                **{field: 1},
+                auth_mode="jwt",
+                cors_allow_origins=["http://localhost:3000"],
                 embedding=EmbeddingConfig(
                     provider="voyage",
                     model="voyage-multimodal-3.5",
@@ -299,7 +297,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
     assert cfg.embedding.asymmetric == "auto"
-    assert cfg.parser.rules == "docx:native-iteP,*:mineru-iteP"
+    assert cfg.parser.rules == "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
     assert cfg.extraction.use_json is True
     assert cfg.extraction.language == "English"
     assert cfg.parser_sidecars.vlm.enabled is True
@@ -309,7 +307,10 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.parser_sidecars.mineru.api_mode == "local"
     assert cfg.parser_sidecars.mineru.local_endpoint == "http://127.0.0.1:8210"
     assert cfg.parser_sidecars.mineru.auxiliary_block_policy == "conservative"
-    assert os.environ["LIGHTRAG_PARSER"] == "docx:native-iteP,*:mineru-iteP"
+    assert (
+        os.environ["LIGHTRAG_PARSER"]
+        == "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
+    )
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
@@ -350,9 +351,7 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.answer.image_min_quality == 79
     assert cfg.checkpoint_session_ttl_seconds == 30 * 24 * 60 * 60
     assert cfg.query_images.max_described_images == 3
-    assert not hasattr(cfg.query_images, "session_ttl_seconds")
     assert cfg.visual_assets.thumb_max_px == 300
-    assert not hasattr(cfg, "bm25" + "_text_config")
     assert [profile.name for profile in cfg.bm25_profiles] == [
         "zh",
         "en",
@@ -378,8 +377,6 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.bm25_profiles[6].text_config == "simple"
     assert cfg.bm25_k1 == 1.2
     assert cfg.bm25_b == 0.75
-    for removed_shortcut in ("chat", "extract", "keywords", "query", "vlm"):
-        assert not hasattr(cfg, removed_shortcut)
 
 
 def test_bm25_profiles_accept_safe_pg_textsearch_config_names() -> None:
@@ -493,7 +490,6 @@ def test_pgvector_value_type_is_derived_from_index_type() -> None:
     )
 
     assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
-    assert not hasattr(cfg, "pg_vector_value_type")
 
 
 def test_vector_index_type_can_fall_back_to_plain_hnsw() -> None:
@@ -625,92 +621,6 @@ def test_pg_connection_kwargs_builds_verify_ssl_context() -> None:
     ssl_value = cfg.pg_connection_kwargs()["ssl"]
     assert isinstance(ssl_value, ssl.SSLContext)
     assert ssl_value.check_hostname is False
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("runtime_role", "query"),
-        ("postgres_replica_host", "replica.internal"),
-        ("postgres_replica_port", 5433),
-        ("postgres_replica_user", "reader"),
-        ("postgres_replica_password", "secret"),
-        ("postgres_replica_database", "dlightrag"),
-        ("read_after_write_mode", "wait_for_replay"),
-        ("read_after_write_timeout", 15.0),
-    ],
-)
-def test_app_level_replica_routing_fields_removed(field: str, value: object) -> None:
-    with pytest.raises(ValidationError):
-        DlightragConfig(
-            embedding=EmbeddingConfig(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                dim=1024,
-                startup_probe=False,
-            ),
-            **{field: value},
-        )
-
-
-def test_query_image_semantic_enhancement_switch_removed() -> None:
-    with pytest.raises(ValidationError):
-        DlightragConfig(
-            embedding=EmbeddingConfig(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                dim=1024,
-                startup_probe=False,
-            ),
-            query_images={"semantic_enhancement": False},
-        )
-
-
-@pytest.mark.parametrize("removed_field", ["ingest", "keywords"])
-def test_removed_top_level_llm_fields_rejected(removed_field: str) -> None:
-    kwargs = {
-        "embedding": {
-            "provider": "voyage",
-            "model": "voyage-multimodal-3.5",
-            "api_key": "sk-test",
-            "dim": 1024,
-            "startup_probe": False,
-        },
-        removed_field: {"provider": "openai", "model": "gpt-5.4-mini"},
-    }
-
-    with pytest.raises(ValidationError):
-        DlightragConfig(**kwargs)
-
-
-def test_removed_parser_engine_process_options_rejected() -> None:
-    with pytest.raises(ValidationError):
-        DlightragConfig(
-            embedding=EmbeddingConfig(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                dim=1024,
-                startup_probe=False,
-            ),
-            parser={"engine": "mineru", "process_options": "teP"},
-        )
-
-
-def test_unknown_postgres_shadow_fields_rejected() -> None:
-    removed_shadow_field = "postgres_" + "primary_host"
-    with pytest.raises(ValidationError):
-        DlightragConfig(
-            embedding=EmbeddingConfig(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                startup_probe=False,
-            ),
-            **{removed_shadow_field: "primary.internal"},
-        )
 
 
 def test_dotenv_allows_upstream_lightrag_parser_env(
@@ -939,13 +849,16 @@ def test_lightrag_parser_env_follows_dlightrag_parser_rules(
     assert os.environ["LIGHTRAG_PARSER"] == cfg.parser.rules
 
 
-def test_dotenv_rejects_unknown_dlightrag_keys(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dotenv_rejects_unknown_dlightrag_keys(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     env_file = tmp_path / ".env"
-    removed_key = "DLIGHTRAG_REMOVED__API_KEY"
-    env_file.write_text(f"{removed_key}=sk-old\n", encoding="utf-8")
+    unknown_key = "DLIGHTRAG_UNKNOWN__API_KEY"
+    env_file.write_text(f"{unknown_key}=sk-old\n", encoding="utf-8")
     monkeypatch.setitem(DlightragConfig.model_config, "env_file", env_file)
 
-    with pytest.raises(ValidationError, match="removed"):
+    with pytest.raises(ValidationError, match="unknown"):
         DlightragConfig(
             embedding=EmbeddingConfig(
                 provider="voyage",

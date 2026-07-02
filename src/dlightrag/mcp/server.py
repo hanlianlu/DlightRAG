@@ -422,8 +422,9 @@ async def run_streamable_http(host: str, port: int) -> None:
     """Run MCP server over streamable-http transport.
 
     Bearer auth is enforced when ``auth_mode`` is not ``"none"``.
-    Both simple (``DLIGHTRAG_API_AUTH_TOKEN``) and JWT (``DLIGHTRAG_JWT_SECRET``)
-    modes are supported via the shared ``verify_bearer_token`` dispatcher.
+    Both simple (``DLIGHTRAG_API_AUTH_TOKEN``) and JWT
+    (``DLIGHTRAG_JWT_VERIFICATION_KEY``) modes are supported via the shared
+    ``verify_bearer_token`` dispatcher.
     Without auth, the server runs open — caller is responsible for binding
     to loopback or trusted network only. We log a loud warning in that case.
     """
@@ -451,8 +452,8 @@ async def run_streamable_http(host: str, port: int) -> None:
                 "Safe configurations:\n"
                 "  (a) Set DLIGHTRAG_AUTH_MODE=simple + DLIGHTRAG_API_AUTH_TOKEN\n"
                 "      — bearer token guards MCP and REST (single secret).\n"
-                "  (b) Set DLIGHTRAG_AUTH_MODE=jwt + DLIGHTRAG_JWT_SECRET\n"
-                "      — JWT bearer auth guards MCP and REST (same secret).\n"
+                "  (b) Set DLIGHTRAG_AUTH_MODE=jwt + DLIGHTRAG_JWT_VERIFICATION_KEY\n"
+                "      — JWT bearer auth guards MCP and REST (external issuer).\n"
                 "  (c) Bind to 127.0.0.1 (loopback only).\n"
                 "  (d) Map host port to 127.0.0.1 only (compose: '127.0.0.1:8101:8101')\n"
                 "      — safe even with container-internal 0.0.0.0.\n" + "=" * 72,
