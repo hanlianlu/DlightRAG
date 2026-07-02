@@ -464,7 +464,7 @@ async def run_streamable_http(host: str, port: int) -> None:
                 port,
             )
     else:
-        logger.info("MCP streamable-http on %s:%d (loopback, no auth required)", host, port)
+        logger.info("MCP streamable-http on %s:%d with bearer auth enabled", host, port)
 
     class MCPPathMiddleware:
         """Normalize the public MCP endpoint before Starlette's mount redirect."""
