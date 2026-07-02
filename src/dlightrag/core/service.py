@@ -18,7 +18,7 @@ import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from lightrag.constants import PARSED_DIR_NAME
 
@@ -1081,6 +1081,92 @@ class RAGService:
             return results[0]
         return batch_result
 
+    @staticmethod
+    def _default_source_uri_for_key(source_type: str, key: str) -> str:
+        if not source_type or "://" in source_type:
+            raise ValueError("source_type must be a non-empty URI scheme name")
+        return f"{source_type}://{key.lstrip('/')}"
+
+    async def aingest_source(
+        self,
+        source: Any,
+        *,
+        source_type: str = "source",
+        keys: Iterable[str] | AsyncIterable[str] | None = None,
+        prefix: str | None = None,
+        source_uri_for_key: Callable[[str], str] | None = None,
+        replace: bool | None = None,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        """Ingest documents from a caller-provided async data source.
+
+        SDK connectors only need to expose stable document ids and bytes through
+        ``AsyncDataSource``. DlightRAG handles temporary parser files, metadata
+        provenance, replace semantics, and cleanup.
+        """
+        self._ensure_initialized()
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+
+        resolved_keys: Iterable[str] | AsyncIterable[str]
+        if keys is not None:
+            resolved_keys = keys
+        else:
+            aiter_documents = getattr(source, "aiter_documents", None)
+            if callable(aiter_documents):
+                resolved_keys = cast(
+                    Iterable[str] | AsyncIterable[str],
+                    aiter_documents(prefix=prefix),
+                )
+            else:
+                resolved_keys = cast(Iterable[str], await source.alist_documents(prefix=prefix))
+        uri_for_key = source_uri_for_key or (
+            lambda key: self._default_source_uri_for_key(source_type, key)
+        )
+        close = getattr(source, "aclose", None)
+        try:
+            return await self._aingest_remote_keys(
+                source=source,
+                source_type=source_type,
+                keys=resolved_keys,
+                source_uri_for_key=uri_for_key,
+                replace=self._resolve_replace(replace),
+                title=title,
+                author=author,
+                metadata=metadata,
+                metadata_policy=metadata_policy,
+            )
+        finally:
+            if close is not None:
+                await close()
+
+    async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
+        raw_urls = kwargs.get("urls")
+        urls = list(raw_urls) if isinstance(raw_urls, list) else []
+        if kwargs.get("url"):
+            urls = [str(kwargs["url"])]
+
+        from dlightrag.sourcing.url import URLDataSource
+
+        source = URLDataSource(urls=urls, filename=kwargs.get("filename"))
+        result = await self.aingest_source(
+            source,
+            source_type="url",
+            keys=source.aiter_documents(),
+            source_uri_for_key=source.source_uri_for_key,
+            replace=replace,
+            title=kwargs.get("title"),
+            author=kwargs.get("author"),
+            metadata=kwargs.get("metadata"),
+            metadata_policy=kwargs.get("metadata_policy"),
+        )
+        if len(urls) == 1:
+            return self._single_file_result(result)
+        return result
+
     async def _aingest_azure_blob(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         container_name = kwargs.get("container_name")
         source = kwargs.get("source")
@@ -1189,17 +1275,18 @@ class RAGService:
 
     async def aingest(
         self,
-        source_type: Literal["local", "azure_blob", "s3"],
+        source_type: Literal["local", "azure_blob", "s3", "url"],
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Unified ingestion API.
 
         Args:
-            source_type: "local", "azure_blob", or "s3"
+            source_type: "local", "azure_blob", "s3", or "url"
             kwargs:
                 local: path, replace
                 azure_blob: source, container_name, blob_path, prefix, replace
                 s3: bucket, key, prefix, replace
+                url: url or urls, optional filename, replace
         """
         self._ensure_initialized()
         replace = self._resolve_replace(kwargs.get("replace"))
@@ -1231,6 +1318,9 @@ class RAGService:
 
         if self._ingestion_engine is not None and source_type == "s3":
             return await self._aingest_s3(replace=replace, **kwargs)
+
+        if self._ingestion_engine is not None and source_type == "url":
+            return await self._aingest_url(replace=replace, **kwargs)
 
         raise RuntimeError("Ingestion engine not initialized")
 

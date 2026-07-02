@@ -646,6 +646,28 @@ class TestDelegation:
         assert row["result"] == {"doc_id": "d1", "status": "ok"}
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aingest_source_delegates_directly_to_service(
+        self, mock_create, test_cfg
+    ) -> None:
+        source = AsyncMock()
+        mock_svc = AsyncMock()
+        mock_svc.aingest_source.return_value = {"processed": 1}
+        mock_create.return_value = mock_svc
+        manager = RAGServiceManager(config=test_cfg)
+
+        result = await manager.aingest_source(
+            "ws_a",
+            source,
+            source_type="bynder",
+            keys=["asset.pdf"],
+            source_uri_for_key=lambda key: f"bynder://assets/{key}",
+        )
+
+        assert result == {"processed": 1}
+        mock_svc.aingest_source.assert_awaited_once()
+        assert manager._ingest_jobs._tasks == {}
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_list_ingested_files_delegates(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
         mock_svc.alist_ingested_files.return_value = [{"doc": "d1"}]
@@ -709,6 +731,45 @@ class TestIngestJobs:
         assert row is not None
         assert row["processed_items"] == 129
         assert row["result"]["processed"] == 129
+
+    async def test_recover_url_ingest_job(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        row = {
+            "job_id": "job-1",
+            "workspace": "project_a",
+            "source_type": "url",
+            "status": "running",
+            "request": {
+                "workspace": "project_a",
+                "source_type": "url",
+                "kwargs": {
+                    "url": "https://api.bynder.com/docs/getting-started",
+                    "filename": "getting-started.html",
+                },
+            },
+            "total_items": 0,
+            "processed_items": 0,
+            "failed_items": 0,
+            "current_window": 0,
+            "errors": [],
+            "result": {},
+        }
+        store.rows["job-1"] = dict(row)
+        manager._ingest_jobs._store = store
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
+        await asyncio.wait_for(manager._ingest_jobs._tasks["job-1"], timeout=1.0)
+
+        svc.aingest.assert_awaited_once()
+        assert svc.aingest.await_args.kwargs["source_type"] == "url"
+        assert svc.aingest.await_args.kwargs["url"] == (
+            "https://api.bynder.com/docs/getting-started"
+        )
+        assert svc.aingest.await_args.kwargs["filename"] == "getting-started.html"
 
     async def test_astart_ingest_job_records_progress_and_result(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)

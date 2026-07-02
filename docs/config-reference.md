@@ -97,18 +97,21 @@ semantic multimodal path enabled.
 
 ## Remote Source URLs
 
-Azure Blob and S3 source files are not copied into DlightRAG storage. Retrieved
-sources point back to `azure://...` or `s3://...`; `GET /api/files/{file_path}`
-redirects to a short-lived provider URL. Azure uses
+Azure Blob, S3, and URL source files are not copied into DlightRAG storage.
+Retrieved sources point back to `azure://...`, `s3://...`, or `https://...`;
+`GET /api/files/{file_path}` redirects to a provider/source URL. Azure uses
 `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
+REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only. SaaS APIs
+that require auth headers should be wrapped by an SDK `AsyncDataSource`
+connector and ingested with `RAGServiceManager.aingest_source()`.
 
 Remote prefix ingest streams provider listings into bounded local staging
 windows. It uses the same ingest job substrate as local and single-object ingest,
 while keeping source ownership in the cloud provider. DlightRAG delete/reset
 operations remove DlightRAG metadata, LightRAG storage, and local parser
-artifacts only; they do not delete Azure Blob or S3 source objects.
+artifacts only; they do not delete Azure Blob, S3, or URL source objects.
 
 Advanced signing defaults:
 

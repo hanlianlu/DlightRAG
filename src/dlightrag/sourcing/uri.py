@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-SourceType = Literal["local", "azure_blob", "s3"]
+SourceType = Literal["local", "azure_blob", "s3", "url"]
 
 
 def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
@@ -25,6 +25,8 @@ def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
     ('azure_blob', {'container_name': 'container', 'blob_path': 'path/to/blob.pdf'})
     >>> parse_remote_uri("s3://bucket/key/with/slashes")
     ('s3', {'bucket': 'bucket', 'key': 'key/with/slashes'})
+    >>> parse_remote_uri("https://example.com/report.pdf")
+    ('url', {'url': 'https://example.com/report.pdf'})
 
     Raises ``ValueError`` for malformed URIs (missing container/bucket or
     payload) or unsupported schemes.
@@ -42,6 +44,9 @@ def parse_remote_uri(file_path: str) -> tuple[SourceType, dict[str, Any]]:
         if not bucket or not key:
             raise ValueError(f"malformed s3 URI (need bucket/key): {file_path!r}")
         return "s3", {"bucket": bucket, "key": key}
+
+    if file_path.startswith("https://"):
+        return "url", {"url": file_path}
 
     if "://" in file_path:
         scheme = file_path.split("://", 1)[0]

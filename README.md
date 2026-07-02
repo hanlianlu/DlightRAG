@@ -233,6 +233,10 @@ curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "s3", "bucket": "my-bucket", "prefix": "docs/"}'
 
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "url", "url": "https://api.bynder.com/docs/getting-started", "filename": "getting-started.html"}'
+
 curl http://localhost:8100/ingest/jobs/<job_id>
 
 curl -X POST http://localhost:8100/retrieve \
@@ -276,6 +280,15 @@ async def main():
             prefix="docs/",
         )
         print(await manager.get_ingest_job(job["job_id"]))
+
+        # Custom SDK connectors can feed bytes directly without adding a
+        # DlightRAG-native Bynder/SaaS connector.
+        await manager.aingest_source(
+            workspace,
+            my_source,  # implements alist_documents/aiter_documents + aload_document
+            source_type="bynder",
+            source_uri_for_key=lambda key: f"bynder://assets/{key}",
+        )
 
         contexts = await manager.aretrieve("What are the key findings?", workspace=workspace)
         print(contexts.contexts)
@@ -660,7 +673,7 @@ make langfuse-down
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/ingest` | Ingest managed workspace-local paths, Azure Blob, or AWS S3 content; returns an ingest job |
+| `POST` | `/ingest` | Ingest managed workspace-local paths, Azure Blob, AWS S3, or public/signed HTTPS URL content; returns an ingest job |
 | `GET` | `/ingest/jobs/{job_id}` | Return ingest job status |
 | `POST` | `/ingest/blob` | Upload one file via multipart form and return an ingest job |
 | `POST` | `/retrieve` | Return contexts and sources without answer generation |

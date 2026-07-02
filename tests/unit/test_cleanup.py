@@ -136,7 +136,11 @@ class TestRemoveDeletedFiles:
         local_copy.write_bytes(b"local")
 
         removed = remove_deleted_files(
-            {"azure://container/team-a/report.pdf", "s3://bucket/team-b/report.pdf"},
+            {
+                "azure://container/team-a/report.pdf",
+                "s3://bucket/team-b/report.pdf",
+                "https://api.bynder.com/docs/report.pdf",
+            },
             str(workspace_input),
         )
 

@@ -113,6 +113,20 @@ class TestFileEndpoint:
 
         assert resp.status_code == 503
 
+    async def test_https_source_redirects_to_original_url(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/https://api.bynder.com/docs/getting-started")
+
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "https://api.bynder.com/docs/getting-started"
+
+    async def test_https_source_redirect_preserves_encoded_query(self, client: AsyncClient) -> None:
+        resp = await client.get(
+            "/api/files/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
+        )
+
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "https://cdn.example.com/report.pdf?sig=x&download=1"
+
 
 class TestFileEndpointAzureRedirect:
     @patch(

@@ -12,7 +12,7 @@ import inspect
 import logging
 import time
 from collections import defaultdict
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -379,7 +379,7 @@ class RAGServiceManager:
     async def aingest(
         self,
         workspace: str,
-        source_type: Literal["local", "azure_blob", "s3"],
+        source_type: Literal["local", "azure_blob", "s3", "url"],
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Start an ingest job, wait according to config, and return the result if ready."""
@@ -397,6 +397,37 @@ class RAGServiceManager:
             detail = "; ".join(str(error) for error in errors) or "Ingest job failed"
             raise RAGServiceUnavailableError(detail=detail)
         return row
+
+    async def aingest_source(
+        self,
+        workspace: str,
+        source: Any,
+        *,
+        source_type: str = "source",
+        keys: Iterable[str] | AsyncIterable[str] | None = None,
+        prefix: str | None = None,
+        source_uri_for_key: Callable[[str], str] | None = None,
+        replace: bool | None = None,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        """Ingest from an in-memory SDK data source without durable job recovery."""
+        svc = await self._get_service(workspace)
+        await svc.aregister_workspace()
+        return await svc.aingest_source(
+            source,
+            source_type=source_type,
+            keys=keys,
+            prefix=prefix,
+            source_uri_for_key=source_uri_for_key,
+            replace=replace,
+            title=title,
+            author=author,
+            metadata=metadata,
+            metadata_policy=metadata_policy,
+        )
 
     async def _start_ingest_job_recovery(self) -> None:
         try:
@@ -511,7 +542,7 @@ class RAGServiceManager:
     async def astart_ingest_job(
         self,
         workspace: str,
-        source_type: Literal["local", "azure_blob", "s3"],
+        source_type: Literal["local", "azure_blob", "s3", "url"],
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Start a background ingest job and return its durable job row."""

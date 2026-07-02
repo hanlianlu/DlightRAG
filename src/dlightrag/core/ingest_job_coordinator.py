@@ -13,7 +13,8 @@ from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
 
-SourceType = Literal["local", "azure_blob", "s3"]
+SourceType = Literal["local", "azure_blob", "s3", "url"]
+_RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 
 
 class IngestJobCoordinator:
@@ -78,7 +79,7 @@ class IngestJobCoordinator:
         source_type = str(row.get("source_type") or request.get("source_type") or "")
         raw_kwargs = request.get("kwargs")
         kwargs: dict[str, Any] = dict(raw_kwargs) if isinstance(raw_kwargs, dict) else {}
-        if not workspace or source_type not in {"local", "azure_blob", "s3"}:
+        if not workspace or source_type not in _RECOVERABLE_SOURCE_TYPES:
             logger.warning("Skipping invalid recoverable ingest job row: %s", row)
             return False
 

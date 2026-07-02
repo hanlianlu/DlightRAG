@@ -72,6 +72,16 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
             kwargs["key"] = key
         if prefix is not None:
             kwargs["prefix"] = prefix
+    elif source_type == "url":
+        url = _get(payload, "url")
+        urls = _get(payload, "urls")
+        filename = _get(payload, "filename")
+        if url:
+            kwargs["url"] = url
+        if urls:
+            kwargs["urls"] = urls
+        if filename:
+            kwargs["filename"] = filename
 
     for name in ("replace", "title", "author", "metadata", "metadata_policy"):
         value = _get(payload, name)

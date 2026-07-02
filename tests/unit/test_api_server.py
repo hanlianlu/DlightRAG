@@ -482,6 +482,27 @@ class TestIngestEndpoint:
         resp = await client.post("/ingest", json={"source_type": "s3"})
         assert resp.status_code == 422
 
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_url_requires_url_or_urls(
+        self, client: AsyncClient, mock_config: DlightragConfig
+    ) -> None:
+        resp = await client.post("/ingest", json={"source_type": "url"})
+        assert resp.status_code == 422
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_url_rejects_both_url_and_urls(
+        self, client: AsyncClient, mock_config: DlightragConfig
+    ) -> None:
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "url",
+                "url": "https://api.bynder.com/docs/getting-started",
+                "urls": ["https://api.bynder.com/docs/other"],
+            },
+        )
+        assert resp.status_code == 422
+
     async def test_local_defaults_to_background_job(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -582,6 +603,29 @@ class TestIngestEndpoint:
             source_type="s3",
             bucket="my-bucket",
             key="docs/file.pdf",
+        )
+        mock_manager.aingest.assert_not_awaited()
+
+    async def test_url_ingest_defaults_to_background_job(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "url",
+                "url": "https://api.bynder.com/docs/getting-started",
+                "filename": "getting-started.html",
+            },
+        )
+
+        assert resp.status_code == 202
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
+            "default",
+            source_type="url",
+            url="https://api.bynder.com/docs/getting-started",
+            filename="getting-started.html",
         )
         mock_manager.aingest.assert_not_awaited()
 

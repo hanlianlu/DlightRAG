@@ -269,7 +269,7 @@ async def _add_doc_status_file_paths_for_doc_ids(ctx: DeletionContext, doc_statu
 
 
 def _is_remote_source_path(path: str) -> bool:
-    return path.startswith(("azure://", "s3://"))
+    return path.startswith(("azure://", "s3://", "https://"))
 
 
 def _source_root_for_stored_path(path: Path, input_root: Path) -> Path:

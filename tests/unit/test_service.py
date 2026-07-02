@@ -699,6 +699,100 @@ class TestRAGServiceLightRAGMainPath:
         assert progress.failed_delta == 1
         assert progress.errors == ("s3://my-bucket/docs/b.pdf: download failed",)
 
+    async def test_aingest_source_accepts_sdk_async_data_source(
+        self, test_config: DlightragConfig
+    ) -> None:
+        """SDK callers can ingest custom connector output without pretending it is S3."""
+
+        class BynderSource:
+            def __init__(self) -> None:
+                self.loaded: list[str] = []
+                self.closed = False
+
+            async def alist_documents(self, prefix: str | None = None) -> list[str]:
+                assert prefix == "approved/"
+                return ["asset-123/report.pdf"]
+
+            async def aload_document(self, doc_id: str) -> bytes:
+                self.loaded.append(doc_id)
+                return b"%PDF-fake"
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        seen_items: list[PreparedIngestFile] = []
+
+        async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
+            seen_items.extend(items)
+            return {
+                "processed": len(items),
+                "errors": [],
+                "results": [{"doc_id": item.display_filename} for item in items],
+            }
+
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
+        source = BynderSource()
+
+        result = await service.aingest_source(
+            source,
+            source_type="bynder",
+            prefix="approved/",
+            source_uri_for_key=lambda key: f"bynder://assets/{key}",
+            title="Approved asset",
+            metadata={"collection": "marketing"},
+        )
+
+        assert result["processed"] == 1
+        assert source.loaded == ["asset-123/report.pdf"]
+        assert source.closed is True
+        assert seen_items[0].metadata_path == "bynder://assets/asset-123/report.pdf"
+        assert seen_items[0].display_filename == "report.pdf"
+        assert seen_items[0].parser_path.suffix == ".pdf"
+
+    async def test_aingest_url_uses_url_data_source(self, test_config: DlightragConfig) -> None:
+        """REST/MCP URL jobs enter the same remote ingest pipeline."""
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={
+                "processed": 1,
+                "errors": [],
+                "results": [{"doc_id": "d1", "status": "success"}],
+            }
+        )
+
+        mock_source = MagicMock()
+
+        async def _aiter_documents(prefix: str | None = None):
+            assert prefix is None
+            yield "getting-started.html"
+
+        mock_source.aiter_documents = _aiter_documents
+        mock_source.aload_document = AsyncMock(return_value=b"<html></html>")
+        mock_source.source_uri_for_key = lambda key: "https://api.bynder.com/docs/getting-started"
+        mock_source.aclose = AsyncMock()
+
+        with patch("dlightrag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
+            result = await service.aingest(
+                source_type="url",
+                url="https://api.bynder.com/docs/getting-started",
+                filename="getting-started.html",
+            )
+
+        cls.assert_called_once_with(
+            urls=["https://api.bynder.com/docs/getting-started"],
+            filename="getting-started.html",
+        )
+        assert result["status"] == "success"
+        call_items = service._ingestion_engine.aingest_files.await_args.args[0]
+        assert call_items[0].metadata_path == "https://api.bynder.com/docs/getting-started"
+        assert call_items[0].display_filename == "getting-started.html"
+        mock_source.aclose.assert_awaited_once()
+
     async def test_aingest_unified_blob_batch_failure_leaves_no_temp_dirs(
         self, test_config: DlightragConfig
     ) -> None:
