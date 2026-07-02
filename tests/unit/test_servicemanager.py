@@ -19,7 +19,7 @@ from dlightrag.config import (
     ModelConfig,
     set_config,
 )
-from dlightrag.core.query_image_payloads import prepare_query_images
+from dlightrag.core.query_images import prepare_query_images
 from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError

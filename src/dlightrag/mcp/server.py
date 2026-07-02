@@ -25,8 +25,11 @@ from dlightrag.core.client_payloads import (
     answer_payload,
     retrieval_payload,
 )
-from dlightrag.core.client_requests import ingest_kwargs_from_payload, query_kwargs_from_payload
-from dlightrag.core.ingest_policy import should_wait_for_ingest
+from dlightrag.core.client_requests import (
+    ingest_kwargs_from_payload,
+    query_kwargs_from_payload,
+    should_wait_for_ingest,
+)
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.mcp.contracts import (

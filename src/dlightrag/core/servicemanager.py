@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
-from dlightrag.core.query_image_payloads import PreparedQueryImages, prepare_query_images
+from dlightrag.core.query_images import PreparedQueryImages, prepare_query_images
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
