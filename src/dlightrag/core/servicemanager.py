@@ -18,6 +18,10 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
+    from dlightrag.core.query_images import QueryImageEnhancer
+    from dlightrag.core.session_images import SessionImageStore
+    from dlightrag.storage.checkpoint_pg import PGCheckpointStore
+    from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.federation import federated_retrieve
@@ -216,10 +220,10 @@ class RAGServiceManager:
         self._answer_engine: AnswerEngine | None = None
         self._ingest_jobs = IngestJobCoordinator(lambda workspace: self._get_service(workspace))
         self._query_planner: QueryPlanner | None = None
-        self._query_image_enhancer: Any = None
-        self._session_images: Any = None
-        self._workspace_registry: Any = None
-        self._checkpoint: Any = None
+        self._query_image_enhancer: QueryImageEnhancer | None = None
+        self._session_images: SessionImageStore | None = None
+        self._workspace_registry: PGWorkspaceRegistry | None = None
+        self._checkpoint: PGCheckpointStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
@@ -298,9 +302,11 @@ class RAGServiceManager:
             self._startup_warnings.append("Workspace registry unavailable")
             logger.warning("Workspace registry initialization failed: %s", exc)
 
-    async def _get_workspace_registry(self) -> Any:
+    async def _get_workspace_registry(self) -> PGWorkspaceRegistry:
         if self._workspace_registry is None:
             await self._initialize_workspace_registry()
+        if self._workspace_registry is None:
+            raise RuntimeError("Workspace registry unavailable")
         return self._workspace_registry
 
     @staticmethod
@@ -724,7 +730,7 @@ class RAGServiceManager:
             )
         return self._query_planner
 
-    def _get_session_images(self):
+    def _get_session_images(self) -> SessionImageStore:
         """Lazy-create session image memory."""
         if self._session_images is None:
             from dlightrag.core.session_images import SessionImageStore
@@ -748,7 +754,7 @@ class RAGServiceManager:
         scoped_session_id = scope.session_key(session_id) if scope is not None else session_id
         return self._get_session_images().get(scoped_session_id, image_ids)
 
-    def _get_checkpoint(self):
+    def _get_checkpoint(self) -> PGCheckpointStore:
         """Lazy-create conversation checkpoint store."""
         if self._checkpoint is None:
             from dlightrag.storage.checkpoint_pg import PGCheckpointStore
@@ -838,7 +844,7 @@ class RAGServiceManager:
         except Exception:
             logger.warning("Failed to save checkpoint for session %s", session_id, exc_info=True)
 
-    def _get_query_image_enhancer(self):
+    def _get_query_image_enhancer(self) -> QueryImageEnhancer:
         """Lazy-create VLM query image enhancer."""
         if self._query_image_enhancer is None:
             from dlightrag.core.query_images import QueryImageEnhancer
