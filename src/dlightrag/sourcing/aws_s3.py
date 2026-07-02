@@ -89,10 +89,6 @@ class S3DataSource(AsyncDataSource):
             self._client = await ctx.__aenter__()
         return self._client
 
-    async def alist_documents(self, prefix: str | None = None) -> list[str]:
-        """List object keys in the bucket (paginated, handles >1000 objects)."""
-        return [key async for key in self.aiter_documents(prefix=prefix)]
-
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
         """Stream object keys in the bucket."""
         client = await self._ensure_client()

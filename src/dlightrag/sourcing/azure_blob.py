@@ -126,10 +126,6 @@ class AzureBlobDataSource(DataSource, AsyncDataSource):
         stream = blob_client.download_blob()
         return stream.readall()
 
-    async def alist_documents(self, prefix: str | None = None) -> list[str]:
-        """List all blob names in container (async)."""
-        return [name async for name in self.aiter_documents(prefix=prefix)]
-
     async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
         """Stream blob names in the container."""
         client = await self._get_async_container_client()

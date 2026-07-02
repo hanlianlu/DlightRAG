@@ -709,9 +709,9 @@ class TestRAGServiceLightRAGMainPath:
                 self.loaded: list[str] = []
                 self.closed = False
 
-            async def alist_documents(self, prefix: str | None = None) -> list[str]:
+            async def aiter_documents(self, prefix: str | None = None):
                 assert prefix == "approved/"
-                return ["asset-123/report.pdf"]
+                yield "asset-123/report.pdf"
 
             async def aload_document(self, doc_id: str) -> bytes:
                 self.loaded.append(doc_id)

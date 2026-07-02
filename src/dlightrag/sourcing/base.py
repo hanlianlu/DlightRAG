@@ -39,20 +39,19 @@ class AsyncDataSource(ABC):
     All async data sources must implement this interface.
     """
 
-    @abstractmethod
     async def alist_documents(self, prefix: str | None = None) -> list[str]:
-        """List available document identifiers (async)."""
-        ...
+        """Collect available document identifiers into a list."""
+        return [doc_id async for doc_id in self.aiter_documents(prefix=prefix)]
 
-    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+    @abstractmethod
+    def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
         """Stream available document identifiers.
 
-        Adapters with paginated backends should override this to avoid
-        materializing large prefixes. The default preserves compatibility for
-        simple async sources.
+        Adapters should implement this as the primary discovery path. Small
+        sources can yield from an in-memory list; paginated backends should
+        yield page by page.
         """
-        for doc_id in await self.alist_documents(prefix=prefix):
-            yield doc_id
+        ...
 
     @abstractmethod
     async def aload_document(self, doc_id: str) -> bytes:

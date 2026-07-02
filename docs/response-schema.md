@@ -36,7 +36,7 @@ try:
     # authentication and expose document ids + bytes to DlightRAG.
     result = await manager.aingest_source(
         "default",
-        my_source,                # alist_documents/aiter_documents + aload_document
+        my_source,                # aiter_documents + aload_document
         source_type="bynder",
         source_uri_for_key=lambda key: f"bynder://assets/{key}",
     )

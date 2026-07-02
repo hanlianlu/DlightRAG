@@ -1113,18 +1113,11 @@ class RAGService:
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
 
-        resolved_keys: Iterable[str] | AsyncIterable[str]
-        if keys is not None:
-            resolved_keys = keys
-        else:
-            aiter_documents = getattr(source, "aiter_documents", None)
-            if callable(aiter_documents):
-                resolved_keys = cast(
-                    Iterable[str] | AsyncIterable[str],
-                    aiter_documents(prefix=prefix),
-                )
-            else:
-                resolved_keys = cast(Iterable[str], await source.alist_documents(prefix=prefix))
+        resolved_keys = (
+            keys
+            if keys is not None
+            else cast(Iterable[str] | AsyncIterable[str], source.aiter_documents(prefix=prefix))
+        )
         uri_for_key = source_uri_for_key or (
             lambda key: self._default_source_uri_for_key(source_type, key)
         )

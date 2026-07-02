@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import inspect
 import ipaddress
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -47,11 +47,10 @@ class URLDataSource(AsyncDataSource):
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
 
-    async def alist_documents(self, prefix: str | None = None) -> list[str]:
-        keys = list(self._url_by_key)
-        if prefix is None:
-            return keys
-        return [key for key in keys if key.startswith(prefix)]
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+        for key in self._url_by_key:
+            if prefix is None or key.startswith(prefix):
+                yield key
 
     async def aload_document(self, doc_id: str) -> bytes:
         try:
