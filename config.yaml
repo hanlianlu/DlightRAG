@@ -92,6 +92,7 @@ parser_sidecars:
   mineru:
     api_mode: local
     local_endpoint: http://127.0.0.1:8210
+    language: ch
     auxiliary_block_policy: conservative
     # api_mode: official
     # official_endpoint: https://mineru.net

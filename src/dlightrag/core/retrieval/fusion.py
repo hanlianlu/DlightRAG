@@ -3,17 +3,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dlightrag.core.retrieval.protocols import ContextRow
 
 
-def _chunk_id(row: dict[str, Any]) -> str:
+def _chunk_id(row: ContextRow) -> str:
     return str(row.get("chunk_id") or row.get("id"))
 
 
-def rrf_fuse(rankings: list[list[dict[str, Any]]], *, k: int = 60) -> list[dict[str, Any]]:
+def rrf_fuse(rankings: list[list[ContextRow]], *, k: int = 60) -> list[ContextRow]:
     """Fuse ranked chunk lists with Reciprocal Rank Fusion."""
     scores: dict[str, float] = {}
-    best: dict[str, dict[str, Any]] = {}
+    best: dict[str, ContextRow] = {}
 
     for ranking in rankings:
         for rank, row in enumerate(ranking):
@@ -23,7 +23,7 @@ def rrf_fuse(rankings: list[list[dict[str, Any]]], *, k: int = 60) -> list[dict[
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
             best.setdefault(cid, dict(row))
 
-    fused: list[dict[str, Any]] = []
+    fused: list[ContextRow] = []
     for cid, row in best.items():
         row["chunk_id"] = cid
         row["score"] = scores[cid]
@@ -32,10 +32,10 @@ def rrf_fuse(rankings: list[list[dict[str, Any]]], *, k: int = 60) -> list[dict[
 
 
 def dedup_chunks_by_content(
-    chunks: list[dict[str, Any]],
+    chunks: list[ContextRow],
     *,
     prefix_len: int = 200,
-) -> list[dict[str, Any]]:
+) -> list[ContextRow]:
     """Remove chunks whose content prefix matches an earlier chunk.
 
     Keeps the first occurrence (highest fusion score, since chunks are
@@ -43,7 +43,7 @@ def dedup_chunks_by_content(
     identical first *prefix_len* characters are considered duplicates.
     """
     seen: set[str] = set()
-    result: list[dict[str, Any]] = []
+    result: list[ContextRow] = []
     for chunk in chunks:
         content = str(chunk.get("content", ""))
         key = content[:prefix_len] if len(content) >= prefix_len else content

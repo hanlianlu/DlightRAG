@@ -8,7 +8,7 @@ from typing import Any
 
 from dlightrag.citations.utils import split_source_ids
 from dlightrag.core.answer_images import AnswerImageBudget
-from dlightrag.core.retrieval.protocols import RetrievalContexts
+from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 
 
 @dataclass
@@ -38,7 +38,7 @@ class AnswerContextPacker:
     ) -> PackedAnswerContext:
         chunks = contexts.get("chunks", [])
         target_chunks = context_top_k if context_top_k and context_top_k > 0 else None
-        packed_chunks: list[dict[str, Any]] = []
+        packed_chunks: list[ContextRow] = []
         image_blocks: dict[str, dict[str, Any]] = {}
         skipped_images = 0
         sent_images = 0
@@ -105,13 +105,13 @@ class AnswerContextPacker:
 
 
 def _filter_by_source_ids(
-    items: list[dict[str, Any]],
+    items: list[ContextRow],
     included_chunk_ids: set[str],
-) -> list[dict[str, Any]]:
+) -> list[ContextRow]:
     """Keep KG items sourced by chunks included in the final answer context."""
     if not items:
         return []
-    filtered: list[dict[str, Any]] = []
+    filtered: list[ContextRow] = []
     for item in items:
         source_ids = split_source_ids(item.get("source_id"))
         if any(source in included_chunk_ids for source in source_ids):

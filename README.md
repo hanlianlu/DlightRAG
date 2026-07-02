@@ -192,7 +192,7 @@ parser_sidecars:
   mineru:
     api_mode: official
     official_endpoint: https://mineru.net
-    model_version: vlm
+    language: ch
 ```
 
 ```bash
@@ -206,11 +206,15 @@ parser_sidecars:
   mineru:
     api_mode: local
     local_endpoint: https://your-mineru-service.company.internal
+    language: ch
 ```
 
 The setting name `local_endpoint` follows LightRAG/MinerU's local-protocol
 environment contract. The endpoint can still be remote from the DlightRAG
 container as long as it exposes the compatible MinerU HTTP API.
+`language` is MinerU's OCR hint, not the LightRAG KG extraction language.
+DlightRAG does not enable MinerU-side image/chart analysis by default; LightRAG's
+own multimodal analyze stage handles images, tables, and equations after parse.
 
 3. Enable auth before exposing REST or MCP:
 
@@ -468,6 +472,7 @@ Important parser settings:
 | `parser_sidecars.vlm.surrounding_trailing_max_tokens` | `128` | Trailing page context sent to VLM analysis |
 | `parser_sidecars.mineru.api_mode` | `local` | Uses a MinerU-compatible API endpoint instead of the official API |
 | `parser_sidecars.mineru.local_endpoint` | `http://127.0.0.1:8210` | Native local sidecar endpoint for local development |
+| `parser_sidecars.mineru.language` | `ch` | MinerU OCR language hint for scanned/image documents |
 | `parser_sidecars.mineru.auxiliary_block_policy` | `conservative` | Drop discarded blocks, headers, footers, and printed page numbers |
 
 `conservative` keeps ambiguous notes such as `aside_text`, `margin_note`, and
@@ -575,6 +580,12 @@ Checked-in profiles:
 | Swedish | `swedish` |
 | Spanish | `spanish` |
 | French | `french` |
+| Italian | `italian` |
+| Portuguese | `portuguese` |
+| Dutch | `dutch` |
+| Russian | `russian` |
+| Danish | `danish` |
+| Finnish | `finnish` |
 | Fallback | `simple` |
 
 Each non-fallback BM25 profile maps to exactly one language. The fallback

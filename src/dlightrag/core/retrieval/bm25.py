@@ -16,6 +16,7 @@ from dlightrag.core.retrieval.bm25_language import (
     normalize_language_code,
 )
 from dlightrag.core.retrieval.fusion import rrf_fuse
+from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
 BM25_INDEX_PREFIX = pg_identifier("idx_lightrag_doc_chunks_bm25")
@@ -28,7 +29,7 @@ def _format_float(value: float) -> str:
     return f"{float(value):g}"
 
 
-def _format_bm25_top(chunks: list[dict[str, Any]], *, limit: int = 3) -> str:
+def _format_bm25_top(chunks: list[ContextRow], *, limit: int = 3) -> str:
     parts: list[str] = []
     for chunk in chunks[:limit]:
         chunk_id = str(chunk.get("chunk_id") or chunk.get("id") or "?")
@@ -339,7 +340,7 @@ class PostgresBM25:
         *,
         candidate_ids: set[str] | None,
         top_k: int | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[ContextRow]:
         if candidate_ids is not None and len(candidate_ids) == 0:
             logger.info(
                 "[BM25] search: workspace=%s query=%r profiles=none candidate_scope=0 "
@@ -352,8 +353,8 @@ class PostgresBM25:
         limit = self._top_k if top_k is None else top_k
         profiles = self._profiles_for_query(query)
 
-        async def _operation(conn: Any) -> list[list[dict[str, Any]]]:
-            rankings: list[list[dict[str, Any]]] = []
+        async def _operation(conn: Any) -> list[list[ContextRow]]:
+            rankings: list[list[ContextRow]] = []
             for profile in profiles:
                 sql = build_bm25_sql(
                     index_name=profile.index_name,
@@ -424,7 +425,7 @@ class PostgresBM25:
         )
 
     @staticmethod
-    def _row_to_chunk(row: Any, *, profile: BM25Profile) -> dict[str, Any]:
+    def _row_to_chunk(row: Any, *, profile: BM25Profile) -> ContextRow:
         return {
             "chunk_id": row["id"],
             "content": row["content"],
