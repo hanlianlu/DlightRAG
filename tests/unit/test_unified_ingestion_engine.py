@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -12,6 +13,10 @@ from PIL import Image
 
 from dlightrag.core.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
 from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
+
+
+def _sha256(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
 
 
 def _make_engine(**overrides):
@@ -36,6 +41,61 @@ def _make_engine(**overrides):
     }
     defaults.update(overrides)
     return UnifiedIngestionEngine(**defaults), defaults
+
+
+async def test_replace_false_keeps_idempotent_skip(tmp_path: Path) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["source_kind"] == "skipped"
+    deps["lightrag"].adelete_by_doc_id.assert_not_awaited()
+    deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
+
+
+async def test_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
+        None,
+        {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
+    ]
+
+    result = await engine.aingest_file(source, replace=True)
+
+    assert result["source_kind"] == "document"
+    assert result["chunks"] == ["new-chunk"]
+    deps["lightrag"].adelete_by_doc_id.assert_awaited_once()
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
+
+
+async def test_batch_replace_true_bypasses_idempotent_skip(tmp_path: Path) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        {"chunks_list": ["old-chunk"], "content_hash": _sha256(content), "status": "processed"},
+        {"chunks_list": ["new-chunk"], "content_hash": _sha256(content), "status": "processed"},
+    ]
+
+    result = await engine.aingest_files([source], replace=True)
+
+    assert result["processed"] == 1
+    assert result["results"][0]["chunks"] == ["new-chunk"]
+    deps["lightrag"].adelete_by_doc_id.assert_awaited_once()
+    deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
 
 
 async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) -> None:
