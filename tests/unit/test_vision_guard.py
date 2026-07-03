@@ -10,7 +10,6 @@ import pytest
 from dlightrag.core.servicemanager import (
     _check_vision_support,
     _history_has_images,
-    set_vision_supported,
 )
 
 
@@ -54,30 +53,25 @@ class TestHistoryHasImages:
 
 
 class TestVisionGuard:
-    def teardown_method(self) -> None:
-        """Reset module-level flag after each test."""
-        set_vision_supported(True)  # restore to safe default
-
     def test_raises_when_query_images_and_no_vision(self) -> None:
-        set_vision_supported(False)
         with pytest.raises(ValueError) as exc:
             _check_vision_support(
                 query_images=cast(Any, ["data:..."]),
                 conversation_history=None,
+                supports_vision=False,
             )
         assert "does not support image input" in str(exc.value)
         assert "[IMAGES_NOT_SUPPORTED_BY_MODEL]" in str(exc.value)
 
     def test_passes_when_query_images_and_vision_supported(self) -> None:
-        set_vision_supported(True)
         # Should not raise
         _check_vision_support(
             query_images=cast(Any, ["data:..."]),
             conversation_history=None,
+            supports_vision=True,
         )
 
     def test_raises_when_history_has_images_but_no_vision(self) -> None:
-        set_vision_supported(False)
         with pytest.raises(ValueError) as exc:
             _check_vision_support(
                 query_images=None,
@@ -89,21 +83,22 @@ class TestVisionGuard:
                         ],
                     },
                 ],
+                supports_vision=False,
             )
         assert "does not support image input" in str(exc.value)
 
     def test_passes_when_no_images_at_all(self) -> None:
-        set_vision_supported(False)
         # No images involved — should not raise
         _check_vision_support(
             query_images=None,
             conversation_history=[{"role": "user", "content": "hello"}],
+            supports_vision=False,
         )
 
     def test_passes_when_vision_none_unknown(self) -> None:
-        set_vision_supported(None)  # type: ignore[arg-type]
         # unprobed — allow through
         _check_vision_support(
             query_images=cast(Any, ["data:..."]),
             conversation_history=None,
+            supports_vision=None,
         )

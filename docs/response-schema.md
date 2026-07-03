@@ -331,7 +331,7 @@ async for token in token_iter:
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
-| `query_images` | `list[str \| dict]` | `None` | User-attached images. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 3. |
+| `query_images` | `list[QueryImage]` | `None` | User-attached OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 3. |
 | `session_id` | `str \| None` | `None` | Conversation/session key for reusing uploaded query images. |
 | `referenced_image_ids` | `list[str] \| None` | `None` | Image IDs from a previous `image_meta` event or JSON response to include again in retrieval and answer generation. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
@@ -654,12 +654,16 @@ reasoning:
 
 ```python
 # Python SDK
+import base64
+
 with open("photo.png", "rb") as f:
     img_bytes = f.read()
 
+data_uri = "data:image/png;base64," + base64.b64encode(img_bytes).decode("ascii")
+
 result = await manager.aanswer(
     query="What does this diagram show?",
-    query_images=[base64.b64encode(img_bytes).decode("ascii")],
+    query_images=[{"type": "image_url", "image_url": {"url": data_uri}}],
     session_id="chat-123",
 )
 ```
@@ -671,7 +675,9 @@ curl -X POST http://localhost:8100/answer \
   -d '{
     "query": "What does this diagram show?",
     "stream": false,
-    "query_images": ["<base64>"],
+    "query_images": [
+      {"type": "image_url", "image_url": {"url": "data:image/png;base64,<base64>"}}
+    ],
     "session_id": "chat-123"
   }'
 

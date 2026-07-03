@@ -415,11 +415,8 @@ class AnswerConfig(BaseModel):
         description="Maximum user-attached images (query_images + history) sent to the answer LLM.",
     )
 
-    # supports_vision — runtime probe result (not a config field).
-    # Set by RAGService.initialize() after the startup vision probe.
-    # The config attribute is monkey-patched at runtime; it is NOT
-    # declared as a Pydantic field so users cannot (and don't need to)
-    # set it in config.yaml.
+    # Vision support is runtime manager state, not config. Users do not set it
+    # in config.yaml; the startup probe records it on RAGServiceManager.
     image_max_bytes: int = Field(
         default=3_000_000,
         description="Maximum compressed binary bytes per answer image.",
