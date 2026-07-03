@@ -29,7 +29,6 @@ class LightRAGMixBackend:
         *,
         lightrag: Any,
         embedder: Any | None = None,
-        rerank_func: Any | None = None,
         direct_visual_top_k: int = 20,
         max_entity_tokens: int = 6000,
         max_relation_tokens: int = 8000,
@@ -37,7 +36,6 @@ class LightRAGMixBackend:
     ) -> None:
         self._lightrag = lightrag
         self._embedder = embedder
-        self._rerank_func = rerank_func
         self._direct_visual_top_k = max(0, int(direct_visual_top_k))
         self._max_entity_tokens = max_entity_tokens
         self._max_relation_tokens = max_relation_tokens
@@ -77,7 +75,6 @@ class LightRAGMixBackend:
             "lightrag_relationship_count": len(data.get("relationships", [])),
             "direct_visual_chunk_count": 0,
             "hydrated_chunk_count": 0,
-            "reranked_chunk_count": 0,
         }
         seen_ids = {chunk["chunk_id"] for chunk in chunks}
         injected = await fetch_missing_chunks(self._lightrag.text_chunks, seen_ids, limit)
@@ -94,8 +91,6 @@ class LightRAGMixBackend:
 
         await self._hydrate_chunk_provenance(chunks)
         trace["hydrated_chunk_count"] = len(chunks)
-        chunks = await self._rerank(query, chunks, top_k=limit)
-        trace["reranked_chunk_count"] = len(chunks)
         chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
 
         context_chunks: list[ContextRow] = []
@@ -213,21 +208,6 @@ class LightRAGMixBackend:
 
     async def _hydrate_chunk_provenance(self, chunks: list[ContextRow]) -> None:
         await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
-
-    async def _rerank(
-        self,
-        query: str,
-        chunks: list[ContextRow],
-        *,
-        top_k: int,
-    ) -> list[ContextRow]:
-        if self._rerank_func is None or not chunks:
-            return chunks[:top_k]
-        try:
-            return await self._rerank_func(query=query, chunks=chunks, top_k=top_k)
-        except Exception:
-            logger.warning("Rerank failed; returning unfused chunk order", exc_info=True)
-            return chunks[:top_k]
 
 
 def _extract_images(multimodal_content: list[dict[str, Any]] | None) -> list[Image.Image]:

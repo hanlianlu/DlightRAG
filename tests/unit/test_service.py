@@ -222,6 +222,44 @@ class TestRAGServiceRetrieve:
         call_kwargs = service._retrieval_orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["multimodal_content"] == mc
 
+    async def test_aretrieve_reranks_after_hydrating_fused_chunks(
+        self, test_config, monkeypatch: pytest.MonkeyPatch
+    ):
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = self._make_retrieval_service(test_config)
+        service._lightrag = MagicMock()
+        service._retrieval_orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {"chunk_id": "semantic-a", "content": "semantic"},
+                    {"chunk_id": "bm25-visual", "content": "visual text"},
+                ],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+
+        async def hydrate(_lightrag, chunks):
+            chunks[1]["image_data"] = "hydrated-image"
+
+        async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]:
+            assert query == "test query"
+            assert top_k == 3
+            assert chunks[1]["image_data"] == "hydrated-image"
+            return [chunks[1], chunks[0]]
+
+        service._rerank_func = rerank_func
+        monkeypatch.setattr(
+            "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            hydrate,
+        )
+
+        result = await service.aretrieve("test query", chunk_top_k=3)
+
+        assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-visual", "semantic-a"]
+        assert result.trace["reranked_chunk_count"] == 2
+
     async def test_aretrieve_not_initialized_raises(self, test_config):
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
@@ -404,7 +442,6 @@ class TestBuildRetrievalBackend:
             test_config,
             lightrag=MagicMock(),
             embedder=MagicMock(),
-            rerank_func=MagicMock(),
         )
 
         assert backend._direct_visual_top_k == 9
