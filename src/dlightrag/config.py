@@ -770,6 +770,13 @@ class DlightragConfig(BaseSettings):
         ge=1,
         description="Maximum bytes to download for one public HTTPS URL ingest.",
     )
+    url_ingest_private_host_allowlist: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Explicit host/IP patterns allowed to resolve to private addresses for URL ingest. "
+            "Keep empty unless ingesting trusted enterprise intranet URLs."
+        ),
+    )
     max_upload_bytes: int = Field(
         default=100 * 1024 * 1024,
         description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",

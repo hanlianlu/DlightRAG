@@ -850,6 +850,7 @@ class TestRAGServiceLightRAGMainPath:
 
     async def test_aingest_url_uses_url_data_source(self, test_config: DlightragConfig) -> None:
         """REST/MCP URL jobs enter the same remote ingest pipeline."""
+        test_config.url_ingest_private_host_allowlist = ["*.corp.example"]
         service = RAGService(config=test_config)
         service._initialized = True
         service._ingestion_engine = MagicMock()
@@ -885,6 +886,7 @@ class TestRAGServiceLightRAGMainPath:
             urls=["https://api.bynder.com/docs/getting-started"],
             filename="getting-started.html",
             max_download_bytes=test_config.url_ingest_max_bytes,
+            allow_private_hosts=["*.corp.example"],
         )
         assert result["status"] == "success"
         await_args = service._ingestion_engine.aingest_files.await_args

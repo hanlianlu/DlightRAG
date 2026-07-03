@@ -864,6 +864,19 @@ def test_lightrag_workspace_env_is_not_globalized(monkeypatch: pytest.MonkeyPatc
     assert "POSTGRES_WORKSPACE" not in os.environ
 
 
+def test_url_ingest_private_host_allowlist_defaults_empty() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+    )
+
+    assert cfg.url_ingest_private_host_allowlist == []
+
+
 def test_lightrag_parser_env_follows_dlightrag_parser_rules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

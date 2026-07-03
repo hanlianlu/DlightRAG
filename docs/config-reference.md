@@ -117,6 +117,9 @@ an SDK `AsyncDataSource` connector and ingested with
 `RAGServiceManager.aingest_source()`. URL ingest stores fetch URLs without query
 or fragment by default; pass `source_uri` or `source_uris` when a stable source
 identity should be persisted instead.
+Set `url_ingest_private_host_allowlist` only for trusted enterprise hosts that
+must be fetched by REST/MCP URL ingest. Entries are host/IP patterns such as
+`docs.corp.example`, `*.corp.example`, or `10.0.0.5`.
 
 Remote prefix ingest streams provider listings into bounded local staging
 windows. It uses the same ingest job substrate as local and single-object ingest,
@@ -129,6 +132,7 @@ Advanced signing defaults:
 ```yaml
 retain_remote_source_files: false
 url_ingest_max_bytes: 104857600
+url_ingest_private_host_allowlist: []
 azure_sas_expiry: 3600
 s3_presign_expiry: 3600
 s3_region:
@@ -372,6 +376,7 @@ max_conversation_turns: 50
 max_conversation_tokens: 150000
 max_upload_bytes: 104857600
 url_ingest_max_bytes: 104857600
+url_ingest_private_host_allowlist: []
 max_upload_size_mb: 512
 ingest_timeout:
 request_timeout: 300
@@ -379,7 +384,9 @@ request_timeout: 300
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
 applies to Web uploads. `url_ingest_max_bytes` caps each public HTTPS URL
-download before parser staging.
+download before parser staging. `url_ingest_private_host_allowlist` keeps
+private/internal URL fetch disabled by default while allowing explicit trusted
+hosts for enterprise deployments.
 `ingest_timeout` limits how long synchronous SDK/REST/MCP ingest calls wait.
 When it expires, the ingest job keeps running and callers receive/read the job
 status instead of cancelling the ingest.

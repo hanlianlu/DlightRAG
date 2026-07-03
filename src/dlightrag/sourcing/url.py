@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import inspect
 import ipaddress
 import socket
@@ -37,6 +38,7 @@ class URLDataSource(AsyncDataSource):
         client: Any | None = None,
         timeout: float = 120.0,
         max_download_bytes: int = 100 * 1024 * 1024,
+        allow_private_hosts: Sequence[str] | None = None,
     ) -> None:
         if not urls:
             raise ValueError("'url' or 'urls' is required for url ingestion")
@@ -53,11 +55,16 @@ class URLDataSource(AsyncDataSource):
         self._owns_client = client is None
         self._timeout = timeout
         self._max_download_bytes = max(1, int(max_download_bytes))
+        self._allow_private_hosts = _normalize_host_patterns(allow_private_hosts or ())
         self._url_by_key: dict[str, str] = {}
         self._source_uri_by_key: dict[str, str] = {}
 
         for index, raw_url in enumerate(urls):
-            url = _validate_public_https_url(raw_url, resolve_host=self._owns_client)
+            url = _validate_public_https_url(
+                raw_url,
+                resolve_host=self._owns_client,
+                allow_private_hosts=self._allow_private_hosts,
+            )
             key = _document_key_from_url(url, index=index, filename=filename)
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
@@ -91,11 +98,15 @@ class URLDataSource(AsyncDataSource):
                             current_url,
                             response,
                             resolve_host=self._owns_client,
+                            allow_private_hosts=self._allow_private_hosts,
                         )
                         continue
 
                     response.raise_for_status()
-                    _validate_public_https_url(str(getattr(response, "url", current_url)))
+                    _validate_public_https_url(
+                        str(getattr(response, "url", current_url)),
+                        allow_private_hosts=self._allow_private_hosts,
+                    )
                     await self._write_response(response, destination)
                     return
         except Exception:
@@ -141,7 +152,12 @@ class URLDataSource(AsyncDataSource):
                 out.write(chunk)
 
 
-def _validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> str:
+def _validate_public_https_url(
+    raw_url: str,
+    *,
+    resolve_host: bool = False,
+    allow_private_hosts: frozenset[str] = frozenset(),
+) -> str:
     parsed = urlparse(raw_url)
     if parsed.scheme.lower() != "https":
         raise ValueError("url ingestion only accepts https URLs")
@@ -150,7 +166,9 @@ def _validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> s
     if parsed.username or parsed.password:
         raise ValueError("url ingestion does not accept credentials in URLs")
 
-    host = parsed.hostname.lower().strip("[]")
+    host = _normalize_host(parsed.hostname)
+    if _host_allowed_private(host, allow_private_hosts):
+        return raw_url
     if host == "localhost" or host.endswith(".localhost") or host.endswith(".local"):
         raise ValueError("url ingestion requires a public host")
 
@@ -178,14 +196,34 @@ def _validate_resolved_public_host(host: str, port: int) -> None:
             raise ValueError("url ingestion requires a public host")
 
 
-def _redirect_target(current_url: str, response: Any, *, resolve_host: bool) -> str:
+def _redirect_target(
+    current_url: str,
+    response: Any,
+    *,
+    resolve_host: bool,
+    allow_private_hosts: frozenset[str],
+) -> str:
     headers = getattr(response, "headers", {}) or {}
     location = headers.get("location") or headers.get("Location")
     if not location:
         raise ValueError("url redirect is missing Location header")
     return _validate_public_https_url(
-        urljoin(current_url, str(location)), resolve_host=resolve_host
+        urljoin(current_url, str(location)),
+        resolve_host=resolve_host,
+        allow_private_hosts=allow_private_hosts,
     )
+
+
+def _normalize_host_patterns(values: Sequence[str]) -> frozenset[str]:
+    return frozenset(_normalize_host(value) for value in values if value)
+
+
+def _normalize_host(value: str) -> str:
+    return value.lower().strip("[]").rstrip(".")
+
+
+def _host_allowed_private(host: str, patterns: frozenset[str]) -> bool:
+    return any(fnmatch.fnmatchcase(host, pattern) for pattern in patterns)
 
 
 def _default_source_uri_from_url(url: str) -> str:
