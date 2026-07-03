@@ -14,7 +14,7 @@ from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -31,7 +31,8 @@ class URLDataSource(AsyncDataSource):
     def __init__(
         self,
         *,
-        urls: Sequence[str],
+        urls: Sequence[str] | None = None,
+        documents: Sequence[SourceDocument] | None = None,
         filename: str | None = None,
         source_uri: str | None = None,
         source_uris: Sequence[str] | None = None,
@@ -40,15 +41,20 @@ class URLDataSource(AsyncDataSource):
         max_download_bytes: int = 100 * 1024 * 1024,
         allow_private_hosts: Sequence[str] | None = None,
     ) -> None:
-        if not urls:
+        if documents is not None and any(
+            value is not None for value in (urls, filename, source_uri, source_uris)
+        ):
+            raise ValueError("'documents' is mutually exclusive with URL shortcut fields")
+        if documents is None and not urls:
             raise ValueError("'url' or 'urls' is required for url ingestion")
-        if filename is not None and len(urls) != 1:
+        url_list = list(urls or [])
+        if filename is not None and len(url_list) != 1:
             raise ValueError("'filename' can only be used with a single url")
-        if source_uri is not None and len(urls) != 1:
+        if source_uri is not None and len(url_list) != 1:
             raise ValueError("'source_uri' can only be used with a single url")
         if source_uri is not None and source_uris is not None:
             raise ValueError("'source_uri' and 'source_uris' are mutually exclusive")
-        if source_uris is not None and len(source_uris) != len(urls):
+        if source_uris is not None and len(source_uris) != len(url_list):
             raise ValueError("'source_uris' must match the number of urls")
 
         self._client = client
@@ -58,34 +64,61 @@ class URLDataSource(AsyncDataSource):
         self._allow_private_hosts = _normalize_host_patterns(allow_private_hosts or ())
         self._url_by_key: dict[str, str] = {}
         self._source_uri_by_key: dict[str, str] = {}
+        self._document_by_key: dict[str, SourceDocument] = {}
 
-        for index, raw_url in enumerate(urls):
+        if documents is not None:
+            document_inputs = list(documents)
+            if not document_inputs:
+                raise ValueError("'documents' must contain at least one document")
+        else:
+            document_inputs = [
+                SourceDocument(
+                    key=raw_url,
+                    source_uri=(
+                        source_uri
+                        if source_uri is not None
+                        else source_uris[index]
+                        if source_uris is not None
+                        else None
+                    ),
+                    display_filename=filename,
+                )
+                for index, raw_url in enumerate(url_list)
+            ]
+
+        for index, document in enumerate(document_inputs):
             url = _validate_public_https_url(
-                raw_url,
+                document.key,
                 resolve_host=self._owns_client,
                 allow_private_hosts=self._allow_private_hosts,
             )
-            key = _document_key_from_url(url, index=index, filename=filename)
+            key = _document_key_from_url(url, index=index, filename=document.display_filename)
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
-            if source_uri is not None:
-                stable_source_uri = source_uri
-            elif source_uris is not None:
-                stable_source_uri = source_uris[index]
-            else:
-                stable_source_uri = _default_source_uri_from_url(url)
-            self._source_uri_by_key[key] = _validate_source_uri(stable_source_uri)
+            stable_source_uri = document.source_uri or _default_source_uri_from_url(url)
+            stable_source_uri = _validate_source_uri(stable_source_uri)
+            self._source_uri_by_key[key] = stable_source_uri
+            self._document_by_key[key] = SourceDocument(
+                key=key,
+                source_uri=stable_source_uri,
+                display_filename=document.display_filename,
+                title=document.title,
+                author=document.author,
+                metadata=document.metadata,
+                metadata_policy=document.metadata_policy,
+            )
 
-    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
-        for key in self._url_by_key:
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:
+        for key, document in self._document_by_key.items():
             if prefix is None or key.startswith(prefix):
-                yield key
+                yield document
 
-    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+    async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
+        key = document.key
         try:
-            url = self._url_by_key[doc_id]
+            url = self._url_by_key[key]
         except KeyError as exc:
-            raise KeyError(f"unknown URL document id: {doc_id}") from exc
+            raise KeyError(f"unknown URL document id: {key}") from exc
 
         client = self._ensure_client()
         current_url = url

@@ -194,7 +194,7 @@ class UnifiedIngestionEngine:
                         display_filename=item.display_filename,
                         title=item.title if item.title is not None else title,
                         author=item.author if item.author is not None else author,
-                        metadata=item.metadata if item.metadata is not None else metadata,
+                        metadata=_overlay_metadata(metadata, item.metadata),
                         metadata_policy=(
                             item.metadata_policy
                             if item.metadata_policy is not None
@@ -537,6 +537,17 @@ def _prepare_ingest_item(path: str | Path | PreparedIngestFile) -> PreparedInges
     if isinstance(path, PreparedIngestFile):
         return path
     return PreparedIngestFile(parser_path=Path(path))
+
+
+def _overlay_metadata(
+    defaults: Mapping[str, Any] | None,
+    overlay: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    if defaults is None:
+        return overlay
+    if overlay is None:
+        return defaults
+    return {**defaults, **overlay}
 
 
 def _mapping_get(value: Any, key: str) -> Any:

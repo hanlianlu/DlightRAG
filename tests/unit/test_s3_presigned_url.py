@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from dlightrag.sourcing.aws_s3 import S3DataSource, generate_s3_presigned_url
+from dlightrag.sourcing.base import SourceDocument
 
 
 class _FakeS3Client:
@@ -119,7 +120,7 @@ async def test_s3_materialize_closes_streaming_body(tmp_path) -> None:
     source._client = _FakeDownloadClient(body)
 
     destination = tmp_path / "report.pdf"
-    await source.amaterialize_document("reports/q1.pdf", destination)
+    await source.amaterialize_document(SourceDocument(key="reports/q1.pdf"), destination)
 
     assert destination.read_bytes() == b"%PDF-fake"
     assert body.closed is True

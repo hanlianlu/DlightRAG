@@ -12,7 +12,7 @@ from typing import Any
 from aiobotocore.session import AioSession
 from botocore.exceptions import BotoCoreError, NoCredentialsError, PartialCredentialsError
 
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.uri import parse_remote_uri
 
 logger = logging.getLogger(__name__)
@@ -90,18 +90,18 @@ class S3DataSource(AsyncDataSource):
             self._client = await ctx.__aenter__()
         return self._client
 
-    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:
         """Stream object keys in the bucket."""
         client = await self._ensure_client()
         paginator = client.get_paginator("list_objects_v2")
         async for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix or ""):
             for obj in page.get("Contents", []):
-                yield str(obj["Key"])
+                yield SourceDocument(key=str(obj["Key"]))
 
-    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+    async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
         """Download an S3 object to a local parser input file."""
         client = await self._ensure_client()
-        resp = await client.get_object(Bucket=self._bucket, Key=doc_id)
+        resp = await client.get_object(Bucket=self._bucket, Key=document.key)
         body = resp["Body"]
         try:
             with destination.open("wb") as out:

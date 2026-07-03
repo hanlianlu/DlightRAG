@@ -13,7 +13,7 @@ import pytest
 import dlightrag
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import DlightragConfig
-from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.mcp import server as mcp_server
 from dlightrag.models.schemas import Reference
@@ -133,6 +133,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "filename" in ingest_props
     assert "source_uri" in ingest_props
     assert "source_uris" in ingest_props
+    assert "documents" in ingest_props
     assert "retain_source_file" in ingest_props
     delete_files_tool = next(tool for tool in tools if tool.name == "delete_files")
     assert "dry_run" in delete_files_tool.inputSchema["properties"]
@@ -333,6 +334,48 @@ async def test_mcp_ingest_forwards_document_metadata(
         ),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_ingest_forwards_document_manifest_metadata(mock_mcp_manager) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "finance",
+            "source_type": "s3",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {
+            "source_type": "s3",
+            "bucket": "my-bucket",
+            "workspace": "finance",
+            "metadata": {"source_system": "s3-prod"},
+            "documents": [
+                {
+                    "key": "docs/a.pdf",
+                    "metadata": {"department": "Legal", "asset_id": "a"},
+                }
+            ],
+        },
+    )
+
+    assert _tool_json(result)["job_id"] == "job-1"
+    assert mock_mcp_manager.astart_ingest_job.await_args is not None
+    ingest_spec = mock_mcp_manager.astart_ingest_job.await_args.args[1]
+    assert ingest_spec == IngestSpec(
+        source_type="s3",
+        bucket="my-bucket",
+        metadata={"source_system": "s3-prod"},
+        documents=[
+            IngestDocument(
+                key="docs/a.pdf",
+                metadata={"department": "Legal", "asset_id": "a"},
+            )
+        ],
+    )
 
 
 async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_manager) -> None:

@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from dlightrag import DlightragConfig, IngestSpec, RAGServiceManager
-from dlightrag.sourcing import AsyncDataSource
+from dlightrag.sourcing import AsyncDataSource, SourceDocument
 
 
 class BynderSource(AsyncDataSource):
@@ -21,20 +21,26 @@ class BynderSource(AsyncDataSource):
 
     def __init__(self, bynder_client) -> None:
         self.bynder_client = bynder_client
-        self.asset_id_by_key: dict[str, str] = {}
 
-    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:
         async for asset in self.bynder_client.iter_assets(prefix=prefix):
-            # Discovery only: DlightRAG materializes each key later.
-            # Keep a parser-friendly filename/extension in the key.
             key = f"{asset['id']}/{asset['filename']}"
-            self.asset_id_by_key[key] = asset["id"]
-            yield key
+            yield SourceDocument(
+                key=key,
+                source_uri=f"bynder://assets/{asset['id']}",
+                display_filename=asset["filename"],
+                title=asset.get("title"),
+                metadata={
+                    "asset_id": asset["id"],
+                    "collection": asset.get("collection"),
+                },
+            )
 
-    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+    async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
         # User-owned client method. Stream or write bytes to the supplied path.
+        asset_id = document.key.split("/", 1)[0]
         await self.bynder_client.download_asset_to_file(
-            self.asset_id_by_key[doc_id],
+            asset_id,
             destination,
         )
 
@@ -71,7 +77,7 @@ try:
         "default",
         BynderSource(bynder_client),
         source_type="bynder",
-        source_uri_for_key=lambda key: f"bynder://assets/{key.split('/', 1)[0]}",
+        metadata={"source_system": "bynder"},
     )
 
     # Explicit non-blocking ingest
@@ -86,8 +92,10 @@ finally:
 
 `iter_assets()` and `download_asset_to_file()` in the example are methods on
 your own Bynder client wrapper. DlightRAG calls `aiter_documents()` to discover
-keys and `amaterialize_document(key, destination)` to write each document into
-parser staging without loading the whole object into memory.
+`SourceDocument` descriptors and `amaterialize_document(document, destination)`
+to write each document into parser staging without loading the whole object into
+memory. Ingest-call `metadata` is the batch default; `SourceDocument.metadata`
+overlays it for that document.
 
 ### REST API
 
@@ -139,6 +147,7 @@ local file.
 | `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |
 | `source_uri` | `string` | — | Stable stored source URI for a single URL, independent of the signed fetch URL |
 | `source_uris` | `list[string]` | — | Stable stored source URIs for URL batches; must match `urls` length |
+| `documents` | `list[object]` | — | Explicit document manifest. Local documents use `path`, S3/Azure use `key`, URL documents use `url`; per-document metadata overlays request metadata. |
 | `retain_source_file` | `boolean` | — | Per-call remote source retention override. `true` keeps fetched remote files under the workspace input root; `false` keeps them transient even if config defaults to retention. |
 | `replace` | `boolean` | — | Replace existing documents by cascade-purging the prior LightRAG record before enqueueing the new ingest |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
@@ -150,6 +159,19 @@ REST also supports one-file multipart upload at `POST /ingest/blob`. Fields are
 `file` plus optional `workspace`, `title`, `author`, `metadata` (JSON string),
 and `metadata_policy`. The file is staged under DlightRAG's managed input
 workspace directory and returns an ingest job.
+
+For per-document metadata, pass a manifest instead of prefix discovery:
+
+```json
+{
+  "source_type": "s3",
+  "bucket": "my-bucket",
+  "metadata": {"source_system": "s3-prod"},
+  "documents": [
+    {"key": "docs/a.pdf", "metadata": {"department": "legal", "asset_id": "a"}}
+  ]
+}
+```
 
 ### MCP Server
 

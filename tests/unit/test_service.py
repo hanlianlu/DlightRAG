@@ -14,7 +14,7 @@ import pytest
 from dlightrag.config import DlightragConfig
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.service import RAGService, RemoteIngestWindowProgress
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 
 class _FakePostgresConn:
@@ -134,11 +134,11 @@ class TestRAGServiceAingest:
         mock_source = AsyncMock()
 
         async def _aiter_documents(prefix: str | None = None):
-            yield "f.pdf"
+            yield SourceDocument(key="f.pdf")
 
         mock_source.aiter_documents = _aiter_documents
         mock_source.amaterialize_document = AsyncMock(
-            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF")
+            side_effect=lambda _document, destination: destination.write_bytes(b"%PDF")
         )
         with pytest.raises(RuntimeError, match="ingestion failed"):
             await service.aingest(source_type="azure_blob", source=mock_source, container_name="c")
@@ -517,12 +517,12 @@ class TestRAGServiceLightRAGMainPath:
 
         async def _aiter_documents(prefix: str | None = None):
             assert prefix == "docs/"
-            yield "team-a/report.pdf"
-            yield "team-b/report.pdf"
+            yield SourceDocument(key="team-a/report.pdf")
+            yield SourceDocument(key="team-b/report.pdf")
 
         mock_source.aiter_documents = _aiter_documents
         mock_source.amaterialize_document = AsyncMock(
-            side_effect=lambda _doc_id, destination: destination.write_bytes(b"%PDF-fake")
+            side_effect=lambda _document, destination: destination.write_bytes(b"%PDF-fake")
         )
 
         result = await service.aingest(
@@ -582,16 +582,18 @@ class TestRAGServiceLightRAGMainPath:
             def __init__(self) -> None:
                 self.loaded: list[str] = []
 
-            async def alist_documents(self, prefix: str | None = None) -> list[str]:
+            async def alist_documents(self, prefix: str | None = None) -> list[SourceDocument]:
                 raise AssertionError("prefix ingest should stream keys")
 
             async def aiter_documents(self, prefix: str | None = None):
                 assert prefix == "docs/"
-                yield "docs/a.pdf"
-                yield "docs/b.pdf"
+                yield SourceDocument(key="docs/a.pdf")
+                yield SourceDocument(key="docs/b.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
-                self.loaded.append(doc_id)
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                self.loaded.append(document.key)
                 destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
@@ -632,10 +634,12 @@ class TestRAGServiceLightRAGMainPath:
             async def aiter_documents(self, prefix: str | None = None):
                 assert prefix == "docs/"
                 for name in ("a", "b", "c", "d", "e"):
-                    yield f"docs/{name}.pdf"
+                    yield SourceDocument(key=f"docs/{name}.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
-                self.loaded.append(doc_id)
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                self.loaded.append(document.key)
                 destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
@@ -670,11 +674,13 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         class PartiallyFailingS3Source:
             async def aiter_documents(self, prefix: str | None = None):
-                yield "docs/a.pdf"
-                yield "docs/b.pdf"
+                yield SourceDocument(key="docs/a.pdf")
+                yield SourceDocument(key="docs/b.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
-                if doc_id == "docs/b.pdf":
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                if document.key == "docs/b.pdf":
                     raise RuntimeError("download failed")
                 destination.write_bytes(b"%PDF-fake")
 
@@ -725,9 +731,11 @@ class TestRAGServiceLightRAGMainPath:
     ) -> None:
         class RemoteSource(AsyncDataSource):
             async def aiter_documents(self, prefix: str | None = None):
-                yield "docs/report.pdf"
+                yield SourceDocument(key="docs/report.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
                 destination.write_bytes(b"%PDF-retained")
 
         service = RAGService(config=test_config)
@@ -766,9 +774,11 @@ class TestRAGServiceLightRAGMainPath:
 
         class RemoteSource(AsyncDataSource):
             async def aiter_documents(self, prefix: str | None = None):
-                yield "docs/report.pdf"
+                yield SourceDocument(key="docs/report.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
                 destination.write_bytes(b"%PDF-transient")
 
         service = RAGService(config=test_config)
@@ -805,12 +815,16 @@ class TestRAGServiceLightRAGMainPath:
                 self.loaded: list[str] = []
                 self.closed = False
 
-            async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+            async def aiter_documents(
+                self, prefix: str | None = None
+            ) -> AsyncIterator[SourceDocument]:
                 assert prefix == "approved/"
-                yield "asset-123/report.pdf"
+                yield SourceDocument(key="asset-123/report.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
-                self.loaded.append(doc_id)
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                self.loaded.append(document.key)
                 destination.write_bytes(b"%PDF-fake")
 
             async def aclose(self) -> None:
@@ -848,15 +862,95 @@ class TestRAGServiceLightRAGMainPath:
         assert seen_items[0].display_filename == "report.pdf"
         assert seen_items[0].parser_path.suffix == ".pdf"
 
+    async def test_aingest_source_accepts_per_document_metadata(
+        self, test_config: DlightragConfig
+    ) -> None:
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(
+                self, prefix: str | None = None
+            ) -> AsyncIterator[SourceDocument]:
+                assert prefix == "approved/"
+                yield SourceDocument(
+                    key="asset-123/report.pdf",
+                    source_uri="bynder://assets/asset-123",
+                    display_filename="report.pdf",
+                    title="Asset report",
+                    metadata={"department": "Legal", "asset_id": "asset-123"},
+                )
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                assert document.key == "asset-123/report.pdf"
+                destination.write_bytes(b"%PDF-fake")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        seen_items: list[PreparedIngestFile] = []
+
+        async def _ingest(items: list[PreparedIngestFile], **kwargs: object) -> dict[str, object]:
+            seen_items.extend(items)
+            assert kwargs["metadata"] == {"source_system": "bynder", "department": "Marketing"}
+            return {"processed": len(items), "errors": [], "results": []}
+
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
+
+        result = await service.aingest_source(
+            BynderSource(),
+            source_type="bynder",
+            prefix="approved/",
+            metadata={"source_system": "bynder", "department": "Marketing"},
+            metadata_policy="validate",
+        )
+
+        assert result["processed"] == 1
+        assert seen_items[0].metadata_path == "bynder://assets/asset-123"
+        assert seen_items[0].display_filename == "report.pdf"
+        assert seen_items[0].title == "Asset report"
+        assert seen_items[0].metadata == {"department": "Legal", "asset_id": "asset-123"}
+        assert seen_items[0].metadata_policy is None
+
+    async def test_aingest_local_manifest_preserves_workspace_relative_path(
+        self, test_config: DlightragConfig
+    ) -> None:
+        input_root = test_config.input_dir_path / test_config.workspace
+        source = input_root / "docs" / "report.pdf"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"%PDF-fake")
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        seen_items: list[PreparedIngestFile] = []
+
+        async def _ingest(items: list[PreparedIngestFile], **_: object) -> dict[str, object]:
+            seen_items.extend(items)
+            return {"processed": len(items), "errors": [], "results": []}
+
+        service._ingestion_engine.aingest_files = AsyncMock(side_effect=_ingest)
+
+        result = await service.aingest(
+            source_type="local",
+            documents=[{"path": str(source), "metadata": {"asset_id": "local-a"}}],
+        )
+
+        assert result["processed"] == 1
+        assert seen_items[0].parser_path == source
+        assert seen_items[0].metadata == {"asset_id": "local-a"}
+
     async def test_aingest_source_accepts_sync_close(self, test_config: DlightragConfig) -> None:
         class SyncCloseSource(AsyncDataSource):
             def __init__(self) -> None:
                 self.closed = False
 
-            async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
-                yield "asset-123/report.pdf"
+            async def aiter_documents(
+                self, prefix: str | None = None
+            ) -> AsyncIterator[SourceDocument]:
+                yield SourceDocument(key="asset-123/report.pdf")
 
-            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
                 destination.write_bytes(b"%PDF-fake")
 
             def aclose(self) -> None:
@@ -897,11 +991,14 @@ class TestRAGServiceLightRAGMainPath:
 
         async def _aiter_documents(prefix: str | None = None):
             assert prefix is None
-            yield "getting-started.html"
+            yield SourceDocument(
+                key="getting-started.html",
+                source_uri="https://api.bynder.com/docs/getting-started",
+            )
 
         mock_source.aiter_documents = _aiter_documents
         mock_source.amaterialize_document = AsyncMock(
-            side_effect=lambda _doc_id, destination: destination.write_bytes(b"<html></html>")
+            side_effect=lambda _document, destination: destination.write_bytes(b"<html></html>")
         )
         mock_source.source_uri_for_key = lambda key: "https://api.bynder.com/docs/getting-started"
         mock_source.aclose = AsyncMock()

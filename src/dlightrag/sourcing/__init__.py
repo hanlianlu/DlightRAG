@@ -3,12 +3,12 @@
 
 from typing import TYPE_CHECKING
 
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 if TYPE_CHECKING:
     from dlightrag.sourcing.url import URLDataSource
 
-__all__ = ["AsyncDataSource", "URLDataSource"]
+__all__ = ["AsyncDataSource", "SourceDocument", "URLDataSource"]
 
 
 def __getattr__(name: str):

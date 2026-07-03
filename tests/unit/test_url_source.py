@@ -69,12 +69,13 @@ async def test_url_data_source_maps_extensionless_url_to_html_filename(tmp_path:
         client=client,
     )
 
-    assert await source.alist_documents() == ["getting-started.html"]
+    documents = await source.alist_documents()
+    assert [document.key for document in documents] == ["getting-started.html"]
     assert source.source_uri_for_key("getting-started.html") == (
         "https://api.bynder.com/docs/getting-started"
     )
     destination = tmp_path / "getting-started.html"
-    await source.amaterialize_document("getting-started.html", destination)
+    await source.amaterialize_document(documents[0], destination)
     assert destination.read_bytes() == b"document"
     assert client.urls == ["https://api.bynder.com/docs/getting-started"]
 
@@ -86,7 +87,8 @@ async def test_url_data_source_uses_explicit_filename_for_opaque_single_url() ->
         client=_Client(),
     )
 
-    assert await source.alist_documents() == ["asset.pdf"]
+    documents = await source.alist_documents()
+    assert [document.key for document in documents] == ["asset.pdf"]
     assert source.source_uri_for_key("asset.pdf") == "https://cdn.example.com/download"
 
 
@@ -108,7 +110,9 @@ async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) ->
     )
 
     with pytest.raises(ValueError, match="public"):
-        await source.amaterialize_document("report.pdf", tmp_path / "report.pdf")
+        await source.amaterialize_document(
+            (await source.alist_documents())[0], tmp_path / "report.pdf"
+        )
 
 
 async def test_url_data_source_rejects_private_redirect_before_following(tmp_path: Path) -> None:
@@ -130,7 +134,9 @@ async def test_url_data_source_rejects_private_redirect_before_following(tmp_pat
     source = URLDataSource(urls=["https://cdn.example.com/start.pdf"], client=client)
 
     with pytest.raises(ValueError, match="public"):
-        await source.amaterialize_document("start.pdf", tmp_path / "start.pdf")
+        await source.amaterialize_document(
+            (await source.alist_documents())[0], tmp_path / "start.pdf"
+        )
 
     assert client.urls == ["https://cdn.example.com/start.pdf"]
     assert not (tmp_path / "start.pdf").exists()
@@ -144,7 +150,9 @@ async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> N
     )
 
     with pytest.raises(ValueError, match="maximum"):
-        await source.amaterialize_document("report.pdf", tmp_path / "report.pdf")
+        await source.amaterialize_document(
+            (await source.alist_documents())[0], tmp_path / "report.pdf"
+        )
 
     assert not (tmp_path / "report.pdf").exists()
 

@@ -16,7 +16,7 @@ __maintainer__ = "HanlianLyu"
 __credits__ = ["hllyu"]
 
 from dlightrag.config import DlightragConfig
-from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 
 if TYPE_CHECKING:
     from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DlightragConfig",
+    "IngestDocument",
     "IngestSpec",
     "RAGServiceManager",
     "RetrievalResult",

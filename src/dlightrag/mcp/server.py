@@ -32,6 +32,7 @@ from dlightrag.core.client_payloads import (
 )
 from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
+    managed_local_ingest_documents,
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
@@ -342,6 +343,16 @@ async def ingest_tool(
         list[str] | None,
         Field(default=None, description="Stable source URIs stored for URL batches."),
     ] = None,
+    documents: Annotated[
+        list[dict[str, Any]] | None,
+        Field(
+            default=None,
+            description=(
+                "Explicit document manifest. Local documents use path, S3/Azure use key, "
+                "URL documents use url. Document metadata overlays request metadata."
+            ),
+        ),
+    ] = None,
     replace: Annotated[
         bool | None,
         Field(default=None, description="Replace existing documents."),
@@ -382,7 +393,13 @@ async def ingest_tool(
             input_dir=_get_config().input_dir_path,
             workspace=workspace_name,
         )
-        ingest_spec = ingest_spec.model_copy(update={"path": path})
+        managed_documents = managed_local_ingest_documents(
+            source_type=args.source_type,
+            documents=ingest_spec.documents,
+            input_dir=_get_config().input_dir_path,
+            workspace=workspace_name,
+        )
+        ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": managed_documents})
     return await manager.astart_ingest_job(workspace_name, ingest_spec)
 
 
