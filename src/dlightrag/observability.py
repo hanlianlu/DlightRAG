@@ -190,6 +190,15 @@ def _safe_update(observation: Any, **kwargs: Any) -> None:
         logger.debug("Langfuse observation update failed (non-fatal)", exc_info=True)
 
 
+class _ObservationHandle:
+    def __init__(self, observation: Any | None) -> None:
+        self._observation = observation
+
+    def update(self, **kwargs: Any) -> None:
+        if self._observation is not None:
+            _safe_update(self._observation, **kwargs)
+
+
 def _observation_update_kwargs(
     result: Any,
     *,
@@ -407,10 +416,10 @@ async def trace_observation(
     as_type: str = "span",
     input: Any | None = None,
     metadata: Any | None = None,
-) -> AsyncIterator[None]:
+) -> AsyncIterator[_ObservationHandle]:
     """Mark a DlightRAG operation as a Langfuse v4 observation."""
     if _client is None:
-        yield
+        yield _ObservationHandle(None)
         return
     observation_kwargs: dict[str, Any] = {"as_type": as_type, "name": name}
     if input is not None:
@@ -422,7 +431,7 @@ async def trace_observation(
         observation = cm.__enter__()
     except Exception:
         logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
-        yield
+        yield _ObservationHandle(None)
         return
 
     exc_type: type[BaseException] | None = None
@@ -430,7 +439,7 @@ async def trace_observation(
     tb: TracebackType | None = None
     try:
         try:
-            yield
+            yield _ObservationHandle(observation)
         except BaseException as caught:
             exc_type = type(caught)
             exc = caught

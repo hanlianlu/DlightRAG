@@ -112,6 +112,27 @@ def _normalize_workspaces(workspaces: list[str] | tuple[str, ...] | None) -> tup
     return tuple(result)
 
 
+def _context_count(contexts: RetrievalContexts, key: str) -> int:
+    items = contexts.get(key, [])
+    return len(items) if isinstance(items, list) else 0
+
+
+def _context_output(contexts: RetrievalContexts) -> dict[str, int]:
+    return {
+        "context_chunk_count": _context_count(contexts, "chunks"),
+        "entity_count": _context_count(contexts, "entities"),
+        "relationship_count": _context_count(contexts, "relationships"),
+    }
+
+
+def _answer_output(result: RetrievalResult) -> dict[str, int]:
+    return {
+        "answer_len": len(result.answer or ""),
+        "source_count": len(result.sources or []),
+        "context_chunk_count": _context_count(result.contexts, "chunks"),
+    }
+
+
 def _scope_for_workspaces(
     scope: RequestScope | None,
     workspaces: list[str] | tuple[str, ...] | None,
@@ -914,15 +935,23 @@ class RAGServiceManager:
                 "workspaces": list(workspaces or []),
                 "history_turns": len(conversation_history or []),
             },
-        ):
+        ) as trace:
             schema = await self._get_schema(workspaces)
-            return await planner.plan(
+            plan = await planner.plan(
                 query,
                 conversation_history=conversation_history,
                 max_turns=self._config.max_conversation_turns,
                 max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
             )
+            trace.update(
+                output={
+                    "standalone_query": plan.standalone_query,
+                    "has_metadata_filter": plan.metadata_filter is not None,
+                    "referenced_image_count": len(plan.referenced_image_ids or []),
+                }
+            )
+            return plan
 
     async def agenerate_stream_from_contexts(
         self,
@@ -1081,8 +1110,15 @@ class RAGServiceManager:
                 async with trace_observation(
                     "retrieve",
                     as_type="retriever",
-                    metadata={"workspaces": ws_list, "query": effective_query},
-                ):
+                    input={"query": effective_query},
+                    metadata={
+                        "workspaces": ws_list,
+                        "top_k": kwargs["top_k"],
+                        "chunk_top_k": kwargs["chunk_top_k"],
+                        "has_filters": "filters" in kwargs,
+                        "multimodal_count": len(kwargs.get("multimodal_content") or []),
+                    },
+                ) as trace:
                     if len(ws_list) == 1:
                         svc = await self._get_service(ws_list[0])
                         result = await svc.aretrieve(effective_query, **kwargs)
@@ -1093,6 +1129,12 @@ class RAGServiceManager:
                     result.image_descriptions = prepared.descriptions
                     result.current_image_ids = prepared.current_image_ids
                     result.trace["query_image_description_count"] = len(prepared.descriptions)
+                    trace.update(
+                        output={
+                            **_context_output(result.contexts),
+                            "query_image_description_count": len(prepared.descriptions),
+                        }
+                    )
                     return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
@@ -1152,8 +1194,14 @@ class RAGServiceManager:
                 async with trace_observation(
                     "answer_pipeline",
                     as_type="chain",
-                    metadata={"workspaces": ws_list, "query": query},
-                ):
+                    input={"query": query},
+                    metadata={
+                        "workspaces": ws_list,
+                        "history_turns": len(conversation_history or []),
+                        "query_image_count": len(query_images or []),
+                        "semantic_highlights": semantic_highlights,
+                    },
+                ) as pipeline_trace:
                     plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
                         query,
                         conversation_history=conversation_history,
@@ -1166,11 +1214,12 @@ class RAGServiceManager:
                     async with trace_observation(
                         "answer_generation",
                         as_type="chain",
+                        input={"query": plan.standalone_query},
                         metadata={
                             "context_chunks": len(retrieval.contexts.get("chunks", [])),
                             "context_top_k": limits.context_top_k,
                         },
-                    ):
+                    ) as generation_trace:
                         result = await engine.generate(
                             plan.standalone_query,
                             retrieval.contexts,
@@ -1178,6 +1227,7 @@ class RAGServiceManager:
                             conversation_history=conversation_history,
                             context_top_k=limits.context_top_k,
                         )
+                        generation_trace.update(output=_answer_output(result))
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     result.current_image_ids = prepared.current_image_ids
@@ -1189,6 +1239,7 @@ class RAGServiceManager:
                             answer_text=result.answer,
                             config=self._config,
                         )
+                    pipeline_trace.update(output=_answer_output(result))
                     return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
@@ -1245,8 +1296,13 @@ class RAGServiceManager:
                 async with trace_observation(
                     "answer_stream_pipeline",
                     as_type="chain",
-                    metadata={"workspaces": ws_list, "query": query},
-                ):
+                    input={"query": query},
+                    metadata={
+                        "workspaces": ws_list,
+                        "history_turns": len(conversation_history or []),
+                        "query_image_count": len(query_images or []),
+                    },
+                ) as pipeline_trace:
                     plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
                         query,
                         conversation_history=conversation_history,
@@ -1259,11 +1315,12 @@ class RAGServiceManager:
                     async with trace_observation(
                         "answer_stream_setup",
                         as_type="chain",
+                        input={"query": plan.standalone_query},
                         metadata={
                             "context_chunks": len(retrieval.contexts.get("chunks", [])),
                             "context_top_k": limits.context_top_k,
                         },
-                    ):
+                    ) as setup_trace:
                         contexts, stream = await self.agenerate_stream_from_contexts(
                             plan.standalone_query,
                             retrieval.contexts,
@@ -1271,6 +1328,12 @@ class RAGServiceManager:
                             conversation_history=conversation_history,
                             context_top_k=limits.context_top_k,
                         )
+                        stream_output = {
+                            **_context_output(contexts),
+                            "streaming": stream is not None,
+                        }
+                        setup_trace.update(output=stream_output)
+                        pipeline_trace.update(output=stream_output)
                     if stream is not None:
                         stream_meta = cast(Any, stream)
                         stream_meta.current_image_ids = prepared.current_image_ids

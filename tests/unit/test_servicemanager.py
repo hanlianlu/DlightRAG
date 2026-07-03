@@ -34,11 +34,17 @@ def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
 
 
-def _record_trace_calls(calls: list[tuple[str, dict[str, Any]]]):
+def _record_trace_calls(calls: list[dict[str, Any]]):
     @asynccontextmanager
     async def _trace(name: str, **kwargs: Any):
-        calls.append((name, kwargs))
-        yield
+        call = {"name": name, **kwargs, "updates": []}
+        calls.append(call)
+
+        class _Trace:
+            def update(self, **update_kwargs: Any) -> None:
+                call["updates"].append(update_kwargs)
+
+        yield _Trace()
 
     return _trace
 
@@ -481,7 +487,7 @@ class TestAnswerViaEngine:
                 '"filter_confidence":"low","filter_evidence":[]}'
             )
 
-        trace_calls: list[tuple[str, dict[str, Any]]] = []
+        trace_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
             "dlightrag.observability.trace_observation",
             _record_trace_calls(trace_calls),
@@ -495,14 +501,21 @@ class TestAnswerViaEngine:
 
         assert plan.standalone_query == "rewritten query"
         assert trace_calls == [
-            (
-                "query_planning",
-                {
-                    "as_type": "chain",
-                    "input": {"query": "raw query"},
-                    "metadata": {"workspaces": ["ws_a"], "history_turns": 0},
-                },
-            )
+            {
+                "name": "query_planning",
+                "as_type": "chain",
+                "input": {"query": "raw query"},
+                "metadata": {"workspaces": ["ws_a"], "history_turns": 0},
+                "updates": [
+                    {
+                        "output": {
+                            "standalone_query": "rewritten query",
+                            "has_metadata_filter": False,
+                            "referenced_image_count": 0,
+                        }
+                    }
+                ],
+            }
         ]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
@@ -510,19 +523,22 @@ class TestAnswerViaEngine:
         self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """aanswer() calls aretrieve() then AnswerEngine.generate()."""
-        trace_calls: list[tuple[str, dict[str, Any]]] = []
+        trace_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
             "dlightrag.observability.trace_observation",
             _record_trace_calls(trace_calls),
         )
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
-        mock_retrieval = MagicMock(contexts=mock_contexts)
+        mock_retrieval = MagicMock(contexts=mock_contexts, trace={})
         mock_svc.aretrieve.return_value = mock_retrieval
         mock_create.return_value = mock_svc
 
         mock_engine = AsyncMock()
-        expected_result = MagicMock()
+        answer_text = "Answer [1-1]."
+        expected_result = MagicMock(
+            answer=answer_text, contexts=mock_contexts, sources=[], trace={}
+        )
         mock_engine.generate.return_value = expected_result
 
         manager = RAGServiceManager(config=test_cfg)
@@ -539,7 +555,52 @@ class TestAnswerViaEngine:
             context_top_k=30,
         )
         assert result is expected_result
-        assert "answer_generation" in [name for name, _kwargs in trace_calls]
+        retrieve = next(call for call in trace_calls if call["name"] == "retrieve")
+        answer_pipeline = next(call for call in trace_calls if call["name"] == "answer_pipeline")
+        answer_generation = next(
+            call for call in trace_calls if call["name"] == "answer_generation"
+        )
+        assert retrieve["input"] == {"query": "what is X?"}
+        assert "query" not in retrieve["metadata"]
+        assert retrieve["metadata"] == {
+            "workspaces": ["ws_a"],
+            "top_k": test_cfg.top_k,
+            "chunk_top_k": test_cfg.chunk_top_k,
+            "has_filters": False,
+            "multimodal_count": 0,
+        }
+        assert retrieve["updates"] == [
+            {
+                "output": {
+                    "context_chunk_count": 0,
+                    "entity_count": 0,
+                    "relationship_count": 0,
+                    "query_image_description_count": 0,
+                }
+            }
+        ]
+        assert answer_pipeline["input"] == {"query": "what is X?"}
+        assert "query" not in answer_pipeline["metadata"]
+        assert answer_pipeline["updates"] == [
+            {
+                "output": {
+                    "answer_len": len(answer_text),
+                    "source_count": 0,
+                    "context_chunk_count": 0,
+                }
+            }
+        ]
+        assert answer_generation["input"] == {"query": "what is X?"}
+        assert answer_generation["metadata"] == {"context_chunks": 0, "context_top_k": 30}
+        assert answer_generation["updates"] == [
+            {
+                "output": {
+                    "answer_len": len(answer_text),
+                    "source_count": 0,
+                    "context_chunk_count": 0,
+                }
+            }
+        ]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_derives_candidate_and_context_limits(
@@ -621,7 +682,7 @@ class TestAnswerViaEngine:
             return '{"phrases": ["market growth"], "confidence": 1.0}'
 
         monkeypatch.setattr("dlightrag.models.llm.get_keyword_model_func", lambda _cfg: llm_func)
-        trace_calls: list[tuple[str, dict[str, Any]]] = []
+        trace_calls: list[dict[str, Any]] = []
         monkeypatch.setattr(
             "dlightrag.observability.trace_observation",
             _record_trace_calls(trace_calls),
@@ -665,7 +726,13 @@ class TestAnswerViaEngine:
         assert highlighted_chunks is not None
         assert plain_chunks[0].highlight_phrases is None
         assert highlighted_chunks[0].highlight_phrases == ["market growth"]
-        assert "semantic_highlights" in [name for name, _kwargs in trace_calls]
+        semantic_highlights = next(
+            call for call in trace_calls if call["name"] == "semantic_highlights"
+        )
+        assert semantic_highlights["metadata"] == {"source_count": 1, "text_chunk_count": 1}
+        assert semantic_highlights["updates"] == [
+            {"output": {"highlighted_source_count": 1, "highlighted_chunk_count": 1}}
+        ]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_stream_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:

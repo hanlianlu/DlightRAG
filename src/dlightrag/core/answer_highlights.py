@@ -37,8 +37,8 @@ async def enrich_semantic_highlights(
             "semantic_highlights",
             as_type="chain",
             metadata={"source_count": len(sources), "text_chunk_count": text_chunk_count},
-        ):
-            return await asyncio.wait_for(
+        ) as trace:
+            highlighted = await asyncio.wait_for(
                 extract_highlights_for_sources(
                     sources=sources,
                     answer_text=answer_text,
@@ -50,6 +50,8 @@ async def enrich_semantic_highlights(
                 ),
                 timeout=highlight_cfg.timeout,
             )
+            trace.update(output=_highlight_output(highlighted))
+            return highlighted
     except TimeoutError:
         logger.warning(
             "Semantic highlight extraction timed out (%.1fs), skipping",
@@ -62,6 +64,23 @@ async def enrich_semantic_highlights(
 
 def _text_chunk_count(sources: list[SourceReference]) -> int:
     return sum(1 for source in sources if source.chunks for chunk in source.chunks if chunk.content)
+
+
+def _highlight_output(sources: list[SourceReference]) -> dict[str, int]:
+    highlighted_source_count = 0
+    highlighted_chunk_count = 0
+    for source in sources:
+        source_has_highlight = False
+        for chunk in source.chunks or []:
+            if chunk.highlight_phrases:
+                source_has_highlight = True
+                highlighted_chunk_count += 1
+        if source_has_highlight:
+            highlighted_source_count += 1
+    return {
+        "highlighted_source_count": highlighted_source_count,
+        "highlighted_chunk_count": highlighted_chunk_count,
+    }
 
 
 __all__ = ["enrich_semantic_highlights"]
