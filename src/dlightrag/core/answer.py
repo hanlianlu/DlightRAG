@@ -526,7 +526,7 @@ class AnswerEngine:
                             label_line = f"[{filename}]"
                     blocks.append({"type": "text", "text": f"{label_line}\n{content}"})
 
-                # Dynamic metadata line — surfaces sidecar, pipeline_stage, etc.
+                # Dynamic metadata line for non-internal chunk annotations.
                 meta_line = _format_chunk_metadata(chunk)
                 if meta_line:
                     blocks.append({"type": "text", "text": meta_line})
@@ -569,16 +569,28 @@ class AnswerEngine:
 _INTERNAL_KEYS: frozenset[str] = frozenset(
     {
         "chunk_id",
+        "chunk_idx",
         "content",
+        "bbox",
+        "bm25_profile",
+        "distance",
         "file_path",
         "full_doc_id",
         "image_data",
         "image_mime_type",
+        "image_url",
         "metadata",
         "page_idx",
+        "pipeline_stage",
         "reference_id",
         "relevance_score",
+        "rerank_score",
+        "score",
+        "sidecar",
+        "sidecar_location",
+        "thumbnail_url",
         "_answer_image_sent",
+        "_workspace",
     }
 )
 

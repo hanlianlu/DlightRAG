@@ -41,6 +41,33 @@ class ConversationMessage(ClientContractModel):
     content: str | list[ContentBlock]
 
 
+class ClientChunkContext(ClientContractModel):
+    """Public chunk context returned by SDK/REST/MCP payload helpers."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    chunk_id: str
+    reference_id: str = ""
+    file_path: str = ""
+    content: str = ""
+    page_idx: int | None = None
+    bbox: dict[str, Any] | None = None
+    image_url: str | None = None
+    thumbnail_url: str | None = None
+    image_mime_type: str | None = None
+    relevance_score: float | None = None
+    metadata: dict[str, Any] | None = None
+    workspace: str | None = Field(default=None, alias="_workspace")
+
+
+class ClientRetrievalContexts(ClientContractModel):
+    """Public retrieval contexts returned to clients."""
+
+    chunks: list[ClientChunkContext] = Field(default_factory=list)
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(default_factory=list)
+
+
 type SourceType = Literal["local", "azure_blob", "s3", "url"]
 type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
 
@@ -192,7 +219,9 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 
 
 __all__ = [
+    "ClientChunkContext",
     "ClientContractModel",
+    "ClientRetrievalContexts",
     "ContentBlock",
     "ConversationMessage",
     "ImageURL",

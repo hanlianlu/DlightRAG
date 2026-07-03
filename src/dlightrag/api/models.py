@@ -11,6 +11,7 @@ from pydantic import Field
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.core.client_contracts import (
     ClientContractModel,
+    ClientRetrievalContexts,
     ContentBlock,
     ConversationMessage,
     IngestPayload,
@@ -110,7 +111,7 @@ class ReferenceSummary(ClientContractModel):
 
 class RetrievalResponse(ClientContractModel):
     answer: str | None = None
-    contexts: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    contexts: ClientRetrievalContexts = Field(default_factory=ClientRetrievalContexts)
     sources: list[SourceReference] = Field(default_factory=list)
     trace: dict[str, Any] = Field(default_factory=dict)
     image_descriptions: list[str] = Field(default_factory=list)

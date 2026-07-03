@@ -1484,7 +1484,11 @@ class TestAnswerStreamMode:
 
         events = [json_mod.loads(line.removeprefix("data: ")) for line in lines]
         assert events[0]["type"] == "context"
-        assert events[0]["data"] == {"chunks": [{"id": "c1"}]}
+        assert events[0]["data"] == {
+            "chunks": [{"chunk_id": "c1", "reference_id": "", "file_path": "", "content": ""}],
+            "entities": [],
+            "relationships": [],
+        }
         assert events[-1]["type"] == "done"
         assert events[-1]["answer"] == "Hi there"
         token_events = [e for e in events if e["type"] == "token"]
