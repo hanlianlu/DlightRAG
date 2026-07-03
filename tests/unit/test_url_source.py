@@ -178,6 +178,31 @@ def test_url_data_source_rejects_hostname_that_resolves_private(
         URLDataSource(urls=["https://private.example/report.pdf"])
 
 
+def test_url_data_source_allows_allowlisted_private_hostname(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("10.0.0.1", 443),
+            )
+        ],
+    )
+
+    source = URLDataSource(
+        urls=["https://docs.corp.example/report.pdf"],
+        allow_private_hosts=["*.corp.example"],
+    )
+
+    assert source.source_uri_for_key("report.pdf") == "https://docs.corp.example/report.pdf"
+
+
 def test_parse_remote_uri_treats_https_as_url_source() -> None:
     assert parse_remote_uri("https://api.bynder.com/docs/getting-started") == (
         "url",

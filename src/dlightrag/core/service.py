@@ -1183,6 +1183,7 @@ class RAGService:
         source = URLDataSource(
             **source_kwargs,
             max_download_bytes=self.config.url_ingest_max_bytes,
+            allow_private_hosts=self.config.url_ingest_private_host_allowlist,
         )
         result = await self.aingest_source(
             source,
