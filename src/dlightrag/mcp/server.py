@@ -19,6 +19,7 @@ from mcp.types import ContentBlock, TextContent
 from pydantic import Field
 
 import dlightrag
+from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.client_contracts import (
     ConversationMessage,
@@ -123,6 +124,39 @@ def _normalize_workspace_argument(args: CreateWorkspaceInput) -> tuple[str, str]
     return normalize_workspace(label), display_name
 
 
+async def _enforce_access(action: str, workspace: str | None = None) -> None:
+    try:
+        await access_control_from_config(_get_config()).check(
+            current_request_scope(),
+            action,
+            workspace=workspace,
+        )
+    except AccessDeniedError as exc:
+        raise ValueError(str(exc)) from None
+
+
+async def _enforce_workspaces_access(
+    action: str,
+    workspaces: list[str] | None,
+) -> None:
+    from dlightrag.utils import normalize_workspace
+
+    for workspace in workspaces or [_get_config().workspace]:
+        await _enforce_access(action, normalize_workspace(workspace))
+
+
+async def _filter_workspace_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    workspaces = [str(row["workspace"]) for row in records]
+    allowed = set(
+        await access_control_from_config(_get_config()).filter_workspaces(
+            current_request_scope(),
+            AccessAction.WORKSPACE_QUERY,
+            workspaces,
+        )
+    )
+    return [row for row in records if str(row["workspace"]) in allowed]
+
+
 @mcp_app.tool(
     name="retrieve",
     description=(
@@ -157,6 +191,7 @@ async def retrieve_tool(
 ) -> dict[str, Any]:
     args = RetrieveInput.model_validate(locals())
     manager = await _ensure_manager()
+    await _enforce_workspaces_access(AccessAction.WORKSPACE_QUERY, args.workspaces)
     scope = current_request_scope().for_workspaces(args.workspaces)
     result = await manager.aretrieve(
         args.query,
@@ -215,6 +250,7 @@ async def answer_tool(
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
     manager = await _ensure_manager()
+    await _enforce_workspaces_access(AccessAction.WORKSPACE_QUERY, args.workspaces)
     scope = current_request_scope().for_workspaces(args.workspaces)
     result = await manager.aanswer(
         args.query,
@@ -234,6 +270,7 @@ async def answer_tool(
 async def list_workspaces_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
     records = await manager.list_workspace_records()
+    records = await _filter_workspace_records(records)
     return {
         "workspaces": [row["workspace"] for row in records],
         "records": records,
@@ -251,6 +288,7 @@ async def create_workspace_tool(
     args = CreateWorkspaceInput.model_validate(locals())
     manager = await _ensure_manager()
     normalized_workspace, normalized_display_name = _normalize_workspace_argument(args)
+    await _enforce_access(AccessAction.WORKSPACE_CREATE, normalized_workspace)
     existing = await manager.list_workspaces()
     if normalized_workspace in existing:
         raise ValueError(f"Workspace '{normalized_display_name}' already exists")
@@ -280,6 +318,7 @@ async def delete_workspace_tool(
 
     label = validate_workspace_name(args.workspace)
     normalized_workspace = normalize_workspace(label)
+    await _enforce_access(AccessAction.WORKSPACE_DELETE, normalized_workspace)
     result = await manager.areset(
         workspace=label,
         keep_files=args.keep_files,
@@ -385,6 +424,10 @@ async def ingest_tool(
     args = IngestInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
+    from dlightrag.utils import normalize_workspace
+
+    workspace_name = normalize_workspace(workspace_name)
+    await _enforce_access(AccessAction.WORKSPACE_INGEST, workspace_name)
     ingest_spec = ingest_spec_from_payload(args)
     if args.source_type == "local":
         path = managed_local_ingest_path(
@@ -414,6 +457,8 @@ async def ingest_job_status_tool(
     result = await manager.get_ingest_job(args.job_id)
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
+    workspace = result.get("workspace")
+    await _enforce_access(AccessAction.JOB_READ, str(workspace) if workspace else None)
     return result
 
 
@@ -427,6 +472,7 @@ async def list_files_tool(
     args = ListFilesInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
+    await _enforce_access(AccessAction.WORKSPACE_LIST_FILES, workspace_name)
     files = await manager.list_ingested_files(workspace_name)
     return {"files": files, "count": len(files), "workspace": workspace_name}
 
@@ -453,6 +499,7 @@ async def delete_files_tool(
     args = DeleteFilesInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
+    await _enforce_access(AccessAction.WORKSPACE_DELETE_FILES, workspace_name)
     results = await manager.delete_files(
         workspace_name,
         filenames=args.filenames,

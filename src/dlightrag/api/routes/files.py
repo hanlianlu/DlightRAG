@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.responses import RedirectResponse
 
+from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
     DeleteFilesResponse,
@@ -26,7 +27,7 @@ from dlightrag.sourcing.aws_s3 import (
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
 from dlightrag.utils import normalize_workspace
 
-from .deps import get_manager, resolve_workspace
+from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
 
@@ -40,6 +41,7 @@ async def list_files(
     """List all ingested documents."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
     files = await manager.list_ingested_files(ws)
     return {"files": files, "count": len(files), "workspace": ws}
 
@@ -51,6 +53,7 @@ async def delete_files(
     """Delete documents from knowledge base."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_DELETE_FILES, workspace=ws)
     results = await manager.delete_files(
         ws,
         file_paths=body.file_paths,
@@ -69,6 +72,7 @@ async def list_failed_files(
     """List documents currently in DocStatus.FAILED."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
     failed = await manager.list_failed_docs(ws)
     return {"failed": failed, "count": len(failed), "workspace": ws}
 
@@ -83,12 +87,14 @@ async def retry_failed_files(
     from each doc's stored file_path scheme (azure://, s3://, https://, otherwise local)."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
     return await manager.retry_failed_docs(ws)
 
 
 @router.get("/api/files/{file_path:path}", response_model=None)
 async def serve_file(
     file_path: str,
+    request: Request,
     workspace: str = Query(default="default"),
     user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse | RedirectResponse:
@@ -100,6 +106,12 @@ async def serve_file(
     - https://: 302 redirect to original source URL
     """
     config = get_config()
+    await enforce_access(
+        request,
+        user,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        workspace=resolve_workspace(workspace),
+    )
 
     # --- Azure blob: 302 redirect ---
     if file_path.startswith("azure://"):

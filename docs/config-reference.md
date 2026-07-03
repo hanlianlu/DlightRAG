@@ -323,6 +323,32 @@ auth_mode: none
 Set `api_host: 0.0.0.0` only when the server is behind a trusted network or
 `auth_mode` is explicitly enabled.
 
+Authorization is disabled by default even when authentication is enabled:
+
+```yaml
+access_control:
+  mode: allow_all
+```
+
+Set `mode: jwt_claims` to map verified JWT claims to DlightRAG workspace
+actions. This keeps Azure/Okta/Auth0 group management outside DlightRAG while
+making REST, Web, and MCP enforce the same resource checks:
+
+```yaml
+auth_mode: jwt
+access_control:
+  mode: jwt_claims
+  rules:
+    - claim: groups
+      value: finance-rag-readers
+      workspaces: [finance]
+      actions:
+        - workspace.query
+        - workspace.list_files
+```
+
+Rules support `*` workspace and action wildcards such as `workspace.*`.
+
 ## MCP Streamable HTTP
 
 DlightRAG's HTTP MCP server uses the current Streamable HTTP transport on a

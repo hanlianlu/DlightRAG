@@ -462,6 +462,26 @@ class VisualAssetsConfig(BaseModel):
     thumb_cache_size: int = 256
 
 
+class AccessControlRuleConfig(BaseModel):
+    """Map one verified JWT claim value to DlightRAG actions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    claim: str
+    value: str
+    workspaces: list[str] = Field(default_factory=lambda: ["*"])
+    actions: list[str]
+
+
+class AccessControlConfig(BaseModel):
+    """DlightRAG resource authorization settings."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["allow_all", "jwt_claims"] = "allow_all"
+    rules: list[AccessControlRuleConfig] = Field(default_factory=list)
+
+
 class BM25ProfileConfig(BaseModel):
     """Query-language-routed pg_textsearch BM25 profile."""
 
@@ -704,6 +724,7 @@ class DlightragConfig(BaseSettings):
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
     query_images: QueryImagesConfig = Field(default_factory=QueryImagesConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
+    access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
 
     # ===== RAG Processing =====
     working_dir: str = Field(default="./dlightrag_storage")
@@ -999,6 +1020,7 @@ class DlightragConfig(BaseSettings):
         """Validate cross-field configuration."""
         self._validate_bm25_profiles()
         self._validate_auth_mode()
+        self._validate_access_control()
         return self
 
     def _validate_bm25_profiles(self) -> None:
@@ -1038,6 +1060,14 @@ class DlightragConfig(BaseSettings):
                 "to explicit origins (e.g. ['https://your-frontend.example.com']).",
                 stacklevel=2,
             )
+
+    def _validate_access_control(self) -> None:
+        if self.access_control.mode == "allow_all":
+            return
+        if self.auth_mode != "jwt":
+            raise ValueError("access_control.mode='jwt_claims' requires auth_mode='jwt'")
+        if not self.access_control.rules:
+            raise ValueError("access_control.mode='jwt_claims' requires at least one rule")
 
     # ===== Computed Properties =====
 

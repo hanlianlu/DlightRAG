@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextvars
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from dlightrag.utils import normalize_workspace
@@ -40,6 +40,7 @@ class RequestScope:
     user_id: str = "anonymous"
     auth_mode: str = "none"
     workspaces: tuple[str, ...] = ()
+    claims: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def anonymous(cls) -> RequestScope:
@@ -52,6 +53,7 @@ class RequestScope:
         return cls(
             user_id=str(getattr(user, "user_id", "") or "anonymous"),
             auth_mode=str(getattr(user, "auth_mode", "") or "none"),
+            claims=dict(getattr(user, "claims", {}) or {}),
         )
 
     def for_workspaces(self, workspaces: Iterable[str] | None) -> RequestScope:
@@ -59,6 +61,7 @@ class RequestScope:
             user_id=self.user_id,
             auth_mode=self.auth_mode,
             workspaces=_workspace_tuple(workspaces),
+            claims=dict(self.claims),
         )
 
     def session_key(self, session_id: str | None) -> str | None:

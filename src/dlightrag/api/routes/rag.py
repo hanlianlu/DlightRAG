@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.events import (
     AnswerContextStreamEvent,
@@ -49,7 +50,13 @@ from dlightrag.core.client_requests import (
 )
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
-from .deps import get_manager, request_scope, resolve_workspace
+from .deps import (
+    enforce_access,
+    enforce_workspaces_access,
+    get_manager,
+    request_scope,
+    resolve_workspace,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -67,6 +74,7 @@ async def ingest(
     """Bulk document ingestion."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
     ingest_spec = ingest_spec_from_payload(body)
     if body.source_type == "local":
         try:
@@ -101,6 +109,13 @@ async def get_ingest_job(
     job = await manager.get_ingest_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
+    workspace = job.get("workspace")
+    await enforce_access(
+        request,
+        user,
+        AccessAction.JOB_READ,
+        workspace=str(workspace) if workspace else None,
+    )
     return job
 
 
@@ -111,6 +126,7 @@ async def retrieve(
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
     kwargs = query_kwargs_from_payload(body)
+    await enforce_workspaces_access(request, user, AccessAction.WORKSPACE_QUERY, body.workspaces)
     scope = request_scope(user, body.workspaces)
 
     result = await manager.aretrieve(
@@ -132,6 +148,7 @@ async def answer(
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     manager = get_manager(request)
     kwargs = query_kwargs_from_payload(body)
+    await enforce_workspaces_access(request, user, AccessAction.WORKSPACE_QUERY, body.workspaces)
     scope = request_scope(user, body.workspaces)
 
     if not body.stream:
@@ -241,6 +258,7 @@ async def ingest_blob(
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
     cfg = manager.config
+    await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
@@ -323,6 +341,7 @@ async def reset_workspace(
     """Reset all RAG data for a workspace."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_RESET, workspace=ws)
     return await manager.areset(
         workspace=ws,
         keep_files=body.keep_files,

@@ -8,7 +8,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from dlightrag.web.deps import get_manager
+from dlightrag.access_control import AccessAction
+from dlightrag.web.deps import enforce_web_access, get_manager
 
 router = APIRouter()
 
@@ -22,6 +23,7 @@ async def image(
 ) -> Response:
     """Serve a same-origin source panel image."""
     manager = get_manager(request)
+    await enforce_web_access(request, AccessAction.WORKSPACE_READ_VISUAL_ASSET, workspace)
     asset = await manager.aget_visual_asset(workspace, chunk_id, size=size)
     if asset is None:
         raise HTTPException(status_code=404, detail="Image not found")

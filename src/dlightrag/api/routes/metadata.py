@@ -5,10 +5,11 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import MetadataResponse, MetadataUpdateRequest, MetadataUpdateResponse
 
-from .deps import get_manager, resolve_workspace
+from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
 
@@ -23,6 +24,7 @@ async def get_metadata(
     """Retrieve metadata of a specific document incrementally."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
     data = await manager.aget_metadata(ws, doc_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
@@ -47,6 +49,7 @@ async def update_metadata(
 
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)
     await manager.aupdate_metadata(
         ws,
         doc_id,
@@ -79,4 +82,5 @@ async def search_metadata(
 
     manager = get_manager(request)
     ws = resolve_workspace(workspace)
+    await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
     return await manager.asearch_metadata(ws, validated)
