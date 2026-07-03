@@ -36,12 +36,12 @@ interfaces. The full runtime and code-layer view is in
 
 ## Choose Your Deployment Path
 
-| Path | Use this when | PostgreSQL | Parser endpoint | Security |
-|---|---|---|---|---|
-| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU-compatible sidecar | `auth_mode: none` on loopback |
-| Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable MinerU-compatible endpoint | Local or explicit auth |
-| Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Official MinerU API or independent parser service | `simple` or `jwt` |
-| Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control |
+| Path | Use this when | PostgreSQL | Parser endpoint | Security | Start here |
+|---|---|---|---|---|---|
+| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU-compatible sidecar | `auth_mode: none` on loopback | [Quick Start](#quick-start) |
+| Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable MinerU-compatible endpoint | Local or explicit auth | [Native API Variant](#native-api-variant) |
+| Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Official MinerU API or independent parser service | `simple` or `jwt` | [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md), [Security](docs/security.md) |
+| Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control | [Security](docs/security.md), [PostgreSQL](docs/postgresql.md), [Configuration](docs/configuration.md) |
 
 Do not install MinerU into the DlightRAG app container. DlightRAG consumes the
 MinerU-compatible HTTP endpoint that LightRAG expects. On macOS, keep MinerU as
@@ -108,6 +108,20 @@ http://localhost:8100/web/
 ```
 
 Upload documents or images from the Files panel, then ask a question.
+
+### Native API Variant
+
+Use this when the API process should run on the host while PostgreSQL stays in
+Docker:
+
+```bash
+docker compose up -d postgres
+uv sync
+uv run dlightrag-api
+```
+
+Native runs can ingest host paths directly because the API process sees the
+same filesystem as your shell.
 
 ## Use DlightRAG
 
