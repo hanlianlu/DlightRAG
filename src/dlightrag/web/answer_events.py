@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
-from dlightrag.citations import extract_highlights_for_sources, finalize_answer
+from dlightrag.citations import finalize_answer
+from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
 from dlightrag.web.events import (
@@ -261,35 +261,19 @@ async def stream_answer_events(
         if isinstance(trace, dict) and trace:
             yield sse_event("trace", AnswerTraceEvent(trace=trace))
 
-        highlight_cfg = cfg.citations.highlights
-        has_text_chunks = any(
-            chunk.content for src in finalized.sources if src.chunks for chunk in src.chunks
+        highlighted_sources = await enrich_semantic_highlights(
+            finalized.sources,
+            answer_text=finalized.answer,
+            config=cfg,
         )
-        if highlight_cfg.enabled and has_text_chunks:
-            try:
-                from dlightrag.models.llm import get_keyword_model_func
-
-                llm_func = get_keyword_model_func(cfg)
-                highlighted_sources = await asyncio.wait_for(
-                    extract_highlights_for_sources(
-                        sources=finalized.sources,
-                        answer_text=finalized.answer,
-                        llm_func=llm_func,
-                        max_concurrency=highlight_cfg.max_concurrency,
-                        batch_size=highlight_cfg.batch_size,
-                        max_input_chars=highlight_cfg.max_input_chars,
-                        cache_size=highlight_cfg.cache_size,
-                    ),
-                    timeout=highlight_cfg.timeout,
-                )
-                yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
-            except TimeoutError:
-                logger.warning(
-                    "Highlight extraction timed out (%.1fs), skipping",
-                    highlight_cfg.timeout,
-                )
-            except Exception:
-                logger.warning("Highlight extraction failed", exc_info=True)
+        has_highlights = any(
+            chunk.highlight_phrases
+            for source in highlighted_sources
+            if source.chunks
+            for chunk in source.chunks
+        )
+        if has_highlights:
+            yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
 
     except Exception:
         logger.exception("Answer streaming failed")

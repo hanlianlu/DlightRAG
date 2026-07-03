@@ -64,6 +64,7 @@ class AnswerRequest(ClientContractModel):
     conversation_history: list[ConversationMessage] | None = None
     session_id: str | None = None
     referenced_image_ids: list[str] | None = None
+    semantic_highlights: bool = False
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
     """User-attached images used for VLM semantic enhancement, direct visual
     retrieval, session image memory, and bounded answer-model image blocks."""
