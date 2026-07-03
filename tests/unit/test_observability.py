@@ -183,11 +183,14 @@ async def test_trace_observation_nests_child_observations() -> None:
     async with observability.trace_observation(
         "answer_pipeline",
         as_type="chain",
-        metadata={"query": "q"},
-    ):
+        input={"query": "q"},
+        metadata={"workspaces": ["default"]},
+    ) as trace:
+        trace.update(output={"answer_len": 12})
         async with observability.trace_observation(
             "retrieve",
             as_type="retriever",
+            input={"query": "q"},
             metadata={"workspaces": ["default"]},
         ):
             pass
@@ -197,7 +200,17 @@ async def test_trace_observation_nests_child_observations() -> None:
         "retrieve",
     ]
     assert [obs.kwargs["as_type"] for obs in client.observations] == ["chain", "retriever"]
+    assert client.observations[0].kwargs["input"] == {"query": "q"}
+    assert client.observations[0].kwargs["metadata"] == {"workspaces": ["default"]}
+    assert client.observations[0].updates == [{"output": {"answer_len": 12}}]
     assert client.observations[1].parent is client.observations[0]
+
+
+async def test_trace_observation_update_is_noop_without_client() -> None:
+    observability._client = None
+
+    async with observability.trace_observation("disabled", as_type="chain") as trace:
+        trace.update(output={"answer_len": 12})
 
 
 def test_init_tracing_filters_external_spans_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
