@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import inspect
 import json
@@ -280,16 +281,24 @@ async def _hydrate_image_data(
                 full_doc_cache=full_doc_cache,
             )
             if artifact_dir is not None:
-                image_path = _load_sidecar_drawing_path(
-                    artifact_dir, drawing_id, page_idx=chunk.get("page_idx")
+                image_path = await asyncio.to_thread(
+                    _load_sidecar_drawing_path,
+                    artifact_dir,
+                    drawing_id,
+                    page_idx=chunk.get("page_idx"),
                 )
 
     if not isinstance(image_path, str):
         image_path = chunk.get("file_path")
     if not isinstance(image_path, str):
         return
-    path = Path(image_path)
-    if path.suffix.lower() not in _IMAGE_SUFFIXES or not path.exists():
+    payload = await asyncio.to_thread(_image_payload_from_path, Path(image_path))
+    if payload is None:
         return
-    chunk["image_data"] = base64.b64encode(path.read_bytes()).decode("ascii")
-    chunk["image_mime_type"] = detect_image_mime_type(path)
+    chunk["image_data"], chunk["image_mime_type"] = payload
+
+
+def _image_payload_from_path(path: Path) -> tuple[str, str] | None:
+    if path.suffix.lower() not in _IMAGE_SUFFIXES or not path.exists():
+        return None
+    return base64.b64encode(path.read_bytes()).decode("ascii"), detect_image_mime_type(path)
