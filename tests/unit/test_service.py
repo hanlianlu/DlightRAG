@@ -848,6 +848,37 @@ class TestRAGServiceLightRAGMainPath:
         assert seen_items[0].display_filename == "report.pdf"
         assert seen_items[0].parser_path.suffix == ".pdf"
 
+    async def test_aingest_source_accepts_sync_close(self, test_config: DlightragConfig) -> None:
+        class SyncCloseSource(AsyncDataSource):
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+                yield "asset-123/report.pdf"
+
+            async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+                destination.write_bytes(b"%PDF-fake")
+
+            def aclose(self) -> None:
+                self.closed = True
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": [{"doc_id": "d1"}]}
+        )
+        source = SyncCloseSource()
+
+        result = await service.aingest_source(
+            source,
+            source_type="bynder",
+            source_uri_for_key=lambda key: f"bynder://assets/{key}",
+        )
+
+        assert result["processed"] == 1
+        assert source.closed is True
+
     async def test_aingest_url_uses_url_data_source(self, test_config: DlightragConfig) -> None:
         """REST/MCP URL jobs enter the same remote ingest pipeline."""
         test_config.url_ingest_private_host_allowlist = ["*.corp.example"]

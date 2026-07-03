@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from dlightrag.sourcing.aws_s3 import generate_s3_presigned_url
+from dlightrag.sourcing.aws_s3 import S3DataSource, generate_s3_presigned_url
 
 
 class _FakeS3Client:
@@ -44,6 +44,26 @@ class _FakeSession:
     def create_client(self, service_name: str, **kwargs: Any) -> _FakeClientContext:
         self.create_client_calls.append((service_name, kwargs))
         return _FakeClientContext(self.client)
+
+
+class _FakeStreamingBody:
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.closed = False
+
+    async def read(self, size: int) -> bytes:
+        return self._chunks.pop(0) if self._chunks else b""
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeDownloadClient:
+    def __init__(self, body: _FakeStreamingBody) -> None:
+        self.body = body
+
+    async def get_object(self, **kwargs: Any) -> dict[str, Any]:
+        return {"Body": self.body}
 
 
 @pytest.mark.asyncio
@@ -90,3 +110,16 @@ async def test_generate_s3_presigned_url_rejects_non_s3_path() -> None:
             raw_path="azure://container/reports/q1.pdf",
             session=_FakeSession(_FakeS3Client()),
         )
+
+
+@pytest.mark.asyncio
+async def test_s3_materialize_closes_streaming_body(tmp_path) -> None:
+    body = _FakeStreamingBody([b"%PDF-", b"fake"])
+    source = S3DataSource("my-bucket")
+    source._client = _FakeDownloadClient(body)
+
+    destination = tmp_path / "report.pdf"
+    await source.amaterialize_document("reports/q1.pdf", destination)
+
+    assert destination.read_bytes() == b"%PDF-fake"
+    assert body.closed is True

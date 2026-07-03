@@ -188,7 +188,7 @@ class TestGeminiProvider:
         with patch("dlightrag.models.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
-            mock_client.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             result = await p.complete(
                 [
@@ -197,7 +197,7 @@ class TestGeminiProvider:
                 ],
                 "gemini-2.0-flash",
             )
-            call_kwargs = mock_client.models.generate_content.call_args[1]
+            call_kwargs = mock_client.aio.models.generate_content.call_args[1]
             assert "Be concise." in str(call_kwargs.get("config", {}).get("system_instruction", ""))
         assert result == "reply"
 
@@ -209,7 +209,7 @@ class TestGeminiProvider:
         with patch("dlightrag.models.providers.gemini_native.genai") as mock_genai:
             mock_client = MagicMock()
             mock_genai.Client.return_value = mock_client
-            mock_client.models.generate_content = AsyncMock(return_value=mock_response)
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             await p.complete(
                 [
@@ -218,9 +218,33 @@ class TestGeminiProvider:
                 ],
                 "gemini-2.0-flash",
             )
-            call_args = mock_client.models.generate_content.call_args
+            call_args = mock_client.aio.models.generate_content.call_args
             contents = call_args[1].get(
                 "contents", call_args[0][1] if len(call_args[0]) > 1 else None
             )
             # Verify assistant → model role mapping
             assert any(c.get("role") == "model" for c in contents if isinstance(c, dict))
+
+    @pytest.mark.asyncio
+    async def test_stream_uses_gemini_async_stream_api(self):
+        p = get_provider("gemini", api_key="test-key")
+
+        async def fake_stream():
+            for text in ("hel", "lo"):
+                yield SimpleNamespace(text=text)
+
+        with patch("dlightrag.models.providers.gemini_native.genai") as mock_genai:
+            mock_client = MagicMock()
+            mock_genai.Client.return_value = mock_client
+            mock_client.aio.models.generate_content_stream = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            tokens = [
+                token
+                async for token in cast(Any, p).stream(
+                    [{"role": "user", "content": "hi"}],
+                    "gemini-2.0-flash",
+                )
+            ]
+
+        assert tokens == ["hel", "lo"]
+        mock_client.aio.models.generate_content_stream.assert_awaited_once()

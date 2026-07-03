@@ -63,7 +63,7 @@ class SourceUrlResolver:
     def resolve(self, raw_path: str) -> str | None:
         """Convert a servable stored path to a /api/files/ URL."""
         if raw_path.startswith(("azure://", "s3://")):
-            return f"{self._base_url}/{raw_path}"
+            return f"{self._base_url}/{quote(raw_path, safe='/:')}"
         if raw_path.startswith("https://"):
             return f"{self._base_url}/{quote(raw_path, safe='/:')}"
         if "://" in raw_path:

@@ -16,6 +16,7 @@ import random
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
+from inspect import isawaitable
 from pathlib import Path
 from typing import Any, Literal, cast
 
@@ -1163,7 +1164,9 @@ class RAGService:
             )
         finally:
             if close is not None:
-                await close()
+                result = close()
+                if isawaitable(result):
+                    await result
 
     async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         raw_urls = kwargs.get("urls")

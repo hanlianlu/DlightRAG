@@ -4,6 +4,8 @@
 Exposable as both a REST API (bulk ingestion) and MCP server (agent integration).
 """
 
+from typing import TYPE_CHECKING
+
 try:
     from importlib.metadata import version as _version
 
@@ -16,9 +18,15 @@ __credits__ = ["hllyu"]
 from dlightrag.config import DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
 
+if TYPE_CHECKING:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+    from dlightrag.core.servicemanager import RAGServiceManager
+
 __all__ = [
     "DlightragConfig",
     "IngestSpec",
+    "RAGServiceManager",
+    "RetrievalResult",
     "__version__",
 ]
 
