@@ -4,14 +4,27 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote
 
 from dlightrag.citations.source_builder import build_sources
-from dlightrag.core.client_contracts import ClientChunkContext, ClientRetrievalContexts
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+
+_PUBLIC_CHUNK_KEYS = (
+    "reference_id",
+    "file_path",
+    "content",
+    "page_idx",
+    "bbox",
+    "image_url",
+    "thumbnail_url",
+    "image_mime_type",
+    "relevance_score",
+    "metadata",
+    "_workspace",
+)
 
 
 def metadata_filter_from_payload(payload: Any | None) -> MetadataFilter | None:
@@ -35,43 +48,38 @@ def project_contexts_for_client(
     image_url_prefix: str | None = "/images",
 ) -> RetrievalContexts:
     """Return client-safe contexts without inline base64 image data."""
-    public = ClientRetrievalContexts(
-        chunks=[
-            _project_chunk_context(item, image_url_prefix=image_url_prefix)
-            for item in contexts.get("chunks", [])
-        ],
-        entities=[dict(item) for item in contexts.get("entities", [])],
-        relationships=[dict(item) for item in contexts.get("relationships", [])],
-    )
-    return cast(RetrievalContexts, public.model_dump(by_alias=True, exclude_none=True))
+    chunks = [
+        chunk
+        for item in contexts.get("chunks", [])
+        if (chunk := _project_chunk_context(item, image_url_prefix=image_url_prefix)) is not None
+    ]
+    return {
+        "chunks": chunks,
+        "entities": [dict(item) for item in contexts.get("entities", [])],
+        "relationships": [dict(item) for item in contexts.get("relationships", [])],
+    }
 
 
 def _project_chunk_context(
     item: dict[str, Any],
     *,
     image_url_prefix: str | None,
-) -> ClientChunkContext:
+) -> dict[str, Any] | None:
     row = dict(item)
     chunk_id = row.get("chunk_id") or row.get("id")
+    if chunk_id is None:
+        return None
+
+    payload = {key: row[key] for key in _PUBLIC_CHUNK_KEYS if row.get(key) is not None}
     payload = {
-        key: row[key]
-        for key in (
-            "reference_id",
-            "file_path",
-            "content",
-            "page_idx",
-            "bbox",
-            "image_url",
-            "thumbnail_url",
-            "image_mime_type",
-            "relevance_score",
-            "metadata",
-            "_workspace",
-        )
-        if row.get(key) is not None
+        **{
+            "chunk_id": str(chunk_id),
+            "reference_id": "",
+            "file_path": "",
+            "content": "",
+        },
+        **payload,
     }
-    if chunk_id is not None:
-        payload["chunk_id"] = str(chunk_id)
     image_data = row.get("image_data")
     if image_data and image_url_prefix and row.get("_workspace") and chunk_id:
         base_path = (
@@ -81,7 +89,7 @@ def _project_chunk_context(
         )
         payload.setdefault("image_url", f"{base_path}?size=full")
         payload.setdefault("thumbnail_url", f"{base_path}?size=thumb")
-    return ClientChunkContext(**payload)
+    return payload
 
 
 def retrieval_payload(
