@@ -49,7 +49,7 @@
 
   <text class="title" x="64" y="52">DlightRAG Unified LightRAG Main Architecture</text>
   <text class="subtitle" x="64" y="80">One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status.</text>
-  <text class="subtitle" x="64" y="98">DlightRAG adds jobs, metadata governance, query-image visual search, BM25 fusion, visual assets, and cited answers.</text>
+  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, visual search, BM25 fusion, cited answers, highlights, and operations.</text>
 
   <rect class="band-soft" x="64" y="126" width="1152" height="108"/>
   <text class="band-title" x="84" y="151">Interface Boundary</text>
@@ -132,7 +132,7 @@
 
   <rect class="box box-blue" x="884" y="360" width="126" height="58"/>
   <text class="label" text-anchor="middle" x="947" y="383">QueryPlanner</text>
-  <text class="small" text-anchor="middle" x="947" y="402">rewrite, BM25 query, filters</text>
+  <text class="small" text-anchor="middle" x="947" y="402">rewrite + filters</text>
 
   <rect class="box box-blue" x="1034" y="360" width="126" height="58"/>
   <text class="label" text-anchor="middle" x="1097" y="383">Filter Scope</text>
@@ -143,12 +143,12 @@
   <text class="small" text-anchor="middle" x="1022" y="497">LightRAG mix + BM25 + query images</text>
 
   <rect class="box" x="884" y="535" width="126" height="58"/>
-  <text class="label" text-anchor="middle" x="947" y="558">Fusion/Rerank</text>
-  <text class="small" text-anchor="middle" x="947" y="577">RRF then rerank</text>
+  <text class="label" text-anchor="middle" x="947" y="558">Hydrate/Rerank</text>
+  <text class="small" text-anchor="middle" x="947" y="577">after RRF fusion</text>
 
   <rect class="box" x="1034" y="535" width="126" height="58"/>
   <text class="label" text-anchor="middle" x="1097" y="558">Answer/Sources</text>
-  <text class="small" text-anchor="middle" x="1097" y="577">stream + validated citations</text>
+  <text class="small" text-anchor="middle" x="1097" y="577">citations + highlights</text>
 
   <path class="line-blue" d="M 1010 389 H 1034"/>
   <path class="line-blue" d="M 1097 418 V 455"/>

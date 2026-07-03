@@ -74,8 +74,13 @@ RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
   |
   |-- RRF fusion + dedup + chunk candidate budget
   |
-  |-- Rerank
-  |     multimodal listwise or external reranker
+  |-- Provenance hydration
+  |     page labels, visual sidecars, image bytes for fused chunks
+  |
+  |-- Final rerank
+  |     multimodal listwise or external reranker over fused candidates
+  |
+  |-- Metadata enrichment + reference canonicalization
   |
   `-- AnswerEngine
         text excerpts, KG context, source metadata, optional images
@@ -121,9 +126,10 @@ use pgvector HNSW with iterative scan settings.
 
 ## Multimodal Queries
 
-Text queries go through LightRAG `mix`, BM25, and reranking. Image-bearing
-queries add a direct image vector path only when the configured embedding
-provider supports image inputs and the startup probe succeeds:
+Text queries go through LightRAG `mix`, BM25, fused-candidate hydration, and
+reranking. Image-bearing queries add a direct image vector path only when the
+configured embedding provider supports image inputs and the startup probe
+succeeds:
 
 ```text
 query + images
@@ -149,7 +155,11 @@ semantic multimodal path.
 
 ## Reranking
 
-`rerank.strategy` chooses the post-fusion ranker:
+`rerank.strategy` chooses the final ranker. DlightRAG does not pass
+`rerank_model_func` into LightRAG; it disables LightRAG query reranking and
+reranks the DlightRAG fused candidate set after provenance hydration. This lets
+BM25-only hits, metadata-injected chunks, direct image matches, and LightRAG
+`mix` chunks compete in one list with page/image data already attached.
 
 | Strategy | How it works |
 |---|---|
@@ -161,12 +171,12 @@ Post-rerank filtering removes chunks below `rerank.score_threshold`. If all
 chunks fall below the threshold, DlightRAG keeps the top scored fallback set
 instead of returning an accidental empty answer context.
 
-Reranking has an independent image budget because it runs before answer-context
-packing. `chat_llm_reranker` and image-capable HTTP rerankers bound each request
-with `rerank.image_max_bytes`, `rerank.image_max_total_bytes`, and the
-rerank-stage size/quality floors before constructing model payloads. Visual
-chunks whose images cannot fit fall back to their text, if present, rather than
-sending unbounded data URIs.
+Reranking has an independent image budget because it runs after retrieval
+hydration but before answer-context packing. `chat_llm_reranker` and
+image-capable HTTP rerankers bound each request with `rerank.image_max_bytes`,
+`rerank.image_max_total_bytes`, and the rerank-stage size/quality floors before
+constructing model payloads. Visual chunks whose images cannot fit fall back to
+their text, if present, rather than sending unbounded data URIs.
 
 ## Answer Generation
 
@@ -217,3 +227,20 @@ from validated inline markers. Returned `sources` contain only cited documents
 and chunks.
 Streaming callers receive tokens immediately and a final normalized answer plus
 cited sources after validation.
+
+## Semantic Highlights
+
+Semantic highlights are answer-source enrichment, not retrieval. They run only
+after answer finalization has validated inline citations and built `sources`.
+The highlighter uses the finalized answer text plus cited source chunk content
+to fill `sources[].chunks[].highlight_phrases`.
+
+Web streaming attempts highlight enrichment by default after the answer and
+source panel are finalized. SDK, REST, and MCP answer calls default to no
+semantic highlights; pass `semantic_highlights=True` or
+`semantic_highlights: true` on an answer request to opt in. `/retrieve` never
+emits highlights because it has no finalized answer citations.
+
+`citations.highlights.enabled` is the global kill switch. When enabled, the
+highlighter uses the keyword LLM role, runs with its own timeout/concurrency
+limits, and returns the original sources unchanged on timeout or failure.

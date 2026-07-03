@@ -445,7 +445,7 @@ paths without deleting LightRAG rows, metadata, or local files.
 |---|---|---|
 | `context` | `{type, data}` | Full contexts, sent first |
 | `token` | `{type, content}` | LLM answer token (repeats) |
-| `sources` | `{type, data}` | Validated cited sources, after all tokens and before done |
+| `sources` | `{type, data}` | Validated cited sources, after all tokens and before done. Includes `highlight_phrases` when `semantic_highlights` is true and enrichment succeeds. |
 | `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
 | `image_meta` | `{type, current_image_ids, image_descriptions}` | Session image IDs and VLM image descriptions |
 | `done` | `{type, answer}` | Stream complete; `answer` is the final normalized answer body after citation validation |
@@ -470,6 +470,10 @@ data: {"type":"done","answer":"The key findings are..."}
 REST uses the same fields as the Python manager methods. `retrieve` and
 `answer` both accept `chunk_top_k`, `filters`, `query_images`, and
 `multimodal_content`; `answer` also accepts `semantic_highlights`.
+
+Web streaming uses the same answer pipeline but always attempts semantic
+highlights when citation highlighting is enabled. If phrases are found, Web
+emits a `highlights` SSE event with the updated source panel HTML.
 
 ### MCP Server
 

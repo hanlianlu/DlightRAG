@@ -67,7 +67,7 @@
           <mxGeometry x="505" y="525" width="270" height="58" as="geometry"/>
         </mxCell>
 
-        <mxCell id="planner" value="&lt;b&gt;QueryPlanner&lt;/b&gt;&lt;br&gt;rewrite, BM25 query, filters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="planner" value="&lt;b&gt;QueryPlanner&lt;/b&gt;&lt;br&gt;rewrite + filters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="360" width="126" height="58" as="geometry"/>
         </mxCell>
         <mxCell id="filter_scope" value="&lt;b&gt;Filter Scope&lt;/b&gt;&lt;br&gt;metadata in-filter" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
@@ -76,10 +76,10 @@
         <mxCell id="retriever" value="&lt;b&gt;UnifiedRetriever&lt;/b&gt;&lt;br&gt;LightRAG mix + BM25 + query images" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="455" width="276" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="fusion" value="&lt;b&gt;Fusion/Rerank&lt;/b&gt;&lt;br&gt;RRF then rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="fusion" value="&lt;b&gt;Hydrate/Rerank&lt;/b&gt;&lt;br&gt;after RRF fusion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="884" y="535" width="126" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="answer" value="&lt;b&gt;Answer/Sources&lt;/b&gt;&lt;br&gt;stream + validated citations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="answer" value="&lt;b&gt;Answer/Sources&lt;/b&gt;&lt;br&gt;citations + highlights" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="1034" y="535" width="126" height="58" as="geometry"/>
         </mxCell>
 
