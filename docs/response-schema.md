@@ -307,7 +307,10 @@ result.answer     # None
 result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
 
 # Answer: contexts + LLM-generated answer
-result = await manager.aanswer(query="What are the key findings?")
+result = await manager.aanswer(
+    query="What are the key findings?",
+    semantic_highlights=True,  # optional; default false outside Web
+)
 result.answer      # "The key findings are... [1-1] [2-3]"
 result.contexts    # same structure as retrieve, packed to what the answer model saw
 result.references  # validated cited documents, derived from inline citations
@@ -334,6 +337,7 @@ async for token in token_iter:
 | `query_images` | `list[QueryImage]` | `None` | User-attached OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 3. |
 | `session_id` | `str \| None` | `None` | Conversation/session key for reusing uploaded query images. |
 | `referenced_image_ids` | `list[str] \| None` | `None` | Image IDs from a previous `image_meta` event or JSON response to include again in retrieval and answer generation. |
+| `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
 
 ### REST API
@@ -347,7 +351,7 @@ curl -X POST http://localhost:8100/retrieve \
 # Answer as one JSON response
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
-  -d '{"query": "key findings", "stream": false}'
+  -d '{"query": "key findings", "stream": false, "semantic_highlights": true}'
 
 # Streaming answer (default)
 curl -X POST http://localhost:8100/answer \
@@ -431,7 +435,7 @@ data: {"type":"done","answer":"The key findings are..."}
 
 REST uses the same fields as the Python manager methods. `retrieve` and
 `answer` both accept `chunk_top_k`, `filters`, `query_images`, and
-`multimodal_content`.
+`multimodal_content`; `answer` also accepts `semantic_highlights`.
 
 ### MCP Server
 
@@ -445,6 +449,9 @@ MCP tools return JSON text with `sources` at top level:
   "sources": [...]
 }
 ```
+
+Pass `semantic_highlights: true` to the MCP `answer` tool to include
+`highlight_phrases` in cited source chunks when highlight enrichment is enabled.
 
 
 ## Contexts Object

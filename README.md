@@ -645,8 +645,11 @@ then returns contexts and sources aligned with what the answer model saw.
 
 Citation validation is always part of answer finalization. Web source-panel
 semantic highlights are enabled by default and run after answer generation with
-the keyword LLM role, bounded by timeout/concurrency settings. REST and MCP
-answer payloads are not affected by Web highlight enrichment.
+the keyword LLM role, bounded by timeout/concurrency settings. SDK, REST, and
+MCP answer clients default to no highlights, but can pass
+`semantic_highlights=True` in Python or `semantic_highlights: true` in JSON to
+fill `sources[].chunks[].highlight_phrases` when highlight enrichment is
+enabled.
 
 ### Langfuse
 

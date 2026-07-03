@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.config import (
     AnswerConfig,
     DlightragConfig,
@@ -553,6 +554,60 @@ class TestAnswerViaEngine:
             context_top_k=3,
         )
         assert result is expected_result
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_aanswer_semantic_highlights_are_opt_in(
+        self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SDK answer highlights are disabled by default and enabled per call."""
+        mock_svc = AsyncMock()
+        mock_contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_svc.aretrieve.return_value = MagicMock(contexts=mock_contexts, trace={})
+        mock_create.return_value = mock_svc
+
+        async def llm_func(*, messages, **kwargs) -> str:
+            return '{"phrases": ["market growth"], "confidence": 1.0}'
+
+        monkeypatch.setattr("dlightrag.models.llm.get_keyword_model_func", lambda _cfg: llm_func)
+
+        def _answer_result() -> MagicMock:
+            return MagicMock(
+                answer="Market growth improved [1-1].",
+                contexts=mock_contexts,
+                sources=[
+                    SourceReference(
+                        id="1",
+                        path="/docs/report.pdf",
+                        chunks=[
+                            ChunkSnippet(
+                                chunk_id="c1",
+                                chunk_idx=1,
+                                content="The report says market growth improved in 2025.",
+                            )
+                        ],
+                    )
+                ],
+                trace={},
+            )
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._answer_engine = AsyncMock()
+        manager._answer_engine.generate.side_effect = [_answer_result(), _answer_result()]
+        manager._query_planner = QueryPlanner(llm_func=None)
+
+        plain = await manager.aanswer("query", workspace="ws_a")
+        highlighted = await manager.aanswer(
+            "query",
+            workspace="ws_a",
+            semantic_highlights=True,
+        )
+
+        plain_chunks = plain.sources[0].chunks
+        highlighted_chunks = highlighted.sources[0].chunks
+        assert plain_chunks is not None
+        assert highlighted_chunks is not None
+        assert plain_chunks[0].highlight_phrases is None
+        assert highlighted_chunks[0].highlight_phrases == ["market growth"]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_stream_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:

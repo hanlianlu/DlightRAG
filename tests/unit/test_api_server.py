@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
+from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -1131,6 +1132,22 @@ class TestAnswerEndpoint:
         call_kwargs = mock_manager.aanswer.call_args.kwargs
         assert call_kwargs["chunk_top_k"] == 12
         assert call_kwargs["answer_context_top_k"] == 4
+        assert call_kwargs["semantic_highlights"] is False
+
+    async def test_answer_forwards_semantic_highlights_opt_in(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "What is RAG?",
+                "stream": False,
+                "semantic_highlights": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert mock_manager.aanswer.call_args.kwargs["semantic_highlights"] is True
 
     async def test_answer_forwards_typed_history_and_query_image_blocks(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1303,6 +1320,112 @@ class TestAnswerStreamMode:
         assert len(token_events) == 2
         assert token_events[0]["content"] == "Hi"
         assert token_events[1]["content"] == " there"
+
+    async def test_stream_semantic_highlights_default_off(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Streaming REST answer does not enrich highlights unless requested."""
+        from dlightrag.api.routes import rag as rag_routes
+
+        async def mock_tokens():
+            yield "Market growth improved [1-1]."
+
+        async def fail_enrich(*args, **kwargs):
+            raise AssertionError("semantic highlights should be opt-in for REST streaming")
+
+        monkeypatch.setattr(
+            rag_routes,
+            "enrich_semantic_highlights",
+            fail_enrich,
+            raising=False,
+        )
+        mock_manager.aanswer_stream = AsyncMock(
+            return_value=(
+                {
+                    "chunks": [
+                        {
+                            "chunk_id": "c1",
+                            "reference_id": "1",
+                            "file_path": "/docs/report.pdf",
+                            "content": "The report says market growth improved.",
+                        }
+                    ]
+                },
+                mock_tokens(),
+            )
+        )
+        app.state.manager = mock_manager
+
+        resp = await client.post("/answer", json={"query": "test", "stream": True})
+
+        assert resp.status_code == 200
+        assert "semantic highlights should be opt-in" not in resp.text
+
+    async def test_stream_semantic_highlights_are_opt_in(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Streaming REST answer can opt into source highlight phrases."""
+        from dlightrag.api.routes import rag as rag_routes
+
+        async def mock_tokens():
+            yield "Market growth improved [1-1]."
+
+        async def fake_enrich(
+            sources: list[SourceReference],
+            answer_text: str | None,
+            config: DlightragConfig,
+        ) -> list[SourceReference]:
+            assert answer_text == "Market growth improved [1-1]."
+            chunks = sources[0].chunks
+            assert chunks is not None
+            chunks[0].highlight_phrases = ["market growth"]
+            return sources
+
+        monkeypatch.setattr(
+            rag_routes,
+            "enrich_semantic_highlights",
+            fake_enrich,
+            raising=False,
+        )
+        mock_manager.aanswer_stream = AsyncMock(
+            return_value=(
+                {
+                    "chunks": [
+                        {
+                            "chunk_id": "c1",
+                            "reference_id": "1",
+                            "file_path": "/docs/report.pdf",
+                            "content": "The report says market growth improved.",
+                        }
+                    ]
+                },
+                mock_tokens(),
+            )
+        )
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/answer",
+            json={"query": "test", "stream": True, "semantic_highlights": True},
+        )
+
+        import json as json_mod
+
+        events = [
+            json_mod.loads(line.removeprefix("data: "))
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+        sources_event = next(event for event in events if event["type"] == "sources")
+        assert sources_event["data"][0]["chunks"][0]["highlight_phrases"] == ["market growth"]
 
     async def test_stream_error_during_iteration(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

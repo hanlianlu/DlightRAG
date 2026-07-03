@@ -351,8 +351,10 @@ non-loopback network.
 
 Citation validation is always part of answer finalization. Web source-panel
 semantic highlights are enabled by default and use the keyword LLM role after
-the answer has already been streamed/finalized. REST and MCP answer payloads do
-not run this highlight enrichment path.
+the answer has already been streamed/finalized. SDK, REST, and MCP answer calls
+default to no semantic highlights; pass `semantic_highlights=True` in Python or
+`semantic_highlights: true` in JSON on one answer request to include
+`sources[].chunks[].highlight_phrases`.
 
 Advanced highlight controls:
 
@@ -366,8 +368,8 @@ citations:
     cache_size: 500
 ```
 
-Disable highlights only when Web UI follow-up source enrichment cost is more
-important than highlighted source snippets.
+Set `citations.highlights.enabled: false` to disable semantic highlight
+extraction for every interface.
 
 ## Conversation And Upload Limits
 

@@ -1099,6 +1099,7 @@ class RAGServiceManager:
         query_images: list[dict[str, Any]] | None = None,
         session_id: str | None = None,
         referenced_image_ids: list[str] | None = None,
+        semantic_highlights: bool = False,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate.
@@ -1153,6 +1154,14 @@ class RAGServiceManager:
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     result.current_image_ids = prepared.current_image_ids
+                    if semantic_highlights:
+                        from dlightrag.core.answer_highlights import enrich_semantic_highlights
+
+                        result.sources = await enrich_semantic_highlights(
+                            result.sources,
+                            answer_text=result.answer,
+                            config=self._config,
+                        )
                     return result
         except TimeoutError as e:
             raise RAGServiceUnavailableError(

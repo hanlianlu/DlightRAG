@@ -110,9 +110,11 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "chunk_top_k" in answer_props
     assert "session_id" in answer_props
     assert "referenced_image_ids" in answer_props
+    assert answer_props["semantic_highlights"]["default"] is False
     assert "filters" in answer_props
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
+    assert "semantic_highlights" not in retrieve_props
     assert "chunk_top_k" in retrieve_props
     retrieve_image_block_schema = _query_image_schema(
         retrieve_tool.inputSchema,
@@ -648,6 +650,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "session_id": "session-1",
             "referenced_image_ids": ["img_1"],
             "filters": {"doc_title": "Manual"},
+            "semantic_highlights": True,
         },
     )
 
@@ -671,6 +674,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert call_kwargs["session_id"] == "session-1"
     assert call_kwargs["referenced_image_ids"] == ["img_1"]
     assert call_kwargs["filters"].doc_title == "Manual"
+    assert call_kwargs["semantic_highlights"] is True
 
 
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:

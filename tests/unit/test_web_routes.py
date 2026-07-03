@@ -344,6 +344,7 @@ class TestWebAnswer:
             nonlocal highlights_called
             highlights_called = True
             assert llm_func is keyword_llm
+            sources[0].chunks[0].highlight_phrases = ["Evidence"]
             return sources
 
         def fail_query_model(*args, **kwargs):
@@ -381,7 +382,7 @@ class TestWebAnswer:
         )
         monkeypatch.setattr("dlightrag.models.llm.get_query_model_func", fail_query_model)
         monkeypatch.setattr(
-            "dlightrag.web.answer_events.extract_highlights_for_sources",
+            "dlightrag.core.answer_highlights.extract_highlights_for_sources",
             fake_extract_highlights_for_sources,
         )
 

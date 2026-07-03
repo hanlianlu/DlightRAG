@@ -34,6 +34,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.citations import finalize_answer
 from dlightrag.config import get_config
+from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
@@ -134,6 +135,7 @@ async def answer(
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
             answer_context_top_k=body.answer_context_top_k,
+            semantic_highlights=body.semantic_highlights,
             scope=scope,
             **kwargs,
         )
@@ -174,6 +176,12 @@ async def answer(
                 source_contexts=public_contexts,
                 source_url_resolver=_resolver,
             )
+            if body.semantic_highlights:
+                finalized.sources = await enrich_semantic_highlights(
+                    finalized.sources,
+                    answer_text=finalized.answer,
+                    config=manager.config,
+                )
 
             yield sse_data_event(AnswerSourcesStreamEvent(data=finalized.sources))
             trace = getattr(token_iter, "trace", None)

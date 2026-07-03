@@ -36,6 +36,7 @@ class AnswerInput(RetrieveInput):
     chunk_top_k: int | None = None
     answer_context_top_k: int | None = None
     conversation_history: list[ConversationMessage] | None = None
+    semantic_highlights: bool = False
 
 
 class IngestInput(IngestPayload):
