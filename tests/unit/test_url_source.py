@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import pytest
@@ -12,9 +13,18 @@ from dlightrag.sourcing.url import URLDataSource
 
 
 class _Response:
-    def __init__(self, content: bytes, *, url: str = "https://cdn.example.com/report.pdf") -> None:
+    def __init__(
+        self,
+        content: bytes,
+        *,
+        url: str = "https://cdn.example.com/report.pdf",
+        status_code: int = 200,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._content = content
         self.url = url
+        self.status_code = status_code
+        self.headers = headers or {}
 
     async def __aenter__(self) -> _Response:
         return self
@@ -32,7 +42,13 @@ class _Response:
 
 
 class _Client:
-    def __init__(self, *, final_url: str = "https://cdn.example.com/report.pdf") -> None:
+    def __init__(
+        self,
+        *,
+        content: bytes = b"document",
+        final_url: str = "https://cdn.example.com/report.pdf",
+    ) -> None:
+        self.content = content
         self.final_url = final_url
         self.urls: list[str] = []
         self.closed = False
@@ -40,7 +56,7 @@ class _Client:
     def stream(self, method: str, url: str) -> _Response:
         assert method == "GET"
         self.urls.append(url)
-        return _Response(b"document", url=self.final_url)
+        return _Response(self.content, url=self.final_url)
 
     async def aclose(self) -> None:
         self.closed = True
@@ -95,12 +111,71 @@ async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) ->
         await source.amaterialize_document("report.pdf", tmp_path / "report.pdf")
 
 
+async def test_url_data_source_rejects_private_redirect_before_following(tmp_path: Path) -> None:
+    class RedirectClient:
+        def __init__(self) -> None:
+            self.urls: list[str] = []
+
+        def stream(self, method: str, url: str) -> _Response:
+            assert method == "GET"
+            self.urls.append(url)
+            return _Response(
+                b"",
+                url=url,
+                status_code=302,
+                headers={"location": "https://127.0.0.1/admin.pdf"},
+            )
+
+    client = RedirectClient()
+    source = URLDataSource(urls=["https://cdn.example.com/start.pdf"], client=client)
+
+    with pytest.raises(ValueError, match="public"):
+        await source.amaterialize_document("start.pdf", tmp_path / "start.pdf")
+
+    assert client.urls == ["https://cdn.example.com/start.pdf"]
+    assert not (tmp_path / "start.pdf").exists()
+
+
+async def test_url_data_source_enforces_download_size_limit(tmp_path: Path) -> None:
+    source = URLDataSource(
+        urls=["https://cdn.example.com/report.pdf"],
+        client=_Client(content=b"document"),
+        max_download_bytes=3,
+    )
+
+    with pytest.raises(ValueError, match="maximum"):
+        await source.amaterialize_document("report.pdf", tmp_path / "report.pdf")
+
+    assert not (tmp_path / "report.pdf").exists()
+
+
 def test_url_data_source_rejects_insecure_or_private_urls() -> None:
     with pytest.raises(ValueError, match="https"):
         URLDataSource(urls=["http://example.com/report.pdf"], client=_Client())
 
     with pytest.raises(ValueError, match="public"):
         URLDataSource(urls=["https://127.0.0.1/report.pdf"], client=_Client())
+
+
+def test_url_data_source_rejects_hostname_that_resolves_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                ("10.0.0.1", 443),
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="public"):
+        URLDataSource(urls=["https://private.example/report.pdf"])
 
 
 def test_parse_remote_uri_treats_https_as_url_source() -> None:

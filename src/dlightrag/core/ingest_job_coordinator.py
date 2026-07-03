@@ -62,6 +62,7 @@ class IngestJobCoordinator:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._workspaces: dict[str, str] = {}
         self._recovery_started = False
+        self._closing = False
 
     async def get_store(self) -> IngestJobStore:
         if self._store is None:
@@ -130,6 +131,7 @@ class IngestJobCoordinator:
         resume_from_window = max(0, int(row.get("current_window") or 0))
         if resume_from_window:
             recovered_kwargs["_resume_from_window"] = resume_from_window
+        cleanup_paths = _normalize_cleanup_paths(request.get("cleanup_paths"))
 
         task = asyncio.create_task(
             self._run_job(
@@ -137,7 +139,7 @@ class IngestJobCoordinator:
                 workspace=workspace,
                 source_type=cast(SourceType, source_type),
                 kwargs=recovered_kwargs,
-                cleanup_paths=(),
+                cleanup_paths=cleanup_paths,
             )
         )
         self._track(job_id, workspace, task)
@@ -205,11 +207,14 @@ class IngestJobCoordinator:
 
         job_id = uuid.uuid4().hex
         store = await self.get_store()
+        cleanup_path_tuple = _normalize_cleanup_paths(cleanup_paths)
         request = {
             "workspace": workspace_id,
             "source_type": source_type,
             "kwargs": _json_safe(kwargs),
         }
+        if cleanup_path_tuple:
+            request["cleanup_paths"] = [str(path) for path in cleanup_path_tuple]
         await store.create(
             job_id=job_id,
             workspace=workspace_id,
@@ -223,7 +228,7 @@ class IngestJobCoordinator:
                 workspace=workspace_id,
                 source_type=source_type,
                 kwargs=dict(kwargs),
-                cleanup_paths=_normalize_cleanup_paths(cleanup_paths),
+                cleanup_paths=cleanup_path_tuple,
             )
         )
         self._track(job_id, workspace_id, task)
@@ -266,6 +271,7 @@ class IngestJobCoordinator:
         store = await self.get_store()
         await store.mark_running(job_id)
         progress_seen = False
+        cleanup_after_run = True
 
         async def _record_progress(progress: Any) -> None:
             nonlocal progress_seen
@@ -301,12 +307,15 @@ class IngestJobCoordinator:
                 job_id, result=await self._job_result_with_totals(store, job_id, result)
             )
         except asyncio.CancelledError:
-            await store.fail(job_id, error="ingest job cancelled")
+            if not self._closing:
+                await store.fail(job_id, error="ingest job cancelled")
+            else:
+                cleanup_after_run = False
             raise
         except Exception as exc:
             await store.fail(job_id, error=f"{type(exc).__name__}: {exc}")
         finally:
-            if cleanup_paths:
+            if cleanup_after_run and cleanup_paths:
                 await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths)
 
     async def _job_result_with_totals(
@@ -328,10 +337,12 @@ class IngestJobCoordinator:
 
     async def close(self) -> None:
         if self._tasks:
+            self._closing = True
             for task in self._tasks.values():
                 task.cancel()
             await asyncio.gather(*self._tasks.values(), return_exceptions=True)
             self._tasks.clear()
+            self._closing = False
         self._workspaces.clear()
 
     def _track(self, job_id: str, workspace: str, task: asyncio.Task[None]) -> None:

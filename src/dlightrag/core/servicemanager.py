@@ -249,32 +249,28 @@ class RAGServiceManager:
 
     @classmethod
     async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
-        """Async factory — creates manager, warms up all known workspaces in parallel."""
+        """Async factory — creates manager and warms the default workspace."""
         from dlightrag.observability import init_tracing
-        from dlightrag.utils.concurrency import bounded_gather
 
         manager = cls(config=config)
         init_tracing(manager._config)
 
         await manager._initialize_workspace_registry()
 
-        # Discover all known workspaces and warm them up in parallel
+        # Discover all known workspaces for recovery, but only instantiate the
+        # default service on startup. Other workspaces are lazy-loaded on demand.
         all_ws = await manager._list_all_workspaces()
         default_ws = normalize_workspace(manager._config.workspace)
         if default_ws not in all_ws:
             all_ws.insert(0, default_ws)
 
-        warmup_coros = [manager._get_service(ws) for ws in all_ws]
-        results = await bounded_gather(
-            warmup_coros,
-            max_concurrent=max(1, int(manager._config.max_async)),
-            task_name="warmup",
-        )
-        failed = [ws for ws, r in zip(all_ws, results, strict=True) if isinstance(r, Exception)]
-        ok = len(all_ws) - len(failed)
-        logger.info("Warmed up %d/%d workspace services", ok, len(all_ws))
-        if failed:
-            logger.warning("Failed to warm up: %s", ", ".join(failed))
+        default_err: Exception | None = None
+        try:
+            await manager._get_service(default_ws)
+            logger.info("Warmed up default workspace service '%s'", default_ws)
+        except Exception as exc:
+            default_err = exc
+            logger.warning("Failed to warm up default workspace '%s'", default_ws, exc_info=True)
 
         await manager._start_ingest_job_recovery()
         await manager._recover_stalled_docs(all_ws)
@@ -287,15 +283,6 @@ class RAGServiceManager:
             manager._ready = True
         else:
             manager._degraded = True
-            # Include original error detail for diagnostics
-            default_err = next(
-                (
-                    r
-                    for ws, r in zip(all_ws, results, strict=True)
-                    if ws == default_ws and isinstance(r, Exception)
-                ),
-                None,
-            )
             detail = getattr(default_err, "detail", str(default_err)) if default_err else "unknown"
             manager._startup_warnings.append(f"Default workspace init failed: {detail}")
             logger.error("RAG service started in degraded mode: %s", detail)

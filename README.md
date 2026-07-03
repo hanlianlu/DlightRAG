@@ -115,7 +115,7 @@ This starts:
 
 | Service | Purpose | Host port |
 |---|---|---|
-| `dlightrag-api` | REST API + Web UI | `8100` |
+| `dlightrag-api` | REST API + Web UI | `127.0.0.1:8100` |
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
 | `postgres` | PG18 + pgvector + AGE + pg_textsearch + pg_jieba | `5432` |
 
@@ -265,7 +265,7 @@ cp .env.example .env
 ```python
 import asyncio
 from dotenv import load_dotenv
-from dlightrag import DlightragConfig, RAGServiceManager
+from dlightrag import DlightragConfig, IngestSpec, RAGServiceManager
 
 load_dotenv()
 
@@ -275,14 +275,19 @@ async def main():
     try:
         workspace = "research_notes"
         await manager.acreate_workspace(workspace, display_name="Research Notes")
-        result = await manager.aingest(workspace, source_type="local", path="./docs")
+        result = await manager.aingest(
+            workspace,
+            IngestSpec(source_type="local", path="./docs"),
+        )
         print(result)
         job = await manager.astart_ingest_job(
             workspace,
-            source_type="s3",
-            bucket="my-bucket",
-            region="us-east-1",  # optional; credentials come from AWS env/config/IAM
-            prefix="docs/",
+            IngestSpec(
+                source_type="s3",
+                bucket="my-bucket",
+                region="us-east-1",  # optional; credentials come from AWS env/config/IAM
+                prefix="docs/",
+            ),
         )
         print(await manager.get_ingest_job(job["job_id"]))
 

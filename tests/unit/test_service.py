@@ -884,6 +884,7 @@ class TestRAGServiceLightRAGMainPath:
         cls.assert_called_once_with(
             urls=["https://api.bynder.com/docs/getting-started"],
             filename="getting-started.html",
+            max_download_bytes=test_config.url_ingest_max_bytes,
         )
         assert result["status"] == "success"
         await_args = service._ingestion_engine.aingest_files.await_args

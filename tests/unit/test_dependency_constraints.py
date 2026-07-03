@@ -100,6 +100,13 @@ def test_compose_runtime_services_do_not_bind_mount_source_tree() -> None:
     assert "./src:/app/src" not in compose
 
 
+def test_compose_binds_api_port_to_loopback_on_host() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert '"127.0.0.1:8100:8100"' in compose
+    assert 'DLIGHTRAG_API_HOST: "0.0.0.0"' in compose
+
+
 def test_runtime_dockerfile_does_not_depend_on_ghcr_uv_stage() -> None:
     """App image builds should not require GHCR metadata just to obtain uv."""
     dockerfile = Path("Dockerfile").read_text(encoding="utf-8")

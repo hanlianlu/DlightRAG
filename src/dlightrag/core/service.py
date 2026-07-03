@@ -1180,7 +1180,10 @@ class RAGService:
             source_kwargs["source_uri"] = kwargs["source_uri"]
         if kwargs.get("source_uris") is not None:
             source_kwargs["source_uris"] = kwargs["source_uris"]
-        source = URLDataSource(**source_kwargs)
+        source = URLDataSource(
+            **source_kwargs,
+            max_download_bytes=self.config.url_ingest_max_bytes,
+        )
         result = await self.aingest_source(
             source,
             source_type="url",

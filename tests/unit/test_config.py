@@ -133,6 +133,32 @@ class TestMetadataConfig:
 
 
 class TestDlightragConfigNested:
+    def test_api_defaults_to_loopback_for_local_dev(self):
+        cfg = DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        )
+
+        assert cfg.api_host == "127.0.0.1"
+        assert cfg.auth_mode == "none"
+
+    def test_public_api_host_without_auth_warns(self):
+        with pytest.warns(UserWarning, match="api_host"):
+            DlightragConfig(
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="sk-test",
+                    startup_probe=False,
+                ),
+                api_host="0.0.0.0",
+                auth_mode="none",
+            )
+
     def test_minimal_config(self, tmp_path, monkeypatch):
         """Only embedding required; llm defaults are nested under llm.default."""
         monkeypatch.chdir(tmp_path)

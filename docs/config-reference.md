@@ -110,11 +110,13 @@ provider/source URL. Azure uses `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the
 standard AWS credential chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`, `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS
 config).
-REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only. SaaS APIs
-that require auth headers should be wrapped by an SDK `AsyncDataSource`
-connector and ingested with `RAGServiceManager.aingest_source()`. URL ingest
-stores fetch URLs without query/fragment by default; pass `source_uri` or
-`source_uris` when a stable source identity should be persisted instead.
+REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only, does not
+follow redirects to private hosts, and caps each download with
+`url_ingest_max_bytes`. SaaS APIs that require auth headers should be wrapped by
+an SDK `AsyncDataSource` connector and ingested with
+`RAGServiceManager.aingest_source()`. URL ingest stores fetch URLs without query
+or fragment by default; pass `source_uri` or `source_uris` when a stable source
+identity should be persisted instead.
 
 Remote prefix ingest streams provider listings into bounded local staging
 windows. It uses the same ingest job substrate as local and single-object ingest,
@@ -126,6 +128,7 @@ Advanced signing defaults:
 
 ```yaml
 retain_remote_source_files: false
+url_ingest_max_bytes: 104857600
 azure_sas_expiry: 3600
 s3_presign_expiry: 3600
 s3_region:
@@ -303,6 +306,19 @@ visual_assets:
   thumb_cache_size: 256
 ```
 
+## REST API
+
+REST binds to loopback by default for local development:
+
+```yaml
+api_host: 127.0.0.1
+api_port: 8100
+auth_mode: none
+```
+
+Set `api_host: 0.0.0.0` only when the server is behind a trusted network or
+`auth_mode` is explicitly enabled.
+
 ## MCP Streamable HTTP
 
 DlightRAG's HTTP MCP server uses the current Streamable HTTP transport on a
@@ -355,13 +371,15 @@ important than highlighted source snippets.
 max_conversation_turns: 50
 max_conversation_tokens: 150000
 max_upload_bytes: 104857600
+url_ingest_max_bytes: 104857600
 max_upload_size_mb: 512
 ingest_timeout:
 request_timeout: 300
 ```
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
-applies to Web uploads.
+applies to Web uploads. `url_ingest_max_bytes` caps each public HTTPS URL
+download before parser staging.
 `ingest_timeout` limits how long synchronous SDK/REST/MCP ingest calls wait.
 When it expires, the ingest job keeps running and callers receive/read the job
 status instead of cancelling the ingest.

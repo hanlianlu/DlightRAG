@@ -5,14 +5,18 @@ from __future__ import annotations
 
 import inspect
 import ipaddress
+import socket
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 
 from dlightrag.sourcing.base import AsyncDataSource
+
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 
 
 class URLDataSource(AsyncDataSource):
@@ -32,6 +36,7 @@ class URLDataSource(AsyncDataSource):
         source_uris: Sequence[str] | None = None,
         client: Any | None = None,
         timeout: float = 120.0,
+        max_download_bytes: int = 100 * 1024 * 1024,
     ) -> None:
         if not urls:
             raise ValueError("'url' or 'urls' is required for url ingestion")
@@ -47,11 +52,12 @@ class URLDataSource(AsyncDataSource):
         self._client = client
         self._owns_client = client is None
         self._timeout = timeout
+        self._max_download_bytes = max(1, int(max_download_bytes))
         self._url_by_key: dict[str, str] = {}
         self._source_uri_by_key: dict[str, str] = {}
 
         for index, raw_url in enumerate(urls):
-            url = _validate_public_https_url(raw_url)
+            url = _validate_public_https_url(raw_url, resolve_host=self._owns_client)
             key = _document_key_from_url(url, index=index, filename=filename)
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
@@ -75,13 +81,27 @@ class URLDataSource(AsyncDataSource):
             raise KeyError(f"unknown URL document id: {doc_id}") from exc
 
         client = self._ensure_client()
-        async with client.stream("GET", url) as response:
-            response.raise_for_status()
-            _validate_public_https_url(str(getattr(response, "url", url)))
-            with destination.open("wb") as out:
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        out.write(chunk)
+        current_url = url
+        try:
+            for _ in range(_MAX_REDIRECTS + 1):
+                async with client.stream("GET", current_url) as response:
+                    status_code = int(getattr(response, "status_code", 200) or 200)
+                    if status_code in _REDIRECT_STATUSES:
+                        current_url = _redirect_target(
+                            current_url,
+                            response,
+                            resolve_host=self._owns_client,
+                        )
+                        continue
+
+                    response.raise_for_status()
+                    _validate_public_https_url(str(getattr(response, "url", current_url)))
+                    await self._write_response(response, destination)
+                    return
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
+        raise ValueError("url ingestion exceeded maximum redirects")
 
     def source_uri_for_key(self, key: str) -> str:
         try:
@@ -102,13 +122,26 @@ class URLDataSource(AsyncDataSource):
     def _ensure_client(self) -> Any:
         if self._client is None:
             self._client = httpx.AsyncClient(
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=httpx.Timeout(self._timeout),
             )
         return self._client
 
+    async def _write_response(self, response: Any, destination: Path) -> None:
+        written = 0
+        with destination.open("wb") as out:
+            async for chunk in response.aiter_bytes():
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > self._max_download_bytes:
+                    raise ValueError(
+                        f"url ingest exceeds maximum size of {self._max_download_bytes} bytes"
+                    )
+                out.write(chunk)
 
-def _validate_public_https_url(raw_url: str) -> str:
+
+def _validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> str:
     parsed = urlparse(raw_url)
     if parsed.scheme.lower() != "https":
         raise ValueError("url ingestion only accepts https URLs")
@@ -124,10 +157,35 @@ def _validate_public_https_url(raw_url: str) -> str:
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
+        if resolve_host:
+            _validate_resolved_public_host(host, parsed.port or 443)
         return raw_url
     if not ip.is_global:
         raise ValueError("url ingestion requires a public host")
     return raw_url
+
+
+def _validate_resolved_public_host(host: str, port: int) -> None:
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("url ingestion requires a resolvable public host") from exc
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        if not ipaddress.ip_address(str(sockaddr[0])).is_global:
+            raise ValueError("url ingestion requires a public host")
+
+
+def _redirect_target(current_url: str, response: Any, *, resolve_host: bool) -> str:
+    headers = getattr(response, "headers", {}) or {}
+    location = headers.get("location") or headers.get("Location")
+    if not location:
+        raise ValueError("url redirect is missing Location header")
+    return _validate_public_https_url(
+        urljoin(current_url, str(location)), resolve_host=resolve_host
+    )
 
 
 def _default_source_uri_from_url(url: str) -> str:
