@@ -28,6 +28,7 @@ from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.core.session_images import SessionImageStore
+from dlightrag.sourcing.base import SourceDocument
 
 
 def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
@@ -917,13 +918,16 @@ class TestDelegation:
             "ws_a",
             source,
             source_type="bynder",
-            keys=["asset.pdf"],
+            documents=[SourceDocument(key="asset.pdf")],
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
             retain_source_file=True,
         )
 
         assert result == {"processed": 1}
         mock_svc.aingest_source.assert_awaited_once()
+        assert mock_svc.aingest_source.await_args.kwargs["documents"] == [
+            SourceDocument(key="asset.pdf")
+        ]
         assert mock_svc.aingest_source.await_args.kwargs["retain_source_file"] is True
         assert manager._ingest_jobs._tasks == {}
 

@@ -525,6 +525,8 @@ Metadata is explicit-schema first:
 - Declare filterable custom fields once in `metadata.fields`.
 - REST, MCP, and SDK ingest calls pass metadata values, not schema
   declarations.
+- Ingest-call `metadata` is batch-level default metadata; manifest or
+  `SourceDocument` metadata overlays it for one document.
 - Declared fields are normalized and promoted to filterable columns.
 - Undeclared metadata can be stored as JSONB enrichment when
   `allow_ad_hoc_json: true`, but it is not filterable.

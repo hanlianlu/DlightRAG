@@ -45,6 +45,20 @@ type SourceType = Literal["local", "azure_blob", "s3", "url"]
 type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
 
 
+class IngestDocument(ClientContractModel):
+    """One explicitly listed document in an ingest manifest."""
+
+    path: str | None = None
+    key: str | None = None
+    url: str | None = None
+    filename: str | None = None
+    source_uri: str | None = None
+    title: str | None = None
+    author: str | None = None
+    metadata: dict[str, Any] | None = None
+    metadata_policy: MetadataPolicy | None = None
+
+
 class IngestSpec(ClientContractModel):
     """Transport-neutral ingest source specification shared by SDK, REST, and MCP."""
 
@@ -61,6 +75,7 @@ class IngestSpec(ClientContractModel):
     filename: str | None = None
     source_uri: str | None = None
     source_uris: list[str] | None = None
+    documents: list[IngestDocument] | None = None
     retain_source_file: bool | None = None
     replace: bool | None = None
     title: str | None = None
@@ -71,21 +86,52 @@ class IngestSpec(ClientContractModel):
     @model_validator(mode="after")
     def _validate_source_fields(self) -> IngestSpec:
         if self.source_type == "local":
+            if self.documents is not None:
+                if self.path:
+                    raise ValueError("'path' and 'documents' are mutually exclusive")
+                _require_document_field(self.documents, "path", source_type=self.source_type)
+                return self
             if not self.path:
                 raise ValueError("'path' is required for local ingestion")
         elif self.source_type == "azure_blob":
             if not self.container_name:
                 raise ValueError("'container_name' is required for azure_blob")
+            if self.documents is not None:
+                if self.blob_path or self.prefix is not None:
+                    raise ValueError("'blob_path'/'prefix' and 'documents' are mutually exclusive")
+                _require_document_field(self.documents, "key", source_type=self.source_type)
+                return self
             if self.blob_path and self.prefix is not None:
                 raise ValueError("'blob_path' and 'prefix' are mutually exclusive")
         elif self.source_type == "s3":
             if not self.bucket:
                 raise ValueError("'bucket' is required for s3")
+            if self.documents is not None:
+                if self.key or self.prefix is not None:
+                    raise ValueError("'key'/'prefix' and 'documents' are mutually exclusive")
+                _require_document_field(self.documents, "key", source_type=self.source_type)
+                return self
             if not self.key and self.prefix is None:
                 raise ValueError("'key' or 'prefix' is required for s3")
             if self.key and self.prefix is not None:
                 raise ValueError("'key' and 'prefix' are mutually exclusive")
         elif self.source_type == "url":
+            if self.documents is not None:
+                if any(
+                    value is not None
+                    for value in (
+                        self.url,
+                        self.urls,
+                        self.filename,
+                        self.source_uri,
+                        self.source_uris,
+                    )
+                ):
+                    raise ValueError(
+                        "'url'/'urls'/'filename'/'source_uri' and 'documents' are mutually exclusive"
+                    )
+                _require_document_field(self.documents, "url", source_type=self.source_type)
+                return self
             url_count = _url_count(self.url, self.urls)
             if url_count == 0:
                 raise ValueError("'url' or 'urls' is required for url ingestion")
@@ -114,6 +160,18 @@ def _url_count(url: str | None, urls: list[str] | None) -> int:
     return len(urls or [])
 
 
+def _require_document_field(
+    documents: list[IngestDocument], field_name: Literal["path", "key", "url"], *, source_type: str
+) -> None:
+    if not documents:
+        raise ValueError("'documents' must contain at least one document")
+    for index, document in enumerate(documents):
+        if not getattr(document, field_name):
+            raise ValueError(
+                f"'documents[{index}].{field_name}' is required for {source_type} ingestion"
+            )
+
+
 def model_dump_json_safe(value: Any) -> Any:
     """Return plain JSON-ready data from Pydantic models and containers."""
     if isinstance(value, BaseModel):
@@ -139,6 +197,7 @@ __all__ = [
     "ConversationMessage",
     "ImageURL",
     "ImageURLContentBlock",
+    "IngestDocument",
     "IngestPayload",
     "IngestSpec",
     "MetadataPolicy",

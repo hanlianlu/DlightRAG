@@ -353,6 +353,46 @@ async def test_document_ingest_accepts_explicit_user_metadata(tmp_path: Path) ->
     assert saved["metadata_json"]["project"] == "Analytical Engine"
 
 
+async def test_prepared_file_metadata_overlays_batch_metadata(tmp_path: Path) -> None:
+    source = tmp_path / "asset.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine(
+        metadata_registry=MetadataFieldRegistry.from_config(
+            {
+                "source_system": {"type": "string", "filter_ops": ["exact"]},
+                "department": {"type": "string", "filter_ops": ["exact"]},
+                "asset_id": {"type": "string", "filter_ops": ["exact"]},
+            }
+        ),
+        allow_ad_hoc_metadata=True,
+        default_metadata_policy="validate",
+    )
+
+    await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=source,
+                metadata={"department": " Legal ", "asset_id": "A-123"},
+            )
+        ],
+        replace=False,
+        metadata={"source_system": "Bynder", "department": "Marketing"},
+        metadata_policy="validate",
+    )
+
+    _, saved = deps["metadata_index"].upsert.await_args.args
+    assert saved["user_metadata"] == {
+        "source_system": "Bynder",
+        "department": " Legal ",
+        "asset_id": "A-123",
+    }
+    assert saved["metadata_filterable"] == {
+        "source_system": "bynder",
+        "department": "legal",
+        "asset_id": "a-123",
+    }
+
+
 async def test_image_file_ingest_delegates_to_lightrag_parser(
     tmp_path: Path,
 ) -> None:

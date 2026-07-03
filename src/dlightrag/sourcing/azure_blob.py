@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC
 from pathlib import Path
 
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 try:
     from azure.storage.blob import generate_blob_sas
@@ -108,12 +108,12 @@ class AzureBlobDataSource(AsyncDataSource):
         self._async_blob_service = None
         self._async_container_client = None
 
-    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[str]:
+    async def aiter_documents(self, prefix: str | None = None) -> AsyncIterator[SourceDocument]:
         """Stream blob names in the container."""
         client = await self._get_async_container_client()
         blobs = client.list_blobs(name_starts_with=prefix)
         async for blob in blobs:
-            yield str(blob.name)
+            yield SourceDocument(key=str(blob.name))
 
     async def _get_async_container_client(self):
         """Lazy init async container client."""
@@ -128,10 +128,10 @@ class AzureBlobDataSource(AsyncDataSource):
             )
         return self._async_container_client
 
-    async def amaterialize_document(self, doc_id: str, destination: Path) -> None:
+    async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
         """Download blob content to a local parser input file."""
         client = await self._get_async_container_client()
-        blob_client = client.get_blob_client(doc_id)
+        blob_client = client.get_blob_client(document.key)
         stream = await blob_client.download_blob()
         with destination.open("wb") as out:
             async for chunk in stream.chunks():

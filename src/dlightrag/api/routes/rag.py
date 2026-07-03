@@ -43,6 +43,7 @@ from dlightrag.core.client_payloads import (
 )
 from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
+    managed_local_ingest_documents,
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
@@ -77,7 +78,13 @@ async def ingest(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
-        ingest_spec = ingest_spec.model_copy(update={"path": path})
+        documents = managed_local_ingest_documents(
+            source_type=body.source_type,
+            documents=ingest_spec.documents,
+            input_dir=get_config().input_dir_path,
+            workspace=ws,
+        )
+        ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": documents})
 
     job = await manager.astart_ingest_job(ws, ingest_spec)
     return _job_response(job)

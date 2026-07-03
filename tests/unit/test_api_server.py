@@ -761,6 +761,36 @@ class TestIngestEndpoint:
         assert ingest_spec.metadata_policy == "reject_unknown"
         mock_manager.aingest.assert_not_awaited()
 
+    async def test_ingest_forwards_document_manifest_metadata(
+        self, client: AsyncClient, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "s3",
+                "bucket": "my-bucket",
+                "metadata": {"source_system": "s3-prod", "department": "Marketing"},
+                "documents": [
+                    {
+                        "key": "docs/a.pdf",
+                        "title": "A",
+                        "metadata": {"department": "Legal", "asset_id": "a"},
+                    }
+                ],
+            },
+        )
+
+        assert resp.status_code == 202
+        ingest_spec = mock_manager.astart_ingest_job.call_args.args[1]
+        assert ingest_spec.source_type == "s3"
+        assert ingest_spec.bucket == "my-bucket"
+        assert ingest_spec.metadata == {"source_system": "s3-prod", "department": "Marketing"}
+        assert ingest_spec.documents[0].key == "docs/a.pdf"
+        assert ingest_spec.documents[0].title == "A"
+        assert ingest_spec.documents[0].metadata == {"department": "Legal", "asset_id": "a"}
+        mock_manager.aingest.assert_not_awaited()
+
     async def test_azure_blob_success(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:

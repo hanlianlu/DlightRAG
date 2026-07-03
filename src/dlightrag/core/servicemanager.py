@@ -37,7 +37,7 @@ from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import RAGService
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
@@ -423,7 +423,7 @@ class RAGServiceManager:
         source: AsyncDataSource,
         *,
         source_type: str = "source",
-        keys: Iterable[str] | AsyncIterable[str] | None = None,
+        documents: Iterable[SourceDocument] | AsyncIterable[SourceDocument] | None = None,
         prefix: str | None = None,
         source_uri_for_key: Callable[[str], str] | None = None,
         replace: bool | None = None,
@@ -439,7 +439,7 @@ class RAGServiceManager:
         return await svc.aingest_source(
             source,
             source_type=source_type,
-            keys=keys,
+            documents=documents,
             prefix=prefix,
             source_uri_for_key=source_uri_for_key,
             replace=replace,

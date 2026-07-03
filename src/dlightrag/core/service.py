@@ -23,7 +23,7 @@ from typing import Any, Literal, cast
 from lightrag.constants import PARSED_DIR_NAME
 
 from dlightrag.config import DlightragConfig, get_config
-from dlightrag.core.client_contracts import SourceType
+from dlightrag.core.client_contracts import IngestDocument, SourceType
 from dlightrag.core.ingestion.engine import PreparedIngestFile
 from dlightrag.core.ingestion.paths import (
     iter_ingestable_files,
@@ -35,11 +35,35 @@ from dlightrag.core.ingestion.paths import (
     workspace_input_root,
 )
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
-from dlightrag.sourcing.base import AsyncDataSource
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
 
 logger = logging.getLogger(__name__)
+
+
+def _ingest_documents(value: Any | None) -> list[IngestDocument] | None:
+    if value is None:
+        return None
+    return [
+        document
+        if isinstance(document, IngestDocument)
+        else IngestDocument.model_validate(document)
+        for document in value
+    ]
+
+
+def _source_document_from_manifest(document: IngestDocument, *, key: str) -> SourceDocument:
+    return SourceDocument(
+        key=key,
+        source_uri=document.source_uri,
+        display_filename=document.filename,
+        title=document.title,
+        author=document.author,
+        metadata=document.metadata,
+        metadata_policy=document.metadata_policy,
+    )
+
 
 # PostgreSQL advisory lock serializing first-time storage init across
 # concurrent workers (multi-Gunicorn processes, Docker scale-out, launchd
@@ -909,19 +933,82 @@ class RAGService:
 
         return result
 
+    async def _aingest_local_manifest(
+        self,
+        documents: list[IngestDocument],
+        *,
+        replace: bool,
+        title: str | None = None,
+        author: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        metadata_policy: MetadataIngestPolicy | None = None,
+    ) -> dict[str, Any]:
+        """Ingest explicitly listed local files with per-document metadata."""
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+        prepared_items: list[PreparedIngestFile] = []
+        for document in documents:
+            assert document.path is not None
+            file_path = Path(document.path)
+            relative_to = self._local_manifest_relative_root(file_path)
+            if replace:
+                await self._purge_existing_for_replace(
+                    file_path=staged_input_path(
+                        input_root=self._workspace_input_root(),
+                        file_path=file_path,
+                        relative_to=relative_to,
+                    )
+                )
+            staged = stage_input_file(
+                input_root=self._workspace_input_root(),
+                file_path=file_path,
+                relative_to=relative_to,
+            )
+            prepared_items.append(
+                PreparedIngestFile(
+                    parser_path=staged,
+                    display_filename=document.filename,
+                    title=document.title,
+                    author=document.author,
+                    metadata=document.metadata,
+                    metadata_policy=document.metadata_policy,
+                )
+            )
+        result = await self._ingestion_engine.aingest_files(
+            prepared_items,
+            replace=replace,
+            title=title,
+            author=author,
+            metadata=metadata,
+            metadata_policy=metadata_policy,
+        )
+        if hasattr(result, "model_dump"):
+            result = result.model_dump()
+
+        return result
+
     def _workspace_input_root(self) -> Path:
         return workspace_input_root(self.config.input_dir_path, self.config.workspace)
+
+    def _local_manifest_relative_root(self, file_path: Path) -> Path | None:
+        input_root = self._workspace_input_root()
+        try:
+            file_path.resolve().relative_to(input_root.resolve())
+        except ValueError:
+            return None
+        return input_root
 
     async def _download_remote_to_prepared_item(
         self,
         *,
         source: AsyncDataSource,
-        key: str,
+        document: SourceDocument,
         source_type: str,
         source_uri: str,
         batch_root: Path,
         retain_source_file: bool,
     ) -> PreparedIngestFile:
+        key = document.key
         if retain_source_file:
             parser_path = retained_remote_source_path(
                 input_root=self._workspace_input_root(),
@@ -938,19 +1025,23 @@ class RAGService:
             )
             metadata_path = source_uri
         parser_path.parent.mkdir(parents=True, exist_ok=True)
-        await source.amaterialize_document(key, parser_path)
+        await source.amaterialize_document(document, parser_path)
         return PreparedIngestFile(
             parser_path=parser_path,
             metadata_path=metadata_path,
-            display_filename=Path(key).name,
+            display_filename=document.display_filename or Path(key).name,
+            title=document.title,
+            author=document.author,
+            metadata=document.metadata,
+            metadata_policy=document.metadata_policy,
         )
 
-    async def _aingest_remote_keys(
+    async def _aingest_remote_documents(
         self,
         *,
         source: AsyncDataSource,
         source_type: str,
-        keys: Iterable[str] | AsyncIterable[str],
+        documents: Iterable[SourceDocument] | AsyncIterable[SourceDocument],
         source_uri_for_key: Callable[[str], str],
         replace: bool,
         title: str | None = None,
@@ -968,15 +1059,15 @@ class RAGService:
         processed = 0
         results: list[dict[str, Any]] = []
         errors: list[str] = []
-        saw_keys = False
+        saw_documents = False
         retain_source_files = (
             self.config.retain_remote_source_files
             if retain_source_file is None
             else bool(retain_source_file)
         )
 
-        async for batch_index, window in _aiter_chunks(keys, _REMOTE_INGEST_BATCH_SIZE):
-            saw_keys = True
+        async for batch_index, window in _aiter_chunks(documents, _REMOTE_INGEST_BATCH_SIZE):
+            saw_documents = True
             if batch_index < resume_from_window:
                 continue
 
@@ -985,19 +1076,21 @@ class RAGService:
                 source_type=source_type,
                 batch_id=f"{batch_index:04d}-{uuid.uuid4().hex}",
             )
-            source_uris = [source_uri_for_key(key) for key in window]
+            source_uris = [
+                document.source_uri or source_uri_for_key(document.key) for document in window
+            ]
             prepared_items: list[PreparedIngestFile] = []
             window_errors: list[str] = []
 
             async def _download(
-                item: tuple[str, str],
+                item: tuple[SourceDocument, str],
                 *,
                 current_batch_root: Path = batch_root,
             ) -> PreparedIngestFile:
-                key, source_uri = item
+                document, source_uri = item
                 return await self._download_remote_to_prepared_item(
                     source=source,
-                    key=key,
+                    document=document,
                     source_type=source_type,
                     source_uri=source_uri,
                     batch_root=current_batch_root,
@@ -1013,8 +1106,8 @@ class RAGService:
                 )
 
                 prepared_source_uris: list[str] = []
-                prepared_keys: list[str] = []
-                for _key, source_uri, downloaded in zip(
+                prepared_documents: list[SourceDocument] = []
+                for document, source_uri, downloaded in zip(
                     window, source_uris, download_results, strict=True
                 ):
                     if isinstance(downloaded, Exception):
@@ -1024,7 +1117,7 @@ class RAGService:
                         continue
                     prepared_items.append(downloaded)
                     prepared_source_uris.append(source_uri)
-                    prepared_keys.append(_key)
+                    prepared_documents.append(document)
 
                 if not prepared_items:
                     if progress_callback is not None:
@@ -1041,8 +1134,8 @@ class RAGService:
                     continue
 
                 if replace:
-                    for key, prepared_item, source_uri in zip(
-                        prepared_keys, prepared_items, prepared_source_uris, strict=True
+                    for document, prepared_item, source_uri in zip(
+                        prepared_documents, prepared_items, prepared_source_uris, strict=True
                     ):
                         await self._purge_existing_for_replace(
                             file_path=prepared_item.parser_path,
@@ -1054,7 +1147,7 @@ class RAGService:
                                     input_root=self._workspace_input_root(),
                                     source_type=source_type,
                                     source_uri=source_uri,
-                                    key=key,
+                                    key=document.key,
                                 )
                             )
 
@@ -1094,7 +1187,7 @@ class RAGService:
                     self._workspace_input_root(),
                 )
 
-        if not saw_keys:
+        if not saw_documents:
             return {"processed": 0, "errors": [], "results": []}
         return {"processed": processed, "errors": errors, "results": results}
 
@@ -1116,7 +1209,7 @@ class RAGService:
         source: AsyncDataSource,
         *,
         source_type: str = "source",
-        keys: Iterable[str] | AsyncIterable[str] | None = None,
+        documents: Iterable[SourceDocument] | AsyncIterable[SourceDocument] | None = None,
         prefix: str | None = None,
         source_uri_for_key: Callable[[str], str] | None = None,
         replace: bool | None = None,
@@ -1138,20 +1231,23 @@ class RAGService:
         if self._ingestion_engine is None:
             raise RuntimeError("Ingestion engine not initialized")
 
-        resolved_keys = (
-            keys
-            if keys is not None
-            else cast(Iterable[str] | AsyncIterable[str], source.aiter_documents(prefix=prefix))
+        resolved_documents = (
+            documents
+            if documents is not None
+            else cast(
+                Iterable[SourceDocument] | AsyncIterable[SourceDocument],
+                source.aiter_documents(prefix=prefix),
+            )
         )
         uri_for_key = source_uri_for_key or (
             lambda key: self._default_source_uri_for_key(source_type, key)
         )
         close = getattr(source, "aclose", None)
         try:
-            return await self._aingest_remote_keys(
+            return await self._aingest_remote_documents(
                 source=source,
                 source_type=source_type,
-                keys=resolved_keys,
+                documents=resolved_documents,
                 source_uri_for_key=uri_for_key,
                 replace=self._resolve_replace(replace),
                 title=title,
@@ -1169,6 +1265,35 @@ class RAGService:
                     await result
 
     async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
+        documents = _ingest_documents(kwargs.get("documents"))
+        if documents is not None:
+            from dlightrag.sourcing.url import URLDataSource
+
+            source = URLDataSource(
+                documents=[
+                    _source_document_from_manifest(document, key=cast(str, document.url))
+                    for document in documents
+                ],
+                max_download_bytes=self.config.url_ingest_max_bytes,
+                allow_private_hosts=self.config.url_ingest_private_host_allowlist,
+            )
+            result = await self.aingest_source(
+                source,
+                source_type="url",
+                source_uri_for_key=source.source_uri_for_key,
+                replace=replace,
+                title=kwargs.get("title"),
+                author=kwargs.get("author"),
+                metadata=kwargs.get("metadata"),
+                metadata_policy=kwargs.get("metadata_policy"),
+                retain_source_file=kwargs.get("retain_source_file"),
+                _progress_callback=kwargs.get("_progress_callback"),
+                _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
+            )
+            if len(documents) == 1:
+                return self._single_file_result(result)
+            return result
+
         raw_urls = kwargs.get("urls")
         urls = list(raw_urls) if isinstance(raw_urls, list) else []
         if kwargs.get("url"):
@@ -1230,9 +1355,23 @@ class RAGService:
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
         }
+        documents = _ingest_documents(kwargs.get("documents"))
+        if documents is not None:
+            return await self.aingest_source(
+                source,
+                documents=[
+                    _source_document_from_manifest(document, key=cast(str, document.key))
+                    for document in documents
+                ],
+                **common_kwargs,
+            )
         if kwargs.get("blob_path"):
             return self._single_file_result(
-                await self.aingest_source(source, keys=[str(kwargs["blob_path"])], **common_kwargs)
+                await self.aingest_source(
+                    source,
+                    documents=[SourceDocument(key=str(kwargs["blob_path"]))],
+                    **common_kwargs,
+                )
             )
 
         prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
@@ -1262,10 +1401,24 @@ class RAGService:
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
         }
+        documents = _ingest_documents(kwargs.get("documents"))
+        if documents is not None:
+            return await self.aingest_source(
+                source,
+                documents=[
+                    _source_document_from_manifest(document, key=cast(str, document.key))
+                    for document in documents
+                ],
+                **common_kwargs,
+            )
         key = kwargs.get("key") or kwargs.get("blob_path")
         if key:
             return self._single_file_result(
-                await self.aingest_source(source, keys=[str(key)], **common_kwargs)
+                await self.aingest_source(
+                    source,
+                    documents=[SourceDocument(key=str(key))],
+                    **common_kwargs,
+                )
             )
 
         prefix = "" if kwargs.get("prefix") is None else str(kwargs.get("prefix"))
@@ -1290,6 +1443,16 @@ class RAGService:
         replace = self._resolve_replace(kwargs.get("replace"))
 
         if self._ingestion_engine is not None and source_type == "local":
+            documents = _ingest_documents(kwargs.get("documents"))
+            if documents is not None:
+                return await self._aingest_local_manifest(
+                    documents,
+                    replace=replace,
+                    title=kwargs.get("title"),
+                    author=kwargs.get("author"),
+                    metadata=kwargs.get("metadata"),
+                    metadata_policy=kwargs.get("metadata_policy"),
+                )
             path_str = kwargs.get("path")
             if not path_str:
                 raise ValueError("'path' is required for local source_type")

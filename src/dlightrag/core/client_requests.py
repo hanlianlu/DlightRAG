@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
+from dlightrag.core.client_contracts import IngestDocument, IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import metadata_filter_from_payload
 
 
@@ -99,10 +99,11 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
         "author",
         "metadata",
         "metadata_policy",
+        "documents",
     ):
         value = _get(payload, name)
         if value is not None:
-            kwargs[name] = value
+            kwargs[name] = dump_optional_list(value) if name == "documents" else value
 
     return kwargs
 
@@ -154,6 +155,31 @@ def managed_local_ingest_path(
     return str(resolved)
 
 
+def managed_local_ingest_documents(
+    *,
+    source_type: str,
+    documents: list[IngestDocument] | None,
+    input_dir: Path,
+    workspace: str,
+) -> list[IngestDocument] | None:
+    """Constrain local manifest paths to this workspace's input root."""
+    if source_type != "local" or documents is None:
+        return documents
+    return [
+        document.model_copy(
+            update={
+                "path": managed_local_ingest_path(
+                    source_type=source_type,
+                    path=document.path,
+                    input_dir=input_dir,
+                    workspace=workspace,
+                )
+            }
+        )
+        for document in documents
+    ]
+
+
 def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
     """Wrap CLI-supplied image URLs/data URIs as modern image_url content blocks."""
     return [{"type": "image_url", "image_url": {"url": value}} for value in values]
@@ -162,6 +188,7 @@ def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
 __all__ = [
     "ingest_kwargs_from_payload",
     "ingest_spec_from_payload",
+    "managed_local_ingest_documents",
     "managed_local_ingest_path",
     "query_image_blocks_from_urls",
     "query_kwargs_from_payload",
