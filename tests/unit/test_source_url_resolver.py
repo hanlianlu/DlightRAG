@@ -32,6 +32,15 @@ class TestResolve:
         resolver = SourceUrlResolver()
         assert resolver.resolve("s3://my-bucket/doc.pdf") == "/api/files/s3://my-bucket/doc.pdf"
 
+    def test_remote_source_query_fragment_and_space_are_encoded(self) -> None:
+        resolver = SourceUrlResolver()
+        assert resolver.resolve("s3://my-bucket/docs/report final.pdf?version=1#page=2") == (
+            "/api/files/s3://my-bucket/docs/report%20final.pdf%3Fversion%3D1%23page%3D2"
+        )
+        assert resolver.resolve("azure://container/docs/report final.pdf?version=1#page=2") == (
+            "/api/files/azure://container/docs/report%20final.pdf%3Fversion%3D1%23page%3D2"
+        )
+
     def test_https_scheme_wrapped_into_endpoint(self) -> None:
         resolver = SourceUrlResolver()
         assert (

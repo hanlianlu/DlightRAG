@@ -103,9 +103,16 @@ class S3DataSource(AsyncDataSource):
         client = await self._ensure_client()
         resp = await client.get_object(Bucket=self._bucket, Key=doc_id)
         body = resp["Body"]
-        with destination.open("wb") as out:
-            while chunk := await body.read(1024 * 1024):
-                out.write(chunk)
+        try:
+            with destination.open("wb") as out:
+                while chunk := await body.read(1024 * 1024):
+                    out.write(chunk)
+        finally:
+            close = getattr(body, "close", None)
+            if close is not None:
+                result = close()
+                if isawaitable(result):
+                    await result
 
     async def aclose(self) -> None:
         """Close the S3 session."""

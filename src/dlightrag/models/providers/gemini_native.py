@@ -145,7 +145,7 @@ class GeminiProvider(CompletionProvider):
             response_format=response_format,
             model_kwargs=model_kwargs,
         )
-        response = await self._get_client().models.generate_content(
+        response = await self._get_client().aio.models.generate_content(
             model=model_id, contents=contents, config=config
         )
         return response.text or ""
@@ -168,8 +168,7 @@ class GeminiProvider(CompletionProvider):
             response_format=response_format,
             model_kwargs=model_kwargs,
         )
-        config["stream"] = True
-        response = await self._get_client().models.generate_content(
+        response = await self._get_client().aio.models.generate_content_stream(
             model=model_id, contents=contents, config=config
         )
         async for chunk in response:
