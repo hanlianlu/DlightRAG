@@ -13,6 +13,7 @@ import pytest
 import dlightrag
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import DlightragConfig
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.mcp import server as mcp_server
 from dlightrag.models.schemas import Reference
@@ -320,12 +321,14 @@ async def test_mcp_ingest_forwards_document_metadata(
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "finance",
-        source_type="local",
-        path=str(path),
-        title="Quarterly Report",
-        author="Ada",
-        metadata={"department": "Finance"},
-        metadata_policy="reject_unknown",
+        IngestSpec(
+            source_type="local",
+            path=str(path),
+            title="Quarterly Report",
+            author="Ada",
+            metadata={"department": "Finance"},
+            metadata_policy="reject_unknown",
+        ),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -384,9 +387,7 @@ async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) 
     }
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="s3",
-        bucket="bucket",
-        prefix="docs/",
+        IngestSpec(source_type="s3", bucket="bucket", prefix="docs/"),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -416,10 +417,12 @@ async def test_mcp_remote_ingest_forwards_retain_source_file_override(
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="s3",
-        bucket="bucket",
-        key="docs/report.pdf",
-        retain_source_file=True,
+        IngestSpec(
+            source_type="s3",
+            bucket="bucket",
+            key="docs/report.pdf",
+            retain_source_file=True,
+        ),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -447,10 +450,12 @@ async def test_mcp_s3_ingest_forwards_region(mock_mcp_manager) -> None:
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="s3",
-        bucket="bucket",
-        key="docs/report.pdf",
-        region="eu-north-1",
+        IngestSpec(
+            source_type="s3",
+            bucket="bucket",
+            key="docs/report.pdf",
+            region="eu-north-1",
+        ),
     )
 
 
@@ -482,9 +487,11 @@ async def test_mcp_url_ingest_starts_background_job(mock_mcp_manager) -> None:
     }
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="url",
-        url="https://api.bynder.com/docs/getting-started",
-        filename="getting-started.html",
+        IngestSpec(
+            source_type="url",
+            url="https://api.bynder.com/docs/getting-started",
+            filename="getting-started.html",
+        ),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -513,10 +520,12 @@ async def test_mcp_url_ingest_accepts_stable_source_uri(mock_mcp_manager) -> Non
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="url",
-        url="https://cdn.example.com/download?id=asset-1&signature=secret",
-        filename="asset.pdf",
-        source_uri="bynder://asset/asset-1",
+        IngestSpec(
+            source_type="url",
+            url="https://cdn.example.com/download?id=asset-1&signature=secret",
+            filename="asset.pdf",
+            source_uri="bynder://asset/asset-1",
+        ),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -547,8 +556,7 @@ async def test_mcp_local_directory_ingest_starts_background_job(
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="local",
-        path=str(docs_dir),
+        IngestSpec(source_type="local", path=str(docs_dir)),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
@@ -576,9 +584,7 @@ async def test_mcp_single_s3_key_defaults_to_background_job(mock_mcp_manager) ->
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        source_type="s3",
-        bucket="bucket",
-        key="docs/file.pdf",
+        IngestSpec(source_type="s3", bucket="bucket", key="docs/file.pdf"),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 

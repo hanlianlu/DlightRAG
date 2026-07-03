@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from dlightrag.core.client_contracts import dump_optional_list
+from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import metadata_filter_from_payload
 
 
@@ -107,6 +107,12 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
     return kwargs
 
 
+def ingest_spec_from_payload(payload: Any) -> IngestSpec:
+    """Return an IngestSpec from REST, MCP, CLI, or SDK-shaped payload objects."""
+    source_type = _get(payload, "source_type")
+    return IngestSpec(source_type=source_type, **ingest_kwargs_from_payload(payload))
+
+
 def managed_local_ingest_path(
     *,
     source_type: str,
@@ -155,6 +161,7 @@ def query_image_blocks_from_urls(values: Sequence[str]) -> list[dict[str, Any]]:
 
 __all__ = [
     "ingest_kwargs_from_payload",
+    "ingest_spec_from_payload",
     "managed_local_ingest_path",
     "query_image_blocks_from_urls",
     "query_kwargs_from_payload",

@@ -25,7 +25,8 @@ if TYPE_CHECKING:
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag.core.answer import AnswerEngine
-from dlightrag.core.client_contracts import SourceType
+from dlightrag.core.client_contracts import IngestSpec, SourceType
+from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
@@ -399,51 +400,10 @@ class RAGServiceManager:
     async def aingest(
         self,
         workspace: str,
-        source_type: SourceType,
-        *,
-        path: str | None = None,
-        container_name: str | None = None,
-        blob_path: str | None = None,
-        prefix: str | None = None,
-        bucket: str | None = None,
-        region: str | None = None,
-        key: str | None = None,
-        url: str | None = None,
-        urls: list[str] | None = None,
-        filename: str | None = None,
-        source_uri: str | None = None,
-        source_uris: list[str] | None = None,
-        retain_source_file: bool | None = None,
-        replace: bool | None = None,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        request: IngestSpec,
     ) -> dict[str, Any]:
         """Start an ingest job, wait according to config, and return the result if ready."""
-        kwargs = _drop_none(
-            {
-                "path": path,
-                "container_name": container_name,
-                "blob_path": blob_path,
-                "prefix": prefix,
-                "bucket": bucket,
-                "region": region,
-                "key": key,
-                "url": url,
-                "urls": urls,
-                "filename": filename,
-                "source_uri": source_uri,
-                "source_uris": source_uris,
-                "retain_source_file": retain_source_file,
-                "replace": replace,
-                "title": title,
-                "author": author,
-                "metadata": metadata,
-                "metadata_policy": metadata_policy,
-            }
-        )
-        job = await self.astart_ingest_job(workspace, source_type=source_type, **kwargs)
+        job = await self.astart_ingest_job(workspace, request)
         row = await self.await_ingest_job(job["job_id"], timeout=self._config.ingest_timeout)
         if row is None:
             raise RAGServiceUnavailableError(detail=f"Ingest job disappeared: {job['job_id']}")
@@ -604,54 +564,17 @@ class RAGServiceManager:
     async def astart_ingest_job(
         self,
         workspace: str,
-        source_type: SourceType,
-        *,
-        path: str | None = None,
-        container_name: str | None = None,
-        blob_path: str | None = None,
-        prefix: str | None = None,
-        bucket: str | None = None,
-        region: str | None = None,
-        key: str | None = None,
-        url: str | None = None,
-        urls: list[str] | None = None,
-        filename: str | None = None,
-        source_uri: str | None = None,
-        source_uris: list[str] | None = None,
-        retain_source_file: bool | None = None,
-        replace: bool | None = None,
-        title: str | None = None,
-        author: str | None = None,
-        metadata: dict[str, Any] | None = None,
-        metadata_policy: MetadataIngestPolicy | None = None,
+        request: IngestSpec,
     ) -> dict[str, Any]:
         """Start a background ingest job and return its durable job row."""
-        kwargs = _drop_none(
-            {
-                "path": path,
-                "container_name": container_name,
-                "blob_path": blob_path,
-                "prefix": prefix,
-                "bucket": bucket,
-                "region": region,
-                "key": key,
-                "url": url,
-                "urls": urls,
-                "filename": filename,
-                "source_uri": source_uri,
-                "source_uris": source_uris,
-                "retain_source_file": retain_source_file,
-                "replace": replace,
-                "title": title,
-                "author": author,
-                "metadata": metadata,
-                "metadata_policy": metadata_policy,
-            }
-        )
+        kwargs = ingest_kwargs_from_payload(request)
         return await self._ingest_jobs.start_job(
             workspace,
-            source_type,
-            cleanup_paths=_cleanup_paths_for_local_ingest(source_type=source_type, path=path),
+            request.source_type,
+            cleanup_paths=_cleanup_paths_for_local_ingest(
+                source_type=request.source_type,
+                path=request.path,
+            ),
             **kwargs,
         )
 

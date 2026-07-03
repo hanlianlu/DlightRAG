@@ -15,6 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
 
@@ -516,8 +517,7 @@ class TestIngestEndpoint:
         assert resp.json()["job_id"] == "job-1"
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="local",
-            path=str(path),
+            IngestSpec(source_type="local", path=str(path)),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -577,8 +577,7 @@ class TestIngestEndpoint:
         assert body["status_url"] == "/ingest/jobs/job-1"
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="local",
-            path=str(docs_dir),
+            IngestSpec(source_type="local", path=str(docs_dir)),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -600,9 +599,7 @@ class TestIngestEndpoint:
         assert resp.json()["job_id"] == "job-1"
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="s3",
-            bucket="my-bucket",
-            key="docs/file.pdf",
+            IngestSpec(source_type="s3", bucket="my-bucket", key="docs/file.pdf"),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -624,10 +621,12 @@ class TestIngestEndpoint:
         assert resp.status_code == 202
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="s3",
-            bucket="my-bucket",
-            key="docs/file.pdf",
-            retain_source_file=True,
+            IngestSpec(
+                source_type="s3",
+                bucket="my-bucket",
+                key="docs/file.pdf",
+                retain_source_file=True,
+            ),
         )
 
     async def test_s3_ingest_forwards_region(
@@ -648,10 +647,12 @@ class TestIngestEndpoint:
         assert resp.status_code == 202
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="s3",
-            bucket="my-bucket",
-            key="docs/file.pdf",
-            region="eu-north-1",
+            IngestSpec(
+                source_type="s3",
+                bucket="my-bucket",
+                key="docs/file.pdf",
+                region="eu-north-1",
+            ),
         )
 
     async def test_url_ingest_defaults_to_background_job(
@@ -671,9 +672,11 @@ class TestIngestEndpoint:
         assert resp.status_code == 202
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="url",
-            url="https://api.bynder.com/docs/getting-started",
-            filename="getting-started.html",
+            IngestSpec(
+                source_type="url",
+                url="https://api.bynder.com/docs/getting-started",
+                filename="getting-started.html",
+            ),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -695,10 +698,12 @@ class TestIngestEndpoint:
         assert resp.status_code == 202
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="url",
-            url="https://cdn.example.com/download?id=asset-1&signature=secret",
-            filename="asset.pdf",
-            source_uri="bynder://asset/asset-1",
+            IngestSpec(
+                source_type="url",
+                url="https://cdn.example.com/download?id=asset-1&signature=secret",
+                filename="asset.pdf",
+                source_uri="bynder://asset/asset-1",
+            ),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -724,9 +729,10 @@ class TestIngestEndpoint:
         assert body["job_id"] == "job-1"
         assert body["filename"] == "report.pdf"
         call_args = mock_manager.astart_ingest_job.call_args
-        assert call_args.args == ("default",)
-        assert call_args.kwargs["source_type"] == "local"
-        assert call_args.kwargs["path"].startswith(str(mock_config.input_dir_path / "default"))
+        assert call_args.args[0] == "default"
+        ingest_spec = call_args.args[1]
+        assert ingest_spec.source_type == "local"
+        assert ingest_spec.path.startswith(str(mock_config.input_dir_path / "default"))
         mock_manager.aingest.assert_not_awaited()
 
     async def test_ingest_forwards_metadata_contract(
@@ -746,12 +752,12 @@ class TestIngestEndpoint:
             },
         )
         assert resp.status_code == 202
-        call_kwargs = mock_manager.astart_ingest_job.call_args.kwargs
-        assert call_kwargs["path"] == str(path)
-        assert call_kwargs["title"] == "Field Notes"
-        assert call_kwargs["author"] == "Ada"
-        assert call_kwargs["metadata"] == {"project": "apollo"}
-        assert call_kwargs["metadata_policy"] == "reject_unknown"
+        ingest_spec = mock_manager.astart_ingest_job.call_args.args[1]
+        assert ingest_spec.path == str(path)
+        assert ingest_spec.title == "Field Notes"
+        assert ingest_spec.author == "Ada"
+        assert ingest_spec.metadata == {"project": "apollo"}
+        assert ingest_spec.metadata_policy == "reject_unknown"
         mock_manager.aingest.assert_not_awaited()
 
     async def test_azure_blob_success(
@@ -769,9 +775,11 @@ class TestIngestEndpoint:
         assert resp.status_code == 202
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="azure_blob",
-            container_name="my-container",
-            blob_path="docs/file.pdf",
+            IngestSpec(
+                source_type="azure_blob",
+                container_name="my-container",
+                blob_path="docs/file.pdf",
+            ),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -793,9 +801,7 @@ class TestIngestEndpoint:
         assert body["status_url"] == "/ingest/jobs/job-1"
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            source_type="s3",
-            bucket="my-bucket",
-            prefix="docs/",
+            IngestSpec(source_type="s3", bucket="my-bucket", prefix="docs/"),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -856,7 +862,7 @@ class TestIngestEndpoint:
         assert resp.status_code == 202
         call_kwargs = mock_manager.astart_ingest_job.call_args
         assert call_kwargs[0][0] == "project_x"  # normalized: hyphens → underscores
-        assert call_kwargs.kwargs["path"] == str(path)
+        assert call_kwargs.args[1].path == str(path)
         mock_manager.aingest.assert_not_awaited()
 
     async def test_ingest_service_unavailable_503(

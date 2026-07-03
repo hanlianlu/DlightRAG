@@ -31,7 +31,7 @@ from dlightrag.core.client_payloads import (
     retrieval_payload,
 )
 from dlightrag.core.client_requests import (
-    ingest_kwargs_from_payload,
+    ingest_spec_from_payload,
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
@@ -369,15 +369,16 @@ async def ingest_tool(
     args = IngestInput.model_validate(locals())
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
-    kwargs = ingest_kwargs_from_payload(args)
+    ingest_spec = ingest_spec_from_payload(args)
     if args.source_type == "local":
-        kwargs["path"] = managed_local_ingest_path(
+        path = managed_local_ingest_path(
             source_type=args.source_type,
-            path=kwargs.get("path"),
+            path=ingest_spec.path,
             input_dir=_get_config().input_dir_path,
             workspace=workspace_name,
         )
-    return await manager.astart_ingest_job(workspace_name, source_type=args.source_type, **kwargs)
+        ingest_spec = ingest_spec.model_copy(update={"path": path})
+    return await manager.astart_ingest_job(workspace_name, ingest_spec)
 
 
 @mcp_app.tool(name="ingest_job_status", description="Return the status of an ingest job.")
