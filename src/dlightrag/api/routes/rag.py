@@ -34,14 +34,14 @@ from dlightrag.api.models import (
 )
 from dlightrag.citations import finalize_answer
 from dlightrag.config import get_config
-from dlightrag.core.client_contracts import dump_optional_list
+from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
     project_contexts_for_client,
     retrieval_payload,
 )
 from dlightrag.core.client_requests import (
-    ingest_kwargs_from_payload,
+    ingest_spec_from_payload,
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
@@ -65,19 +65,20 @@ async def ingest(
     """Bulk document ingestion."""
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace)
-    kwargs = ingest_kwargs_from_payload(body)
+    ingest_spec = ingest_spec_from_payload(body)
     if body.source_type == "local":
         try:
-            kwargs["path"] = managed_local_ingest_path(
+            path = managed_local_ingest_path(
                 source_type=body.source_type,
-                path=kwargs.get("path"),
+                path=ingest_spec.path,
                 input_dir=get_config().input_dir_path,
                 workspace=ws,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
+        ingest_spec = ingest_spec.model_copy(update={"path": path})
 
-    job = await manager.astart_ingest_job(ws, source_type=body.source_type, **kwargs)
+    job = await manager.astart_ingest_job(ws, ingest_spec)
     return _job_response(job)
 
 
@@ -284,7 +285,7 @@ async def ingest_blob(
             )
         policy = metadata_policy
 
-    kwargs: dict[str, Any] = {"path": str(target_path)}
+    kwargs: dict[str, Any] = {"source_type": "local", "path": str(target_path)}
     if title is not None:
         kwargs["title"] = title
     if author is not None:
@@ -294,7 +295,7 @@ async def ingest_blob(
     if policy is not None:
         kwargs["metadata_policy"] = policy
 
-    job = await manager.astart_ingest_job(ws, source_type="local", **kwargs)
+    job = await manager.astart_ingest_job(ws, IngestSpec(**kwargs))
     job["uploaded_file"] = str(target_path)
     job["filename"] = safe_name
     return _job_response(job)

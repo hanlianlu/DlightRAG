@@ -45,8 +45,8 @@ type SourceType = Literal["local", "azure_blob", "s3", "url"]
 type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
 
 
-class IngestPayload(ClientContractModel):
-    """Transport-neutral ingest request fields shared by REST and MCP."""
+class IngestSpec(ClientContractModel):
+    """Transport-neutral ingest source specification shared by SDK, REST, and MCP."""
 
     source_type: SourceType
     path: str | None = None
@@ -63,14 +63,13 @@ class IngestPayload(ClientContractModel):
     source_uris: list[str] | None = None
     retain_source_file: bool | None = None
     replace: bool | None = None
-    workspace: str | None = None
     title: str | None = None
     author: str | None = None
     metadata: dict[str, Any] | None = None
     metadata_policy: MetadataPolicy | None = None
 
     @model_validator(mode="after")
-    def _validate_source_fields(self) -> IngestPayload:
+    def _validate_source_fields(self) -> IngestSpec:
         if self.source_type == "local":
             if not self.path:
                 raise ValueError("'path' is required for local ingestion")
@@ -101,6 +100,12 @@ class IngestPayload(ClientContractModel):
             if self.source_uris is not None and len(self.source_uris) != url_count:
                 raise ValueError("'source_uris' must match the number of urls")
         return self
+
+
+class IngestPayload(IngestSpec):
+    """Transport ingest request; workspace routes the request, not the source spec."""
+
+    workspace: str | None = None
 
 
 def _url_count(url: str | None, urls: list[str] | None) -> int:
@@ -135,6 +140,7 @@ __all__ = [
     "ImageURL",
     "ImageURLContentBlock",
     "IngestPayload",
+    "IngestSpec",
     "MetadataPolicy",
     "QueryImage",
     "SourceType",

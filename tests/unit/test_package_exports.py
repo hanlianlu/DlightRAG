@@ -14,5 +14,6 @@ def test_package_root_exports_manager_not_runtime_service() -> None:
 
     assert dlightrag.RAGServiceManager.__name__ == "RAGServiceManager"
     assert dlightrag.RetrievalResult.__name__ == "RetrievalResult"
+    assert dlightrag.IngestSpec.__name__ == "IngestSpec"
     with pytest.raises(AttributeError):
         read_runtime_service()

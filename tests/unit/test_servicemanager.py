@@ -20,6 +20,7 @@ from dlightrag.config import (
     ModelConfig,
     set_config,
 )
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.query_images import prepare_query_images
 from dlightrag.core.query_planner import QueryPlanner
 from dlightrag.core.scope import RequestScope
@@ -31,7 +32,7 @@ def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
 
 
-def test_public_sdk_signatures_expose_primary_kwargs() -> None:
+def test_public_sdk_signatures_expose_primary_contracts() -> None:
     for method in (
         RAGServiceManager.aingest,
         RAGServiceManager.astart_ingest_job,
@@ -44,6 +45,10 @@ def test_public_sdk_signatures_expose_primary_kwargs() -> None:
         assert all(param.kind is not inspect.Parameter.VAR_KEYWORD for param in params)
 
     ingest_params = inspect.signature(RAGServiceManager.aingest).parameters
+    start_job_params = inspect.signature(RAGServiceManager.astart_ingest_job).parameters
+    assert tuple(ingest_params) == ("self", "workspace", "request")
+    assert tuple(start_job_params) == ("self", "workspace", "request")
+
     for name in (
         "path",
         "bucket",
@@ -58,7 +63,7 @@ def test_public_sdk_signatures_expose_primary_kwargs() -> None:
         "metadata_policy",
         "replace",
     ):
-        assert name in ingest_params
+        assert name in IngestSpec.model_fields
 
     retrieve_params = inspect.signature(RAGServiceManager.aretrieve).parameters
     for name in ("top_k", "chunk_top_k", "filters", "multimodal_content"):
@@ -683,7 +688,10 @@ class TestDelegation:
         store = _InMemoryIngestJobStore()
         manager._ingest_jobs._store = store
 
-        result = await manager.aingest("ws_a", source_type="local", path="/tmp/f.pdf")
+        result = await manager.aingest(
+            "ws_a",
+            IngestSpec(source_type="local", path="/tmp/f.pdf"),
+        )
 
         mock_svc.aregister_workspace.assert_awaited_once()
         mock_svc.aingest.assert_awaited_once()
@@ -705,10 +713,12 @@ class TestDelegation:
 
         await manager.aingest(
             "ws_a",
-            source_type="s3",
-            bucket="bucket",
-            key="docs/report.pdf",
-            region="eu-north-1",
+            IngestSpec(
+                source_type="s3",
+                bucket="bucket",
+                key="docs/report.pdf",
+                region="eu-north-1",
+            ),
         )
 
         assert mock_svc.aingest.await_args.kwargs["region"] == "eu-north-1"
@@ -870,9 +880,7 @@ class TestIngestJobs:
 
         job = await manager.astart_ingest_job(
             "Project A",
-            source_type="s3",
-            bucket="bucket",
-            prefix="docs/",
+            IngestSpec(source_type="s3", bucket="bucket", prefix="docs/"),
         )
         task = manager._ingest_jobs._tasks[job["job_id"]]
 
@@ -904,8 +912,7 @@ class TestIngestJobs:
 
         job = await manager.astart_ingest_job(
             "Project A",
-            source_type="local",
-            path=str(staged_dir),
+            IngestSpec(source_type="local", path=str(staged_dir)),
         )
         await asyncio.wait_for(manager._ingest_jobs._tasks[job["job_id"]], timeout=1.0)
         row = await manager.get_ingest_job(job["job_id"])
@@ -934,7 +941,10 @@ class TestIngestJobs:
         svc.aingest = AsyncMock(side_effect=fake_ingest)
         manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
 
-        result = await manager.aingest("default", source_type="local", path="/tmp/slow.pdf")
+        result = await manager.aingest(
+            "default",
+            IngestSpec(source_type="local", path="/tmp/slow.pdf"),
+        )
 
         assert result["status"] in {"queued", "running"}
         assert result["job_id"] in manager._ingest_jobs._tasks

@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.web.deps import (
     error_response,
     get_manager,
@@ -281,8 +282,7 @@ async def upload_files(
     try:
         await manager.astart_ingest_job(
             selected_workspace,
-            source_type="local",
-            path=str(upload_dir),
+            IngestSpec(source_type="local", path=str(upload_dir)),
         )
     except Exception as e:
         logger.exception("Failed to start ingest job for workspace %s", selected_workspace)

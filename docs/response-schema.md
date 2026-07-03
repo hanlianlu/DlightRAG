@@ -12,7 +12,7 @@ Python SDK, REST API, MCP server, and Web UI.
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from dlightrag import RAGServiceManager, DlightragConfig
+from dlightrag import DlightragConfig, IngestSpec, RAGServiceManager
 from dlightrag.sourcing import AsyncDataSource
 
 
@@ -42,23 +42,27 @@ class BynderSource(AsyncDataSource):
 manager = await RAGServiceManager.create(DlightragConfig())
 try:
     # Local files or directory
-    result = await manager.aingest("default", source_type="local", path="./docs")
+    result = await manager.aingest("default", IngestSpec(source_type="local", path="./docs"))
 
     # Azure Blob Storage
     result = await manager.aingest(
         "default",
-        source_type="azure_blob",
-        container_name="documents",
-        prefix="reports/",       # or blob_path="reports/q1.pdf"
+        IngestSpec(
+            source_type="azure_blob",
+            container_name="documents",
+            prefix="reports/",       # or blob_path="reports/q1.pdf"
+        ),
     )
 
     # AWS S3
     result = await manager.aingest(
         "default",
-        source_type="s3",
-        bucket="my-bucket",
-        region="us-east-1",      # optional; credentials come from AWS env/config/IAM
-        key="docs/q1.pdf",       # or prefix="docs/"
+        IngestSpec(
+            source_type="s3",
+            bucket="my-bucket",
+            region="us-east-1",      # optional; credentials come from AWS env/config/IAM
+            key="docs/q1.pdf",       # or prefix="docs/"
+        ),
     )
 
     # Custom SDK connector; useful for Bynder/SaaS clients that handle auth
@@ -73,9 +77,7 @@ try:
     # Explicit non-blocking ingest
     job = await manager.astart_ingest_job(
         "default",
-        source_type="s3",
-        bucket="my-bucket",
-        prefix="docs/",
+        IngestSpec(source_type="s3", bucket="my-bucket", prefix="docs/"),
     )
     status = await manager.get_ingest_job(job["job_id"])
 finally:

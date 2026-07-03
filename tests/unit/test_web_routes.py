@@ -622,9 +622,10 @@ class TestWebFiles:
         mock_manager.aingest.assert_not_awaited()
         mock_manager.astart_ingest_job.assert_awaited_once()
         call = mock_manager.astart_ingest_job.await_args
-        assert call.args == ("default",)
-        assert call.kwargs["source_type"] == "local"
-        upload_dir = Path(call.kwargs["path"])
+        assert call.args[0] == "default"
+        ingest_spec = call.args[1]
+        assert ingest_spec.source_type == "local"
+        upload_dir = Path(ingest_spec.path)
         assert upload_dir.is_dir()
         assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
 

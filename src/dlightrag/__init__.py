@@ -14,9 +14,11 @@ __maintainer__ = "HanlianLyu"
 __credits__ = ["hllyu"]
 
 from dlightrag.config import DlightragConfig
+from dlightrag.core.client_contracts import IngestSpec
 
 __all__ = [
     "DlightragConfig",
+    "IngestSpec",
     "__version__",
 ]
 
