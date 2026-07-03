@@ -63,7 +63,7 @@ async def test_none_candidate_set_is_no_filter() -> None:
 async def test_fetch_chunks_by_ids_uses_explicit_ids_outside_filter_scope() -> None:
     text_chunks = AsyncMock()
     text_chunks.get_by_ids.return_value = [
-        {"content": "alpha", "file_path": "/tmp/a.pdf"},
+        {"content": "alpha", "file_path": "/tmp/a.pdf", "full_doc_id": "doc-a"},
         {"content": "beta", "file_path": "/tmp/b.pdf"},
     ]
 
@@ -71,7 +71,13 @@ async def test_fetch_chunks_by_ids_uses_explicit_ids_outside_filter_scope() -> N
 
     text_chunks.get_by_ids.assert_awaited_once_with(["c1", "c2"])
     assert result == [
-        {"chunk_id": "c1", "content": "alpha", "reference_id": "", "file_path": "/tmp/a.pdf"},
+        {
+            "chunk_id": "c1",
+            "content": "alpha",
+            "reference_id": "",
+            "file_path": "/tmp/a.pdf",
+            "full_doc_id": "doc-a",
+        },
         {"chunk_id": "c2", "content": "beta", "reference_id": "", "file_path": "/tmp/b.pdf"},
     ]
 

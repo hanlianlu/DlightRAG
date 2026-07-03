@@ -176,6 +176,7 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
     result = await backend.aretrieve("question")
 
     assert result.contexts["chunks"][0]["page_idx"] == 5
+    assert result.contexts["chunks"][0]["full_doc_id"] == "doc-1"
 
 
 async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:

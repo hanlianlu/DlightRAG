@@ -120,12 +120,12 @@ class FilteredVectorStorage:
                 lambda conn: conn.fetch(
                     f"WITH candidate_ids(id) AS (SELECT unnest($3::text[])), "
                     f"candidate_rows AS MATERIALIZED ("
-                    f"  SELECT v.id, v.content, v.file_path, v.content_vector "
+                    f"  SELECT v.id, v.content, v.file_path, v.full_doc_id, v.content_vector "
                     f"  FROM {table_name} v "
                     f"  JOIN candidate_ids c ON c.id = v.id "
                     f"  WHERE v.workspace = $2"
                     f") "
-                    f"SELECT id, content, file_path, "
+                    f"SELECT id, content, file_path, full_doc_id, "
                     f"1 - (content_vector <=> $1::{vector_cast}) AS score "
                     f"FROM candidate_rows "
                     f"WHERE 1 - (content_vector <=> $1::{vector_cast}) > $4 "
@@ -151,7 +151,7 @@ class FilteredVectorStorage:
                 await conn.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
                 return await conn.fetch(
                     f"WITH nearest_results AS MATERIALIZED ("
-                    f"  SELECT id, content, file_path, "
+                    f"  SELECT id, content, file_path, full_doc_id, "
                     f"  1 - (content_vector <=> $1::{vector_cast}) AS score, "
                     f"  content_vector <=> $1::{vector_cast} AS distance "
                     f"  FROM {table_name} "
@@ -160,7 +160,7 @@ class FilteredVectorStorage:
                     f"  ORDER BY content_vector <=> $1::{vector_cast} "
                     f"  LIMIT $5"
                     f") "
-                    f"SELECT id, content, file_path, score "
+                    f"SELECT id, content, file_path, full_doc_id, score "
                     f"FROM nearest_results "
                     f"WHERE score > $4 "
                     f"ORDER BY distance + 0",
@@ -186,15 +186,18 @@ class FilteredVectorStorage:
 
     @staticmethod
     def _format_rows(rows: Any) -> list[dict[str, Any]]:
-        return [
-            {
+        chunks: list[dict[str, Any]] = []
+        for r in rows:
+            chunk = {
                 "id": r["id"],
                 "content": r.get("content", ""),
                 "file_path": r.get("file_path", ""),
                 "distance": 1 - r["score"],
             }
-            for r in rows
-        ]
+            if r.get("full_doc_id"):
+                chunk["full_doc_id"] = r["full_doc_id"]
+            chunks.append(chunk)
+        return chunks
 
     def __getattr__(self, name: str) -> Any:
         """Proxy all other attributes to original (table_name, workspace, etc.)."""
@@ -251,15 +254,18 @@ async def fetch_chunks_by_ids(text_chunks: Any, chunk_ids: list[str]) -> list[di
         if isinstance(content_raw, str):
             content = content_raw
             file_path = ""
+            full_doc_id = None
         else:
             content = content_raw.get("content", "")
             file_path = content_raw.get("file_path", "") or ""
-        chunks.append(
-            {
-                "chunk_id": cid,
-                "content": content,
-                "reference_id": "",
-                "file_path": file_path,
-            }
-        )
+            full_doc_id = content_raw.get("full_doc_id")
+        chunk = {
+            "chunk_id": cid,
+            "content": content,
+            "reference_id": "",
+            "file_path": file_path,
+        }
+        if full_doc_id:
+            chunk["full_doc_id"] = str(full_doc_id)
+        chunks.append(chunk)
     return chunks

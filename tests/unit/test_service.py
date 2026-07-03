@@ -1298,19 +1298,23 @@ class TestRAGServiceLightRAGMainPath:
         sent_filter = service._metadata_index.query.await_args.args[0]
         assert sent_filter.custom == {"department": "finance"}
 
-    async def test_metadata_enrichment_prefers_exact_file_path_over_basename(
+    async def test_metadata_enrichment_uses_full_doc_id_without_path_fallback(
         self, test_config: DlightragConfig
     ) -> None:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = RAGService(config=test_config)
         service._metadata_index = AsyncMock()
-        service._metadata_index.find_by_file_path = AsyncMock(return_value=["doc-right"])
-        service._metadata_index.find_by_filename = AsyncMock(return_value=["doc-wrong"])
+        service._metadata_index.find_by_file_path = AsyncMock()
+        service._metadata_index.find_by_filename = AsyncMock()
         service._metadata_index.get = AsyncMock(
             side_effect=lambda doc_id: {
-                "doc-right": {"department": "finance", "filename": "report.pdf"},
-                "doc-wrong": {"department": "legal", "filename": "report.pdf"},
+                "doc-right": {
+                    "department": "finance",
+                    "filename": "report.pdf",
+                    "metadata_json": {"large": True},
+                    "process_options": {"ocr": True},
+                },
             }.get(doc_id)
         )
         result = RetrievalResult(
@@ -1318,19 +1322,23 @@ class TestRAGServiceLightRAGMainPath:
                 "chunks": [
                     {
                         "chunk_id": "chunk-1",
+                        "full_doc_id": "doc-right",
                         "file_path": "/inputs/default/finance/report.pdf",
-                    }
+                    },
+                    {
+                        "chunk_id": "chunk-2",
+                        "file_path": "/inputs/default/finance/report.pdf",
+                    },
                 ]
             }
         )
 
         await service._enrich_chunks_with_metadata(result)
 
-        chunk = result.contexts["chunks"][0]
-        assert chunk["metadata"] == {"department": "finance"}
-        service._metadata_index.find_by_file_path.assert_awaited_once_with(
-            "/inputs/default/finance/report.pdf"
-        )
+        assert result.contexts["chunks"][0]["metadata"] == {"department": "finance"}
+        assert "metadata" not in result.contexts["chunks"][1]
+        service._metadata_index.get.assert_awaited_once_with("doc-right")
+        service._metadata_index.find_by_file_path.assert_not_awaited()
         service._metadata_index.find_by_filename.assert_not_awaited()
 
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:

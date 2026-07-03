@@ -122,7 +122,13 @@ async def test_bm25_search_empty_candidate_set_short_circuits() -> None:
 async def test_bm25_search_maps_rows() -> None:
     conn = AsyncMock()
     conn.fetch.return_value = [
-        {"id": "chunk-a", "content": "hello world", "file_path": "a.md", "score": 1.5}
+        {
+            "id": "chunk-a",
+            "content": "hello world",
+            "file_path": "a.md",
+            "full_doc_id": "doc-a",
+            "score": 1.5,
+        }
     ]
     pool = MagicMock()
     pool.acquire.return_value.__aenter__.return_value = conn
@@ -145,6 +151,7 @@ async def test_bm25_search_maps_rows() -> None:
             "chunk_id": "chunk-a",
             "content": "hello world",
             "file_path": "a.md",
+            "full_doc_id": "doc-a",
             "bm25_profile": "en",
             "score": 1.5,
         }
