@@ -259,50 +259,43 @@ Full request and response details are in
 
 ```bash
 uv add dlightrag
-cp .env.example .env
 ```
 
 ```python
 import asyncio
-from dotenv import load_dotenv
-from dlightrag import DlightragConfig, IngestSpec, RAGServiceManager
+import os
 
-load_dotenv()
+from dlightrag import IngestSpec, RAGServiceManager
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
 
-async def main():
-    config = DlightragConfig()
+
+async def main() -> None:
+    workspace = "research_notes"
+    config = DlightragConfig(
+        workspace=workspace,
+        working_dir="./dlightrag_storage/sdk_demo",
+        llm=LLMConfig(
+            default=ModelConfig(
+                provider="openai",
+                model="gpt-4.1-mini",
+                api_key=os.environ["OPENAI_API_KEY"],
+                temperature=0.2,
+            )
+        ),
+        embedding=EmbeddingConfig(
+            provider="openai_compatible",
+            model="text-embedding-3-large",
+            api_key=os.environ["OPENAI_API_KEY"],
+            base_url="https://api.openai.com/v1",
+            dim=3072,
+        ),
+    )
     manager = await RAGServiceManager.create(config)
     try:
-        workspace = "research_notes"
-        await manager.acreate_workspace(workspace, display_name="Research Notes")
-        result = await manager.aingest(
+        await manager.aingest(
             workspace,
             IngestSpec(source_type="local", path="./docs"),
         )
-        print(result)
-        job = await manager.astart_ingest_job(
-            workspace,
-            IngestSpec(
-                source_type="s3",
-                bucket="my-bucket",
-                region="us-east-1",  # optional; credentials come from AWS env/config/IAM
-                prefix="docs/",
-            ),
-        )
-        print(await manager.get_ingest_job(job["job_id"]))
-
-        # Custom SDK connectors can materialize files without adding a
-        # DlightRAG-native Bynder/SaaS connector.
-        await manager.aingest_source(
-            workspace,
-            my_source,  # implements aiter_documents + amaterialize_document
-            source_type="bynder",
-            source_uri_for_key=lambda key: f"bynder://assets/{key}",
-            retain_source_file=True,  # optional per-call override
-        )
-
-        contexts = await manager.aretrieve("What are the key findings?", workspace=workspace)
-        print(contexts.contexts)
 
         answer = await manager.aanswer("What are the key findings?", workspace=workspace)
         print(answer.answer)
@@ -311,6 +304,10 @@ async def main():
 
 asyncio.run(main())
 ```
+
+`config.yaml` is optional for SDK users; constructor values take precedence.
+S3, Azure Blob, URL, REST, MCP, and custom connector payloads are covered in
+[docs/response-schema.md](docs/response-schema.md).
 
 ### MCP Server
 
