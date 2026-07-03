@@ -59,10 +59,21 @@ README should not keep:
 
 ## Docs Ownership
 
+Target public reading surface:
+
+- root `README.md`
+- eight public reference markdown docs under `docs/`
+
+`docs/architecture.svg` and `docs/architecture.drawio` are architecture
+assets, not standalone docs. `docs/designs/` contains planning records, not
+public product documentation.
+
 Keep these reference responsibilities:
 
 | File | Responsibility |
 |---|---|
+| `docs/interface-contracts.md` | SDK, REST, MCP, and Web-facing request/response contracts |
+| `docs/security.md` | Authentication, JWT/JWKS, IdP boundary, and access control |
 | `docs/config-reference.md` | Typed configuration and advanced overrides |
 | `docs/PG.md` | PostgreSQL requirements, tuning, and LightRAG storage notes |
 | `docs/operations.md` | Maintenance commands and operational safety notes |
@@ -73,7 +84,8 @@ Keep these reference responsibilities:
 Rename `docs/response-schema.md` to `docs/interface-contracts.md` because it
 covers SDK, REST, MCP, and Web-facing contracts, not only response schemas.
 
-Add `docs/security.md` for:
+Add `docs/security.md` because auth and authorization are no longer a small
+configuration footnote. It owns:
 
 - `auth_mode: none`, `simple`, and `jwt`
 - static JWT keys versus JWKS/OIDC issuers
@@ -81,6 +93,28 @@ Add `docs/security.md` for:
 - access-control modes
 - JWT claim to workspace/action mapping
 - deployment recommendations for local, internal, and enterprise setups
+
+Do not add separate docs for metadata, BM25, Langfuse, source retention,
+semantic highlights, or parser routing now. They fit inside the existing
+owners:
+
+- metadata/source retention: `docs/interface-contracts.md` for call behavior,
+  `docs/config-reference.md` for config fields
+- BM25 and semantic highlights: `docs/retrieval_answer_mechanism.md` for
+  runtime behavior, `docs/config-reference.md` for config fields
+- Langfuse: `docs/config-reference.md` for settings, README for the short
+  no-op/enablement summary
+- parser routing: README for topology, `docs/config-reference.md` for settings
+
+## New Doc Test
+
+Add a new public doc only when all are true:
+
+- it has a distinct audience or operating mode
+- it owns facts that do not naturally belong to an existing owner doc
+- keeping it inside an existing doc would make that doc harder to scan
+
+Otherwise, place the content in the existing owner doc and link to it.
 
 ## De-Duplication Rule
 
@@ -105,6 +139,7 @@ procedures from another owner page.
 - Do not build a documentation site.
 - Do not introduce a larger docs taxonomy unless the existing files no longer
   fit.
+- Do not add `docs/README.md`; the root README documentation map is enough.
 - Do not duplicate full reference tables in README.
 - Do not duplicate the same substantive reference content across docs.
 - Do not preserve stale names just for compatibility; update links instead.
@@ -117,6 +152,8 @@ procedures from another owner page.
   unrelated reference detail.
 - JWT/JWKS/access control is introduced under a security model, not as a random
   configuration subsection.
+- Public product documentation is limited to README plus the eight owner docs
+  listed above.
 - Interface contracts are documented in `docs/interface-contracts.md`.
 - Each major topic has one source-of-truth page, with cross-links instead of
   duplicated substance.
