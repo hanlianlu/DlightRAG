@@ -18,7 +18,7 @@
         <mxCell id="adapters" value="&lt;b&gt;API, SDK, Web UI, MCP&lt;/b&gt;&lt;br&gt;transport, auth, uploads, image routes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=9;" vertex="1" parent="1">
           <mxGeometry x="96" y="166" width="210" height="52" as="geometry"/>
         </mxCell>
-        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, session images&lt;br&gt;service lifecycle, sessions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="manager" value="&lt;b&gt;RAGServiceManager&lt;/b&gt;&lt;br&gt;workspace routing, session images&lt;br&gt;service lifecycle, ingest jobs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="382" y="160" width="244" height="64" as="geometry"/>
         </mxCell>
         <mxCell id="service" value="&lt;b&gt;RAGService&lt;/b&gt;&lt;br&gt;per-workspace runtime facade" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eef2ff;strokeColor=#6366f1;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=10;" vertex="1" parent="1">
@@ -41,7 +41,7 @@
           <mxGeometry x="858" y="316" width="330" height="290" as="geometry"/>
         </mxCell>
 
-        <mxCell id="source_intake" value="&lt;b&gt;Source Intake&lt;/b&gt;&lt;br&gt;local, Azure, S3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="source_intake" value="&lt;b&gt;Source Intake&lt;/b&gt;&lt;br&gt;local, URL, Azure, S3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="360" width="130" height="58" as="geometry"/>
         </mxCell>
         <mxCell id="metadata" value="&lt;b&gt;Metadata&lt;/b&gt;&lt;br&gt;contracts + policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">

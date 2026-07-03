@@ -61,7 +61,7 @@
   <rect class="box box-indigo" x="382" y="160" width="244" height="64"/>
   <text class="label" text-anchor="middle" x="504" y="184">RAGServiceManager</text>
   <text class="small" text-anchor="middle" x="504" y="202">workspace routing, session images</text>
-  <text class="small" text-anchor="middle" x="504" y="216">service lifecycle, sessions</text>
+  <text class="small" text-anchor="middle" x="504" y="216">service lifecycle, ingest jobs</text>
 
   <rect class="box box-indigo" x="704" y="160" width="244" height="64"/>
   <text class="label" text-anchor="middle" x="826" y="188">RAGService</text>
@@ -84,7 +84,7 @@
 
   <rect class="box" x="118" y="360" width="130" height="58"/>
   <text class="label" text-anchor="middle" x="183" y="383">Source Intake</text>
-  <text class="small" text-anchor="middle" x="183" y="402">local, Azure, S3</text>
+  <text class="small" text-anchor="middle" x="183" y="402">local, URL, Azure, S3</text>
 
   <rect class="box box-blue" x="270" y="360" width="124" height="58"/>
   <text class="label" text-anchor="middle" x="332" y="383">Metadata</text>
