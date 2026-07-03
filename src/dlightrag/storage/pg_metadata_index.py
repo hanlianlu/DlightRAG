@@ -302,6 +302,22 @@ class PGMetadataIndex:
             return None
         return dict(row)
 
+    async def get_many(self, doc_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Get metadata for multiple documents in one query."""
+        unique_doc_ids = list(dict.fromkeys(str(doc_id) for doc_id in doc_ids if doc_id))
+        if not unique_doc_ids:
+            return {}
+
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(
+                "SELECT * FROM dlightrag_doc_metadata WHERE workspace=$1 AND doc_id = ANY($2::text[])",
+                self._workspace,
+                unique_doc_ids,
+            )
+
+        rows = await self._run(_operation)
+        return {str(row["doc_id"]): dict(row) for row in rows}
+
     async def delete(self, doc_id: str) -> None:
         """Delete metadata for a document."""
 

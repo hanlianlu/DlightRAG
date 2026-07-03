@@ -60,3 +60,34 @@ class TestFinalizeAnswer:
         assert result.sources == []
         assert result.cited_chunks == {}
         assert result.flat_contexts == []
+
+    def test_reuses_one_citation_index_for_sources_and_validation(self, monkeypatch) -> None:
+        from dlightrag.citations import indexer as indexer_module
+        from dlightrag.citations.finalization import finalize_answer
+
+        calls = 0
+        original = indexer_module.CitationIndexer.build_index
+
+        def counted(self, contexts):  # noqa: ANN001, ANN202
+            nonlocal calls
+            calls += 1
+            return original(self, contexts)
+
+        monkeypatch.setattr(indexer_module.CitationIndexer, "build_index", counted)
+
+        result = finalize_answer(
+            "Answer cites [1-1].",
+            {
+                "chunks": [
+                    {
+                        "chunk_id": "c1",
+                        "reference_id": "1",
+                        "file_path": "/docs/report.pdf",
+                        "content": "Evidence.",
+                    }
+                ]
+            },
+        )
+
+        assert result.cited_chunks == {"1": ["c1"]}
+        assert calls == 1

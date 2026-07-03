@@ -183,3 +183,29 @@ async def test_metadata_index_finds_by_exact_file_path() -> None:
     assert await idx.find_by_file_path("/inputs/default/a/report.pdf") == ["doc-1"]
     assert "file_path=$2" in seen["query"]
     assert seen["args"] == ("default", "/inputs/default/a/report.pdf")
+
+
+async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+    seen: dict[str, Any] = {}
+
+    class Conn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+            seen["query"] = query
+            seen["args"] = args
+            return [
+                {"doc_id": "doc-1", "department": "finance"},
+                {"doc_id": "doc-2", "department": "legal"},
+            ]
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    assert await idx.get_many(["doc-1", "doc-2", "doc-1"]) == {
+        "doc-1": {"doc_id": "doc-1", "department": "finance"},
+        "doc-2": {"doc_id": "doc-2", "department": "legal"},
+    }
+    assert "doc_id = ANY($2::text[])" in seen["query"]
+    assert seen["args"] == ("default", ["doc-1", "doc-2"])

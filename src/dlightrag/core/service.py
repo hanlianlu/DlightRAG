@@ -1544,7 +1544,17 @@ class RAGService:
 
             chunks_to_hydrate = kg_result.contexts.get("chunks", [])
             if chunks_to_hydrate:
-                await hydrate_lightrag_chunk_provenance(lr, chunks_to_hydrate)
+                hydrated_ids = {
+                    str(chunk_id)
+                    for chunk_id in kg_result.trace.get("provenance_hydrated_chunk_ids", [])
+                }
+                pending_chunks = [
+                    chunk
+                    for chunk in chunks_to_hydrate
+                    if str(chunk.get("chunk_id") or "") not in hydrated_ids
+                ]
+                if pending_chunks:
+                    await hydrate_lightrag_chunk_provenance(lr, pending_chunks)
 
         await self._rerank_retrieval_chunks(
             query,
@@ -1652,29 +1662,16 @@ class RAGService:
         idx = self._metadata_index
         if idx is None or not doc_meta:
             return
-        from dlightrag.utils.concurrency import bounded_map
 
-        async def _fetch(doc_id: str) -> tuple[str, dict[str, Any]]:
-            try:
-                meta = await idx.get(doc_id)
-                if not meta:
-                    return doc_id, {}
-                return doc_id, {
-                    k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
-                }
-            except Exception:
-                return doc_id, {}  # enrichment is best-effort
+        try:
+            fetched = await idx.get_many(list(doc_meta))
+        except Exception:
+            fetched = {}  # enrichment is best-effort
 
-        results = await bounded_map(
-            list(doc_meta),
-            _fetch,
-            max_concurrent=8,
-            task_name="metadata-enrichment",
-        )
-        for fetch_result in results:
-            if isinstance(fetch_result, Exception):
-                continue
-            doc_id, fetched_meta = fetch_result
+        for doc_id, meta in fetched.items():
+            fetched_meta = {
+                k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
+            }
             if fetched_meta:
                 doc_meta[doc_id] = fetched_meta
 
