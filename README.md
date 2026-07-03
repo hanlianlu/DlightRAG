@@ -626,6 +626,29 @@ Clients send `Authorization: Bearer <token>`. JWT tokens must include `sub`,
 which becomes the authenticated `user_id`. For RS*/ES* algorithms,
 `DLIGHTRAG_JWT_VERIFICATION_KEY` must be the issuer's public key PEM.
 
+DlightRAG authorization is off by default:
+
+```yaml
+access_control:
+  mode: allow_all
+```
+
+Enable claim-based workspace permissions when the JWT issuer already supplies
+verified group or role claims:
+
+```yaml
+access_control:
+  mode: jwt_claims
+  rules:
+    - claim: groups
+      value: finance-rag-readers
+      workspaces: [finance]
+      actions: [workspace.query, workspace.list_files]
+```
+
+REST, Web, and MCP use the same checks. DlightRAG does not issue OAuth tokens
+or manage users; use an external IdP or gateway for login/token issuance.
+
 ### Rerank And Answer Breadth
 
 Reranking happens before answer-context packing. Root config exposes the

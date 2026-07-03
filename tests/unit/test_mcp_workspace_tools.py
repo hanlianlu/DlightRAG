@@ -12,9 +12,10 @@ import pytest
 
 import dlightrag
 from dlightrag.citations.schemas import SourceReference
-from dlightrag.config import DlightragConfig
+from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
+from dlightrag.core.scope import RequestScope, request_scope_context
 from dlightrag.mcp import server as mcp_server
 from dlightrag.models.schemas import Reference
 
@@ -237,6 +238,40 @@ async def test_mcp_retrieve_forwards_chunk_top_k(mock_mcp_manager) -> None:
     call_kwargs = await_args.kwargs
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["chunk_top_k"] == 5
+
+
+async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
+    mock_mcp_manager,
+    test_config: DlightragConfig,
+) -> None:
+    test_config.auth_mode = "jwt"
+    test_config.jwt_verification_key = "test-key"
+    test_config.access_control = AccessControlConfig(
+        mode="jwt_claims",
+        rules=[
+            AccessControlRuleConfig(
+                claim="groups",
+                value="finance-rag-readers",
+                workspaces=["finance"],
+                actions=["workspace.query"],
+            )
+        ],
+    )
+
+    with request_scope_context(
+        RequestScope(
+            user_id="alice",
+            auth_mode="jwt",
+            claims={"groups": ["legal-rag-readers"]},
+        )
+    ):
+        result = await mcp_server.mcp_app.call_tool(
+            "retrieve",
+            {"query": "x", "workspaces": ["finance"]},
+        )
+
+    assert "Access denied" in _tool_text(result)
+    mock_mcp_manager.aretrieve.assert_not_awaited()
 
 
 async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:

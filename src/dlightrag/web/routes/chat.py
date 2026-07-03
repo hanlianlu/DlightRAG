@@ -8,10 +8,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import ValidationError
 
+from dlightrag.access_control import AccessAction
 from dlightrag.core.client_contracts import dump_optional_list
 from dlightrag.utils.images import decode_image_base64, image_url_block
 from dlightrag.web.answer_events import stream_answer_events
-from dlightrag.web.deps import get_manager, get_request_scope, get_workspace, templates
+from dlightrag.web.deps import (
+    enforce_web_access,
+    filter_web_workspace_records,
+    get_manager,
+    get_request_scope,
+    get_workspace,
+    templates,
+)
 from dlightrag.web.requests import WebAnswerRequest
 
 logger = logging.getLogger(__name__)
@@ -36,6 +44,7 @@ async def get_checkpoint_history(
 
     manager = get_manager(request)
     scope = get_request_scope(request, [workspace])
+    await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace)
 
     try:
         history = await manager.aget_checkpoint_history(
@@ -60,6 +69,7 @@ async def delete_checkpoint_history(
 
     manager = get_manager(request)
     scope = get_request_scope(request, [workspace])
+    await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace)
 
     try:
         deleted = await manager.adelete_checkpoint_session(
@@ -90,6 +100,11 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
                 "embedding_model": manager.config.embedding.model,
             }
         ]
+    workspaces = await filter_web_workspace_records(
+        request,
+        AccessAction.WORKSPACE_QUERY,
+        workspaces,
+    )
 
     known = {str(row["workspace"]) for row in workspaces}
     active_raw = request.cookies.get("dlightrag_workspace_ids", "")
@@ -150,6 +165,8 @@ async def answer_stream(
     # Extract workspaces (multi-select from frontend).
     workspaces = body.workspaces
     session_id = body.session_id
+    for ws in workspaces or [workspace]:
+        await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
     scope = get_request_scope(request, workspaces or [workspace])
 
     manager = get_manager(request)

@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
+from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
 from dlightrag.api.models import (
     WorkspaceCreateRequest,
@@ -16,7 +17,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.utils import normalize_workspace, validate_workspace_name
 
-from .deps import get_manager
+from .deps import enforce_access, filter_workspace_records, get_manager
 
 router = APIRouter()
 
@@ -38,6 +39,7 @@ async def list_workspaces(
     """List all registered workspaces."""
     manager = get_manager(request)
     records = await manager.list_workspace_records()
+    records = await filter_workspace_records(request, user, AccessAction.WORKSPACE_QUERY, records)
     return {
         "workspaces": [row["workspace"] for row in records],
         "records": records,
@@ -57,6 +59,7 @@ async def create_workspace(
     """Create an empty workspace in the durable registry."""
     manager = get_manager(request)
     workspace, display_name = _normalize_create_body(body)
+    await enforce_access(request, user, AccessAction.WORKSPACE_CREATE, workspace=workspace)
     existing = await manager.list_workspaces()
     if workspace in existing:
         raise HTTPException(status_code=409, detail=f"Workspace '{display_name}' already exists")
@@ -84,6 +87,7 @@ async def delete_workspace(
         normalized = normalize_workspace(label)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await enforce_access(request, user, AccessAction.WORKSPACE_DELETE, workspace=normalized)
     result = await manager.areset(
         workspace=label,
         keep_files=keep_files,

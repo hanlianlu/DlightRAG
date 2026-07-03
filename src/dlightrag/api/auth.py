@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import jwt
 from fastapi import HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
@@ -26,6 +26,7 @@ class UserContext(BaseModel, frozen=True):
 
     user_id: str
     auth_mode: str  # "none" | "simple" | "jwt"
+    claims: dict[str, object] = Field(default_factory=dict)
 
 
 def _extract_bearer_token(request: Request) -> str:
@@ -72,7 +73,7 @@ def verify_bearer_token(
         sub = claims.get("sub")
         if not sub:
             raise HTTPException(status_code=401, detail="Token missing 'sub' claim")
-        return UserContext(user_id=sub, auth_mode="jwt")
+        return UserContext(user_id=sub, auth_mode="jwt", claims=dict(claims))
 
     raise HTTPException(status_code=500, detail=f"Unknown auth mode: {mode}")
 

@@ -9,7 +9,13 @@ from typing import Any
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
-from dlightrag.web.deps import error_response, get_manager
+from dlightrag.access_control import AccessAction
+from dlightrag.web.deps import (
+    enforce_web_access,
+    error_response,
+    filter_web_workspace_records,
+    get_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +40,9 @@ async def _set_workspace_cookies(
     Cookie values are always derived from the DB workspace registry so they
     never originate from unvalidated user input.
     """
-    workspaces = await manager.list_workspaces()
+    records = [{"workspace": workspace} for workspace in await manager.list_workspaces()]
+    visible = await filter_web_workspace_records(request, AccessAction.WORKSPACE_QUERY, records)
+    workspaces = [str(row["workspace"]) for row in visible]
     if not workspaces:
         response.delete_cookie("dlightrag_workspace", path="/")
         response.delete_cookie("dlightrag_workspace_ids", path="/")
@@ -77,6 +85,7 @@ async def create_workspace(
         return error_response(str(exc))
 
     ws = normalize_workspace(name)
+    await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
 
     # Duplicate check
     existing = await manager.list_workspaces()
@@ -122,6 +131,7 @@ async def delete_workspace(
         return error_response("Confirmation name does not match")
 
     ws = normalize_workspace(name)
+    await enforce_web_access(request, AccessAction.WORKSPACE_DELETE, ws)
 
     try:
         await manager.areset(workspace=ws)

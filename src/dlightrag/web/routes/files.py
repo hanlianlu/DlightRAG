@@ -12,8 +12,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
+from dlightrag.access_control import AccessAction
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.web.deps import (
+    enforce_web_access,
     error_response,
     get_manager,
     get_workspace,
@@ -156,6 +158,7 @@ async def file_list(
     selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
     if selected_workspace is None:
         return _stale_workspace_response()
+    await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
     return await _file_list_response(request, selected_workspace)
 
 
@@ -219,6 +222,7 @@ async def upload_files(
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         return _stale_workspace_response()
+    await enforce_web_access(request, AccessAction.WORKSPACE_INGEST, selected_workspace)
 
     # Detect whether the pipeline is already busy so the UI can show a
     # "queued" state instead of "starting" — LightRAG's request_pending
@@ -326,6 +330,7 @@ async def ingest_status(
     selected_workspace = await _resolve_registered_workspace(request, selected_workspace)
     if selected_workspace is None:
         return _stale_workspace_response()
+    await enforce_web_access(request, AccessAction.WORKSPACE_LIST_FILES, selected_workspace)
     manager = get_manager(request)
 
     try:
@@ -367,6 +372,7 @@ async def delete_files(
     selected_workspace = _resolve_workspace(request.query_params.get("workspace"), workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         return _stale_workspace_response()
+    await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
 
     try:
         await manager.delete_files(selected_workspace, file_paths=file_paths)

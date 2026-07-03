@@ -15,7 +15,7 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
 from dlightrag.citations.schemas import SourceReference
-from dlightrag.config import DlightragConfig
+from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
@@ -345,6 +345,82 @@ class TestJWTAuth:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_jwt_claims_access_control_denies_unmapped_workspace(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_manager
+    ) -> None:
+        cfg = mock_config_no_auth_override
+        cfg.auth_mode = "jwt"
+        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
+        cfg.jwt_algorithm = "HS256"
+        cfg.access_control = AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=["finance"],
+                    actions=["workspace.query"],
+                )
+            ],
+        )
+        token = jwt.encode(
+            {
+                "sub": "user-42",
+                "groups": ["legal-rag-readers"],
+                "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+            },
+            _JWT_VERIFICATION_KEY,
+            algorithm="HS256",
+        )
+
+        resp = await client.post(
+            "/retrieve",
+            json={"query": "hello", "workspaces": ["finance"]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 403
+        mock_manager.aretrieve.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_manager")
+    async def test_jwt_claims_access_control_allows_mapped_workspace(
+        self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig, mock_manager
+    ) -> None:
+        cfg = mock_config_no_auth_override
+        cfg.auth_mode = "jwt"
+        cfg.jwt_verification_key = _JWT_VERIFICATION_KEY
+        cfg.jwt_algorithm = "HS256"
+        cfg.access_control = AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=["finance"],
+                    actions=["workspace.query"],
+                )
+            ],
+        )
+        token = jwt.encode(
+            {
+                "sub": "user-42",
+                "groups": ["finance-rag-readers"],
+                "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+            },
+            _JWT_VERIFICATION_KEY,
+            algorithm="HS256",
+        )
+
+        resp = await client.post(
+            "/retrieve",
+            json={"query": "hello", "workspaces": ["finance"]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 200
+        mock_manager.aretrieve.assert_awaited_once()
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_jwt_expired_token(
