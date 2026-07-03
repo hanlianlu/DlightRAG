@@ -140,7 +140,7 @@ local file.
 | `source_uri` | `string` | — | Stable stored source URI for a single URL, independent of the signed fetch URL |
 | `source_uris` | `list[string]` | — | Stable stored source URIs for URL batches; must match `urls` length |
 | `retain_source_file` | `boolean` | — | Per-call remote source retention override. `true` keeps fetched remote files under the workspace input root; `false` keeps them transient even if config defaults to retention. |
-| `replace` | `boolean` | — | Replace existing documents with same content hash (cascade-purges prior record after the new ingest succeeds) |
+| `replace` | `boolean` | — | Replace existing documents by cascade-purging the prior LightRAG record before enqueueing the new ingest |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |
 | `author` | `string` | — | User-declared document author stored in metadata |
