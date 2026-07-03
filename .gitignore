@@ -16,8 +16,12 @@ build/
 .venv-*/
 venv/
 ENV/
+
+# Local planning artifacts
 docs/plans/
 docs/superpowers/
+superpowers/
+.superpowers/
 
 # IDE
 .idea/
@@ -38,7 +42,7 @@ Thumbs.db
 
 # Worktrees
 .worktrees/
-.superpowers/
+
 # Storage
 dlightrag_storage/
 *.db
@@ -59,3 +63,4 @@ frontend/node_modules/
 htmlcov/
 .coverage
 coverage.xml
+ragas_eval_results/

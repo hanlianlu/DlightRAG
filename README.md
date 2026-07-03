@@ -10,7 +10,7 @@ knowledge graph. DlightRAG adds product-layer metadata governance,
 PostgreSQL BM25, direct image-vector alignment, answer orchestration,
 citations, REST, Web, SDK, and MCP interfaces.
 
-Status: Python 3.12+. Storage: PostgreSQL 18 with pgvector, Apache AGE,
+Status: Python 3.12. Storage: PostgreSQL 18 with pgvector, Apache AGE,
 pg_textsearch, and pg_jieba. License: Apache-2.0.
 
 ## Quick Start
@@ -117,6 +117,7 @@ This starts:
 |---|---|---|
 | `dlightrag-api` | REST API + Web UI | `127.0.0.1:8100` |
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
+| `lightrag-gui` | Upstream LightRAG graph browser | `127.0.0.1:9621` |
 | `postgres` | PG18 + pgvector + AGE + pg_textsearch + pg_jieba | `5432` |
 
 When `dlightrag-api` runs in Docker and MinerU runs as a native host process,
@@ -231,14 +232,6 @@ curl -X POST http://localhost:8100/ingest \
 
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "s3", "bucket": "my-bucket", "prefix": "docs/"}'
-
-curl -X POST http://localhost:8100/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"source_type": "url", "url": "https://api.bynder.com/docs/getting-started", "filename": "getting-started.html"}'
-
-curl -X POST http://localhost:8100/ingest \
-  -H "Content-Type: application/json" \
   -d '{"source_type": "url", "url": "https://cdn.example.com/download?id=asset-1&signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1"}'
 
 curl http://localhost:8100/ingest/jobs/<job_id>
@@ -252,7 +245,7 @@ curl -X POST http://localhost:8100/answer \
   -d '{"query": "What are the key findings?", "stream": false}'
 ```
 
-Full request and response details are in
+S3, Azure Blob, batch URL, SDK connector, request, and response details are in
 [docs/response-schema.md](docs/response-schema.md).
 
 ### Python SDK
@@ -691,7 +684,7 @@ make langfuse-down
 | `DELETE` | `/files` | Delete documents; pass `dry_run: true` to preview matches |
 | `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |
 | `POST` | `/files/retry` | Retry failed documents |
-| `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob / S3 sources |
+| `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob, S3, or HTTPS sources |
 | `GET` | `/metadata/{doc_id}` | Read document metadata |
 | `POST` | `/metadata/{doc_id}` | Merge or replace document metadata |
 | `POST` | `/metadata/search` | Find document IDs matching metadata filters |
@@ -706,11 +699,10 @@ Ingest jobs are durable. If the DlightRAG process restarts, recent
 `queued`/`running` jobs are recovered automatically; remote prefix jobs resume
 from the next unfinished source window, while LightRAG's document status handles
 document-level skips for already processed content.
-Remote S3/Azure/URL source files are transient by default; set
-`retain_remote_source_files: true` as the default, or pass
-`retain_source_file: true` on one SDK/REST/MCP ingest call, to keep fetched
-files in the workspace input root and store that workspace-local path as
-metadata `file_path`.
+Remote source files are transient by default. Set
+`retain_remote_source_files: true` globally, or pass `retain_source_file: true`
+on one SDK/REST/MCP ingest call, to keep fetched files in the workspace input
+root and store that workspace-local path as metadata `file_path`.
 
 Workspace-scoped read/write endpoints accept optional `workspace`.
 Workspace lifecycle endpoints name the workspace explicitly. Query endpoints
