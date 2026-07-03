@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import TYPE_CHECKING
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
 import jwt
 from fastapi import HTTPException, Request
@@ -37,6 +38,33 @@ def _extract_bearer_token(request: Request) -> str:
     return auth_header[7:]
 
 
+@lru_cache(maxsize=16)
+def _jwks_client(url: str) -> jwt.PyJWKClient:
+    return jwt.PyJWKClient(url)
+
+
+def _jwt_signing_key(raw_token: str, cfg: DlightragConfig) -> Any:
+    if cfg.jwt_jwks_url:
+        try:
+            return _jwks_client(cfg.jwt_jwks_url).get_signing_key_from_jwt(raw_token).key
+        except jwt.PyJWKClientError:
+            raise HTTPException(status_code=401, detail="Invalid token") from None
+    if cfg.jwt_verification_key:
+        return cfg.jwt_verification_key
+    raise HTTPException(status_code=500, detail="JWT verification key not configured")
+
+
+def _jwt_decode_kwargs(cfg: DlightragConfig) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {"algorithms": [cfg.jwt_algorithm]}
+    if cfg.jwt_issuer:
+        kwargs["issuer"] = cfg.jwt_issuer
+    if cfg.jwt_audience:
+        kwargs["audience"] = cfg.jwt_audience
+    else:
+        kwargs["options"] = {"verify_aud": False}
+    return kwargs
+
+
 def verify_bearer_token(
     raw_token: str,
     cfg: DlightragConfig,
@@ -62,10 +90,12 @@ def verify_bearer_token(
         return UserContext(user_id=default_user_id, auth_mode="simple")
 
     if mode == "jwt":
-        if not cfg.jwt_verification_key:
-            raise HTTPException(status_code=500, detail="JWT verification key not configured")
         try:
-            claims = jwt.decode(raw_token, cfg.jwt_verification_key, algorithms=[cfg.jwt_algorithm])
+            claims = jwt.decode(
+                raw_token,
+                _jwt_signing_key(raw_token, cfg),
+                **_jwt_decode_kwargs(cfg),
+            )
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token expired") from None
         except jwt.InvalidTokenError:
