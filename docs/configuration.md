@@ -375,6 +375,7 @@ citations:
     enabled: true
     timeout: 10.0
     max_concurrency: 8
+    batch_size: 8
     max_input_chars: 4096
     cache_size: 500
 ```
