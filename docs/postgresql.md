@@ -1,4 +1,11 @@
-# PostgreSQL Maintenance Notes
+# PostgreSQL
+
+This page is for operators deploying or tuning DlightRAG's database layer. It
+owns PostgreSQL version requirements, extensions, pool sizing, HNSW tuning, AGE
+patches, schema migrations, and deployment notes. Runtime ownership lives in
+[architecture.md](architecture.md); config fields live in
+[configuration.md](configuration.md); rebuild procedures live in
+[operations.md](operations.md).
 
 DlightRAG's supported core storage ecosystem is PostgreSQL 18 with:
 

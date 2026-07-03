@@ -1,8 +1,12 @@
-# DlightRAG Operations
+# Operations
 
-This page covers maintenance commands that operate on existing DlightRAG and
-LightRAG storage. These commands are not part of normal ingestion or query
-traffic.
+This page is for operators running maintenance commands against existing
+DlightRAG and LightRAG storage. It owns rebuilds, maintenance safety, and
+recovery workflows. PostgreSQL deployment tuning lives in
+[postgresql.md](postgresql.md); configuration fields live in
+[configuration.md](configuration.md).
+
+The commands here are not part of normal ingestion or query traffic.
 
 ## Offline Vector Storage Rebuild
 

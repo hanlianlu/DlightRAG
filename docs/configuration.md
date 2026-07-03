@@ -1,4 +1,10 @@
-# DlightRAG Configuration Reference
+# Configuration
+
+This page is for operators and SDK users deciding which settings to change. It
+owns configuration precedence, public field groups, defaults, and advanced
+overrides. Runtime architecture lives in [architecture.md](architecture.md);
+auth and access-control guidance lives in [security.md](security.md);
+interface payloads live in [interfaces.md](interfaces.md).
 
 Root [config.yaml](../config.yaml) is intentionally curated. It should contain
 the product and deployment choices most operators actually change. The typed
@@ -169,7 +175,7 @@ postgres_connection_retry_backoff_max: 30.0
 postgres_pool_close_timeout: 5.0
 ```
 
-Use [PG.md](PG.md) for production sizing, SSL, shared memory, and extension
+Use [postgresql.md](postgresql.md) for production sizing, SSL, shared memory, and extension
 notes.
 
 ## Staged Ingest Queues
@@ -323,51 +329,10 @@ auth_mode: none
 Set `api_host: 0.0.0.0` only when the server is behind a trusted network or
 `auth_mode` is explicitly enabled.
 
-JWT verification accepts either a static key:
-
-```yaml
-auth_mode: jwt
-jwt_algorithm: HS256
-jwt_verification_key: "<shared-secret-or-public-key>"
-```
-
-or a JWKS endpoint for external IdPs that rotate signing keys:
-
-```yaml
-auth_mode: jwt
-jwt_algorithm: RS256
-jwt_jwks_url: https://login.example.com/.well-known/jwks.json
-jwt_issuer: https://login.example.com/tenant/v2.0
-jwt_audience: api://dlightrag
-```
-
-`jwt_issuer` and `jwt_audience` are required with `jwt_jwks_url`.
-
-Authorization is disabled by default even when authentication is enabled:
-
-```yaml
-access_control:
-  mode: allow_all
-```
-
-Set `mode: jwt_claims` to map verified JWT claims to DlightRAG workspace
-actions. This keeps Azure/Okta/Auth0 group management outside DlightRAG while
-making REST, Web, and MCP enforce the same resource checks:
-
-```yaml
-auth_mode: jwt
-access_control:
-  mode: jwt_claims
-  rules:
-    - claim: groups
-      value: finance-rag-readers
-      workspaces: [finance]
-      actions:
-        - workspace.query
-        - workspace.list_files
-```
-
-Rules support `*` workspace and action wildcards such as `workspace.*`.
+Use [security.md](security.md) for `simple`, static JWT, JWKS/OIDC issuer, and
+access-control deployment guidance. The related config fields are `auth_mode`,
+`api_auth_token`, `jwt_verification_key`, `jwt_jwks_url`, `jwt_issuer`,
+`jwt_audience`, `jwt_algorithm`, `cors_allow_origins`, and `access_control`.
 
 ## MCP Streamable HTTP
 
@@ -391,7 +356,7 @@ mcp_allowed_origins:
 ```
 
 Set explicit hostnames/origins and enable `auth_mode` before exposing MCP on a
-non-loopback network.
+non-loopback network. Use [security.md](security.md) for exposure guidance.
 
 ## Citations
 

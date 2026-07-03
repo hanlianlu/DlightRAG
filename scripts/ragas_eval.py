@@ -6,7 +6,7 @@ Reuses LightRAG's built-in :class:`RAGEvaluator` — RAGAS metrics
 two-stage pipeline concurrency, progress bars, and CSV/JSON export.
 
 Only :meth:`generate_rag_response` is overridden to call DlightRAG's
-``/api/answer`` instead of LightRAG's ``/query``.
+``/answer`` instead of LightRAG's ``/query``.
 
 When ``EVAL_LLM_BINDING_API_KEY`` is not set, the adapter auto-resolves
 eval credentials from DlightRAG's own config (query role → default LLM,
@@ -18,7 +18,7 @@ Usage::
     uv pip install ragas
     uv run python scripts/ragas_eval.py --dataset my_questions.json
 
-See `docs/ragas-evaluation.md <../docs/ragas-evaluation.md>`_ for full guide.
+See `docs/evaluation.md <../docs/evaluation.md>`_ for full guide.
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ def _resolve_eval_env() -> None:
 
 
 class DlightRAGAdapterEvaluator(RAGEvaluator):
-    """RAGEvaluator wired to a DlightRAG ``/api/answer`` endpoint.
+    """RAGEvaluator wired to a DlightRAG ``/answer`` endpoint.
 
     Inherits everything — RAGAS metrics, concurrency, tqdm, CSV/JSON export —
     and only overrides the API-call method to speak DlightRAG's response format.
@@ -188,7 +188,7 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
         question: str,
         client: httpx.AsyncClient,
     ) -> dict[str, Any]:
-        """Call DlightRAG ``POST /api/answer`` and translate to LightRAG format.
+        """Call DlightRAG ``POST /answer`` and translate to LightRAG format.
 
         DlightRAG response::
 
@@ -204,7 +204,6 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
         try:
             payload: dict[str, Any] = {
                 "query": question,
-                "mode": "mix",
                 "stream": False,
                 "top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")),
                 "chunk_top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")) * 3,
@@ -215,7 +214,7 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
                 headers["Authorization"] = f"Bearer {self._dlightrag_api_key}"
 
             response = await client.post(
-                f"{self.rag_api_url}/api/answer",
+                f"{self.rag_api_url}/answer",
                 json=payload,
                 headers=headers if headers else None,
             )
@@ -242,7 +241,7 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
 
         except httpx.ConnectError as exc:
             raise Exception(
-                f"Cannot connect to DlightRAG API at {self.rag_api_url}/api/answer\n"
+                f"Cannot connect to DlightRAG API at {self.rag_api_url}/answer\n"
                 f"  Make sure DlightRAG is running: docker compose up -d\n"
                 f"  Error: {exc}"
             ) from exc
@@ -301,8 +300,8 @@ Examples:
         "-d",
         type=str,
         default=None,
-        help="Path to test dataset JSON file (default: bundled sample). "
-        'Format: {"test_cases": [{"question": "...", "ground_truth": "..."}]}',
+        help='Path to test dataset JSON file. Format: {"test_cases": '
+        '[{"question": "...", "ground_truth": "..."}]}',
     )
     parser.add_argument(
         "--output-dir",
@@ -328,7 +327,7 @@ _EXPECTED_ENV_VARS: dict[str, str] = {
     "EVAL_EMBEDDING_BINDING_HOST": "Custom endpoint for eval embeddings (cascaded from eval LLM host)",
     "DLIGHTRAG_API_URL": "DlightRAG API base URL (default for --api)",
     "DLIGHTRAG_API_TOKEN": "Bearer token (auto from simple config, explicit for JWT)",
-    "EVAL_QUERY_TOP_K": "top_k sent to DlightRAG /api/answer (default: 10)",
+    "EVAL_QUERY_TOP_K": "top_k sent to DlightRAG /answer (default: 10)",
     "EVAL_MAX_CONCURRENT": "RAGAS evaluation concurrency (default: 2)",
     "EVAL_LLM_MAX_RETRIES": "Max retries for eval LLM calls (default: 5)",
     "EVAL_LLM_TIMEOUT": "Timeout per eval LLM call, seconds (default: 180)",
@@ -377,7 +376,7 @@ async def _run() -> None:
         evaluator.results_dir = Path(args.output_dir)
         evaluator.results_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("DlightRAG API: %s/api/answer", evaluator.rag_api_url)
+    logger.info("DlightRAG API: %s/answer", evaluator.rag_api_url)
     logger.info("Eval LLM:     %s", evaluator.eval_model)
     logger.info("Eval Embed:   %s", evaluator.eval_embedding_model)
     logger.info("Results dir:  %s", evaluator.results_dir.absolute())
@@ -390,7 +389,7 @@ async def _run() -> None:
         logger.error(
             "Pass --dataset <your_questions.json> with ingested documents.\n"
             '  Format: {"test_cases": [{"question": "...", "ground_truth": "..."}]}\n'
-            "  See docs/ragas-evaluation.md for the full guide."
+            "  See docs/evaluation.md for the full guide."
         )
         sys.exit(1)
 

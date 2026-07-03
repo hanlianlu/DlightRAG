@@ -1,8 +1,19 @@
-# API Reference
+# Interfaces
 
-Request and response structures for `ingest`, `retrieve`, and `answer` across
-Python SDK, REST API, MCP server, and Web UI.
+This page is for SDK, REST, MCP, and Web consumers. It owns request and response
+contracts for ingestion, jobs, retrieval, answers, contexts, sources, citations,
+and multimodal payloads. Security posture lives in [security.md](security.md);
+runtime retrieval behavior lives in [retrieval-answer.md](retrieval-answer.md);
+configuration fields live in [configuration.md](configuration.md).
 
+## Interface Overview
+
+| Interface | Primary use | Ingestion behavior |
+|---|---|---|
+| Python SDK | In-process applications and custom connectors | Foreground via `aingest`; background via `astart_ingest_job` |
+| REST API | Web clients, services, and remote callers | Durable ingest jobs |
+| MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
+| Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
 
 ## Ingestion
 
@@ -180,12 +191,13 @@ passed as tool arguments. Local path arguments are relative to the managed
 `input_dir/<workspace>`. Calls return a background job; call
 `ingest_job_status` with the returned `job_id` to read progress.
 
-### Metadata Schema And Policy
+### Metadata At Call Time
 
-The filterable metadata schema is service configuration, not an ingest-time
-API payload. Declare custom filter fields in `config.yaml` under
-`metadata.fields`; REST, MCP, and SDK ingest calls then pass values for those
-fields through `metadata`.
+The filterable metadata schema is service configuration, not an ingest-time API
+payload. Declare custom filter fields in `config.yaml` under `metadata.fields`;
+REST, MCP, and SDK ingest calls then pass values for those fields through
+`metadata`. Configuration fields and defaults live in
+[configuration.md](configuration.md).
 
 ```yaml
 metadata:
@@ -309,7 +321,7 @@ source windows are not downloaded again; already processed documents are still
 deduplicated by LightRAG's document status and DlightRAG's content-hash guard.
 
 
-## Retrieval & Answer
+## Retrieval And Answer
 
 ### Quick Reference
 

@@ -1,4 +1,10 @@
-# Retrieval & Answer Mechanism
+# Retrieval And Answer
+
+This page is for maintainers and advanced users who need to understand how
+queries become contexts, answers, sources, and citations. It owns retrieval and
+answer behavior. Interface payloads live in [interfaces.md](interfaces.md);
+configuration fields live in [configuration.md](configuration.md);
+runtime ownership lives in [architecture.md](architecture.md).
 
 DlightRAG exposes one runtime path: LightRAG main is the base graph/vector
 engine, always queried in `mix` mode, while DlightRAG adds metadata
