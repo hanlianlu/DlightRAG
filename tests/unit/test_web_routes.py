@@ -52,9 +52,6 @@ def mock_manager():
     manager.delete_files = AsyncMock(return_value=[])
     manager.aingest = AsyncMock()
     manager.astart_ingest_job = AsyncMock(return_value={"job_id": "job-1", "status": "queued"})
-    manager._astart_staged_local_ingest_job = AsyncMock(
-        return_value={"job_id": "job-1", "status": "queued"}
-    )
     return manager
 
 
@@ -623,10 +620,10 @@ class TestWebFiles:
 
         assert resp.status_code == 200
         mock_manager.aingest.assert_not_awaited()
-        mock_manager.astart_ingest_job.assert_not_awaited()
-        mock_manager._astart_staged_local_ingest_job.assert_awaited_once()
-        call = mock_manager._astart_staged_local_ingest_job.await_args
+        mock_manager.astart_ingest_job.assert_awaited_once()
+        call = mock_manager.astart_ingest_job.await_args
         assert call.args == ("default",)
+        assert call.kwargs["source_type"] == "local"
         upload_dir = Path(call.kwargs["path"])
         assert upload_dir.is_dir()
         assert (upload_dir / "report.pdf").read_bytes() == b"%PDF-fake"
@@ -646,7 +643,6 @@ class TestWebFiles:
         assert "Workspace no longer exists" in resp.text
         mock_manager.aingest.assert_not_awaited()
         mock_manager.astart_ingest_job.assert_not_awaited()
-        mock_manager._astart_staged_local_ingest_job.assert_not_awaited()
 
     def test_safe_relative_path_rejects_absolute_paths(self) -> None:
         from dlightrag.web.routes.files import _safe_relative_path

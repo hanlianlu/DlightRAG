@@ -15,11 +15,14 @@ Usage:
     uv run scripts/cli.py ingest --source azure_blob --container c --prefix reports/
 
     # S3 ingestion
-    uv run scripts/cli.py ingest --source s3 --bucket my-bucket --key docs/report.pdf
+    uv run scripts/cli.py ingest --source s3 --bucket my-bucket --key docs/report.pdf --region us-east-1
     uv run scripts/cli.py ingest --source s3 --bucket my-bucket --prefix docs/
 
+    # URL ingestion
+    uv run scripts/cli.py ingest --source url --url https://example.com/doc.pdf --filename doc.pdf
+
     # Query & answer (requires API server: docker compose up dlightrag-api)
-    uv run scripts/cli.py query "What are the key findings?"
+    uv run scripts/cli.py query "What are the key findings?" --chunk-top-k 30
     uv run scripts/cli.py query "findings?" --workspaces project-a project-b
     uv run scripts/cli.py query "findings?" --filter-doc-author Ada
     uv run scripts/cli.py answer "What are the key findings?"
@@ -130,6 +133,21 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             _die("--key and --prefix are mutually exclusive for s3")
         if args.container_name or args.blob_path:
             _die("--container, --blob-path are only for azure_blob source")
+    elif source == "url":
+        if args.path:
+            _die("positional path is not used with url")
+        if not args.url and not args.urls:
+            _die("url source requires --url or --urls")
+        if args.url and args.urls:
+            _die("--url and --urls are mutually exclusive")
+        if args.filename and not args.url:
+            _die("--filename can only be used with --url")
+        if args.source_uri and not args.url:
+            _die("--source-uri can only be used with --url")
+        if args.source_uri and args.source_uris:
+            _die("--source-uri and --source-uris are mutually exclusive")
+        if args.source_uris and len(args.source_uris) != len(args.urls or []):
+            _die("--source-uris must match the number of --urls values")
 
 
 def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -464,27 +482,29 @@ def build_parser() -> argparse.ArgumentParser:
     # -- ingest --
     p_ingest = sub.add_parser(
         "ingest",
-        help="Ingest documents from local, Azure Blob, or S3 sources",
+        help="Ingest documents from local, Azure Blob, S3, or URL sources",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Ingest documents into the RAG knowledge base.\n\n"
             "Source types:\n"
             "  local (default)  Ingest from local filesystem (file or directory)\n"
             "  azure_blob       Ingest from Azure Blob Storage container\n"
-            "  s3               Ingest from AWS S3 bucket\n\n"
+            "  s3               Ingest from AWS S3 bucket\n"
+            "  url              Ingest from public or signed HTTPS URLs\n\n"
             "Examples:\n"
             "  %(prog)s ./docs                                          # local file/dir\n"
             "  %(prog)s ./docs --replace                                # local with replace\n"
             "  %(prog)s --source azure_blob --container my-container    # entire container\n"
             "  %(prog)s --source azure_blob --container c --prefix rpt/ # by prefix\n"
             "  %(prog)s --source s3 --bucket my-bucket --key doc.pdf    # S3 single object\n"
-            "  %(prog)s --source s3 --bucket my-bucket --prefix docs/   # S3 by prefix"
+            "  %(prog)s --source s3 --bucket my-bucket --prefix docs/   # S3 by prefix\n"
+            "  %(prog)s --source url --url https://example.com/doc.pdf  # URL single document"
         ),
     )
     p_ingest.add_argument("path", nargs="?", default=None, help="Path to file or directory (local)")
     p_ingest.add_argument(
         "--source",
-        choices=["local", "azure_blob", "s3"],
+        choices=["local", "azure_blob", "s3", "url"],
         default="local",
         dest="source_type",
         help="Data source type (default: local)",
@@ -493,7 +513,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--blob-path", dest="blob_path", help="Specific blob (azure_blob)")
     p_ingest.add_argument("--prefix", help="Blob prefix filter (azure_blob/s3)")
     p_ingest.add_argument("--bucket", help="S3 bucket name")
+    p_ingest.add_argument("--region", help="S3 region name")
     p_ingest.add_argument("--key", help="S3 object key")
+    p_ingest.add_argument("--url", help="Public or signed HTTPS document URL")
+    p_ingest.add_argument("--urls", nargs="+", help="Public or signed HTTPS document URLs")
+    p_ingest.add_argument("--filename", help="Parser filename for a single URL")
+    p_ingest.add_argument(
+        "--source-uri", dest="source_uri", help="Stable source URI for a single URL"
+    )
+    p_ingest.add_argument(
+        "--source-uris",
+        nargs="+",
+        dest="source_uris",
+        help="Stable source URIs for URL batches",
+    )
+    p_ingest.add_argument(
+        "--retain-source-file",
+        action="store_true",
+        default=None,
+        dest="retain_source_file",
+        help="Keep fetched remote source files in the workspace input root",
+    )
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
     p_ingest.add_argument("--workspace", default=None, help="Target workspace")
     p_ingest.add_argument("--title", default=None, help="Optional document title metadata")
@@ -515,7 +555,7 @@ def build_parser() -> argparse.ArgumentParser:
     # -- query --
     p_query = sub.add_parser("query", help="Retrieve contexts and sources (no answer)")
     p_query.add_argument("query", help="Search query")
-    _add_retrieval_options(p_query)
+    _add_retrieval_options(p_query, include_chunk_top_k=True)
 
     # -- answer --
     p_answer = sub.add_parser("answer", help="LLM-generated answer with contexts and sources")

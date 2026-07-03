@@ -57,6 +57,8 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             "find diagrams",
             "--top-k",
             "8",
+            "--chunk-top-k",
+            "5",
             "--workspaces",
             "finance",
             "legal",
@@ -76,6 +78,7 @@ def test_query_payload_supports_current_retrieval_options() -> None:
     assert _build_retrieve_payload(args) == {
         "query": "find diagrams",
         "top_k": 8,
+        "chunk_top_k": 5,
         "workspaces": ["finance", "legal"],
         "filters": {
             "doc_title": "Manual",
@@ -85,11 +88,6 @@ def test_query_payload_supports_current_retrieval_options() -> None:
         "session_id": "session-1",
         "referenced_image_ids": ["img_1"],
     }
-
-
-def test_query_rejects_answer_chunk_candidate_option() -> None:
-    with pytest.raises(SystemExit):
-        _parse_query(["find diagrams", "--chunk-top-k", "5"])
 
 
 def test_answer_payload_supports_current_answer_options() -> None:
@@ -162,6 +160,52 @@ def test_ingest_kwargs_support_document_metadata_options() -> None:
         "author": "Ada",
         "metadata": {"department": "finance"},
         "metadata_policy": "reject_unknown",
+    }
+
+
+def test_ingest_kwargs_support_s3_region_and_retention() -> None:
+    args = _parse_ingest(
+        [
+            "--source",
+            "s3",
+            "--bucket",
+            "bucket",
+            "--key",
+            "docs/report.pdf",
+            "--region",
+            "eu-north-1",
+            "--retain-source-file",
+        ]
+    )
+
+    assert _build_ingest_kwargs(args) == {
+        "bucket": "bucket",
+        "key": "docs/report.pdf",
+        "region": "eu-north-1",
+        "retain_source_file": True,
+        "replace": False,
+    }
+
+
+def test_ingest_kwargs_support_url_source() -> None:
+    args = _parse_ingest(
+        [
+            "--source",
+            "url",
+            "--url",
+            "https://cdn.example.com/download?id=asset-1",
+            "--filename",
+            "asset.pdf",
+            "--source-uri",
+            "bynder://asset/asset-1",
+        ]
+    )
+
+    assert _build_ingest_kwargs(args) == {
+        "url": "https://cdn.example.com/download?id=asset-1",
+        "filename": "asset.pdf",
+        "source_uri": "bynder://asset/asset-1",
+        "replace": False,
     }
 
 

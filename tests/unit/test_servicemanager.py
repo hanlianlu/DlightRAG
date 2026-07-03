@@ -47,6 +47,7 @@ def test_public_sdk_signatures_expose_primary_kwargs() -> None:
     for name in (
         "path",
         "bucket",
+        "region",
         "key",
         "prefix",
         "url",
@@ -695,6 +696,24 @@ class TestDelegation:
         assert row["result"] == {"doc_id": "d1", "status": "ok"}
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
+    async def test_s3_region_reaches_service_ingest(self, mock_create, test_cfg) -> None:
+        mock_svc = AsyncMock()
+        mock_svc.aingest.return_value = {"processed": 1, "errors": []}
+        mock_create.return_value = mock_svc
+        manager = RAGServiceManager(config=test_cfg)
+        manager._ingest_jobs._store = _InMemoryIngestJobStore()
+
+        await manager.aingest(
+            "ws_a",
+            source_type="s3",
+            bucket="bucket",
+            key="docs/report.pdf",
+            region="eu-north-1",
+        )
+
+        assert mock_svc.aingest.await_args.kwargs["region"] == "eu-north-1"
+
+    @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aingest_source_delegates_directly_to_service(
         self, mock_create, test_cfg
     ) -> None:
@@ -872,7 +891,7 @@ class TestIngestJobs:
         svc.aregister_workspace.assert_awaited_once()
         svc.aingest.assert_awaited_once()
 
-    async def test_staged_local_ingest_cleanup_is_not_durable_request(self, test_cfg) -> None:
+    async def test_upload_batch_local_ingest_cleanup_is_not_durable_request(self, test_cfg) -> None:
         manager = RAGServiceManager(config=test_cfg)
         store = _InMemoryIngestJobStore()
         manager._ingest_jobs._store = store
@@ -883,8 +902,9 @@ class TestIngestJobs:
         svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
         manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
 
-        job = await manager._astart_staged_local_ingest_job(
+        job = await manager.astart_ingest_job(
             "Project A",
+            source_type="local",
             path=str(staged_dir),
         )
         await asyncio.wait_for(manager._ingest_jobs._tasks[job["job_id"]], timeout=1.0)
