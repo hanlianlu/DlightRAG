@@ -66,6 +66,14 @@ def test_project_contexts_for_client_accepts_lightrag_id_alias() -> None:
     ]
 
 
+def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
+    from dlightrag.core.client_payloads import project_contexts_for_client
+
+    public = project_contexts_for_client({"chunks": [{"content": "orphan"}]})
+
+    assert public["chunks"] == []
+
+
 def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
     from dlightrag.core.client_payloads import answer_payload
 
