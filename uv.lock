@@ -452,7 +452,7 @@ wheels = [
 
 [[package]]
 name = "dlightrag"
-version = "1.5.14"
+version = "1.5.15"
 source = { editable = "." }
 dependencies = [
     { name = "aiobotocore" },
@@ -503,7 +503,7 @@ dev = [
 requires-dist = [
     { name = "aiobotocore", specifier = ">=2.13.0" },
     { name = "aiofiles" },
-    { name = "anthropic", specifier = ">=0.115.1" },
+    { name = "anthropic", specifier = ">=0.116.0" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "azure-storage-blob", specifier = ">=12.28.0" },
     { name = "bcrypt" },

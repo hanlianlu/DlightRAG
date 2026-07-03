@@ -7,6 +7,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,67 +17,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ------------------------------------------------------------------
-  # Lint: ruff check + format (~20s)
-  # ------------------------------------------------------------------
-  lint:
+  fast:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          python-version: '3.12'
+          python-version: "3.12"
       - run: uv sync --group dev
       - run: uv run ruff check src/ tests/ scripts/
       - run: uv run ruff format --check src/ tests/ scripts/
-
-  # ------------------------------------------------------------------
-  # Type check: pyright (~30s)
-  # ------------------------------------------------------------------
-  type-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: '3.12'
-      - run: uv sync --group dev
-      - run: uv run pyright
-
-  # ------------------------------------------------------------------
-  # Architecture: import-linter boundary enforcement (~10s)
-  # ------------------------------------------------------------------
-  architecture:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: '3.12'
-      - run: uv sync --group dev
+      - run: uv run pyright src/
       - run: uv run lint-imports
+      - run: uv run pytest tests/unit -q --tb=short
 
-  # ------------------------------------------------------------------
-  # Unit tests: no external deps (~60s)
-  # ------------------------------------------------------------------
-  unit-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: '3.12'
-      - run: uv sync --group dev
-      - run: uv run pytest tests/unit -v --tb=short
-
-  # ------------------------------------------------------------------
-  # Integration tests: PostgreSQL service container (~90s)
-  # ------------------------------------------------------------------
-  integration-tests:
+  integration:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -97,9 +54,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          python-version: '3.12'
+          python-version: "3.12"
       - run: uv sync --group dev
-      - run: uv run pytest tests/integration -v --tb=short
+      - run: uv run pytest tests/integration -q --tb=short
         env:
           PGHOST: localhost
           PGPORT: 5432

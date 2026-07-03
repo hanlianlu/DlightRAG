@@ -18,6 +18,7 @@ import json
 import os
 import re
 import ssl
+import warnings
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, ClassVar, Literal, TypedDict
@@ -37,6 +38,7 @@ _LOCAL_MCP_ALLOWED_ORIGINS = [
     "http://localhost:*",
     "http://[::1]:*",
 ]
+_LOCAL_API_HOSTS = {"127.0.0.1", "localhost", "::1"}
 PostgresSSLMode = Literal["disable", "allow", "prefer", "require", "verify-ca", "verify-full"]
 MinerULanguage = Literal[
     "ch",
@@ -763,6 +765,11 @@ class DlightragConfig(BaseSettings):
             "When false, only parser artifacts and remote source URI metadata are retained."
         ),
     )
+    url_ingest_max_bytes: int = Field(
+        default=100 * 1024 * 1024,
+        ge=1,
+        description="Maximum bytes to download for one public HTTPS URL ingest.",
+    )
     max_upload_bytes: int = Field(
         default=100 * 1024 * 1024,
         description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",
@@ -870,7 +877,7 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== REST API Server =====
-    api_host: str = Field(default="0.0.0.0")
+    api_host: str = Field(default="127.0.0.1")
     api_port: int = Field(default=8100)
     api_auth_token: str | None = Field(
         default=None,
@@ -1012,11 +1019,15 @@ class DlightragConfig(BaseSettings):
         # Fail-fast: jwt mode requires verification material; otherwise every request 500s.
         if self.auth_mode == "jwt" and not self.jwt_verification_key:
             raise ValueError("auth_mode='jwt' requires jwt_verification_key to be set")
+        if self.auth_mode == "none" and self.api_host not in _LOCAL_API_HOSTS:
+            warnings.warn(
+                "api_host is non-loopback while auth_mode='none'; set auth_mode or bind "
+                "DLIGHTRAG_API_HOST to 127.0.0.1 for local-only use.",
+                stacklevel=2,
+            )
         # Browsers reject allow_origins=['*'] with credentials. When auth is
         # on, an explicit origin list MUST replace the wildcard.
         if self.auth_mode != "none" and self.cors_allow_origins == ["*"]:
-            import warnings
-
             warnings.warn(
                 "auth_mode is enabled but cors_allow_origins=['*']; browsers will "
                 "reject credentialed cross-origin requests. Set DLIGHTRAG_CORS_ALLOW_ORIGINS "

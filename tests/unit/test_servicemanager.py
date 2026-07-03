@@ -899,7 +899,9 @@ class TestIngestJobs:
         svc.aregister_workspace.assert_awaited_once()
         svc.aingest.assert_awaited_once()
 
-    async def test_upload_batch_local_ingest_cleanup_is_not_durable_request(self, test_cfg) -> None:
+    async def test_upload_batch_local_ingest_cleanup_is_durable_job_metadata(
+        self, test_cfg
+    ) -> None:
         manager = RAGServiceManager(config=test_cfg)
         store = _InMemoryIngestJobStore()
         manager._ingest_jobs._store = store
@@ -919,10 +921,49 @@ class TestIngestJobs:
 
         assert row is not None
         assert row["request"]["kwargs"] == {"path": str(staged_dir)}
+        assert row["request"]["cleanup_paths"] == [str(staged_dir)]
         assert svc.aingest.await_args.kwargs["path"] == str(staged_dir)
         assert "_cleanup_paths" not in svc.aingest.await_args.kwargs
         assert "cleanup_paths" not in svc.aingest.await_args.kwargs
         assert not staged_dir.exists()
+
+    async def test_recovered_upload_batch_ingest_cleans_durable_cleanup_paths(
+        self, test_cfg
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        staged_dir = test_cfg.input_dir_path / "project_a" / "__uploads__" / "batch-1"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "report.pdf").write_text("pdf", encoding="utf-8")
+        row = {
+            "job_id": "job-1",
+            "workspace": "project_a",
+            "source_type": "local",
+            "status": "running",
+            "request": {
+                "workspace": "project_a",
+                "source_type": "local",
+                "kwargs": {"path": str(staged_dir)},
+                "cleanup_paths": [str(staged_dir)],
+            },
+            "total_items": 0,
+            "processed_items": 0,
+            "failed_items": 0,
+            "current_window": 0,
+            "errors": [],
+            "result": {},
+        }
+        store.rows["job-1"] = dict(row)
+        manager._ingest_jobs._store = store
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        assert manager._ingest_jobs.schedule_recovered_job(row, store) is True
+        await asyncio.wait_for(manager._ingest_jobs._tasks["job-1"], timeout=1.0)
+
+        assert not staged_dir.exists()
+        assert "cleanup_paths" not in svc.aingest.await_args.kwargs
 
     async def test_aingest_timeout_returns_running_job_without_cancelling_task(
         self, test_cfg
@@ -957,6 +998,63 @@ class TestIngestJobs:
         assert row is not None
         assert row["status"] == "succeeded"
         assert row["result"] == {"doc_id": "d1"}
+
+    async def test_manager_close_leaves_running_ingest_job_recoverable(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_jobs._store = store
+        started = asyncio.Event()
+
+        async def fake_ingest(**kwargs: Any) -> dict[str, Any]:
+            started.set()
+            await asyncio.Event().wait()
+            return {"doc_id": "d1"}
+
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(side_effect=fake_ingest)
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        job = await manager.astart_ingest_job(
+            "default",
+            IngestSpec(source_type="local", path="/tmp/slow.pdf"),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        await manager.close()
+
+        row = await store.get(job["job_id"])
+        assert row is not None
+        assert row["status"] == "running"
+        assert row["errors"] == []
+
+    async def test_manager_close_keeps_upload_batch_files_for_recovery(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_jobs._store = store
+        staged_dir = test_cfg.input_dir_path / "default" / "__uploads__" / "batch-1"
+        staged_dir.mkdir(parents=True)
+        (staged_dir / "report.pdf").write_text("pdf", encoding="utf-8")
+        started = asyncio.Event()
+
+        async def fake_ingest(**kwargs: Any) -> dict[str, Any]:
+            started.set()
+            await asyncio.Event().wait()
+            return {"doc_id": "d1"}
+
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(side_effect=fake_ingest)
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        await manager.astart_ingest_job(
+            "default",
+            IngestSpec(source_type="local", path=str(staged_dir)),
+        )
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        await manager.close()
+
+        assert staged_dir.exists()
+        assert (staged_dir / "report.pdf").exists()
 
 
 class TestDegradedMode:
@@ -997,11 +1095,12 @@ class TestDegradedMode:
         assert manager.is_degraded()
         assert any("DB down" in w for w in manager.get_warnings())
 
-    async def test_create_warmup_concurrency_follows_config(
+    async def test_create_warms_default_workspace_only(
         self, monkeypatch: pytest.MonkeyPatch, test_cfg
     ) -> None:
         cfg = test_cfg.model_copy(update={"max_async": 3})
-        calls: dict[str, object] = {}
+        created: list[str] = []
+        recovered: list[str] = []
 
         async def fake_initialize_workspace_registry(self):  # noqa: ANN001, ANN202
             return None
@@ -1010,13 +1109,12 @@ class TestDegradedMode:
             return ["default", "alpha", "beta"]
 
         async def fake_get_service(self, workspace: str):  # noqa: ANN001, ANN202
+            created.append(workspace)
             self._services[workspace] = workspace
             return workspace
 
-        async def fake_bounded_gather(coros, *, max_concurrent: int, task_name: str):  # noqa: ANN001, ANN202
-            calls["max_concurrent"] = max_concurrent
-            calls["task_name"] = task_name
-            return [await coro for coro in coros]
+        async def fake_recover_stalled_docs(self, workspaces: list[str]):  # noqa: ANN001, ANN202
+            recovered.extend(workspaces)
 
         monkeypatch.setattr(
             RAGServiceManager,
@@ -1025,13 +1123,14 @@ class TestDegradedMode:
         )
         monkeypatch.setattr(RAGServiceManager, "_list_all_workspaces", fake_list_all_workspaces)
         monkeypatch.setattr(RAGServiceManager, "_get_service", fake_get_service)
+        monkeypatch.setattr(RAGServiceManager, "_recover_stalled_docs", fake_recover_stalled_docs)
         monkeypatch.setattr("dlightrag.observability.init_tracing", lambda config: None)
-        monkeypatch.setattr("dlightrag.utils.concurrency.bounded_gather", fake_bounded_gather)
 
         manager = await RAGServiceManager.create(config=cfg)
 
         assert manager.is_ready()
-        assert calls == {"max_concurrent": 3, "task_name": "warmup"}
+        assert created == ["default"]
+        assert recovered == ["default", "alpha", "beta"]
 
 
 class TestActionableErrors:
