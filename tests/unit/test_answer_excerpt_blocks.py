@@ -10,6 +10,7 @@ class TestFormatChunkMetadata:
     def test_empty_when_no_extra_fields(self) -> None:
         chunk = {
             "chunk_id": "c1",
+            "chunk_idx": 2,
             "reference_id": "r1",
             "content": "Hello",
             "file_path": "/docs/x.pdf",
@@ -26,34 +27,55 @@ class TestFormatChunkMetadata:
             "metadata": {"doc_title": "T"},
             "page_idx": 3,
             "image_mime_type": "image/png",
+            "image_url": "/images/default/c1?size=full",
+            "thumbnail_url": "/images/default/c1?size=thumb",
             "relevance_score": 0.85,
+            "rerank_score": 0.91,
+            "score": 0.22,
+            "distance": 0.78,
+            "bm25_profile": "english",
             "full_doc_id": "doc-abc123",
+            "bbox": {"page_index": 2, "range": [1, 2, 3, 4]},
+            "_workspace": "default",
             "_answer_image_sent": True,
             "sidecar": {"type": "drawing", "id": "im-hash-1"},
+            "sidecar_location": "file:///tmp/report.parsed",
+            "pipeline_stage": "rerank",
         }
-        # Only 'sidecar' is non-internal
         result = _format_chunk_metadata(chunk)
-        assert "sidecar.type=drawing" in result
+        assert result == ""
         assert "chunk_id" not in result
+        assert "chunk_idx" not in result
         assert "image_data" not in result
         assert "_answer_image_sent" not in result
         assert "relevance_score" not in result
+        assert "rerank_score" not in result
+        assert "image_url" not in result
+        assert "thumbnail_url" not in result
+        assert "score" not in result
+        assert "distance" not in result
+        assert "bm25_profile" not in result
+        assert "bbox" not in result
+        assert "_workspace" not in result
         assert "full_doc_id" not in result
+        assert "sidecar" not in result
+        assert "sidecar_location" not in result
+        assert "pipeline_stage" not in result
 
     def test_formats_simple_scalar_fields(self) -> None:
-        chunk = {"pipeline_stage": "rerank", "chunk_id": "c1"}
+        chunk = {"section_title": "Risk Factors", "chunk_id": "c1"}
         result = _format_chunk_metadata(chunk)
-        assert "pipeline_stage=rerank" in result
+        assert "section_title=Risk Factors" in result
         assert "[meta:" in result
 
     def test_formats_dict_fields_with_dot_notation(self) -> None:
         chunk = {
-            "sidecar": {"type": "drawing", "id": "im-hash-abc123"},
+            "attributes": {"department": "legal", "asset_id": "asset-123"},
             "chunk_id": "c1",
         }
         result = _format_chunk_metadata(chunk)
-        assert "sidecar.type=drawing" in result
-        assert "sidecar.id=im-hash-abc123" in result
+        assert "attributes.department=legal" in result
+        assert "attributes.asset_id=asset-123" in result
 
     def test_formats_list_fields_truncated(self) -> None:
         chunk = {
@@ -89,10 +111,10 @@ class TestFormatChunkMetadata:
         assert "is_visual=True" in result
 
     def test_skips_underscore_prefixed_keys(self) -> None:
-        chunk = {"_private": "secret", "sidecar": {"type": "drawing"}, "chunk_id": "c1"}
+        chunk = {"_private": "secret", "business": {"type": "contract"}, "chunk_id": "c1"}
         result = _format_chunk_metadata(chunk)
         assert "_private" not in result
-        assert "sidecar.type=drawing" in result
+        assert "business.type=contract" in result
 
 
 class TestBuildImageLabel:
