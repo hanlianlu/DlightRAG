@@ -48,8 +48,8 @@
   <rect class="bg" width="1280" height="900"/>
 
   <text class="title" x="64" y="52">DlightRAG Unified LightRAG Main Architecture</text>
-  <text class="subtitle" x="64" y="80">One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.</text>
-  <text class="subtitle" x="64" y="98">DlightRAG adds metadata governance, query-image visual search, BM25 fusion, visual assets, and validated cited answers.</text>
+  <text class="subtitle" x="64" y="80">One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status.</text>
+  <text class="subtitle" x="64" y="98">DlightRAG adds jobs, metadata governance, query-image visual search, BM25 fusion, visual assets, and cited answers.</text>
 
   <rect class="band-soft" x="64" y="126" width="1152" height="108"/>
   <text class="band-title" x="84" y="151">Interface Boundary</text>
@@ -84,7 +84,7 @@
 
   <rect class="box" x="118" y="360" width="130" height="58"/>
   <text class="label" text-anchor="middle" x="183" y="383">Source Intake</text>
-  <text class="small" text-anchor="middle" x="183" y="402">local, URL, Azure, S3</text>
+  <text class="small" text-anchor="middle" x="183" y="402">local, URL, SDK, cloud</text>
 
   <rect class="box box-blue" x="270" y="360" width="124" height="58"/>
   <text class="label" text-anchor="middle" x="332" y="383">Metadata</text>
@@ -92,7 +92,7 @@
 
   <rect class="box box-blue" x="118" y="455" width="276" height="60"/>
   <text class="label" text-anchor="middle" x="256" y="478">Unified Ingestion Engine</text>
-  <text class="small" text-anchor="middle" x="256" y="497">single LightRAG-main path</text>
+  <text class="small" text-anchor="middle" x="256" y="497">staging, metadata, LightRAG enqueue</text>
 
   <rect class="box box-pink" x="118" y="535" width="276" height="50"/>
   <text class="label" text-anchor="middle" x="256" y="556">Image Vector Alignment</text>
@@ -121,7 +121,7 @@
 
   <rect class="box box-orange" x="505" y="525" width="270" height="58"/>
   <text class="label" text-anchor="middle" x="640" y="548">LightRAG Mix Retrieval</text>
-  <text class="small" text-anchor="middle" x="640" y="567">aquery_data(mode=mix) only</text>
+  <text class="small" text-anchor="middle" x="640" y="567">retrieval base: aquery_data(mode=mix)</text>
 
   <path class="line" d="M 394 485 H 505"/>
   <path class="line-orange" d="M 640 418 V 440"/>

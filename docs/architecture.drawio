@@ -8,7 +8,7 @@
         <mxCell id="title" value="DlightRAG Unified LightRAG Main Architecture" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=25;fontStyle=1;fontColor=#0f172a;" vertex="1" parent="1">
           <mxGeometry x="64" y="24" width="680" height="34" as="geometry"/>
         </mxCell>
-        <mxCell id="subtitle" value="One production path: LightRAG main owns document ingest, KG/vector retrieval, chunks, and doc status.&lt;br&gt;DlightRAG adds metadata governance, query-image visual search, BM25 fusion, visual assets, and validated cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
+        <mxCell id="subtitle" value="One production path: DlightRAG stages sources and metadata; LightRAG runs parser, KG, vectors, chunks, and doc status.&lt;br&gt;DlightRAG adds jobs, metadata governance, query-image visual search, BM25 fusion, visual assets, and cited answers." style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontFamily=Inter;fontSize=12;fontColor=#475569;spacingTop=2;" vertex="1" parent="1">
           <mxGeometry x="64" y="66" width="1040" height="40" as="geometry"/>
         </mxCell>
 
@@ -41,13 +41,13 @@
           <mxGeometry x="858" y="316" width="330" height="290" as="geometry"/>
         </mxCell>
 
-        <mxCell id="source_intake" value="&lt;b&gt;Source Intake&lt;/b&gt;&lt;br&gt;local, URL, Azure, S3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="source_intake" value="&lt;b&gt;Source Intake&lt;/b&gt;&lt;br&gt;local, URL, SDK, cloud" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#94a3b8;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="360" width="130" height="58" as="geometry"/>
         </mxCell>
         <mxCell id="metadata" value="&lt;b&gt;Metadata&lt;/b&gt;&lt;br&gt;contracts + policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="270" y="360" width="124" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="ingestion" value="&lt;b&gt;Unified Ingestion Engine&lt;/b&gt;&lt;br&gt;single LightRAG-main path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="ingestion" value="&lt;b&gt;Unified Ingestion Engine&lt;/b&gt;&lt;br&gt;staging, metadata, LightRAG enqueue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="455" width="276" height="60" as="geometry"/>
         </mxCell>
         <mxCell id="visual_path" value="&lt;b&gt;Image Vector Alignment&lt;/b&gt;&lt;br&gt;existing LightRAG drawing chunks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
@@ -63,7 +63,7 @@
         <mxCell id="doc_status" value="&lt;b&gt;Doc Status&lt;/b&gt;&lt;br&gt;content hash&lt;br&gt;chunks list" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=7;" vertex="1" parent="1">
           <mxGeometry x="649" y="440" width="126" height="64" as="geometry"/>
         </mxCell>
-        <mxCell id="mix_retrieval" value="&lt;b&gt;LightRAG Mix Retrieval&lt;/b&gt;&lt;br&gt;aquery_data(mode=mix) only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="mix_retrieval" value="&lt;b&gt;LightRAG Mix Retrieval&lt;/b&gt;&lt;br&gt;retrieval base: aquery_data(mode=mix)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fffbeb;strokeColor=#d97706;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="505" y="525" width="270" height="58" as="geometry"/>
         </mxCell>
 
