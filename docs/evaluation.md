@@ -1,10 +1,15 @@
-# RAGAS Evaluation for DlightRAG
+# Evaluation
+
+This page is for teams measuring answer quality with RAGAS. It owns the
+evaluation workflow, dataset format, metrics, outputs, and CI integration.
+Runtime retrieval behavior lives in [retrieval-answer.md](retrieval-answer.md);
+REST answer contracts live in [interfaces.md](interfaces.md).
 
 DlightRAG reuses LightRAG's built-in [RAGAS](https://docs.ragas.io/) evaluation
 framework. The adapter in `scripts/ragas_eval.py` inherits from LightRAG's
-`RAGEvaluator` and translates DlightRAG's `/api/answer` response format so the
-rest of the evaluation pipeline — metrics, concurrency, progress bars, CSV/JSON
-export — works unchanged.
+`RAGEvaluator` and translates DlightRAG's answer response format so the rest of
+the evaluation pipeline — metrics, concurrency, progress bars, CSV/JSON export
+— works unchanged.
 
 ## Quick Start
 
@@ -79,13 +84,13 @@ A ``--dataset`` is always required — there is no built-in default.
 ## How the Adapter Works
 
 LightRAG's `RAGEvaluator` calls `POST /query` on a LightRAG API server.
-DlightRAG uses `POST /api/answer` with a different request and response shape.
+DlightRAG uses `POST /answer` with a different request and response shape.
 
 `DlightRAGAdapterEvaluator` inherits the entire evaluator and overrides **one
 method** — `generate_rag_response()`. It translates:
 
 ```
-DlightRAG /api/answer response          →  LightRAG RAGEvaluator format
+DlightRAG /answer response              →  LightRAG RAGEvaluator format
 ─────────────────────────────────────       ─────────────────────────────
 {                                           {
   "answer": "...",                            "answer": "...",
@@ -210,7 +215,7 @@ evaluation:
         EVAL_LLM_BINDING_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
 ```
 
-## Architecture Note
+## Adapter Note
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -218,7 +223,7 @@ evaluation:
 │                                                    │
 │  DlightRAGAdapterEvaluator(RAGEvaluator)           │
 │    └─ generate_rag_response()  ← OVERRIDE          │
-│         POST /api/answer → translate format        │
+│         POST /answer → translate format            │
 │                                                    │
 │  Everything else inherited from RAGEvaluator:      │
 │    • RAGAS evaluate() with 4 metrics               │
@@ -228,7 +233,7 @@ evaluation:
 │    • Benchmark stats + console table               │
 └────────────────────────────────────────────────────┘
          │                              ▲
-         │ POST /api/answer             │ RAGAS calls eval LLM
+         │ POST /answer                 │ RAGAS calls eval LLM
          ▼                              │
    DlightRAG API                  OpenAI / custom endpoint
 ```
