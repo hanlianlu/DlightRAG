@@ -1637,6 +1637,8 @@ class RAGService:
                 "filename_stem",
                 "ingested_at",
                 "custom_metadata",
+                "ingest_strategy",
+                "parse_engine",
                 "metadata_json",
                 "process_options",
                 "page_count",
