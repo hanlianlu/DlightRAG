@@ -13,22 +13,42 @@ citations, REST, Web, SDK, and MCP interfaces.
 Status: Python 3.12. Storage: PostgreSQL 18 with pgvector, Apache AGE,
 pg_textsearch, and pg_jieba. License: Apache-2.0.
 
-## Quick Start
+## Architecture At A Glance
 
-Start by choosing the topology. The model, parser, and database decisions are
-different for local development and cloud deployment.
+<p align="center">
+  <img src="docs/architecture.svg" alt="DlightRAG Architecture" width="1080" />
+</p>
 
-| Mode | Use this when | PostgreSQL | MinerU parser endpoint | Auth |
+```text
+Clients
+  -> REST / Web / MCP / SDK adapters
+  -> RAGServiceManager
+  -> RAGService
+  -> LightRAG main
+  -> PostgreSQL 18 storage ecosystem
+```
+
+DlightRAG has one production RAG path: DlightRAG stages sources and metadata,
+LightRAG performs parser/KG/vector/chunk/doc-status work, and DlightRAG adds
+metadata filtering, BM25, direct visual retrieval, cited answers, jobs, and
+interfaces. The full runtime and code-layer view is in
+[docs/architecture.md](docs/architecture.md).
+
+## Choose Your Deployment Path
+
+| Path | Use this when | PostgreSQL | Parser endpoint | Security |
 |---|---|---|---|---|
-| Local | Developer machine, Web UI, smoke tests | Docker Compose PG18 | Native host sidecar on macOS/M4, or any reachable MinerU API/router | `none` on loopback; `simple` if exposed |
-| Cloud | Shared service, remote users, agents | Managed or self-hosted PG18 | MinerU official API, or an independent GPU/API service | `simple` or `jwt` |
+| Local Docker | Developer machine, Web UI, smoke tests | Compose PG18 | Host-native MinerU-compatible sidecar | `auth_mode: none` on loopback |
+| Native API | API process runs on host, PostgreSQL stays in Docker | Compose PG18 | Any reachable MinerU-compatible endpoint | Local or explicit auth |
+| Shared service | Remote users, agents, team workspace | Managed or self-hosted PG18 | Official MinerU API or independent parser service | `simple` or `jwt` |
+| Enterprise | Multi-user internal product | Managed PG18 | Independently operated parser service | `jwt` + JWKS, optional claim access control |
 
 Do not install MinerU into the DlightRAG app container. DlightRAG consumes the
-MinerU-compatible HTTP endpoint that LightRAG expects. On macOS this should be
+MinerU-compatible HTTP endpoint that LightRAG expects. On macOS, keep MinerU as
 a native host process so MLX/MPS acceleration is available. On Linux GPU, run
 MinerU as an independent service/router or use the official API.
 
-### Local Setup
+## Quick Start
 
 1. Clone the repo and create a secrets file:
 
@@ -38,7 +58,7 @@ cd dlightrag
 cp .env.example .env
 ```
 
-Fill only secrets and deployment-only overrides in `.env`:
+Fill secrets in `.env`:
 
 ```bash
 DLIGHTRAG_LLM__DEFAULT__API_KEY=...
@@ -49,59 +69,20 @@ DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=...
 
 Normal behavior lives in [config.yaml](config.yaml): model names, parser
 sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse
-behavior, and deployment endpoints. Rare PostgreSQL and retrieval tuning
-belongs in [docs/PG.md](docs/PG.md) and
-[docs/config-reference.md](docs/config-reference.md).
+behavior, and deployment endpoints. Deep config reference is in
+[docs/configuration.md](docs/configuration.md).
 
-2. Install and start a native MinerU sidecar if one is not already running.
-
-MinerU is intentionally a native sidecar in local development. Docker Compose
-does not run MinerU; it runs DlightRAG, MCP, and PostgreSQL, then connects the
-DlightRAG containers back to the host-native MinerU endpoint.
-
-Create MinerU's own env file and install the dedicated MinerU virtual
-environment once:
+2. Install and start a native MinerU sidecar if one is not already running:
 
 ```bash
 cp .env.mineru.example .env.mineru
 make mineru-install
-```
-
-This creates `.venv-mineru` so MinerU's ML dependencies stay out of the
-DlightRAG runtime. Re-run `make mineru-install` only when upgrading MinerU or
-changing `.env.mineru` package extras such as `MINERU_INSTALL_EXTRAS`.
-
-Choose `MINERU_INSTALL_EXTRAS` in `.env.mineru` for the local machine:
-
-- Apple Silicon local development: `core,mlx`
-- Linux or WSL CPU fallback: `core`
-- Linux GPU service, when supported by the target MinerU release:
-  `core,vllm` or `core,lmdeploy`
-
-For a foreground process on macOS, Linux, or WSL, run:
-
-```bash
 make mineru-api
 ```
 
-`make mineru-api` blocks in the current terminal and serves
-`http://127.0.0.1:8210` by default.
-
-DlightRAG does not manage the MinerU process. If you want it to run in the
-background, use your OS process manager or an independent MinerU API/router.
-On native Windows, install MinerU with its official Python package and point
-`parser_sidecars.mineru.local_endpoint` at the `mineru-api` endpoint you start.
-
-Endpoint alignment:
-
-- Native MinerU listens on `MINERU_API_HOST:MINERU_API_PORT` from
-  `.env.mineru`, defaulting to `http://127.0.0.1:8210`.
-- [config.yaml](config.yaml) defaults
-  `parser_sidecars.mineru.local_endpoint` to `http://127.0.0.1:8210`.
-- Docker Compose maps that host-native endpoint into DlightRAG containers as
-  `http://host.docker.internal:8210` through `MINERU_DOCKER_LOCAL_ENDPOINT`.
-  Override that value in `.env` only if the DlightRAG containers must reach a
-  different externally managed MinerU endpoint.
+`make mineru-api` serves `http://127.0.0.1:8210` by default and blocks in the
+current terminal. Docker Compose does not run MinerU; it maps the host-native
+endpoint into DlightRAG containers as `http://host.docker.internal:8210`.
 
 3. Start DlightRAG and PostgreSQL:
 
@@ -120,133 +101,40 @@ This starts:
 | `lightrag-gui` | Upstream LightRAG graph browser | `127.0.0.1:9621` |
 | `postgres` | PG18 + pgvector + AGE + pg_textsearch + pg_jieba | `5432` |
 
-When `dlightrag-api` runs in Docker and MinerU runs as a native host process,
-Compose maps `MINERU_LOCAL_ENDPOINT` inside the app container to
-`http://host.docker.internal:8210`. Override `MINERU_DOCKER_LOCAL_ENDPOINT`
-only when the app container must reach a different host-native endpoint.
-
 4. Open the Web UI:
 
 ```text
 http://localhost:8100/web/
 ```
 
-Upload documents or images from the Files panel, then ask a question. Web
-uploads are staged under DlightRAG's managed `working_dir/inputs/<workspace>/`
-tree, which is also the root LightRAG parser workers can see.
+Upload documents or images from the Files panel, then ask a question.
 
-### Cloud Setup
+## Use DlightRAG
 
-Cloud deployments should make the parser and database endpoints explicit.
+### Web
 
-1. Provide PostgreSQL 18 with:
+The Web UI is served by the REST API at `/web/`. It supports workspace
+selection, file/folder upload, chat, session image memory, citations, source
+panels, and semantic highlights.
 
-- pgvector
-- Apache AGE
-- pg_textsearch
-- pg_jieba
-- `shared_preload_libraries=age,pg_textsearch,pg_jieba`
+### REST
 
-Use [docs/PG.md](docs/PG.md) for extension, SSL, pool, HNSW, and sizing notes.
-
-2. Choose one MinerU mode in `config.yaml`.
-
-For the MinerU official API:
-
-```yaml
-parser_sidecars:
-  mineru:
-    api_mode: official
-    official_endpoint: https://mineru.net
-    language: ch
-```
-
-```bash
-DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN=...
-```
-
-For an independent MinerU API/router service:
-
-```yaml
-parser_sidecars:
-  mineru:
-    api_mode: local
-    local_endpoint: https://your-mineru-service.company.internal
-    language: ch
-```
-
-The setting name `local_endpoint` follows LightRAG/MinerU's local-protocol
-environment contract. The endpoint can still be remote from the DlightRAG
-container as long as it exposes the compatible MinerU HTTP API.
-`language` is MinerU's OCR hint, not the LightRAG KG extraction language.
-DlightRAG does not enable MinerU-side image/chart analysis by default; LightRAG's
-own multimodal analyze stage handles images, tables, and equations after parse.
-
-3. Enable auth before exposing REST or MCP:
-
-```bash
-DLIGHTRAG_AUTH_MODE=simple
-DLIGHTRAG_API_AUTH_TOKEN=<openssl-rand-base64-32>
-```
-
-or:
-
-```bash
-DLIGHTRAG_AUTH_MODE=jwt
-DLIGHTRAG_JWT_VERIFICATION_KEY=<openssl-rand-base64-64>
-DLIGHTRAG_JWT_ALGORITHM=HS256
-```
-
-When auth is enabled, set explicit CORS origins in `config.yaml` rather than
-using `["*"]`.
-
-4. Configure model credentials and PostgreSQL secrets through the deployment
-secret store. Keep non-secret behavior in `config.yaml` so it can be reviewed
-and versioned.
-
-### Native API
-
-Use this when DlightRAG runs outside Docker while PostgreSQL stays in Docker:
-
-```bash
-docker compose up -d postgres
-uv sync
-uv run dlightrag-api
-```
-
-Native runs can ingest host paths directly because the API process sees the
-same filesystem as your shell.
-
-### First API Calls
-
-For remote clients, prefer Web upload or `POST /ingest/blob`; uploaded files are
-staged under `working_dir/inputs/<workspace>/` and processed through the local
-pipeline. JSON/MCP `source_type="local"` accepts paths relative to that managed
-workspace input directory. REST/MCP ingest requests return an ingest job; poll
-the job endpoint for completion.
+REST ingest starts durable background jobs. Poll the job endpoint for status.
 
 ```bash
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "local", "path": "report.pdf"}'
 
-curl -X POST http://localhost:8100/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"source_type": "url", "url": "https://cdn.example.com/download?id=asset-1&signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1"}'
-
 curl http://localhost:8100/ingest/jobs/<job_id>
-
-curl -X POST http://localhost:8100/retrieve \
-  -H "Content-Type: application/json" \
-  -d '{"query": "What are the key findings?"}'
 
 curl -X POST http://localhost:8100/answer \
   -H "Content-Type: application/json" \
   -d '{"query": "What are the key findings?", "stream": false}'
 ```
 
-S3, Azure Blob, batch URL, SDK connector, request, and response details are in
-[docs/response-schema.md](docs/response-schema.md).
+All SDK, REST, MCP, Web contracts and response shapes are in
+[docs/interfaces.md](docs/interfaces.md).
 
 ### Python SDK
 
@@ -289,20 +177,18 @@ async def main() -> None:
             workspace,
             IngestSpec(source_type="local", path="./docs"),
         )
-
         answer = await manager.aanswer("What are the key findings?", workspace=workspace)
         print(answer.answer)
     finally:
         await manager.close()
 
+
 asyncio.run(main())
 ```
 
 `config.yaml` is optional for SDK users; constructor values take precedence.
-S3, Azure Blob, URL, REST, MCP, and custom connector payloads are covered in
-[docs/response-schema.md](docs/response-schema.md).
 
-### MCP Server
+### MCP
 
 Use stdio when an agent starts DlightRAG as a subprocess:
 
@@ -325,464 +211,85 @@ DLIGHTRAG_MCP_HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 
-The HTTP transport exposes a single MCP endpoint at `/mcp`. DlightRAG does not
-serve the deprecated HTTP+SSE `/sse` + `/messages` transport. Streamable HTTP
-uses JSON responses by default, enables MCP Host/Origin DNS-rebinding
-protection, and allows only loopback hosts/origins unless
-`DLIGHTRAG_MCP_ALLOWED_HOSTS` and `DLIGHTRAG_MCP_ALLOWED_ORIGINS` are set for a
-trusted remote deployment.
-
-MCP tools: `retrieve`, `answer`, `ingest`, `ingest_job_status`,
+MCP tools include `retrieve`, `answer`, `ingest`, `ingest_job_status`,
 `list_files`, `delete_files`, `list_workspaces`, `create_workspace`, and
 `delete_workspace`.
 
-## Architecture
+## Core Concepts
 
-<p align="center">
-  <img src="docs/architecture.svg" alt="DlightRAG Architecture" width="1080" />
-</p>
+**Workspaces.** A workspace is the primitive isolation unit for indexed data,
+metadata, jobs, files, and queries. Query calls can target one workspace or
+federate across multiple workspaces.
 
-<sub>Source: <a href="docs/architecture.drawio">docs/architecture.drawio</a>
-and <a href="docs/module-layers.md">docs/module-layers.md</a>.</sub>
+**Ingestion sources.** Local files, Web uploads, S3, Azure Blob, public/signed
+HTTPS URLs, and SDK `AsyncDataSource` connectors flow through the same ingest
+contract. Web and REST uploads are staged under DlightRAG's managed
+`working_dir/inputs/<workspace>/` tree.
 
-### Runtime Responsibilities
+**Source retention.** Remote source files are transient by default for S3,
+Azure Blob, URL, and SDK connectors. Set `retain_remote_source_files: true`, or
+pass `retain_source_file: true` on one ingest call, when fetched files should be
+kept under the workspace input root.
 
-```text
-Clients
-  -> REST / Web / MCP / SDK adapters
-  -> RAGServiceManager
-       workspace routing, user scope, federation, read-after-write barriers
-  -> RAGService
-       one workspace runtime, ingest, retrieve, answer, reset
-  -> LightRAG main
-       parser routing, staged ingest, chunks, doc status, KG, vectors
-  -> DlightRAG PostgreSQL stores
-       metadata index, BM25 indexes, workspace and role metadata
-```
+**Metadata.** Declare filterable custom fields once in configuration. Ingest
+calls pass values. Request-level metadata is the batch default; manifest or
+`SourceDocument` metadata overlays it per document.
 
-LightRAG remains the core RAG engine. DlightRAG does not reimplement parser
-sidecars, document status, KG extraction, or LightRAG `mix` retrieval.
+**Retrieval and answers.** DlightRAG uses LightRAG `mix` as the base retrieval
+mode, then adds metadata filtering, BM25, optional direct image retrieval, RRF
+fusion, reranking, answer packing, citations, and optional semantic highlights.
+The detailed mechanism is in [docs/retrieval-answer.md](docs/retrieval-answer.md).
 
-### Ingestion Flow
+**Observability.** Langfuse tracing is optional. If Langfuse keys are absent,
+tracing is a no-op. Configuration is documented in
+[docs/configuration.md](docs/configuration.md).
 
-```text
-source file or upload
-  -> DlightRAG metadata normalization
-  -> LightRAG parser routing
-       DOCX native route by default
-       MinerU route for PDFs, Office files, images, tables, and equations
-  -> LightRAG staged ingest
-       chunks, multimodal semantic text, KG entities/relations, vector rows
-  -> DlightRAG post-ingest alignment
-       active direct image embedding overwrites the canonical LightRAG drawing chunk vector
-       chunk language labels update BM25 partial indexes
-       declared metadata updates filterable columns
-```
+## Security Model
 
-Source images and parser-extracted images both go through LightRAG's
-multimodal path. DlightRAG does not create a second VLM description chunk.
-When the configured embedding provider supports image inputs and the startup
-probe succeeds, DlightRAG aligns the existing canonical LightRAG visual chunk
-with a raw image embedding so visual retrieval, citations, and asset serving use
-the same chunk id. With a text-only embedding model, this alignment is skipped
-and LightRAG's semantic visual chunk remains the complete multimodal ingestion
-path.
-
-### Retrieval And Answer Flow
-
-```text
-query
-  -> query planning and optional metadata filter inference
-  -> strict metadata in-filtering when filters are explicit
-  -> LightRAG mix retrieval
-  -> direct query-image retrieval when image embedding is active
-  -> pg_textsearch BM25 over the same candidate scope
-  -> RRF fusion
-  -> rerank
-  -> answer packing with citations and bounded images
-```
-
-DlightRAG always uses LightRAG `mix` as the base retrieval mode. The DlightRAG
-hybrid layer is separate from LightRAG's `hybrid` query mode.
-
-### PostgreSQL Topology
-
-DlightRAG has one application-level PostgreSQL endpoint. REST, Web, MCP, and
-SDK surfaces all use the same configured write-capable endpoint, and LightRAG's
-normal staged pipeline supports ingest and query in the same service process.
-
-If production infrastructure uses managed read replicas, keep that routing in
-the PostgreSQL/proxy/platform layer and expose the endpoint that DlightRAG
-should use. DlightRAG does not carry a separate query runtime role, replica
-credentials, or read-after-write policy. That keeps application behavior
-identical across local, Docker, and cloud deployments.
-
-## Configuration
-
-Configuration uses typed settings in [config.yaml](config.yaml) and secrets or
-deployment-only overrides in `.env`. The checked-in config is intentionally
-curated: it keeps product and deployment choices visible while leaving rare
-tuning to code defaults and [docs/config-reference.md](docs/config-reference.md).
-
-Priority:
-
-```text
-constructor args > environment variables > .env > config.yaml > defaults
-```
-
-DlightRAG-owned environment variables use the `DLIGHTRAG_` prefix. Double
-underscores address nested objects:
-
-```bash
-DLIGHTRAG_LLM__DEFAULT__API_KEY=...
-DLIGHTRAG_EMBEDDING__API_KEY=...
-DLIGHTRAG_RERANK__API_KEY=...
-```
-
-### Parser Routing And Sidecars
-
-DlightRAG defaults to LightRAG native parsing for DOCX, Markdown, and textpack
-bundles, and a MinerU-compatible external parser endpoint for other supported
-document formats. Parser routing is a product default, not a normal user-facing
-setting. DlightRAG exposes the sidecar endpoint and visual context controls
-needed for local/cloud deployment.
-
-Important parser settings:
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `parser_sidecars.vlm.surrounding_leading_max_tokens` | `128` | Leading page context sent to VLM analysis |
-| `parser_sidecars.vlm.surrounding_trailing_max_tokens` | `128` | Trailing page context sent to VLM analysis |
-| `parser_sidecars.mineru.api_mode` | `local` | Uses a MinerU-compatible API endpoint instead of the official API |
-| `parser_sidecars.mineru.local_endpoint` | `http://127.0.0.1:8210` | Native local sidecar endpoint for local development |
-| `parser_sidecars.mineru.language` | `ch` | MinerU OCR language hint for scanned/image documents |
-| `parser_sidecars.mineru.auxiliary_block_policy` | `conservative` | Drop discarded blocks, headers, footers, and printed page numbers |
-
-`conservative` keeps ambiguous notes such as `aside_text`, `margin_note`, and
-`page_footnote`. Set `extended` only when those should also be removed before
-LightRAG chunking.
-
-### Models And Roles
-
-LLM role names follow LightRAG:
-
-| Role | What it drives |
-|---|---|
-| `extract` | Entity and relationship extraction during ingest |
-| `keyword` | LightRAG retrieval keyword extraction |
-| `query` | Query planning and answer generation |
-| `vlm` | Visual analysis for images, tables, equations, and drawings |
-
-Unset roles fall back to `llm.default`. The checked-in defaults use
-role-specific `extract` and `keyword` models and let `query` / `vlm` fall back
-to the default multimodal LLM.
-
-Concurrency defaults:
-
-| Setting | Default | Scope |
-|---|---:|---|
-| `max_async` | `8` | Shared LLM role queues and DlightRAG planner/answer calls |
-| `embedding_func_max_async` | `16` | Embedding queue concurrency |
-| `max_parallel_insert` | `3` | LightRAG staged insert workers |
-| `max_parallel_parse_native` | `5` | Native parser workers |
-| `max_parallel_parse_mineru` | `2` | External parser workers for the MinerU-compatible route |
-| `max_parallel_analyze` | `5` | VLM analyze workers |
-
-### Embeddings
-
-DlightRAG defaults to a unified multimodal embedding model so text chunks, query
-text, query images, source images, and parser-extracted images share one vector
-space.
-
-Default:
-
-```yaml
-embedding:
-  provider: voyage
-  model: voyage-multimodal-3.5
-  dim: 1024
-  asymmetric: auto
-```
-
-Supported providers include `voyage`, `dashscope_qwen`,
-`qwen_openai_compatible`, `gemini`, `jina`, `openai_compatible`, and `ollama`.
-Generic `openai_compatible` is treated as text-only because there is no standard
-image embedding payload for that API family; use `qwen_openai_compatible` only
-for an explicitly image-capable Qwen3-VL embedding server; model names starting
-with `qwen3-vl-embedding` on non-DashScope `base_url`s are auto-routed there.
-If the configured provider is text-only, or if `startup_probe` cannot embed a
-small in-memory image with the provider-specific payload, DlightRAG
-automatically disables direct image embedding and leaves image handling to
-LightRAG's VLM semantic chunks. The startup probe does not write to PostgreSQL,
-LightRAG storage, or local files. Changing `embedding.dim` or the embedding
-model after indexing requires clearing the workspace and rebuilding vector
-indexes.
-
-### Metadata
-
-Metadata is explicit-schema first:
-
-- Declare filterable custom fields once in `metadata.fields`.
-- REST, MCP, and SDK ingest calls pass metadata values, not schema
-  declarations.
-- Ingest-call `metadata` is batch-level default metadata; manifest or
-  `SourceDocument` metadata overlays it for one document.
-- Declared fields are normalized and promoted to filterable columns.
-- Undeclared metadata can be stored as JSONB enrichment when
-  `allow_ad_hoc_json: true`, but it is not filterable.
-- Explicit API/user filters are strict and never fall back to global retrieval.
-- LLM-inferred filters can fall back to unfiltered retrieval when they
-  over-infer and match no candidates.
-
-Example:
-
-```yaml
-metadata:
-  allow_ad_hoc_json: true
-  default_ingest_policy: validate
-  fields:
-    department:
-      type: string
-      filter_ops: ["exact"]
-```
-
-See [docs/response-schema.md](docs/response-schema.md#metadata-schema-and-policy).
-
-### BM25
-
-BM25 uses DlightRAG-managed pg_textsearch indexes over LightRAG's document
-chunks. Ingest labels each chunk with `dlightrag_bm25_language`. Query-time
-language detection selects one matching partial index; unsupported or
-ambiguous queries use the `simple` fallback.
-
-Checked-in profiles:
-
-| Language | Text config |
-|---|---|
-| Chinese | `public.jiebacfg` from pg_jieba |
-| English | `english` |
-| German | `german` |
-| Swedish | `swedish` |
-| Spanish | `spanish` |
-| French | `french` |
-| Italian | `italian` |
-| Portuguese | `portuguese` |
-| Dutch | `dutch` |
-| Russian | `russian` |
-| Danish | `danish` |
-| Finnish | `finnish` |
-| Fallback | `simple` |
-
-Each non-fallback BM25 profile maps to exactly one language. The fallback
-profile must not declare languages.
-
-### Storage
-
-DlightRAG's supported core storage stack is PostgreSQL 18:
-
-| Component | Backend |
-|---|---|
-| Vector store | `PGVectorStorage` with pgvector |
-| Graph store | `PGGraphStorage` with Apache AGE |
-| KV store | `PGKVStorage` |
-| Document status | `PGDocStatusStorage` |
-| BM25 | pg_textsearch |
-
-Default vector indexing uses HNSW over `HALFVEC(dim)`. Plain `HNSW` over
-`VECTOR(dim)`, `pg_hnsw_*`, pool sizing, statement-cache, retry, and
-session-GUC overrides are advanced deployment settings, documented in
-[docs/PG.md](docs/PG.md) and [docs/config-reference.md](docs/config-reference.md#postgresql). Server-level
-memory, WAL, preload library, and shared-memory settings belong to the
-PostgreSQL deployment or `docker-compose.yml`.
-
-### Auth
-
-Modes:
+Local loopback development can use `auth_mode: none`. Shared or exposed
+deployments should enable auth:
 
 | Mode | Use case |
 |---|---|
-| `none` | Local loopback development only |
-| `simple` | Shared bearer token |
-| `jwt` | User-scoped deployments with signed tokens |
+| `simple` | One shared bearer token |
+| `jwt` | Externally issued signed tokens |
+| `jwt` + JWKS | OIDC-style issuers with key rotation |
+| `jwt` + `jwt_claims` access control | Workspace/action permissions from verified claims |
 
-Simple token:
+DlightRAG verifies bearer tokens and can enforce workspace/action access
+control. It does not issue OAuth tokens or manage users. Use an external IdP or
+gateway for login and token issuance. Full guidance is in
+[docs/security.md](docs/security.md).
 
-```bash
-openssl rand -base64 32
-DLIGHTRAG_AUTH_MODE=simple
-DLIGHTRAG_API_AUTH_TOKEN=<generated>
-```
+## Operations And Development
 
-JWT:
-
-```bash
-openssl rand -base64 64
-DLIGHTRAG_AUTH_MODE=jwt
-DLIGHTRAG_JWT_VERIFICATION_KEY=<generated>
-DLIGHTRAG_JWT_ALGORITHM=HS256
-```
-
-Clients send `Authorization: Bearer <token>`. JWT tokens must include `sub`,
-which becomes the authenticated `user_id`. For RS*/ES* algorithms,
-`DLIGHTRAG_JWT_VERIFICATION_KEY` must be the issuer's public key PEM.
-
-For Azure Entra, Okta, Auth0, Keycloak, and other OIDC-style issuers, prefer
-JWKS so signing-key rollover is handled by PyJWT:
-
-```yaml
-auth_mode: jwt
-jwt_algorithm: RS256
-jwt_jwks_url: https://login.example.com/.well-known/jwks.json
-jwt_issuer: https://login.example.com/tenant/v2.0
-jwt_audience: api://dlightrag
-```
-
-DlightRAG authorization is off by default:
-
-```yaml
-access_control:
-  mode: allow_all
-```
-
-Enable claim-based workspace permissions when the JWT issuer already supplies
-verified group or role claims:
-
-```yaml
-access_control:
-  mode: jwt_claims
-  rules:
-    - claim: groups
-      value: finance-rag-readers
-      workspaces: [finance]
-      actions: [workspace.query, workspace.list_files]
-```
-
-REST, Web, and MCP use the same checks. DlightRAG does not issue OAuth tokens
-or manage users; use an external IdP or gateway for login/token issuance.
-
-### Rerank And Answer Breadth
-
-Reranking happens before answer-context packing. Root config exposes the
-high-signal breadth controls:
-
-| Setting | Default |
-|---|---:|
-| `chunk_top_k` | `30` |
-| `answer.context_top_k` | `30` |
-| `answer.max_images` | `6` |
-| `answer.max_user_images` | `3` |
-
-Image compression budgets are advanced transport limits; see
-[docs/config-reference.md](docs/config-reference.md#image-budgets). `/retrieve`
-and `/answer` both accept `chunk_top_k` for retrieval candidates. `/answer`
-then returns contexts and sources aligned with what the answer model saw.
-
-### Citations
-
-Citation validation is always part of answer finalization. Web source-panel
-semantic highlights are enabled by default and run after answer generation with
-the keyword LLM role, bounded by timeout/concurrency settings. SDK, REST, and
-MCP answer clients default to no highlights, but can pass
-`semantic_highlights=True` in Python or `semantic_highlights: true` in JSON to
-fill `sources[].chunks[].highlight_phrases` when highlight enrichment is
-enabled.
-
-### Langfuse
-
-Langfuse tracing is optional. If both keys are absent, tracing is a no-op.
-
-```bash
-DLIGHTRAG_LANGFUSE_PUBLIC_KEY=pk-...
-DLIGHTRAG_LANGFUSE_SECRET_KEY=sk-...
-```
-
-Set non-secret behavior in `config.yaml`: `langfuse_host`,
-`langfuse_environment`, `langfuse_release`, `langfuse_sample_rate`,
-`langfuse_timeout`, `langfuse_flush_at`, `langfuse_flush_interval`, and
-`langfuse_export_external_spans`.
-
-Local self-hosted helper:
-
-```bash
-make langfuse-up
-make langfuse-health
-make langfuse-logs
-make langfuse-down
-```
-
-## API Surface
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/ingest` | Ingest managed workspace-local paths, Azure Blob, AWS S3, or public/signed HTTPS URL content; returns an ingest job |
-| `GET` | `/ingest/jobs/{job_id}` | Return ingest job status |
-| `POST` | `/ingest/blob` | Upload one file via multipart form and return an ingest job |
-| `POST` | `/retrieve` | Return contexts and sources without answer generation |
-| `POST` | `/answer` | Return or stream an LLM answer with contexts and sources |
-| `GET` | `/files` | List ingested documents |
-| `DELETE` | `/files` | Delete documents; pass `dry_run: true` to preview matches |
-| `GET` | `/files/failed` | List documents stuck in `DocStatus.FAILED` |
-| `POST` | `/files/retry` | Retry failed documents |
-| `GET` | `/api/files/{file_path}` | Serve local source files or redirect Azure Blob, S3, or HTTPS sources |
-| `GET` | `/metadata/{doc_id}` | Read document metadata |
-| `POST` | `/metadata/{doc_id}` | Merge or replace document metadata |
-| `POST` | `/metadata/search` | Find document IDs matching metadata filters |
-| `GET` | `/images/{workspace}/{chunk_id}` | Serve full or thumbnail visual assets |
-| `POST` | `/reset` | Reset workspace storage |
-| `GET` | `/workspaces` | List registered workspaces |
-| `POST` | `/workspaces` | Create an empty workspace |
-| `DELETE` | `/workspaces/{workspace}` | Delete/reset one workspace |
-| `GET` | `/health` | Health and storage status |
-
-Ingest jobs are durable. If the DlightRAG process restarts, recent
-`queued`/`running` jobs are recovered automatically; remote prefix jobs resume
-from the next unfinished source window, while LightRAG's document status handles
-document-level skips for already processed content.
-Remote source files are transient by default. Set
-`retain_remote_source_files: true` globally, or pass `retain_source_file: true`
-on one SDK/REST/MCP ingest call, to keep fetched files in the workspace input
-root and store that workspace-local path as metadata `file_path`.
-
-Workspace-scoped read/write endpoints accept optional `workspace`.
-Workspace lifecycle endpoints name the workspace explicitly. Query endpoints
-accept `workspaces` for federated search. `/answer` streams by default; pass
-`stream: false` for a single JSON response.
-
-## Operations
-
-Use `dlightrag-rebuild-vdb` for offline LightRAG vector storage maintenance.
-It checks or rebuilds existing graph/chunk vector rows; it does not ingest files
-or re-run parsers.
+Offline vector maintenance:
 
 ```bash
 uv run dlightrag-rebuild-vdb --target check
 uv run dlightrag-rebuild-vdb --target all --yes
 ```
 
-Run destructive targets only after stopping DlightRAG API, MCP, ingest workers,
-and any other writer using the same storage. Chunk rebuilds automatically
-refresh BM25 chunk language labels and restore DlightRAG's sidecar
-image-vector alignment unless explicitly disabled.
-Full target descriptions, Docker Compose usage, and safety notes are in
-[docs/operations.md](docs/operations.md).
+Use [docs/operations.md](docs/operations.md) for rebuild and maintenance safety
+notes.
 
-## Development
+Development setup:
 
 ```bash
-git clone https://github.com/hanlianlu/dlightrag.git
-cd dlightrag
-cp .env.example .env
 uv sync
 cd frontend && npm ci && cd ..
-make hooks   # install pre-commit checks (one-time)
+make hooks
 ```
 
-Frontend packages use `package.json` ranges and `package-lock.json` for the
-actual pinned resolution. Use `npm ci` for normal installs and CI. Use
-`npm install` only when intentionally updating the lockfile.
+Verification:
 
-The Web UI is built with Vite and served from `src/dlightrag/web/static`.
-After editing files under `frontend/`, rebuild and check the bundle:
+```bash
+make ci          # lint + type-check + architecture + unit tests
+make ci-full     # above + integration tests
+make ci-e2e      # above + E2E smoke
+```
+
+Frontend checks after editing `frontend/`:
 
 ```bash
 cd frontend
@@ -791,64 +298,18 @@ npm run build
 npm run lint:css
 ```
 
-If HTMX is upgraded, refresh the vendored browser file after `npm install`:
+Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 
-```bash
-cp node_modules/htmx.org/dist/htmx.min.js ../src/dlightrag/web/static/vendor/htmx.min.js
-```
+## Documentation Map
 
-Pre-commit hooks run ruff, pyright, and architecture checks on every
-`git commit`.  Slow checks (pytest, E2E) stay in CI — run them explicitly
-when you want them:
-
-```bash
-make ci          # lint + type-check + architecture + unit tests
-make ci-full     # above + integration tests (needs PostgreSQL)
-make ci-e2e      # above + E2E smoke (needs PG18 with AGE)
-```
-
-Opt-in PG18 E2E smoke (requires a running postgres from the stack):
-
-```bash
-docker compose up -d postgres
-DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -m e2e_pg18 -q
-```
-
-The E2E smoke expects PostgreSQL 18 with pgvector, Apache AGE,
-pg_textsearch, and pg_jieba installed. It uses deterministic fake model
-functions by default.
-
-### RAGAS Evaluation
-
-DlightRAG reuses LightRAG's built-in [RAGAS](https://docs.ragas.io/)
-evaluation framework. The adapter auto-resolves API credentials and URL
-from DlightRAG's own config — no extra `.env` entries needed.
-
-```bash
-# One-time: install eval dependencies
-uv pip install ragas
-
-# Run against your own test dataset
-uv run python scripts/ragas_eval.py --dataset my_questions.json
-
-# Or via the unified CLI
-uv run python scripts/cli.py ragas_eval --dataset my_questions.json
-```
-
-Four RAGAS metrics are scored per test case (Faithfulness, AnswerRelevancy,
-ContextRecall, ContextPrecision) and saved as CSV/JSON in
-`./ragas_eval_results/`. Dataset format, eval model configuration, CI
-integration, and architecture notes are in
-[docs/ragas-evaluation.md](docs/ragas-evaluation.md).
-
-## References
-
-- [docs/response-schema.md](docs/response-schema.md) - REST, MCP, and SDK payloads.
-- [docs/retrieval_answer_mechanism.md](docs/retrieval_answer_mechanism.md) - retrieval, filters, fusion, and answer generation.
-- [docs/module-layers.md](docs/module-layers.md) - code organization and import boundaries.
-- [docs/operations.md](docs/operations.md) - offline vector rebuild and maintenance commands.
-- [docs/PG.md](docs/PG.md) - PostgreSQL requirements and tuning notes.
-- [docs/config-reference.md](docs/config-reference.md) - advanced config overrides not shown in root config.
+- [docs/architecture.md](docs/architecture.md) - runtime ownership, storage topology, and code layering.
+- [docs/interfaces.md](docs/interfaces.md) - SDK, REST, MCP, and Web contracts.
+- [docs/security.md](docs/security.md) - auth, JWT/JWKS, IdP boundaries, and access control.
+- [docs/configuration.md](docs/configuration.md) - configuration precedence, fields, and defaults.
+- [docs/retrieval-answer.md](docs/retrieval-answer.md) - retrieval, filters, BM25, fusion, rerank, answers, and citations.
+- [docs/postgresql.md](docs/postgresql.md) - PostgreSQL requirements and tuning.
+- [docs/operations.md](docs/operations.md) - maintenance commands and recovery workflows.
+- [docs/evaluation.md](docs/evaluation.md) - RAGAS evaluation workflow.
 - [LightRAG API Server docs](https://github.com/HKUDS/LightRAG/blob/main/docs/LightRAG-API-Server.md) - upstream parser routing and MinerU official API contract.
 - [MinerU Docker deployment docs](https://opendatalab.github.io/MinerU/quick_start/docker_deployment/) - Linux/WSL2 Docker support and macOS warning.
 
