@@ -1612,7 +1612,7 @@ class RAGService:
     async def _enrich_chunks_with_metadata(self, result: RetrievalResult) -> None:
         """Inject document metadata into chunk contexts for LLM consumption.
 
-        Looks up each chunk's file_path in the metadata index and merges
+        Looks up each chunk's LightRAG full_doc_id in the metadata index and merges
         any non-empty fields into the chunk's metadata dict. Fields are
         dynamic: whatever the metadata index returns is included, minus
         internal/system fields that add no value to the LLM context.
@@ -1627,6 +1627,8 @@ class RAGService:
                 "filename_stem",
                 "ingested_at",
                 "custom_metadata",
+                "metadata_json",
+                "process_options",
                 "page_count",
                 "original_format",
                 "doc_title",
@@ -1638,48 +1640,33 @@ class RAGService:
         if not chunks:
             return
 
-        # Collect unique file_paths for batch lookup.  When available, keep the
-        # LightRAG full_doc_id as the strongest metadata key.
-        path_meta: dict[str, dict[str, Any]] = {}
-        path_doc_ids: dict[str, str] = {}
+        # Collect unique LightRAG full_doc_id values. Retrieval adapters must
+        # propagate this identity; file_path lookup is for deletion/cleanup, not
+        # answer-time enrichment.
+        doc_meta: dict[str, dict[str, Any]] = {}
         for chunk in chunks:
-            fp = chunk.get("file_path", "")
-            if fp and fp not in path_meta:
-                path_meta[fp] = {}
             doc_id = chunk.get("full_doc_id") or chunk.get("_full_doc_id")
-            if fp and doc_id and fp not in path_doc_ids:
-                path_doc_ids[fp] = str(doc_id)
+            if doc_id:
+                doc_meta.setdefault(str(doc_id), {})
 
         idx = self._metadata_index
-        if idx is None:
+        if idx is None or not doc_meta:
             return
         from dlightrag.utils.concurrency import bounded_map
 
-        async def _fetch(fp: str) -> tuple[str, dict[str, Any]]:
+        async def _fetch(doc_id: str) -> tuple[str, dict[str, Any]]:
             try:
-                meta = None
-                doc_id = path_doc_ids.get(fp)
-                if doc_id:
-                    meta = await idx.get(doc_id)
-                if meta is None:
-                    doc_ids = await idx.find_by_file_path(fp)
-                    if not doc_ids:
-                        from pathlib import Path as _Path
-
-                        doc_ids = await idx.find_by_filename(_Path(fp).name)
-                    if not doc_ids:
-                        return fp, {}
-                    meta = await idx.get(doc_ids[0])
+                meta = await idx.get(doc_id)
                 if not meta:
-                    return fp, {}
-                return fp, {
+                    return doc_id, {}
+                return doc_id, {
                     k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
                 }
             except Exception:
-                return fp, {}  # enrichment is best-effort
+                return doc_id, {}  # enrichment is best-effort
 
         results = await bounded_map(
-            list(path_meta),
+            list(doc_meta),
             _fetch,
             max_concurrent=8,
             task_name="metadata-enrichment",
@@ -1687,17 +1674,17 @@ class RAGService:
         for fetch_result in results:
             if isinstance(fetch_result, Exception):
                 continue
-            fp, doc_meta = fetch_result
-            if doc_meta:
-                path_meta[fp] = doc_meta
+            doc_id, fetched_meta = fetch_result
+            if fetched_meta:
+                doc_meta[doc_id] = fetched_meta
 
         # Inject into each chunk's metadata field
         for chunk in chunks:
-            fp = chunk.get("file_path", "")
-            doc_meta = path_meta.get(fp)
-            if doc_meta:
+            doc_id = chunk.get("full_doc_id") or chunk.get("_full_doc_id")
+            fetched_meta = doc_meta.get(str(doc_id)) if doc_id else None
+            if fetched_meta:
                 existing = chunk.get("metadata") or {}
-                existing.update(doc_meta)
+                existing.update(fetched_meta)
                 chunk["metadata"] = existing
 
     # === METADATA API ===

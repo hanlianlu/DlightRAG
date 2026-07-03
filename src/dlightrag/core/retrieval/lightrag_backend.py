@@ -104,6 +104,8 @@ class LightRAGMixBackend:
                 "image_mime_type": c.get("image_mime_type"),
                 "relevance_score": c.get("relevance_score"),
             }
+            if c.get("full_doc_id"):
+                context_chunk["full_doc_id"] = c["full_doc_id"]
             if c.get("page_idx") is not None:
                 context_chunk["page_idx"] = c["page_idx"]
             if c.get("bbox") is not None:

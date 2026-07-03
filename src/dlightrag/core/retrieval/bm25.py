@@ -172,7 +172,7 @@ def build_bm25_sql(
     )
     limit_placeholder = "$4" if candidate_ids is not None else "$3"
     return f"""
-        SELECT id, content, file_path,
+        SELECT id, content, file_path, full_doc_id,
                -(content <@> to_bm25query($1, '{safe_index}')) AS score
         FROM {BM25_TABLE}
         WHERE workspace = $2
@@ -426,10 +426,13 @@ class PostgresBM25:
 
     @staticmethod
     def _row_to_chunk(row: Any, *, profile: BM25Profile) -> ContextRow:
-        return {
+        chunk = {
             "chunk_id": row["id"],
             "content": row["content"],
             "file_path": row["file_path"],
             "bm25_profile": profile.name,
             "score": float(row["score"]),
         }
+        if row.get("full_doc_id"):
+            chunk["full_doc_id"] = row["full_doc_id"]
+        return chunk
