@@ -14,6 +14,7 @@ import time
 from collections import defaultdict
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.client_contracts import SourceType
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
+from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.query_images import PreparedQueryImages, prepare_query_images
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
@@ -120,6 +122,12 @@ def _scope_for_workspaces(
 
 def _drop_none(values: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
+
+
+def _cleanup_paths_for_local_ingest(*, source_type: SourceType, path: str | None) -> list[str]:
+    if source_type != "local" or not path:
+        return []
+    return [path] if is_explicit_upload_batch_dir(Path(path)) else []
 
 
 def _merge_schema_rows(schemas: list[dict[str, Any]]) -> dict[str, Any]:
@@ -398,6 +406,7 @@ class RAGServiceManager:
         blob_path: str | None = None,
         prefix: str | None = None,
         bucket: str | None = None,
+        region: str | None = None,
         key: str | None = None,
         url: str | None = None,
         urls: list[str] | None = None,
@@ -419,6 +428,7 @@ class RAGServiceManager:
                 "blob_path": blob_path,
                 "prefix": prefix,
                 "bucket": bucket,
+                "region": region,
                 "key": key,
                 "url": url,
                 "urls": urls,
@@ -601,6 +611,7 @@ class RAGServiceManager:
         blob_path: str | None = None,
         prefix: str | None = None,
         bucket: str | None = None,
+        region: str | None = None,
         key: str | None = None,
         url: str | None = None,
         urls: list[str] | None = None,
@@ -622,6 +633,7 @@ class RAGServiceManager:
                 "blob_path": blob_path,
                 "prefix": prefix,
                 "bucket": bucket,
+                "region": region,
                 "key": key,
                 "url": url,
                 "urls": urls,
@@ -636,20 +648,11 @@ class RAGServiceManager:
                 "metadata_policy": metadata_policy,
             }
         )
-        return await self._ingest_jobs.start_job(workspace, source_type, **kwargs)
-
-    async def _astart_staged_local_ingest_job(
-        self,
-        workspace: str,
-        *,
-        path: str,
-    ) -> dict[str, Any]:
-        """Start a web-upload ingest job and clean the staged input directory afterward."""
         return await self._ingest_jobs.start_job(
             workspace,
-            "local",
-            path=path,
-            cleanup_paths=[path],
+            source_type,
+            cleanup_paths=_cleanup_paths_for_local_ingest(source_type=source_type, path=path),
+            **kwargs,
         )
 
     async def await_ingest_job(

@@ -305,6 +305,10 @@ async def ingest_tool(
         str | None,
         Field(default=None, description="S3 bucket name."),
     ] = None,
+    region: Annotated[
+        str | None,
+        Field(default=None, description="S3 region name."),
+    ] = None,
     key: Annotated[
         str | None,
         Field(default=None, description="S3 object key, single object or prefix."),

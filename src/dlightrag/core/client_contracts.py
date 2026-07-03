@@ -54,6 +54,7 @@ class IngestPayload(ClientContractModel):
     blob_path: str | None = None
     prefix: str | None = None
     bucket: str | None = None
+    region: str | None = None
     key: str | None = None
     url: str | None = None
     urls: list[str] | None = None

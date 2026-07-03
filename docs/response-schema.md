@@ -130,6 +130,7 @@ local file.
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
 | `prefix` | `string` | azure_blob/s3 | Blob/key prefix filter; mutually exclusive with `blob_path`/`key` |
 | `bucket` | `string` | s3 | S3 bucket name |
+| `region` | `string` | — | Optional S3 region for this ingest; falls back to `s3_region` or the AWS SDK environment/config defaults |
 | `key` | `string` | s3 | S3 object key; mutually exclusive with `prefix` |
 | `url` | `string` | url | Single public or signed HTTPS document URL |
 | `urls` | `list[string]` | url | Multiple public or signed HTTPS document URLs; mutually exclusive with `url` |

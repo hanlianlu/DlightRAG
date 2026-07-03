@@ -1239,7 +1239,9 @@ class RAGService:
                 raise ValueError("'bucket' is required for s3 source_type")
             from dlightrag.sourcing.aws_s3 import S3DataSource
 
-            source = S3DataSource(bucket=str(bucket), region=kwargs.get("region"))
+            source = S3DataSource(
+                bucket=str(bucket), region=kwargs.get("region") or self.config.s3_region
+            )
 
         common_kwargs = {
             "source_type": "s3",
