@@ -176,18 +176,27 @@ async def test_embedding_wrapper_uses_embedding_observation() -> None:
     assert obs.updates == [{"output": {"embedding_count": 1}}]
 
 
-async def test_trace_pipeline_nests_child_observations() -> None:
+async def test_trace_observation_nests_child_observations() -> None:
     client = _RecordingLangfuse()
     observability._client = client
 
-    async with observability.trace_pipeline("answer_pipeline", query="q"):
-        async with observability.trace_pipeline("retrieve", workspaces=["default"]):
+    async with observability.trace_observation(
+        "answer_pipeline",
+        as_type="chain",
+        metadata={"query": "q"},
+    ):
+        async with observability.trace_observation(
+            "retrieve",
+            as_type="retriever",
+            metadata={"workspaces": ["default"]},
+        ):
             pass
 
     assert [obs.kwargs["name"] for obs in client.observations] == [
         "answer_pipeline",
         "retrieve",
     ]
+    assert [obs.kwargs["as_type"] for obs in client.observations] == ["chain", "retriever"]
     assert client.observations[1].parent is client.observations[0]
 
 

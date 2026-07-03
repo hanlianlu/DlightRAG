@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -31,6 +32,15 @@ from dlightrag.core.session_images import SessionImageStore
 
 def _image_block(url: str = "data:image/png;base64,abc") -> dict[str, Any]:
     return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _record_trace_calls(calls: list[tuple[str, dict[str, Any]]]):
+    @asynccontextmanager
+    async def _trace(name: str, **kwargs: Any):
+        calls.append((name, kwargs))
+        yield
+
+    return _trace
 
 
 def test_public_sdk_signatures_expose_primary_contracts() -> None:
@@ -461,9 +471,50 @@ class TestRouting:
 class TestAnswerViaEngine:
     """aanswer and aanswer_stream route through AnswerEngine."""
 
+    async def test_aplan_query_emits_query_planning_observation(
+        self, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def llm_func(*, messages, **kwargs) -> str:
+            return (
+                '{"standalone_query":"rewritten query","bm25_query":"rewritten query",'
+                '"referenced_image_ids":[],"filters":{},'
+                '"filter_confidence":"low","filter_evidence":[]}'
+            )
+
+        trace_calls: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            "dlightrag.observability.trace_observation",
+            _record_trace_calls(trace_calls),
+        )
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._query_planner = QueryPlanner(llm_func=llm_func)
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
+
+        plan = await manager.aplan_query("raw query", workspaces=["ws_a"])
+
+        assert plan.standalone_query == "rewritten query"
+        assert trace_calls == [
+            (
+                "query_planning",
+                {
+                    "as_type": "chain",
+                    "input": {"query": "raw query"},
+                    "metadata": {"workspaces": ["ws_a"], "history_turns": 0},
+                },
+            )
+        ]
+
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
-    async def test_aanswer_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:
+    async def test_aanswer_calls_retrieve_then_engine(
+        self, mock_create, test_cfg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """aanswer() calls aretrieve() then AnswerEngine.generate()."""
+        trace_calls: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            "dlightrag.observability.trace_observation",
+            _record_trace_calls(trace_calls),
+        )
         mock_svc = AsyncMock()
         mock_contexts = {"chunks": [], "entities": [], "relationships": []}
         mock_retrieval = MagicMock(contexts=mock_contexts)
@@ -488,6 +539,7 @@ class TestAnswerViaEngine:
             context_top_k=30,
         )
         assert result is expected_result
+        assert "answer_generation" in [name for name, _kwargs in trace_calls]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_derives_candidate_and_context_limits(
@@ -569,6 +621,11 @@ class TestAnswerViaEngine:
             return '{"phrases": ["market growth"], "confidence": 1.0}'
 
         monkeypatch.setattr("dlightrag.models.llm.get_keyword_model_func", lambda _cfg: llm_func)
+        trace_calls: list[tuple[str, dict[str, Any]]] = []
+        monkeypatch.setattr(
+            "dlightrag.observability.trace_observation",
+            _record_trace_calls(trace_calls),
+        )
 
         def _answer_result() -> MagicMock:
             return MagicMock(
@@ -608,6 +665,7 @@ class TestAnswerViaEngine:
         assert highlighted_chunks is not None
         assert plain_chunks[0].highlight_phrases is None
         assert highlighted_chunks[0].highlight_phrases == ["market growth"]
+        assert "semantic_highlights" in [name for name, _kwargs in trace_calls]
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aanswer_stream_calls_retrieve_then_engine(self, mock_create, test_cfg) -> None:

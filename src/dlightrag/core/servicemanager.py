@@ -904,14 +904,25 @@ class RAGServiceManager:
     ) -> QueryPlan:
         """Plan a query using the manager-owned planner and config limits."""
         planner = self._get_query_planner()
-        schema = await self._get_schema(workspaces)
-        return await planner.plan(
-            query,
-            conversation_history=conversation_history,
-            max_turns=self._config.max_conversation_turns,
-            max_tokens=self._config.max_conversation_tokens,
-            schema=schema,
-        )
+        from dlightrag.observability import trace_observation
+
+        async with trace_observation(
+            "query_planning",
+            as_type="chain",
+            input={"query": query},
+            metadata={
+                "workspaces": list(workspaces or []),
+                "history_turns": len(conversation_history or []),
+            },
+        ):
+            schema = await self._get_schema(workspaces)
+            return await planner.plan(
+                query,
+                conversation_history=conversation_history,
+                max_turns=self._config.max_conversation_turns,
+                max_tokens=self._config.max_conversation_tokens,
+                schema=schema,
+            )
 
     async def agenerate_stream_from_contexts(
         self,
@@ -1063,11 +1074,15 @@ class RAGServiceManager:
             kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         if plan is not None:
             kwargs.setdefault("_plan", plan)
-        from dlightrag.observability import trace_pipeline
+        from dlightrag.observability import trace_observation
 
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                async with trace_pipeline("retrieve", workspaces=ws_list, query=effective_query):
+                async with trace_observation(
+                    "retrieve",
+                    as_type="retriever",
+                    metadata={"workspaces": ws_list, "query": effective_query},
+                ):
                     if len(ws_list) == 1:
                         svc = await self._get_service(ws_list[0])
                         result = await svc.aretrieve(effective_query, **kwargs)
@@ -1130,11 +1145,15 @@ class RAGServiceManager:
             supports_vision=self._supports_vision,
         )
 
-        from dlightrag.observability import trace_pipeline
+        from dlightrag.observability import trace_observation
 
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                async with trace_pipeline("answer_pipeline", workspaces=ws_list, query=query):
+                async with trace_observation(
+                    "answer_pipeline",
+                    as_type="chain",
+                    metadata={"workspaces": ws_list, "query": query},
+                ):
                     plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
                         query,
                         conversation_history=conversation_history,
@@ -1144,13 +1163,21 @@ class RAGServiceManager:
                         kwargs=kwargs,
                     )
                     engine = self._get_answer_engine()
-                    result = await engine.generate(
-                        plan.standalone_query,
-                        retrieval.contexts,
-                        query_images=prepared.answer_images or None,
-                        conversation_history=conversation_history,
-                        context_top_k=limits.context_top_k,
-                    )
+                    async with trace_observation(
+                        "answer_generation",
+                        as_type="chain",
+                        metadata={
+                            "context_chunks": len(retrieval.contexts.get("chunks", [])),
+                            "context_top_k": limits.context_top_k,
+                        },
+                    ):
+                        result = await engine.generate(
+                            plan.standalone_query,
+                            retrieval.contexts,
+                            query_images=prepared.answer_images or None,
+                            conversation_history=conversation_history,
+                            context_top_k=limits.context_top_k,
+                        )
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
                     result.current_image_ids = prepared.current_image_ids
@@ -1211,12 +1238,14 @@ class RAGServiceManager:
         )
 
         scoped = _scope_for_workspaces(scope, ws_list)
-        from dlightrag.observability import trace_pipeline
+        from dlightrag.observability import trace_observation
 
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                async with trace_pipeline(
-                    "answer_stream_pipeline", workspaces=ws_list, query=query
+                async with trace_observation(
+                    "answer_stream_pipeline",
+                    as_type="chain",
+                    metadata={"workspaces": ws_list, "query": query},
                 ):
                     plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
                         query,
@@ -1227,13 +1256,21 @@ class RAGServiceManager:
                         kwargs=kwargs,
                         log_plan=True,
                     )
-                    contexts, stream = await self.agenerate_stream_from_contexts(
-                        plan.standalone_query,
-                        retrieval.contexts,
-                        query_images=prepared.answer_images or None,
-                        conversation_history=conversation_history,
-                        context_top_k=limits.context_top_k,
-                    )
+                    async with trace_observation(
+                        "answer_stream_setup",
+                        as_type="chain",
+                        metadata={
+                            "context_chunks": len(retrieval.contexts.get("chunks", [])),
+                            "context_top_k": limits.context_top_k,
+                        },
+                    ):
+                        contexts, stream = await self.agenerate_stream_from_contexts(
+                            plan.standalone_query,
+                            retrieval.contexts,
+                            query_images=prepared.answer_images or None,
+                            conversation_history=conversation_history,
+                            context_top_k=limits.context_top_k,
+                        )
                     if stream is not None:
                         stream_meta = cast(Any, stream)
                         stream_meta.current_image_ids = prepared.current_image_ids
