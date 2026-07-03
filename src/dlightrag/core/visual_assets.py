@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from collections import OrderedDict
@@ -95,7 +96,12 @@ class VisualAssetResolver:
         full = await self.resolve(chunk_id)
         if full is None:
             return None
-        data, media_type = thumbnail_bytes(full.data, max_px=max_px, output_mime=full.media_type)
+        data, media_type = await asyncio.to_thread(
+            thumbnail_bytes,
+            full.data,
+            max_px=max_px,
+            output_mime=full.media_type,
+        )
         thumb = VisualAsset(chunk_id=chunk_id, data=data, media_type=media_type)
         self._thumb_cache.set(cache_key, thumb)
         return thumb
