@@ -177,6 +177,9 @@ answer:
 # auth_mode: simple
 # api_auth_token: ""
 # jwt_verification_key: ""
+# jwt_jwks_url: ""
+# jwt_issuer: ""
+# jwt_audience: ""
 # jwt_algorithm: "HS256"
 
 # Langfuse keys belong in .env. Non-secret SDK behavior can be set here when

@@ -323,6 +323,26 @@ auth_mode: none
 Set `api_host: 0.0.0.0` only when the server is behind a trusted network or
 `auth_mode` is explicitly enabled.
 
+JWT verification accepts either a static key:
+
+```yaml
+auth_mode: jwt
+jwt_algorithm: HS256
+jwt_verification_key: "<shared-secret-or-public-key>"
+```
+
+or a JWKS endpoint for external IdPs that rotate signing keys:
+
+```yaml
+auth_mode: jwt
+jwt_algorithm: RS256
+jwt_jwks_url: https://login.example.com/.well-known/jwks.json
+jwt_issuer: https://login.example.com/tenant/v2.0
+jwt_audience: api://dlightrag
+```
+
+`jwt_issuer` and `jwt_audience` are required with `jwt_jwks_url`.
+
 Authorization is disabled by default even when authentication is enabled:
 
 ```yaml

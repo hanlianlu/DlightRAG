@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Iterator
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import jwt
@@ -12,6 +13,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.api import auth as auth_module
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
 from dlightrag.citations.schemas import SourceReference
@@ -490,6 +492,69 @@ class TestVerifyBearerToken:
         ctx = verify_bearer_token(token, test_config)
         assert ctx.user_id == "user-42"
         assert ctx.auth_mode == "jwt"
+
+    def test_jwt_jwks_url_validates_issuer_and_audience(
+        self,
+        test_config: DlightragConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        test_config.auth_mode = "jwt"
+        test_config.jwt_jwks_url = "https://login.example.com/discovery/keys"
+        test_config.jwt_issuer = "https://login.example.com/tenant/v2.0"
+        test_config.jwt_audience = "api://dlightrag"
+        test_config.jwt_algorithm = "HS256"
+
+        payload = {
+            "sub": "user-42",
+            "iss": test_config.jwt_issuer,
+            "aud": test_config.jwt_audience,
+            "groups": ["finance-rag-readers"],
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        }
+        jwks_secret = "jwks-secret-for-unit-tests-32-bytes"
+        token = jwt.encode(payload, jwks_secret, algorithm="HS256", headers={"kid": "key-1"})
+
+        class FakeJwksClient:
+            def get_signing_key_from_jwt(self, raw_token: str):
+                assert raw_token == token
+                return SimpleNamespace(key=jwks_secret)
+
+        monkeypatch.setattr(auth_module, "_jwks_client", lambda _url: FakeJwksClient())
+
+        ctx = verify_bearer_token(token, test_config)
+
+        assert ctx.user_id == "user-42"
+        assert ctx.claims["groups"] == ["finance-rag-readers"]
+
+    def test_jwt_jwks_url_rejects_wrong_audience(
+        self,
+        test_config: DlightragConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        test_config.auth_mode = "jwt"
+        test_config.jwt_jwks_url = "https://login.example.com/discovery/keys"
+        test_config.jwt_issuer = "https://login.example.com/tenant/v2.0"
+        test_config.jwt_audience = "api://dlightrag"
+        test_config.jwt_algorithm = "HS256"
+
+        payload = {
+            "sub": "user-42",
+            "iss": test_config.jwt_issuer,
+            "aud": "api://other",
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        }
+        jwks_secret = "jwks-secret-for-unit-tests-32-bytes"
+        token = jwt.encode(payload, jwks_secret, algorithm="HS256", headers={"kid": "key-1"})
+
+        class FakeJwksClient:
+            def get_signing_key_from_jwt(self, raw_token: str):
+                assert raw_token == token
+                return SimpleNamespace(key=jwks_secret)
+
+        monkeypatch.setattr(auth_module, "_jwks_client", lambda _url: FakeJwksClient())
+
+        with pytest.raises(HTTPException, match="Invalid token"):
+            verify_bearer_token(token, test_config)
 
     def test_jwt_expired_token_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"

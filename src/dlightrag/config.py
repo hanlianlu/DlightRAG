@@ -923,6 +923,18 @@ class DlightragConfig(BaseSettings):
             "verifies externally issued JWTs and does not sign or renew tokens."
         ),
     )
+    jwt_jwks_url: str | None = Field(
+        default=None,
+        description="JWKS endpoint for externally issued JWT signing keys.",
+    )
+    jwt_issuer: str | None = Field(
+        default=None,
+        description="Expected JWT issuer. Required with jwt_jwks_url.",
+    )
+    jwt_audience: str | None = Field(
+        default=None,
+        description="Expected JWT audience. Required with jwt_jwks_url.",
+    )
     jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = Field(
         default="HS256",
         description="JWT signature algorithm — restricted to safe HMAC/RSA/ECDSA variants. "
@@ -1043,8 +1055,10 @@ class DlightragConfig(BaseSettings):
         if self.auth_mode == "simple" and not self.api_auth_token:
             raise ValueError("auth_mode='simple' requires api_auth_token to be set")
         # Fail-fast: jwt mode requires verification material; otherwise every request 500s.
-        if self.auth_mode == "jwt" and not self.jwt_verification_key:
-            raise ValueError("auth_mode='jwt' requires jwt_verification_key to be set")
+        if self.auth_mode == "jwt" and not (self.jwt_verification_key or self.jwt_jwks_url):
+            raise ValueError("auth_mode='jwt' requires jwt_verification_key or jwt_jwks_url")
+        if self.jwt_jwks_url and not (self.jwt_issuer and self.jwt_audience):
+            raise ValueError("jwt_jwks_url requires jwt_issuer and jwt_audience")
         if self.auth_mode == "none" and self.api_host not in _LOCAL_API_HOSTS:
             warnings.warn(
                 "api_host is non-loopback while auth_mode='none'; set auth_mode or bind "

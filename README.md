@@ -626,6 +626,17 @@ Clients send `Authorization: Bearer <token>`. JWT tokens must include `sub`,
 which becomes the authenticated `user_id`. For RS*/ES* algorithms,
 `DLIGHTRAG_JWT_VERIFICATION_KEY` must be the issuer's public key PEM.
 
+For Azure Entra, Okta, Auth0, Keycloak, and other OIDC-style issuers, prefer
+JWKS so signing-key rollover is handled by PyJWT:
+
+```yaml
+auth_mode: jwt
+jwt_algorithm: RS256
+jwt_jwks_url: https://login.example.com/.well-known/jwks.json
+jwt_issuer: https://login.example.com/tenant/v2.0
+jwt_audience: api://dlightrag
+```
+
 DlightRAG authorization is off by default:
 
 ```yaml

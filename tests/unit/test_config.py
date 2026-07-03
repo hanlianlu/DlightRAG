@@ -260,10 +260,43 @@ class TestDlightragConfigNested:
 
         assert cfg.jwt_verification_key == "test-jwt-verification-key"
 
-    def test_jwt_mode_requires_verification_key(self) -> None:
-        with pytest.raises(ValidationError, match="jwt_verification_key"):
+    def test_jwt_mode_accepts_jwks_url_with_issuer_and_audience(self) -> None:
+        cfg = DlightragConfig(
+            auth_mode="jwt",
+            jwt_jwks_url="https://login.example.com/discovery/keys",
+            jwt_issuer="https://login.example.com/tenant/v2.0",
+            jwt_audience="api://dlightrag",
+            jwt_algorithm="RS256",
+            cors_allow_origins=["http://localhost:3000"],
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+        )
+
+        assert cfg.jwt_jwks_url == "https://login.example.com/discovery/keys"
+
+    def test_jwt_mode_requires_verification_key_or_jwks_url(self) -> None:
+        with pytest.raises(ValidationError, match="jwt_verification_key or jwt_jwks_url"):
             DlightragConfig(
                 auth_mode="jwt",
+                cors_allow_origins=["http://localhost:3000"],
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="sk-test",
+                    startup_probe=False,
+                ),
+            )
+
+    def test_jwt_jwks_url_requires_issuer_and_audience(self) -> None:
+        with pytest.raises(ValidationError, match="jwt_issuer and jwt_audience"):
+            DlightragConfig(
+                auth_mode="jwt",
+                jwt_jwks_url="https://login.example.com/discovery/keys",
+                jwt_algorithm="RS256",
                 cors_allow_origins=["http://localhost:3000"],
                 embedding=EmbeddingConfig(
                     provider="voyage",
