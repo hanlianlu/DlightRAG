@@ -1057,6 +1057,26 @@ class TestIngestJobs:
         assert (staged_dir / "report.pdf").exists()
 
 
+async def test_vision_probe_result_is_manager_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+    test_cfg: DlightragConfig,
+) -> None:
+    first = RAGServiceManager(config=test_cfg)
+    first._supports_vision = False
+    second = RAGServiceManager(config=test_cfg)
+    provider = SimpleNamespace(aclose=AsyncMock())
+    probe = AsyncMock(return_value=True)
+
+    monkeypatch.setattr("dlightrag.models.providers.get_provider", MagicMock(return_value=provider))
+    monkeypatch.setattr("dlightrag.core.vision_probe.probe_vision_support", probe)
+
+    await second._probe_vision_support()
+
+    assert first._supports_vision is False
+    assert second._supports_vision is True
+    probe.assert_awaited_once()
+
+
 class TestDegradedMode:
     @pytest.fixture(autouse=True)
     def _isolate_workspace_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:

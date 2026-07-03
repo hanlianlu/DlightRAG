@@ -108,6 +108,35 @@ class TestAnthropicProvider:
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
             assert "json" in call_kwargs["system"].lower()
 
+    @pytest.mark.asyncio
+    async def test_complete_converts_https_image_url(self):
+        p = get_provider("anthropic", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.content = [MagicMock(text="ok")]
+        with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
+            cast(Any, p)._client = None
+            await p.complete(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "https://example.com/chart.png"},
+                            },
+                            {"type": "text", "text": "describe"},
+                        ],
+                    }
+                ],
+                "claude-sonnet-4-20250514",
+            )
+            call_kwargs = MockSDK.return_value.messages.create.call_args[1]
+            assert call_kwargs["messages"][0]["content"][0] == {
+                "type": "image",
+                "source": {"type": "url", "url": "https://example.com/chart.png"},
+            }
+
 
 class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio

@@ -60,6 +60,8 @@ def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
                         "source": {"type": "base64", "media_type": m.group(1), "data": m.group(2)},
                     }
                 )
+            elif isinstance(url, str) and url.startswith("https://"):
+                result.append({"type": "image", "source": {"type": "url", "url": url}})
         else:
             result.append(block)
     return result

@@ -166,16 +166,6 @@ _ERROR_IMAGES_NOT_SUPPORTED = (
     "Current model does not support image input. Use a vision-capable model or remove query_images."
 )
 
-# Module-level vision support — set once at startup by the server lifecycle.
-# NOT stored on config.answer because Pydantic extra="forbid" rejects monkey-patching.
-_supports_vision: bool | None = None
-
-
-def set_vision_supported(supported: bool | None) -> None:
-    """Store the startup vision probe result (called from server lifespan)."""
-    global _supports_vision
-    _supports_vision = supported
-
 
 def _history_has_images(history: list[dict[str, Any]] | None) -> bool:
     """Return True if any message in *history* contains image_url blocks."""
@@ -194,18 +184,18 @@ def _check_vision_support(
     *,
     query_images: list[dict[str, Any]] | None,
     conversation_history: list[dict[str, Any]] | None,
+    supports_vision: bool | None,
 ) -> None:
     """Raise ValueError if images are present but model doesn't support vision.
 
     Checks both ``query_images`` and ``conversation_history`` for image
-    content.  Reads the startup probe result from the module-level
-    ``_supports_vision`` flag (set by ``set_vision_supported()`` in the
-    server lifespan).
+    content. ``None`` means unprobed, so the request is allowed through and
+    the provider surfaces any model-specific error.
     """
     has_images = bool(query_images) or _history_has_images(conversation_history)
     if not has_images:
         return
-    if _supports_vision is False:
+    if supports_vision is False:
         raise ValueError(f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}")
     # None (unprobed) or True — allow through
 
@@ -240,6 +230,7 @@ class RAGServiceManager:
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._checkpoint: PGCheckpointStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
+        self._supports_vision: bool | None = None
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
     @property
@@ -513,11 +504,10 @@ class RAGServiceManager:
     async def _probe_vision_support(self) -> None:
         """Probe the chat model's vision capability once at startup.
 
-        Sets the module-level ``_supports_vision`` flag consumed by
-        ``_check_vision_support`` on every request.
+        Stores the result on this manager instance so SDK callers can run
+        multiple managers with different model configs in one process.
         """
-        global _supports_vision
-        if _supports_vision is not None:
+        if self._supports_vision is not None:
             return  # already probed
 
         from dlightrag.core.vision_probe import probe_vision_support
@@ -533,7 +523,7 @@ class RAGServiceManager:
         )
         try:
             has_vision = await probe_vision_support(provider, model=default.model)
-            _supports_vision = has_vision
+            self._supports_vision = has_vision
             logger.info(
                 "Chat model vision probe: %s (model=%s, provider=%s)",
                 "supported" if has_vision else "not supported",
@@ -1136,6 +1126,7 @@ class RAGServiceManager:
         _check_vision_support(
             query_images=query_images,
             conversation_history=conversation_history,
+            supports_vision=self._supports_vision,
         )
 
         from dlightrag.observability import trace_pipeline
@@ -1207,6 +1198,7 @@ class RAGServiceManager:
         _check_vision_support(
             query_images=query_images,
             conversation_history=conversation_history,
+            supports_vision=self._supports_vision,
         )
 
         scoped = _scope_for_workspaces(scope, ws_list)
