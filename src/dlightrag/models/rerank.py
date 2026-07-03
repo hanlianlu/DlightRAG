@@ -7,9 +7,10 @@ and return chunks with rerank_score added, sorted descending.
 Runtime interface:
     async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]
 
-Reranking is handled by DlightRAG's own pipeline (LightRAGMixBackend),
-NOT through LightRAG's ``rerank_model_func``, because LightRAG's built-in
-rerank pipeline strips image data from chunks before invoking the reranker.
+Reranking is handled by DlightRAG after retrieval fusion and provenance
+hydration, NOT through LightRAG's ``rerank_model_func``. DlightRAG's final
+candidate set can include BM25, metadata-injected, and multimodal chunks that
+LightRAG's native reranker cannot see as one list.
 """
 
 from __future__ import annotations

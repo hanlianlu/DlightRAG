@@ -217,6 +217,7 @@ class RAGService:
         self._bm25: Any = None
         self._retrieval_orchestrator: Any = None
         self._multimodal_embedder: Any = None
+        self._rerank_func: Any = None
         self._direct_image_embedding_enabled = False
         self._visual_asset_resolver: Any = None
 
@@ -292,7 +293,6 @@ class RAGService:
         *,
         lightrag: Any,
         embedder: Any | None = None,
-        rerank_func: Any | None = None,
     ) -> Any:
         """Build the LightRAG retrieval backend from typed DlightRAG config."""
         from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
@@ -300,7 +300,6 @@ class RAGService:
         return LightRAGMixBackend(
             lightrag=lightrag,
             embedder=embedder,
-            rerank_func=rerank_func,
             direct_visual_top_k=config.direct_visual_top_k,
             max_entity_tokens=config.max_entity_tokens,
             max_relation_tokens=config.max_relation_tokens,
@@ -458,6 +457,7 @@ class RAGService:
         # Get model functions
         default_func_lr = get_default_model_func_for_lightrag(config)
         rerank_func = get_rerank_func(config)
+        self._rerank_func = rerank_func
         role_overrides = build_role_llm_configs(config)
         if role_overrides is not None:
             logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
@@ -532,7 +532,6 @@ class RAGService:
             config,
             lightrag=lightrag,
             embedder=multimodal_embedder if self._direct_image_embedding_enabled else None,
-            rerank_func=rerank_func,
         )
 
         # Initialize metadata index
@@ -1547,6 +1546,13 @@ class RAGService:
             if chunks_to_hydrate:
                 await hydrate_lightrag_chunk_provenance(lr, chunks_to_hydrate)
 
+        await self._rerank_retrieval_chunks(
+            query,
+            kg_result,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+        )
+
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)
         kg_result.trace["metadata_enriched"] = True
@@ -1564,6 +1570,30 @@ class RAGService:
         kg_result.trace["workspace"] = self.config.workspace
 
         return kg_result
+
+    async def _rerank_retrieval_chunks(
+        self,
+        query: str,
+        result: RetrievalResult,
+        *,
+        top_k: int | None,
+        chunk_top_k: int | None,
+    ) -> None:
+        chunks = result.contexts.get("chunks", [])
+        result.trace.setdefault("reranked_chunk_count", 0)
+        if self._rerank_func is None or not chunks:
+            return
+
+        limit = chunk_top_k or top_k or len(chunks)
+        try:
+            result.contexts["chunks"] = await self._rerank_func(
+                query=query,
+                chunks=chunks,
+                top_k=limit,
+            )
+            result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
+        except Exception:
+            logger.warning("Rerank failed; returning fused chunk order", exc_info=True)
 
     async def aget_visual_asset(self, chunk_id: str, *, size: str = "full") -> Any | None:
         """Resolve a chunk image asset for API/Web image routes."""
