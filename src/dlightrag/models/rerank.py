@@ -66,20 +66,6 @@ def _build_scored_chunks(
             chunk["rerank_score"] = score
             scored.append(chunk)
 
-    # Fallback: if threshold filtered everything, keep top-5 by score
-    if not scored and indexed_scores:
-        by_score = sorted(indexed_scores, key=lambda r: r["relevance_score"], reverse=True)
-        for r in by_score[:5]:
-            chunk = chunks[r["index"]].copy()
-            chunk["rerank_score"] = r["relevance_score"]
-            scored.append(chunk)
-        logger.info(
-            "Rerank: all below threshold %.2f, kept top-%d (best=%.3f)",
-            score_threshold,
-            len(scored),
-            scored[0]["rerank_score"] if scored else 0,
-        )
-
     scored.sort(key=lambda c: c["rerank_score"], reverse=True)
     return scored[:top_k]
 
@@ -183,7 +169,7 @@ async def _chat_llm_rerank(
             logger.warning(
                 "LLM/VLM listwise rerank failed for batch %d", batch_start, exc_info=True
             )
-            scores = [0.0] * len(batch)
+            raise
 
         return list(zip(batch, scores, strict=False))
 
@@ -212,6 +198,8 @@ async def _chat_llm_rerank(
         if isinstance(result, Exception):
             continue
         all_results.extend(result)
+    if not all_results and chunks:
+        raise RuntimeError("All rerank batches failed")
 
     # Apply threshold
     scored = []
@@ -220,20 +208,6 @@ async def _chat_llm_rerank(
             out = chunk.copy()
             out["rerank_score"] = score
             scored.append(out)
-
-    # Fallback: if threshold filtered everything, keep top-5 by score
-    if not scored and all_results:
-        by_score = sorted(all_results, key=lambda x: x[1], reverse=True)
-        for chunk, score in by_score[:5]:
-            out = chunk.copy()
-            out["rerank_score"] = score
-            scored.append(out)
-        logger.info(
-            "Rerank: all below threshold %.2f, kept top-%d (best=%.3f)",
-            score_threshold,
-            len(scored),
-            scored[0]["rerank_score"] if scored else 0,
-        )
 
     scored.sort(key=lambda c: c["rerank_score"], reverse=True)
     return scored[:top_k]

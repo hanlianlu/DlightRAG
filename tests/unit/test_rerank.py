@@ -193,12 +193,10 @@ class TestChatLlmRerank:
     async def test_fallback_on_error(self):
         mock_scoring = AsyncMock(side_effect=RuntimeError("API down"))
         chunks = [{"content": "doc0"}, {"content": "doc1"}]
-        result = await _chat_llm_rerank(
-            "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
-        )
-        # Fallback keeps top-5 (all zeros)
-        assert len(result) == 2
-        assert all(c["rerank_score"] == 0.0 for c in result)
+        with pytest.raises(RuntimeError, match="All rerank batches failed"):
+            await _chat_llm_rerank(
+                "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.3
+            )
 
     async def test_empty_chunks(self):
         mock_scoring = AsyncMock()
@@ -217,14 +215,13 @@ class TestChatLlmRerank:
         assert len(result) == 1
         assert result[0]["content"] == "b"
 
-    async def test_threshold_fallback_keeps_top5(self):
+    async def test_score_threshold_drops_all_below_threshold(self):
         mock_scoring = AsyncMock(return_value="[0.05, 0.08, 0.03]")
         chunks = [{"content": "a"}, {"content": "b"}, {"content": "c"}]
         result = await _chat_llm_rerank(
             "query", chunks, top_k=10, scoring_func=mock_scoring, score_threshold=0.5
         )
-        assert len(result) == 3
-        assert result[0]["rerank_score"] == pytest.approx(0.08)
+        assert result == []
 
     async def test_batched_scoring(self):
         call_count = 0
@@ -460,6 +457,28 @@ class TestHttpRerank:
         assert client.payload is not None
         assert client.payload["documents"] == [{"text": "VLM text description"}]
         assert raw_image not in str(client.payload)
+
+    async def test_score_threshold_drops_all_http_results_below_threshold(self):
+        client = _CaptureClient(
+            {
+                "results": [
+                    {"index": 0, "relevance_score": 0.1},
+                    {"index": 1, "relevance_score": 0.2},
+                ]
+            }
+        )
+
+        result = await _http_rerank(
+            "query",
+            [{"content": "low"}, {"content": "also low"}],
+            top_k=10,
+            url="https://rerank.example",
+            model="reranker",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert result == []
 
 
 class _CaptureClient:

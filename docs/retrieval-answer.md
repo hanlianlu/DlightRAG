@@ -167,9 +167,11 @@ BM25-only hits, metadata-injected chunks, direct image matches, and LightRAG
 | `jina_reranker` / `aliyun_reranker` / `local_reranker` | Calls an OpenAI-compatible `/rerank` endpoint with text documents. |
 | `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. |
 
-Post-rerank filtering removes chunks below `rerank.score_threshold`. If all
-chunks fall below the threshold, DlightRAG keeps the top scored fallback set
-instead of returning an accidental empty answer context.
+Post-rerank filtering removes chunks below `rerank.score_threshold`. The
+threshold is hard: if every candidate in a workspace scores below it, that
+workspace contributes no reranked chunks to federated round-robin merge. If the
+reranker itself fails, DlightRAG treats that as infrastructure degradation and
+falls back to the pre-rerank fused order for that request.
 
 Reranking has an independent image budget because it runs after retrieval
 hydration but before answer-context packing. `chat_llm_reranker` and
@@ -244,3 +246,16 @@ emits highlights because it has no finalized answer citations.
 `citations.highlights.enabled` is the global kill switch. When enabled, the
 highlighter uses the keyword LLM role, runs with its own timeout/concurrency
 limits, and returns the original sources unchanged on timeout or failure.
+
+## Multi-Workspace Retrieval
+
+Federated retrieval plans the query once, then queries requested workspaces
+concurrently. Each workspace runs the full single-workspace pipeline, including
+metadata filtering, LightRAG `mix`, BM25 fusion, provenance hydration, and final
+rerank thresholding. The federation layer then tags chunks with `_workspace`,
+canonicalizes reference ids across workspaces, round-robin interleaves the
+already-thresholded per-workspace lists, and truncates to `chunk_top_k`.
+
+There is no cross-workspace global rerank. Round-robin is intentional: it keeps
+workspace representation stable without assuming rerank scores from different
+workspace/model calls are globally calibrated.
