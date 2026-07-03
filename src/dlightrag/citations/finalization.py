@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
+from .indexer import CitationIndexer
 from .processor import CitationProcessor
 from .schemas import SourceReference
 from .source_builder import build_sources
@@ -50,11 +51,16 @@ def finalize_answer(
     retrieval payload.
     """
     flat_contexts = flatten_context_chunks(contexts)
+    indexer: CitationIndexer | None = None
+    if flat_contexts:
+        indexer = CitationIndexer()
+        indexer.build_index(flat_contexts)
     all_sources = build_sources(
         source_contexts or contexts,
         source_url_resolver=source_url_resolver,
         image_url_prefix=image_url_prefix,
         default_workspace=default_workspace,
+        indexer=indexer,
     )
 
     if not answer_text or not flat_contexts:
@@ -69,6 +75,7 @@ def finalize_answer(
     result = CitationProcessor(
         contexts=flat_contexts,
         available_sources=all_sources,
+        indexer=indexer,
     ).process(answer_text)
     return FinalizedAnswer(
         answer=result.answer,

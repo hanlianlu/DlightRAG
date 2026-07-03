@@ -34,10 +34,13 @@ class CitationProcessor:
         self,
         contexts: list[dict[str, Any]],
         available_sources: list[SourceReference],
+        *,
+        indexer: CitationIndexer | None = None,
     ) -> None:
         self._available_sources = available_sources
-        self._indexer = CitationIndexer()
-        self._indexer.build_index(contexts)
+        self._indexer = indexer or CitationIndexer()
+        if indexer is None:
+            self._indexer.build_index(contexts)
         self._enriched_contexts = self._indexer.inject_chunk_idx(contexts)
 
     def process(self, answer_text: str) -> CitationResult:

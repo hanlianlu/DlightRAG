@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from typing import Any
@@ -91,6 +92,9 @@ class LightRAGMixBackend:
 
         await self._hydrate_chunk_provenance(chunks)
         trace["hydrated_chunk_count"] = len(chunks)
+        trace["provenance_hydrated_chunk_ids"] = [
+            str(chunk["chunk_id"]) for chunk in chunks if chunk.get("chunk_id")
+        ]
         chunks = canonicalize_reference_ids(chunks, references=data.get("references", []))
 
         context_chunks: list[ContextRow] = []
@@ -153,7 +157,7 @@ class LightRAGMixBackend:
             return []
         if top_k <= 0:
             return []
-        images = _extract_images(multimodal_content)
+        images = await asyncio.to_thread(_extract_images, multimodal_content)
         if not images:
             return []
 

@@ -7,11 +7,13 @@ import base64
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from PIL import Image
 
+from dlightrag.core.retrieval import lightrag_backend as lightrag_backend_module
 from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
 
 
@@ -215,6 +217,38 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     assert query_args is not None
     assert query_args.kwargs["query_embedding"] == [0.1, 0.2, 0.3]
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
+
+
+async def test_backend_decodes_query_images_off_event_loop(
+    monkeypatch: Any,
+) -> None:
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={"data": {"chunks": [], "entities": [], "relationships": []}}
+    )
+    lightrag.text_chunks = MagicMock()
+    lightrag.text_chunks.get_by_ids = AsyncMock(return_value=[])
+    lightrag.chunks_vdb = MagicMock()
+    lightrag.chunks_vdb.query = AsyncMock(return_value=[])
+    embedder = MagicMock()
+    embedder.embed_query_images = AsyncMock(return_value=[])
+    calls: list[str] = []
+
+    async def fake_to_thread(func, *args, **kwargs):  # noqa: ANN001, ANN202
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        lightrag_backend_module,
+        "asyncio",
+        SimpleNamespace(to_thread=fake_to_thread),
+        raising=False,
+    )
+
+    backend = LightRAGMixBackend(lightrag=lightrag, embedder=embedder)
+    await backend.aretrieve("find this", multimodal_content=[_image_payload()])
+
+    assert calls == ["_extract_images"]
 
 
 async def test_backend_skips_direct_query_images_without_embedder() -> None:

@@ -260,6 +260,44 @@ class TestRAGServiceRetrieve:
         assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-visual", "semantic-a"]
         assert result.trace["reranked_chunk_count"] == 2
 
+    async def test_aretrieve_skips_chunks_hydrated_by_backend(
+        self, test_config, monkeypatch: pytest.MonkeyPatch
+    ):
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = self._make_retrieval_service(test_config)
+        service._lightrag = MagicMock()
+        service._retrieval_orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {
+                        "chunk_id": "semantic-a",
+                        "content": "semantic",
+                        "full_doc_id": "doc-a",
+                    },
+                    {"chunk_id": "bm25-b", "content": "lexical", "full_doc_id": "doc-b"},
+                ],
+                "entities": [],
+                "relationships": [],
+            },
+            trace={"provenance_hydrated_chunk_ids": ["semantic-a"]},
+        )
+        seen: list[list[str]] = []
+
+        async def hydrate(_lightrag, chunks):
+            seen.append([chunk["chunk_id"] for chunk in chunks])
+            chunks[0]["page_idx"] = 7
+
+        monkeypatch.setattr(
+            "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            hydrate,
+        )
+
+        result = await service.aretrieve("test query")
+
+        assert seen == [["bm25-b"]]
+        assert result.contexts["chunks"][1]["page_idx"] == 7
+
     async def test_aretrieve_not_initialized_raises(self, test_config):
         service = RAGService(config=test_config)
         with pytest.raises(RuntimeError, match="not initialized"):
@@ -1307,15 +1345,16 @@ class TestRAGServiceLightRAGMainPath:
         service._metadata_index = AsyncMock()
         service._metadata_index.find_by_file_path = AsyncMock()
         service._metadata_index.find_by_filename = AsyncMock()
-        service._metadata_index.get = AsyncMock(
-            side_effect=lambda doc_id: {
+        service._metadata_index.get = AsyncMock()
+        service._metadata_index.get_many = AsyncMock(
+            return_value={
                 "doc-right": {
                     "department": "finance",
                     "filename": "report.pdf",
                     "metadata_json": {"large": True},
                     "process_options": {"ocr": True},
-                },
-            }.get(doc_id)
+                }
+            }
         )
         result = RetrievalResult(
             contexts={
@@ -1337,7 +1376,8 @@ class TestRAGServiceLightRAGMainPath:
 
         assert result.contexts["chunks"][0]["metadata"] == {"department": "finance"}
         assert "metadata" not in result.contexts["chunks"][1]
-        service._metadata_index.get.assert_awaited_once_with("doc-right")
+        service._metadata_index.get_many.assert_awaited_once_with(["doc-right"])
+        service._metadata_index.get.assert_not_awaited()
         service._metadata_index.find_by_file_path.assert_not_awaited()
         service._metadata_index.find_by_filename.assert_not_awaited()
 
