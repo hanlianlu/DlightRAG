@@ -401,21 +401,27 @@ def wrap_rerank_func(fn: Callable[..., Any], *, name: str = "reranking") -> Call
 
 
 @asynccontextmanager
-async def trace_pipeline(name: str, **metadata: Any) -> AsyncIterator[None]:
-    """Mark a pipeline stage as a Langfuse span. Nested calls auto-link as children."""
+async def trace_observation(
+    name: str,
+    *,
+    as_type: str = "span",
+    input: Any | None = None,
+    metadata: Any | None = None,
+) -> AsyncIterator[None]:
+    """Mark a DlightRAG operation as a Langfuse v4 observation."""
     if _client is None:
         yield
         return
-    as_type = "retriever" if "retrieve" in name else "chain" if "pipeline" in name else "span"
+    observation_kwargs: dict[str, Any] = {"as_type": as_type, "name": name}
+    if input is not None:
+        observation_kwargs["input"] = input
+    if metadata is not None:
+        observation_kwargs["metadata"] = metadata
     try:
-        cm = _client.start_as_current_observation(
-            as_type=as_type,
-            name=name,
-            metadata=metadata,
-        )
+        cm = _client.start_as_current_observation(**observation_kwargs)
         observation = cm.__enter__()
     except Exception:
-        logger.debug("Langfuse pipeline observation start failed (non-fatal)", exc_info=True)
+        logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
         yield
         return
 
