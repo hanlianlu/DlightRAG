@@ -124,8 +124,13 @@ class AnswerEngine:
         )
 
         logger.info(
-            "[AE] generate: chunks=%d query=%s",
+            "[AE] generate: input_chunks=%d packed_chunks=%d target=%s images_sent=%d "
+            "images_skipped=%d query=%s",
             len(contexts.get("chunks", [])),
+            prepared.trace["answer_context_chunks"],
+            prepared.trace["answer_context_target_chunks"],
+            prepared.trace["answer_context_images_sent"],
+            prepared.trace["answer_context_images_skipped"],
             query[:60],
         )
 
@@ -202,8 +207,13 @@ class AnswerEngine:
         )
 
         logger.info(
-            "[AE] generate_stream: chunks=%d query=%s",
+            "[AE] generate_stream: input_chunks=%d packed_chunks=%d target=%s "
+            "images_sent=%d images_skipped=%d query=%s",
             len(contexts.get("chunks", [])),
+            prepared.trace["answer_context_chunks"],
+            prepared.trace["answer_context_target_chunks"],
+            prepared.trace["answer_context_images_sent"],
+            prepared.trace["answer_context_images_skipped"],
             query[:60],
         )
 
