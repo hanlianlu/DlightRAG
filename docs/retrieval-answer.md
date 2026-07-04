@@ -171,11 +171,13 @@ BM25-only hits, metadata-injected chunks, direct image matches, and LightRAG
 | `cohere_reranker` | Calls Cohere `/v2/rerank` with text documents. |
 | `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. |
 
-Post-rerank filtering removes chunks below `rerank.score_threshold`. The
-threshold is hard: if every candidate in a workspace scores below it, that
-workspace contributes no reranked chunks to federated round-robin merge. If the
-reranker itself fails, DlightRAG treats that as infrastructure degradation and
-falls back to the pre-rerank fused order for that request.
+When `rerank.score_threshold` is set, post-rerank filtering removes chunks below
+that score. The threshold is hard: if every candidate in a workspace scores
+below it, that workspace contributes no reranked chunks to federated round-robin
+merge. When omitted, `chat_llm_reranker` defaults to `0.5`; provider rerankers
+keep all scored candidates before taking `top_k`. If the reranker itself fails,
+DlightRAG treats that as infrastructure degradation and falls back to the
+pre-rerank fused order for that request.
 
 Reranking has an independent image budget because it runs after retrieval
 hydration but before answer-context packing. `chat_llm_reranker` and

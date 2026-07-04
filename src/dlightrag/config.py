@@ -342,7 +342,14 @@ class RerankConfig(BaseModel):
             "image_data when the selected model/API supports image documents."
         ),
     )
-    score_threshold: float = Field(default=0.5, ge=0)
+    score_threshold: float | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Minimum rerank score to keep. When omitted, chat_llm_reranker uses 0.5 "
+            "and provider rerankers keep all scored candidates before top_k."
+        ),
+    )
     max_concurrency: int = Field(default=8, ge=1)
     batch_size: int = Field(default=8, ge=1)
     image_max_bytes: int = Field(

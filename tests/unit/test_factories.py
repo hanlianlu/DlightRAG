@@ -309,6 +309,7 @@ class TestGetRerankFunc:
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
                 roles=LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
             ),
+            rerank=RerankConfig(strategy="chat_llm_reranker"),
             embedding=_embedding_config(),
         )
 
@@ -326,6 +327,7 @@ class TestGetRerankFunc:
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
                 roles=LLMRolesConfig(query=ModelConfig(provider="openai", model="query-model")),
             ),
+            rerank=RerankConfig(strategy="chat_llm_reranker"),
             embedding=_embedding_config(),
         )
 
@@ -342,6 +344,7 @@ class TestGetRerankFunc:
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
             ),
+            rerank=RerankConfig(strategy="chat_llm_reranker"),
             embedding=_embedding_config(),
         )
 
@@ -358,6 +361,7 @@ class TestGetRerankFunc:
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
             ),
+            rerank=RerankConfig(strategy="chat_llm_reranker"),
             embedding=_embedding_config(),
         )
 
@@ -372,6 +376,7 @@ class TestGetRerankFunc:
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
             ),
+            rerank=RerankConfig(strategy="chat_llm_reranker"),
             embedding=_embedding_config(),
         )
 
