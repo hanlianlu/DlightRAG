@@ -45,6 +45,7 @@ Thumbs.db
 
 # Storage
 dlightrag_storage/
+output/
 *.db
 
 # Runtime logs (e.g. lightrag.log emitted at cwd by some upstream paths)
