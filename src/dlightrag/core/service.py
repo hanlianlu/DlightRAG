@@ -292,6 +292,7 @@ class RAGService:
         config: DlightragConfig,
         *,
         lightrag: Any,
+        stores: Any,
         embedder: Any | None = None,
     ) -> Any:
         """Build the LightRAG retrieval backend from typed DlightRAG config."""
@@ -299,6 +300,7 @@ class RAGService:
 
         return LightRAGMixBackend(
             lightrag=lightrag,
+            stores=stores,
             embedder=embedder,
             direct_visual_top_k=config.direct_visual_top_k,
             max_entity_tokens=config.max_entity_tokens,
@@ -500,17 +502,6 @@ class RAGService:
         self._lightrag = lightrag
         logger.info("LightRAG storages initialized")
 
-        from dlightrag.core.lightrag_stores import LightRAGStores
-
-        self._lightrag_stores = LightRAGStores(lightrag)
-
-        from dlightrag.core.visual_assets import ThumbnailCache, VisualAssetResolver
-
-        self._visual_asset_resolver = VisualAssetResolver(
-            lightrag=lightrag,
-            thumb_cache=ThumbnailCache(max_size=config.visual_assets.thumb_cache_size),
-        )
-
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
             await LightRAGContractGuard(lightrag).verify_all()
@@ -523,6 +514,17 @@ class RAGService:
                 exact_threshold=config.metadata_filter_exact_vector_threshold,
             )
 
+        from dlightrag.core.lightrag_stores import LightRAGStores
+
+        self._lightrag_stores = LightRAGStores(lightrag)
+
+        from dlightrag.core.visual_assets import ThumbnailCache, VisualAssetResolver
+
+        self._visual_asset_resolver = VisualAssetResolver(
+            stores=self._lightrag_stores,
+            thumb_cache=ThumbnailCache(max_size=config.visual_assets.thumb_cache_size),
+        )
+
         # Post-init verification: ensure AGE graph labels actually exist.
         # Catches stale/corrupted graphs left by previous failed inits
         # (e.g., schema created but vlabels missing due to uncaught errors).
@@ -531,6 +533,7 @@ class RAGService:
         self._backend = self._build_retrieval_backend(
             config,
             lightrag=lightrag,
+            stores=self._lightrag_stores,
             embedder=multimodal_embedder if self._direct_image_embedding_enabled else None,
         )
 
@@ -1540,8 +1543,8 @@ class RAGService:
         # --- Step 2.5: Hydrate image data for all retrieved chunks ---
         # BM25 chunks and other post-fusion additions haven't been through
         # hydration yet, so they lack image_data for visual chunks.
-        lr = self.lightrag
-        if lr is not None:
+        stores = self._lightrag_stores
+        if stores is not None:
             from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 
             chunks_to_hydrate = kg_result.contexts.get("chunks", [])
@@ -1556,7 +1559,7 @@ class RAGService:
                     if str(chunk.get("chunk_id") or "") not in hydrated_ids
                 ]
                 if pending_chunks:
-                    await hydrate_lightrag_chunk_provenance(lr, pending_chunks)
+                    await hydrate_lightrag_chunk_provenance(stores, pending_chunks)
 
         await self._rerank_retrieval_chunks(
             query,
@@ -1742,13 +1745,13 @@ class RAGService:
     async def alist_ingested_files(self) -> list[dict[str, Any]]:
         """List all processed files from LightRAG doc_status."""
         self._ensure_initialized()
-        if self._lightrag is None:
+        if self._lightrag_stores is None:
             return []
 
         from lightrag.base import DocStatus
 
         try:
-            processed = await self._lightrag.doc_status.get_docs_by_status(DocStatus.PROCESSED)
+            processed = await self._lightrag_stores.docs_by_status(DocStatus.PROCESSED)
         except Exception as exc:
             logger.warning("Failed to query PROCESSED docs: %s", exc)
             return []
@@ -1766,13 +1769,13 @@ class RAGService:
     async def alist_failed_docs(self) -> list[dict[str, Any]]:
         """Return all documents currently in DocStatus.FAILED for this workspace."""
         self._ensure_initialized()
-        if self._lightrag is None:
+        if self._lightrag_stores is None:
             return []
 
         from lightrag.base import DocStatus
 
         try:
-            failed = await self._lightrag.doc_status.get_docs_by_status(DocStatus.FAILED)
+            failed = await self._lightrag_stores.docs_by_status(DocStatus.FAILED)
         except Exception as exc:
             logger.warning("Failed to query FAILED docs: %s", exc)
             return []

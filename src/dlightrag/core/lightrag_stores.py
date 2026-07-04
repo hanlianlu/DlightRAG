@@ -80,8 +80,61 @@ class LightRAGStores:
     async def get_doc_status(self, doc_id: str) -> dict[str, Any] | None:
         return await self.doc_status.get_by_id(doc_id)
 
+    async def docs_by_status(self, status: Any) -> dict[str, Any]:
+        return await self.doc_status.get_docs_by_status(status)
+
     async def get_full_doc(self, doc_id: str) -> dict[str, Any] | None:
         return await self.full_docs.get_by_id(doc_id)
+
+    async def get_text_chunks(self, chunk_ids: list[str]) -> list[Any]:
+        if not chunk_ids:
+            return []
+        return await self.text_chunks.get_by_ids(chunk_ids)
+
+    async def context_chunks_by_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """Fetch LightRAG text chunks and format them as retrieval context rows."""
+        if not chunk_ids:
+            return []
+        inject_ids = list(dict.fromkeys(chunk_ids))
+        raw_contents = await self.get_text_chunks(inject_ids)
+
+        chunks: list[dict[str, Any]] = []
+        for cid, content_raw in zip(inject_ids, raw_contents, strict=False):
+            if content_raw is None:
+                continue
+            if isinstance(content_raw, str):
+                content = content_raw
+                file_path = ""
+                full_doc_id = None
+            else:
+                content = content_raw.get("content", "")
+                file_path = content_raw.get("file_path", "") or ""
+                full_doc_id = content_raw.get("full_doc_id")
+            chunk = {
+                "chunk_id": cid,
+                "content": content,
+                "reference_id": "",
+                "file_path": file_path,
+            }
+            if full_doc_id:
+                chunk["full_doc_id"] = str(full_doc_id)
+            chunks.append(chunk)
+        return chunks
+
+    async def query_chunk_vectors(
+        self,
+        *,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[dict[str, Any]]:
+        return (
+            await self.chunks_vdb.query(
+                query="",
+                top_k=top_k,
+                query_embedding=query_embedding,
+            )
+            or []
+        )
 
     async def overwrite_chunk_vectors(
         self,

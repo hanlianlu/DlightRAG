@@ -220,6 +220,7 @@ class TestRAGServiceRetrieve:
         service._retrieval_orchestrator.aretrieve = AsyncMock(
             return_value=RetrievalResult(contexts={"chunks": []})
         )
+        service._lightrag_stores = MagicMock()
         return service
 
     async def test_aretrieve_delegates_to_orchestrator(self, test_config):
@@ -240,7 +241,6 @@ class TestRAGServiceRetrieve:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = self._make_retrieval_service(test_config)
-        service._lightrag = MagicMock()
         service._retrieval_orchestrator.aretrieve.return_value = RetrievalResult(
             contexts={
                 "chunks": [
@@ -252,7 +252,7 @@ class TestRAGServiceRetrieve:
             }
         )
 
-        async def hydrate(_lightrag, chunks):
+        async def hydrate(_stores, chunks):
             chunks[1]["image_data"] = "hydrated-image"
 
         async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]:
@@ -278,7 +278,6 @@ class TestRAGServiceRetrieve:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = self._make_retrieval_service(test_config)
-        service._lightrag = MagicMock()
         service._retrieval_orchestrator.aretrieve.return_value = RetrievalResult(
             contexts={
                 "chunks": [
@@ -296,7 +295,7 @@ class TestRAGServiceRetrieve:
         )
         seen: list[list[str]] = []
 
-        async def hydrate(_lightrag, chunks):
+        async def hydrate(_stores, chunks):
             seen.append([chunk["chunk_id"] for chunk in chunks])
             chunks[0]["page_idx"] = 7
 
@@ -337,9 +336,8 @@ class TestRAGServiceFileManagement:
     async def test_alist_reads_lightrag_doc_status(self, test_config):
         service = RAGService(config=test_config)
         service._initialized = True
-        service._lightrag = MagicMock()
-        service._lightrag.doc_status = MagicMock()
-        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
+        service._lightrag_stores = MagicMock()
+        service._lightrag_stores.docs_by_status = AsyncMock(
             return_value={"d1": MagicMock(file_path="/tmp/a.pdf", updated_at="now")}
         )
         result = await service.alist_ingested_files()
@@ -351,7 +349,7 @@ class TestRAGServiceFileManagement:
                 "updated_at": "now",
             }
         ]
-        service._lightrag.doc_status.get_docs_by_status.assert_awaited_once()
+        service._lightrag_stores.docs_by_status.assert_awaited_once()
 
     async def test_adelete_uses_cascade_pipeline(self, test_config):
         service = RAGService(config=test_config)
@@ -491,6 +489,7 @@ class TestBuildRetrievalBackend:
         backend = RAGService._build_retrieval_backend(
             test_config,
             lightrag=MagicMock(),
+            stores=MagicMock(),
             embedder=MagicMock(),
         )
 
