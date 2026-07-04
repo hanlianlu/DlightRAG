@@ -1598,7 +1598,20 @@ class RAGService:
     ) -> None:
         chunks = result.contexts.get("chunks", [])
         result.trace.setdefault("reranked_chunk_count", 0)
-        if self._rerank_func is None or not chunks:
+        if not chunks:
+            logger.info(
+                "[Rerank] skipped: strategy=%s enabled=%s chunks=0 reason=no_chunks",
+                self.config.rerank.strategy,
+                self.config.rerank.enabled,
+            )
+            return
+        if self._rerank_func is None:
+            logger.info(
+                "[Rerank] skipped: strategy=%s enabled=%s chunks=%d reason=no_function",
+                self.config.rerank.strategy,
+                self.config.rerank.enabled,
+                len(chunks),
+            )
             return
 
         limit = chunk_top_k or top_k or len(chunks)
@@ -1609,6 +1622,18 @@ class RAGService:
                 top_k=limit,
             )
             result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
+            top_score = None
+            if result.contexts["chunks"]:
+                top_score = result.contexts["chunks"][0].get("rerank_score")
+            logger.info(
+                "[Rerank] strategy=%s model=%s input_chunks=%d limit=%d output_chunks=%d top_score=%s",
+                self.config.rerank.strategy,
+                self.config.rerank.model,
+                len(chunks),
+                limit,
+                result.trace["reranked_chunk_count"],
+                top_score,
+            )
         except Exception:
             logger.warning("Rerank failed; returning fused chunk order", exc_info=True)
 
