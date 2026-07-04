@@ -100,7 +100,7 @@ RERANK_GUIDANCE = (
 )
 
 LISTWISE_RERANK_PROMPT = """\
-Score the relevance of {n} items to the query below. Each item may be an image, text, or both.
+Score the relevance of {n} candidates to the query below. Each candidate may be an image, text, or both.
 
 Respond with ONLY a JSON array of {n} scores in order: [<float>, <float>, ...]
 {rerank_guidance}

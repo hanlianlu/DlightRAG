@@ -326,19 +326,20 @@ class RerankConfig(BaseModel):
         "jina_reranker",
         "aliyun_reranker",
         "local_reranker",
+        "voyage_reranker",
+        "cohere_reranker",
         "azure_cohere",
     ] = "chat_llm_reranker"
     provider: Literal["openai", "anthropic", "gemini"] | None = None
     model: str | None = None
     api_key: str | None = None
     base_url: str | None = None
-    multimodal: bool = Field(
-        default=True,
+    input_modality: Literal["auto", "text", "multimodal"] = Field(
+        default="auto",
         description=(
-            "When True, image_data in chunks is sent to the reranker for multimodal scoring. "
-            "When False, image_data is ignored and only text content is used — safe for "
-            "text-only reranker models/APIs. Multimodal chunks always carry VLM-generated "
-            "text descriptions, so text-only fallback retains substantial signal."
+            "Reranker input selection. 'auto' lets the strategy use probed or API-level "
+            "capabilities, 'text' always uses chunk content, and 'multimodal' sends "
+            "image_data when the selected model/API supports image documents."
         ),
     )
     score_threshold: float = Field(default=0.5, ge=0)

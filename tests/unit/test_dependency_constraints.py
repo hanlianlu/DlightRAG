@@ -174,6 +174,13 @@ def test_env_example_defaults_mineru_to_local_sidecar() -> None:
     assert "MINERU_OFFICIAL_ENDPOINT" not in example
 
 
+def test_config_yaml_uses_input_modality_for_rerank() -> None:
+    config = Path("config.yaml").read_text(encoding="utf-8")
+
+    assert re.search(r"(?m)^  input_modality: auto$", config)
+    assert "multimodal:" not in config
+
+
 def test_env_example_active_keys_are_credentials_only() -> None:
     example = Path(".env.example").read_text(encoding="utf-8")
     active_keys = []

@@ -286,13 +286,14 @@ class TestGetRerankFunc:
         from dlightrag.models import llm
 
         seen_models: list[str] = []
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def fake_make_completion_func(cfg, default_api_key=None):
             seen_models.append(cfg.model)
             return f"completion:{cfg.model}"
 
         def fake_build_rerank_func(rc, ingest_func=None):
+            captured["rerank_config"] = rc
             captured["ingest_func"] = ingest_func
             return "rerank-func"
 
@@ -349,6 +350,48 @@ class TestGetRerankFunc:
         assert result == "rerank-func"
         assert captured["ingest_func"] == "completion:chat-model"
         assert seen_models == ["chat-model"]
+
+    def test_chat_llm_reranker_auto_reuses_positive_vision_probe(self, monkeypatch):
+        llm, _, captured = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        llm.get_rerank_func(config, supports_vision=True)
+
+        assert captured["rerank_config"].input_modality == "multimodal"
+
+    def test_chat_llm_reranker_auto_reuses_negative_vision_probe(self, monkeypatch):
+        llm, _, captured = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        llm.get_rerank_func(config, supports_vision=False)
+
+        assert captured["rerank_config"].input_modality == "text"
+
+    def test_chat_llm_reranker_forced_multimodal_rejects_negative_probe(self, monkeypatch):
+        llm, _, _ = self._capture_scoring_model(monkeypatch)
+
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+            ),
+            rerank=RerankConfig(input_modality="multimodal"),
+            embedding=_embedding_config(),
+        )
+
+        with pytest.raises(ValueError, match="does not support image input"):
+            llm.get_rerank_func(config, supports_vision=False)
 
     def test_chat_llm_reranker_explicit_config_overrides_roles(self, monkeypatch):
         llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
