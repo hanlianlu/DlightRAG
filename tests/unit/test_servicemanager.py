@@ -1159,6 +1159,28 @@ class TestIngestJobs:
         assert "cleanup_paths" not in svc.aingest.await_args.kwargs
         assert not staged_dir.exists()
 
+    async def test_regular_local_ingest_source_is_not_cleanup_path(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        store = _InMemoryIngestJobStore()
+        manager._ingest_jobs._store = store
+        source_file = test_cfg.input_dir_path / "project_a" / "report.pdf"
+        source_file.parent.mkdir(parents=True)
+        source_file.write_text("pdf", encoding="utf-8")
+        svc = AsyncMock()
+        svc.aingest = AsyncMock(return_value={"processed": 1, "errors": []})
+        manager._get_service = AsyncMock(return_value=svc)  # type: ignore[method-assign]
+
+        job = await manager.astart_ingest_job(
+            "Project A",
+            IngestSpec(source_type="local", path=str(source_file)),
+        )
+        await asyncio.wait_for(manager._ingest_jobs._tasks[job["job_id"]], timeout=1.0)
+        row = await manager.get_ingest_job(job["job_id"])
+
+        assert row is not None
+        assert "cleanup_paths" not in row["request"]
+        assert source_file.exists()
+
     async def test_recovered_upload_batch_ingest_cleans_durable_cleanup_paths(
         self, test_cfg
     ) -> None:

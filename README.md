@@ -238,12 +238,18 @@ federate across multiple workspaces.
 **Ingestion sources.** Local files, Web uploads, S3, Azure Blob, public/signed
 HTTPS URLs, and SDK `AsyncDataSource` connectors flow through the same ingest
 contract. Web and REST uploads are staged under DlightRAG's managed
-`working_dir/inputs/<workspace>/` tree.
+`working_dir/inputs/<workspace>/` tree, then copied into the workspace input
+root as retained local sources. Upload batch staging under `__uploads__/` is
+cleaned by the durable ingest job after the handoff.
 
 **Source retention.** Remote source files are transient by default for S3,
 Azure Blob, URL, and SDK connectors. Set `retain_remote_source_files: true`, or
 pass `retain_source_file: true` on one ingest call, when fetched files should be
 kept under the workspace input root.
+
+**Runtime storage.** Docker Compose stores `working_dir` in the
+`dlightrag_data` named volume mounted at `/app/dlightrag_storage`; the host
+`./dlightrag_storage` directory is only used by native, non-Docker runs.
 
 **Metadata.** Declare filterable custom fields once in configuration. Ingest
 calls pass values. Request-level metadata is the batch default; manifest or
@@ -311,6 +317,9 @@ npm run typecheck
 npm run build
 npm run lint:css
 ```
+
+`npm run build` writes the browser bundle to `src/dlightrag/web/static/`; commit
+those generated files with frontend changes.
 
 Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 
