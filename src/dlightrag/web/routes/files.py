@@ -5,15 +5,22 @@ from __future__ import annotations
 
 import logging
 import shutil
-import uuid
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 
 from dlightrag.access_control import AccessAction
+from dlightrag.app_state import request_config
 from dlightrag.core.client_contracts import IngestSpec
+from dlightrag.core.ingestion.uploads import (
+    UploadTooLargeError,
+    ignored_upload,
+    safe_upload_destination,
+    upload_batch_dir,
+    write_upload_stream,
+)
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
@@ -97,51 +104,6 @@ def _file_view_models(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _staging_dir(workspace: str) -> Path:
-    """Persistent staging directory for this workspace's uploaded files."""
-    from dlightrag.config import get_config
-
-    cfg = get_config()
-    p = cfg.input_dir_path / workspace
-    p.mkdir(parents=True, exist_ok=True)
-    return p
-
-
-def _upload_batch_dir(workspace: str) -> Path:
-    """Per-request staging directory so batch ingest never scans old uploads."""
-    root = _staging_dir(workspace) / "__uploads__"
-    root.mkdir(parents=True, exist_ok=True)
-    p = root / uuid.uuid4().hex
-    p.mkdir(parents=True, exist_ok=False)
-    return p
-
-
-def _safe_relative_path(filename: str) -> Path:
-    """Sanitize a webkitRelativePath — reject path traversal attempts."""
-    if not filename:
-        raise ValueError("Empty filename")
-    if "\0" in filename:
-        raise ValueError(f"Unsafe filename: {filename!r}")
-    candidate = Path(filename)
-    windows_candidate = PureWindowsPath(filename)
-    if candidate.is_absolute() or windows_candidate.is_absolute() or windows_candidate.drive:
-        raise ValueError(f"Unsafe filename: {filename!r}")
-    parts = candidate.parts
-    if not parts or ".." in parts:
-        raise ValueError(f"Unsafe filename: {filename!r}")
-    return Path(*parts)
-
-
-def _safe_upload_destination(dest_dir: Path, filename: str) -> Path:
-    """Return a destination under dest_dir, rejecting escapes after resolution."""
-    rel = _safe_relative_path(filename)
-    root = dest_dir.resolve()
-    dest = (root / rel).resolve()
-    if not dest.is_relative_to(root):
-        raise ValueError(f"Unsafe filename: {filename!r}")
-    return dest
-
-
 # ---------------------------------------------------------------------------
 # GET /web/files — file list panel content
 # ---------------------------------------------------------------------------
@@ -206,9 +168,8 @@ async def upload_files(
     workspace: str = Depends(get_workspace),
 ):
     """Upload files and start background ingest.  Returns immediately."""
-    from dlightrag.config import get_config
-
-    cfg = get_config()
+    manager = get_manager(request)
+    cfg = request_config(request)
     max_bytes = cfg.max_upload_size_mb * 1024 * 1024
 
     content_length = request.headers.get("content-length")
@@ -218,7 +179,6 @@ async def upload_files(
             status_code=413,
         )
 
-    manager = get_manager(request)
     selected_workspace = _resolve_workspace(workspace_name, workspace)
     if not await _workspace_is_registered(request, selected_workspace):
         return _stale_workspace_response()
@@ -237,39 +197,33 @@ async def upload_files(
     bytes_written = 0
     upload_dir: Path | None = None
     try:
-        upload_dir = _upload_batch_dir(selected_workspace)
+        upload_dir = upload_batch_dir(cfg.input_dir_path / selected_workspace)
         saved_paths: list[Path] = []
-        _SYSTEM_FILES = {
-            ".DS_Store",  # macOS folder metadata
-            "Thumbs.db",  # Windows thumbnail cache
-            "desktop.ini",  # Windows folder customization
-        }
 
         for f in files:
             if not f.filename:
                 continue
-            basename = f.filename.rsplit("/", 1)[-1]
-            if basename in _SYSTEM_FILES or basename.startswith("._"):
+            if ignored_upload(f.filename):
                 continue
             try:
-                dest = _safe_upload_destination(upload_dir, f.filename)
+                dest = safe_upload_destination(upload_dir, f.filename)
             except ValueError:
                 logger.warning("Rejected upload with unsafe filename: %r", f.filename)
                 continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            with open(dest, "wb") as out:
-                while chunk := await f.read(1024 * 1024):
-                    bytes_written += len(chunk)
-                    if bytes_written > max_bytes:
-                        out.close()
-                        dest.unlink(missing_ok=True)
-                        if upload_dir is not None:
-                            shutil.rmtree(upload_dir, ignore_errors=True)
-                        return error_response(
-                            f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
-                            status_code=413,
-                        )
-                    out.write(chunk)
+            try:
+                bytes_written = await write_upload_stream(
+                    f,
+                    dest,
+                    max_bytes=max_bytes,
+                    bytes_written=bytes_written,
+                )
+            except UploadTooLargeError:
+                if upload_dir is not None:
+                    shutil.rmtree(upload_dir, ignore_errors=True)
+                return error_response(
+                    f"Upload exceeds limit ({cfg.max_upload_size_mb} MB)",
+                    status_code=413,
+                )
             saved_paths.append(dest)
 
         if not saved_paths:

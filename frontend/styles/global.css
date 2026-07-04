@@ -53,7 +53,7 @@ body {
     padding: var(--space-tight) 0;
     margin: var(--space-component) 0;
     border-top: 1px dashed var(--color-text-subtle);
-    letter-spacing: 0.3px;
+    letter-spacing: 0;
     opacity: 0.7;
 }
 

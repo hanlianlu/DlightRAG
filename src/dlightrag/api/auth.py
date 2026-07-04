@@ -16,6 +16,8 @@ import jwt
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, Field
 
+from dlightrag.app_state import request_config
+
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
 
@@ -110,9 +112,7 @@ def verify_bearer_token(
 
 async def get_current_user(request: Request) -> UserContext:
     """FastAPI dependency -- extract Bearer token and delegate to verify_bearer_token."""
-    from dlightrag.config import get_config
-
-    cfg = get_config()
+    cfg = request_config(request)
     if cfg.auth_mode == "none":
         return UserContext(user_id="anonymous", auth_mode="none")
 

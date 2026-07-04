@@ -17,7 +17,9 @@ from dlightrag.config import (
     LLMRolesConfig,
     MetadataConfig,
     ModelConfig,
+    QueryImagesConfig,
     RerankConfig,
+    VisualAssetsConfig,
     load_config,
 )
 
@@ -71,6 +73,18 @@ class TestModelConfig:
         cfg = ModelConfig(model="gpt-5.4-mini", model_kwargs={"top_p": 0.9})
         assert cfg.model_kwargs == {"top_p": 0.9}
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"model": "gpt-5.4-mini", "temperature": -0.1},
+            {"model": "gpt-5.4-mini", "timeout": 0},
+            {"model": "gpt-5.4-mini", "max_retries": -1},
+        ],
+    )
+    def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError):
+            ModelConfig(**kwargs)
+
 
 class TestEmbeddingConfig:
     def test_defaults(self):
@@ -96,6 +110,11 @@ class TestEmbeddingConfig:
         assert cfg.asymmetric == "require"
         assert cfg.startup_probe is False
 
+    @pytest.mark.parametrize("kwargs", [{"dim": 0}, {"max_token_size": 0}])
+    def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError):
+            EmbeddingConfig(provider="voyage", model="voyage-multimodal-3.5", **kwargs)
+
 
 class TestRerankConfig:
     def test_defaults(self):
@@ -117,6 +136,21 @@ class TestRerankConfig:
         cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-m0", api_key="key")
         assert cfg.strategy == "jina_reranker"
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"max_concurrency": 0},
+            {"batch_size": 0},
+            {"image_max_bytes": 0},
+            {"image_quality": 0},
+            {"image_quality": 96},
+            {"temperature": -0.1},
+        ],
+    )
+    def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError):
+            RerankConfig(**kwargs)
+
 
 class TestCitationHighlightConfig:
     def test_defaults_enabled_for_web_source_panel_enrichment(self):
@@ -133,6 +167,40 @@ class TestAnswerConfig:
         assert cfg.context_top_k == 30
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"max_images": -1},
+            {"max_user_images": -1},
+            {"image_max_total_bytes": 0},
+            {"image_min_px": 0},
+            {"image_min_quality": 96},
+        ],
+    )
+    def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError):
+            AnswerConfig(**kwargs)
+
+    def test_zero_image_slots_are_valid_disable_knobs(self) -> None:
+        cfg = AnswerConfig(max_images=0, max_user_images=0)
+        assert cfg.max_images == 0
+        assert cfg.max_user_images == 0
+
+
+class TestQueryAndVisualConfig:
+    @pytest.mark.parametrize(
+        ("cls", "kwargs"),
+        [
+            (QueryImagesConfig, {"max_described_images": -1}),
+            (QueryImagesConfig, {"session_max_images": 0}),
+            (VisualAssetsConfig, {"thumb_max_px": 0}),
+            (VisualAssetsConfig, {"thumb_cache_size": 0}),
+        ],
+    )
+    def test_rejects_invalid_numeric_bounds(self, cls: type, kwargs: dict[str, Any]) -> None:
+        with pytest.raises(ValidationError):
+            cast(Any, cls)(**kwargs)
 
 
 class TestMetadataConfig:
@@ -979,6 +1047,34 @@ def test_stalled_doc_timeout_allows_disable_but_rejects_too_small_values() -> No
                 startup_probe=False,
             ),
             stalled_doc_timeout_seconds=1,
+        )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"embedding_request_timeout": 0},
+        {"max_upload_bytes": 0},
+        {"max_upload_size_mb": 0},
+        {"request_timeout": 0},
+        {"ingest_timeout": -1},
+        {"parser_sidecars": {"vlm": {"max_image_bytes": 0}}},
+        {"parser_sidecars": {"vlm": {"surrounding_leading_max_tokens": -1}}},
+        {"parser_sidecars": {"mineru": {"max_polls": 0}}},
+        {"query_images": {"max_described_images": -1}},
+        {"visual_assets": {"thumb_max_px": 0}},
+    ],
+)
+def test_config_parsing_rejects_invalid_numeric_bounds(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        _settings_config(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+            **kwargs,
         )
 
 

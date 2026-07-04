@@ -18,7 +18,7 @@ from dlightrag.api.models import (
     FailedFilesResponse,
     FileListResponse,
 )
-from dlightrag.config import get_config
+from dlightrag.app_state import request_config
 from dlightrag.sourcing.aws_s3 import (
     S3CredentialsUnavailable,
     S3PresignError,
@@ -40,7 +40,7 @@ async def list_files(
 ) -> dict[str, Any]:
     """List all ingested documents."""
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
     files = await manager.list_ingested_files(ws)
     return {"files": files, "count": len(files), "workspace": ws}
@@ -52,7 +52,7 @@ async def delete_files(
 ) -> dict[str, Any]:
     """Delete documents from knowledge base."""
     manager = get_manager(request)
-    ws = resolve_workspace(body.workspace)
+    ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_DELETE_FILES, workspace=ws)
     results = await manager.delete_files(
         ws,
@@ -71,7 +71,7 @@ async def list_failed_files(
 ) -> dict[str, Any]:
     """List documents currently in DocStatus.FAILED."""
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
     failed = await manager.list_failed_docs(ws)
     return {"failed": failed, "count": len(failed), "workspace": ws}
@@ -86,7 +86,7 @@ async def retry_failed_files(
     """Re-ingest all FAILED documents (replace=True). Source type is derived
     from each doc's stored file_path scheme (azure://, s3://, https://, otherwise local)."""
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
     return await manager.retry_failed_docs(ws)
 
@@ -105,13 +105,13 @@ async def serve_file(
     - s3://: 302 redirect to S3 presigned URL
     - https://: 302 redirect to original source URL
     """
-    config = get_config()
+    config = request_config(request)
     if file_path.startswith(("azure://", "s3://", "https://")):
         await enforce_access(
             request,
             user,
             AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
-            workspace=resolve_workspace(workspace),
+            workspace=resolve_workspace(workspace, request),
         )
 
     # --- Azure blob: 302 redirect ---
@@ -152,7 +152,12 @@ async def serve_file(
     _ensure_safe_local_file_path(file_path)
 
     input_dir = config.input_dir_path.resolve()
-    safe_workspace, relative_path = _resolve_local_file_scope(file_path, input_dir, workspace)
+    safe_workspace, relative_path = _resolve_local_file_scope(
+        file_path,
+        input_dir,
+        workspace,
+        default_workspace=config.workspace,
+    )
     await enforce_access(
         request,
         user,
@@ -205,7 +210,11 @@ async def serve_file(
 
 
 def _resolve_local_file_scope(
-    file_path: str, input_dir: Path, workspace: str | None
+    file_path: str,
+    input_dir: Path,
+    workspace: str | None,
+    *,
+    default_workspace: str,
 ) -> tuple[str, Path]:
     relative_path = Path(file_path.lstrip("/"))
     explicit_workspace = normalize_workspace(workspace) if workspace is not None else None
@@ -223,7 +232,9 @@ def _resolve_local_file_scope(
     if explicit_workspace and embedded_workspace and explicit_workspace != embedded_workspace:
         raise HTTPException(403, "Access denied")
 
-    return explicit_workspace or embedded_workspace or resolve_workspace(None), scoped_path
+    return explicit_workspace or embedded_workspace or normalize_workspace(
+        default_workspace
+    ), scoped_path
 
 
 def _ensure_safe_local_file_path(file_path: str) -> None:
@@ -234,6 +245,7 @@ def _ensure_safe_local_file_path(file_path: str) -> None:
         or windows_candidate.is_absolute()
         or windows_candidate.drive
         or ".." in candidate.parts
+        or ".." in windows_candidate.parts
     ):
         raise HTTPException(403, "Access denied")
 

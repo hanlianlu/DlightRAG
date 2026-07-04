@@ -4,7 +4,6 @@
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -33,8 +32,8 @@ from dlightrag.api.models import (
     RetrievalResponse,
     RetrieveRequest,
 )
+from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
-from dlightrag.config import get_config
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import (
@@ -47,6 +46,11 @@ from dlightrag.core.client_requests import (
     managed_local_ingest_documents,
     managed_local_ingest_path,
     query_kwargs_from_payload,
+)
+from dlightrag.core.ingestion.uploads import (
+    UploadTooLargeError,
+    safe_upload_basename,
+    write_upload_stream,
 )
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
@@ -73,7 +77,8 @@ async def ingest(
 ) -> dict[str, Any] | JSONResponse:
     """Bulk document ingestion."""
     manager = get_manager(request)
-    ws = resolve_workspace(body.workspace)
+    cfg = request_config(request)
+    ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
     ingest_spec = ingest_spec_from_payload(body)
     if body.source_type == "local":
@@ -81,7 +86,7 @@ async def ingest(
             path = managed_local_ingest_path(
                 source_type=body.source_type,
                 path=ingest_spec.path,
-                input_dir=get_config().input_dir_path,
+                input_dir=cfg.input_dir_path,
                 workspace=ws,
             )
         except ValueError as exc:
@@ -89,7 +94,7 @@ async def ingest(
         documents = managed_local_ingest_documents(
             source_type=body.source_type,
             documents=ingest_spec.documents,
-            input_dir=get_config().input_dir_path,
+            input_dir=cfg.input_dir_path,
             workspace=ws,
         )
         ingest_spec = ingest_spec.model_copy(update={"path": path, "documents": documents})
@@ -256,50 +261,29 @@ async def ingest_blob(
     import json as _json
 
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
-    cfg = manager.config
+    ws = resolve_workspace(workspace, request)
+    cfg = request_config(request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
-    # Sanitize filename -- reject path traversal
-    safe_name = Path(file.filename).name
-    if safe_name != file.filename or ".." in safe_name:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-
-    # Persist to input_dir/<workspace>/<safe_name> with chunked streaming
-    # (aligned with web/routes/files.py — avoids reading the entire file into RAM)
-    import aiofiles  # noqa: PLC0415 (late import kept local)
+    try:
+        safe_name = safe_upload_basename(file.filename)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename") from None
 
     target_dir = cfg.input_dir_path / ws
     target_dir.mkdir(parents=True, exist_ok=True)
     target_path = target_dir / safe_name
 
-    bytes_written = 0
-    chunk_size = 1024 * 1024  # 1 MiB
-    needs_cleanup = False
-
-    async with aiofiles.open(target_path, "wb") as out_file:
-        while True:
-            chunk = await file.read(chunk_size)
-            if not chunk:
-                break
-            bytes_written += len(chunk)
-            if bytes_written > cfg.max_upload_bytes:
-                needs_cleanup = True
-                break
-            await out_file.write(chunk)
-
-    if needs_cleanup:
-        try:
-            target_path.unlink()
-        except Exception:
-            pass
+    try:
+        await write_upload_stream(file, target_path, max_bytes=cfg.max_upload_bytes)
+    except UploadTooLargeError:
         raise HTTPException(
             status_code=413,
             detail=f"File exceeds maximum size of {cfg.max_upload_bytes} bytes",
-        )
+        ) from None
 
     # Parse optional metadata JSON
     meta_dict: dict[str, Any] | None = None
@@ -340,7 +324,7 @@ async def reset_workspace(
 ) -> dict[str, Any]:
     """Reset all RAG data for a workspace."""
     manager = get_manager(request)
-    ws = resolve_workspace(body.workspace)
+    ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_RESET, workspace=ws)
     return await manager.areset(
         workspace=ws,

@@ -4,6 +4,7 @@
 from fastapi import APIRouter, Request
 
 from dlightrag.api.models import HealthResponse
+from dlightrag.app_state import request_config
 
 from .deps import get_manager
 
@@ -13,9 +14,7 @@ router = APIRouter()
 @router.get("/health", response_model=HealthResponse, response_model_exclude_none=True)
 async def health(request: Request) -> dict[str, object]:
     """Health check including RAG service status."""
-    from dlightrag.config import get_config
-
-    config = get_config()
+    config = request_config(request)
     manager = get_manager(request)
 
     is_degraded = manager.is_degraded()

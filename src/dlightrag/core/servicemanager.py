@@ -244,7 +244,10 @@ class RAGServiceManager:
         self._backoff: dict[str, tuple[float, float]] = {}
 
         self._answer_engine: AnswerEngine | None = None
-        self._ingest_jobs = IngestJobCoordinator(lambda workspace: self._get_service(workspace))
+        self._ingest_jobs = IngestJobCoordinator(
+            lambda workspace: self._get_service(workspace),
+            input_root=self._config.input_dir_path,
+        )
         self._query_planner: QueryPlanner | None = None
         self._query_image_enhancer: QueryImageEnhancer | None = None
         self._session_images: SessionImageStore | None = None
@@ -1288,7 +1291,6 @@ class RAGServiceManager:
             supports_vision=self._supports_vision,
         )
 
-        scoped = _scope_for_workspaces(scope, ws_list)
         from dlightrag.observability import trace_observation
 
         try:
