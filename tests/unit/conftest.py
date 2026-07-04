@@ -5,8 +5,6 @@ Prevents real .env values (API keys, provider settings) from leaking
 into unit tests that construct DlightragConfig() directly.
 """
 
-from __future__ import annotations
-
 import os
 
 import pytest

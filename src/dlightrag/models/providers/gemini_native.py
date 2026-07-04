@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Google Gemini native completion provider."""
 
-from __future__ import annotations
-
 import base64
 import logging
 import re
@@ -159,7 +157,7 @@ class GeminiProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> AsyncGenerator[str, None]:  # type: ignore
+    ) -> AsyncGenerator[str]:  # type: ignore
         model_id, contents, config = self._build_args(
             messages,
             model,

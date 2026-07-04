@@ -2,8 +2,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Architecture boundary check — core/internal packages must not import from transport packages."""
 
-from __future__ import annotations
-
 import ast
 import sys
 from pathlib import Path

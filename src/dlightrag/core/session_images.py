@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Session-scoped query image memory."""
 
-from __future__ import annotations
-
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field

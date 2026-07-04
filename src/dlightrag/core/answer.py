@@ -15,8 +15,6 @@ Both streaming and non-streaming paths use the same freetext system prompt.
 Sources are projected from validated inline citation markers.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for multimodal conversation history in QueryPlanner."""
 
-from __future__ import annotations
-
 from dlightrag.core.query_planner import _convert_history_to_text
 
 

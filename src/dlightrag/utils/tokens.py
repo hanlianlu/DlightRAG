@@ -10,8 +10,6 @@ Three density buckets:
   - **ASCII** (~1 token / 4 chars): basic Latin, digits, punctuation
 """
 
-from __future__ import annotations
-
 import math
 from typing import Any
 

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for storage.metadata_fields — field registry."""
 
-from __future__ import annotations
-
 import pytest
 
 from dlightrag.core.retrieval.metadata_fields import (

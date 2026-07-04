@@ -2,8 +2,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Prepare the local Langfuse Docker Compose stack used by DlightRAG."""
 
-from __future__ import annotations
-
 import argparse
 import sys
 import urllib.request
@@ -78,7 +76,8 @@ def prepare_stack(*, target_dir: Path, source: Path | None = None) -> StackResul
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Download and prepare the local Langfuse Docker Compose stack"
+        description="Download and prepare the local Langfuse Docker Compose stack",
+        suggest_on_error=True,
     )
     parser.add_argument("--dir", type=Path, required=True, help="Target local Langfuse stack dir")
     parser.add_argument("--source", type=Path, default=None, help="Optional compose source file")

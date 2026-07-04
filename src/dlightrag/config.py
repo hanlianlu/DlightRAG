@@ -12,8 +12,6 @@ LightRAG reads backend-specific env vars directly — model_post_init bridges
 DLIGHTRAG_* → backend env vars so both modes work seamlessly.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import re

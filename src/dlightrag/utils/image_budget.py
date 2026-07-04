@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared image payload budgeting for model requests."""
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass
 

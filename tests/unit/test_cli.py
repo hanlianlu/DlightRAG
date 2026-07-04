@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for CLI argument validation."""
 
-from __future__ import annotations
-
 import importlib.util
 from pathlib import Path
 from typing import Any

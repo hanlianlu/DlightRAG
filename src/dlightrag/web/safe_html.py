@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Safe HTML fragment rendering for browser-inserted web UI payloads."""
 
-from __future__ import annotations
-
 import re
 from typing import Any
 from urllib.parse import urlparse

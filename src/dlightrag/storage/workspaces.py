@@ -6,8 +6,6 @@ display labels. LightRAG stores own document/KG/vector data per workspace;
 this table owns the user-facing workspace list, including empty workspaces.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from dlightrag.storage.migrations import Migration, apply_migrations

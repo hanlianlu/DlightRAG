@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Resolve LightRAG multimodal sidecar assets for vector overrides."""
 
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +35,7 @@ def collect_lightrag_drawing_assets(
 
     try:
         payload = json.loads(drawings_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return []
     if not isinstance(payload, dict):
         return []

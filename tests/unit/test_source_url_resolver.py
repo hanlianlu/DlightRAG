@@ -1,7 +1,5 @@
 """Tests for source URL resolution from stored retrieval paths."""
 
-from __future__ import annotations
-
 import inspect
 
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver

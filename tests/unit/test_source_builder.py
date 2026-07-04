@@ -1,7 +1,5 @@
 """Tests for build_sources() shared utility."""
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 from dlightrag.citations.schemas import SourceReference

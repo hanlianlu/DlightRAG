@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Pydantic schemas."""
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 from dlightrag.models.schemas import Reference

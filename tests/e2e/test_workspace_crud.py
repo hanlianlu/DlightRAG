@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """E2E tests for workspace CRUD: create, open, delete workspaces."""
 
-from __future__ import annotations
-
 import pytest
 
 

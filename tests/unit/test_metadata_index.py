@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for PG metadata index SQL generation."""
 
-from __future__ import annotations
-
 import json
 import re
 from typing import Any

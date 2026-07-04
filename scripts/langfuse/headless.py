@@ -6,8 +6,6 @@ This helper keeps the local Langfuse stack's headless project keys and
 DlightRAG's Langfuse SDK keys aligned before either service starts.
 """
 
-from __future__ import annotations
-
 import argparse
 import os
 import re
@@ -146,7 +144,8 @@ def bootstrap(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Prepare local Langfuse headless project keys for DlightRAG"
+        description="Prepare local Langfuse headless project keys for DlightRAG",
+        suggest_on_error=True,
     )
     parser.add_argument("--langfuse-env", type=Path, required=True)
     parser.add_argument("--dlightrag-env", type=Path, default=Path(".env"))

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for RAGService facade (core/service.py)."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncIterator
 from pathlib import Path

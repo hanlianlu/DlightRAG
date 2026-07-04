@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Hydrate retrieved LightRAG chunks with display provenance."""
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import inspect
@@ -220,7 +218,7 @@ def _load_sidecar_drawing_path(
     for drawings_path in sorted(artifact_dir.glob("*.drawings.json")):
         try:
             data = json.loads(drawings_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError, OSError:
             continue
         if not isinstance(data, dict):
             continue

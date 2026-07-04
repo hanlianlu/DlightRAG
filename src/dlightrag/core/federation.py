@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Federated retrieval across multiple workspaces."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

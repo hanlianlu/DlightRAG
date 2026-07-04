@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for Langfuse observability wrappers."""
 
-from __future__ import annotations
-
 from collections.abc import Generator
 from types import SimpleNamespace
 from typing import Any

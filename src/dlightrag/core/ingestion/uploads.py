@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Upload staging helpers shared by REST and Web routes."""
 
-from __future__ import annotations
-
 import uuid
 from pathlib import Path, PureWindowsPath
 from typing import Any

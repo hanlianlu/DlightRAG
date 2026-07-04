@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for request/session scoping."""
 
-from __future__ import annotations
-
 from dlightrag.core.scope import RequestScope
 
 

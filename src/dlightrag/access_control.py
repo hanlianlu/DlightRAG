@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Small authorization layer for DlightRAG resources."""
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, Protocol
 

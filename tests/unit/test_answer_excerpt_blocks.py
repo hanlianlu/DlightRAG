@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for dynamic contract chunk rendering in _build_excerpt_blocks."""
 
-from __future__ import annotations
-
 from dlightrag.core.answer import _build_image_label, _format_chunk_metadata
 
 

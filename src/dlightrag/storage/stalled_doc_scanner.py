@@ -18,8 +18,6 @@ reset.  It reads directly from ``LIGHTRAG_DOC_STATUS`` via a transient asyncpg
 connection — no dependency on an initialized LightRAG instance.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
@@ -183,7 +181,7 @@ def _parse_update_count(result: str) -> int:
     if len(parts) >= 2:
         try:
             return int(parts[-1])
-        except (ValueError, IndexError):
+        except ValueError, IndexError:
             pass
     return 0
 

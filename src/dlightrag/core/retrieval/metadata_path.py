@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Metadata retrieval path: resolve hard filters to LightRAG chunk IDs."""
 
-from __future__ import annotations
-
 import logging
 
 from dlightrag.core.retrieval.models import MetadataFilter

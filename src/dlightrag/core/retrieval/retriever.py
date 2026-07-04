@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unified retrieval orchestration for LightRAG mix + DlightRAG BM25."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any

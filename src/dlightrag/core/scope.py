@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Request and session scoping primitives."""
 
-from __future__ import annotations
-
 import contextvars
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager

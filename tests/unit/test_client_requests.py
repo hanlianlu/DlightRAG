@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for transport-neutral client request projection."""
 
-from __future__ import annotations
-
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.client_requests import ingest_spec_from_payload
 

@@ -12,8 +12,6 @@ Two renderers are provided:
   passthrough for tables from LightRAG parsers).
 """
 
-from __future__ import annotations
-
 import html as _html
 
 from markdown_it import MarkdownIt

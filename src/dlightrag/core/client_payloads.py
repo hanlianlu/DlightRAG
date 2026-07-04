@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Transport-neutral payload projection for API, MCP, and other clients."""
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote

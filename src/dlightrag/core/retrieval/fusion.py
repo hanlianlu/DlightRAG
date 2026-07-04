@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Retrieval score fusion."""
 
-from __future__ import annotations
-
 from dlightrag.core.retrieval.protocols import ContextRow
 
 
@@ -43,7 +41,7 @@ def format_bm25_top(chunks: list[ContextRow], *, limit: int = 3) -> str:
         else:
             try:
                 score_text = f"{float(score):.3f}"
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 score_text = "?"
         parts.append(f"{chunk_id}:{profile}:{score_text}")
     if len(chunks) > limit:

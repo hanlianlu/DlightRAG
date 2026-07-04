@@ -9,8 +9,6 @@ printed page numbers; extended mode also drops aside/margin/page-footnote
 blocks.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from functools import wraps

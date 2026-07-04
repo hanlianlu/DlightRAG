@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL server and pgvector capability validation."""
 
-from __future__ import annotations
-
 from typing import Any
 
 _BOOTSTRAPPABLE_EXTENSIONS = frozenset({"pg_textsearch", "pg_jieba"})

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Structured-output contracts for small LLM planning tasks."""
 
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from typing import Any

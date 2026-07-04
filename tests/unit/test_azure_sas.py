@@ -1,7 +1,5 @@
 """Tests for Azure SAS URL generation — verifies connection string parsing and SAS dispatch."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import pytest

@@ -15,8 +15,6 @@ Usage::
     await pg_pool.close()                # call once at shutdown
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable

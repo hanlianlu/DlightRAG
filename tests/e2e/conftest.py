@@ -10,8 +10,6 @@ Usage (opt-in, requires Playwright)::
     pytest tests/e2e/ -m e2e
 """
 
-from __future__ import annotations
-
 import socket
 import threading
 import time
@@ -43,7 +41,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture(scope="module")
-def e2e_base_url() -> Generator[str, Any, None]:
+def e2e_base_url() -> Generator[str, Any]:
     """Start a real FastAPI server with a mocked manager on a random port."""
     manager = AsyncMock()
     manager.config = SimpleNamespace(
@@ -84,7 +82,7 @@ def e2e_base_url() -> Generator[str, Any, None]:
             try:
                 with urllib.request.urlopen(f"{base_url}/web/", timeout=0.25):
                     break
-            except (OSError, urllib.error.URLError):
+            except OSError, urllib.error.URLError:
                 time.sleep(0.05)
         else:
             server.should_exit = True
@@ -96,7 +94,7 @@ def e2e_base_url() -> Generator[str, Any, None]:
 
 
 @pytest.fixture(scope="module")
-def browser(playwright: Playwright) -> Generator[Browser, Any, None]:
+def browser(playwright: Playwright) -> Generator[Browser, Any]:
     """Module-scoped browser — reuse across tests for speed."""
     b = playwright.chromium.launch(headless=True)
     yield b
@@ -104,7 +102,7 @@ def browser(playwright: Playwright) -> Generator[Browser, Any, None]:
 
 
 @pytest.fixture
-def page(browser: Browser, e2e_base_url: str) -> Generator[Page, Any, None]:
+def page(browser: Browser, e2e_base_url: str) -> Generator[Page, Any]:
     """Fresh page per test, already pointed at the running server."""
     context = browser.new_context(base_url=e2e_base_url)
     page_obj = context.new_page()

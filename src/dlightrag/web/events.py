@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Typed browser-facing SSE event payloads."""
 
-from __future__ import annotations
-
 from typing import Any, Literal
 
 from pydantic import Field

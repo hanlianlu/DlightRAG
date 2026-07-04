@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for dlightrag.utils.tokens."""
 
-from __future__ import annotations
-
 from dlightrag.utils.tokens import estimate_tokens, truncate_conversation_history
 
 

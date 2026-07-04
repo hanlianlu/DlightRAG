@@ -1,7 +1,5 @@
 """Static file serving for the Web UI."""
 
-from __future__ import annotations
-
 from starlette.responses import Response
 from starlette.staticfiles import StaticFiles
 

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Language classification for BM25 profile routing and chunk labeling."""
 
-from __future__ import annotations
-
 import re
 from functools import lru_cache
 from typing import Any

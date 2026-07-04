@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Dependency constraint policy tests."""
 
-from __future__ import annotations
-
 import re
 import tomllib
 from pathlib import Path

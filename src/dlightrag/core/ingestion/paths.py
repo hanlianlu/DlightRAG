@@ -7,8 +7,6 @@ Keep those rules centralized here so service orchestration does not grow
 ad-hoc directory handling.
 """
 
-from __future__ import annotations
-
 import hashlib
 import os
 import re

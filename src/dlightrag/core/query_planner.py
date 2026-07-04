@@ -9,8 +9,6 @@ Consumers:
 - Web/API routes -- no longer do query processing, just pass raw history
 """
 
-from __future__ import annotations
-
 import asyncio
 import inspect
 import logging
@@ -203,7 +201,7 @@ class QueryPlanner:
         try:
             sig = inspect.signature(llm_func)
             params = sig.parameters
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             params = {}
 
         if "prompt" in params and "messages" not in params:
@@ -353,7 +351,7 @@ class QueryPlanner:
             return None
         try:
             parsed = QUERY_PLAN_STRUCTURED_OUTPUT.parse(response)
-        except (ValidationError, ValueError, TypeError):
+        except ValidationError, ValueError, TypeError:
             logger.warning("QueryPlanner: invalid structured output for query: %r", query[:80])
             return None
 
@@ -392,14 +390,14 @@ class QueryPlanner:
 
                     try:
                         mf.date_from = datetime.fromisoformat(date_from_str)
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         pass
                 if date_to_str:
                     from datetime import datetime
 
                     try:
                         mf.date_to = datetime.fromisoformat(date_to_str)
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         pass
                 metadata_filter = mf if not mf.is_empty() else None
             except Exception:

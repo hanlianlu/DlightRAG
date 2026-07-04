@@ -7,8 +7,6 @@ PostgreSQL advisory locks coordinate first-time storage initialization across
 concurrent workers.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

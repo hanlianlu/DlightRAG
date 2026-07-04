@@ -6,8 +6,6 @@ All endpoint logic lives in routes.py; this module handles app lifecycle,
 middleware, exception handlers, and router mounting.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -149,7 +147,10 @@ def main() -> None:
 
     from dlightrag.config import get_config, load_config, set_config
 
-    parser = argparse.ArgumentParser(description="dlightrag REST API server")
+    parser = argparse.ArgumentParser(
+        description="dlightrag REST API server",
+        suggest_on_error=True,
+    )
     parser.add_argument("--env-file", help="Path to .env configuration file")
     args = parser.parse_args()
 

@@ -30,8 +30,6 @@ When upgrading lightrag-hku, verify these surfaces still exist and behave
 as expected.  The contract_guard module provides runtime contract checks.
 """
 
-from __future__ import annotations
-
 import asyncio
 import datetime
 import json

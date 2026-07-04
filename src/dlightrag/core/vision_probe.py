@@ -6,8 +6,6 @@ response is a valid text completion (``"ok"``) or an error.
 The result is cached on ``provider.supports_vision``.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

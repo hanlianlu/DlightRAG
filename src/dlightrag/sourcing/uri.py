@@ -6,8 +6,6 @@ between ``RAGService.aretry_failed_docs`` and the file-serving routes,
 so that adding a new source scheme is a single-edit change.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from dlightrag.core.client_contracts import SourceType

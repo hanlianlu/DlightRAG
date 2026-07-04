@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Unified ingestion over LightRAG parser sidecars and image vector overrides."""
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import logging

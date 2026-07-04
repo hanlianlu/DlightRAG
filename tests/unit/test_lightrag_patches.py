@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for LightRAG AGE monkey-patches."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock, MagicMock
 
 import asyncpg.exceptions

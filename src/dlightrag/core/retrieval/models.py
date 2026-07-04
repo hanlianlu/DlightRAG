@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Data models for multi-path retrieval."""
 
-from __future__ import annotations
-
 import warnings
 from datetime import datetime
 from typing import Any

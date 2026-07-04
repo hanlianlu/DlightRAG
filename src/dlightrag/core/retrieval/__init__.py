@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared retrieval types and utilities."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from dlightrag.core.retrieval.models import MetadataFilter

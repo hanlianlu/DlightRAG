@@ -1,7 +1,5 @@
 """Citation index — maps [ref_id-chunk_idx] to actual chunk_ids."""
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Any

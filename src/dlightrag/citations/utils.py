@@ -1,7 +1,5 @@
 """Utility functions for citation processing."""
 
-from __future__ import annotations
-
 import re
 from typing import Any
 

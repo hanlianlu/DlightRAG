@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for S3 source download URL signing."""
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

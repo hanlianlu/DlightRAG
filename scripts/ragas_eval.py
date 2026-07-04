@@ -21,8 +21,6 @@ Usage::
 See `docs/evaluation.md <../docs/evaluation.md>`_ for full guide.
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import os
@@ -272,6 +270,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="RAGAS evaluation for DlightRAG",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        suggest_on_error=True,
         epilog="""
 Examples:
   # Zero-config for no-auth/simple-auth setups

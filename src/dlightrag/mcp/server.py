@@ -6,8 +6,6 @@ Primarily used by DeerFlow and other MCP-compatible agents for
 retrieve() + lightweight ingest().
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Mapping, Sequence
@@ -664,7 +662,10 @@ def main() -> None:
     """Entry point for dlightrag-mcp."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="dlightrag MCP server")
+    parser = argparse.ArgumentParser(
+        description="dlightrag MCP server",
+        suggest_on_error=True,
+    )
     parser.add_argument("--env-file", help="Path to .env configuration file")
     args = parser.parse_args()
 

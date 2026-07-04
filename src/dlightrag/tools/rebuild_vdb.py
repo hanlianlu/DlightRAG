@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """DlightRAG offline vector storage rebuild command."""
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import logging
@@ -33,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the command-line parser for `dlightrag-rebuild-vdb`."""
     parser = argparse.ArgumentParser(
         description="Offline DlightRAG vector storage rebuild command",
+        suggest_on_error=True,
     )
     parser.add_argument("--env-file", help="Path to .env configuration file")
     parser.add_argument(
