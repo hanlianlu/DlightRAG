@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict, runtime_checkable
+from typing import TYPE_CHECKING, Any, NotRequired, Protocol, TypedDict
 
 from dlightrag.models.schemas import Reference
 
@@ -87,7 +87,6 @@ class RetrievalResult:
 # ── Backend protocol ──────────────────────────────────────────────
 
 
-@runtime_checkable
 class RetrievalBackend(Protocol):
     """Retrieval interface for the LightRAG-main runtime path."""
 
@@ -102,7 +101,6 @@ class RetrievalBackend(Protocol):
     ) -> RetrievalResult: ...
 
 
-@runtime_checkable
 class BM25Retriever(Protocol):
     """Lexical chunk retriever used by UnifiedRetriever."""
 
@@ -115,7 +113,6 @@ class BM25Retriever(Protocol):
     ) -> list[ContextRow]: ...
 
 
-@runtime_checkable
 class MetadataChunkStore(Protocol):
     """Store methods needed to resolve metadata hits into chunk ids."""
 

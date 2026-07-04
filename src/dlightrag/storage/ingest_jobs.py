@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     started_at      TIMESTAMPTZ,
-    finished_at     TIMESTAMPTZ
+    finished_at     TIMESTAMPTZ,
+    lease_owner     TEXT,
+    lease_expires_at TIMESTAMPTZ
 )
 """
 
@@ -39,64 +41,108 @@ _CREATE_INDEXES = (
     f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_workspace_created "
     f"ON {TABLE} (workspace, created_at DESC)",
     f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_updated ON {TABLE} (status, updated_at DESC)",
+    f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_lease ON {TABLE} (status, lease_expires_at)",
 )
+
+_ROW_COLUMNS = """
+job_id, workspace, source_type, status, request_json, total_items,
+processed_items, failed_items, current_window, result_json, errors,
+created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
+"""
 
 _INSERT = f"""
 INSERT INTO {TABLE} (job_id, workspace, source_type, status, request_json)
 VALUES ($1, $2, $3, 'queued', $4::jsonb)
 """
 
-_MARK_RUNNING = f"""
+_CLAIM_RUNNING = f"""
 UPDATE {TABLE}
 SET status = 'running',
+    lease_owner = $2,
+    lease_expires_at = NOW() + ($3 * INTERVAL '1 second'),
     started_at = COALESCE(started_at, NOW()),
     updated_at = NOW()
 WHERE job_id = $1
+  AND status IN ('queued', 'running')
+  AND (lease_owner = $2 OR lease_expires_at IS NULL OR lease_expires_at < NOW())
+RETURNING {_ROW_COLUMNS}
+"""
+
+_HEARTBEAT = f"""
+WITH updated AS (
+    UPDATE {TABLE}
+    SET lease_expires_at = NOW() + ($3 * INTERVAL '1 second'),
+        updated_at = NOW()
+    WHERE job_id = $1
+      AND lease_owner = $2
+      AND status = 'running'
+    RETURNING 1
+)
+SELECT COUNT(*)::int FROM updated
 """
 
 _RECORD_WINDOW = f"""
-UPDATE {TABLE}
-SET total_items = total_items + $2,
-    processed_items = processed_items + $3,
-    failed_items = failed_items + $4,
-    current_window = $5,
-    errors = errors || $6::jsonb,
-    updated_at = NOW()
-WHERE job_id = $1
+WITH updated AS (
+    UPDATE {TABLE}
+    SET total_items = total_items + $2,
+        processed_items = processed_items + $3,
+        failed_items = failed_items + $4,
+        current_window = $5,
+        errors = errors || $6::jsonb,
+        lease_expires_at = NOW() + ($8 * INTERVAL '1 second'),
+        updated_at = NOW()
+    WHERE job_id = $1
+      AND lease_owner = $7
+    RETURNING 1
+)
+SELECT COUNT(*)::int FROM updated
 """
 
 _FINISH = f"""
-UPDATE {TABLE}
-SET status = 'succeeded',
-    result_json = $2::jsonb,
-    updated_at = NOW(),
-    finished_at = NOW()
-WHERE job_id = $1
+WITH updated AS (
+    UPDATE {TABLE}
+    SET status = 'succeeded',
+        result_json = $2::jsonb,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = NOW(),
+        finished_at = NOW()
+    WHERE job_id = $1
+      AND lease_owner = $3
+    RETURNING 1
+)
+SELECT COUNT(*)::int FROM updated
 """
 
 _FAIL = f"""
-UPDATE {TABLE}
-SET status = 'failed',
-    errors = errors || $2::jsonb,
-    updated_at = NOW(),
-    finished_at = NOW()
-WHERE job_id = $1
+WITH updated AS (
+    UPDATE {TABLE}
+    SET status = 'failed',
+        errors = errors || $2::jsonb,
+        lease_owner = NULL,
+        lease_expires_at = NULL,
+        updated_at = NOW(),
+        finished_at = NOW()
+    WHERE job_id = $1
+      AND lease_owner = $3
+    RETURNING 1
+)
+SELECT COUNT(*)::int FROM updated
 """
 
 _GET = f"""
-SELECT job_id, workspace, source_type, status, request_json, total_items,
-       processed_items, failed_items, current_window, result_json, errors,
-       created_at, updated_at, started_at, finished_at
+SELECT {_ROW_COLUMNS}
 FROM {TABLE}
 WHERE job_id = $1
 """
 
 _LIST_RECOVERABLE = f"""
-SELECT job_id, workspace, source_type, status, request_json, total_items,
-       processed_items, failed_items, current_window, result_json, errors,
-       created_at, updated_at, started_at, finished_at
+SELECT {_ROW_COLUMNS}
 FROM {TABLE}
-WHERE status IN ('queued', 'running')
+WHERE (
+    status = 'queued'
+    OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
+)
   AND updated_at >= NOW() - ($1 * INTERVAL '1 second')
 ORDER BY updated_at ASC
 LIMIT $2
@@ -153,6 +199,16 @@ _SCHEMA_MIGRATIONS = (
         "Create ingest job state table",
         (_CREATE, *_CREATE_INDEXES),
     ),
+    Migration(
+        "0002_ingest_job_leases",
+        "Add ingest job recovery leases",
+        (
+            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS lease_owner TEXT",
+            f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ",
+            f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_lease "
+            f"ON {TABLE} (status, lease_expires_at)",
+        ),
+    ),
 )
 
 
@@ -198,11 +254,24 @@ class PGIngestJobStore:
 
         await self._run(_operation)
 
-    async def mark_running(self, job_id: str) -> None:
-        async def _operation(conn: Any) -> None:
-            await conn.execute(_MARK_RUNNING, job_id)
+    async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
 
-        await self._run(_operation)
+        async def _operation(conn: Any) -> Any:
+            return await conn.fetchrow(_CLAIM_RUNNING, job_id, lease_owner, lease_seconds)
+
+        return await self._run(_operation) is not None
+
+    async def heartbeat(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+
+        async def _operation(conn: Any) -> int:
+            updated = await conn.fetchval(_HEARTBEAT, job_id, lease_owner, lease_seconds)
+            return int(updated or 0)
+
+        return await self._run(_operation) > 0
 
     async def record_window(
         self,
@@ -213,9 +282,14 @@ class PGIngestJobStore:
         failed_delta: int,
         current_window: int,
         errors: list[str],
-    ) -> None:
-        async def _operation(conn: Any) -> None:
-            await conn.execute(
+        lease_owner: str,
+        lease_seconds: int,
+    ) -> bool:
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+
+        async def _operation(conn: Any) -> int:
+            updated = await conn.fetchval(
                 _RECORD_WINDOW,
                 job_id,
                 total_delta,
@@ -223,21 +297,26 @@ class PGIngestJobStore:
                 failed_delta,
                 current_window,
                 json.dumps(errors),
+                lease_owner,
+                lease_seconds,
             )
+            return int(updated or 0)
 
-        await self._run(_operation)
+        return await self._run(_operation) > 0
 
-    async def finish(self, job_id: str, *, result: dict[str, Any]) -> None:
-        async def _operation(conn: Any) -> None:
-            await conn.execute(_FINISH, job_id, json.dumps(result))
+    async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool:
+        async def _operation(conn: Any) -> int:
+            updated = await conn.fetchval(_FINISH, job_id, json.dumps(result), lease_owner)
+            return int(updated or 0)
 
-        await self._run(_operation)
+        return await self._run(_operation) > 0
 
-    async def fail(self, job_id: str, *, error: str) -> None:
-        async def _operation(conn: Any) -> None:
-            await conn.execute(_FAIL, job_id, json.dumps([error]))
+    async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool:
+        async def _operation(conn: Any) -> int:
+            updated = await conn.fetchval(_FAIL, job_id, json.dumps([error]), lease_owner)
+            return int(updated or 0)
 
-        await self._run(_operation)
+        return await self._run(_operation) > 0
 
     async def get(self, job_id: str) -> dict[str, Any] | None:
         async def _operation(conn: Any) -> Any:

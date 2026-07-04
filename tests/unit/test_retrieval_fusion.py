@@ -27,6 +27,12 @@ def test_rrf_fuse_preserves_best_row_payload() -> None:
     assert fused[0]["score"] > 0
 
 
+def test_rrf_fuse_skips_rows_without_chunk_id() -> None:
+    fused = rrf_fuse([[{"content": "missing id"}, {"chunk_id": "chunk-a"}]])
+
+    assert [row["chunk_id"] for row in fused] == ["chunk-a"]
+
+
 def test_dedup_removes_duplicate_prefixes() -> None:
     # Both "a" and "b" share the same first 200 characters
     shared = "The quick brown fox jumps. " + "x" * 173

@@ -958,6 +958,30 @@ def test_lightrag_parser_env_follows_dlightrag_parser_rules(
     assert os.environ["LIGHTRAG_PARSER"] == cfg.parser.rules
 
 
+def test_stalled_doc_timeout_allows_disable_but_rejects_too_small_values() -> None:
+    disabled = _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            startup_probe=False,
+        ),
+        stalled_doc_timeout_seconds=0,
+    )
+    assert disabled.stalled_doc_timeout_seconds == 0
+
+    with pytest.raises(ValidationError):
+        DlightragConfig(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                startup_probe=False,
+            ),
+            stalled_doc_timeout_seconds=1,
+        )
+
+
 def test_dotenv_rejects_unknown_dlightrag_keys(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

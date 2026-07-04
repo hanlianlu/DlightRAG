@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-from dlightrag.core.retrieval.fusion import dedup_chunks_by_content, rrf_fuse
+from dlightrag.core.retrieval.fusion import dedup_chunks_by_content, format_bm25_top, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import (
@@ -21,25 +21,6 @@ from dlightrag.core.retrieval.protocols import (
 from dlightrag.storage.protocols import MetadataIndexProtocol
 
 logger = logging.getLogger(__name__)
-
-
-def _format_bm25_top(chunks: list[ContextRow], *, limit: int = 3) -> str:
-    parts: list[str] = []
-    for chunk in chunks[:limit]:
-        chunk_id = str(chunk.get("chunk_id") or chunk.get("id") or "?")
-        profile = str(chunk.get("bm25_profile") or "?")
-        score = chunk.get("score")
-        if score is None:
-            score_text = "?"
-        else:
-            try:
-                score_text = f"{float(score):.3f}"
-            except (TypeError, ValueError):
-                score_text = "?"
-        parts.append(f"{chunk_id}:{profile}:{score_text}")
-    if len(chunks) > limit:
-        parts.append(f"+{len(chunks) - limit}")
-    return ",".join(parts) if parts else "none"
 
 
 def _chunk_ids(chunks: list[ContextRow]) -> set[str]:
@@ -185,7 +166,7 @@ class UnifiedRetriever:
             fused_source_counts["semantic_only"],
             fused_source_counts["bm25_only"],
             fused_source_counts["both"],
-            _format_bm25_top(bm25_chunks),
+            format_bm25_top(bm25_chunks),
         )
         lightrag_result.trace = trace
         return lightrag_result

@@ -40,6 +40,7 @@ class _Conn:
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple[Any, ...]]] = []
         self.fetches: list[tuple[str, tuple[Any, ...]]] = []
+        self.fetchrows: list[tuple[str, tuple[Any, ...]]] = []
         self.fetch_results: list[list[dict[str, Any]]] = []
         self.fetchvals: list[tuple[str, tuple[Any, ...]]] = []
         self.fetchval_results: list[int] = []
@@ -68,6 +69,8 @@ class _Conn:
                 "updated_at": None,
                 "started_at": None,
                 "finished_at": None,
+                "lease_owner": None,
+                "lease_expires_at": None,
             }
         elif "SET status = 'running'" in query and self.row is not None:
             self.row["status"] = "running"
@@ -82,6 +85,11 @@ class _Conn:
             self.row["result_json"] = args[1]
 
     async def fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
+        self.fetchrows.append((query, args))
+        if "SET status = 'running'" in query and self.row is not None:
+            self.row["status"] = "running"
+            self.row["lease_owner"] = args[1]
+            self.row["lease_expires_at"] = "future"
         return self.row
 
     async def fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
@@ -90,6 +98,28 @@ class _Conn:
 
     async def fetchval(self, query: str, *args: Any) -> int:
         self.fetchvals.append((query, args))
+        if "total_items = total_items + $2" in query and self.row is not None:
+            self.row["total_items"] += args[1]
+            self.row["processed_items"] += args[2]
+            self.row["failed_items"] += args[3]
+            self.row["current_window"] = args[4]
+            self.row["errors"] = json.dumps(json.loads(self.row["errors"]) + json.loads(args[5]))
+            return 1
+        if "SET status = 'succeeded'" in query and self.row is not None:
+            self.row["status"] = "succeeded"
+            self.row["result_json"] = args[1]
+            self.row["lease_owner"] = None
+            self.row["lease_expires_at"] = None
+            return 1
+        if "SET status = 'failed'" in query and self.row is not None:
+            self.row["status"] = "failed"
+            self.row["errors"] = json.dumps(json.loads(self.row["errors"]) + json.loads(args[1]))
+            self.row["lease_owner"] = None
+            self.row["lease_expires_at"] = None
+            return 1
+        if "SET lease_expires_at" in query and self.row is not None:
+            self.row["lease_expires_at"] = "future"
+            return 1
         return self.fetchval_results.pop(0) if self.fetchval_results else 0
 
     def transaction(self) -> _Tx:
@@ -107,7 +137,7 @@ async def test_ingest_job_store_records_window_progress_and_result() -> None:
         source_type="s3",
         request={"bucket": "b", "prefix": "docs/"},
     )
-    await store.mark_running("job-1")
+    await store.claim_running("job-1", lease_owner="owner-1", lease_seconds=300)
     await store.record_window(
         "job-1",
         total_delta=64,
@@ -115,8 +145,10 @@ async def test_ingest_job_store_records_window_progress_and_result() -> None:
         failed_delta=1,
         current_window=1,
         errors=["s3://b/docs/bad.pdf: failed"],
+        lease_owner="owner-1",
+        lease_seconds=300,
     )
-    await store.finish("job-1", result={"processed": 63})
+    await store.finish("job-1", result={"processed": 63}, lease_owner="owner-1")
 
     row = await store.get("job-1")
 
@@ -130,6 +162,72 @@ async def test_ingest_job_store_records_window_progress_and_result() -> None:
     assert row["request"] == {"bucket": "b", "prefix": "docs/"}
     assert row["result"] == {"processed": 63}
     assert row["errors"] == ["s3://b/docs/bad.pdf: failed"]
+
+
+async def test_ingest_job_store_claims_job_with_database_lease() -> None:
+    conn = _Conn()
+    conn.row = {
+        "job_id": "job-1",
+        "workspace": "default",
+        "source_type": "s3",
+        "status": "running",
+        "request_json": "{}",
+        "total_items": 0,
+        "processed_items": 0,
+        "failed_items": 0,
+        "current_window": 0,
+        "result_json": "{}",
+        "errors": "[]",
+        "created_at": None,
+        "updated_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "lease_owner": None,
+        "lease_expires_at": None,
+    }
+    store = PGIngestJobStore(pool=_Pool(conn))
+
+    claimed = await store.claim_running("job-1", lease_owner="owner-1", lease_seconds=300)
+
+    assert claimed is True
+    query, args = conn.fetchrows[0]
+    assert "UPDATE dlightrag_ingest_jobs" in query
+    assert "lease_owner = $2" in query
+    assert "lease_expires_at = NOW() + ($3 * INTERVAL '1 second')" in query
+    assert "RETURNING" in query
+    assert args == ("job-1", "owner-1", 300)
+
+
+async def test_ingest_job_store_renews_owned_lease() -> None:
+    conn = _Conn()
+    conn.row = {
+        "job_id": "job-1",
+        "workspace": "default",
+        "source_type": "s3",
+        "status": "running",
+        "request_json": "{}",
+        "total_items": 0,
+        "processed_items": 0,
+        "failed_items": 0,
+        "current_window": 0,
+        "result_json": "{}",
+        "errors": "[]",
+        "created_at": None,
+        "updated_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "lease_owner": "owner-1",
+        "lease_expires_at": "soon",
+    }
+    store = PGIngestJobStore(pool=_Pool(conn))
+
+    renewed = await store.heartbeat("job-1", lease_owner="owner-1", lease_seconds=300)
+
+    assert renewed is True
+    query, args = conn.fetchvals[0]
+    assert "SET lease_expires_at = NOW() + ($3 * INTERVAL '1 second')" in query
+    assert "lease_owner = $2" in query
+    assert args == ("job-1", "owner-1", 300)
 
 
 async def test_ingest_job_store_prunes_stale_jobs() -> None:
@@ -193,7 +291,8 @@ async def test_ingest_job_store_lists_recoverable_jobs() -> None:
     assert rows[0]["current_window"] == 2
     assert rows[0]["request"]["kwargs"] == {"bucket": "b", "prefix": "docs/"}
     query, args = conn.fetches[0]
-    assert "status IN ('queued', 'running')" in query
+    assert "status = 'queued'" in query
+    assert "lease_expires_at < NOW()" in query
     assert args == (3600, 25)
 
 
