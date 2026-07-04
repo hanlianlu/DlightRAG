@@ -3,11 +3,11 @@
 
 ARG UV_VERSION=0.11.21
 
-FROM python:3.12-slim-bookworm AS uv-bin
+FROM python:3.14-slim-bookworm AS uv-bin
 ARG UV_VERSION
 RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.14-slim-bookworm AS builder
 
 WORKDIR /app
 COPY --from=uv-bin /usr/local/bin/uv /usr/local/bin/uvx /bin/
@@ -20,7 +20,7 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     UV_HTTP_TIMEOUT=300 uv sync --frozen --no-dev --no-install-project
 
-FROM python:3.12-slim-bookworm
+FROM python:3.14-slim-bookworm
 LABEL maintainer="HanlianLyu"
 
 WORKDIR /app
