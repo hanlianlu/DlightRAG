@@ -202,7 +202,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
       turn.contentDiv.appendChild(refList.cloneNode(true));
     }
     if (sourceData) {
-      (sourceData as HTMLElement).className = 'source-data visually-hidden';
+      (sourceData as HTMLElement).className = 'source-data hidden';
       sourceData.removeAttribute('id');
       turn.aiDiv.appendChild(sourceData);
     }

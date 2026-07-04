@@ -1,22 +1,36 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
+import type {WorkspaceRecord} from '../events/bus.ts';
 
-let popoverEl = null;
+type WorkspacePayload = {
+    workspace?: string;
+    id?: string;
+    display_name?: string;
+    displayName?: string;
+    embedding_model?: string;
+    embeddingModel?: string;
+    next_workspace?: string;
+    nextWorkspace?: string;
+    value?: WorkspacePayload;
+};
 
-export function getWorkspaceRecords() {
+type WorkspaceRecordInput = string | WorkspacePayload;
+
+let popoverEl: HTMLElement | null = null;
+
+export function getWorkspaceRecords(): readonly WorkspaceRecord[] {
     return workspaceStore.records;
 }
 
-function payload(event) {
-    if (!event.detail) return {};
-    return event.detail.value || event.detail;
+function payload(event: Event): WorkspacePayload {
+    const detail = (event as CustomEvent<WorkspacePayload>).detail;
+    return detail?.value || detail || {};
 }
 
-function normalizeRecord(record) {
+function normalizeRecord(record: WorkspaceRecordInput): WorkspaceRecord | null {
     if (typeof record === 'string') {
         return {workspace: record, displayName: record, embeddingModel: ''};
     }
@@ -29,19 +43,23 @@ function normalizeRecord(record) {
     };
 }
 
-function workspaceName(workspace) {
+function workspaceName(workspace: string): string {
     const match = workspaceStore.records.find((item) => item.workspace === workspace);
     return match ? match.displayName : workspace;
 }
 
-export function initWorkspaces() {
+function eventElement(event: Event): Element | null {
+    return event.target instanceof Element ? event.target : null;
+}
+
+export function initWorkspaces(): void {
     const selector = document.getElementById('workspace-selector');
     if (!selector) return;
 
     try {
-        const records = JSON.parse(selector.getAttribute('data-all') || '[]')
+        const records = (JSON.parse(selector.getAttribute('data-all') || '[]') as WorkspaceRecordInput[])
             .map(normalizeRecord)
-            .filter(Boolean);
+            .filter((record): record is WorkspaceRecord => record !== null);
         let active: string[] = [];
         try {
             active = JSON.parse(selector.getAttribute('data-active') || '[]');
@@ -56,23 +74,23 @@ export function initWorkspaces() {
     setupWorkspaceEvents();
 }
 
-export function toggleWorkspace(workspace) {
+export function toggleWorkspace(workspace: string): void {
     workspaceStore.toggle(workspace);
     renderWorkspaceSelector();
 }
 
-export function selectWorkspace(workspace) {
+export function selectWorkspace(workspace: string): void {
     if (!workspace) return;
     workspaceStore.select(workspace);
     renderWorkspaceSelector();
 }
 
-export function removeWorkspace(workspace, nextWorkspace) {
+export function removeWorkspace(workspace: string, nextWorkspace?: string): void {
     workspaceStore.remove(workspace, nextWorkspace || '');
     renderWorkspaceSelector();
 }
 
-function renderWorkspaceSelector() {
+function renderWorkspaceSelector(): void {
     const label = document.getElementById('workspace-label');
     const dot = document.getElementById('workspace-dot');
     if (!label || !dot) return;
@@ -94,7 +112,7 @@ function renderWorkspaceSelector() {
     }
 }
 
-function selectAllWorkspaces() {
+function selectAllWorkspaces(): void {
     if (workspaceStore.records.length === 0) return;
     workspaceStore.selectAll();
     renderWorkspaceSelector();
@@ -102,7 +120,7 @@ function selectAllWorkspaces() {
     openWorkspacePopover();
 }
 
-export function openWorkspacePopover() {
+export function openWorkspacePopover(): void {
     if (popoverEl) {
         closeWorkspacePopover();
         return;
@@ -112,12 +130,12 @@ export function openWorkspacePopover() {
     selector.classList.add('open');
 
     const popover = document.createElement('div');
-    popover.className = workspaceStyles.workspacePopover;
+    popover.className = 'ui-popover ui-popover--workspace';
     popover.setAttribute('role', 'listbox');
     popover.setAttribute('aria-label', 'Workspaces');
 
     const allItem = document.createElement('div');
-    allItem.className = `${workspaceStyles.workspacePopoverItem} ${workspaceStyles.workspacePopoverAll}`;
+    allItem.className = `ui-popover-item ${workspaceStyles.workspacePopoverAll}`;
     allItem.setAttribute('tabindex', '0');
     allItem.setAttribute('role', 'option');
     const allCheck = document.createElement('div');
@@ -142,7 +160,7 @@ export function openWorkspacePopover() {
 
     workspaceStore.records.slice().sort((a, b) => a.displayName.localeCompare(b.displayName)).forEach((record) => {
         const item = document.createElement('div');
-        item.className = workspaceStyles.workspacePopoverItem;
+        item.className = `ui-popover-item ${workspaceStyles.workspacePopoverItem}`;
         item.setAttribute('tabindex', '0');
         item.setAttribute('role', 'option');
         item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
@@ -195,12 +213,12 @@ export function openWorkspacePopover() {
     }, 0);
 }
 
-function createRow() {
+function createRow(): HTMLDivElement {
     const row = document.createElement('div');
-    row.className = workspaceStyles.workspacePopoverCreate;
+    row.className = 'ui-popover-create';
 
     const input = document.createElement('input');
-    input.className = workspaceStyles.workspacePopoverInput;
+    input.className = 'ui-popover-input';
     input.type = 'text';
     input.placeholder = 'New workspace...';
     input.addEventListener('click', (event) => event.stopPropagation());
@@ -213,7 +231,7 @@ function createRow() {
     row.appendChild(input);
 
     const button = document.createElement('button');
-    button.className = workspaceStyles.workspacePopoverCreateBtn;
+    button.className = 'ui-popover-create-btn';
     button.type = 'button';
     button.textContent = '+';
     button.addEventListener('click', (event) => {
@@ -224,7 +242,7 @@ function createRow() {
     return row;
 }
 
-export function createWorkspace(input) {
+export function createWorkspace(input: HTMLInputElement): void {
     const name = input.value.trim();
     if (!name) return;
     input.disabled = true;
@@ -237,7 +255,7 @@ export function createWorkspace(input) {
     });
 }
 
-function closeWorkspacePopover() {
+function closeWorkspacePopover(): void {
     if (popoverEl) {
         popoverEl.remove();
         popoverEl = null;
@@ -248,23 +266,23 @@ function closeWorkspacePopover() {
     document.removeEventListener('keydown', onEscapeKey);
 }
 
-function onOutsideClick(event) {
+function onOutsideClick(event: MouseEvent): void {
     const selector = document.getElementById('workspace-selector');
-    if (selector && !selector.contains(event.target)) closeWorkspacePopover();
+    if (selector && event.target instanceof Node && !selector.contains(event.target)) closeWorkspacePopover();
 }
 
-function onEscapeKey(event) {
+function onEscapeKey(event: KeyboardEvent): void {
     if (event.key === 'Escape') closeWorkspacePopover();
 }
 
-function showDeleteWorkspaceDialog(workspace) {
+function showDeleteWorkspaceDialog(workspace: string): void {
     const record = workspaceStore.records.find((item) => item.workspace === workspace);
     const displayName = record ? record.displayName : workspace;
-    const dialog = document.getElementById('delete-workspace-dialog');
+    const dialog = document.getElementById('delete-workspace-dialog') as HTMLDialogElement | null;
     const name = document.getElementById('delete-workspace-name');
-    const idInput = document.getElementById('delete-workspace-id');
-    const confirmInput = document.getElementById('delete-workspace-confirm-input');
-    const confirmBtn = document.getElementById('delete-workspace-confirm-btn');
+    const idInput = document.getElementById('delete-workspace-id') as HTMLInputElement | null;
+    const confirmInput = document.getElementById('delete-workspace-confirm-input') as HTMLInputElement | null;
+    const confirmBtn = document.getElementById('delete-workspace-confirm-btn') as HTMLButtonElement | null;
     if (!dialog || !name || !idInput || !confirmInput || !confirmBtn) return;
 
     name.textContent = displayName;
@@ -272,13 +290,13 @@ function showDeleteWorkspaceDialog(workspace) {
     confirmInput.value = '';
     confirmBtn.disabled = true;
     confirmInput.oninput = function() {
-        const value = this.value.trim();
+        const value = confirmInput.value.trim();
         confirmBtn.disabled = value !== displayName && value !== workspace;
     };
     dialog.showModal();
 }
 
-function syncDataAllAttribute() {
+function syncDataAllAttribute(): void {
     const selector = document.getElementById('workspace-selector');
     if (selector) {
         const data = workspaceStore.records.map(r => ({
@@ -290,12 +308,12 @@ function syncDataAllAttribute() {
     }
 }
 
-function setupWorkspaceEvents() {
+function setupWorkspaceEvents(): void {
     const selector = document.getElementById('workspace-selector');
     if (selector && !selector.dataset.bound) {
         selector.dataset.bound = 'true';
         selector.addEventListener('click', (event) => {
-            if (event.target.closest('.' + workspaceStyles.workspacePopover)) return;
+            if (eventElement(event)?.closest('.ui-popover')) return;
             openWorkspacePopover();
         });
         selector.addEventListener('keydown', (event) => {
@@ -306,8 +324,7 @@ function setupWorkspaceEvents() {
     }
 
     document.addEventListener('click', (event) => {
-        const target = event.target instanceof Element ? event.target : null;
-        const closeButton = target?.closest('[data-action="close-delete-workspace-dialog"]');
+        const closeButton = eventElement(event)?.closest('[data-action="close-delete-workspace-dialog"]');
         if (!closeButton) return;
         event.preventDefault();
         closeButton.closest('dialog')?.close();
@@ -332,9 +349,9 @@ function setupWorkspaceEvents() {
         const detail = payload(event);
         const workspace = detail.workspace;
         if (!workspace) return;
-        removeWorkspace(workspace, detail.next_workspace);
+        removeWorkspace(workspace, detail.next_workspace || detail.nextWorkspace);
         syncDataAllAttribute();
-        const dialog = document.getElementById('delete-workspace-dialog');
+        const dialog = document.getElementById('delete-workspace-dialog') as HTMLDialogElement | null;
         if (dialog && dialog.open) dialog.close();
         showToast(`Workspace ${workspace} deleted.`);
     });

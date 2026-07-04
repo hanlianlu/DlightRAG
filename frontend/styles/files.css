@@ -58,43 +58,6 @@
     transform: rotate(180deg);
 }
 
-/* Popover */
-.ingest-target-popover {
-    background: var(--color-bg-elevated);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-md);
-    box-shadow: 0 12px 34px rgb(0 0 0 / 46%);
-    display: flex;
-    flex-direction: column;
-    left: 0;
-    max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: var(--space-tight);
-    position: absolute;
-    top: calc(100% + var(--space-3xs));
-    width: clamp(200px, 20vw, 260px);
-    z-index: 1000;
-}
-
-.ingest-target-popover-item {
-    align-items: center;
-    border-radius: var(--radius-sm);
-    color: var(--color-text-secondary);
-    cursor: pointer;
-    display: flex;
-    font-size: var(--font-size-detail);
-    gap: var(--space-component);
-    padding: var(--space-tight) var(--space-component);
-    transition: background 0.1s;
-}
-
-.ingest-target-popover-item:hover,
-.ingest-target-popover-item:focus-visible {
-    background: var(--color-bg-hover);
-    outline: none;
-}
-
 /* Radio circle */
 .ingest-target-popover-radio {
     align-items: center;
@@ -118,57 +81,6 @@
     content: '';
     height: 50%;
     width: 50%;
-}
-
-/* Create row — same pattern as workspace popover */
-.ingest-target-popover-create {
-    align-items: center;
-    border-top: 1px solid var(--color-border-subtle);
-    display: flex;
-    gap: var(--space-tight);
-    margin-top: var(--space-tight);
-    padding: var(--space-tight) 0 0;
-}
-
-.ingest-target-popover-input {
-    background: var(--color-bg-subtle);
-    border: 1px solid var(--color-border-subtle);
-    border-radius: var(--radius-sm);
-    color: var(--color-text-primary);
-    flex: 1;
-    font-size: var(--font-size-detail);
-    min-width: 0;
-    outline: none;
-    padding: var(--space-tight) var(--space-tight);
-}
-
-.ingest-target-popover-input:focus {
-    border-color: rgb(210 182 97 / 38%);
-}
-
-.ingest-target-popover-input::placeholder {
-    color: var(--color-text-dim);
-}
-
-.ingest-target-popover-create-btn {
-    align-items: center;
-    background: rgb(87 74 36 / 28%);
-    border: 1px solid rgb(210 182 97 / 24%);
-    border-radius: var(--radius-sm);
-    color: var(--color-gold-100);
-    cursor: pointer;
-    display: flex;
-    flex-shrink: 0;
-    font-size: var(--font-size-body);
-    height: clamp(28px, 2.8vw, 34px);
-    justify-content: center;
-    transition: background 0.15s, border-color 0.15s;
-    width: clamp(28px, 2.8vw, 34px);
-}
-
-.ingest-target-popover-create-btn:hover {
-    background: rgb(87 74 36 / 42%);
-    border-color: rgb(210 182 97 / 40%);
 }
 
 /* === File Management === */
@@ -332,6 +244,13 @@
     font-size: var(--font-size-caption);
     color: var(--color-text-dim);
     margin-bottom: var(--space-component);
+}
+
+.upload-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-tight);
+    justify-content: center;
 }
 
 .upload-zone:hover {

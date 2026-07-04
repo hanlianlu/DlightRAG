@@ -1,4 +1,3 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import chatStyles from '../styles/chat.module.css';
@@ -10,7 +9,28 @@ import {createWorkspace} from './workspaces.ts';
 
 const AI_MESSAGE_SELECTOR = '.' + chatStyles.aiMessage;
 
-let ingestPopoverEl = null;
+type WorkspaceEventDetail = {
+    workspace?: string;
+    display_name?: string;
+    displayName?: string;
+    next_workspace?: string;
+    nextWorkspace?: string;
+    value?: WorkspaceEventDetail;
+};
+
+type IngestWorkspaceInput = string | {
+    workspace?: string;
+    id?: string;
+    display_name?: string;
+    displayName?: string;
+};
+
+interface IngestWorkspaceRecord {
+    workspace: string;
+    display_name: string;
+}
+
+let ingestPopoverEl: HTMLElement | null = null;
 
 export {showToast};
 
@@ -22,24 +42,37 @@ const PANEL_DISMISS_EXEMPT_SELECTOR = [
     '[data-action="open-ref-source"]',
 ].join(', ');
 
-function closestElement(target, selector) {
-    return target && target.closest ? target.closest(selector) : null;
+function closestElement<T extends Element = Element>(target: EventTarget | null, selector: string): T | null {
+    if (!(target instanceof Element)) return null;
+    return target.closest(selector) as T | null;
 }
 
-function shouldDismissPanelOnOutsideClick(target) {
+function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {
     const panel = document.getElementById('panel');
     if (!panel || !panel.classList.contains('open')) return false;
     if (document.body.hasAttribute('data-resizing')) return false;
     return !closestElement(target, PANEL_DISMISS_EXEMPT_SELECTOR);
 }
 
-export function openPanel(title) {
-    document.getElementById('panel').classList.add('open');
+function workspaceEventDetail(event: Event): WorkspaceEventDetail {
+    const detail = (event as CustomEvent<WorkspaceEventDetail>).detail;
+    return detail?.value || detail || {};
+}
+
+function htmxEvent(event: Event): HTMXEvent {
+    return event as HTMXEvent;
+}
+
+export function openPanel(title?: string): void {
+    const panel = document.getElementById('panel');
+    if (!panel) return;
+    panel.classList.add('open');
     document.body.classList.add('panel-open');
     if (!title) return;
 
     const titleEl = document.getElementById('panel-title');
     const ingestTarget = document.getElementById('ingest-target');
+    if (!titleEl) return;
     if (title === 'FILES') {
         ingestStore.resetToPrimary();
         titleEl.textContent = 'FILES';
@@ -50,16 +83,16 @@ export function openPanel(title) {
     }
 }
 
-function showEmptyPanelPlaceholder() {
+function showEmptyPanelPlaceholder(): void {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent || panelContent.children.length > 0) return;
     const placeholder = document.createElement('div');
-    placeholder.style.cssText = 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:var(--space-section) var(--space-component);color:var(--color-text-tertiary);font-size:var(--step--1);text-align:center;gap:var(--space-tight);min-height:120px;';
+    placeholder.className = 'empty-state';
     placeholder.textContent = 'No files yet. Drop files or folders here to ingest.';
     panelContent.appendChild(placeholder);
 }
 
-export function applyPanelHtml(html) {
+export function applyPanelHtml(html: string): void {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
     panelContent.innerHTML = html;
@@ -70,15 +103,15 @@ export function applyPanelHtml(html) {
     showEmptyPanelPlaceholder();
 }
 
-function applyProgressBars(root) {
+function applyProgressBars(root: Element | null | undefined): void {
     if (!root) return;
-    const bars = [];
+    const bars: Element[] = [];
     if (root.id === 'ingest-progress') bars.push(root);
     root.querySelectorAll('#ingest-progress').forEach(function(bar) {
         bars.push(bar);
     });
     bars.forEach(function(bar) {
-        const fill = bar.querySelector('.progress-bar-fill');
+        const fill = bar.querySelector<HTMLElement>('.progress-bar-fill');
         if (!fill) return;
         const pct = fill.getAttribute('data-pct');
         if (pct !== null) {
@@ -87,7 +120,7 @@ function applyProgressBars(root) {
     });
 }
 
-function renderIngestPill() {
+function renderIngestPill(): void {
     const container = document.getElementById('ingest-target');
     if (!container) return;
     container.innerHTML = '';
@@ -126,11 +159,11 @@ function renderIngestPill() {
     container.appendChild(pill);
 }
 
-function getIngestWorkspaceRecords() {
+function getIngestWorkspaceRecords(): IngestWorkspaceRecord[] {
     const selector = document.getElementById('workspace-selector');
     if (!selector) return [];
     try {
-        const raw = JSON.parse(selector.getAttribute('data-all') || '[]');
+        const raw = JSON.parse(selector.getAttribute('data-all') || '[]') as IngestWorkspaceInput[];
         return raw.map(function (record) {
             if (typeof record === 'string') {
                 return {workspace: record, display_name: record};
@@ -139,15 +172,15 @@ function getIngestWorkspaceRecords() {
             if (!workspace) return null;
             return {
                 workspace: workspace,
-                display_name: record.display_name || workspace,
+                display_name: record.display_name || record.displayName || workspace,
             };
-        }).filter(Boolean);
+        }).filter((record): record is IngestWorkspaceRecord => record !== null);
     } catch (_) {
         return [];
     }
 }
 
-function toggleIngestPopover(container) {
+function toggleIngestPopover(container: HTMLElement): void {
     if (ingestPopoverEl) {
         closeIngestPopover();
         return;
@@ -157,7 +190,7 @@ function toggleIngestPopover(container) {
     if (pill) pill.setAttribute('aria-expanded', 'true');
 
     const popover = document.createElement('div');
-    popover.className = 'ingest-target-popover';
+    popover.className = 'ui-popover ui-popover--ingest';
     popover.setAttribute('role', 'listbox');
     popover.setAttribute('aria-label', 'Select ingest workspace');
 
@@ -166,7 +199,7 @@ function toggleIngestPopover(container) {
 
     records.slice().sort((a, b) => a.display_name.localeCompare(b.display_name)).forEach((record) => {
         const item = document.createElement('div');
-        item.className = 'ingest-target-popover-item';
+        item.className = 'ui-popover-item';
         item.setAttribute('role', 'option');
         item.setAttribute('tabindex', '0');
         item.setAttribute('aria-selected', record.workspace === current ? 'true' : 'false');
@@ -194,10 +227,10 @@ function toggleIngestPopover(container) {
 
     // Create row
     const createRow = document.createElement('div');
-    createRow.className = 'ingest-target-popover-create';
+    createRow.className = 'ui-popover-create';
 
     const input = document.createElement('input');
-    input.className = 'ingest-target-popover-input';
+    input.className = 'ui-popover-input';
     input.type = 'text';
     input.placeholder = 'New workspace...';
     input.addEventListener('click', (e) => e.stopPropagation());
@@ -210,7 +243,7 @@ function toggleIngestPopover(container) {
     createRow.appendChild(input);
 
     const btn = document.createElement('button');
-    btn.className = 'ingest-target-popover-create-btn';
+    btn.className = 'ui-popover-create-btn';
     btn.type = 'button';
     btn.textContent = '+';
     btn.addEventListener('click', (e) => {
@@ -229,7 +262,7 @@ function toggleIngestPopover(container) {
     }, 0);
 }
 
-function selectIngestWorkspace(workspace) {
+function selectIngestWorkspace(workspace: string): void {
     ingestStore.set(workspace);
     updateIngestPillLabel();
     closeIngestPopover();
@@ -242,12 +275,12 @@ function selectIngestWorkspace(workspace) {
     });
 }
 
-function updateIngestPillLabel() {
+function updateIngestPillLabel(): void {
     const nameEl = document.querySelector('.ingest-target-name');
     if (nameEl) nameEl.textContent = ingestStore.workspace;
 }
 
-function closeIngestPopover() {
+function closeIngestPopover(): void {
     if (ingestPopoverEl) {
         ingestPopoverEl.remove();
         ingestPopoverEl = null;
@@ -262,22 +295,23 @@ function closeIngestPopover() {
     document.removeEventListener('keydown', onIngestPopoverEscape);
 }
 
-function onIngestPopoverOutside(e) {
+function onIngestPopoverOutside(e: MouseEvent): void {
     const container = document.getElementById('ingest-target');
-    if (container && !container.contains(e.target)) closeIngestPopover();
+    if (container && e.target instanceof Node && !container.contains(e.target)) closeIngestPopover();
 }
 
-function onIngestPopoverEscape(e) {
+function onIngestPopoverEscape(e: KeyboardEvent): void {
     if (e.key === 'Escape') closeIngestPopover();
 }
 
-export function closePanel() {
+export function closePanel(): void {
     closeIngestPopover();
-    document.getElementById('panel').classList.remove('open');
+    const panel = document.getElementById('panel');
+    if (panel) panel.classList.remove('open');
     document.body.classList.remove('panel-open');
 }
 
-function openRefSource(refItem) {
+function openRefSource(refItem: HTMLElement): void {
     const ref = refItem.dataset.ref;
     const answerEl = refItem.closest(AI_MESSAGE_SELECTOR);
     if (!answerEl) return;
@@ -288,11 +322,12 @@ function openRefSource(refItem) {
 
     panelContent.replaceChildren();
     const clone = sourceData.cloneNode(true);
-    clone.classList.remove('visually-hidden');
+    if (!(clone instanceof HTMLElement)) return;
+    clone.classList.remove('hidden');
     while (clone.firstChild) panelContent.appendChild(clone.firstChild);
 
-    panelContent.querySelectorAll('.source-doc').forEach(function(doc) {
-        const chunksContainer = doc.querySelector('.source-doc-chunks');
+    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
+        const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
         if (doc.dataset.ref === ref) {
             doc.classList.add('expanded');
             if (chunksContainer) chunksContainer.hidden = false;
@@ -302,13 +337,13 @@ function openRefSource(refItem) {
         }
     });
 
-    const showAllBtn = panelContent.querySelector('.show-all-btn');
+    const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = false;
     renderExpandedSourceMath(panelContent);
     openPanel('SOURCES');
 }
 
-export function filterSource(badge) {
+export function filterSource(badge: HTMLElement): void {
     const ref = badge.dataset.ref;
     const chunk = badge.dataset.chunk;
     const panelContent = document.getElementById('panel-content');
@@ -319,16 +354,17 @@ export function filterSource(badge) {
 
     panelContent.replaceChildren();
     const clone = sourceData.cloneNode(true);
-    clone.classList.remove('visually-hidden');
+    if (!(clone instanceof HTMLElement)) return;
+    clone.classList.remove('hidden');
     while (clone.firstChild) panelContent.appendChild(clone.firstChild);
 
-    panelContent.querySelectorAll('.source-doc').forEach(function(doc) {
-        const chunksContainer = doc.querySelector('.source-doc-chunks');
+    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
+        const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
         if (doc.dataset.ref === ref) {
             doc.classList.add('expanded');
             if (chunksContainer) chunksContainer.hidden = false;
             if (chunk) {
-                doc.querySelectorAll('.source-chunk').forEach(function(c) {
+                doc.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
                     const active = c.dataset.chunk === chunk;
                     c.hidden = !active;
                     c.classList.toggle('active', active);
@@ -340,37 +376,38 @@ export function filterSource(badge) {
         }
     });
 
-    const showAllBtn = panelContent.querySelector('.show-all-btn');
+    const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = false;
     renderExpandedSourceMath(panelContent);
     openPanel('SOURCES');
 }
 
-function renderExpandedSourceMath(root) {
+function renderExpandedSourceMath(root: Element): void {
     if (!root) return;
     root.querySelectorAll('.source-doc.expanded .source-doc-chunks').forEach(function(container) {
         renderMath(container);
     });
 }
 
-function toggleDoc(header) {
-    const doc = header.closest('.source-doc');
+function toggleDoc(header: Element): void {
+    const doc = header.closest<HTMLElement>('.source-doc');
     if (!doc) return;
     const panelContent = doc.closest('#panel-content') || doc.parentElement;
+    if (!panelContent) return;
     panelContent.querySelectorAll('.source-doc').forEach(function(d) {
         if (d !== doc) {
             d.classList.remove('expanded');
-            const chunks = d.querySelector('.source-doc-chunks');
+            const chunks = d.querySelector<HTMLElement>('.source-doc-chunks');
             if (chunks) chunks.hidden = true;
         }
     });
     const wasOpen = doc.classList.contains('expanded');
     doc.classList.toggle('expanded', !wasOpen);
-    const chunksContainer = doc.querySelector('.source-doc-chunks');
+    const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
     if (chunksContainer) {
         chunksContainer.hidden = wasOpen;
         if (!wasOpen) {
-            chunksContainer.querySelectorAll('.source-chunk').forEach(function(c) {
+            chunksContainer.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
                 c.hidden = false;
                 c.classList.remove('active');
             });
@@ -379,36 +416,37 @@ function toggleDoc(header) {
     }
 }
 
-function showAllSources() {
+function showAllSources(): void {
     const panelContent = document.getElementById('panel-content');
-    panelContent.querySelectorAll('.source-doc').forEach(function(doc) {
+    if (!panelContent) return;
+    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
         doc.classList.add('expanded');
-        const chunks = doc.querySelector('.source-doc-chunks');
+        const chunks = doc.querySelector<HTMLElement>('.source-doc-chunks');
         if (chunks) {
             chunks.hidden = false;
-            chunks.querySelectorAll('.source-chunk').forEach(function(c) {
+            chunks.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
                 c.hidden = false;
                 c.classList.remove('active');
             });
         }
     });
-    const showAllBtn = panelContent.querySelector('.show-all-btn');
+    const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = true;
     renderExpandedSourceMath(panelContent);
 }
 
-export function setupPanel() {
+export function setupPanel(): void {
     const closeBtn = document.getElementById('panel-close-btn');
     if (closeBtn) closeBtn.addEventListener('click', closePanel);
 
     document.addEventListener('click', function(e) {
-        const badge = closestElement(e.target, '[data-action="filter-source"]');
+        const badge = closestElement<HTMLElement>(e.target, '[data-action="filter-source"]');
         if (badge) {
             e.preventDefault();
             filterSource(badge);
             return;
         }
-        const refItem = closestElement(e.target, '[data-action="open-ref-source"]');
+        const refItem = closestElement<HTMLElement>(e.target, '[data-action="open-ref-source"]');
         if (refItem) {
             e.preventDefault();
             openRefSource(refItem);
@@ -420,7 +458,7 @@ export function setupPanel() {
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closePanel();
         if (e.key !== 'Enter' && e.key !== ' ') return;
-        const badge = e.target.closest('[data-action="filter-source"]');
+        const badge = closestElement<HTMLElement>(e.target, '[data-action="filter-source"]');
         if (badge) {
             e.preventDefault();
             filterSource(badge);
@@ -429,48 +467,50 @@ export function setupPanel() {
 
     // Apply progress-bar width from data-pct and render math in swapped content.
     document.body.addEventListener('htmx:afterSettle', function(ev) {
-        applyProgressBars(ev.detail.target);
+        const target = htmxEvent(ev).detail.target;
+        applyProgressBars(target);
         // Auto-render math in any HTMX-swapped content.
-        if (ev.detail.target) renderMath(ev.detail.target);
+        if (target) renderMath(target);
         showEmptyPanelPlaceholder();
     });
 
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
     panelContent.addEventListener('click', function(e) {
-        const toggleButton = e.target.closest('[data-action="toggle-doc"]');
+        const toggleButton = closestElement<HTMLElement>(e.target, '[data-action="toggle-doc"]');
         if (toggleButton) {
             toggleDoc(toggleButton);
             return;
         }
-        if (e.target.closest('[data-action="show-all-sources"]')) {
+        if (closestElement(e.target, '[data-action="show-all-sources"]')) {
             showAllSources();
             return;
         }
-        const uploadZone = e.target.closest('#upload-zone');
+        const uploadZone = closestElement(e.target, '#upload-zone');
         if (uploadZone) {
-            const uploadFileBtn = e.target.closest('[data-action="upload-file"]');
+            const uploadFileBtn = closestElement(e.target, '[data-action="upload-file"]');
             if (uploadFileBtn) {
-                const fileInput = document.getElementById('file-input');
+                const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
                 if (fileInput) fileInput.click();
                 return;
             }
             // Clicking the zone itself (not a button) opens file picker
-            const fi = document.getElementById('file-input');
-            if (fi && !e.target.closest('[data-action]')) fi.click();
+            const fi = document.getElementById('file-input') as HTMLInputElement | null;
+            if (fi && !closestElement(e.target, '[data-action]')) fi.click();
             return;
         }
     });
     panelContent.addEventListener('change', function(e) {
-        if (e.target.id === 'file-input') {
+        const target = e.target instanceof Element ? e.target : null;
+        if (target?.id === 'file-input') {
             htmx.trigger(document.getElementById('upload-form'), 'submit');
         }
     });
 
     // Sync ingest pill when workspace is created from either popover
     document.body.addEventListener('workspaceCreated', (event) => {
-        const detail = event.detail && (event.detail.value || event.detail);
-        const workspace = detail && detail.workspace;
+        const detail = workspaceEventDetail(event);
+        const workspace = detail.workspace;
         if (!workspace) return;
         ingestStore.set(workspace);
         updateIngestPillLabel();
@@ -483,9 +523,8 @@ export function setupPanel() {
     });
 
     document.body.addEventListener('workspaceDeleted', (event) => {
-        const detail = event.detail && (event.detail.value || event.detail);
-        if (!detail) return;
-        ingestStore.set(detail.next_workspace || workspaceStore.primary);
+        const detail = workspaceEventDetail(event);
+        ingestStore.set(detail.next_workspace || detail.nextWorkspace || workspaceStore.primary);
         updateIngestPillLabel();
     });
 }

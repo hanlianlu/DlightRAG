@@ -1,17 +1,58 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {applyPanelHtml} from './panel.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {showToast} from './toast.ts';
 
-async function traverseDirectory(entry, basePath) {
-    const files = [];
+type RelativeFile = File & {
+    _relativePath?: string;
+    webkitRelativePath?: string;
+};
+
+interface WebkitFileSystemFileEntry {
+    isFile: true;
+    isDirectory: false;
+    name: string;
+    file(callback: (file: File) => void): void;
+}
+
+interface WebkitFileSystemDirectoryEntry {
+    isFile: false;
+    isDirectory: true;
+    name: string;
+    createReader(): {
+        readEntries(callback: (entries: WebkitFileSystemEntry[]) => void): void;
+    };
+}
+
+type WebkitFileSystemEntry = WebkitFileSystemFileEntry | WebkitFileSystemDirectoryEntry;
+
+type DragItemWithHandles = DataTransferItem & {
+    getAsFileSystemHandle?: () => Promise<FileSystemFileHandle | FileSystemDirectoryHandle | null>;
+    webkitGetAsEntry?: () => WebkitFileSystemEntry | null;
+};
+
+interface DropDetectionResult {
+    files: RelativeFile[];
+    folderName: string | null;
+}
+
+function withRelativePath(file: File, path: string): RelativeFile {
+    const relativeFile = file as RelativeFile;
+    relativeFile._relativePath = path;
+    return relativeFile;
+}
+
+function eventElement(event: Event): Element | null {
+    return event.target instanceof Element ? event.target : null;
+}
+
+async function traverseDirectory(entry: WebkitFileSystemEntry, basePath: string): Promise<RelativeFile[]> {
+    const files: RelativeFile[] = [];
     if (entry.isFile) {
         return new Promise(function (resolve) {
             entry.file(function (file) {
-                file._relativePath = basePath ? basePath + '/' + file.name : file.name;
-                files.push(file);
+                files.push(withRelativePath(file, basePath ? basePath + '/' + file.name : file.name));
                 resolve(files);
             });
         });
@@ -27,10 +68,10 @@ async function traverseDirectory(entry, basePath) {
     return files;
 }
 
-function readAllEntries(dirEntry) {
+function readAllEntries(dirEntry: WebkitFileSystemDirectoryEntry): Promise<WebkitFileSystemEntry[]> {
     return new Promise(function (resolve) {
         const reader = dirEntry.createReader();
-        const all = [];
+        const all: WebkitFileSystemEntry[] = [];
         function readBatch() {
             reader.readEntries(function (entries) {
                 if (entries.length === 0) {
@@ -45,16 +86,18 @@ function readAllEntries(dirEntry) {
     });
 }
 
-async function traverseFileSystemDirectory(handle, basePath) {
-    const files = [];
+async function traverseFileSystemDirectory(
+    handle: FileSystemDirectoryHandle,
+    basePath: string,
+): Promise<RelativeFile[]> {
+    const files: RelativeFile[] = [];
     for await (const entry of handle.entries()) {
         const name = entry[0];
         const child = entry[1];
         const childPath = basePath + '/' + name;
         if (child.kind === 'file') {
             const file = await child.getFile();
-            file._relativePath = childPath;
-            files.push(file);
+            files.push(withRelativePath(file, childPath));
         } else if (child.kind === 'directory') {
             const childFiles = await traverseFileSystemDirectory(child, childPath);
             files.push.apply(files, childFiles);
@@ -66,21 +109,24 @@ async function traverseFileSystemDirectory(handle, basePath) {
 /**
  * Detect if drop contains folders using progressive enhancement.
  * imageHandler(file) is called for image files that should go to composer thumbnails.
- * Returns {files: File[], folderName: string|null}
+ * Returns {files: File[], folderName: string | null}
  */
-export async function detectDropItems(items, imageHandler) {
-    const allFiles = [];
-    let folderName = null;
+export async function detectDropItems(
+    items: DataTransferItemList,
+    imageHandler?: (file: File) => void,
+): Promise<DropDetectionResult> {
+    const allFiles: RelativeFile[] = [];
+    let folderName: string | null = null;
 
     const supportsFileSystemHandle = 'getAsFileSystemHandle' in DataTransferItem.prototype;
     const supportsWebkitGetAsEntry = 'webkitGetAsEntry' in DataTransferItem.prototype;
 
     for (let i = 0; i < items.length; i++) {
-        const item = items[i];
+        const item = items[i] as DragItemWithHandles;
         if (item.kind !== 'file') continue;
 
         // Tier 1: File System Access API
-        if (supportsFileSystemHandle) {
+        if (supportsFileSystemHandle && item.getAsFileSystemHandle) {
             try {
                 const handle = await item.getAsFileSystemHandle();
                 if (handle && handle.kind === 'directory') {
@@ -96,8 +142,7 @@ export async function detectDropItems(items, imageHandler) {
                     continue;
                 }
                 if (handle && handle.kind === 'file') {
-                    const f = await handle.getFile();
-                    f._relativePath = f.name;
+                    const f = withRelativePath(await handle.getFile(), handle.name);
                     if (f.type.startsWith('image/') && imageHandler) {
                         imageHandler(f);
                     } else {
@@ -109,8 +154,8 @@ export async function detectDropItems(items, imageHandler) {
         }
 
         // Tier 2: webkitGetAsEntry
-        if (supportsWebkitGetAsEntry) {
-            const entry = item.webkitGetAsEntry();
+        if (supportsWebkitGetAsEntry && item.webkitGetAsEntry) {
+            const entry = item.webkitGetAsEntry() as WebkitFileSystemEntry | null;
             if (entry) {
                 if (entry.isDirectory) {
                     folderName = folderName || entry.name;
@@ -125,10 +170,9 @@ export async function detectDropItems(items, imageHandler) {
                     continue;
                 }
                 if (entry.isFile) {
-                    const f2 = await new Promise(function (resolve) {
+                    const f2 = await new Promise<RelativeFile>(function (resolve) {
                         entry.file(function (file) {
-                            file._relativePath = file.name;
-                            resolve(file);
+                            resolve(withRelativePath(file, file.name));
                         });
                     });
                     if (f2.type.startsWith('image/') && imageHandler) {
@@ -144,11 +188,11 @@ export async function detectDropItems(items, imageHandler) {
         // Tier 3: Plain file
         const file = item.getAsFile();
         if (file) {
-            file._relativePath = file.name;
+            const relativeFile = withRelativePath(file, file.name);
             if (file.type.startsWith('image/') && imageHandler) {
                 imageHandler(file);
             } else {
-                allFiles.push(file);
+                allFiles.push(relativeFile);
             }
         }
     }
@@ -159,7 +203,7 @@ export async function detectDropItems(items, imageHandler) {
 /**
  * Upload files to workspace, preserving directory structure.
  */
-export async function uploadFolderToWorkspace(files, folderName) {
+export async function uploadFolderToWorkspace(files: RelativeFile[], folderName: string | null): Promise<void> {
     if (files.length === 0) return;
 
     const formData = new FormData();
@@ -185,16 +229,17 @@ export async function uploadFolderToWorkspace(files, folderName) {
             const text = await resp.text();
             showToast('Upload failed: ' + (text || resp.statusText));
         }
-    } catch (err) {
-        showToast('Upload failed: ' + err.message);
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        showToast('Upload failed: ' + message);
     }
 }
 
 /**
  * Set up folder input (webkitdirectory) and Files panel button delegation.
  */
-export function setupFolderInput() {
-    const folderInput = document.getElementById('folder-input');
+export function setupFolderInput(): void {
+    const folderInput = document.getElementById('folder-input') as HTMLInputElement | null;
     if (!folderInput) return;
 
     folderInput.addEventListener('change', async function () {
@@ -202,15 +247,15 @@ export function setupFolderInput() {
         if (!fileList || fileList.length === 0) return;
         const rawFiles = Array.from(fileList);
 
-        let folderName = null;
+        let folderName: string | null = null;
         const augmented = rawFiles.map(function (f) {
             const path = f.webkitRelativePath || f.name;
-            f._relativePath = path;
+            const file = withRelativePath(f, path);
             if (!folderName && f.webkitRelativePath) {
                 const parts = f.webkitRelativePath.split('/');
                 folderName = parts[0];
             }
-            return f;
+            return file;
         });
 
         await uploadFolderToWorkspace(augmented, folderName);
@@ -219,7 +264,7 @@ export function setupFolderInput() {
 
     // Delegated click for "Upload Folder" button in Files panel
     document.addEventListener('click', function (e) {
-        const btn = e.target.closest('[data-action="upload-folder"]');
+        const btn = eventElement(e)?.closest('[data-action="upload-folder"]');
         if (btn) {
             folderInput.click();
         }

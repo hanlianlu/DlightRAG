@@ -11,9 +11,21 @@
 /* ── Universal reset ── */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
-/* ── Visually hidden (screen-reader / htmx-swap) ── */
-.visually-hidden {
+/* ── Visibility helpers ── */
+.hidden {
     display: none;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 /* ── Body defaults ── */
@@ -84,6 +96,138 @@ body {
 
 .text-error {
     color: var(--color-danger);
+}
+
+.file-error {
+    color: var(--color-danger);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    padding: var(--space-tight) 0;
+}
+
+.empty-state {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+    padding: var(--space-section) var(--space-component);
+    text-align: center;
+}
+
+.primary-btn {
+    align-items: center;
+    background: var(--color-gold-500);
+    border: 1px solid rgb(210 182 97 / 24%);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-100);
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    justify-content: center;
+    padding: var(--space-tight) var(--space-related);
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.primary-btn:hover {
+    background: var(--color-gold-400);
+    border-color: rgb(210 182 97 / 40%);
+    color: var(--color-text-primary);
+}
+
+/* === Shared popovers === */
+
+.ui-popover {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 34px rgb(0 0 0 / 46%);
+    display: flex;
+    flex-direction: column;
+    left: 0;
+    max-height: clamp(280px, 19.0476vi + 205.714px, 480px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-tight);
+    position: absolute;
+    top: calc(100% + var(--space-3xs));
+    z-index: 1000;
+}
+
+.ui-popover--workspace {
+    width: clamp(220px, 22vw, 280px);
+}
+
+.ui-popover--ingest {
+    width: clamp(200px, 20vw, 260px);
+}
+
+.ui-popover-item {
+    align-items: center;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    display: flex;
+    font-size: var(--font-size-detail);
+    gap: var(--space-component);
+    padding: var(--space-tight) var(--space-component);
+    transition: background 0.1s;
+}
+
+.ui-popover-item:hover,
+.ui-popover-item:focus-visible {
+    background: var(--color-bg-hover);
+    outline: none;
+}
+
+.ui-popover-create {
+    align-items: center;
+    border-top: 1px solid var(--color-border-subtle);
+    display: flex;
+    gap: var(--space-tight);
+    margin-top: var(--space-tight);
+    padding: var(--space-tight) 0 0;
+}
+
+.ui-popover-input {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    flex: 1;
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    outline: none;
+    padding: var(--space-tight);
+}
+
+.ui-popover-input:focus {
+    border-color: rgb(210 182 97 / 38%);
+}
+
+.ui-popover-input::placeholder {
+    color: var(--color-text-dim);
+}
+
+.ui-popover-create-btn {
+    align-items: center;
+    background: rgb(87 74 36 / 28%);
+    border: 1px solid rgb(210 182 97 / 24%);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-100);
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    font-size: var(--font-size-body);
+    height: var(--size-button);
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+    width: var(--size-button);
+}
+
+.ui-popover-create-btn:hover {
+    background: rgb(87 74 36 / 42%);
+    border-color: rgb(210 182 97 / 40%);
 }
 
 /* === Streaming Indicator === */
@@ -182,4 +326,3 @@ body.resizing.panel-open .topbar,
 body.resizing.panel-open .composer {
     transition: none;
 }
-

@@ -1,18 +1,17 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 const MATHJAX_SRC = 'https://cdn.jsdelivr.net/npm/mathjax@4.1.2/tex-mml-chtml.js';
 
 let loading = false;
 
-export function renderMath(container) {
+export function renderMath(container: Element): void {
     if (!window.MathJax || !window.MathJax.typesetPromise) return;
     window.MathJax.typesetPromise([container]).catch(function () {
         // MathJax may fail on genuinely malformed input; ignore.
     });
 }
 
-function configureMathJax() {
+function configureMathJax(): void {
     if (window.MathJax) return;
     window.MathJax = {
         tex: {
@@ -27,7 +26,7 @@ function configureMathJax() {
     };
 }
 
-function appendMathJaxScript() {
+function appendMathJaxScript(): void {
     if (loading || (window.MathJax && window.MathJax.typesetPromise)) return;
     loading = true;
     configureMathJax();
@@ -48,10 +47,7 @@ function appendMathJaxScript() {
     document.head.appendChild(script);
 }
 
-export function setupMathRendering() {
-    if ('requestIdleCallback' in window) {
-        window.requestIdleCallback(appendMathJaxScript, {timeout: 2000});
-    } else {
-        window.setTimeout(appendMathJaxScript, 0);
-    }
+export function setupMathRendering(): void {
+    const idle = window.requestIdleCallback ?? ((callback: () => void) => window.setTimeout(callback, 0));
+    idle(appendMathJaxScript, {timeout: 2000});
 }

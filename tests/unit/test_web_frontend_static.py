@@ -26,18 +26,16 @@ def _css_rule(path: Path, selector: str) -> str:
 def test_composer_enter_shortcut_respects_ime_composition() -> None:
     chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
-    assert "textarea.addEventListener('beforeinput'" in chat_js
+    assert ".addEventListener('beforeinput'" in chat_js
     assert "e.inputType === 'insertLineBreak'" in chat_js
     assert "e.isComposing === true" in chat_js
-    assert "submitComposerForm(form);" in chat_js
+    assert "submitComposerForm(queryForm);" in chat_js
     assert "let textareaIsComposing = false;" not in chat_js
     assert "compositionJustEnded" not in chat_js
 
-    keydown = chat_js.index("textarea.addEventListener('keydown'")
-    keydown_block = chat_js[
-        keydown : chat_js.index("textarea.addEventListener('beforeinput'", keydown)
-    ]
-    assert "submitComposerForm(form)" not in keydown_block
+    keydown = chat_js.index(".addEventListener('keydown'")
+    keydown_block = chat_js[keydown : chat_js.index(".addEventListener('beforeinput'", keydown)]
+    assert "submitComposerForm(" not in keydown_block
     assert "form.dispatchEvent(new Event('submit'))" not in keydown_block
 
 
@@ -148,8 +146,8 @@ def test_reference_labels_do_not_render_square_brackets() -> None:
 def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
     resize_js = (FRONTEND_UI / "resize.ts").read_text(encoding="utf-8")
 
-    assert "handle.setPointerCapture(e.pointerId)" in resize_js
-    assert "handle.releasePointerCapture(activePointerId)" in resize_js
+    assert ".setPointerCapture(event.pointerId)" in resize_js
+    assert ".releasePointerCapture(activePointerId)" in resize_js
     assert "'pointerId' in e" in resize_js
     assert "pointercancel" in resize_js
     assert "window.addEventListener('blur', finishDrag)" in resize_js
