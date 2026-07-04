@@ -44,6 +44,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-          python-version: '3.12'
+          python-version: '3.14'
       - run: uv sync --group dev
       - run: uv run pytest tests/e2e -v --tb=long -m e2e_pg18
