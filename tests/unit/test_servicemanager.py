@@ -18,6 +18,7 @@ from dlightrag.config import (
     EmbeddingConfig,
     LLMConfig,
     ModelConfig,
+    RerankConfig,
     set_config,
 )
 from dlightrag.core.client_contracts import IngestSpec
@@ -1315,6 +1316,7 @@ async def test_vision_probe_result_is_manager_scoped(
     monkeypatch: pytest.MonkeyPatch,
     test_cfg: DlightragConfig,
 ) -> None:
+    test_cfg = test_cfg.model_copy(update={"rerank": RerankConfig(strategy="chat_llm_reranker")})
     first = RAGServiceManager(config=test_cfg)
     first._supports_vision = False
     second = RAGServiceManager(config=test_cfg)
