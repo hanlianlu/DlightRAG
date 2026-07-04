@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str, Any]]) -> None:
+async def hydrate_lightrag_chunk_provenance(stores: Any, chunks: list[dict[str, Any]]) -> None:
     """Hydrate image bytes and page labels from LightRAG chunk/full_doc sidecars."""
     if not chunks:
         return
 
     chunk_ids = [c["chunk_id"] for c in chunks]
-    raw_chunks = await _fetch_raw_chunks(lightrag, chunk_ids)
+    raw_chunks = await _fetch_raw_chunks(stores, chunk_ids)
     full_doc_cache: dict[str, dict[str, Any] | None] = {}
     block_index_cache: dict[Path, dict[str, BlockProvenance]] = {}
 
@@ -47,7 +47,7 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
         _hydrate_bbox_direct(chunk, sidecar)
         if chunk.get("page_idx") is None:
             provenance = await _provenance_from_block_sidecar(
-                lightrag,
+                stores,
                 sidecar=sidecar,
                 chunk=chunk,
                 raw_chunk=raw_chunk,
@@ -63,7 +63,7 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
         await _hydrate_image_data(
             chunk,
             sidecar,
-            lightrag=lightrag,
+            stores=stores,
             raw_chunk=raw_chunk,
             full_doc_cache=full_doc_cache,
         )
@@ -73,14 +73,14 @@ async def hydrate_lightrag_chunk_provenance(lightrag: Any, chunks: list[dict[str
         if chunk.get("image_data") and _is_sidecar_asset_path(str(chunk.get("file_path", ""))):
             doc_id = chunk.get("full_doc_id")
             if doc_id:
-                full_doc = await _fetch_full_doc(lightrag, doc_id, full_doc_cache)
+                full_doc = await _fetch_full_doc(stores, doc_id, full_doc_cache)
                 if full_doc and full_doc.get("file_path"):
                     chunk["file_path"] = full_doc["file_path"]
 
 
-async def _fetch_raw_chunks(lightrag: Any, chunk_ids: list[str]) -> list[Any]:
+async def _fetch_raw_chunks(stores: Any, chunk_ids: list[str]) -> list[Any]:
     try:
-        return await lightrag.text_chunks.get_by_ids(chunk_ids)
+        return await stores.get_text_chunks(chunk_ids)
     except Exception:
         logger.debug("LightRAG text chunk hydration failed", exc_info=True)
         return [None for _ in chunk_ids]
@@ -116,7 +116,7 @@ def _hydrate_bbox_direct(chunk: dict[str, Any], sidecar: dict[str, Any]) -> None
 
 
 async def _provenance_from_block_sidecar(
-    lightrag: Any,
+    stores: Any,
     *,
     sidecar: dict[str, Any],
     chunk: dict[str, Any],
@@ -129,7 +129,7 @@ async def _provenance_from_block_sidecar(
         return None
 
     artifact_dir = await _artifact_dir_for_chunk(
-        lightrag,
+        stores,
         chunk=chunk,
         raw_chunk=raw_chunk,
         full_doc_cache=full_doc_cache,
@@ -144,7 +144,7 @@ async def _provenance_from_block_sidecar(
 
 
 async def _artifact_dir_for_chunk(
-    lightrag: Any,
+    stores: Any,
     *,
     chunk: dict[str, Any],
     raw_chunk: dict[str, Any],
@@ -158,7 +158,7 @@ async def _artifact_dir_for_chunk(
     if not isinstance(doc_id, str) or not doc_id:
         return None
 
-    full_doc = await _fetch_full_doc(lightrag, doc_id, full_doc_cache)
+    full_doc = await _fetch_full_doc(stores, doc_id, full_doc_cache)
     if not isinstance(full_doc, dict):
         return None
     location = full_doc.get("sidecar_location")
@@ -166,20 +166,15 @@ async def _artifact_dir_for_chunk(
 
 
 async def _fetch_full_doc(
-    lightrag: Any,
+    stores: Any,
     doc_id: str,
     cache: dict[str, dict[str, Any] | None],
 ) -> dict[str, Any] | None:
     if doc_id in cache:
         return cache[doc_id]
 
-    store = getattr(lightrag, "full_docs", None)
-    if store is None:
-        cache[doc_id] = None
-        return None
-
     try:
-        result = store.get_by_id(doc_id)
+        result = stores.get_full_doc(doc_id)
         if inspect.isawaitable(result):
             result = await result
     except Exception:
@@ -260,7 +255,7 @@ async def _hydrate_image_data(
     chunk: dict[str, Any],
     sidecar: dict[str, Any],
     *,
-    lightrag: Any,
+    stores: Any,
     raw_chunk: dict[str, Any],
     full_doc_cache: dict[str, dict[str, Any] | None],
 ) -> None:
@@ -275,7 +270,7 @@ async def _hydrate_image_data(
         drawing_id = sidecar.get("id")
         if isinstance(drawing_id, str):
             artifact_dir = await _artifact_dir_for_chunk(
-                lightrag,
+                stores,
                 chunk=chunk,
                 raw_chunk=raw_chunk,
                 full_doc_cache=full_doc_cache,

@@ -15,14 +15,11 @@ _PNG_B64 = (
 
 async def test_visual_asset_resolver_returns_full_asset() -> None:
     chunk = {"chunk_id": "chunk_1", "image_data": _PNG_B64, "image_mime_type": "image/png"}
-    rag = MagicMock(text_chunks=object())
-    resolver = VisualAssetResolver(lightrag=rag)
+    stores = MagicMock()
+    stores.context_chunks_by_ids = AsyncMock(return_value=[chunk])
+    resolver = VisualAssetResolver(stores=stores)
 
     with (
-        patch(
-            "dlightrag.core.visual_assets.fetch_chunks_by_ids",
-            new=AsyncMock(return_value=[chunk]),
-        ) as fetch,
         patch(
             "dlightrag.core.visual_assets.hydrate_lightrag_chunk_provenance",
             new=AsyncMock(),
@@ -34,20 +31,17 @@ async def test_visual_asset_resolver_returns_full_asset() -> None:
     assert asset.chunk_id == "chunk_1"
     assert asset.media_type == "image/png"
     assert asset.data == base64.b64decode(_PNG_B64)
-    fetch.assert_awaited_once()
+    stores.context_chunks_by_ids.assert_awaited_once_with(["chunk_1"])
     hydrate.assert_awaited_once()
 
 
 async def test_visual_asset_resolver_generates_and_caches_thumbnail() -> None:
     chunk = {"chunk_id": "chunk_1", "image_data": _PNG_B64, "image_mime_type": "image/png"}
-    rag = MagicMock(text_chunks=object())
-    resolver = VisualAssetResolver(lightrag=rag, thumb_cache=ThumbnailCache(max_size=2))
+    stores = MagicMock()
+    stores.context_chunks_by_ids = AsyncMock(return_value=[chunk])
+    resolver = VisualAssetResolver(stores=stores, thumb_cache=ThumbnailCache(max_size=2))
 
     with (
-        patch(
-            "dlightrag.core.visual_assets.fetch_chunks_by_ids",
-            new=AsyncMock(return_value=[chunk]),
-        ) as fetch,
         patch(
             "dlightrag.core.visual_assets.hydrate_lightrag_chunk_provenance",
             new=AsyncMock(),
@@ -59,18 +53,15 @@ async def test_visual_asset_resolver_generates_and_caches_thumbnail() -> None:
     assert first is not None
     assert second is first
     assert first.media_type == "image/png"
-    fetch.assert_awaited_once()
+    stores.context_chunks_by_ids.assert_awaited_once_with(["chunk_1"])
 
 
 async def test_visual_asset_resolver_returns_none_for_missing_image_data() -> None:
-    rag = MagicMock(text_chunks=object())
-    resolver = VisualAssetResolver(lightrag=rag)
+    stores = MagicMock()
+    stores.context_chunks_by_ids = AsyncMock(return_value=[{"chunk_id": "c1"}])
+    resolver = VisualAssetResolver(stores=stores)
 
     with (
-        patch(
-            "dlightrag.core.visual_assets.fetch_chunks_by_ids",
-            new=AsyncMock(return_value=[{"chunk_id": "c1"}]),
-        ),
         patch("dlightrag.core.visual_assets.hydrate_lightrag_chunk_provenance", new=AsyncMock()),
     ):
         assert await resolver.resolve("chunk_no_image") is None

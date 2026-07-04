@@ -10,7 +10,6 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
-from dlightrag.core.retrieval.filtered_vdb import fetch_chunks_by_ids
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
 from dlightrag.utils.images import detect_image_mime, thumbnail_bytes
 
@@ -49,24 +48,20 @@ class ThumbnailCache:
 class VisualAssetResolver:
     """Resolve images from LightRAG text chunk sidecar metadata."""
 
-    def __init__(self, *, lightrag: Any, thumb_cache: ThumbnailCache | None = None) -> None:
-        self._lightrag = lightrag
+    def __init__(self, *, stores: Any, thumb_cache: ThumbnailCache | None = None) -> None:
+        self._stores = stores
         self._thumb_cache = thumb_cache or ThumbnailCache()
 
     async def resolve(self, chunk_id: str) -> VisualAsset | None:
         """Resolve the full image payload for a chunk id."""
-        text_chunks = getattr(self._lightrag, "text_chunks", None)
-        if text_chunks is None:
-            logger.warning("VisualAssetResolver: text_chunks is None for chunk_id=%s", chunk_id)
-            return None
-
-        chunks = await fetch_chunks_by_ids(text_chunks, [chunk_id])
+        chunks = await self._stores.context_chunks_by_ids([chunk_id])
         if not chunks:
             logger.warning(
-                "VisualAssetResolver: no chunks from fetch_chunks_by_ids for chunk_id=%s", chunk_id
+                "VisualAssetResolver: no chunks from context_chunks_by_ids for chunk_id=%s",
+                chunk_id,
             )
             return None
-        await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
+        await hydrate_lightrag_chunk_provenance(self._stores, chunks)
         chunk = chunks[0]
         image_data = chunk.get("image_data")
         if not isinstance(image_data, str) or not image_data:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -136,6 +137,46 @@ async def test_chunk_ids_for_docs_reads_lightrag_text_chunks() -> None:
     assert db.fetch_args is not None
     assert db.fetch_args[1] == "ws"
     assert db.fetch_args[2] == ["doc-1", "doc-2"]
+
+
+async def test_context_chunks_by_ids_formats_text_chunks() -> None:
+    fake = FakeLightRAG()
+    fake.text_chunks = AsyncMock()
+    fake.text_chunks.get_by_ids.return_value = [
+        {"content": "alpha", "file_path": "/tmp/a.pdf", "full_doc_id": "doc-a"},
+        {"content": "beta", "file_path": "/tmp/b.pdf"},
+    ]
+    stores = LightRAGStores(fake)
+
+    result = await stores.context_chunks_by_ids(["c1", "c2"])
+
+    fake.text_chunks.get_by_ids.assert_awaited_once_with(["c1", "c2"])
+    assert result == [
+        {
+            "chunk_id": "c1",
+            "content": "alpha",
+            "reference_id": "",
+            "file_path": "/tmp/a.pdf",
+            "full_doc_id": "doc-a",
+        },
+        {"chunk_id": "c2", "content": "beta", "reference_id": "", "file_path": "/tmp/b.pdf"},
+    ]
+
+
+async def test_query_chunk_vectors_delegates_to_lightrag_vector_store() -> None:
+    fake = FakeLightRAG()
+    fake.chunks_vdb = AsyncMock()
+    fake.chunks_vdb.query.return_value = [{"id": "chunk-a"}]
+    stores = LightRAGStores(fake)
+
+    result = await stores.query_chunk_vectors(query_embedding=[0.1, 0.2], top_k=3)
+
+    fake.chunks_vdb.query.assert_awaited_once_with(
+        query="",
+        top_k=3,
+        query_embedding=[0.1, 0.2],
+    )
+    assert result == [{"id": "chunk-a"}]
 
 
 async def test_fetch_chunk_contents_reads_lightrag_doc_chunks() -> None:

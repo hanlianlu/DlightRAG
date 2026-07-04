@@ -210,7 +210,7 @@ class FilteredVectorStorage:
 
 
 async def fetch_missing_chunks(
-    text_chunks: Any,
+    stores: Any,
     seen_ids: set[str],
     max_count: int = 30,
 ) -> list[dict[str, Any]]:
@@ -234,38 +234,7 @@ async def fetch_missing_chunks(
         return []
 
     inject_ids = sorted(missing)[:max_count]
-    chunks = await fetch_chunks_by_ids(text_chunks, inject_ids)
+    chunks = await stores.context_chunks_by_ids(inject_ids)
     if chunks:
         logger.info("Force-injected %d metadata-resolved chunks", len(chunks))
-    return chunks
-
-
-async def fetch_chunks_by_ids(text_chunks: Any, chunk_ids: list[str]) -> list[dict[str, Any]]:
-    """Fetch explicit LightRAG text chunk ids and format them for retrieval contexts."""
-    if not chunk_ids:
-        return []
-    inject_ids = list(dict.fromkeys(chunk_ids))
-    raw_contents = await text_chunks.get_by_ids(inject_ids)
-
-    chunks: list[dict[str, Any]] = []
-    for cid, content_raw in zip(inject_ids, raw_contents, strict=False):
-        if content_raw is None:
-            continue
-        if isinstance(content_raw, str):
-            content = content_raw
-            file_path = ""
-            full_doc_id = None
-        else:
-            content = content_raw.get("content", "")
-            file_path = content_raw.get("file_path", "") or ""
-            full_doc_id = content_raw.get("full_doc_id")
-        chunk = {
-            "chunk_id": cid,
-            "content": content,
-            "reference_id": "",
-            "file_path": file_path,
-        }
-        if full_doc_id:
-            chunk["full_doc_id"] = str(full_doc_id)
-        chunks.append(chunk)
     return chunks

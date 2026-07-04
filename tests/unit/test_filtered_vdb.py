@@ -5,11 +5,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
-from dlightrag.core.retrieval.filtered_vdb import (
-    _active_filter,
-    fetch_chunks_by_ids,
-    metadata_filter_scope,
-)
+from dlightrag.core.retrieval.filtered_vdb import _active_filter, metadata_filter_scope
 
 
 class _FakeDB:
@@ -58,28 +54,6 @@ async def test_empty_candidate_set_is_active_filter() -> None:
 async def test_none_candidate_set_is_no_filter() -> None:
     async with metadata_filter_scope(None):
         assert _active_filter.get() is None
-
-
-async def test_fetch_chunks_by_ids_uses_explicit_ids_outside_filter_scope() -> None:
-    text_chunks = AsyncMock()
-    text_chunks.get_by_ids.return_value = [
-        {"content": "alpha", "file_path": "/tmp/a.pdf", "full_doc_id": "doc-a"},
-        {"content": "beta", "file_path": "/tmp/b.pdf"},
-    ]
-
-    result = await fetch_chunks_by_ids(text_chunks, ["c1", "c2"])
-
-    text_chunks.get_by_ids.assert_awaited_once_with(["c1", "c2"])
-    assert result == [
-        {
-            "chunk_id": "c1",
-            "content": "alpha",
-            "reference_id": "",
-            "file_path": "/tmp/a.pdf",
-            "full_doc_id": "doc-a",
-        },
-        {"chunk_id": "c2", "content": "beta", "reference_id": "", "file_path": "/tmp/b.pdf"},
-    ]
 
 
 async def test_large_candidate_pg_search_places_distance_filter_outside_cte() -> None:

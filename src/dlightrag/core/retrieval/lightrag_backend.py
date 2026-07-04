@@ -29,6 +29,7 @@ class LightRAGMixBackend:
         self,
         *,
         lightrag: Any,
+        stores: Any,
         embedder: Any | None = None,
         direct_visual_top_k: int = 20,
         max_entity_tokens: int = 6000,
@@ -36,6 +37,7 @@ class LightRAGMixBackend:
         max_total_tokens: int = 40000,
     ) -> None:
         self._lightrag = lightrag
+        self._stores = stores
         self._embedder = embedder
         self._direct_visual_top_k = max(0, int(direct_visual_top_k))
         self._max_entity_tokens = max_entity_tokens
@@ -78,7 +80,7 @@ class LightRAGMixBackend:
             "hydrated_chunk_count": 0,
         }
         seen_ids = {chunk["chunk_id"] for chunk in chunks}
-        injected = await fetch_missing_chunks(self._lightrag.text_chunks, seen_ids, limit)
+        injected = await fetch_missing_chunks(self._stores, seen_ids, limit)
         chunks.extend(injected)
         trace["metadata_injected_chunk_count"] = len(injected)
 
@@ -171,14 +173,7 @@ class LightRAGMixBackend:
                 image.close()
 
         async def _query_vector(vector: list[float]) -> list[ContextRow]:
-            return (
-                await self._lightrag.chunks_vdb.query(
-                    query="",
-                    top_k=top_k,
-                    query_embedding=vector,
-                )
-                or []
-            )
+            return await self._stores.query_chunk_vectors(query_embedding=vector, top_k=top_k)
 
         query_results = await bounded_map(
             list(vectors),
@@ -213,7 +208,7 @@ class LightRAGMixBackend:
         ]
 
     async def _hydrate_chunk_provenance(self, chunks: list[ContextRow]) -> None:
-        await hydrate_lightrag_chunk_provenance(self._lightrag, chunks)
+        await hydrate_lightrag_chunk_provenance(self._stores, chunks)
 
 
 def _extract_images(multimodal_content: list[dict[str, Any]] | None) -> list[Image.Image]:
