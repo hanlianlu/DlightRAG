@@ -136,11 +136,17 @@ because RAGAS requires an OpenAI-compatible API.
 
 All auto-resolved values can be overridden:
 
+```bash
+export EVAL_LLM_MODEL=gpt-4o
+export EVAL_LLM_BINDING_API_KEY="..."
+uv run python scripts/ragas_eval.py --api https://dlightrag.example.com --api-key "..." --dataset my_tests.json
+```
+
 ### Concurrency and Tuning
 
 ```bash
-# How many test cases retrieve in parallel (DlightRAG calls)
-# Default 10. Set higher if your DlightRAG can handle it.
+# Retrieval breadth sent to DlightRAG /answer as top_k.
+# chunk_top_k is derived as EVAL_QUERY_TOP_K * 3.
 export EVAL_QUERY_TOP_K=10
 
 # How many RAGAS evaluations run in parallel (RAGAS is LLM-heavy)
