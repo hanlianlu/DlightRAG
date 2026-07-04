@@ -11,14 +11,6 @@ Storage attributes (copied from the LightRAG instance):
     ``text_chunks``      — PGKVStorage instance
     ``full_docs``        — PGKVStorage instance
     ``doc_status``       — PGDocStatusStorage instance
-    ``entities_vdb``     — PGVectorStorage instance
-    ``relationships_vdb`` — PGVectorStorage instance
-    ``chunk_entity_relation_graph`` — PGGraphStorage instance
-    ``full_entities``    — PGKVStorage instance
-    ``full_relations``   — PGKVStorage instance
-    ``entity_chunks``    — PGKVStorage instance
-    ``relation_chunks``  — PGKVStorage instance
-    ``llm_response_cache`` — PGKVStorage instance
 
 Storage internals (reached through storage attributes):
     ``chunks_vdb.table_name``  — LIGHTRAG_DOC_CHUNKS table name
@@ -59,14 +51,6 @@ class LightRAGStores:
     text_chunks: Any
     full_docs: Any
     doc_status: Any
-    entities_vdb: Any
-    relationships_vdb: Any
-    chunk_entity_relation_graph: Any
-    full_entities: Any
-    full_relations: Any
-    entity_chunks: Any
-    relation_chunks: Any
-    llm_response_cache: Any
 
     _VECTOR_WRITE_MAX_BYTES: ClassVar[int] = 16 * 1024 * 1024
     _VECTOR_WRITE_MAX_RECORDS: ClassVar[int] = 200
@@ -77,14 +61,6 @@ class LightRAGStores:
             "text_chunks",
             "full_docs",
             "doc_status",
-            "entities_vdb",
-            "relationships_vdb",
-            "chunk_entity_relation_graph",
-            "full_entities",
-            "full_relations",
-            "entity_chunks",
-            "relation_chunks",
-            "llm_response_cache",
             "_build_global_config",
         }
     )

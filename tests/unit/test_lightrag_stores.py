@@ -16,14 +16,6 @@ class FakeLightRAG:
         self.text_chunks = object()
         self.full_docs = object()
         self.doc_status = object()
-        self.entities_vdb = object()
-        self.relationships_vdb = object()
-        self.chunk_entity_relation_graph = object()
-        self.full_entities = object()
-        self.full_relations = object()
-        self.entity_chunks = object()
-        self.relation_chunks = object()
-        self.llm_response_cache = object()
 
     def _build_global_config(self):
         return {"ok": True}
