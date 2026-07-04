@@ -121,21 +121,6 @@ class LightRAGStores:
             chunks.append(chunk)
         return chunks
 
-    async def query_chunk_vectors(
-        self,
-        *,
-        query_embedding: list[float],
-        top_k: int,
-    ) -> list[dict[str, Any]]:
-        return (
-            await self.chunks_vdb.query(
-                query="",
-                top_k=top_k,
-                query_embedding=query_embedding,
-            )
-            or []
-        )
-
     async def overwrite_chunk_vectors(
         self,
         vectors: dict[str, list[float]],
