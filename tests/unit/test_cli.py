@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,6 +21,7 @@ _build_answer_payload = _cli._build_answer_payload
 _build_ingest_kwargs = _cli._build_ingest_kwargs
 _build_retrieve_payload = _cli._build_retrieve_payload
 _validate_ingest_args = _cli._validate_ingest_args
+cmd_ragas_eval = _cli.cmd_ragas_eval
 
 
 def _image_block(url: str) -> dict:
@@ -214,6 +216,81 @@ def test_json_object_arg_rejects_non_object_json() -> None:
 
     with pytest.raises(SystemExit):
         parser.parse_args(["query", "q", "--filter-custom-json", '["not", "object"]'])
+
+
+def test_ragas_eval_cli_requires_dataset() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["ragas_eval"])
+
+
+def test_ragas_eval_cli_forwards_api_key_without_printing_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import subprocess
+
+    class Result:
+        returncode = 7
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], *, check: bool) -> Result:
+        captured["cmd"] = cmd
+        captured["check"] = check
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    args = build_parser().parse_args(
+        [
+            "ragas_eval",
+            "--api",
+            "http://localhost:8100",
+            "--dataset",
+            "tests.json",
+            "--api-key",
+            "secret-token",
+            "--output-dir",
+            "out",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_ragas_eval(args)
+
+    assert exc.value.code == 7
+    assert captured["check"] is False
+    assert captured["cmd"][-6:] == [
+        "--dataset",
+        "tests.json",
+        "--api-key",
+        "secret-token",
+        "--output-dir",
+        "out",
+    ]
+    assert "secret-token" not in capsys.readouterr().out
+
+
+def test_ragas_eval_cli_leaves_api_auto_resolution_to_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    class Result:
+        returncode = 0
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], *, check: bool) -> Result:
+        captured["cmd"] = cmd
+        return Result()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    args = build_parser().parse_args(["ragas_eval", "--dataset", "tests.json"])
+
+    with pytest.raises(SystemExit) as exc:
+        cmd_ragas_eval(args)
+
+    assert exc.value.code == 0
+    assert "--api" not in captured["cmd"]
 
 
 # ---------------------------------------------------------------------------

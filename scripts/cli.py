@@ -31,7 +31,7 @@ Usage:
     uv run scripts/cli.py chat --workspaces project-a project-b
 
     # RAGAS evaluation
-    uv run scripts/cli.py ragas_eval --api http://localhost:8100
+    uv run scripts/cli.py ragas_eval --dataset my_tests.json
     uv run scripts/cli.py ragas_eval --api http://localhost:8100 --dataset my_tests.json
 """
 
@@ -395,16 +395,21 @@ def cmd_ragas_eval(args: argparse.Namespace) -> None:
     cmd: list[str] = [
         sys.executable,
         eval_script,
-        "--api",
-        args.api or _get_api_url(),
     ]
+    if args.api:
+        cmd.extend(["--api", args.api])
     if args.dataset:
         cmd.extend(["--dataset", args.dataset])
+    if args.api_key:
+        cmd.extend(["--api-key", args.api_key])
     if args.output_dir:
         cmd.extend(["--output-dir", args.output_dir])
 
-    print(f"Running: {' '.join(cmd)}\n")
-    subprocess.run(cmd, check=False)
+    display_cmd = [
+        "***" if i > 0 and cmd[i - 1] == "--api-key" else part for i, part in enumerate(cmd)
+    ]
+    print(f"Running: {' '.join(display_cmd)}\n")
+    raise SystemExit(subprocess.run(cmd, check=False).returncode)
 
 
 def _add_filter_options(parser: argparse.ArgumentParser) -> None:
@@ -571,13 +576,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_eval.add_argument(
         "--api",
         default=None,
-        help="DlightRAG API base URL (default: $DLIGHTRAG_API_URL or http://localhost:8100)",
+        help="DlightRAG API base URL (default: $DLIGHTRAG_API_URL or DlightRAG config)",
     )
     p_eval.add_argument(
         "--dataset",
         "-d",
+        required=True,
+        help="Required test dataset JSON",
+    )
+    p_eval.add_argument(
+        "--api-key",
         default=None,
-        help="Test dataset JSON (default: LightRAG bundled sample)",
+        help="Bearer token when auth_mode is 'simple' or 'jwt'",
     )
     p_eval.add_argument(
         "--output-dir",

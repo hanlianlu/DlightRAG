@@ -46,6 +46,7 @@ from lightrag.utils import logger
 _OPENAI_COMPATIBLE_EMBED_PROVIDERS = frozenset(
     {"openai_compatible", "qwen_openai_compatible", "ollama"}
 )
+DEFAULT_RESULTS_DIR = Path("ragas_eval_results")
 
 
 def _resolve_eval_env() -> None:
@@ -69,24 +70,31 @@ def _resolve_eval_env() -> None:
       6. DLIGHTRAG_API_URL              ← config.api_host:api_port
       7. DLIGHTRAG_API_TOKEN            ← config.api_auth_token (simple)
     """
-    # If both eval keys are already set, nothing to do
     llm_key_set = bool(os.getenv("EVAL_LLM_BINDING_API_KEY"))
     embed_key_set = bool(os.getenv("EVAL_EMBEDDING_BINDING_API_KEY"))
-    if llm_key_set and embed_key_set:
+    eval_llm_available = llm_key_set or bool(os.getenv("OPENAI_API_KEY"))
+    eval_embedding_available = embed_key_set or eval_llm_available
+    if (
+        eval_llm_available
+        and eval_embedding_available
+        and os.getenv("EVAL_LLM_MODEL")
+        and os.getenv("DLIGHTRAG_API_URL")
+    ):
         return
 
     try:
         from dlightrag.config import DlightragConfig
     except ImportError:
-        logger.warning("DlightRAG not importable — skipping eval credential auto-resolution")
+        logger.warning("DlightRAG not importable — skipping eval/API auto-resolution")
         return
 
     try:
         config = DlightragConfig()  # pyright: ignore[reportCallIssue]
     except Exception:
         logger.warning(
-            "DlightRAG config failed to load — eval credentials must be set explicitly "
-            "via EVAL_LLM_BINDING_API_KEY. Run from the repo root where config.yaml exists.",
+            "DlightRAG config failed to load — set missing eval/API values explicitly "
+            "via EVAL_LLM_BINDING_API_KEY and --api / DLIGHTRAG_API_URL. "
+            "Run from the repo root where config.yaml exists for auto-resolution.",
             exc_info=True,
         )
         return
@@ -170,10 +178,6 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
     ) -> None:
         # CLI --api-key > $DLIGHTRAG_API_TOKEN (auto-resolved in _resolve_eval_env)
         self._dlightrag_api_key = api_key or os.getenv("DLIGHTRAG_API_TOKEN")
-        # Parent RAGEvaluator defaults to its own sample_dataset.json and
-        # localhost:9621 when passed None. Our CLI guarantees `api` is set,
-        # but at the type level we forward the values as-is — the parent
-        # constructor handles None defaults internally.
         super().__init__(  # pyright: ignore[reportArgumentType]
             test_dataset_path=test_dataset_path,  # type: ignore[arg-type]
             rag_api_url=rag_api_url,  # type: ignore[arg-type]
@@ -299,8 +303,8 @@ Examples:
         "--dataset",
         "-d",
         type=str,
-        default=None,
-        help='Path to test dataset JSON file. Format: {"test_cases": '
+        required=True,
+        help='Required test dataset JSON file. Format: {"test_cases": '
         '[{"question": "...", "ground_truth": "..."}]}',
     )
     parser.add_argument(
@@ -352,6 +356,10 @@ async def _run() -> None:
     # after argparse so `--help` exits before credential auto-resolution logs.
     load_dotenv(dotenv_path=".env", override=False)
     args = _build_parser().parse_args()
+    if args.api:
+        os.environ["DLIGHTRAG_API_URL"] = args.api
+    if args.api_key:
+        os.environ["DLIGHTRAG_API_TOKEN"] = args.api_key
     _resolve_eval_env()
     args.api = args.api or os.getenv("DLIGHTRAG_API_URL")
 
@@ -365,33 +373,30 @@ async def _run() -> None:
 
     _check_env()
 
-    evaluator = DlightRAGAdapterEvaluator(
-        test_dataset_path=args.dataset,
-        rag_api_url=args.api.rstrip("/"),
-        api_key=args.api_key,
-    )
-
-    # Override results directory if requested
-    if args.output_dir:
-        evaluator.results_dir = Path(args.output_dir)
-        evaluator.results_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info("DlightRAG API: %s/answer", evaluator.rag_api_url)
-    logger.info("Eval LLM:     %s", evaluator.eval_model)
-    logger.info("Eval Embed:   %s", evaluator.eval_embedding_model)
-    logger.info("Results dir:  %s", evaluator.results_dir.absolute())
-    logger.info("")
-
-    # LightRAG's default sample_dataset.json isn't shipped in the pip wheel.
-    # When no --dataset is given, the parent falls back to a non-existent path.
-    if not evaluator.test_dataset_path.exists():
-        logger.error("No test dataset found at %s", evaluator.test_dataset_path)
+    dataset_path = Path(args.dataset)
+    if not dataset_path.exists():
+        logger.error("No test dataset found at %s", dataset_path)
         logger.error(
             "Pass --dataset <your_questions.json> with ingested documents.\n"
             '  Format: {"test_cases": [{"question": "...", "ground_truth": "..."}]}\n'
             "  See docs/evaluation.md for the full guide."
         )
         sys.exit(1)
+
+    evaluator = DlightRAGAdapterEvaluator(
+        test_dataset_path=str(dataset_path),
+        rag_api_url=args.api.rstrip("/"),
+        api_key=args.api_key,
+    )
+
+    evaluator.results_dir = Path(args.output_dir) if args.output_dir else DEFAULT_RESULTS_DIR
+    evaluator.results_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("DlightRAG API: %s/answer", evaluator.rag_api_url)
+    logger.info("Eval LLM:     %s", evaluator.eval_model)
+    logger.info("Eval Embed:   %s", evaluator.eval_embedding_model)
+    logger.info("Results dir:  %s", evaluator.results_dir.absolute())
+    logger.info("")
 
     await evaluator.run()
 
