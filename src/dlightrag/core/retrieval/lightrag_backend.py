@@ -82,13 +82,13 @@ class LightRAGMixBackend:
         chunks.extend(injected)
         trace["metadata_injected_chunk_count"] = len(injected)
 
-        image_chunks = await self._retrieve_query_images(
+        direct_visual_chunks = await self._retrieve_query_images(
             multimodal_content,
             top_k=self._direct_visual_top_k,
         )
-        trace["direct_visual_chunk_count"] = len(image_chunks)
-        if image_chunks:
-            chunks = rrf_fuse([chunks, image_chunks])[:limit]
+        trace["direct_visual_chunk_count"] = len(direct_visual_chunks)
+        if direct_visual_chunks:
+            chunks = rrf_fuse([chunks, direct_visual_chunks])[:limit]
 
         await self._hydrate_chunk_provenance(chunks)
         trace["hydrated_chunk_count"] = len(chunks)

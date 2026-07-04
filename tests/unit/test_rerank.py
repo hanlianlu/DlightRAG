@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+import dlightrag.models.rerank as rerank_module
+from dlightrag.config import RerankConfig
 from dlightrag.models.rerank import (
     _aliyun_rerank,
     _build_scored_chunks,
@@ -18,6 +20,7 @@ from dlightrag.models.rerank import (
     _parse_listwise_scores,
     _resolve_input_modality,
     _voyage_rerank,
+    build_rerank_func,
 )
 
 _PNG_B64 = (
@@ -84,6 +87,68 @@ class TestBuildScoredChunks:
             }
         ]
         assert "rerank_score" not in chunks[1]
+
+
+class TestBuildRerankFunc:
+    @staticmethod
+    def _capture_threshold(monkeypatch, func_name: str) -> dict[str, float]:
+        captured: dict[str, float] = {}
+
+        async def fake_rerank(query, chunks, top_k, **kwargs):
+            captured["score_threshold"] = kwargs["score_threshold"]
+            return chunks[:top_k]
+
+        monkeypatch.setattr(
+            "dlightrag.observability.wrap_rerank_func",
+            lambda fn, *, name: fn,
+        )
+        monkeypatch.setattr(rerank_module, func_name, fake_rerank)
+        return captured
+
+    @staticmethod
+    def _stub_http_client(monkeypatch) -> None:
+        monkeypatch.setattr(
+            rerank_module.httpx,
+            "AsyncClient",
+            lambda *args, **kwargs: object(),
+        )
+
+    async def test_chat_llm_default_threshold_filters_weak_scores(self, monkeypatch):
+        captured = self._capture_threshold(monkeypatch, "_chat_llm_rerank")
+
+        fn = build_rerank_func(
+            RerankConfig(strategy="chat_llm_reranker"),
+            ingest_func=AsyncMock(),
+        )
+        await fn("query", [{"content": "chunk"}], 1)
+
+        assert captured["score_threshold"] == 0.5
+
+    async def test_provider_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
+        captured = self._capture_threshold(monkeypatch, "_voyage_rerank")
+        self._stub_http_client(monkeypatch)
+
+        fn = build_rerank_func(
+            RerankConfig(strategy="voyage_reranker", api_key="voyage-key"),
+        )
+        await fn("query", [{"content": "chunk"}], 1)
+
+        assert captured["score_threshold"] == 0.0
+
+    async def test_explicit_provider_threshold_is_preserved(self, monkeypatch):
+        captured = self._capture_threshold(monkeypatch, "_voyage_rerank")
+        self._stub_http_client(monkeypatch)
+
+        fn = build_rerank_func(
+            RerankConfig(
+                strategy="voyage_reranker",
+                api_key="voyage-key",
+                score_threshold=0.42,
+            ),
+        )
+        await fn("query", [{"content": "chunk"}], 1)
+
+        assert captured["score_threshold"] == 0.42
 
 
 class TestChatLlmRerank:

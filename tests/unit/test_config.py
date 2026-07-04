@@ -122,7 +122,7 @@ class TestRerankConfig:
         assert cfg.enabled is True
         assert cfg.strategy == "chat_llm_reranker"
         assert cfg.model is None
-        assert cfg.score_threshold == 0.5
+        assert cfg.score_threshold is None
         assert cfg.max_concurrency == 8
         assert cfg.batch_size == 8
         assert cfg.image_max_bytes == 1_500_000
@@ -160,6 +160,7 @@ class TestRerankConfig:
             {"image_max_bytes": 0},
             {"image_quality": 0},
             {"image_quality": 96},
+            {"score_threshold": -0.1},
             {"temperature": -0.1},
         ],
     )

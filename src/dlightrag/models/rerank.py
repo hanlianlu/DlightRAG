@@ -602,6 +602,9 @@ def build_rerank_func(
     from dlightrag.observability import wrap_rerank_func
 
     strategy = rc.strategy
+    score_threshold = rc.score_threshold
+    if score_threshold is None:
+        score_threshold = 0.5 if strategy == "chat_llm_reranker" else 0.0
     fn: Callable[..., Any]
 
     if strategy == "chat_llm_reranker":
@@ -611,7 +614,7 @@ def build_rerank_func(
             _chat_llm_rerank,
             scoring_func=ingest_func,
             max_concurrency=rc.max_concurrency,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             batch_size=rc.batch_size,
             multimodal=rc.input_modality != "text",
             image_max_bytes=rc.image_max_bytes,
@@ -631,7 +634,7 @@ def build_rerank_func(
             model=rc.model or _JINA_RERANK_MODEL,
             api_key=rc.api_key,
             input_modality=rc.input_modality,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             client=client,
             image_max_bytes=rc.image_max_bytes,
             image_max_total_bytes=rc.image_max_total_bytes,
@@ -650,7 +653,7 @@ def build_rerank_func(
             model=rc.model or _ALIYUN_RERANK_MODEL,
             api_key=rc.api_key,
             input_modality=rc.input_modality,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             client=client,
             image_max_bytes=rc.image_max_bytes,
             image_max_total_bytes=rc.image_max_total_bytes,
@@ -676,7 +679,7 @@ def build_rerank_func(
             url=url,
             model=rc.model or default_model,
             api_key=rc.api_key,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             client=client,
             multimodal=(
                 _resolve_input_modality(rc.input_modality, rc.model or default_model)
@@ -698,7 +701,7 @@ def build_rerank_func(
             url=rc.base_url or _VOYAGE_RERANK_URL,
             model=rc.model or _VOYAGE_RERANK_MODEL,
             api_key=rc.api_key,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             client=client,
         )
     elif strategy == "cohere_reranker":
@@ -710,7 +713,7 @@ def build_rerank_func(
             url=rc.base_url or _COHERE_RERANK_URL,
             model=rc.model or _COHERE_RERANK_MODEL,
             api_key=rc.api_key,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             client=client,
         )
     elif strategy == "azure_cohere":
@@ -722,7 +725,7 @@ def build_rerank_func(
             endpoint=rc.base_url,
             api_key=rc.api_key,
             deployment=rc.model or _AZURE_COHERE_RERANK_MODEL,
-            score_threshold=rc.score_threshold,
+            score_threshold=score_threshold,
             client=client,
         )
     else:

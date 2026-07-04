@@ -177,7 +177,10 @@ def test_env_example_defaults_mineru_to_local_sidecar() -> None:
 def test_config_yaml_uses_input_modality_for_rerank() -> None:
     config = Path("config.yaml").read_text(encoding="utf-8")
 
+    assert "  strategy: voyage_reranker\n" in config
+    assert "  model: rerank-2.5-lite\n" in config
     assert re.search(r"(?m)^  input_modality: auto$", config)
+    assert not re.search(r"(?m)^  api_key:", config)
     assert "multimodal:" not in config
 
 

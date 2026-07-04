@@ -63,17 +63,11 @@ embedding:
 
 rerank:
   enabled: true
-  strategy: chat_llm_reranker
+  strategy: voyage_reranker
+  model: rerank-2.5-lite
   input_modality: auto
-  # chat_llm_reranker:auto reuses the startup vision probe: vision-capable
-  # scoring models receive bounded image_data plus text, otherwise VLM text only.
-  # Set to text to force text-only reranking, or multimodal for a self-hosted
-  # model that accepts image document objects.
-  # If provider/model are omitted, chat_llm_reranker reuses llm.roles.vlm,
-  # then llm.roles.query, then llm.default.
-  # provider:
-  # model:
-  # base_url:
+  # voyage_reranker sends text documents to Voyage /v1/rerank.
+  # Keep the credential in .env as DLIGHTRAG_RERANK__API_KEY.
 
 # ─────────────────────────────────────────────────────────────────
 # Parser and Ingestion

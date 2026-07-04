@@ -294,7 +294,8 @@ document objects.
 rerank:
   strategy: chat_llm_reranker
   input_modality: auto
-  score_threshold: 0.5
+  # Optional. Omitted defaults to 0.5 for chat_llm_reranker and 0.0 for provider rerankers.
+  # score_threshold: 0.5
   max_concurrency: 8
   batch_size: 8
   image_max_bytes: 1500000
