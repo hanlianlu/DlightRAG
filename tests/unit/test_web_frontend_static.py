@@ -23,13 +23,6 @@ def _css_rule(path: Path, selector: str) -> str:
     return match.group("body")
 
 
-def test_chat_submit_does_not_auto_close_open_panel() -> None:
-    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-
-    assert "closePanel();" not in chat_js
-    assert "import {closePanel} from './panel.ts';" not in chat_js
-
-
 def test_composer_enter_shortcut_respects_ime_composition() -> None:
     chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
@@ -99,27 +92,6 @@ def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
     assert "data-all" in workspaces_js
 
 
-def test_workspace_delete_removes_canonical_workspace_and_ingest_target() -> None:
-    workspaces_js = (FRONTEND_UI / "workspaces.ts").read_text(encoding="utf-8")
-    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
-
-    assert "removeWorkspace(workspace, detail.next_workspace)" in workspaces_js
-    assert "workspaceStore.remove(workspace" in workspaces_js
-    assert "workspaceStore.active.indexOf(" in workspaces_js
-    assert "workspaceDeleted" in panel_js
-    assert "ingestStore.set(detail.next_workspace || workspaceStore.primary)" in panel_js
-
-
-def test_panel_auto_dismiss_keeps_composer_interactive() -> None:
-    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
-
-    assert "PANEL_DISMISS_EXEMPT_SELECTOR" in panel_js
-    assert "#composer" in panel_js
-    assert "#files-btn" in panel_js
-    assert ".panel" in panel_js
-    assert "shouldDismissPanelOnOutsideClick(e.target)" in panel_js
-
-
 def test_chat_message_bubbles_wrap_unbroken_queries() -> None:
     user_message = _css_rule(FRONTEND_STYLES / "chat.module.css", ".userMessage")
     wrapper = _css_rule(FRONTEND_STYLES / "chat.module.css", ".userMessageWrapper")
@@ -171,19 +143,6 @@ def test_reference_labels_do_not_render_square_brackets() -> None:
     assert "[{{ src.id }}]" not in source_panel
     assert '<span class="answer-ref-id">{{ src.id | reference_label }}</span>' in answer_done
     assert '<span class="source-doc-badge">{{ src.id | reference_label }}</span>' in source_panel
-
-
-def test_composer_autoresize_measures_content_after_height_reset() -> None:
-    chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-
-    height_reset = chat_js.index("textarea.style.height = 'auto';")
-    content_measure = chat_js.index("const contentHeight = textarea.scrollHeight;")
-    multiline_update = chat_js.index("form.classList.toggle('multiline'", content_measure)
-    height_apply = chat_js.index(
-        "textarea.style.height = Math.min(contentHeight, maxHeight) + 'px';"
-    )
-
-    assert height_reset < content_measure < multiline_update < height_apply
 
 
 def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:

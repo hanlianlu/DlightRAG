@@ -35,6 +35,18 @@ def _settings_config(**kwargs: Any) -> DlightragConfig:
     return cast(Any, DlightragConfig)(**kwargs)
 
 
+def _default_test_config() -> DlightragConfig:
+    return _settings_config(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            startup_probe=False,
+        ),
+    )
+
+
 class TestModelConfig:
     def test_defaults(self):
         cfg = ModelConfig(model="gpt-5.4-mini")
@@ -346,21 +358,18 @@ class TestDlightragConfigNested:
 
 
 def test_storage_backends_are_postgres_only() -> None:
-    cfg = _settings_config(
-        embedding=EmbeddingConfig(
-            provider="voyage",
-            model="voyage-multimodal-3.5",
-            api_key="sk-test",
-            dim=1024,
-            startup_probe=False,
-        ),
-    )
+    cfg = _default_test_config()
 
     assert cfg.vector_storage == "PGVectorStorage"
     assert cfg.graph_storage == "PGGraphStorage"
     assert cfg.kv_storage == "PGKVStorage"
     assert cfg.doc_status_storage == "PGDocStatusStorage"
     assert cfg.embedding.asymmetric == "auto"
+
+
+def test_parser_defaults_export_lightrag_env() -> None:
+    cfg = _default_test_config()
+
     assert cfg.parser.rules == "docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP"
     assert cfg.extraction.use_json is True
     assert cfg.extraction.language == "English"
@@ -379,9 +388,19 @@ def test_storage_backends_are_postgres_only() -> None:
     assert os.environ["DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY"] == "conservative"
     assert cfg.input_dir_path == cfg.working_dir_path / "inputs"
     assert os.environ["INPUT_DIR"] == str(cfg.input_dir_path)
+
+
+def test_metadata_and_remote_source_defaults() -> None:
+    cfg = _default_test_config()
+
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
     assert cfg.retain_remote_source_files is False
+
+
+def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
+    cfg = _default_test_config()
+
     assert cfg.pg_vector_index_type == "HNSW_HALFVEC"
     assert cfg.pg_hnsw_m == 32
     assert cfg.pg_hnsw_ef_construction == 256
@@ -401,6 +420,11 @@ def test_storage_backends_are_postgres_only() -> None:
         "queue_size_analyze": 32,
         "queue_size_insert": 4,
     }
+
+
+def test_multimodal_retrieval_defaults() -> None:
+    cfg = _default_test_config()
+
     assert cfg.rerank.image_max_bytes == 1_500_000
     assert cfg.rerank.image_max_total_bytes == 8_000_000
     assert cfg.rerank.image_max_px == 1280
@@ -418,6 +442,11 @@ def test_storage_backends_are_postgres_only() -> None:
     assert cfg.checkpoint_session_ttl_seconds == 30 * 24 * 60 * 60
     assert cfg.query_images.max_described_images == 3
     assert cfg.visual_assets.thumb_max_px == 300
+
+
+def test_bm25_defaults_cover_supported_language_profiles() -> None:
+    cfg = _default_test_config()
+
     assert [
         (profile.name, profile.text_config, profile.languages, profile.fallback)
         for profile in cfg.bm25_profiles
