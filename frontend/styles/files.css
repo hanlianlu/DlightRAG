@@ -60,27 +60,21 @@
 
 /* Radio circle */
 .ingest-target-popover-radio {
-    align-items: center;
     border: 1.5px solid var(--color-text-subtle);
     border-radius: 50%;
-    display: flex;
     flex-shrink: 0;
     height: var(--size-icon-sm);
-    justify-content: center;
     transition: all 0.15s;
     width: var(--size-icon-sm);
 }
 
 .ingest-target-popover-radio.on {
+    background: radial-gradient(
+        circle at 50% 50%,
+        var(--color-gold-200) 0 calc(var(--size-icon-sm) * 0.23),
+        transparent calc(var(--size-icon-sm) * 0.24)
+    );
     border-color: var(--color-gold-200);
-}
-
-.ingest-target-popover-radio.on::after {
-    background: var(--color-gold-200);
-    border-radius: 50%;
-    content: '';
-    height: 50%;
-    width: 50%;
 }
 
 /* === File Management === */
