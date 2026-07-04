@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for PostgreSQL-backed ingest job state."""
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

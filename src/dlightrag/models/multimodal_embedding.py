@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Context-aware text and image embedding over DlightRAG's provider registry."""
 
-from __future__ import annotations
-
 import logging
 import math
 from typing import Literal

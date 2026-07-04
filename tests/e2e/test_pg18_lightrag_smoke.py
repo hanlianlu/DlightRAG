@@ -5,8 +5,6 @@ Run with:
     DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -m e2e_pg18 -q
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

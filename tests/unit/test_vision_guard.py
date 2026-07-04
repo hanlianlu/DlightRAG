@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for vision capability guard."""
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 import pytest

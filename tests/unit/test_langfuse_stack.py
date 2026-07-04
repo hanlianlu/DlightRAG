@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for local Langfuse stack preparation."""
 
-from __future__ import annotations
-
 import importlib.util
 from pathlib import Path
 

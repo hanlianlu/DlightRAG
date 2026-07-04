@@ -5,8 +5,6 @@ Uses the provider registry (openai, anthropic, gemini) to build callables.
 Provides _adapt_for_lightrag() to bridge to LightRAG's (prompt, system_prompt) signature.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from functools import partial

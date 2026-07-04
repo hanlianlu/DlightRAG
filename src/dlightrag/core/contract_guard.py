@@ -11,8 +11,6 @@ Called once in RAGService init after LightRAG.initialize_storages() and
 before chunks_vdb is wrapped by FilteredVectorStorage.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

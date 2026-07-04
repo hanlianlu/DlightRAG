@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for hybrid YAML + .env configuration loading."""
 
-from __future__ import annotations
-
 import os
 from pathlib import Path
 from typing import Any, cast

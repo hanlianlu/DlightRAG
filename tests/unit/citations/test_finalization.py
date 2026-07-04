@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for shared answer finalization."""
 
-from __future__ import annotations
-
 
 class TestFinalizeAnswer:
     def test_cleans_answer_and_projects_cited_sources_with_public_source_contexts(self) -> None:

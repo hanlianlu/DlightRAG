@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for session-scoped query image memory."""
 
-from __future__ import annotations
-
 from dlightrag.core.session_images import SessionImageStore
 
 

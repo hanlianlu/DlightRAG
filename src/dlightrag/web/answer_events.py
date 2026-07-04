@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Browser-facing answer stream presenter for the web UI."""
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable

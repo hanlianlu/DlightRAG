@@ -9,8 +9,6 @@ DlightRAG supports PostgreSQL as the storage ecosystem. Metadata filtering is
 a hard in-filter constraint, not a post-filter hint.
 """
 
-from __future__ import annotations
-
 import contextvars
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Regression coverage for checked-in role model defaults."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import yaml

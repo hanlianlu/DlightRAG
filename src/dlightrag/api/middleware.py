@@ -6,8 +6,6 @@ header or generated UUID4). The ID is stored in a contextvar for access
 throughout the request lifecycle and included in the response headers.
 """
 
-from __future__ import annotations
-
 import contextvars
 import logging
 import uuid

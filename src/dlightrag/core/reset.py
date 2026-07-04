@@ -14,8 +14,6 @@ parameters to avoid circular imports. The public API remains
 5. Remove filesystem artifacts
 """
 
-from __future__ import annotations
-
 import logging
 import shutil
 from collections.abc import Mapping

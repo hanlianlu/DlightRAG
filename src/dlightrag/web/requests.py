@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Typed browser route request payloads."""
 
-from __future__ import annotations
-
 from pydantic import Field
 
 from dlightrag.core.client_contracts import ClientContractModel, ConversationMessage

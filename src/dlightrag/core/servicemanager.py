@@ -5,8 +5,6 @@ Absorbs pool.py workspace management and federation routing into a single
 entry point. All API/MCP consumers depend on this class only.
 """
 
-from __future__ import annotations
-
 import asyncio
 import inspect
 import logging

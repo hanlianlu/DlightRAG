@@ -14,8 +14,6 @@ Usage:
     uv run scripts/reset.py -y                    # skip confirmation prompt
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import logging
@@ -87,6 +85,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="dlightrag-reset",
         description="Reset dlightrag RAG storage (all configured backends)",
+        suggest_on_error=True,
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview without deleting")
     parser.add_argument("-y", "--yes", action="store_true", help="Skip confirmation")
@@ -111,7 +110,7 @@ def main() -> int:
             if input().strip().lower() != "yes":
                 print("Cancelled.")
                 return 1
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             print("\nCancelled.")
             return 1
 

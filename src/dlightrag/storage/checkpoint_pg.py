@@ -7,8 +7,6 @@ asyncpg store that reuses DlightRAG's existing ``pg_pool`` and
 ``PGMetadataIndex``, and ``PGWorkspaceRegistry``.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from typing import Any
@@ -133,7 +131,7 @@ def _resolve_content(jsonb_val: Any, text_fallback: Any) -> str | list[dict[str,
             parsed = json.loads(jsonb_val)
             if isinstance(parsed, list):
                 return parsed
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             pass
         if jsonb_val.strip():
             return jsonb_val

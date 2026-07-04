@@ -4,8 +4,6 @@ Groups chunks by reference_id into SourceReference objects with ChunkSnippets.
 Called by both web routes and API server after retrieval.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote

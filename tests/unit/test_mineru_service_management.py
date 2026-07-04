@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for local MinerU service management helpers."""
 
-from __future__ import annotations
-
 import os
 import plistlib
 import stat

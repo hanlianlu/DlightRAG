@@ -10,7 +10,7 @@ knowledge graph. DlightRAG adds product-layer metadata governance,
 PostgreSQL BM25, direct image-vector alignment, answer orchestration,
 citations, REST, Web, SDK, and MCP interfaces.
 
-Status: Python 3.12-3.14, defaulting to 3.14. Storage: PostgreSQL 18 with pgvector, Apache AGE,
+Status: Python 3.14. Storage: PostgreSQL 18 with pgvector, Apache AGE,
 pg_textsearch, and pg_jieba. License: Apache-2.0.
 
 ## Architecture At A Glance

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Image helpers for model payloads and visual asset serving."""
 
-from __future__ import annotations
-
 import base64
 import io
 import mimetypes

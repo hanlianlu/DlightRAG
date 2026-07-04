@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for strict metadata in-filtering context."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock
 
 from dlightrag.core.retrieval.filtered_vdb import _active_filter, metadata_filter_scope

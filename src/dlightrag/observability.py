@@ -6,8 +6,6 @@ never imports langfuse directly. When tracing is disabled (default),
 every wrapper returns the original function unchanged (zero overhead).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager

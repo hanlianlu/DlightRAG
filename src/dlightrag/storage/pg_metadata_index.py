@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL-backed document metadata index for structured queries."""
 
-from __future__ import annotations
-
 import json
 import logging
 from typing import Any

@@ -5,8 +5,6 @@ Routes receive UserContext via FastAPI dependency injection.
 They never know which auth strategy is active.
 """
 
-from __future__ import annotations
-
 import logging
 import secrets
 from functools import lru_cache

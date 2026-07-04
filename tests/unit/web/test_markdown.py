@@ -1,7 +1,5 @@
 """Tests for Markdown rendering in web UI."""
 
-from __future__ import annotations
-
 
 def test_render_markdown_bold():
     from dlightrag.web.markdown import render_markdown

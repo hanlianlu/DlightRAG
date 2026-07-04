@@ -1,7 +1,5 @@
 """FastAPI dependency injection and Jinja2 environment for web routes."""
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 from typing import Any

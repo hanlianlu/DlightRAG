@@ -3,8 +3,6 @@
 Ported from sandbox_agent. LangChain replaced with raw async LLM function call.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

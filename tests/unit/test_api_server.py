@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for FastAPI REST server endpoints and auth middleware."""
 
-from __future__ import annotations
-
 import datetime
 from collections.abc import Iterator
 from types import SimpleNamespace

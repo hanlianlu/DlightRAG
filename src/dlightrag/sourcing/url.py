@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """URL-backed data source for remote document ingestion."""
 
-from __future__ import annotations
-
 import fnmatch
 import inspect
 import ipaddress

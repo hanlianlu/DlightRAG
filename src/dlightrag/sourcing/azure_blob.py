@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Azure Blob Storage data source."""
 
-from __future__ import annotations
-
 import os
 from collections.abc import AsyncIterator
 from datetime import UTC

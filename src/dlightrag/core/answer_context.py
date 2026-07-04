@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer-context packing after retrieval and rerank."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import Any
 

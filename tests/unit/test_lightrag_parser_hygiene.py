@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for DlightRAG's LightRAG parser hygiene boundary."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from dlightrag.core.ingestion.parser_hygiene import (

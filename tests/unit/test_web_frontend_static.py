@@ -5,8 +5,6 @@ These tests protect public browser behavior and served asset boundaries. They
 avoid pinning exact visual token values or module decomposition details.
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 

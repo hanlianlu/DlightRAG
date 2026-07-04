@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for VLM-assisted query image semantic enhancement."""
 
-from __future__ import annotations
-
 import asyncio
 from unittest.mock import AsyncMock
 

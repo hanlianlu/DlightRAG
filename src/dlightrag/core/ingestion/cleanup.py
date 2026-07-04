@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """LightRAG deletion helpers."""
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 from inspect import isawaitable

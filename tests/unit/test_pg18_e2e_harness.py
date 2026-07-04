@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the opt-in PG18 E2E smoke harness."""
 
-from __future__ import annotations
-
 from tests.e2e.pg18_harness import (
     REQUIRED_EXTENSIONS,
     e2e_enabled,

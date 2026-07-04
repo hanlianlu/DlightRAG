@@ -1,7 +1,5 @@
 """Citation data models — ported from sandbox_agent, framework-agnostic."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from pydantic import BaseModel

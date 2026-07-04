@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Abstract base for LLM completion providers."""
 
-from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -91,7 +89,7 @@ class CompletionProvider(ABC):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> AsyncGenerator[str, None]: ...  # type: ignore[return]
+    ) -> AsyncGenerator[str]: ...  # type: ignore[return]
 
     async def aclose(self) -> None:
         """Release SDK clients, connection pools, and other resources.

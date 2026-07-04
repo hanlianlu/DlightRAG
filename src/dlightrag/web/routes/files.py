@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web routes for file management."""
 
-from __future__ import annotations
-
 import logging
 import shutil
 from pathlib import Path

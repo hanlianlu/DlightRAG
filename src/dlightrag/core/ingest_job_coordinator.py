@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Durable ingest job lifecycle coordination."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import shutil
@@ -219,7 +217,7 @@ class IngestJobCoordinator:
         if not workspace_id:
             raise ValueError("workspace cannot be empty")
 
-        job_id = uuid.uuid4().hex
+        job_id = uuid.uuid7().hex
         store = await self.get_store()
         cleanup_path_tuple = _normalize_cleanup_paths(cleanup_paths)
         request = {

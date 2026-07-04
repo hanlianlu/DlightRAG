@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """AWS S3 data source using aiobotocore (native async)."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncIterator
 from inspect import isawaitable

@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for vision probe."""
 
-from __future__ import annotations
-
 from unittest.mock import AsyncMock
 
 from dlightrag.core.vision_probe import probe_vision_support

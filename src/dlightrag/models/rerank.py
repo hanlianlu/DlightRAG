@@ -13,8 +13,6 @@ candidate set can include BM25, metadata-injected, and multimodal chunks that
 LightRAG's native reranker cannot see as one list.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re
@@ -78,7 +76,7 @@ def _parse_listwise_scores(text: str, expected: int) -> list[float]:
         data = json.loads(text)
         if isinstance(data, list):
             return [_clamp(float(s)) for s in data[:expected]]
-    except (json.JSONDecodeError, ValueError, TypeError):
+    except json.JSONDecodeError, ValueError, TypeError:
         pass
     # Fallback: extract all floats from text
     matches = re.findall(r"\d+\.\d+", text)

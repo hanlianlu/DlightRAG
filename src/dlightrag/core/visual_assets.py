@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Resolve and serve LightRAG sidecar-backed visual chunk assets."""
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import logging

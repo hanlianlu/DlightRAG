@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL BM25 search over LightRAG document chunks."""
 
-from __future__ import annotations
-
 import inspect
 import logging
 import re

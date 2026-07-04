@@ -34,8 +34,6 @@ Patches are:
   wrapper logs a warning and falls back to the original behaviour
 """
 
-from __future__ import annotations
-
 import inspect
 import logging
 from collections.abc import Callable
@@ -87,7 +85,7 @@ def _source_contains(method: Callable[..., Any], needle: str) -> bool | None:
     """Return whether *needle* appears in method source, or None if unavailable."""
     try:
         source = inspect.getsource(method)
-    except (OSError, TypeError):
+    except OSError, TypeError:
         return None
     return needle in source
 
@@ -281,7 +279,7 @@ def _failed_doc_reset_needs_patch(method: Any) -> bool:
     """
     try:
         source = inspect.getsource(method)
-    except (OSError, TypeError):
+    except OSError, TypeError:
         # Can't inspect — defensively apply the wrapper
         return True
 

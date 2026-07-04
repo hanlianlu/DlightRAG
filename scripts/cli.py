@@ -35,8 +35,6 @@ Usage:
     uv run scripts/cli.py ragas_eval --api http://localhost:8100 --dataset my_tests.json
 """
 
-from __future__ import annotations
-
 import argparse
 import asyncio
 import json
@@ -331,7 +329,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
     while True:
         try:
             question = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             print("\nBye!")
             break
 
@@ -481,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dlightrag-cli",
         description="dlightrag CLI — ingestion runs locally, queries go through the REST API",
+        suggest_on_error=True,
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

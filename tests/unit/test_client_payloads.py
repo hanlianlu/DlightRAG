@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for transport-neutral client payload helpers."""
 
-from __future__ import annotations
-
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.models.schemas import Reference

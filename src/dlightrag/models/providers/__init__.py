@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider registry with lazy SDK loading."""
 
-from __future__ import annotations
-
 import importlib
 
 from dlightrag.models.providers.base import CompletionProvider

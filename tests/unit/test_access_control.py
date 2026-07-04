@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Access-control policy tests."""
 
-from __future__ import annotations
-
 import pytest
 
 from dlightrag.access_control import AccessDeniedError, access_control_from_config

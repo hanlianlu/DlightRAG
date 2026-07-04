@@ -1,8 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Shared answer finalization for citation-aware transports."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts

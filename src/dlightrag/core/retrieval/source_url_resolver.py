@@ -7,8 +7,6 @@ local → stream, azure → 302 redirect to SAS URL,
 s3 → 302 redirect to presigned URL, https → 302 redirect to source URL.
 """
 
-from __future__ import annotations
-
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote
 
