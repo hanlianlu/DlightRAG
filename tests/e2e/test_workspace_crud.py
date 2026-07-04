@@ -16,12 +16,12 @@ def test_workspace_popover_opens(page):
     selector.click()
 
     # Popover should be visible with at least one workspace item
-    page.wait_for_selector(".workspace-popover", timeout=5000)
-    popover = page.locator(".workspace-popover")
+    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
+    popover = page.locator(".ui-popover--workspace")
     assert popover.is_visible()
 
     # "Default" workspace should be listed
-    items = popover.locator(".workspace-popover-item")
+    items = popover.locator(".ui-popover-item")
     assert items.count() >= 1
 
 
@@ -32,13 +32,13 @@ def test_workspace_popover_closes(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.wait_for_selector(".workspace-popover", timeout=5000)
-    assert page.locator(".workspace-popover").is_visible()
+    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
+    assert page.locator(".ui-popover--workspace").is_visible()
 
     # Click outside — the popover should go away
     page.locator(".app").click(position={"x": 10, "y": 10})
     page.wait_for_timeout(300)
-    assert page.locator(".workspace-popover").count() == 0
+    assert page.locator(".ui-popover--workspace").count() == 0
 
 
 @pytest.mark.e2e
@@ -48,10 +48,10 @@ def test_workspace_create_input_visible(page):
     page.wait_for_selector("#workspace-selector", timeout=10000)
 
     page.locator("#workspace-selector").click()
-    page.wait_for_selector(".workspace-popover", timeout=5000)
+    page.wait_for_selector(".ui-popover--workspace", timeout=5000)
 
     # The create-row with input and button should be present
-    create_row = page.locator(".workspace-popover-create")
+    create_row = page.locator(".ui-popover-create")
     assert create_row.is_visible()
-    assert create_row.locator(".workspace-popover-input").is_visible()
-    assert create_row.locator(".workspace-popover-create-btn").is_visible()
+    assert create_row.locator(".ui-popover-input").is_visible()
+    assert create_row.locator(".ui-popover-create-btn").is_visible()

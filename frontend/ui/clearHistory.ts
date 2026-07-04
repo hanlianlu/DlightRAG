@@ -9,13 +9,13 @@ let confirmTimer: ReturnType<typeof setTimeout> | null = null;
 function showClearButton(): void {
   const btn = document.getElementById('clear-history-btn');
   if (!btn) return;
-  btn.classList.remove('visually-hidden');
+  btn.classList.remove('hidden');
 }
 
 function hideClearButton(): void {
   const btn = document.getElementById('clear-history-btn');
   if (!btn) return;
-  btn.classList.add('visually-hidden');
+  btn.classList.add('hidden');
   resetConfirmState(btn);
 }
 

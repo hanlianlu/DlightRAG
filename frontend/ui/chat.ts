@@ -1,4 +1,3 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {workspaceStore} from '../stores/workspaceStore.ts';
@@ -10,15 +9,15 @@ import {createAnswerRenderer, createChatTurn, setAnswerError} from '../lib/chat_
 
 let queryInFlight = false;
 
-function submitComposerForm(form) {
+function submitComposerForm(form: HTMLFormElement): void {
     form.requestSubmit();
 }
 
-function isLineBreakInput(e) {
+function isLineBreakInput(e: InputEvent): boolean {
     return e.inputType === 'insertLineBreak';
 }
 
-export async function submitQuery(query) {
+export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
 
@@ -26,7 +25,7 @@ export async function submitQuery(query) {
     const imageData = getPendingImageData();
     clearImages();
 
-    let renderer = null;
+    let renderer: ReturnType<typeof createAnswerRenderer> | null = null;
     let success = false;
 
     try {
@@ -47,11 +46,12 @@ export async function submitQuery(query) {
             return;
         }
 
-        renderer = createAnswerRenderer(turn);
+        const activeRenderer = createAnswerRenderer(turn);
+        renderer = activeRenderer;
         await streamSSE(response, function(eventType, data) {
-            renderer.handle(eventType, data);
+            activeRenderer.handle(eventType, data);
         });
-        success = !renderer.failed;
+        success = !activeRenderer.failed;
     } catch (_) {
         setAnswerError(turn, 'Connection error. Please try again.');
     } finally {
@@ -68,64 +68,65 @@ export async function submitQuery(query) {
     }
 }
 
-export function setupQueryForm() {
-    const form = document.getElementById('query-form');
+export function setupQueryForm(): void {
+    const form = document.getElementById('query-form') as HTMLFormElement | null;
     if (!form) return;
-    const textarea = form.querySelector('.composer-input');
+    const textarea = form.querySelector<HTMLTextAreaElement>('.composer-input');
+    if (!textarea) return;
+    const queryForm = form;
+    const queryInput = textarea;
     const sendBtn = form.querySelector('.composer-send') as HTMLButtonElement | null;
 
     function toggleSendButton() {
-        if (sendBtn && textarea) {
-            sendBtn.disabled = !textarea.value.trim();
+        if (sendBtn) {
+            sendBtn.disabled = !queryInput.value.trim();
         }
     }
 
     function autoResize() {
         toggleSendButton();
-        const computed = getComputedStyle(textarea);
+        const computed = getComputedStyle(queryInput);
         const lineHeight = parseFloat(computed.lineHeight) || 24;
         const maxHeight = parseFloat(computed.maxHeight) || 160;
-        textarea.style.height = 'auto';
-        const contentHeight = textarea.scrollHeight;
-        const isMultiline = textarea.value.includes('\n') || contentHeight > lineHeight * 1.5;
-        form.classList.toggle('multiline', isMultiline);
-        textarea.style.height = Math.min(contentHeight, maxHeight) + 'px';
-        textarea.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
+        queryInput.style.height = 'auto';
+        const contentHeight = queryInput.scrollHeight;
+        const isMultiline = queryInput.value.includes('\n') || contentHeight > lineHeight * 1.5;
+        queryForm.classList.toggle('multiline', isMultiline);
+        queryInput.style.height = Math.min(contentHeight, maxHeight) + 'px';
+        queryInput.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden';
     }
 
-    if (textarea) {
-        let allowNextLineBreak = false;
+    let allowNextLineBreak = false;
 
-        textarea.addEventListener('keydown', function(e) {
-            if (e.key !== 'Enter') return;
-            allowNextLineBreak = e.shiftKey === true;
-        });
-        textarea.addEventListener('beforeinput', function(e) {
-            if (!isLineBreakInput(e)) return;
-            if (e.isComposing === true || allowNextLineBreak) {
-                allowNextLineBreak = false;
-                return;
-            }
-            e.preventDefault();
+    queryInput.addEventListener('keydown', function(e: KeyboardEvent) {
+        if (e.key !== 'Enter') return;
+        allowNextLineBreak = e.shiftKey === true;
+    });
+    queryInput.addEventListener('beforeinput', function(e: InputEvent) {
+        if (!isLineBreakInput(e)) return;
+        if (e.isComposing === true || allowNextLineBreak) {
             allowNextLineBreak = false;
-            submitComposerForm(form);
-        });
-        textarea.addEventListener('keyup', function(e) {
-            if (e.key === 'Enter') allowNextLineBreak = false;
-        });
-        textarea.addEventListener('input', autoResize);
-
-        // Initial state: send button disabled until user types
-        toggleSendButton();
-    }
-    form.addEventListener('submit', function(e) {
+            return;
+        }
         e.preventDefault();
-        const query = textarea.value.trim();
+        allowNextLineBreak = false;
+        submitComposerForm(queryForm);
+    });
+    queryInput.addEventListener('keyup', function(e: KeyboardEvent) {
+        if (e.key === 'Enter') allowNextLineBreak = false;
+    });
+    queryInput.addEventListener('input', autoResize);
+
+    toggleSendButton();
+
+    queryForm.addEventListener('submit', function(e: SubmitEvent) {
+        e.preventDefault();
+        const query = queryInput.value.trim();
         if (!query) return;
-        textarea.value = '';
-        textarea.style.height = '';
-        textarea.style.overflowY = '';
-        form.classList.remove('multiline');
+        queryInput.value = '';
+        queryInput.style.height = '';
+        queryInput.style.overflowY = '';
+        queryForm.classList.remove('multiline');
         toggleSendButton();
         submitQuery(query);
     });

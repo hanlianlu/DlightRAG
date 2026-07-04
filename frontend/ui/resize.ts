@@ -1,18 +1,17 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 const STORAGE_KEY = 'dlightrag-panel-width';
 const MIN_WIDTH = 320;
 
-function getMaxWidth() {
+function getMaxWidth(): number {
     return Math.floor(window.innerWidth * 0.5);
 }
 
-function clampWidth(w) {
+function clampWidth(w: number): number {
     return Math.max(MIN_WIDTH, Math.min(w, getMaxWidth()));
 }
 
-function loadWidth() {
+function loadWidth(): number {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved !== null) {
@@ -23,13 +22,13 @@ function loadWidth() {
     return 420;
 }
 
-function saveWidth(w) {
+function saveWidth(w: number): void {
     try {
         localStorage.setItem(STORAGE_KEY, String(w));
     } catch (_) { /* localStorage unavailable */ }
 }
 
-export function setupPanelResize() {
+export function setupPanelResize(): void {
     const panel = document.getElementById('panel');
     if (!panel) return;
 
@@ -42,42 +41,46 @@ export function setupPanelResize() {
         handle.className = 'panel-resize-handle';
         panel.insertBefore(handle, panel.firstChild);
     }
+    const resizePanel = panel;
+    const resizeHandle = handle;
 
     let dragging = false;
     let startX = 0;
     let startWidth = 0;
-    let rafId = null;
-    let activePointerId = null;
+    let rafId: number | null = null;
+    let activePointerId: number | null = null;
 
-    function isOtherPointer(e) {
-        return e && 'pointerId' in e && activePointerId !== null && e.pointerId !== activePointerId;
+    function isOtherPointer(e: PointerEvent | Event): boolean {
+        return 'pointerId' in e && activePointerId !== null && e.pointerId !== activePointerId;
     }
 
-    function onPointerDown(e) {
+    function onPointerDown(e: Event): void {
+        const event = e as PointerEvent;
         if (dragging) return;
         dragging = true;
-        activePointerId = e.pointerId;
-        startX = e.clientX;
-        startWidth = panel.getBoundingClientRect().width;
-        e.preventDefault();
-        if (handle.setPointerCapture) {
-            handle.setPointerCapture(e.pointerId);
+        activePointerId = event.pointerId;
+        startX = event.clientX;
+        startWidth = resizePanel.getBoundingClientRect().width;
+        event.preventDefault();
+        if (resizeHandle.setPointerCapture) {
+            resizeHandle.setPointerCapture(event.pointerId);
         }
-        handle.classList.add('active');
+        resizeHandle.classList.add('active');
         document.body.style.userSelect = 'none';
         document.body.style.cursor = 'col-resize';
         document.body.setAttribute('data-resizing', '');
         document.body.classList.add('resizing');
-        panel.style.willChange = 'width';
-        panel.style.backdropFilter = 'none';
-        panel.style.boxShadow = 'none';
+        resizePanel.style.willChange = 'width';
+        resizePanel.style.backdropFilter = 'none';
+        resizePanel.style.boxShadow = 'none';
     }
 
-    function onPointerMove(e) {
+    function onPointerMove(e: Event): void {
+        const event = e as PointerEvent;
         if (!dragging) return;
-        if (isOtherPointer(e)) return;
+        if (isOtherPointer(event)) return;
         if (rafId !== null) cancelAnimationFrame(rafId);
-        const clientX = e.clientX;
+        const clientX = event.clientX;
         rafId = requestAnimationFrame(function () {
             const deltaX = startX - clientX;
             const newWidth = clampWidth(startWidth + deltaX);
@@ -85,7 +88,7 @@ export function setupPanelResize() {
         });
     }
 
-    function finishDrag(e) {
+    function finishDrag(e: PointerEvent | Event): void {
         if (!dragging) return;
         if (isOtherPointer(e)) return;
         dragging = false;
@@ -93,32 +96,36 @@ export function setupPanelResize() {
             cancelAnimationFrame(rafId);
             rafId = null;
         }
-        if (activePointerId !== null && handle.hasPointerCapture && handle.hasPointerCapture(activePointerId)) {
-            handle.releasePointerCapture(activePointerId);
+        if (
+            activePointerId !== null
+            && resizeHandle.hasPointerCapture
+            && resizeHandle.hasPointerCapture(activePointerId)
+        ) {
+            resizeHandle.releasePointerCapture(activePointerId);
         }
         activePointerId = null;
-        handle.classList.remove('active');
+        resizeHandle.classList.remove('active');
         document.body.style.userSelect = '';
         document.body.style.cursor = '';
         document.body.classList.remove('resizing');
-        panel.style.willChange = '';
-        panel.style.backdropFilter = '';
-        panel.style.boxShadow = '';
-        const finalWidth = panel.getBoundingClientRect().width;
+        resizePanel.style.willChange = '';
+        resizePanel.style.backdropFilter = '';
+        resizePanel.style.boxShadow = '';
+        const finalWidth = resizePanel.getBoundingClientRect().width;
         saveWidth(Math.round(finalWidth));
         setTimeout(function () {
             document.body.removeAttribute('data-resizing');
         }, 0);
     }
 
-    handle.addEventListener('pointerdown', onPointerDown);
+    resizeHandle.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('pointermove', onPointerMove);
     document.addEventListener('pointerup', finishDrag);
     document.addEventListener('pointercancel', finishDrag);
     window.addEventListener('blur', finishDrag);
 
     window.addEventListener('resize', function () {
-        const current = panel.getBoundingClientRect().width;
+        const current = resizePanel.getBoundingClientRect().width;
         const clamped = clampWidth(current);
         document.documentElement.style.setProperty('--panel-width', clamped + 'px');
     });

@@ -1,4 +1,3 @@
-// @ts-nocheck — full types deferred per spec
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {detectDropItems, uploadFolderToWorkspace} from './folder-upload.ts';
@@ -7,16 +6,33 @@ import lightboxStyles from '../styles/lightbox.module.css';
 
 const MAX_IMAGES = 3;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
-const pendingImages = [];
+const pendingImages: PendingImage[] = [];
 
-export function addImage(file) {
+interface PendingImage {
+    file: File;
+    dataUrl: string;
+    objectUrl: string;
+}
+
+type LightboxElement = HTMLDivElement & {
+    __lightboxPrev?: HTMLButtonElement;
+    __lightboxNext?: HTMLButtonElement;
+    __lightboxImg?: HTMLImageElement;
+};
+
+function eventElement(event: Event): Element | null {
+    return event.target instanceof Element ? event.target : null;
+}
+
+export function addImage(file: File): void {
     if (pendingImages.length >= MAX_IMAGES) return;
     if (!file.type.startsWith('image/')) return;
     if (file.size > MAX_IMAGE_SIZE) return;
 
     const reader = new FileReader();
     reader.onload = function(e) {
-        const dataUrl = e.target.result;
+        const dataUrl = typeof e.target?.result === 'string' ? e.target.result : '';
+        if (!dataUrl) return;
         const objectUrl = URL.createObjectURL(file);
         pendingImages.push({file, dataUrl, objectUrl});
         renderThumbnails();
@@ -24,11 +40,11 @@ export function addImage(file) {
     reader.readAsDataURL(file);
 }
 
-export function getPendingImageData() {
+export function getPendingImageData(): string[] {
     return pendingImages.map(function(img) { return img.dataUrl; });
 }
 
-export function renderMessageImages(container) {
+export function renderMessageImages(container: Element): void {
     if (pendingImages.length === 0) return;
     const msgImages = document.createElement('div');
     msgImages.className = chatStyles.messageImages;
@@ -42,19 +58,19 @@ export function renderMessageImages(container) {
     container.appendChild(msgImages);
 }
 
-export function clearImages() {
+export function clearImages(): void {
     pendingImages.forEach(function(img) { URL.revokeObjectURL(img.objectUrl); });
     pendingImages.length = 0;
     renderThumbnails();
 }
 
-function removeImage(index) {
+function removeImage(index: number): void {
     const removed = pendingImages.splice(index, 1);
     if (removed.length > 0) URL.revokeObjectURL(removed[0].objectUrl);
     renderThumbnails();
 }
 
-function renderThumbnails() {
+function renderThumbnails(): void {
     const strip = document.getElementById('thumbnail-strip');
     if (!strip) return;
     strip.replaceChildren();
@@ -71,7 +87,7 @@ function renderThumbnails() {
         const btn = document.createElement('button');
         btn.className = chatStyles.thumbnailRemove;
         btn.textContent = 'x';
-        btn.setAttribute('data-idx', idx);
+        btn.setAttribute('data-idx', String(idx));
         btn.addEventListener('click', function() { removeImage(idx); });
         item.appendChild(btn);
 
@@ -79,26 +95,26 @@ function renderThumbnails() {
     });
 }
 
-function _isSafeImageSrc(src) {
+function _isSafeImageSrc(src: unknown): src is string {
     return typeof src === 'string' && /^(?!\/\/)(?:\/|blob:|data:)/.test(src);
 }
 
-function _getLightboxImageSrc(el) {
-    const s =el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
+function _getLightboxImageSrc(el: Element): string {
+    const s = el.getAttribute('data-full-src') || el.getAttribute('data-src') || '';
     return _isSafeImageSrc(s) ? s : '';
 }
 
-function _collectGalleryImages() {
+function _collectGalleryImages(): string[] {
     const items = document.querySelectorAll('[data-action="open-lightbox"]');
-    const srcs = [];
+    const srcs: string[] = [];
     items.forEach(function(el) {
-        const s =_getLightboxImageSrc(el);
+        const s = _getLightboxImageSrc(el);
         if (s) srcs.push(s);
     });
     return srcs;
 }
 
-function _currentGalleryIndex(currentSrc) {
+function _currentGalleryIndex(currentSrc: string): number {
     const images = _collectGalleryImages();
     for (let i = 0; i < images.length; i++) {
         if (images[i] === currentSrc) return i;
@@ -106,7 +122,7 @@ function _currentGalleryIndex(currentSrc) {
     return -1;
 }
 
-function _updateNavButtons(box) {
+function _updateNavButtons(box: LightboxElement): void {
     if (!box || !box.classList.contains(lightboxStyles.open)) return;
     const currentSrc = box.getAttribute('data-current-src') || '';
     const images = _collectGalleryImages();
@@ -126,8 +142,7 @@ function _updateNavButtons(box) {
     }
 }
 
-function _showLightboxImage(box, src) {
-    if (typeof src !== 'string') return;
+function _showLightboxImage(box: LightboxElement, src: string): void {
     if (!_isSafeImageSrc(src)) return;
     const img = box.__lightboxImg;
     if (!img) return;
@@ -136,8 +151,8 @@ function _showLightboxImage(box, src) {
     _updateNavButtons(box);
 }
 
-function _navigateLightbox(direction) {
-    const box = document.getElementById('image-lightbox');
+function _navigateLightbox(direction: number): void {
+    const box = document.getElementById('image-lightbox') as LightboxElement | null;
     if (!box || !box.classList.contains(lightboxStyles.open)) return;
     const currentSrc = box.getAttribute('data-current-src') || '';
     const images = _collectGalleryImages();
@@ -150,11 +165,11 @@ function _navigateLightbox(direction) {
     _showLightboxImage(box, images[newIdx]);
 }
 
-function ensureLightbox() {
-    let box = document.getElementById('image-lightbox');
+function ensureLightbox(): LightboxElement {
+    let box = document.getElementById('image-lightbox') as LightboxElement | null;
     if (box) return box;
 
-    box = document.createElement('div');
+    box = document.createElement('div') as LightboxElement;
     box.id = 'image-lightbox';
     box.className = lightboxStyles.imageLightbox;
     box.setAttribute('aria-hidden', 'true');
@@ -178,7 +193,6 @@ function ensureLightbox() {
     img.alt = 'Source image';
     box.appendChild(img);
 
-    // Store element references for later use
     box.__lightboxPrev = prev;
     box.__lightboxNext = next;
     box.__lightboxImg = img;
@@ -189,11 +203,12 @@ function ensureLightbox() {
             closeLightbox();
             return;
         }
-        if (e.target.closest('.' + lightboxStyles.imageLightboxPrev)) {
+        const target = eventElement(e);
+        if (target?.closest('.' + lightboxStyles.imageLightboxPrev)) {
             _navigateLightbox(-1);
             return;
         }
-        if (e.target.closest('.' + lightboxStyles.imageLightboxNext)) {
+        if (target?.closest('.' + lightboxStyles.imageLightboxNext)) {
             _navigateLightbox(1);
             return;
         }
@@ -201,20 +216,20 @@ function ensureLightbox() {
     return box;
 }
 
-export function openLightbox(src) {
-    if (typeof src !== 'string') return;
+export function openLightbox(src: unknown): void {
     if (!_isSafeImageSrc(src)) return;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', src);
     const img = box.__lightboxImg;
+    if (!img) return;
     img.src = src;
     box.classList.add(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'false');
     _updateNavButtons(box);
 }
 
-export function closeLightbox() {
-    const box = document.getElementById('image-lightbox');
+export function closeLightbox(): void {
+    const box = document.getElementById('image-lightbox') as LightboxElement | null;
     if (!box) return;
     box.classList.remove(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'true');
@@ -223,9 +238,9 @@ export function closeLightbox() {
     if (img) img.removeAttribute('src');
 }
 
-export function setupImageInputs() {
+export function setupImageInputs(): void {
     const plusBtn = document.getElementById('composer-plus');
-    const imageInput = document.getElementById('image-input');
+    const imageInput = document.getElementById('image-input') as HTMLInputElement | null;
     if (plusBtn && imageInput) {
         plusBtn.addEventListener('click', function() { imageInput.click(); });
         imageInput.addEventListener('change', function() {
@@ -257,7 +272,7 @@ export function setupImageInputs() {
         dragCounter = 0;
         if (dropOverlay) dropOverlay.classList.remove('active');
 
-        const items = e.dataTransfer.items;
+        const items = e.dataTransfer?.items;
         if (!items || items.length === 0) return;
 
         const result = await detectDropItems(
@@ -280,7 +295,7 @@ export function setupImageInputs() {
         }
     });
     document.addEventListener('click', function(e) {
-        const item = e.target.closest('[data-action="open-lightbox"]');
+        const item = eventElement(e)?.closest('[data-action="open-lightbox"]');
         if (!item) return;
         const src = _getLightboxImageSrc(item);
         if (!src) return;
