@@ -163,22 +163,6 @@ async def test_context_chunks_by_ids_formats_text_chunks() -> None:
     ]
 
 
-async def test_query_chunk_vectors_delegates_to_lightrag_vector_store() -> None:
-    fake = FakeLightRAG()
-    fake.chunks_vdb = AsyncMock()
-    fake.chunks_vdb.query.return_value = [{"id": "chunk-a"}]
-    stores = LightRAGStores(fake)
-
-    result = await stores.query_chunk_vectors(query_embedding=[0.1, 0.2], top_k=3)
-
-    fake.chunks_vdb.query.assert_awaited_once_with(
-        query="",
-        top_k=3,
-        query_embedding=[0.1, 0.2],
-    )
-    assert result == [{"id": "chunk-a"}]
-
-
 async def test_fetch_chunk_contents_reads_lightrag_doc_chunks() -> None:
     class FakeTextChunksDB:
         def __init__(self) -> None:

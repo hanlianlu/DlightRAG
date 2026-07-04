@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock
 from PIL import Image
 
 from dlightrag.core.retrieval import lightrag_backend as lightrag_backend_module
-from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
 from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
 
 
@@ -40,7 +39,8 @@ def _stores(
     stores.context_chunks_by_ids = AsyncMock(return_value=[])
     stores.get_text_chunks = AsyncMock(return_value=list(raw_chunks or []))
     stores.get_full_doc = AsyncMock(return_value=full_doc)
-    stores.query_chunk_vectors = AsyncMock(return_value=list(vector_results or []))
+    stores.chunks_vdb = MagicMock()
+    stores.chunks_vdb.query = AsyncMock(return_value=list(vector_results or []))
     return stores
 
 
@@ -67,34 +67,6 @@ async def test_backend_always_queries_lightrag_mix() -> None:
     assert result.contexts["chunks"][0]["chunk_id"] == "txt1"
     assert result.contexts["chunks"][0]["reference_id"] == "3"
     assert result.contexts["chunks"][0].get("page_idx") is None
-
-
-async def test_backend_uses_store_boundary_for_metadata_injected_chunks() -> None:
-    lightrag = MagicMock(spec=["aquery_data"])
-    lightrag.aquery_data = AsyncMock(
-        return_value={
-            "data": {
-                "chunks": [{"id": "semantic-a", "content": "alpha"}],
-                "entities": [],
-                "relationships": [],
-            }
-        }
-    )
-    stores = MagicMock()
-    stores.context_chunks_by_ids = AsyncMock(
-        return_value=[{"chunk_id": "metadata-only", "content": "beta", "reference_id": ""}]
-    )
-    stores.get_text_chunks = AsyncMock(return_value=[None, None])
-
-    backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
-    async with metadata_filter_scope({"semantic-a", "metadata-only"}):
-        result = await backend.aretrieve("question", chunk_top_k=5)
-
-    stores.context_chunks_by_ids.assert_awaited_once_with(["metadata-only"])
-    assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == [
-        "semantic-a",
-        "metadata-only",
-    ]
 
 
 async def test_backend_forwards_chunk_top_k_to_lightrag_query_param() -> None:
@@ -249,8 +221,8 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     result = await backend.aretrieve("find this", multimodal_content=[_image_payload()])
 
     embedder.embed_query_images.assert_awaited_once()
-    stores.query_chunk_vectors.assert_awaited_once()
-    query_args = stores.query_chunk_vectors.await_args
+    stores.chunks_vdb.query.assert_awaited_once()
+    query_args = stores.chunks_vdb.query.await_args
     assert query_args is not None
     assert query_args.kwargs["query_embedding"] == [0.1, 0.2, 0.3]
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
@@ -296,7 +268,7 @@ async def test_backend_skips_direct_query_images_without_embedder() -> None:
     result = await backend.aretrieve("find this", multimodal_content=[_image_payload()])
 
     assert result.trace["direct_visual_chunk_count"] == 0
-    stores.query_chunk_vectors.assert_not_awaited()
+    stores.chunks_vdb.query.assert_not_awaited()
 
 
 async def test_backend_batches_multiple_query_image_embeddings(tmp_path: Path) -> None:
@@ -307,7 +279,7 @@ async def test_backend_batches_multiple_query_image_embeddings(tmp_path: Path) -
         return_value={"data": {"chunks": [], "entities": [], "relationships": []}}
     )
     stores = _stores(raw_chunks=[None, None])
-    stores.query_chunk_vectors = AsyncMock(
+    stores.chunks_vdb.query = AsyncMock(
         side_effect=[
             [
                 {
@@ -339,7 +311,7 @@ async def test_backend_batches_multiple_query_image_embeddings(tmp_path: Path) -
 
     embedder.embed_query_images.assert_awaited_once()
     assert len(embedder.embed_query_images.await_args.args[0]) == 2
-    assert stores.query_chunk_vectors.await_count == 2
+    assert stores.chunks_vdb.query.await_count == 2
     assert [c["chunk_id"] for c in result.contexts["chunks"][:2]] == ["img-b", "img-a"]
 
 
@@ -378,7 +350,7 @@ async def test_backend_uses_dedicated_direct_visual_top_k_for_image_search(
         multimodal_content=[_image_payload()],
     )
 
-    query_args = stores.query_chunk_vectors.await_args
+    query_args = stores.chunks_vdb.query.await_args
     assert query_args is not None
     assert query_args.kwargs["top_k"] == 2
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"

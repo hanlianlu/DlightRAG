@@ -173,7 +173,14 @@ class LightRAGMixBackend:
                 image.close()
 
         async def _query_vector(vector: list[float]) -> list[ContextRow]:
-            return await self._stores.query_chunk_vectors(query_embedding=vector, top_k=top_k)
+            return (
+                await self._stores.chunks_vdb.query(
+                    query="",
+                    top_k=top_k,
+                    query_embedding=vector,
+                )
+                or []
+            )
 
         query_results = await bounded_map(
             list(vectors),
