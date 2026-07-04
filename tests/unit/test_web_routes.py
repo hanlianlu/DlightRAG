@@ -609,6 +609,15 @@ class TestWebFiles:
         assert "Workspace no longer exists" in resp.text
         mock_manager.get_pipeline_status.assert_not_awaited()
 
+    async def test_ingest_status_done_preserves_panel_content_container(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        resp = await client.get("/web/ingest-status", params={"workspace": "default"})
+
+        assert resp.status_code == 200
+        assert resp.headers["hx-retarget"] == "#panel-content"
+        assert resp.headers["hx-reswap"] == "innerHTML"
+
     async def test_upload_preserves_filename_for_directory_ingest(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:

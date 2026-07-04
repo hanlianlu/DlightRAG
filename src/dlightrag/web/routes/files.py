@@ -304,6 +304,7 @@ async def ingest_status(
     # Ingest finished -- reload the full file list into the panel.
     response = await _file_list_response(request, selected_workspace)
     response.headers["HX-Retarget"] = "#panel-content"
+    response.headers["HX-Reswap"] = "innerHTML"
     return response
 
 
