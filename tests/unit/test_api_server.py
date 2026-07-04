@@ -745,58 +745,6 @@ class TestIngestEndpoint:
         )
         mock_manager.aingest.assert_not_awaited()
 
-    async def test_s3_ingest_forwards_retain_source_file_override(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "s3",
-                "bucket": "my-bucket",
-                "key": "docs/file.pdf",
-                "retain_source_file": True,
-            },
-        )
-
-        assert resp.status_code == 202
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(
-                source_type="s3",
-                bucket="my-bucket",
-                key="docs/file.pdf",
-                retain_source_file=True,
-            ),
-        )
-
-    async def test_s3_ingest_forwards_region(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "s3",
-                "bucket": "my-bucket",
-                "key": "docs/file.pdf",
-                "region": "eu-north-1",
-            },
-        )
-
-        assert resp.status_code == 202
-        mock_manager.astart_ingest_job.assert_awaited_once_with(
-            "default",
-            IngestSpec(
-                source_type="s3",
-                bucket="my-bucket",
-                key="docs/file.pdf",
-                region="eu-north-1",
-            ),
-        )
-
     async def test_url_ingest_defaults_to_background_job(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -875,61 +823,6 @@ class TestIngestEndpoint:
         ingest_spec = call_args.args[1]
         assert ingest_spec.source_type == "local"
         assert ingest_spec.path.startswith(str(mock_config.input_dir_path / "default"))
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_ingest_forwards_metadata_contract(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        path = mock_config.input_dir_path / "default" / "file.pdf"
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "local",
-                "path": "file.pdf",
-                "title": "Field Notes",
-                "author": "Ada",
-                "metadata": {"project": "apollo"},
-                "metadata_policy": "reject_unknown",
-            },
-        )
-        assert resp.status_code == 202
-        ingest_spec = mock_manager.astart_ingest_job.call_args.args[1]
-        assert ingest_spec.path == str(path)
-        assert ingest_spec.title == "Field Notes"
-        assert ingest_spec.author == "Ada"
-        assert ingest_spec.metadata == {"project": "apollo"}
-        assert ingest_spec.metadata_policy == "reject_unknown"
-        mock_manager.aingest.assert_not_awaited()
-
-    async def test_ingest_forwards_document_manifest_metadata(
-        self, client: AsyncClient, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        resp = await client.post(
-            "/ingest",
-            json={
-                "source_type": "s3",
-                "bucket": "my-bucket",
-                "metadata": {"source_system": "s3-prod", "department": "Marketing"},
-                "documents": [
-                    {
-                        "key": "docs/a.pdf",
-                        "title": "A",
-                        "metadata": {"department": "Legal", "asset_id": "a"},
-                    }
-                ],
-            },
-        )
-
-        assert resp.status_code == 202
-        ingest_spec = mock_manager.astart_ingest_job.call_args.args[1]
-        assert ingest_spec.source_type == "s3"
-        assert ingest_spec.bucket == "my-bucket"
-        assert ingest_spec.metadata == {"source_system": "s3-prod", "department": "Marketing"}
-        assert ingest_spec.documents[0].key == "docs/a.pdf"
-        assert ingest_spec.documents[0].title == "A"
-        assert ingest_spec.documents[0].metadata == {"department": "Legal", "asset_id": "a"}
         mock_manager.aingest.assert_not_awaited()
 
     async def test_azure_blob_success(

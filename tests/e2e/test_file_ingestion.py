@@ -12,13 +12,10 @@ def test_ingestion_panel_opens(page):
     page.goto("/web/")
     page.wait_for_selector(".app", timeout=10000)
 
-    # The panel trigger button (if present) opens the file panel
-    panel_trigger = page.locator("#panel-trigger-files")
-    if panel_trigger.count() > 0:
-        panel_trigger.click()
-        page.wait_for_timeout(500)
-        panel = page.locator("#panel")
-        assert panel.is_visible() or panel.count() > 0
+    page.click("#files-btn")
+
+    page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
+    assert page.locator("#panel-title").text_content() == "FILES"
 
 
 @pytest.mark.e2e
@@ -27,12 +24,6 @@ def test_empty_file_list_renders(page):
     page.goto("/web/")
     page.wait_for_selector(".app", timeout=10000)
 
-    # Navigate to ingest panel if accessible
-    panel_trigger = page.locator("#panel-trigger-files")
-    if panel_trigger.count() > 0:
-        panel_trigger.click()
-        page.wait_for_timeout(500)
+    page.click("#files-btn")
 
-    # The panel-content area should exist
-    panel_content = page.locator("#panel-content")
-    assert panel_content.count() >= 1
+    page.wait_for_selector("#panel-content #upload-zone", timeout=10000)

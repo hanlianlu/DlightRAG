@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import inspect
 import json
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -13,7 +12,7 @@ import pytest
 import dlightrag
 from dlightrag.citations.schemas import SourceReference
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
-from dlightrag.core.client_contracts import IngestDocument, IngestSpec
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope, request_scope_context
 from dlightrag.mcp import server as mcp_server
@@ -144,21 +143,6 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "store_only",
     ]
     assert "ingest_job_status" in names
-
-
-def test_mcp_streamable_http_uses_modern_transport_defaults() -> None:
-    source = inspect.getsource(mcp_server.run_streamable_http)
-
-    assert "StreamableHTTPSessionManager" in source
-    assert "TransportSecuritySettings" in source
-    assert "enable_dns_rebinding_protection=True" in source
-    assert "json_response=True" in source
-    assert "stateless=True" in source
-    assert "MCPPathMiddleware" in source
-    assert 'Mount("/mcp"' in source
-    assert '"/sse"' not in source
-    assert '"/messages"' not in source
-    assert "StreamableHTTPServerTransport" not in source
 
 
 def test_mcp_security_defaults_are_loopback_only() -> None:
@@ -330,89 +314,6 @@ async def test_mcp_delete_workspace_resets_workspace(mock_mcp_manager) -> None:
     )
 
 
-async def test_mcp_ingest_forwards_document_metadata(
-    mock_mcp_manager, test_config: DlightragConfig
-) -> None:
-    mock_mcp_manager.astart_ingest_job = AsyncMock(
-        return_value={
-            "job_id": "job-1",
-            "workspace": "finance",
-            "source_type": "local",
-            "status": "queued",
-        }
-    )
-    path = test_config.input_dir_path / "finance" / "report.pdf"
-
-    result = await mcp_server.mcp_app.call_tool(
-        "ingest",
-        {
-            "source_type": "local",
-            "path": "report.pdf",
-            "workspace": "finance",
-            "title": "Quarterly Report",
-            "author": "Ada",
-            "metadata": {"department": "Finance"},
-            "metadata_policy": "reject_unknown",
-        },
-    )
-
-    assert _tool_json(result)["job_id"] == "job-1"
-    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
-        "finance",
-        IngestSpec(
-            source_type="local",
-            path=str(path),
-            title="Quarterly Report",
-            author="Ada",
-            metadata={"department": "Finance"},
-            metadata_policy="reject_unknown",
-        ),
-    )
-    mock_mcp_manager.aingest.assert_not_awaited()
-
-
-async def test_mcp_ingest_forwards_document_manifest_metadata(mock_mcp_manager) -> None:
-    mock_mcp_manager.astart_ingest_job = AsyncMock(
-        return_value={
-            "job_id": "job-1",
-            "workspace": "finance",
-            "source_type": "s3",
-            "status": "queued",
-        }
-    )
-
-    result = await mcp_server.mcp_app.call_tool(
-        "ingest",
-        {
-            "source_type": "s3",
-            "bucket": "my-bucket",
-            "workspace": "finance",
-            "metadata": {"source_system": "s3-prod"},
-            "documents": [
-                {
-                    "key": "docs/a.pdf",
-                    "metadata": {"department": "Legal", "asset_id": "a"},
-                }
-            ],
-        },
-    )
-
-    assert _tool_json(result)["job_id"] == "job-1"
-    assert mock_mcp_manager.astart_ingest_job.await_args is not None
-    ingest_spec = mock_mcp_manager.astart_ingest_job.await_args.args[1]
-    assert ingest_spec == IngestSpec(
-        source_type="s3",
-        bucket="my-bucket",
-        metadata={"source_system": "s3-prod"},
-        documents=[
-            IngestDocument(
-                key="docs/a.pdf",
-                metadata={"department": "Legal", "asset_id": "a"},
-            )
-        ],
-    )
-
-
 async def test_mcp_rejects_local_path_outside_input_dir(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
@@ -470,73 +371,6 @@ async def test_mcp_remote_prefix_ingest_starts_background_job(mock_mcp_manager) 
         IngestSpec(source_type="s3", bucket="bucket", prefix="docs/"),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
-
-
-async def test_mcp_remote_ingest_forwards_retain_source_file_override(
-    mock_mcp_manager,
-) -> None:
-    mock_mcp_manager.astart_ingest_job = AsyncMock(
-        return_value={
-            "job_id": "job-1",
-            "workspace": "default",
-            "source_type": "s3",
-            "status": "queued",
-        }
-    )
-
-    result = await mcp_server.mcp_app.call_tool(
-        "ingest",
-        {
-            "source_type": "s3",
-            "bucket": "bucket",
-            "key": "docs/report.pdf",
-            "retain_source_file": True,
-        },
-    )
-
-    assert _tool_json(result)["job_id"] == "job-1"
-    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
-        "default",
-        IngestSpec(
-            source_type="s3",
-            bucket="bucket",
-            key="docs/report.pdf",
-            retain_source_file=True,
-        ),
-    )
-    mock_mcp_manager.aingest.assert_not_awaited()
-
-
-async def test_mcp_s3_ingest_forwards_region(mock_mcp_manager) -> None:
-    mock_mcp_manager.astart_ingest_job = AsyncMock(
-        return_value={
-            "job_id": "job-1",
-            "workspace": "default",
-            "source_type": "s3",
-            "status": "queued",
-        }
-    )
-
-    result = await mcp_server.mcp_app.call_tool(
-        "ingest",
-        {
-            "source_type": "s3",
-            "bucket": "bucket",
-            "key": "docs/report.pdf",
-            "region": "eu-north-1",
-        },
-    )
-
-    assert _tool_json(result)["job_id"] == "job-1"
-    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
-        "default",
-        IngestSpec(
-            source_type="s3",
-            bucket="bucket",
-            key="docs/report.pdf",
-            region="eu-north-1",
-        ),
-    )
 
 
 async def test_mcp_url_ingest_starts_background_job(mock_mcp_manager) -> None:

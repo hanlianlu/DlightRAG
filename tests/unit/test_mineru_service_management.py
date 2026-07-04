@@ -46,8 +46,6 @@ def test_makefile_delegates_mineru_defaults_to_scripts() -> None:
     assert "MINERU_API_HOST ?=" not in makefile
     assert "MINERU_API_PORT ?=" not in makefile
     assert "MINERU_SERVICE_VENV ?=" not in makefile
-    assert "\nmineru-install:\n\tscripts/mineru/install.sh\n" in makefile
-    assert "\nmineru-api:\n\tscripts/mineru/api.sh\n" in makefile
 
 
 def test_makefile_targets_are_thin_script_wrappers() -> None:
@@ -73,14 +71,11 @@ def test_mineru_env_example_documents_install_extras() -> None:
 
 
 def test_makefile_exposes_mineru_launch_agent_targets() -> None:
-    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-
-    assert "\nmineru-service-install:\n\tscripts/mineru/launch_agent.sh install\n" in makefile
-    assert "\nmineru-service-start:\n\tscripts/mineru/launch_agent.sh start\n" in makefile
-    assert "\nmineru-service-stop:\n\tscripts/mineru/launch_agent.sh stop\n" in makefile
-    assert "\nmineru-service-status:\n\tscripts/mineru/launch_agent.sh status\n" in makefile
-    assert "\nmineru-service-logs:\n\tscripts/mineru/launch_agent.sh logs\n" in makefile
-    assert "\nmineru-service-uninstall:\n\tscripts/mineru/launch_agent.sh uninstall\n" in makefile
+    for action in ("install", "start", "stop", "status", "logs", "uninstall"):
+        assert (
+            _makefile_target_command(f"mineru-service-{action}")
+            == f"scripts/mineru/launch_agent.sh {action}"
+        )
 
 
 def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:

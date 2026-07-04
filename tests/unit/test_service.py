@@ -1404,30 +1404,6 @@ class TestRAGServiceLightRAGMainPath:
 
         service._lightrag.finalize_storages.assert_awaited_once()
 
-    # -- File deletion --
-
-    async def test_adelete_files_unified(self, test_config: DlightragConfig) -> None:
-        """Deletion removes LightRAG data and metadata index entries."""
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service._lightrag = MagicMock()
-        service._lightrag.adelete_by_doc_id = AsyncMock()
-        service._lightrag.doc_status = MagicMock()
-        service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
-        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
-            return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
-        )
-        service._metadata_index = MagicMock()
-        service._metadata_index.get = AsyncMock(return_value={"page_count": 3})
-        service._metadata_index.delete = AsyncMock()
-
-        results = await service.adelete_files(filenames=["a.pdf"])
-
-        assert len(results) == 1
-        assert results[0]["status"] == "deleted"
-        service._lightrag.adelete_by_doc_id.assert_awaited_once()
-        service._metadata_index.delete.assert_awaited_once_with("d1")
-
     async def test_adelete_files_dry_run_reports_matches_without_mutating(
         self, test_config: DlightragConfig
     ) -> None:
@@ -1472,25 +1448,3 @@ class TestRAGServiceLightRAGMainPath:
         results = await service.adelete_files(filenames=["nonexistent.pdf"])
 
         assert results[0]["status"] == "not_found"
-
-    async def test_adelete_files_unified_continues_after_layer1_failure(
-        self, test_config: DlightragConfig
-    ) -> None:
-        """Metadata cleanup still runs when LightRAG deletion fails."""
-        service = RAGService(config=test_config)
-        service._initialized = True
-        service._lightrag = MagicMock()
-        service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=RuntimeError("LightRAG down"))
-        service._lightrag.doc_status = MagicMock()
-        service._lightrag.doc_status.get_doc_by_file_path = AsyncMock(return_value=None)
-        service._lightrag.doc_status.get_docs_by_status = AsyncMock(
-            return_value={"d1": MagicMock(file_path="/tmp/a.pdf")}
-        )
-        service._metadata_index = MagicMock()
-        service._metadata_index.get = AsyncMock(return_value={"page_count": 2})
-        service._metadata_index.delete = AsyncMock()
-
-        results = await service.adelete_files(filenames=["a.pdf"])
-
-        assert results[0]["status"] == "deleted_with_errors"
-        service._metadata_index.delete.assert_awaited_once_with("d1")

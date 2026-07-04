@@ -23,11 +23,9 @@ def test_panelToggles_on_repeated_clicks(page):
     page.goto("/web/")
     page.wait_for_selector(".app", timeout=10000)
 
-    trigger = page.locator("#panel-trigger-files")
-    if trigger.count() > 0:
-        trigger.click()
-        page.wait_for_timeout(300)
-        trigger.click()
-        page.wait_for_timeout(300)
-        # App shell should still be intact
-        assert page.locator(".app").is_visible()
+    page.click("#files-btn")
+    page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
+    page.click("#files-btn")
+
+    assert page.locator(".app").is_visible()
+    assert page.locator("#panel").evaluate("el => el.classList.contains('open')")
