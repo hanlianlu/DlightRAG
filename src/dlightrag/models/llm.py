@@ -279,13 +279,32 @@ def get_multimodal_embedder(config: DlightragConfig) -> Any:
     )
 
 
-def get_rerank_func(config: DlightragConfig) -> Callable | None:
+def get_chat_rerank_scoring_config(config: DlightragConfig) -> ModelConfig:
+    """Return the messages-first model config used by chat_llm_reranker."""
+    rc = config.rerank
+    if rc.provider and rc.model:
+        return ModelConfig(
+            provider=rc.provider,
+            model=rc.model,
+            api_key=rc.api_key,
+            base_url=rc.base_url,
+            temperature=rc.temperature or 0.0,
+            model_kwargs=rc.model_kwargs,
+        )
+    return config.llm.roles.vlm or config.llm.roles.query or config.llm.default
+
+
+def get_rerank_func(
+    config: DlightragConfig,
+    *,
+    supports_vision: bool | None = None,
+) -> Callable | None:
     """Build multimodal rerank callable from config.
 
     For chat_llm_reranker: uses an independent rerank model if provider/model
     are set in rerank config. Otherwise it reuses the most capable configured
-    chat role in order: vlm, query, then default. The selected callable must
-    support image inputs when chunks include page images.
+    chat role in order: vlm, query, then default. When *supports_vision* is
+    provided, it is the startup probe result for that selected scoring model.
     """
     from dlightrag.models.rerank import build_rerank_func
 
@@ -295,17 +314,17 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
 
     # For chat_llm_reranker: build scoring callable (messages-first, NOT LightRAG-adapted)
     if rc.strategy == "chat_llm_reranker":
-        if rc.provider and rc.model:
-            scoring_cfg = ModelConfig(
-                provider=rc.provider,
-                model=rc.model,
-                api_key=rc.api_key,
-                base_url=rc.base_url,
-                temperature=rc.temperature or 0.0,
-                model_kwargs=rc.model_kwargs,
-            )
-        else:
-            scoring_cfg = config.llm.roles.vlm or config.llm.roles.query or config.llm.default
+        scoring_cfg = get_chat_rerank_scoring_config(config)
+        if supports_vision is not None:
+            if rc.input_modality == "auto":
+                rc = rc.model_copy(
+                    update={"input_modality": "multimodal" if supports_vision else "text"}
+                )
+            elif rc.input_modality == "multimodal" and not supports_vision:
+                raise ValueError(
+                    "chat_llm_reranker input_modality=multimodal but the selected scoring "
+                    "model does not support image input"
+                )
 
         scoring_func = _make_completion_func(
             scoring_cfg,
@@ -318,6 +337,7 @@ def get_rerank_func(config: DlightragConfig) -> Callable | None:
 
 __all__ = [
     "build_role_llm_configs",
+    "get_chat_rerank_scoring_config",
     "get_default_model_func",
     "get_default_model_func_for_lightrag",
     "get_embedding_func",

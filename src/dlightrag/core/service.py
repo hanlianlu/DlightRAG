@@ -177,12 +177,14 @@ class RAGService:
         config: DlightragConfig | None = None,
         enable_vlm: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        rerank_supports_vision: bool | None = None,
     ) -> RAGService:
         """Async factory method - creates and initializes RAGService."""
         instance = cls(
             config=config,
             enable_vlm=enable_vlm,
             cancel_checker=cancel_checker,
+            rerank_supports_vision=rerank_supports_vision,
         )
         await instance.initialize()
         return instance
@@ -192,6 +194,7 @@ class RAGService:
         config: DlightragConfig | None = None,
         enable_vlm: bool = True,
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
+        rerank_supports_vision: bool | None = None,
     ) -> None:
         """Store configuration only. Use RAGService.create() for full initialization."""
         self.config = config or get_config()
@@ -200,6 +203,7 @@ class RAGService:
 
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
+        self._rerank_supports_vision = rerank_supports_vision
 
         # Direct LightRAG runtime and DlightRAG orchestration.
         self._lightrag: Any = None  # Direct LightRAG reference
@@ -456,7 +460,7 @@ class RAGService:
 
         # Get model functions
         default_func_lr = get_default_model_func_for_lightrag(config)
-        rerank_func = get_rerank_func(config)
+        rerank_func = get_rerank_func(config, supports_vision=self._rerank_supports_vision)
         self._rerank_func = rerank_func
         role_overrides = build_role_llm_configs(config)
         if role_overrides is not None:

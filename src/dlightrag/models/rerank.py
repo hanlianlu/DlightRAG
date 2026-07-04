@@ -18,7 +18,7 @@ import logging
 import re
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
 
@@ -37,6 +37,29 @@ _DEFAULT_IMAGE_MAX_PX = 1280
 _DEFAULT_IMAGE_MIN_PX = 768
 _DEFAULT_IMAGE_QUALITY = 86
 _DEFAULT_IMAGE_MIN_QUALITY = 76
+_JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
+_JINA_RERANK_MODEL = "jina-reranker-v3"
+_ALIYUN_RERANK_MODEL = "qwen3-rerank"
+_VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank"
+_VOYAGE_RERANK_MODEL = "rerank-2.5"
+_COHERE_RERANK_URL = "https://api.cohere.com/v2/rerank"
+_COHERE_RERANK_MODEL = "rerank-v4.0-pro"
+_AZURE_COHERE_RERANK_MODEL = "cohere-rerank-v4.0-pro"
+InputModality = Literal["auto", "text", "multimodal"]
+ResolvedInputModality = Literal["text", "multimodal"]
+# Official rerank APIs that accept image documents as of the current docs.
+_MULTIMODAL_RERANK_MODELS: frozenset[str] = frozenset(
+    {
+        "qwen3-vl-rerank",
+    }
+)
+_TEXT_RERANK_MODELS = frozenset(
+    {
+        "jina-reranker-v3",
+        "qwen3-rerank",
+    }
+)
+_TEXT_RERANK_MODEL_FAMILIES = ("rerank-2.5", "rerank-v4.0", "cohere-rerank-v4.0")
 
 
 def _clamp(value: float) -> float:
@@ -66,6 +89,56 @@ def _build_scored_chunks(
 
     scored.sort(key=lambda c: c["rerank_score"], reverse=True)
     return scored[:top_k]
+
+
+def _resolve_input_modality(input_modality: InputModality, model: str) -> ResolvedInputModality:
+    model_id = model.lower()
+    if model_id in _TEXT_RERANK_MODELS or any(
+        model_id == family or model_id.startswith(f"{family}-")
+        for family in _TEXT_RERANK_MODEL_FAMILIES
+    ):
+        return "text"
+    if input_modality != "auto":
+        return input_modality
+    return "multimodal" if model_id in _MULTIMODAL_RERANK_MODELS else "text"
+
+
+def _chunk_text(chunk: dict[str, Any]) -> str:
+    return str(chunk.get("content") or "")
+
+
+def _build_rerank_documents(
+    chunks: list[dict[str, Any]],
+    *,
+    input_modality: ResolvedInputModality,
+    image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
+    image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
+    image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
+    image_min_px: int = _DEFAULT_IMAGE_MIN_PX,
+    image_quality: int = _DEFAULT_IMAGE_QUALITY,
+    image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
+) -> list[str | dict[str, str]]:
+    if input_modality == "text":
+        return [_chunk_text(chunk) for chunk in chunks]
+
+    documents: list[str | dict[str, str]] = []
+    image_budget = ImagePayloadBudget(
+        max_total_bytes=image_max_total_bytes,
+        max_bytes_per_image=image_max_bytes,
+        max_px=image_max_px,
+        min_px=image_min_px,
+        quality=image_quality,
+        min_quality=image_min_quality,
+    )
+    for idx, chunk in enumerate(chunks):
+        img = chunk.get("image_data")
+        if img:
+            bounded = image_budget.add_base64(img, label=f"rerank:{idx}")
+            if bounded is not None:
+                documents.append({"image": bounded[0]})
+                continue
+        documents.append(_chunk_text(chunk))
+    return documents
 
 
 def _parse_listwise_scores(text: str, expected: int) -> list[float]:
@@ -128,7 +201,7 @@ async def _chat_llm_rerank(
         )
 
         for i, chunk in enumerate(batch):
-            content.append({"type": "text", "text": f"\n--- Item {i + 1} ---"})
+            content.append({"type": "text", "text": f"\nCandidate {i + 1}:"})
             image_included = False
             if multimodal:
                 img = chunk.get("image_data")
@@ -283,22 +356,193 @@ async def _http_rerank(
     return _build_scored_chunks(chunks, all_results, score_threshold=score_threshold, top_k=top_k)
 
 
-# ── HTTP /rerank strategy registry ───────────────────────────────
-# Three strategies share `_http_rerank`'s shape; only defaults differ.
+# ── Provider rerankers ──────────────────────────────────────────
+
+
+async def _post_rerank_json(
+    *,
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    client: httpx.AsyncClient | None,
+) -> dict[str, Any]:
+    if client is not None:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+    async with httpx.AsyncClient(timeout=60.0) as ephemeral:
+        resp = await ephemeral.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _jina_rerank(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_k: int,
+    *,
+    url: str = _JINA_RERANK_URL,
+    model: str = _JINA_RERANK_MODEL,
+    api_key: str,
+    input_modality: InputModality = "auto",
+    score_threshold: float = 0.5,
+    client: httpx.AsyncClient | None = None,
+    image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
+    image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
+    image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
+    image_min_px: int = _DEFAULT_IMAGE_MIN_PX,
+    image_quality: int = _DEFAULT_IMAGE_QUALITY,
+    image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
+) -> list[dict[str, Any]]:
+    """Jina reranker endpoint; latest v3 uses text documents."""
+    if not chunks:
+        return []
+
+    documents = _build_rerank_documents(
+        chunks,
+        input_modality=_resolve_input_modality(input_modality, model),
+        image_max_bytes=image_max_bytes,
+        image_max_total_bytes=image_max_total_bytes,
+        image_max_px=image_max_px,
+        image_min_px=image_min_px,
+        image_quality=image_quality,
+        image_min_quality=image_min_quality,
+    )
+    payload = {
+        "model": model,
+        "query": query,
+        "documents": documents,
+        "top_n": min(top_k, len(documents)),
+        "return_documents": False,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
+    return _build_scored_chunks(
+        chunks, data.get("results", []), score_threshold=score_threshold, top_k=top_k
+    )
+
+
+async def _aliyun_rerank(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_k: int,
+    *,
+    url: str,
+    model: str = _ALIYUN_RERANK_MODEL,
+    api_key: str,
+    input_modality: InputModality = "auto",
+    score_threshold: float = 0.5,
+    client: httpx.AsyncClient | None = None,
+    image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
+    image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
+    image_max_px: int = _DEFAULT_IMAGE_MAX_PX,
+    image_min_px: int = _DEFAULT_IMAGE_MIN_PX,
+    image_quality: int = _DEFAULT_IMAGE_QUALITY,
+    image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
+) -> list[dict[str, Any]]:
+    """Alibaba Model Studio reranker; qwen3 text and qwen3-vl use different bodies."""
+    if not chunks:
+        return []
+
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    top_n = min(top_k, len(chunks))
+    if model == "qwen3-rerank":
+        payload = {
+            "model": model,
+            "query": query,
+            "documents": [_chunk_text(chunk) for chunk in chunks],
+            "top_n": top_n,
+        }
+        data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
+        results = data.get("results", [])
+    else:
+        documents = _build_rerank_documents(
+            chunks,
+            input_modality=_resolve_input_modality(input_modality, model),
+            image_max_bytes=image_max_bytes,
+            image_max_total_bytes=image_max_total_bytes,
+            image_max_px=image_max_px,
+            image_min_px=image_min_px,
+            image_quality=image_quality,
+            image_min_quality=image_min_quality,
+        )
+        payload = {
+            "model": model,
+            "input": {"query": {"text": query}, "documents": documents},
+            "parameters": {"top_n": top_n},
+        }
+        data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
+        results = data.get("output", {}).get("results", [])
+
+    return _build_scored_chunks(chunks, results, score_threshold=score_threshold, top_k=top_k)
+
+
+async def _voyage_rerank(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_k: int,
+    *,
+    url: str = _VOYAGE_RERANK_URL,
+    model: str = _VOYAGE_RERANK_MODEL,
+    api_key: str,
+    score_threshold: float = 0.5,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Voyage reranker endpoint: text documents, top_k."""
+    if not chunks:
+        return []
+
+    documents = [c.get("content", "") for c in chunks]
+    payload = {
+        "model": model,
+        "query": query,
+        "documents": documents,
+        "top_k": min(top_k, len(documents)),
+        "truncation": True,
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
+    results = data.get("results", [])
+
+    return _build_scored_chunks(chunks, results, score_threshold=score_threshold, top_k=top_k)
+
+
+async def _cohere_rerank(
+    query: str,
+    chunks: list[dict[str, Any]],
+    top_k: int,
+    *,
+    url: str = _COHERE_RERANK_URL,
+    model: str = _COHERE_RERANK_MODEL,
+    api_key: str,
+    score_threshold: float = 0.5,
+    client: httpx.AsyncClient | None = None,
+) -> list[dict[str, Any]]:
+    """Cohere public reranker endpoint: text documents, top_n."""
+    if not chunks:
+        return []
+
+    documents = [c.get("content", "") for c in chunks]
+    payload = {
+        "model": model,
+        "query": query,
+        "documents": documents,
+        "top_n": min(top_k, len(documents)),
+    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
+    results = data.get("results", [])
+
+    return _build_scored_chunks(chunks, results, score_threshold=score_threshold, top_k=top_k)
+
+
+# ── Self-hosted /rerank strategy registry ───────────────────────
+# Local endpoints keep the old generic document-object shape.
 # Tuple = (default_base_url, default_model, append_/rerank_to_base, requires_api_key)
 _HTTP_RERANK_DEFAULTS: dict[str, tuple[str | None, str, bool, bool]] = {
-    "jina_reranker": (
-        "https://api.jina.ai/v1/rerank",
-        "jina-reranker-m0",
-        False,
-        True,
-    ),
-    "aliyun_reranker": (
-        "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/rerank",
-        "gte-rerank",
-        False,
-        True,
-    ),
     "local_reranker": (None, "default", True, False),
 }
 
@@ -316,17 +560,8 @@ async def _azure_cohere_rerank(
     deployment: str,
     score_threshold: float = 0.5,
     client: httpx.AsyncClient | None = None,
-    multimodal: bool = True,  # accepted for uniform interface; Azure Cohere is text-only
 ) -> list[dict[str, Any]]:
-    """Azure AI Services Cohere reranker (text-only).
-
-    The *multimodal* parameter is accepted for interface consistency with
-    the other rerank strategies. When False, the behaviour is unchanged
-    because Cohere's REST API only accepts text documents — ``image_data``
-    is always ignored.
-
-    Reuses *client* when provided; ephemeral fallback otherwise.
-    """
+    """Azure AI Services Cohere reranker (text-only)."""
     if not chunks:
         return []
 
@@ -378,7 +613,45 @@ def build_rerank_func(
             max_concurrency=rc.max_concurrency,
             score_threshold=rc.score_threshold,
             batch_size=rc.batch_size,
-            multimodal=rc.multimodal,
+            multimodal=rc.input_modality != "text",
+            image_max_bytes=rc.image_max_bytes,
+            image_max_total_bytes=rc.image_max_total_bytes,
+            image_max_px=rc.image_max_px,
+            image_min_px=rc.image_min_px,
+            image_quality=rc.image_quality,
+            image_min_quality=rc.image_min_quality,
+        )
+    elif strategy == "jina_reranker":
+        if not rc.api_key:
+            raise ValueError("jina_reranker requires api_key")
+        client = httpx.AsyncClient(timeout=60.0)
+        fn = partial(
+            _jina_rerank,
+            url=rc.base_url or _JINA_RERANK_URL,
+            model=rc.model or _JINA_RERANK_MODEL,
+            api_key=rc.api_key,
+            input_modality=rc.input_modality,
+            score_threshold=rc.score_threshold,
+            client=client,
+            image_max_bytes=rc.image_max_bytes,
+            image_max_total_bytes=rc.image_max_total_bytes,
+            image_max_px=rc.image_max_px,
+            image_min_px=rc.image_min_px,
+            image_quality=rc.image_quality,
+            image_min_quality=rc.image_min_quality,
+        )
+    elif strategy == "aliyun_reranker":
+        if not rc.api_key or not rc.base_url:
+            raise ValueError("aliyun_reranker requires base_url and api_key")
+        client = httpx.AsyncClient(timeout=60.0)
+        fn = partial(
+            _aliyun_rerank,
+            url=rc.base_url,
+            model=rc.model or _ALIYUN_RERANK_MODEL,
+            api_key=rc.api_key,
+            input_modality=rc.input_modality,
+            score_threshold=rc.score_threshold,
+            client=client,
             image_max_bytes=rc.image_max_bytes,
             image_max_total_bytes=rc.image_max_total_bytes,
             image_max_px=rc.image_max_px,
@@ -405,13 +678,40 @@ def build_rerank_func(
             api_key=rc.api_key,
             score_threshold=rc.score_threshold,
             client=client,
-            multimodal=rc.multimodal,
+            multimodal=(
+                _resolve_input_modality(rc.input_modality, rc.model or default_model)
+                == "multimodal"
+            ),
             image_max_bytes=rc.image_max_bytes,
             image_max_total_bytes=rc.image_max_total_bytes,
             image_max_px=rc.image_max_px,
             image_min_px=rc.image_min_px,
             image_quality=rc.image_quality,
             image_min_quality=rc.image_min_quality,
+        )
+    elif strategy == "voyage_reranker":
+        if not rc.api_key:
+            raise ValueError("voyage_reranker requires api_key")
+        client = httpx.AsyncClient(timeout=60.0)
+        fn = partial(
+            _voyage_rerank,
+            url=rc.base_url or _VOYAGE_RERANK_URL,
+            model=rc.model or _VOYAGE_RERANK_MODEL,
+            api_key=rc.api_key,
+            score_threshold=rc.score_threshold,
+            client=client,
+        )
+    elif strategy == "cohere_reranker":
+        if not rc.api_key:
+            raise ValueError("cohere_reranker requires api_key")
+        client = httpx.AsyncClient(timeout=60.0)
+        fn = partial(
+            _cohere_rerank,
+            url=rc.base_url or _COHERE_RERANK_URL,
+            model=rc.model or _COHERE_RERANK_MODEL,
+            api_key=rc.api_key,
+            score_threshold=rc.score_threshold,
+            client=client,
         )
     elif strategy == "azure_cohere":
         if not rc.base_url or not rc.api_key:
@@ -421,10 +721,9 @@ def build_rerank_func(
             _azure_cohere_rerank,
             endpoint=rc.base_url,
             api_key=rc.api_key,
-            deployment=rc.model or "cohere-rerank-v3.5",
+            deployment=rc.model or _AZURE_COHERE_RERANK_MODEL,
             score_threshold=rc.score_threshold,
             client=client,
-            multimodal=rc.multimodal,
         )
     else:
         raise ValueError(f"Unknown rerank strategy: {strategy}")

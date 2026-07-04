@@ -133,8 +133,24 @@ class TestRerankConfig:
         assert cfg.image_min_quality == 76
 
     def test_jina_strategy(self):
-        cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-m0", api_key="key")
+        cfg = RerankConfig(strategy="jina_reranker", model="jina-reranker-v3", api_key="key")
         assert cfg.strategy == "jina_reranker"
+
+    def test_input_modality_defaults_to_auto(self):
+        cfg = RerankConfig()
+        assert cfg.input_modality == "auto"
+
+    def test_input_modality_accepts_text_override(self):
+        cfg = RerankConfig(input_modality="text")
+        assert cfg.input_modality == "text"
+
+    def test_voyage_strategy(self):
+        cfg = RerankConfig(strategy="voyage_reranker", model="rerank-2.5", api_key="key")
+        assert cfg.strategy == "voyage_reranker"
+
+    def test_cohere_strategy(self):
+        cfg = RerankConfig(strategy="cohere_reranker", model="rerank-v4.0-fast", api_key="key")
+        assert cfg.strategy == "cohere_reranker"
 
     @pytest.mark.parametrize(
         "kwargs",

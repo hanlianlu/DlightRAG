@@ -274,8 +274,26 @@ previews. Compression budgets are advanced model transport limits:
 those are omitted, it reuses the configured chat model roles in this order:
 `llm.roles.vlm`, `llm.roles.query`, then `llm.default`.
 
+Voyage's text reranker is available with `strategy: voyage_reranker`,
+`model: rerank-2.5` or `rerank-2.5-lite`, and `DLIGHTRAG_RERANK__API_KEY`.
+Cohere's public text reranker is available with `strategy: cohere_reranker`,
+`model: rerank-v4.0-pro` or `rerank-v4.0-fast`, and the same API key env var.
+
+`rerank.input_modality` defaults to `auto`. For `chat_llm_reranker`, auto
+reuses the startup vision probe for the selected scoring model: vision-capable
+models receive bounded image data plus text, and non-vision models receive VLM
+text only. HTTP rerankers follow their API contract: latest text rerankers such
+as `jina-reranker-v3`, `qwen3-rerank`, Voyage `rerank-2.5` family, and Cohere
+`rerank-v4.0` family receive chunk VLM text content, while `qwen3-vl-rerank`
+receives bounded image documents when chunks have `image_data`. Use
+`input_modality: text` to force text-only reranking, or
+`input_modality: multimodal` for a self-hosted/new model that accepts image
+document objects.
+
 ```yaml
 rerank:
+  strategy: chat_llm_reranker
+  input_modality: auto
   score_threshold: 0.5
   max_concurrency: 8
   batch_size: 8

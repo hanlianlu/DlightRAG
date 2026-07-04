@@ -163,8 +163,12 @@ BM25-only hits, metadata-injected chunks, direct image matches, and LightRAG
 
 | Strategy | How it works |
 |---|---|
-| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `llm.roles.vlm`, `llm.roles.query`, then `llm.default` when no rerank model is set. The selected model must support images when retrieved chunks include page/image data. |
-| `jina_reranker` / `aliyun_reranker` / `local_reranker` | Calls an OpenAI-compatible `/rerank` endpoint with text documents. |
+| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `llm.roles.vlm`, `llm.roles.query`, then `llm.default`. With `input_modality: auto`, the selected scoring model reuses the startup vision probe: vision-capable models get bounded image payloads plus text; non-vision models get VLM text only. |
+| `jina_reranker` | Calls Jina `/v1/rerank`. The latest default is `jina-reranker-v3`, so auto mode sends chunk text. |
+| `aliyun_reranker` | Calls Alibaba Model Studio rerank. `qwen3-rerank` uses the compatible text payload; `qwen3-vl-rerank` uses the DashScope multimodal payload. `base_url` must point at the matching workspace/region endpoint. |
+| `local_reranker` | Calls a self-hosted `/rerank` endpoint. `input_modality: auto` is text-only; set `input_modality: multimodal` only when the endpoint accepts image document objects. |
+| `voyage_reranker` | Calls Voyage AI `/v1/rerank` with text documents. |
+| `cohere_reranker` | Calls Cohere `/v2/rerank` with text documents. |
 | `azure_cohere` | Calls Azure AI Services Cohere rerank with text documents. |
 
 Post-rerank filtering removes chunks below `rerank.score_threshold`. The

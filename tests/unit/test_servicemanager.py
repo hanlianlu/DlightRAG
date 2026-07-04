@@ -1306,6 +1306,7 @@ async def test_vision_probe_result_is_manager_scoped(
 
     assert first._supports_vision is False
     assert second._supports_vision is True
+    assert second._rerank_supports_vision is True
     probe.assert_awaited_once()
 
 

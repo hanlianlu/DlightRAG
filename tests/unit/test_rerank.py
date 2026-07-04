@@ -9,9 +9,15 @@ from unittest.mock import AsyncMock
 import pytest
 
 from dlightrag.models.rerank import (
+    _aliyun_rerank,
+    _build_scored_chunks,
     _chat_llm_rerank,
+    _cohere_rerank,
     _http_rerank,
+    _jina_rerank,
     _parse_listwise_scores,
+    _resolve_input_modality,
+    _voyage_rerank,
 )
 
 _PNG_B64 = (
@@ -39,6 +45,45 @@ class TestParseListwiseScores:
 
     def test_truncates_to_expected(self):
         assert _parse_listwise_scores("[0.9, 0.8, 0.7, 0.6]", 2) == [0.9, 0.8]
+
+
+class TestBuildScoredChunks:
+    def test_preserves_chunk_metadata(self):
+        chunks = [
+            {
+                "chunk_id": "c0",
+                "source_id": "s0",
+                "reference_id": "1",
+                "file_path": "a.pdf",
+                "content": "first",
+            },
+            {
+                "chunk_id": "c1",
+                "source_id": "s1",
+                "reference_id": "2",
+                "file_path": "b.pdf",
+                "content": "second",
+            },
+        ]
+
+        result = _build_scored_chunks(
+            chunks,
+            [{"index": 1, "relevance_score": 0.9}],
+            score_threshold=0.5,
+            top_k=10,
+        )
+
+        assert result == [
+            {
+                "chunk_id": "c1",
+                "source_id": "s1",
+                "reference_id": "2",
+                "file_path": "b.pdf",
+                "content": "second",
+                "rerank_score": 0.9,
+            }
+        ]
+        assert "rerank_score" not in chunks[1]
 
 
 class TestChatLlmRerank:
@@ -227,11 +272,10 @@ class TestChatLlmRerank:
         async def mock_scoring(messages, **kwargs):
             nonlocal call_count
             call_count += 1
-            # Count items by "--- Item" markers in the content
             content_text = "".join(
                 c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
             )
-            n = content_text.count("--- Item")
+            n = content_text.count("\nCandidate ")
             return "[" + ", ".join(["0.7"] * n) + "]"
 
         chunks = [{"content": c} for c in ["a", "b", "c", "d", "e"]]
@@ -254,7 +298,7 @@ class TestChatLlmRerank:
             content_text = "".join(
                 c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
             )
-            n = content_text.count("--- Item")
+            n = content_text.count("\nCandidate ")
             return "[" + ", ".join(["0.7"] * n) + "]"
 
         chunks = [{"content": f"doc{i}"} for i in range(46)]
@@ -363,7 +407,10 @@ class TestChatLlmRerank:
             score_threshold=0.3,
         )
         content = received_messages[0][0]["content"]
-        assert any(c.get("type") == "image_url" for c in content)
+        marker_idx = next(i for i, c in enumerate(content) if c.get("text") == "\nCandidate 1:")
+        image_idx = next(i for i, c in enumerate(content) if c.get("type") == "image_url")
+        text_idx = next(i for i, c in enumerate(content) if c.get("text") == "text")
+        assert marker_idx < image_idx < text_idx
 
     async def test_multimodal_false_concurrent_batches(self):
         """Text-only fallback works correctly with batched concurrent scoring."""
@@ -375,7 +422,7 @@ class TestChatLlmRerank:
             content_parts = [
                 c.get("text", "") for c in messages[0]["content"] if c.get("type") == "text"
             ]
-            n = sum(1 for t in content_parts for _ in [1] if "--- Item" in t)
+            n = sum(1 for t in content_parts if t.startswith("\nCandidate "))
             return "[" + ", ".join(["0.7"] * n) + "]"
 
         chunks = [{"content": f"doc{i}", "image_data": _PNG_B64} for i in range(5)]
@@ -479,13 +526,199 @@ class TestHttpRerank:
         assert result == []
 
 
+class TestRerankInputModality:
+    def test_auto_uses_known_model_capability(self):
+        assert _resolve_input_modality("auto", "jina-reranker-v3") == "text"
+        assert _resolve_input_modality("auto", "qwen3-vl-rerank") == "multimodal"
+        assert _resolve_input_modality("auto", "rerank-2.5-lite") == "text"
+        assert _resolve_input_modality("auto", "rerank-v4.0") == "text"
+        assert _resolve_input_modality("auto", "rerank-v4.0-fast") == "text"
+        assert _resolve_input_modality("auto", "unknown-reranker") == "text"
+
+    def test_known_text_models_stay_text_when_multimodal_is_forced(self):
+        assert _resolve_input_modality("multimodal", "jina-reranker-v3") == "text"
+        assert _resolve_input_modality("multimodal", "rerank-2.5-lite") == "text"
+        assert _resolve_input_modality("multimodal", "rerank-v4.0") == "text"
+        assert _resolve_input_modality("multimodal", "rerank-v4.0-pro") == "text"
+
+
+class TestJinaRerank:
+    async def test_default_latest_model_uses_text(self):
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.9}]})
+
+        result = await _jina_rerank(
+            "query",
+            [{"content": "VLM text", "image_data": _PNG_B64}],
+            top_k=1,
+            url="https://api.jina.ai/v1/rerank",
+            api_key="jina-key",
+            input_modality="auto",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert result[0]["rerank_score"] == pytest.approx(0.9)
+        assert client.payload == {
+            "model": "jina-reranker-v3",
+            "query": "query",
+            "documents": ["VLM text"],
+            "top_n": 1,
+            "return_documents": False,
+        }
+        assert _PNG_B64 not in str(client.payload)
+
+    async def test_text_model_auto_uses_vlm_text(self):
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.8}]})
+
+        await _jina_rerank(
+            "query",
+            [{"content": "VLM text", "image_data": _PNG_B64}],
+            top_k=1,
+            url="https://api.jina.ai/v1/rerank",
+            model="jina-reranker-v3",
+            api_key="jina-key",
+            input_modality="auto",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert client.payload is not None
+        assert client.payload["documents"] == ["VLM text"]
+        assert _PNG_B64 not in str(client.payload)
+
+
+class TestAliyunRerank:
+    async def test_qwen3_vl_auto_sends_dashscope_multimodal_payload(self):
+        client = _CaptureClient({"output": {"results": [{"index": 0, "relevance_score": 0.93}]}})
+
+        result = await _aliyun_rerank(
+            "query",
+            [{"content": "VLM text", "image_data": _PNG_B64}],
+            top_k=1,
+            url="https://workspace.ap-southeast-1.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+            model="qwen3-vl-rerank",
+            api_key="aliyun-key",
+            input_modality="auto",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert result[0]["rerank_score"] == pytest.approx(0.93)
+        assert client.payload == {
+            "model": "qwen3-vl-rerank",
+            "input": {
+                "query": {"text": "query"},
+                "documents": [{"image": f"data:image/png;base64,{_PNG_B64}"}],
+            },
+            "parameters": {"top_n": 1},
+        }
+
+    async def test_qwen3_text_uses_compatible_payload(self):
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.86}]})
+
+        await _aliyun_rerank(
+            "query",
+            [{"content": "VLM text", "image_data": _PNG_B64}],
+            top_k=1,
+            url="https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/reranks",
+            model="qwen3-rerank",
+            api_key="aliyun-key",
+            input_modality="auto",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert client.payload == {
+            "model": "qwen3-rerank",
+            "query": "query",
+            "documents": ["VLM text"],
+            "top_n": 1,
+        }
+        assert _PNG_B64 not in str(client.payload)
+
+
+class TestVoyageRerank:
+    async def test_sends_voyage_text_payload(self):
+        client = _CaptureClient(
+            {
+                "results": [
+                    {"index": 1, "relevance_score": 0.91},
+                    {"index": 0, "relevance_score": 0.2},
+                ]
+            }
+        )
+
+        result = await _voyage_rerank(
+            "query",
+            [{"content": "first", "image_data": "RAW_IMAGE"}, {"content": "second"}],
+            top_k=1,
+            url="https://api.voyageai.com/v1/rerank",
+            model="rerank-2.5",
+            api_key="voyage-key",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert result == [{"content": "second", "rerank_score": 0.91}]
+        assert client.url == "https://api.voyageai.com/v1/rerank"
+        assert client.headers is not None
+        assert client.headers["Authorization"] == "Bearer voyage-key"
+        assert client.payload == {
+            "model": "rerank-2.5",
+            "query": "query",
+            "documents": ["first", "second"],
+            "top_k": 1,
+            "truncation": True,
+        }
+        assert "RAW_IMAGE" not in str(client.payload)
+
+
+class TestCohereRerank:
+    async def test_sends_cohere_text_payload(self):
+        client = _CaptureClient(
+            {
+                "results": [
+                    {"index": 0, "relevance_score": 0.88},
+                    {"index": 1, "relevance_score": 0.4},
+                ]
+            }
+        )
+
+        result = await _cohere_rerank(
+            "query",
+            [{"content": "first"}, {"content": "second", "image_data": "RAW_IMAGE"}],
+            top_k=2,
+            url="https://api.cohere.com/v2/rerank",
+            model="rerank-v4.0-fast",
+            api_key="cohere-key",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert result == [{"content": "first", "rerank_score": 0.88}]
+        assert client.url == "https://api.cohere.com/v2/rerank"
+        assert client.headers is not None
+        assert client.headers["Authorization"] == "Bearer cohere-key"
+        assert client.payload == {
+            "model": "rerank-v4.0-fast",
+            "query": "query",
+            "documents": ["first", "second"],
+            "top_n": 2,
+        }
+        assert "RAW_IMAGE" not in str(client.payload)
+
+
 class _CaptureClient:
     def __init__(self, data):
         self.data = data
         self.payload = None
+        self.url = None
+        self.headers = None
 
     async def post(self, url, *, json, headers):
+        self.url = url
         self.payload = json
+        self.headers = headers
         return _CaptureResponse(self.data)
 
 

@@ -253,6 +253,7 @@ class RAGServiceManager:
         self._checkpoint: PGCheckpointStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._supports_vision: bool | None = None
+        self._rerank_supports_vision: bool | None = None
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
     @property
@@ -277,6 +278,9 @@ class RAGServiceManager:
         if default_ws not in all_ws:
             all_ws.insert(0, default_ws)
 
+        # ── Vision probe (once at startup, not per workspace) ──────────
+        await manager._probe_vision_support()
+
         default_err: Exception | None = None
         try:
             await manager._get_service(default_ws)
@@ -288,9 +292,6 @@ class RAGServiceManager:
         await manager._start_ingest_job_recovery()
         await manager._recover_stalled_docs(all_ws)
         await manager._prune_checkpoint_sessions()
-
-        # ── Vision probe (once at startup, not per workspace) ──────────
-        await manager._probe_vision_support()
 
         if default_ws in manager._services:
             manager._ready = True
@@ -373,7 +374,10 @@ class RAGServiceManager:
 
             try:
                 ws_config = self._config.model_copy(update={"workspace": workspace})
-                svc = await RAGService.create(config=ws_config)
+                svc = await RAGService.create(
+                    config=ws_config,
+                    rerank_supports_vision=self._rerank_supports_vision,
+                )
                 self._services[workspace] = svc
 
                 # Clear backoff on success
@@ -524,41 +528,64 @@ class RAGServiceManager:
             logger.debug("Checkpoint session pruning skipped", exc_info=True)
 
     async def _probe_vision_support(self) -> None:
-        """Probe the chat model's vision capability once at startup.
+        """Probe chat-model vision capability once at startup.
 
         Stores the result on this manager instance so SDK callers can run
         multiple managers with different model configs in one process.
         """
-        if self._supports_vision is not None:
+        if self._supports_vision is not None and self._rerank_supports_vision is not None:
             return  # already probed
 
         from dlightrag.core.vision_probe import probe_vision_support
+        from dlightrag.models.llm import get_chat_rerank_scoring_config
         from dlightrag.models.providers import get_provider
 
         default = self._config.llm.default
-        provider = get_provider(
-            default.provider,
-            api_key=default.api_key,
-            base_url=default.base_url,
-            timeout=default.timeout,
-            max_retries=default.max_retries,
-        )
-        try:
-            has_vision = await probe_vision_support(provider, model=default.model)
-            self._supports_vision = has_vision
-            logger.info(
-                "Chat model vision probe: %s (model=%s, provider=%s)",
-                "supported" if has_vision else "not supported",
-                default.model,
-                default.provider,
+
+        async def probe_model(cfg: Any, *, label: str) -> bool | None:
+            provider = get_provider(
+                cfg.provider,
+                api_key=cfg.api_key or default.api_key,
+                base_url=cfg.base_url,
+                timeout=cfg.timeout,
+                max_retries=cfg.max_retries,
             )
-        except Exception:
-            logger.debug(
-                "Vision probe failed; deferring to per-request check",
-                exc_info=True,
+            try:
+                has_vision = await probe_vision_support(provider, model=cfg.model)
+                logger.info(
+                    "%s vision probe: %s (model=%s, provider=%s)",
+                    label,
+                    "supported" if has_vision else "not supported",
+                    cfg.model,
+                    cfg.provider,
+                )
+                return has_vision
+            except Exception:
+                logger.debug("%s vision probe failed", label, exc_info=True)
+                return None
+            finally:
+                await provider.aclose()
+
+        if self._supports_vision is None:
+            self._supports_vision = await probe_model(default, label="Chat model")
+
+        if (
+            self._rerank_supports_vision is None
+            and self._config.rerank.enabled
+            and self._config.rerank.strategy == "chat_llm_reranker"
+        ):
+            rerank_model = get_chat_rerank_scoring_config(self._config)
+            same_as_default = (
+                rerank_model.provider == default.provider
+                and rerank_model.model == default.model
+                and rerank_model.base_url == default.base_url
+                and (rerank_model.api_key or default.api_key) == default.api_key
             )
-        finally:
-            await provider.aclose()
+            self._rerank_supports_vision = (
+                self._supports_vision
+                if same_as_default
+                else await probe_model(rerank_model, label="Rerank model")
+            )
 
     async def astart_ingest_job(
         self,
