@@ -6,12 +6,11 @@ MetadataIndexProtocol — interface for structured metadata CRUD + query.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 from dlightrag.core.retrieval.models import MetadataFilter
 
 
-@runtime_checkable
 class MetadataIndexProtocol(Protocol):
     """Common interface for PGMetadataIndex and test doubles."""
 

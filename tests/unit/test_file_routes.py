@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from dlightrag.access_control import AccessDeniedError
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
 from dlightrag.sourcing.aws_s3 import S3CredentialsUnavailable
@@ -91,6 +92,55 @@ class TestFileEndpoint:
 
         assert resp.status_code == 200
         assert b"%PDF-1.4 workspace query" in resp.content
+
+    async def test_rejects_conflicting_path_and_query_workspaces(
+        self, client: AsyncClient, tmp_working_dir: Path
+    ) -> None:
+        secret = tmp_working_dir / "inputs" / "secret_ws" / "report.pdf"
+        secret.parent.mkdir(parents=True)
+        secret.write_bytes(b"secret workspace content")
+
+        resp = await client.get("/api/files/secret_ws/report.pdf", params={"workspace": "default"})
+
+        assert resp.status_code == 403
+        assert b"secret workspace content" not in resp.content
+
+    async def test_embedded_workspace_controls_download_authorization(
+        self, tmp_working_dir: Path
+    ) -> None:
+        secret = tmp_working_dir / "inputs" / "secret_ws" / "report.pdf"
+        secret.parent.mkdir(parents=True)
+        secret.write_bytes(b"secret workspace content")
+
+        class DenySecretWorkspace:
+            async def check(self, user, action, *, workspace=None):
+                if workspace == "secret_ws":
+                    raise AccessDeniedError("denied")
+
+            async def filter_workspaces(self, user, action, workspaces):
+                return [workspace for workspace in workspaces if workspace != "secret_ws"]
+
+        config = DlightragConfig(  # type: ignore[call-arg]
+            working_dir=str(tmp_working_dir),
+            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
+            embedding=_embedding_config(),
+        )
+        with (
+            patch("dlightrag.config.get_config", return_value=config),
+            patch("dlightrag.api.routes.files.get_config", return_value=config),
+            patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
+        ):
+            app = create_app(include_web=False)
+            app.state.access_control = DenySecretWorkspace()
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                follow_redirects=False,
+            ) as c:
+                resp = await c.get("/api/files/secret_ws/report.pdf")
+
+        assert resp.status_code == 403
+        assert b"secret workspace content" not in resp.content
 
     async def test_rejects_windows_absolute_path(self, client: AsyncClient) -> None:
         resp = await client.get(r"/api/files/C:\Users\me\secret.pdf")

@@ -426,6 +426,15 @@ class TestSchemaCache:
         plan = await planner.plan("q2")
         assert plan.standalone_query == "q"
 
+    async def test_provider_initial_failure_is_ignored(self):
+        provider = AsyncMock(side_effect=RuntimeError("DB down"))
+        llm = AsyncMock(return_value=json.dumps({"standalone_query": "q", "filters": {}}))
+        planner = QueryPlanner(llm_func=llm, schema_provider=provider)
+
+        plan = await planner.plan("q")
+
+        assert plan.standalone_query == "q"
+
 
 # ---------------------------------------------------------------------------
 # History truncation

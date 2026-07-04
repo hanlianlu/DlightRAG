@@ -965,7 +965,6 @@ class DlightragConfig(BaseSettings):
     )
     stalled_doc_timeout_seconds: int = Field(
         default=3600,
-        ge=300,
         description=(
             "Seconds before a document stuck in PARSING/ANALYZING/PROCESSING is "
             "considered stalled and reset to PENDING at startup. Individual document "
@@ -1026,6 +1025,13 @@ class DlightragConfig(BaseSettings):
     )
 
     # ===== Validators =====
+
+    @field_validator("stalled_doc_timeout_seconds")
+    @classmethod
+    def _validate_stalled_doc_timeout_seconds(cls, value: int) -> int:
+        if value != 0 and value < 300:
+            raise ValueError("stalled_doc_timeout_seconds must be 0 or at least 300")
+        return value
 
     @model_validator(mode="after")
     def _validate_config(self):

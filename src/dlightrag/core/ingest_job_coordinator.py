@@ -8,6 +8,7 @@ import logging
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
+_JOB_LEASE_SECONDS = 300
+_JOB_HEARTBEAT_SECONDS = 60
 
 
 class IngestJobStore(Protocol):
@@ -32,7 +35,8 @@ class IngestJobStore(Protocol):
         request: dict[str, Any],
     ) -> None: ...
 
-    async def mark_running(self, job_id: str) -> None: ...
+    async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
+    async def heartbeat(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
 
     async def record_window(
         self,
@@ -43,10 +47,12 @@ class IngestJobStore(Protocol):
         failed_delta: int,
         current_window: int,
         errors: list[str],
-    ) -> None: ...
+        lease_owner: str,
+        lease_seconds: int,
+    ) -> bool: ...
 
-    async def finish(self, job_id: str, *, result: dict[str, Any]) -> None: ...
-    async def fail(self, job_id: str, *, error: str) -> None: ...
+    async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool: ...
+    async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool: ...
     async def get(self, job_id: str) -> dict[str, Any] | None: ...
     async def list_recoverable(self) -> list[dict[str, Any]]: ...
     async def prune(self) -> dict[str, int]: ...
@@ -63,6 +69,7 @@ class IngestJobCoordinator:
         self._workspaces: dict[str, str] = {}
         self._recovery_started = False
         self._closing = False
+        self._lease_owner = uuid.uuid4().hex
 
     async def get_store(self) -> IngestJobStore:
         if self._store is None:
@@ -122,7 +129,11 @@ class IngestJobCoordinator:
 
         if "source" in kwargs:
             task = asyncio.create_task(
-                store.fail(job_id, error="ingest job cannot recover an in-memory source object")
+                self._fail_recovered_job(
+                    job_id,
+                    store,
+                    "ingest job cannot recover an in-memory source object",
+                )
             )
             self._track(job_id, workspace, task)
             return True
@@ -259,6 +270,15 @@ class IngestJobCoordinator:
         store = await self.get_store()
         return await store.get(job_id)
 
+    async def _fail_recovered_job(self, job_id: str, store: IngestJobStore, error: str) -> None:
+        claimed = await store.claim_running(
+            job_id,
+            lease_owner=self._lease_owner,
+            lease_seconds=_JOB_LEASE_SECONDS,
+        )
+        if claimed:
+            await store.fail(job_id, error=error, lease_owner=self._lease_owner)
+
     async def _run_job(
         self,
         *,
@@ -269,21 +289,38 @@ class IngestJobCoordinator:
         cleanup_paths: tuple[Path, ...],
     ) -> None:
         store = await self.get_store()
-        await store.mark_running(job_id)
+        claimed = await store.claim_running(
+            job_id,
+            lease_owner=self._lease_owner,
+            lease_seconds=_JOB_LEASE_SECONDS,
+        )
+        if not claimed:
+            logger.info("Skipping ingest job %s; another worker owns it", job_id)
+            return
+
         progress_seen = False
         cleanup_after_run = True
+        lease_lost = asyncio.Event()
+        parent_task = asyncio.current_task()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_job(job_id, store, lease_lost, parent_task)
+        )
 
         async def _record_progress(progress: Any) -> None:
             nonlocal progress_seen
             progress_seen = True
-            await store.record_window(
+            updated = await store.record_window(
                 job_id,
                 total_delta=progress.total_delta,
                 processed_delta=progress.processed_delta,
                 failed_delta=progress.failed_delta,
                 current_window=progress.batch_index + 1,
                 errors=list(progress.errors),
+                lease_owner=self._lease_owner,
+                lease_seconds=_JOB_LEASE_SECONDS,
             )
+            if not updated:
+                raise RuntimeError("ingest job lease lost")
 
         try:
             svc = await self._get_service(workspace)
@@ -295,28 +332,73 @@ class IngestJobCoordinator:
             )
             if not progress_seen:
                 total_items, processed_items, failed_items, errors = _infer_ingest_counts(result)
-                await store.record_window(
+                updated = await store.record_window(
                     job_id,
                     total_delta=total_items,
                     processed_delta=processed_items,
                     failed_delta=failed_items,
                     current_window=1,
                     errors=errors,
+                    lease_owner=self._lease_owner,
+                    lease_seconds=_JOB_LEASE_SECONDS,
                 )
-            await store.finish(
-                job_id, result=await self._job_result_with_totals(store, job_id, result)
+                if not updated:
+                    raise RuntimeError("ingest job lease lost")
+            finished = await store.finish(
+                job_id,
+                result=await self._job_result_with_totals(store, job_id, result),
+                lease_owner=self._lease_owner,
             )
+            if not finished:
+                cleanup_after_run = False
         except asyncio.CancelledError:
-            if not self._closing:
-                await store.fail(job_id, error="ingest job cancelled")
+            if lease_lost.is_set():
+                cleanup_after_run = False
+            elif not self._closing:
+                await store.fail(
+                    job_id,
+                    error="ingest job cancelled",
+                    lease_owner=self._lease_owner,
+                )
             else:
                 cleanup_after_run = False
             raise
         except Exception as exc:
-            await store.fail(job_id, error=f"{type(exc).__name__}: {exc}")
+            await store.fail(
+                job_id,
+                error=f"{type(exc).__name__}: {exc}",
+                lease_owner=self._lease_owner,
+            )
         finally:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
             if cleanup_after_run and cleanup_paths:
                 await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths)
+
+    async def _heartbeat_job(
+        self,
+        job_id: str,
+        store: IngestJobStore,
+        lease_lost: asyncio.Event,
+        parent_task: asyncio.Task[None] | None,
+    ) -> None:
+        while True:
+            await asyncio.sleep(_JOB_HEARTBEAT_SECONDS)
+            try:
+                renewed = await store.heartbeat(
+                    job_id,
+                    lease_owner=self._lease_owner,
+                    lease_seconds=_JOB_LEASE_SECONDS,
+                )
+            except Exception:
+                logger.warning("Ingest job lease heartbeat failed for %s", job_id, exc_info=True)
+                renewed = False
+            if not renewed:
+                lease_lost.set()
+                if parent_task is not None:
+                    parent_task.cancel()
+                return
 
     async def _job_result_with_totals(
         self,

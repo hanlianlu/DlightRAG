@@ -15,7 +15,7 @@ from dlightrag.core.retrieval.bm25_language import (
     BM25LanguageClassifier,
     normalize_language_code,
 )
-from dlightrag.core.retrieval.fusion import rrf_fuse
+from dlightrag.core.retrieval.fusion import format_bm25_top, rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow
 from dlightrag.storage.sql_identifiers import pg_identifier, pg_qualified_identifier
 
@@ -27,25 +27,6 @@ logger = logging.getLogger(__name__)
 
 def _format_float(value: float) -> str:
     return f"{float(value):g}"
-
-
-def _format_bm25_top(chunks: list[ContextRow], *, limit: int = 3) -> str:
-    parts: list[str] = []
-    for chunk in chunks[:limit]:
-        chunk_id = str(chunk.get("chunk_id") or chunk.get("id") or "?")
-        profile = str(chunk.get("bm25_profile") or "?")
-        score = chunk.get("score")
-        if score is None:
-            score_text = "?"
-        else:
-            try:
-                score_text = f"{float(score):.3f}"
-            except (TypeError, ValueError):
-                score_text = "?"
-        parts.append(f"{chunk_id}:{profile}:{score_text}")
-    if len(chunks) > limit:
-        parts.append(f"+{len(chunks) - limit}")
-    return ",".join(parts) if parts else "none"
 
 
 def _sql_language_literal(language: str) -> str:
@@ -389,7 +370,7 @@ class PostgresBM25:
             len(candidate_ids) if candidate_ids is not None else "all",
             int(limit),
             len(result),
-            _format_bm25_top(result),
+            format_bm25_top(result),
         )
         return result
 

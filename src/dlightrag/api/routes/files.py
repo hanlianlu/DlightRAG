@@ -95,7 +95,7 @@ async def retry_failed_files(
 async def serve_file(
     file_path: str,
     request: Request,
-    workspace: str = Query(default="default"),
+    workspace: str | None = Query(default=None),
     user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse | RedirectResponse:
     """Serve a file by relative path.
@@ -106,12 +106,13 @@ async def serve_file(
     - https://: 302 redirect to original source URL
     """
     config = get_config()
-    await enforce_access(
-        request,
-        user,
-        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
-        workspace=resolve_workspace(workspace),
-    )
+    if file_path.startswith(("azure://", "s3://", "https://")):
+        await enforce_access(
+            request,
+            user,
+            AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+            workspace=resolve_workspace(workspace),
+        )
 
     # --- Azure blob: 302 redirect ---
     if file_path.startswith("azure://"):
@@ -150,59 +151,79 @@ async def serve_file(
     # --- Local file ---
     _ensure_safe_local_file_path(file_path)
 
-    # SourceUrlResolver embeds workspace in the URL path, so try
-    # input_dir/<file_path> directly first. Also support explicit
-    # ?workspace=... callers with input_dir/<workspace>/<file_path>.
     input_dir = config.input_dir_path.resolve()
-    safe_workspace = normalize_workspace(workspace) or "default"
-    attempts: list[Path] = []
-    # Direct path (workspace already in file_path from SourceUrlResolver)
-    direct = (input_dir / file_path.lstrip("/")).resolve()
-    # Explicit ?workspace=... path
-    ws_prefixed = (input_dir / safe_workspace / file_path.lstrip("/")).resolve()
-    if direct != ws_prefixed:
-        attempts = [direct, ws_prefixed]
-    else:
-        attempts = [direct]
+    safe_workspace, relative_path = _resolve_local_file_scope(file_path, input_dir, workspace)
+    await enforce_access(
+        request,
+        user,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        workspace=safe_workspace,
+    )
 
-    for full_path in attempts:
+    ws_dir = (input_dir / safe_workspace).resolve()
+    try:
+        ws_dir.relative_to(input_dir)
+    except ValueError:
+        raise HTTPException(403, "Access denied") from None
+
+    full_path = (ws_dir / relative_path).resolve()
+    try:
+        full_path.relative_to(ws_dir)
+    except ValueError:
+        pass  # symlink escape, skip direct lookup
+    else:
         try:
-            full_path.relative_to(input_dir)
-        except ValueError:
-            continue  # path traversal attempt, skip
-        if full_path.is_file():
-            content_type, _ = mimetypes.guess_type(str(full_path))
-            return StreamingResponse(
-                _stream_file(full_path),
-                media_type=content_type or "application/octet-stream",
-            )
+            if full_path.is_file():
+                content_type, _ = mimetypes.guess_type(str(full_path))
+                return StreamingResponse(
+                    _stream_file(full_path),
+                    media_type=content_type or "application/octet-stream",
+                )
+        except OSError:
+            pass
 
     # --- Canonical basename lookup ---
     # LightRAG canonicalizes file_path to just the basename (no directory
     # components).  The original file may live in __parsed__/ or another
     # workspace subdirectory.
-    ws_dir = input_dir / safe_workspace
-    try:
-        ws_dir.relative_to(input_dir)
-    except ValueError:
-        pass  # traversal attempt, skip lookup
-    else:
-        bare_name = Path(file_path.lstrip("/")).name
-        if ws_dir.is_dir():
-            for sub in _iter_workspace_lookup_dirs(ws_dir):
-                candidate = (sub / bare_name).resolve()
-                try:
-                    candidate.relative_to(input_dir)
-                except ValueError:
-                    continue  # symlink escape, skip
-                if candidate.is_file():
-                    content_type, _ = mimetypes.guess_type(str(candidate))
-                    return StreamingResponse(
-                        _stream_file(candidate),
-                        media_type=content_type or "application/octet-stream",
-                    )
+    bare_name = relative_path.name
+    if ws_dir.is_dir():
+        for sub in _iter_workspace_lookup_dirs(ws_dir):
+            candidate = (sub / bare_name).resolve()
+            try:
+                candidate.relative_to(ws_dir)
+            except ValueError:
+                continue  # symlink escape, skip
+            if candidate.is_file():
+                content_type, _ = mimetypes.guess_type(str(candidate))
+                return StreamingResponse(
+                    _stream_file(candidate),
+                    media_type=content_type or "application/octet-stream",
+                )
 
     raise HTTPException(404, "File not found")
+
+
+def _resolve_local_file_scope(
+    file_path: str, input_dir: Path, workspace: str | None
+) -> tuple[str, Path]:
+    relative_path = Path(file_path.lstrip("/"))
+    explicit_workspace = normalize_workspace(workspace) if workspace is not None else None
+    explicit_workspace = explicit_workspace or None
+
+    parts = relative_path.parts
+    embedded_workspace: str | None = None
+    scoped_path = relative_path
+    if len(parts) >= 2:
+        candidate = normalize_workspace(parts[0])
+        if candidate and (input_dir / candidate).is_dir():
+            embedded_workspace = candidate
+            scoped_path = Path(*parts[1:])
+
+    if explicit_workspace and embedded_workspace and explicit_workspace != embedded_workspace:
+        raise HTTPException(403, "Access denied")
+
+    return explicit_workspace or embedded_workspace or resolve_workspace(None), scoped_path
 
 
 def _ensure_safe_local_file_path(file_path: str) -> None:
