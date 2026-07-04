@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from dlightrag.api.auth import UserContext, verify_bearer_token
+from dlightrag.app_state import request_config
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.web.deps import templates
 
@@ -121,7 +122,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next: str = "/web/"):
     """Render the web login form when global auth is enabled."""
-    cfg = get_config()
+    cfg = request_config(request)
     target = _safe_next_path(next)
     if cfg.auth_mode == "none":
         return RedirectResponse(target, status_code=303)
@@ -139,7 +140,7 @@ async def login(
     next: str = Form(default="/web/"),
 ):
     """Validate a bearer token and store it in an HttpOnly web cookie."""
-    cfg = get_config()
+    cfg = request_config(request)
     target = _safe_next_path(next)
     if cfg.auth_mode == "none":
         return RedirectResponse(target, status_code=303)

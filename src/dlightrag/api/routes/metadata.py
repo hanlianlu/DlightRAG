@@ -23,7 +23,7 @@ async def get_metadata(
 ) -> dict[str, Any]:
     """Retrieve metadata of a specific document incrementally."""
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
     data = await manager.aget_metadata(ws, doc_id)
     if not data:
@@ -48,7 +48,7 @@ async def update_metadata(
             raise HTTPException(status_code=400, detail=f"Cannot overwrite reserved key '{k}'")
 
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_UPDATE_METADATA, workspace=ws)
     await manager.aupdate_metadata(
         ws,
@@ -81,6 +81,6 @@ async def search_metadata(
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_METADATA, workspace=ws)
     return await manager.asearch_metadata(ws, validated)

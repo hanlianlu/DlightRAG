@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.access_control import AccessDeniedError
 from dlightrag.api.server import create_app
-from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig
+from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
 from dlightrag.sourcing.aws_s3 import S3CredentialsUnavailable
 
 
@@ -37,11 +37,8 @@ async def client(tmp_working_dir: Path) -> AsyncIterator[AsyncClient]:
         llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
         embedding=_embedding_config(),
     )
-    with (
-        patch("dlightrag.config.get_config", return_value=config),
-        patch("dlightrag.api.routes.files.get_config", return_value=config),
-        patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
-    ):
+    set_config(config)
+    with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
         app = create_app(include_web=False)
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -125,11 +122,8 @@ class TestFileEndpoint:
             llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
             embedding=_embedding_config(),
         )
-        with (
-            patch("dlightrag.config.get_config", return_value=config),
-            patch("dlightrag.api.routes.files.get_config", return_value=config),
-            patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
-        ):
+        set_config(config)
+        with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
             app = create_app(include_web=False)
             app.state.access_control = DenySecretWorkspace()
             async with AsyncClient(
@@ -144,6 +138,10 @@ class TestFileEndpoint:
 
     async def test_rejects_windows_absolute_path(self, client: AsyncClient) -> None:
         resp = await client.get(r"/api/files/C:\Users\me\secret.pdf")
+        assert resp.status_code == 403
+
+    async def test_rejects_windows_path_traversal(self, client: AsyncClient) -> None:
+        resp = await client.get("/api/files/default%5C..%5Csecret_ws%5Creport.pdf")
         assert resp.status_code == 403
 
     async def test_azure_503_when_unconfigured(self, client: AsyncClient) -> None:
@@ -191,11 +189,8 @@ class TestFileEndpointAzureRedirect:
             embedding=_embedding_config(),
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
-        with (
-            patch("dlightrag.config.get_config", return_value=config),
-            patch("dlightrag.api.routes.files.get_config", return_value=config),
-            patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
-        ):
+        set_config(config)
+        with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
             app = create_app(include_web=False)
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -220,11 +215,8 @@ class TestFileEndpointS3Redirect:
             llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
             embedding=_embedding_config(),
         )
-        with (
-            patch("dlightrag.config.get_config", return_value=config),
-            patch("dlightrag.api.routes.files.get_config", return_value=config),
-            patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock),
-        ):
+        set_config(config)
+        with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
             app = create_app(include_web=False)
             async with AsyncClient(
                 transport=ASGITransport(app=app),

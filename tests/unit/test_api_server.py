@@ -17,7 +17,12 @@ from dlightrag.api import auth as auth_module
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
 from dlightrag.citations.schemas import SourceReference
-from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
+from dlightrag.config import (
+    AccessControlConfig,
+    AccessControlRuleConfig,
+    DlightragConfig,
+    set_config,
+)
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceUnavailableError
@@ -184,6 +189,24 @@ class TestAuthMiddleware:
 
 class TestWorkspaceLifecycleAPI:
     """Workspace lifecycle API uses the durable manager registry."""
+
+    async def test_routes_use_app_scoped_config_after_singleton_changes(
+        self,
+        client: AsyncClient,
+        _api_app: FastAPI,
+        mock_config: DlightragConfig,
+        mock_manager,
+    ) -> None:
+        _api_app.state.manager = mock_manager
+        mock_config.workspace = "app_ws"
+        singleton_config = mock_config.model_copy(deep=True)
+        singleton_config.workspace = "singleton_ws"
+        set_config(singleton_config)
+
+        resp = await client.get("/files")
+
+        assert resp.status_code == 200
+        mock_manager.list_ingested_files.assert_awaited_once_with("app_ws")
 
     async def test_list_workspaces_returns_records(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager

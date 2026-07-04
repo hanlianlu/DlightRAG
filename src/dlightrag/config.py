@@ -118,9 +118,9 @@ class ModelConfig(BaseModel):
     model: str
     api_key: str | None = None
     base_url: str | None = None
-    temperature: float | None = None
-    timeout: float = 120.0
-    max_retries: int = 3
+    temperature: float | None = Field(default=None, ge=0)
+    timeout: float = Field(default=120.0, gt=0)
+    max_retries: int = Field(default=3, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -141,8 +141,8 @@ class EmbeddingConfig(BaseModel):
     model: str
     api_key: str | None = None
     base_url: str | None = None
-    dim: int = 1024
-    max_token_size: int = 8192
+    dim: int = Field(default=1024, ge=1)
+    max_token_size: int = Field(default=8192, ge=1)
     asymmetric: Literal["auto", "require", "disable"] = "auto"
     startup_probe: bool = True
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
@@ -228,10 +228,10 @@ class VLMSidecarConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
-    max_image_bytes: int = 5_242_880
-    min_image_pixel: int = 100
-    surrounding_leading_max_tokens: int | None = 128
-    surrounding_trailing_max_tokens: int | None = 128
+    max_image_bytes: int = Field(default=5_242_880, ge=1)
+    min_image_pixel: int = Field(default=100, ge=1)
+    surrounding_leading_max_tokens: int | None = Field(default=128, ge=0)
+    surrounding_trailing_max_tokens: int | None = Field(default=128, ge=0)
 
     # Pydantic field → LightRAG env var. Single source of truth;
     # _lightrag_sidecar_env_map() and _LIGHTRAG_SIDECAR_ENV_KEYS derive from this.
@@ -265,7 +265,7 @@ class MinerUSidecarConfig(BaseModel):
     # Two large PDFs submitted in parallel will serialize, and the second one's poll
     # clock starts counting from submit time — not from when it actually starts
     # processing. 1200 polls × 2s = 40 min covers two large PDFs in serial.
-    max_polls: int = 1200
+    max_polls: int = Field(default=1200, ge=1)
 
     # DlightRAG-only: filter header/footer blocks that pollute chunk text.
     auxiliary_block_policy: Literal["conservative", "extended"] = "conservative"
@@ -343,34 +343,42 @@ class RerankConfig(BaseModel):
             "text descriptions, so text-only fallback retains substantial signal."
         ),
     )
-    score_threshold: float = 0.5
-    max_concurrency: int = 8
-    batch_size: int = 8
+    score_threshold: float = Field(default=0.5, ge=0)
+    max_concurrency: int = Field(default=8, ge=1)
+    batch_size: int = Field(default=8, ge=1)
     image_max_bytes: int = Field(
         default=1_500_000,
+        ge=1,
         description="Maximum compressed binary bytes per image sent to rerank model calls.",
     )
     image_max_total_bytes: int = Field(
         default=8_000_000,
+        ge=1,
         description="Maximum total compressed binary image bytes per rerank model request.",
     )
     image_max_px: int = Field(
         default=1280,
+        ge=1,
         description="Maximum image long edge sent to rerank model calls.",
     )
     image_min_px: int = Field(
         default=768,
+        ge=1,
         description="Minimum long edge preserved before skipping oversized rerank images.",
     )
     image_quality: int = Field(
         default=86,
+        ge=1,
+        le=95,
         description="Initial JPEG quality for rerank model image previews.",
     )
     image_min_quality: int = Field(
         default=76,
+        ge=1,
+        le=95,
         description="Minimum JPEG quality before skipping oversized rerank images.",
     )
-    temperature: float | None = None
+    temperature: float | None = Field(default=None, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -407,11 +415,12 @@ class AnswerConfig(BaseModel):
     )
     max_images: int = Field(
         default=6,
+        ge=0,
         description="Maximum RAG context images sent to the answer LLM.",
     )
     max_user_images: int = Field(
         default=3,
-        ge=1,
+        ge=0,
         description="Maximum user-attached images (query_images + history) sent to the answer LLM.",
     )
 
@@ -419,26 +428,34 @@ class AnswerConfig(BaseModel):
     # in config.yaml; the startup probe records it on RAGServiceManager.
     image_max_bytes: int = Field(
         default=3_000_000,
+        ge=1,
         description="Maximum compressed binary bytes per answer image.",
     )
     image_max_total_bytes: int = Field(
         default=24_000_000,
+        ge=1,
         description="Maximum total compressed binary image bytes per answer request.",
     )
     image_max_px: int = Field(
         default=1536,
+        ge=1,
         description="Maximum image long edge sent to the answer LLM.",
     )
     image_min_px: int = Field(
         default=1024,
+        ge=1,
         description="Minimum long edge preserved before skipping oversized answer images.",
     )
     image_quality: int = Field(
         default=89,
+        ge=1,
+        le=95,
         description="Initial JPEG quality for answer LLM image previews.",
     )
     image_min_quality: int = Field(
         default=79,
+        ge=1,
+        le=95,
         description="Minimum JPEG quality before skipping oversized answer images.",
     )
 
@@ -448,9 +465,9 @@ class QueryImagesConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_described_images: int = 3
-    session_max_images: int = 50
-    session_max_sessions: int = 100
+    max_described_images: int = Field(default=3, ge=0)
+    session_max_images: int = Field(default=50, ge=1)
+    session_max_sessions: int = Field(default=100, ge=1)
 
 
 class VisualAssetsConfig(BaseModel):
@@ -458,8 +475,8 @@ class VisualAssetsConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    thumb_max_px: int = 300
-    thumb_cache_size: int = 256
+    thumb_max_px: int = Field(default=300, ge=1)
+    thumb_cache_size: int = Field(default=256, ge=1)
 
 
 class AccessControlRuleConfig(BaseModel):
@@ -771,6 +788,7 @@ class DlightragConfig(BaseSettings):
     embedding_batch_num: int = Field(default=10, ge=1)
     embedding_request_timeout: int = Field(
         default=120,
+        gt=0,
         description="Per-request timeout for embedding calls (seconds). "
         "LightRAG worker timeout is 2x this value. "
         "Increase for slow local models (CPU inference).",
@@ -797,6 +815,7 @@ class DlightragConfig(BaseSettings):
     )
     max_upload_bytes: int = Field(
         default=100 * 1024 * 1024,
+        ge=1,
         description="Maximum file size in bytes for /api/ingest/blob uploads (default 100MB).",
     )
 
@@ -948,6 +967,7 @@ class DlightragConfig(BaseSettings):
     )
     max_upload_size_mb: int = Field(
         default=512,
+        ge=1,
         description="Per-request upload cap for /web/files/upload (MB). Reject the "
         "whole request when Content-Length exceeds this so we don't fill the temp "
         "directory before noticing.",
@@ -955,12 +975,14 @@ class DlightragConfig(BaseSettings):
 
     # ===== Operational =====
     log_level: str = Field(default="info")
-    ingest_timeout: int | None = Field(
+    ingest_timeout: float | None = Field(
         default=None,
+        ge=0,
         description="Seconds to wait for synchronous ingest calls. None waits until completion; timeouts return the running job instead of cancelling ingest.",
     )
     request_timeout: int = Field(
         default=300,
+        gt=0,
         description="Timeout in seconds for retrieve/answer/query operations.",
     )
     stalled_doc_timeout_seconds: int = Field(

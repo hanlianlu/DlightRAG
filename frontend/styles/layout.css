@@ -33,7 +33,7 @@
 .show-all-btn {
     font-size: var(--font-size-caption);
     font-weight: 600;
-    letter-spacing: 0.04em;
+    letter-spacing: 0;
     text-transform: uppercase;
 }
 
@@ -352,7 +352,7 @@ body.panel-open .composer-inner {
     color: var(--color-text-subtle);
     font-size: var(--font-size-caption);
     font-weight: 600;
-    letter-spacing: 1.5px;
+    letter-spacing: 0;
 }
 
 .panel-close {

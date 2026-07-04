@@ -26,7 +26,7 @@ async def image(
 ) -> Response:
     """Serve a LightRAG sidecar-backed visual chunk asset."""
     manager = get_manager(request)
-    ws = resolve_workspace(workspace)
+    ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_READ_VISUAL_ASSET, workspace=ws)
     asset = await manager.aget_visual_asset(ws, chunk_id, size=size)
     if asset is None:

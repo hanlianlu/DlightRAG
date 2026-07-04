@@ -62,8 +62,11 @@ class IngestJobStore(Protocol):
 class IngestJobCoordinator:
     """Manage durable ingest jobs, recovery, and in-process task lifecycle."""
 
-    def __init__(self, get_service: Callable[[str], Awaitable[RAGService]]) -> None:
+    def __init__(
+        self, get_service: Callable[[str], Awaitable[RAGService]], *, input_root: Path
+    ) -> None:
         self._get_service = get_service
+        self._input_root = input_root
         self._store: IngestJobStore | None = None
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._workspaces: dict[str, str] = {}
@@ -374,7 +377,7 @@ class IngestJobCoordinator:
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
             if cleanup_after_run and cleanup_paths:
-                await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths)
+                await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths, self._input_root)
 
     async def _heartbeat_job(
         self,
@@ -456,10 +459,8 @@ def _normalize_cleanup_paths(
     return tuple(Path(str(value)) for value in values if str(value))
 
 
-def _cleanup_ingest_paths(paths: tuple[Path, ...]) -> None:
-    from dlightrag.config import get_config
-
-    input_root = get_config().input_dir_path.resolve(strict=False)
+def _cleanup_ingest_paths(paths: tuple[Path, ...], input_root: Path) -> None:
+    input_root = input_root.resolve(strict=False)
     for path in paths:
         resolved = path.resolve(strict=False)
         try:

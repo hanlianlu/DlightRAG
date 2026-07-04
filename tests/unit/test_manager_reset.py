@@ -36,7 +36,10 @@ def _make_manager() -> RAGServiceManager:
     manager._startup_warnings = []
     manager._backoff = {}
     manager._answer_engine = None
-    manager._ingest_jobs = IngestJobCoordinator(lambda workspace: manager._get_service(workspace))
+    manager._ingest_jobs = IngestJobCoordinator(
+        lambda workspace: manager._get_service(workspace),
+        input_root=config.input_dir_path,
+    )
     cast(Any, manager._ingest_jobs)._store = _ResetJobStore()
     return manager
 

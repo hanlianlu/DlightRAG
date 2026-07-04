@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from dlightrag.api.middleware import RequestIdMiddleware, install_request_id_log_record_factory
 from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
+from dlightrag.app_state import request_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
-        _app.state.manager = await RAGServiceManager.create()
+        _app.state.manager = await RAGServiceManager.create(config=request_config(_app))
     except Exception:
         logger.exception("Failed to initialize RAG service manager")
         raise
@@ -57,6 +58,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
         version=__import__("dlightrag").__version__,
         lifespan=lifespan,
     )
+    application.state.config = cfg
 
     # -- Request ID middleware (outermost — runs first) --
     application.add_middleware(RequestIdMiddleware)
@@ -119,7 +121,7 @@ def create_app(*, include_web: bool = True) -> FastAPI:
                 from dlightrag.web.routes import router as web_router
                 from dlightrag.web.static_files import NoCacheStaticFiles
 
-                application.add_middleware(WebAuthMiddleware)
+                application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
                 application.include_router(web_router)
                 _static_dir = _TEMPLATE_DIR.parent / "static"
                 if _static_dir.exists():

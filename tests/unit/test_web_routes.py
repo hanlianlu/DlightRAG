@@ -646,11 +646,21 @@ class TestWebFiles:
         mock_manager.aingest.assert_not_awaited()
         mock_manager.astart_ingest_job.assert_not_awaited()
 
-    def test_safe_relative_path_rejects_absolute_paths(self) -> None:
-        from dlightrag.web.routes.files import _safe_relative_path
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "/tmp/evil.pdf",
+            "../evil.pdf",
+            r"..\evil.pdf",
+            r"folder\..\evil.pdf",
+            r"C:\Users\me\secret.pdf",
+        ],
+    )
+    def test_safe_relative_path_rejects_unsafe_paths(self, filename: str) -> None:
+        from dlightrag.core.ingestion.uploads import safe_upload_relative_path
 
         with pytest.raises(ValueError):
-            _safe_relative_path("/tmp/evil.pdf")
+            safe_upload_relative_path(filename)
 
     async def test_delete_files(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager

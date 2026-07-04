@@ -246,7 +246,7 @@
     font-weight: 600;
     color: var(--color-text-subtle);
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0;
     margin-bottom: var(--space-tight);
 }
 

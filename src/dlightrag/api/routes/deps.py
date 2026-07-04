@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 
 from dlightrag.access_control import AccessDeniedError, access_control_from_config
+from dlightrag.app_state import request_config
 from dlightrag.config import get_config
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager
@@ -15,10 +16,11 @@ def get_manager(request: Request) -> RAGServiceManager:
     return request.app.state.manager
 
 
-def resolve_workspace(ws: str | None) -> str:
+def resolve_workspace(ws: str | None, request: Request | None = None) -> str:
     from dlightrag.utils import normalize_workspace
 
-    return normalize_workspace(ws or get_config().workspace)
+    workspace = request_config(request).workspace if request is not None else get_config().workspace
+    return normalize_workspace(ws or workspace)
 
 
 def request_scope(
@@ -29,7 +31,7 @@ def request_scope(
 
 def get_access_control(request: Request):
     return getattr(request.app.state, "access_control", None) or access_control_from_config(
-        get_config()
+        request_config(request)
     )
 
 
@@ -52,9 +54,9 @@ async def enforce_workspaces_access(
     action: str,
     workspaces: list[str] | tuple[str, ...] | None,
 ) -> None:
-    targets = workspaces or [get_config().workspace]
+    targets = workspaces or [request_config(request).workspace]
     for workspace in targets:
-        await enforce_access(request, user, action, workspace=resolve_workspace(workspace))
+        await enforce_access(request, user, action, workspace=resolve_workspace(workspace, request))
 
 
 async def filter_workspace_records(
