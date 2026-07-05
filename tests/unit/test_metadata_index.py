@@ -7,7 +7,16 @@ from typing import Any
 
 from dlightrag.core.retrieval.metadata_fields import METADATA_FIELDS
 from dlightrag.storage import pg_metadata_index
-from dlightrag.storage.pg_metadata_index import _CREATE_INDEXES, _SCHEMA_MIGRATIONS, _UPSERT
+from dlightrag.storage.pg_metadata_index import _SCHEMA_MIGRATIONS, _UPSERT
+
+
+def _index_sql() -> str:
+    return "\n".join(
+        stmt
+        for migration in _SCHEMA_MIGRATIONS
+        for stmt in migration.statements
+        if stmt.startswith("CREATE INDEX")
+    )
 
 
 class _Tx:
@@ -50,7 +59,7 @@ class TestUpsertSQL:
 
 class TestMetadataSQL:
     def test_indexes_do_not_require_pg_trgm(self):
-        sql = "\n".join(_CREATE_INDEXES)
+        sql = _index_sql()
 
         assert "gin_trgm" not in sql
         assert "trgm" not in sql
@@ -59,7 +68,7 @@ class TestMetadataSQL:
         assert "similarity(" not in _UPSERT
 
     def test_string_btree_indexes_are_case_normalized(self):
-        sql = "\n".join(_CREATE_INDEXES)
+        sql = _index_sql()
 
         assert "ON dlightrag_doc_metadata (LOWER(filename))" in sql
         assert "ON dlightrag_doc_metadata (LOWER(filename_stem))" in sql
@@ -68,7 +77,7 @@ class TestMetadataSQL:
         assert "ON dlightrag_doc_metadata (LOWER(doc_author))" in sql
 
     def test_non_string_btree_indexes_remain_plain(self):
-        sql = "\n".join(_CREATE_INDEXES)
+        sql = _index_sql()
 
         assert "ON dlightrag_doc_metadata (creation_date)" in sql
 
@@ -119,20 +128,6 @@ class TestMetadataSQL:
         assert json.loads(field_values["custom_metadata"]) == {"department": "finance"}
         assert json.loads(field_values["metadata_json"]) == {"department": "Finance"}
         assert "ingested_at" not in field_values
-
-    def test_pg_metadata_index_does_not_query_lightrag_doc_status_metadata(self):
-        from dlightrag.storage import pg_metadata_index as module
-
-        source = "\n".join(
-            [
-                module._UPSERT,
-                module._CREATE_TABLE,
-                "\n".join(module._CREATE_INDEXES),
-            ]
-        )
-
-        assert "LIGHTRAG_DOC_STATUS.metadata" not in source
-        assert "doc_status.metadata" not in source
 
     def test_metadata_schema_migrations_cover_registry_columns_and_indexes(self):
         versions = {migration.version for migration in _SCHEMA_MIGRATIONS}

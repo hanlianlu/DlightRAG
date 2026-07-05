@@ -8,12 +8,9 @@ asyncpg store that reuses DlightRAG's existing ``pg_pool`` and
 """
 
 import json
-import logging
 from typing import Any
 
 from dlightrag.storage.migrations import Migration, apply_migrations
-
-logger = logging.getLogger(__name__)
 
 TABLE = "dlightrag_checkpoints"
 

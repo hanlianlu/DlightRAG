@@ -113,6 +113,11 @@ class TestDerivedFunctions:
         # page_count is not searchable
         assert "page_count" not in ids
 
+    def test_metadata_filter_covers_searchable_fields(self) -> None:
+        from dlightrag.core.retrieval.metadata_fields import searchable_field_ids
+
+        assert searchable_field_ids() <= set(MetadataFilter.model_fields)
+
     def test_filterable_field_ids(self) -> None:
         from dlightrag.core.retrieval.metadata_fields import filterable_field_ids
 

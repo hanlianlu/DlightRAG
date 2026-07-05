@@ -18,10 +18,7 @@ import logging
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from dlightrag.core.service import RAGService
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 async def areset(
-    service: RAGService,
+    service: Any,
     *,
     keep_files: bool = False,
     dry_run: bool = False,
@@ -190,7 +187,7 @@ async def _quote_public_table(conn: Any, table: str) -> str:
     return f"public.{quoted}"
 
 
-async def _cancel_pending_tasks(service: RAGService, *, dry_run: bool) -> int:
+async def _cancel_pending_tasks(service: Any, *, dry_run: bool) -> int:
     """Phase 0: Cancel pending async tasks (worker pools, etc.).
 
     Returns count of cancelled items.

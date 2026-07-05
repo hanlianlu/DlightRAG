@@ -258,7 +258,6 @@ class TestPatchIdempotency:
             mineru_ir_builder_needs_auxiliary_filter,
         )
 
-        mod._PATCHED = False
         mod.apply()
 
         assert mineru_ir_builder_needs_auxiliary_filter(MinerUIRBuilder) is False
@@ -267,9 +266,8 @@ class TestPatchIdempotency:
         """Applying patches twice should not double-patch."""
         import dlightrag.core._lightrag_patches as mod
 
-        mod._PATCHED = False
         mod.apply()
-        mod.apply()  # second call returns early (_PATCHED=True)
+        mod.apply()
 
         from lightrag.kg.postgres_impl import PostgreSQLDB
 
@@ -279,21 +277,3 @@ class TestPatchIdempotency:
         await PostgreSQLDB.configure_age(conn, "g")
         # Should still work normally
         conn.execute.assert_called_once()
-
-    async def test_idempotent_apply(self):
-        """_PATCHED flag prevents re-application."""
-        import dlightrag.core._lightrag_patches as mod
-
-        mod._PATCHED = False
-        mod.apply()
-
-        mod._PATCHED = False
-        mod.apply()
-
-        # Patch replaces (not wraps) — just verify it still works
-        from lightrag.kg.postgres_impl import PostgreSQLDB
-
-        conn = AsyncMock()
-        conn.fetchval = AsyncMock(return_value=True)
-        conn.execute = AsyncMock()
-        await PostgreSQLDB.configure_age(conn, "g")

@@ -31,18 +31,6 @@ def _build_create_table() -> str:
 _CREATE_TABLE = _build_create_table()
 
 
-def _build_create_indexes() -> list[str]:
-    indexes = []
-    for f in METADATA_FIELDS:
-        idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
-        if idx_clause is not None:
-            indexes.append(
-                f"CREATE INDEX IF NOT EXISTS idx_dm_{f.field_id} "
-                f"ON dlightrag_doc_metadata{idx_clause}"
-            )
-    return indexes
-
-
 def _index_clause(field_id: str, pg_type: str, index_type: str | None) -> str | None:
     if index_type == "gin":
         return f" USING gin ({field_id})"
@@ -61,9 +49,6 @@ def _is_string_pg_type(pg_type: str) -> bool:
 
 def _json_param(value: Any) -> str | None:
     return json.dumps(value) if value is not None else None
-
-
-_CREATE_INDEXES = _build_create_indexes()
 
 
 def _build_schema_migrations() -> tuple[Migration, ...]:

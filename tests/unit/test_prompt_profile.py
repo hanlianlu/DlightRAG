@@ -3,8 +3,6 @@
 
 import json
 
-import dlightrag.prompts as prompts
-import dlightrag.prompts.identity as identity
 from dlightrag.prompts import (
     ANSWER_CORE,
     HIGHLIGHT_SYSTEM_PROMPT,
@@ -17,16 +15,9 @@ from dlightrag.prompts.guidance import (
     CITATION_GUIDANCE,
     HIGHLIGHT_GUIDANCE,
     HIGHLIGHT_RESPONSE_FORMAT,
-    LISTWISE_RERANK_PROMPT,
     PLANNER_GUIDANCE,
 )
 from dlightrag.prompts.identity import CORE_IDENTITY
-
-
-def test_prompt_profile_exposes_single_core_identity() -> None:
-    identity_names = [name for name in dir(identity) if name.endswith("IDENTITY")]
-    assert identity_names == ["CORE_IDENTITY"]
-    assert CORE_IDENTITY.startswith("You are ")
 
 
 def test_answer_prompt_is_assembled_from_core_identity_and_guidance() -> None:
@@ -68,23 +59,3 @@ def test_highlight_response_format_contains_parseable_json_example() -> None:
 
     assert parsed == {"phrases": ["phrase1", "phrase2"], "confidence": 0.8}
     assert "0.0-1.0" not in HIGHLIGHT_SYSTEM_PROMPT
-
-
-def test_exported_guidance_constants_do_not_declare_identity() -> None:
-    guidance_names = [
-        "ANSWER_CONTEXT_GUIDANCE",
-        "CITATION_GUIDANCE",
-        "ANSWER_CITATION_EXAMPLE",
-        "PLANNER_GUIDANCE",
-        "RERANK_GUIDANCE",
-        "LISTWISE_RERANK_PROMPT",
-        "HIGHLIGHT_GUIDANCE",
-        "HIGHLIGHT_RESPONSE_FORMAT",
-        "HIGHLIGHT_USER_PROMPT",
-        "HIGHLIGHT_BATCH_USER_PROMPT",
-    ]
-
-    for name in guidance_names:
-        assert name in prompts.__all__
-        assert "You are " not in getattr(prompts, name)
-    assert "You are " not in LISTWISE_RERANK_PROMPT

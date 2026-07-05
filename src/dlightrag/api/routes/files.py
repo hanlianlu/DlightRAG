@@ -1,14 +1,13 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """File operations API routes."""
 
+import logging
 import mimetypes
-from collections.abc import AsyncIterator
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
-from starlette.responses import RedirectResponse
+from starlette.responses import FileResponse, RedirectResponse
 
 from dlightrag.access_control import AccessAction
 from dlightrag.api.auth import UserContext, get_current_user
@@ -30,6 +29,7 @@ from dlightrag.utils import normalize_workspace
 from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/files", response_model=FileListResponse)
@@ -97,10 +97,10 @@ async def serve_file(
     request: Request,
     workspace: str | None = Query(default=None),
     user: UserContext = Depends(get_current_user),
-) -> StreamingResponse | RedirectResponse:
+) -> FileResponse | RedirectResponse:
     """Serve a file by relative path.
 
-    - Local paths under ``input_dir/<workspace>/``: 200 + StreamingResponse
+    - Local paths under ``input_dir/<workspace>/``: 200 + FileResponse
     - azure://: 302 redirect to SAS signed URL
     - s3://: 302 redirect to S3 presigned URL
     - https://: 302 redirect to original source URL
@@ -165,27 +165,15 @@ async def serve_file(
         workspace=safe_workspace,
     )
 
-    ws_dir = (input_dir / safe_workspace).resolve()
-    try:
-        ws_dir.relative_to(input_dir)
-    except ValueError:
+    ws_dir = _contained_resolved_path(input_dir, input_dir / safe_workspace)
+    if ws_dir is None:
         raise HTTPException(403, "Access denied") from None
 
-    full_path = (ws_dir / relative_path).resolve()
-    try:
-        full_path.relative_to(ws_dir)
-    except ValueError:
-        pass  # symlink escape, skip direct lookup
-    else:
-        try:
-            if full_path.is_file():
-                content_type, _ = mimetypes.guess_type(str(full_path))
-                return StreamingResponse(
-                    _stream_file(full_path),
-                    media_type=content_type or "application/octet-stream",
-                )
-        except OSError:
-            pass
+    full_path = _contained_resolved_path(ws_dir, ws_dir / relative_path)
+    if full_path is not None:
+        response = _file_response_if_present(full_path)
+        if response is not None:
+            return response
 
     # --- Canonical basename lookup ---
     # LightRAG canonicalizes file_path to just the basename (no directory
@@ -194,17 +182,12 @@ async def serve_file(
     bare_name = relative_path.name
     if ws_dir.is_dir():
         for sub in _iter_workspace_lookup_dirs(ws_dir):
-            candidate = (sub / bare_name).resolve()
-            try:
-                candidate.relative_to(ws_dir)
-            except ValueError:
-                continue  # symlink escape, skip
-            if candidate.is_file():
-                content_type, _ = mimetypes.guess_type(str(candidate))
-                return StreamingResponse(
-                    _stream_file(candidate),
-                    media_type=content_type or "application/octet-stream",
-                )
+            candidate = _contained_resolved_path(ws_dir, sub / bare_name)
+            if candidate is None:
+                continue
+            response = _file_response_if_present(candidate)
+            if response is not None:
+                return response
 
     raise HTTPException(404, "File not found")
 
@@ -272,10 +255,21 @@ def _iter_workspace_lookup_dirs(ws_dir: Path) -> list[Path]:
     return dirs
 
 
-async def _stream_file(path: Path, chunk_size: int = 64 * 1024) -> AsyncIterator[bytes]:
-    """Stream a file in chunks to avoid loading it entirely into memory."""
-    import asyncio
+def _contained_resolved_path(root: Path, candidate: Path) -> Path | None:
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(root)
+    except OSError, ValueError:
+        return None
+    return resolved
 
-    with path.open("rb") as f:
-        while chunk := await asyncio.to_thread(f.read, chunk_size):
-            yield chunk
+
+def _file_response_if_present(path: Path) -> FileResponse | None:
+    try:
+        if not path.is_file():
+            return None
+    except OSError:
+        logger.debug("Skipping inaccessible file candidate: %s", path, exc_info=True)
+        return None
+    content_type, _ = mimetypes.guess_type(str(path))
+    return FileResponse(path, media_type=content_type or "application/octet-stream")

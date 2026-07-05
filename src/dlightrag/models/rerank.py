@@ -19,6 +19,7 @@ import re
 from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 
@@ -557,9 +558,14 @@ def _azure_cohere_rerank_url(endpoint: str) -> str:
         return base
     if base.endswith("/providers/cohere"):
         return f"{base}/v2/rerank"
-    if ".services.ai.azure.com" in base:
+    if _is_azure_ai_services_host(base):
         return f"{base}/providers/cohere/v2/rerank"
     return f"{base}/v1/rerank"
+
+
+def _is_azure_ai_services_host(endpoint: str) -> bool:
+    host = (urlparse(endpoint).hostname or "").rstrip(".").lower()
+    return host == "services.ai.azure.com" or host.endswith(".services.ai.azure.com")
 
 
 async def _azure_cohere_rerank(
