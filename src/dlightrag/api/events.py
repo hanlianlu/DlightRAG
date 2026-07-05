@@ -39,6 +39,8 @@ class AnswerImageMetaStreamEvent(ClientContractModel):
 class AnswerDoneStreamEvent(ClientContractModel):
     type: Literal["done"] = "done"
     answer: str
+    answer_images: list[dict[str, Any]] = Field(default_factory=list)
+    answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnswerErrorStreamEvent(ClientContractModel):

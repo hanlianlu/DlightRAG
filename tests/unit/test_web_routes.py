@@ -409,6 +409,8 @@ class TestWebSSEBoundary:
             "answer": "x",
             "current_image_ids": [],
             "image_descriptions": [],
+            "answer_images": [],
+            "answer_blocks": [],
         }
 
     async def test_answer_done_html_strips_unsafe_urls(

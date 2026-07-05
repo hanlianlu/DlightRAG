@@ -5,10 +5,10 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
-from urllib.parse import quote
 
 from dlightrag.citations import finalize_answer
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
+from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
 from dlightrag.web.events import (
@@ -53,63 +53,15 @@ async def _session_image_cards(
         data_url = stored_session_images[i] if i < len(stored_session_images) else ""
         answer_images.append(
             {
+                "id": cid,
                 "chunk_id": cid,
+                "source_ref": "",
                 "url": data_url,
-                "thumb_url": data_url,
+                "thumbnail_url": data_url,
                 "label": desc or f"Visual {i + 1}",
             }
         )
     return answer_images
-
-
-def _retrieved_image_cards(
-    *,
-    flat_contexts: list[dict[str, Any]],
-    seen_img_ids: set[str],
-    workspace: str,
-    default_workspace: str,
-    existing_count: int,
-) -> list[dict[str, Any]]:
-    answer_images: list[dict[str, Any]] = []
-    for chunk in flat_contexts:
-        cid = chunk.get("chunk_id", "")
-        if not cid or cid in seen_img_ids:
-            continue
-        if chunk.get("_answer_image_sent") is False:
-            continue
-        image_url = chunk.get("image_url")
-        thumb_url = chunk.get("thumbnail_url") or image_url
-        image_data = chunk.get("image_data")
-        ws = chunk.get("_workspace") or workspace or default_workspace
-        if not image_url and not image_data and _is_visual_chunk(chunk):
-            image_url, thumb_url = _web_image_urls(ws, cid)
-        if not image_url and not image_data:
-            continue
-        if not image_url and image_data:
-            image_url, thumb_url = _web_image_urls(ws, cid)
-        label = chunk.get("file_path", "") or f"Visual {existing_count + len(answer_images) + 1}"
-        answer_images.append(
-            {
-                "chunk_id": cid,
-                "url": image_url,
-                "thumb_url": thumb_url,
-                "label": label,
-            }
-        )
-        seen_img_ids.add(cid)
-    return answer_images
-
-
-def _is_visual_chunk(chunk: dict[str, Any]) -> bool:
-    sidecar = chunk.get("sidecar")
-    return isinstance(sidecar, dict) and sidecar.get("type") == "drawing"
-
-
-def _web_image_urls(workspace: str, chunk_id: str) -> tuple[str, str]:
-    safe_ws = quote(str(workspace), safe="")
-    safe_chunk = quote(str(chunk_id), safe="")
-    base = f"/web/images/{safe_ws}/{safe_chunk}"
-    return f"{base}?size=full", f"{base}?size=thumb"
 
 
 async def stream_answer_events(
@@ -183,8 +135,6 @@ async def stream_answer_events(
             image_descriptions=image_descriptions,
             scope=scope,
         )
-        seen_img_ids = {str(img.get("chunk_id", "")) for img in session_cards}
-
         resolver = SourceUrlResolver(
             input_dir=str(cfg.input_dir_path),
             workspace=workspace or manager.config.workspace,
@@ -196,26 +146,12 @@ async def stream_answer_events(
             image_url_prefix="/web/images",
             default_workspace=workspace or manager.config.workspace,
         )
-        flat_contexts = finalized.flat_contexts
-        answer_images = [
-            *session_cards,
-            *_retrieved_image_cards(
-                flat_contexts=flat_contexts,
-                seen_img_ids=seen_img_ids,
-                workspace=workspace,
-                default_workspace=manager.config.workspace,
-                existing_count=len(session_cards),
-            ),
-        ]
-
-        all_cited_ids: set[str] = set()
-        for cids in finalized.cited_chunks.values():
-            all_cited_ids.update(cids)
-        cited_images = [img for img in answer_images if img.get("chunk_id", "") in all_cited_ids]
-        session_images = [
-            img for img in answer_images if str(img.get("chunk_id", "")).startswith("img_")
-        ]
-        answer_images = session_images + cited_images
+        cited_images = answer_images_from_sources(
+            finalized.sources,
+            contexts={"chunks": finalized.flat_contexts},
+        )
+        answer_images = session_cards + cited_images
+        answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
 
         done_payload = AnswerDoneEvent(
             html=safe_answer_done(
@@ -226,6 +162,8 @@ async def stream_answer_events(
             answer=finalized.answer,
             current_image_ids=current_image_ids,
             image_descriptions=image_descriptions,
+            answer_images=answer_images,
+            answer_blocks=answer_blocks,
         )
         yield sse_event("done", done_payload)
 

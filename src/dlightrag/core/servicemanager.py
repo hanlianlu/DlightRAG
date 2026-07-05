@@ -1267,6 +1267,19 @@ class RAGServiceManager:
                             answer_text=result.answer,
                             config=self._config,
                         )
+                        from dlightrag.core.answer_media import (
+                            answer_blocks_from_markdown,
+                            answer_images_from_sources,
+                        )
+
+                        result.answer_images = answer_images_from_sources(
+                            result.sources,
+                            contexts=result.contexts,
+                        )
+                        result.answer_blocks = answer_blocks_from_markdown(
+                            result.answer,
+                            result.answer_images,
+                        )
                     pipeline_trace.update(output=_answer_output(result))
                     return result
         except TimeoutError as e:

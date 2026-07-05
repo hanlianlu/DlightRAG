@@ -117,6 +117,8 @@ class RetrievalResponse(ClientContractModel):
 
 class AnswerResponse(RetrievalResponse):
     references: list[ReferenceSummary] = Field(default_factory=list)
+    answer_images: list[dict[str, Any]] = Field(default_factory=list)
+    answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class IngestJobStatusResponse(ClientContractModel):

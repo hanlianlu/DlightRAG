@@ -234,6 +234,10 @@ reference section; the output boundary still normalizes provider drift by
 discarding generated bibliography tails and deriving `sources` deterministically
 from validated inline markers. Returned `sources` contain only cited documents
 and chunks.
+Answer generation also derives `answer_images` and `answer_blocks` from those
+validated cited sources before transport projection, so SDK, REST, MCP, and Web
+expose the same image registry and insertion hints without trusting
+model-generated Markdown image URLs.
 Streaming callers receive tokens immediately and a final normalized answer plus
 cited sources after validation.
 

@@ -136,6 +136,8 @@ def answer_payload(
         ),
         "references": [{"id": ref.id, "title": ref.title} for ref in result.references],
         "sources": [source.model_dump() for source in result.sources],
+        "answer_images": result.answer_images,
+        "answer_blocks": result.answer_blocks,
         "trace": result.trace,
         "image_descriptions": result.image_descriptions,
         "current_image_ids": result.current_image_ids,
