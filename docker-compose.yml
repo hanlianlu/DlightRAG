@@ -15,10 +15,15 @@ x-common-env: &common-env
   # explicitly overridden.
   MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}
 
+x-app-image: &app-image dlightrag:local
+x-app-build: &app-build
+  context: .
+
 services:
   dlightrag-api:
     restart: unless-stopped
-    build: .
+    image: *app-image
+    build: *app-build
     ports:
       - "127.0.0.1:8100:8100"
     environment:
@@ -38,7 +43,8 @@ services:
 
   dlightrag-mcp:
     restart: unless-stopped
-    build: .
+    image: *app-image
+    build: *app-build
     # SECURITY: MCP streamable-http exposes ingest / delete_files / answer.
     # This maps the host port to 127.0.0.1 only; set DLIGHTRAG_AUTH_MODE=simple
     # + DLIGHTRAG_API_AUTH_TOKEN before exposing it on a non-loopback network.
@@ -62,7 +68,8 @@ services:
 
   lightrag-gui:
     restart: unless-stopped
-    build: .
+    image: *app-image
+    build: *app-build
     ports:
       - "127.0.0.1:9621:9621"
     environment:
@@ -108,7 +115,7 @@ services:
       context: postgres
     shm_size: ${DLIGHTRAG_POSTGRES_SHM_SIZE:-8gb}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: ${DLIGHTRAG_POSTGRES_DATABASE:-dlightrag}
       POSTGRES_USER: ${DLIGHTRAG_POSTGRES_USER:-dlightrag}
