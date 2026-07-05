@@ -155,6 +155,35 @@ class TestWebAuth:
         assert "dlightrag_web_auth=" in login.headers["set-cookie"]
         assert resp.status_code == 200
 
+    async def test_login_redirect_rejects_external_next(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            resp = await c.post(
+                "/web/login",
+                data={"token": "secret-token", "next": "https://evil.example/"},
+            )
+
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/web/"
+
+    async def test_invalid_auth_cookie_is_cleared(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            c.cookies.set("dlightrag_web_auth", "not base64!")
+            resp = await c.get("/web/")
+
+        assert resp.status_code == 303
+        assert resp.headers["location"].startswith("/web/login")
+        assert "dlightrag_web_auth=" in resp.headers["set-cookie"]
+
     async def test_bearer_header_grants_web_access(
         self, test_config: DlightragConfig, mock_manager
     ) -> None:

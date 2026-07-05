@@ -19,6 +19,7 @@ from dlightrag.core.ingestion.uploads import (
     upload_batch_dir,
     write_upload_stream,
 )
+from dlightrag.utils import log_safe
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
@@ -127,7 +128,11 @@ async def _file_list_response(request: Request, workspace: str):
     try:
         files = _file_view_models(await manager.list_ingested_files(workspace))
     except Exception:
-        logger.debug("Could not list files for workspace %s", workspace, exc_info=True)
+        logger.debug(
+            "Could not list files for workspace %s",
+            log_safe(workspace),
+            exc_info=True,
+        )
         files = []
 
     # LightRAG's shared-storage pipeline_status is the authoritative ingest
@@ -140,7 +145,11 @@ async def _file_list_response(request: Request, workspace: str):
         if ingest_busy:
             status = ps
     except Exception:
-        logger.debug("Could not read pipeline status for workspace %s", workspace, exc_info=True)
+        logger.debug(
+            "Could not read pipeline status for workspace %s",
+            log_safe(workspace),
+            exc_info=True,
+        )
 
     return templates.TemplateResponse(
         request,
@@ -193,7 +202,7 @@ async def upload_files(
     except Exception:
         logger.debug(
             "Could not read pipeline status before upload for workspace %s",
-            selected_workspace,
+            log_safe(selected_workspace),
             exc_info=True,
         )
 
@@ -246,7 +255,10 @@ async def upload_files(
             IngestSpec(source_type="local", path=str(upload_dir)),
         )
     except Exception as e:
-        logger.exception("Failed to start ingest job for workspace %s", selected_workspace)
+        logger.exception(
+            "Failed to start ingest job for workspace %s",
+            log_safe(selected_workspace),
+        )
         if upload_dir is not None:
             shutil.rmtree(upload_dir, ignore_errors=True)
         return error_response(f"Upload staged but ingest did not start: {e}", status_code=500)

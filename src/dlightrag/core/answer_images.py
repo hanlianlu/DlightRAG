@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
+from dlightrag.utils import log_safe
 from dlightrag.utils.image_budget import ImagePayloadBudget
 from dlightrag.utils.images import image_url_block
 
@@ -72,15 +73,17 @@ def _validate_image_url(text: str, *, label: str) -> str | None:
 
     colon = text.find(":")
     if colon < 0:
-        logger.warning("Rejected image source without scheme · %s · %.80s", label, text)
+        logger.warning(
+            "Rejected image source without scheme · %s · %s", log_safe(label), log_safe(text)
+        )
         return None
     scheme = text[:colon].lower().rstrip("/")
     if scheme not in _ALLOWED_SCHEMES:
         logger.warning(
             "Rejected image source with unsafe scheme '%s' · %s · %.80s",
-            scheme,
-            label,
-            text,
+            log_safe(scheme),
+            log_safe(label),
+            log_safe(text),
         )
         return None
 
@@ -89,8 +92,8 @@ def _validate_image_url(text: str, *, label: str) -> str | None:
     if _is_unsafe_host(parsed.hostname):
         logger.warning(
             "Rejected image URL with unsafe host '%s' · %s",
-            parsed.hostname,
-            label,
+            log_safe(parsed.hostname),
+            log_safe(label),
         )
         return None
     return text
@@ -181,9 +184,9 @@ class AnswerImageBudget:
         if scheme != "data":  # data: already handled above
             logger.warning(
                 "Rejected image source with unsafe scheme '%s' · %s · %.80s",
-                scheme,
-                label,
-                text,
+                log_safe(scheme),
+                log_safe(label),
+                log_safe(text),
             )
             return None
 

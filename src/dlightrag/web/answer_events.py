@@ -110,7 +110,6 @@ async def stream_answer_events(
             pass
         elif isinstance(token_iter, str):
             full_answer = token_iter
-            accumulated_text = token_iter
             yield sse_event("token", token_iter)
         else:
             async for chunk in token_iter:
