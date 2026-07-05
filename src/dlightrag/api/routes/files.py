@@ -3,6 +3,7 @@
 
 import logging
 import mimetypes
+import os
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -169,11 +170,9 @@ async def serve_file(
     if ws_dir is None:
         raise HTTPException(403, "Access denied") from None
 
-    full_path = _contained_resolved_path(ws_dir, ws_dir / relative_path)
-    if full_path is not None:
-        response = _file_response_if_present(full_path)
-        if response is not None:
-            return response
+    response = _file_response_if_present(ws_dir, ws_dir / relative_path)
+    if response is not None:
+        return response
 
     # --- Canonical basename lookup ---
     # LightRAG canonicalizes file_path to just the basename (no directory
@@ -182,10 +181,7 @@ async def serve_file(
     bare_name = relative_path.name
     if ws_dir.is_dir():
         for sub in _iter_workspace_lookup_dirs(ws_dir):
-            candidate = _contained_resolved_path(ws_dir, sub / bare_name)
-            if candidate is None:
-                continue
-            response = _file_response_if_present(candidate)
+            response = _file_response_if_present(ws_dir, sub / bare_name)
             if response is not None:
                 return response
 
@@ -257,19 +253,27 @@ def _iter_workspace_lookup_dirs(ws_dir: Path) -> list[Path]:
 
 def _contained_resolved_path(root: Path, candidate: Path) -> Path | None:
     try:
-        resolved = candidate.resolve()
-        resolved.relative_to(root)
+        root_path = os.path.realpath(root)
+        resolved_path = os.path.realpath(candidate)
+        if os.path.commonpath([root_path, resolved_path]) != root_path:
+            return None
     except OSError, ValueError:
         return None
-    return resolved
+    return Path(resolved_path)
 
 
-def _file_response_if_present(path: Path) -> FileResponse | None:
+def _file_response_if_present(root: Path, candidate: Path) -> FileResponse | None:
     try:
-        if not path.is_file():
+        root_path = os.path.realpath(root)
+        path = os.path.realpath(candidate)
+        if os.path.commonpath([root_path, path]) != root_path:
+            return None
+        if not os.path.isfile(path):
             return None
     except OSError:
         logger.debug("Skipping inaccessible file candidate", exc_info=True)
         return None
-    content_type, _ = mimetypes.guess_type(str(path))
+    except ValueError:
+        return None
+    content_type, _ = mimetypes.guess_type(path)
     return FileResponse(path, media_type=content_type or "application/octet-stream")
