@@ -199,6 +199,49 @@ The answer prompt receives:
 - quality-preserving bounded inline page or image previews when available
 - user-supplied `query_images`, bounded by the independent user-image budget
 
+### Answer LLM Input Shape
+
+The answer model does not receive the raw `contexts` JSON. `AnswerEngine`
+builds OpenAI-style messages with explicit evidence and task boundaries:
+
+```python
+[
+    {"role": "system", "content": get_answer_system_prompt()},
+    # optional conversation history
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "## User-attached images\n"},
+            {"type": "image_url", "image_url": {"url": "..."}},
+            {"type": "text", "text": "## Document Excerpts"},
+            {"type": "text", "text": "### Document [1]: report.pdf"},
+            {"type": "text", "text": "[1-1] report.pdf, Page 3\nEvidence text..."},
+            {"type": "text", "text": "[1-2] \"Doc Title\" Page 4"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}},
+            {"type": "text", "text": (
+                "## Knowledge Graph Context\n..."
+                "\n\n## Reference List\n..."
+                "\n\n## Question\nWhat are the key findings?"
+            )},
+        ],
+    },
+]
+```
+
+The `## User-attached images` blocks are omitted when no current query images
+fit the user-image budget. Conversation history, when present, is inserted as
+prior messages before the current user message.
+
+The sections are intentional:
+
+- `## User-attached images` are part of the user's question, not retrieved evidence.
+- `## Document Excerpts` contains retrieved text and page/image previews grouped by document.
+- Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
+- Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the RAG image budget.
+- `## Knowledge Graph Context` gives entity/relationship facts, with source document tags when available.
+- `## Reference List` maps citation IDs to documents.
+- `## Question` is the actual user task and is placed last.
+
 Answer generation has two image budgets. Retrieved visual chunks use
 `answer.max_images` plus the answer image byte/quality limits. User-supplied
 `query_images` and history images use `answer.max_user_images`; current-turn

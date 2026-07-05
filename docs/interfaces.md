@@ -333,6 +333,16 @@ deduplicated by LightRAG's document status and DlightRAG's content-hash guard.
 | Web UI | — | SSE (HTML) | Built-in |
 | CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | N/A |
 
+### Contract Terms
+
+| Term | Meaning |
+|---|---|
+| `contexts` | Evidence package. `/retrieve` returns the broader retrieved set; `/answer` returns the packed evidence that the answer model actually saw. |
+| `sources` | Document-level source objects with chunks, pages, optional visual routes, and optional highlights. `/retrieve` returns all retrieved sources; `/answer` returns only cited sources. |
+| `references` | Compact document-level citation summary for answers, derived from validated inline citations. |
+| `answer_images` | Registry of cited visual assets available for rendering. Entries reference image routes, not inline document image bytes. |
+| `answer_blocks` | Display plan for answers: markdown text blocks plus `image_ref` blocks that point into `answer_images`. |
+
 ### Python SDK
 
 ```python
@@ -473,7 +483,7 @@ paths without deleting LightRAG rows, metadata, or local files.
 | `error` | `{type, message}` | Error mid-stream |
 
 ```
-data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":[...]},"sources":[...]}
+data: {"type":"context","data":{"chunks":[...],"entities":[...],"relationships":[...]}}
 
 data: {"type":"token","content":"The key findings"}
 
@@ -524,6 +534,21 @@ retrieved chunk has a visual sidecar, DlightRAG projects it to
 `image_url`/`thumbnail_url` routes. Python manager internals may still carry
 `image_data` inside contexts so answer generation and reranking can use bounded
 multimodal payloads without a second database read.
+
+### Images Are References, Not Inline Payloads
+
+Retrieved document images are exposed as route references, not embedded bytes:
+
+| Interface | Image reference shape | Byte access |
+|---|---|---|
+| REST | `/images/{workspace}/{chunk_id}?size=thumb\|full` in `image_url`, `thumbnail_url`, and `answer_images` | Authenticated REST image route |
+| Web | `/web/images/{workspace}/{chunk_id}?size=thumb\|full` in rendered HTML/SSE payloads | Same-origin Web image route |
+| MCP | Same JSON `image_url`/`thumbnail_url` references as REST when a REST image route is reachable | No separate MCP binary stream today |
+| SDK | `answer_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `answer_images` |
+
+User-supplied `query_images` are different: they can arrive as data URIs, are
+bounded before model use, and may be stored temporarily in session memory so a
+later request can refer to `current_image_ids`.
 
 ```python
 from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, EntityContext, RelationshipContext
