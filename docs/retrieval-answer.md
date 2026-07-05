@@ -114,10 +114,11 @@ Metadata filtering is explicit-schema first:
   chunks, retrieval returns no matches.
 - LLM-inferred filters include `filter_confidence` and evidence spans for
   observability. DlightRAG does not use hand-written fuzzy/static rules to
-  invent or reject filters. If an inferred filter resolves to zero candidates,
-  DlightRAG retries without that inferred filter because the planner may have
-  over-inferred.
-- Non-empty inferred candidate sets constrain semantic search and BM25.
+  invent or reject filters. If an inferred filter resolves to zero candidates
+  or filtered retrieval returns no chunks, DlightRAG retries without that
+  inferred filter because the planner may have over-inferred.
+- Non-empty inferred candidate sets constrain semantic search and BM25 unless
+  that inferred-filter retry path is needed.
 
 For semantic search, `FilteredVectorDB` applies the candidate set before
 ranking. Empty strict candidates return immediately. Small candidate sets use
@@ -158,8 +159,8 @@ semantic multimodal path.
 `rerank.strategy` chooses the final ranker. DlightRAG does not pass
 `rerank_model_func` into LightRAG; it disables LightRAG query reranking and
 reranks the DlightRAG fused candidate set after provenance hydration. This lets
-BM25-only hits, metadata-injected chunks, direct image matches, and LightRAG
-`mix` chunks compete in one list with page/image data already attached.
+BM25-only hits, direct image matches, and LightRAG `mix` chunks compete in one
+list with page/image data already attached.
 
 | Strategy | How it works |
 |---|---|
@@ -225,7 +226,7 @@ pre-answer retrieval set.
 
 DlightRAG does not use LightRAG `aquery_llm()` for final answer generation
 because post-LightRAG context can include BM25 results, direct image matches,
-metadata-path injections, federated chunks, and reranked multimodal pages.
+federated chunks, and reranked multimodal pages.
 Instead, it uses LightRAG `aquery_data()` as the base context and reference
 seed, then validates inline `[n]` and `[n-m]` citations against the final
 post-fusion context. The system prompt tells the model not to generate a

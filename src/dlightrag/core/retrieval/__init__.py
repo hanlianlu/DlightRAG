@@ -25,8 +25,8 @@ def canonicalize_reference_ids(
 
     LightRAG ``aquery_data`` already returns a document reference list. When
     provided, that list is the seed for doc-level citations. DlightRAG then
-    extends it for chunks introduced after LightRAG retrieval, such as BM25,
-    metadata-path injections, or direct visual hits.
+    extends it for chunks introduced after LightRAG retrieval, such as BM25 or
+    direct visual hits.
 
     Re-running on chunks that already have reference_ids is safe: existing
     mappings are preserved and only empty slots are filled.
