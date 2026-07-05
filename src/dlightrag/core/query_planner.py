@@ -14,7 +14,9 @@ import inspect
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -387,19 +389,11 @@ class QueryPlanner:
             try:
                 mf = MetadataFilter(**clean)
                 if date_from_str:
-                    from datetime import datetime
-
-                    try:
+                    with suppress(ValueError, TypeError):
                         mf.date_from = datetime.fromisoformat(date_from_str)
-                    except ValueError, TypeError:
-                        pass
                 if date_to_str:
-                    from datetime import datetime
-
-                    try:
+                    with suppress(ValueError, TypeError):
                         mf.date_to = datetime.fromisoformat(date_to_str)
-                    except ValueError, TypeError:
-                        pass
                 metadata_filter = mf if not mf.is_empty() else None
             except Exception:
                 logger.warning("QueryPlanner: invalid filter values for query: %r", query[:80])

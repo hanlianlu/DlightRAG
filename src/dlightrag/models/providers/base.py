@@ -77,7 +77,8 @@ class CompletionProvider(ABC):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> str: ...
+    ) -> str:
+        raise NotImplementedError
 
     @abstractmethod
     async def stream(
@@ -89,7 +90,8 @@ class CompletionProvider(ABC):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> AsyncGenerator[str]: ...  # type: ignore[return]
+    ) -> AsyncGenerator[str]:  # type: ignore[return]
+        raise NotImplementedError
 
     async def aclose(self) -> None:
         """Release SDK clients, connection pools, and other resources.

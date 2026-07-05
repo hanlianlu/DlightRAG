@@ -243,7 +243,7 @@ class RAGServiceManager:
 
         self._answer_engine: AnswerEngine | None = None
         self._ingest_jobs = IngestJobCoordinator(
-            lambda workspace: self._get_service(workspace),
+            self._get_ingest_service,
             input_root=self._config.input_dir_path,
         )
         self._query_planner: QueryPlanner | None = None
@@ -338,6 +338,9 @@ class RAGServiceManager:
         if "authentication" in text or "password" in text or "denied" in text:
             return f"{msg}. Check API keys or database credentials."
         return msg
+
+    async def _get_ingest_service(self, workspace: str) -> RAGService:
+        return await self._get_service(workspace)
 
     async def _get_service(self, workspace: str) -> RAGService:
         """Get or create a RAGService for a specific workspace. Async-safe.

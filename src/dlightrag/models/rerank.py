@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
+from contextlib import suppress
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
@@ -143,12 +144,10 @@ def _parse_listwise_scores(text: str, expected: int) -> list[float]:
     """Parse a JSON array of scores from a model response."""
     text = text.strip()
     # Try JSON array
-    try:
+    with suppress(json.JSONDecodeError, ValueError, TypeError):
         data = json.loads(text)
         if isinstance(data, list):
             return [_clamp(float(s)) for s in data[:expected]]
-    except json.JSONDecodeError, ValueError, TypeError:
-        pass
     # Fallback: extract all floats from text
     matches = re.findall(r"\d+\.\d+", text)
     if matches:

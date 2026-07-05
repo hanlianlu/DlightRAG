@@ -107,7 +107,7 @@ class S3DataSource(AsyncDataSource):
             if close is not None:
                 result = close()
                 if isawaitable(result):
-                    await result
+                    _ = await result
 
     async def aclose(self) -> None:
         """Close the S3 session."""

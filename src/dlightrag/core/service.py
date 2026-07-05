@@ -1250,7 +1250,7 @@ class RAGService:
             if close is not None:
                 result = close()
                 if isawaitable(result):
-                    await result
+                    _ = await result
 
     async def _aingest_url(self, *, replace: bool, **kwargs: Any) -> dict[str, Any]:
         documents = _ingest_documents(kwargs.get("documents"))

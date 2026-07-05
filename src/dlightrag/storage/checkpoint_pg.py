@@ -8,6 +8,7 @@ asyncpg store that reuses DlightRAG's existing ``pg_pool`` and
 """
 
 import json
+from contextlib import suppress
 from typing import Any
 
 from dlightrag.storage.migrations import Migration, apply_migrations
@@ -124,12 +125,10 @@ def _resolve_content(jsonb_val: Any, text_fallback: Any) -> str | list[dict[str,
     if isinstance(jsonb_val, list):
         return jsonb_val
     if isinstance(jsonb_val, str):
-        try:
+        with suppress(json.JSONDecodeError, TypeError):
             parsed = json.loads(jsonb_val)
             if isinstance(parsed, list):
                 return parsed
-        except json.JSONDecodeError, TypeError:
-            pass
         if jsonb_val.strip():
             return jsonb_val
     text = str(text_fallback or "")

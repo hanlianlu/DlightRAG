@@ -159,7 +159,7 @@ class URLDataSource(AsyncDataSource):
             return
         result = close()
         if inspect.isawaitable(result):
-            await result
+            _ = await result
 
     def _ensure_client(self) -> Any:
         if self._client is None:
