@@ -96,14 +96,31 @@ function renderThumbnails(): void {
     });
 }
 
-function _safeImageSrc(src: unknown): string {
-    if (typeof src !== 'string') return '';
+function _safeImageUrl(src: unknown): URL | null {
+    if (typeof src !== 'string') return null;
     const value = src.trim();
-    if (!value) return '';
-    if (value.startsWith('/') && !value.startsWith('//')) return value;
-    if (value.startsWith('blob:')) return value;
-    if (SAFE_DATA_IMAGE_SRC_RE.test(value)) return value;
-    return '';
+    if (!value) return null;
+
+    let url: URL;
+    try {
+        url = new URL(value, window.location.origin);
+    } catch {
+        return null;
+    }
+
+    if (
+        (url.protocol === 'http:' || url.protocol === 'https:') &&
+        url.origin === window.location.origin
+    ) {
+        return url;
+    }
+    if (url.protocol === 'blob:' && url.origin === window.location.origin) return url;
+    if (url.protocol === 'data:' && SAFE_DATA_IMAGE_SRC_RE.test(value)) return url;
+    return null;
+}
+
+function _safeImageSrc(src: unknown): string {
+    return _safeImageUrl(src)?.href || '';
 }
 
 function _getLightboxImageSrc(el: Element): string {
@@ -150,12 +167,12 @@ function _updateNavButtons(box: LightboxElement): void {
 }
 
 function _showLightboxImage(box: LightboxElement, src: string): void {
-    const safeSrc = _safeImageSrc(src);
-    if (!safeSrc) return;
+    const safeUrl = _safeImageUrl(src);
+    if (!safeUrl) return;
     const img = box.__lightboxImg;
     if (!img) return;
-    img.src = safeSrc;
-    box.setAttribute('data-current-src', safeSrc);
+    img.src = safeUrl.href;
+    box.setAttribute('data-current-src', safeUrl.href);
     _updateNavButtons(box);
 }
 
@@ -225,13 +242,13 @@ function ensureLightbox(): LightboxElement {
 }
 
 export function openLightbox(src: unknown): void {
-    const safeSrc = _safeImageSrc(src);
-    if (!safeSrc) return;
+    const safeUrl = _safeImageUrl(src);
+    if (!safeUrl) return;
     const box = ensureLightbox();
-    box.setAttribute('data-current-src', safeSrc);
+    box.setAttribute('data-current-src', safeUrl.href);
     const img = box.__lightboxImg;
     if (!img) return;
-    img.src = safeSrc;
+    img.src = safeUrl.href;
     box.classList.add(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'false');
     _updateNavButtons(box);
