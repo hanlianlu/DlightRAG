@@ -200,39 +200,3 @@ class FilteredVectorStorage:
     def __getattr__(self, name: str) -> Any:
         """Proxy all other attributes to original (table_name, workspace, etc.)."""
         return getattr(self._original, name)
-
-
-# ── Shared force-injection helper ─────────────────────────────────
-# Used by service-level candidate injection to recover metadata-resolved chunks
-# that the KG/vector retrieval did not return in the first pass.
-
-
-async def fetch_missing_chunks(
-    stores: Any,
-    seen_ids: set[str],
-    max_count: int = 30,
-) -> list[dict[str, Any]]:
-    """Fetch chunks matching the active metadata filter but missing from *seen_ids*.
-
-    Reads the per-request ``_active_filter`` contextvar and fetches any
-    chunk_ids that are in the filter set but absent from *seen_ids*.
-
-    Returns basic chunk dicts (chunk_id, content, reference_id, file_path).
-    ``file_path`` is populated from the LightRAG text_chunks payload when
-    available; this is required so downstream
-    ``canonicalize_reference_ids`` can assign a stable doc-level
-    ``reference_id`` (the upstream helper skips chunks with empty
-    file_path). Callers may further enrich with image data afterward.
-    """
-    active_ids = _active_filter.get()
-    if active_ids is None:
-        return []
-    missing = active_ids - seen_ids
-    if not missing:
-        return []
-
-    inject_ids = sorted(missing)[:max_count]
-    chunks = await stores.context_chunks_by_ids(inject_ids)
-    if chunks:
-        logger.info("Force-injected %d metadata-resolved chunks", len(chunks))
-    return chunks

@@ -3,7 +3,10 @@
 
 from unittest.mock import AsyncMock
 
-from dlightrag.core.retrieval.filtered_vdb import _active_filter, metadata_filter_scope
+from dlightrag.core.retrieval.filtered_vdb import (
+    _active_filter,
+    metadata_filter_scope,
+)
 
 
 class _FakeDB:

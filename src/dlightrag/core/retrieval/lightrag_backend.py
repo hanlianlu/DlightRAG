@@ -10,7 +10,6 @@ from lightrag import QueryParam
 from PIL import Image
 
 from dlightrag.core.retrieval import canonicalize_reference_ids
-from dlightrag.core.retrieval.filtered_vdb import fetch_missing_chunks
 from dlightrag.core.retrieval.fusion import rrf_fuse
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalResult
 from dlightrag.core.retrieval.provenance import hydrate_lightrag_chunk_provenance
@@ -77,11 +76,6 @@ class LightRAGMixBackend:
             "direct_visual_chunk_count": 0,
             "hydrated_chunk_count": 0,
         }
-        seen_ids = {chunk["chunk_id"] for chunk in chunks}
-        injected = await fetch_missing_chunks(self._stores, seen_ids, limit)
-        chunks.extend(injected)
-        trace["metadata_injected_chunk_count"] = len(injected)
-
         direct_visual_chunks = await self._retrieve_query_images(
             multimodal_content,
             top_k=self._direct_visual_top_k,
@@ -114,6 +108,10 @@ class LightRAGMixBackend:
                 context_chunk["page_idx"] = c["page_idx"]
             if c.get("bbox") is not None:
                 context_chunk["bbox"] = c["bbox"]
+            if c.get("sidecar") is not None:
+                context_chunk["sidecar"] = c["sidecar"]
+            if c.get("sidecar_location") is not None:
+                context_chunk["sidecar_location"] = c["sidecar_location"]
             context_chunks.append(context_chunk)
 
         return RetrievalResult(

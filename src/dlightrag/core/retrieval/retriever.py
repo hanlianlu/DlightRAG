@@ -142,6 +142,21 @@ class UnifiedRetriever:
         fused = dedup_chunks_by_content(fused)
         lightrag_result.contexts["chunks"] = fused
         trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
+        if candidate_ids is not None and metadata_filter_source == "llm_inferred" and not fused:
+            relaxed = await self.aretrieve(
+                query,
+                metadata_filter=None,
+                metadata_filter_source=None,
+                multimodal_content=multimodal_content,
+                bm25_query=bm25_query,
+                top_k=top_k,
+                chunk_top_k=chunk_top_k,
+                **kwargs,
+            )
+            relaxed.trace["metadata_filter_source"] = metadata_filter_source
+            relaxed.trace["metadata_candidate_count"] = len(candidate_ids)
+            relaxed.trace["metadata_filter_relaxed"] = True
+            return relaxed
         fused_source_counts = _count_fused_sources(
             lightrag_result.contexts["chunks"],
             semantic_chunks=semantic_chunks,
@@ -151,8 +166,7 @@ class UnifiedRetriever:
         logger.info(
             "[Retriever] mix: bm25_enabled=%s bm25_query=%r filter_source=%s "
             "metadata_candidates=%s filter_relaxed=%s semantic_chunks=%d bm25_chunks=%d "
-            "fused_chunks=%d fused_sources=semantic_only=%d bm25_only=%d both=%d "
-            "bm25_top=%s",
+            "fused_chunks=%d fused_sources=semantic_only=%d bm25_only=%d both=%d bm25_top=%s",
             self._bm25 is not None,
             lexical_query if self._bm25 is not None else None,
             metadata_filter_source,

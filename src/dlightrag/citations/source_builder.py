@@ -165,14 +165,21 @@ def _chunk_image_urls(
 ) -> tuple[str | None, str | None]:
     if chunk.get("image_url") or chunk.get("thumbnail_url"):
         return chunk.get("image_url"), chunk.get("thumbnail_url")
-    if not image_url_prefix or not chunk.get("image_data"):
+    if not image_url_prefix:
         return None, None
     workspace = chunk.get("_workspace") or default_workspace
     chunk_id = chunk.get("chunk_id")
     if not workspace or not chunk_id:
+        return None, None
+    if not chunk.get("image_data") and not _is_visual_chunk(chunk):
         return None, None
     base = image_url_prefix.rstrip("/")
     safe_ws = quote(str(workspace), safe="")
     safe_chunk = quote(str(chunk_id), safe="")
     path = f"{base}/{safe_ws}/{safe_chunk}"
     return f"{path}?size=full", f"{path}?size=thumb"
+
+
+def _is_visual_chunk(chunk: dict[str, Any]) -> bool:
+    sidecar = chunk.get("sidecar")
+    return isinstance(sidecar, dict) and sidecar.get("type") == "drawing"

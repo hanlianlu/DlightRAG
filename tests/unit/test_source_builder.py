@@ -78,6 +78,19 @@ class TestBuildSources:
         assert _chunks(sources[0])[0].image_url == "/images/default/c1?size=full"
         assert _chunks(sources[0])[0].thumbnail_url == "/images/default/c1?size=thumb"
 
+    def test_projects_visual_chunk_urls_without_inline_image_data(self) -> None:
+        chunk = _chunk("doc-1-mm-drawing-001", "ref-1", image_data=None, page_idx=1)
+        chunk["_workspace"] = "default"
+        chunk["sidecar"] = {"type": "drawing"}
+        contexts = {"chunks": [chunk]}
+        sources = build_sources(contexts)
+
+        assert _chunks(sources[0])[0].image_url == "/images/default/doc-1-mm-drawing-001?size=full"
+        assert (
+            _chunks(sources[0])[0].thumbnail_url
+            == "/images/default/doc-1-mm-drawing-001?size=thumb"
+        )
+
     def test_empty_contexts(self) -> None:
         assert build_sources({}) == []
         assert build_sources({"chunks": []}) == []

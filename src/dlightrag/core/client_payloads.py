@@ -78,8 +78,12 @@ def _project_chunk_context(
         },
         **payload,
     }
-    image_data = row.get("image_data")
-    if image_data and image_url_prefix and row.get("_workspace") and chunk_id:
+    if (
+        image_url_prefix
+        and row.get("_workspace")
+        and chunk_id
+        and (row.get("image_data") or _is_visual_chunk(row))
+    ):
         base_path = (
             f"{image_url_prefix.rstrip('/')}/"
             f"{quote(str(row['_workspace']), safe='')}/"
@@ -88,6 +92,11 @@ def _project_chunk_context(
         payload.setdefault("image_url", f"{base_path}?size=full")
         payload.setdefault("thumbnail_url", f"{base_path}?size=thumb")
     return payload
+
+
+def _is_visual_chunk(row: dict[str, Any]) -> bool:
+    sidecar = row.get("sidecar")
+    return isinstance(sidecar, dict) and sidecar.get("type") == "drawing"
 
 
 def retrieval_payload(
