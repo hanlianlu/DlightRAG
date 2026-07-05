@@ -387,7 +387,7 @@ class IngestJobCoordinator:
         finally:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
-                await heartbeat_task
+                _ = await heartbeat_task
             if cleanup_after_run and cleanup_paths:
                 await asyncio.to_thread(_cleanup_ingest_paths, cleanup_paths, self._input_root)
 
