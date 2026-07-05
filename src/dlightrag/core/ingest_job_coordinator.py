@@ -31,10 +31,14 @@ class IngestJobStore(Protocol):
         workspace: str,
         source_type: str,
         request: dict[str, Any],
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
-    async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
-    async def heartbeat(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool: ...
+    async def claim_running(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool:
+        raise NotImplementedError
+
+    async def heartbeat(self, job_id: str, *, lease_owner: str, lease_seconds: int) -> bool:
+        raise NotImplementedError
 
     async def record_window(
         self,
@@ -47,14 +51,26 @@ class IngestJobStore(Protocol):
         errors: list[str],
         lease_owner: str,
         lease_seconds: int,
-    ) -> bool: ...
+    ) -> bool:
+        raise NotImplementedError
 
-    async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool: ...
-    async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool: ...
-    async def get(self, job_id: str) -> dict[str, Any] | None: ...
-    async def list_recoverable(self) -> list[dict[str, Any]]: ...
-    async def prune(self) -> dict[str, int]: ...
-    async def delete_for_workspace(self, workspace: str) -> int: ...
+    async def finish(self, job_id: str, *, result: dict[str, Any], lease_owner: str) -> bool:
+        raise NotImplementedError
+
+    async def fail(self, job_id: str, *, error: str, lease_owner: str) -> bool:
+        raise NotImplementedError
+
+    async def get(self, job_id: str) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    async def list_recoverable(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    async def prune(self) -> dict[str, int]:
+        raise NotImplementedError
+
+    async def delete_for_workspace(self, workspace: str) -> int:
+        raise NotImplementedError
 
 
 class IngestJobCoordinator:
@@ -258,13 +274,11 @@ class IngestJobCoordinator:
     ) -> dict[str, Any] | None:
         task = self._tasks.get(job_id)
         if task is not None:
-            try:
+            with suppress(TimeoutError):
                 if timeout is None:
                     await asyncio.shield(task)
                 else:
                     await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
-            except TimeoutError:
-                pass
         return await self.get_job(job_id)
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None:

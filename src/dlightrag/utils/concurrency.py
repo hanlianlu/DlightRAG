@@ -84,9 +84,9 @@ async def bounded_map[T, R](
                 results[idx] = await worker(item)
             except asyncio.CancelledError:
                 raise
-            except BaseException as exc:
+            except Exception as exc:
                 logger.warning("%s #%d failed: %s", task_name, idx, exc)
-                results[idx] = exc if isinstance(exc, Exception) else Exception(str(exc))
+                results[idx] = exc
 
     async with asyncio.TaskGroup() as tg:
         for _ in range(min(max(1, max_concurrent), len(items))):

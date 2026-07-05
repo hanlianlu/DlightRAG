@@ -98,7 +98,8 @@ class RetrievalBackend(Protocol):
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         **kwargs: Any,
-    ) -> RetrievalResult: ...
+    ) -> RetrievalResult:
+        raise NotImplementedError
 
 
 class BM25Retriever(Protocol):
@@ -110,13 +111,15 @@ class BM25Retriever(Protocol):
         *,
         candidate_ids: set[str] | None,
         top_k: int | None = None,
-    ) -> list[ContextRow]: ...
+    ) -> list[ContextRow]:
+        raise NotImplementedError
 
 
 class MetadataChunkStore(Protocol):
     """Store methods needed to resolve metadata hits into chunk ids."""
 
-    async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]: ...
+    async def chunk_ids_for_docs(self, doc_ids: list[str]) -> list[str]:
+        raise NotImplementedError
 
 
 __all__ = [

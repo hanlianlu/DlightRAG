@@ -41,12 +41,12 @@ class AsyncDataSource(ABC):
         metadata comes from the ingest call; per-document metadata belongs on
         each ``SourceDocument`` and overlays those batch defaults.
         """
-        ...
+        raise NotImplementedError
 
     @abstractmethod
     async def amaterialize_document(self, document: SourceDocument, destination: Path) -> None:
         """Write document content to *destination* without returning bytes."""
-        ...
+        raise NotImplementedError
 
 
 __all__ = ["AsyncDataSource", "SourceDocument"]

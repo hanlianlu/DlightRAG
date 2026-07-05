@@ -28,14 +28,16 @@ class AccessDeniedError(PermissionError):
 
 
 class AccessControl(Protocol):
-    async def check(self, user: Any, action: str, *, workspace: str | None = None) -> None: ...
+    async def check(self, user: Any, action: str, *, workspace: str | None = None) -> None:
+        raise NotImplementedError
 
     async def filter_workspaces(
         self,
         user: Any,
         action: str,
         workspaces: Sequence[str],
-    ) -> list[str]: ...
+    ) -> list[str]:
+        raise NotImplementedError
 
 
 class AllowAllAccessControl:
