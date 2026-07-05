@@ -27,6 +27,16 @@ def normalize_workspace(name: str) -> str:
     return safe
 
 
+def log_safe(value: object, *, max_length: int = 240) -> str:
+    """Return a bounded single-line string for log fields."""
+    text = str(value).replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\r")
+    if len(text) <= max_length:
+        return text
+    if max_length <= 3:
+        return text[:max_length]
+    return f"{text[: max_length - 3]}..."
+
+
 def validate_workspace_name(name: str, *, max_length: int = 64) -> str:
     """Validate and trim a user-facing workspace name.
 

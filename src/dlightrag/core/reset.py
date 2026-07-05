@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from dlightrag.utils import log_safe, normalize_workspace
+
 logger = logging.getLogger(__name__)
 
 
@@ -145,21 +147,15 @@ async def areset(
     # (checkpoints.db, etc.) is shared and must never be wiped per-workspace.
     if not keep_files:
         try:
-            input_root = service.config.input_dir_path.resolve()
-            input_ws_dir = (input_root / workspace).resolve()
-            try:
-                input_ws_dir.relative_to(input_root)
-            except ValueError:
-                errors.append("Phase 5 (filesystem): workspace path escapes input directory")
-            else:
-                if input_ws_dir.exists() and input_ws_dir.is_dir():
-                    file_count = sum(1 for _ in input_ws_dir.rglob("*") if _.is_file())
-                    if not dry_run:
-                        shutil.rmtree(input_ws_dir, ignore_errors=True)
-                    stats["local_files_removed"] = file_count
+            input_ws_dir = _workspace_input_dir(service.config.input_dir_path, workspace)
+            if input_ws_dir is not None and input_ws_dir.is_dir():
+                file_count = sum(1 for _ in input_ws_dir.rglob("*") if _.is_file())
+                if not dry_run:
+                    shutil.rmtree(input_ws_dir, ignore_errors=True)
+                stats["local_files_removed"] = file_count
         except Exception as exc:
             errors.append(f"Phase 5 (filesystem): {exc}")
-            logger.warning("areset Phase 5 failed: %s", exc)
+            logger.warning("areset Phase 5 failed: %s", log_safe(exc))
 
     # Phase 5b: Remove checkpoint data for this workspace
     try:
@@ -171,10 +167,14 @@ async def areset(
         if removed > 0:
             stats["checkpoint_sessions_removed"] = removed
     except Exception:
-        logger.warning("Failed to clean checkpoint data for workspace %s", workspace, exc_info=True)
+        logger.warning(
+            "Failed to clean checkpoint data for workspace %s",
+            log_safe(workspace),
+            exc_info=True,
+        )
 
     service._initialized = False
-    logger.info("areset complete for workspace=%s: %s", workspace, stats)
+    logger.info("areset complete for workspace=%s: %s", log_safe(workspace), log_safe(stats))
     return stats
 
 
@@ -185,6 +185,26 @@ async def _quote_public_table(conn: Any, table: str) -> str:
     """Return a safely quoted public-table identifier for dynamic SQL."""
     quoted = await conn.fetchval("SELECT quote_ident($1)", table)
     return f"public.{quoted}"
+
+
+def _workspace_input_dir(input_root: Path, workspace: str) -> Path | None:
+    """Return the direct input_dir child for a normalized workspace."""
+    workspace_id = normalize_workspace(workspace)
+    if not workspace_id:
+        raise ValueError("workspace name normalizes to empty")
+
+    root = input_root.resolve()
+    if not root.exists():
+        return None
+    for child in root.iterdir():
+        if child.name != workspace_id:
+            continue
+        if child.is_symlink():
+            raise ValueError("workspace path is a symlink")
+        resolved = child.resolve()
+        resolved.relative_to(root)
+        return resolved
+    return None
 
 
 async def _cancel_pending_tasks(service: Any, *, dry_run: bool) -> int:
@@ -506,8 +526,6 @@ async def areset_orphaned_workspace(
     have leftover AGE graph schemas, PG table rows, or filesystem artifacts.
     This is a best-effort direct PG cleanup.
     """
-    from dlightrag.utils import normalize_workspace
-
     original_workspace = workspace
     workspace = normalize_workspace(workspace)
     errors: list[str] = []
@@ -544,21 +562,19 @@ async def areset_orphaned_workspace(
     if not keep_files:
         if input_dir:
             try:
-                input_root = Path(input_dir).resolve()
-                input_ws_dir = (input_root / workspace).resolve()
-                try:
-                    input_ws_dir.relative_to(input_root)
-                except ValueError:
-                    errors.append("Filesystem (input_dir): workspace path escapes input directory")
-                else:
-                    if input_ws_dir.exists() and input_ws_dir.is_dir():
-                        if not dry_run:
-                            shutil.rmtree(input_ws_dir, ignore_errors=True)
-                        stats["local_files_removed"] += 1
+                input_ws_dir = _workspace_input_dir(Path(input_dir), workspace)
+                if input_ws_dir is not None and input_ws_dir.is_dir():
+                    if not dry_run:
+                        shutil.rmtree(input_ws_dir, ignore_errors=True)
+                    stats["local_files_removed"] += 1
             except Exception as exc:
                 errors.append(f"Filesystem (input_dir): {exc}")
 
-    logger.info("areset_orphaned complete for workspace=%s: %s", workspace, stats)
+    logger.info(
+        "areset_orphaned complete for workspace=%s: %s",
+        log_safe(workspace),
+        log_safe(stats),
+    )
     return stats
 
 
@@ -614,7 +630,11 @@ async def _drop_age_graphs_for_workspace(
             if schema_name not in dropped:
                 dropped.append(schema_name)
     except Exception as exc:
-        logger.warning("PG schema fallback failed for orphan workspace %s: %s", workspace, exc)
+        logger.warning(
+            "PG schema fallback failed for orphan workspace %s: %s",
+            log_safe(workspace),
+            log_safe(exc),
+        )
 
     return dropped
 

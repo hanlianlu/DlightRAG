@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from dlightrag.access_control import AccessAction
 from dlightrag.core.client_contracts import dump_optional_list
+from dlightrag.utils import log_safe
 from dlightrag.utils.images import decode_image_base64, image_url_block
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.deps import (
@@ -53,7 +54,11 @@ async def get_checkpoint_history(
         )
         return JSONResponse({"history": history})
     except Exception:
-        logger.debug("Failed to load checkpoint history for session %s", session_id, exc_info=True)
+        logger.debug(
+            "Failed to load checkpoint history for session %s",
+            log_safe(session_id),
+            exc_info=True,
+        )
         return JSONResponse({"history": []})
 
 
@@ -79,7 +84,9 @@ async def delete_checkpoint_history(
         return JSONResponse({"deleted": deleted})
     except Exception:
         logger.debug(
-            "Failed to delete checkpoint history for session %s", session_id, exc_info=True
+            "Failed to delete checkpoint history for session %s",
+            log_safe(session_id),
+            exc_info=True,
         )
         return JSONResponse({"deleted": 0})
 

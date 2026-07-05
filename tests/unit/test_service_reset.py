@@ -253,6 +253,24 @@ class TestAresetPhase5:
         assert db_path.exists()
         assert (tmp_path / "shared_config.json").exists()
 
+    async def test_workspace_path_input_cannot_escape_input_root(self, tmp_path: Path) -> None:
+        service = _make_service(workspace="../outside")
+        cast(Any, service.config).input_dir_path = tmp_path / "inputs"
+
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("keep")
+
+        normalized_ws_dir = tmp_path / "inputs" / "___outside"
+        normalized_ws_dir.mkdir(parents=True)
+        (normalized_ws_dir / "staged.txt").write_text("delete")
+
+        result = await service.areset()
+
+        assert result["local_files_removed"] == 1
+        assert outside.exists()
+        assert not normalized_ws_dir.exists()
+
 
 class TestAresetDryRun:
     """dry_run=True collects stats without executing."""

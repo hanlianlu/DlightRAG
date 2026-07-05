@@ -36,7 +36,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResul
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.service import RAGService
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
-from dlightrag.utils import normalize_workspace
+from dlightrag.utils import log_safe, normalize_workspace
 
 logger = logging.getLogger(__name__)
 
@@ -386,7 +386,7 @@ class RAGServiceManager:
                 # Clear backoff on success
                 self._backoff.pop(workspace, None)
 
-                logger.info("Created RAGService for workspace '%s'", workspace)
+                logger.info("Created RAGService for workspace '%s'", log_safe(workspace))
                 return svc
             except Exception as e:
                 error_msg = self._actionable_error(e)
@@ -396,8 +396,8 @@ class RAGServiceManager:
                 self._backoff[workspace] = (time.time(), new_interval)
                 logger.error(
                     "RAGService creation failed for '%s': %s. Retry in %ss",
-                    workspace,
-                    error_msg,
+                    log_safe(workspace),
+                    log_safe(error_msg),
                     new_interval,
                 )
                 raise RAGServiceUnavailableError(detail=error_msg) from e
@@ -750,14 +750,22 @@ class RAGServiceManager:
             except Exception as exc:
                 results[ws] = {"error": str(exc), "ingest_jobs_cancelled": cancelled_jobs}
                 total_errors += 1
-                logger.warning("Failed to reset workspace '%s': %s", ws, exc)
+                logger.warning(
+                    "Failed to reset workspace '%s': %s",
+                    log_safe(ws),
+                    log_safe(exc),
+                )
 
             # Close and evict from cache even after reset errors.
             if ws in self._services:
                 try:
                     await self._services[ws].close()
                 except Exception:
-                    logger.warning("Failed to close service for '%s'", ws, exc_info=True)
+                    logger.warning(
+                        "Failed to close service for '%s'",
+                        log_safe(ws),
+                        exc_info=True,
+                    )
                 del self._services[ws]
 
         return {"workspaces": results, "total_errors": total_errors}
@@ -942,7 +950,11 @@ class RAGServiceManager:
                     if isinstance(schema, dict):
                         schemas.append(schema)
             except Exception:
-                logger.debug("Schema lookup failed for workspace %s", workspace, exc_info=True)
+                logger.debug(
+                    "Schema lookup failed for workspace %s",
+                    log_safe(workspace),
+                    exc_info=True,
+                )
         merged = _merge_schema_rows(schemas)
         self._schema_cache[ws_key] = (now, merged)
         return merged

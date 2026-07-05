@@ -28,6 +28,7 @@ from dlightrag.prompts import (
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
 )
+from dlightrag.utils import log_safe
 from dlightrag.utils.tokens import truncate_conversation_history
 
 logger = logging.getLogger(__name__)
@@ -339,12 +340,12 @@ class QueryPlanner:
         logger.info(
             "[Planner] result: standalone=%r, bm25_query=%r, filter_source=%s, "
             "filter_confidence=%s, filter_evidence=%s, filter=%s",
-            plan.standalone_query[:60],
-            plan.bm25_query,
-            plan.metadata_filter_source,
-            plan.metadata_filter_confidence,
-            _format_filter_evidence(plan.metadata_filter_evidence),
-            plan.metadata_filter,
+            log_safe(plan.standalone_query, max_length=60),
+            log_safe(plan.bm25_query),
+            log_safe(plan.metadata_filter_source),
+            log_safe(plan.metadata_filter_confidence),
+            log_safe(_format_filter_evidence(plan.metadata_filter_evidence)),
+            log_safe(plan.metadata_filter),
         )
         return plan
 
@@ -355,7 +356,10 @@ class QueryPlanner:
         try:
             parsed = QUERY_PLAN_STRUCTURED_OUTPUT.parse(response)
         except ValidationError, ValueError, TypeError:
-            logger.warning("QueryPlanner: invalid structured output for query: %r", query[:80])
+            logger.warning(
+                "QueryPlanner: invalid structured output for query: %s",
+                log_safe(query, max_length=80),
+            )
             return None
 
         data = parsed.model_dump()
@@ -396,7 +400,10 @@ class QueryPlanner:
                         mf.date_to = datetime.fromisoformat(date_to_str)
                 metadata_filter = mf if not mf.is_empty() else None
             except Exception:
-                logger.warning("QueryPlanner: invalid filter values for query: %r", query[:80])
+                logger.warning(
+                    "QueryPlanner: invalid filter values for query: %s",
+                    log_safe(query, max_length=80),
+                )
                 metadata_filter = None
 
         return QueryPlan(

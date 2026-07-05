@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Web UI authentication using the global DlightRAG auth mode."""
 
+import base64
+import binascii
 from collections.abc import Callable
 from urllib.parse import quote
 
@@ -26,8 +28,10 @@ def _safe_next_path(value: str | None) -> str:
     if not value:
         return "/web/"
     cleaned = value.replace("\r", "").replace("\n", "").strip()
-    if cleaned == "/web" or cleaned.startswith("/web/"):
-        return cleaned
+    if cleaned == "/web":
+        return "/web"
+    if cleaned.startswith("/web/"):
+        return "/web/" + cleaned.removeprefix("/web/")
     return "/web/"
 
 
@@ -50,14 +54,26 @@ def _token_from_request(request: Request) -> tuple[str | None, str | None]:
         return raw, "header"
     raw = request.cookies.get(WEB_AUTH_COOKIE)
     if raw:
-        return raw, "cookie"
+        return _decode_cookie_token(raw), "cookie"
     return None, None
+
+
+def _encode_cookie_token(token: str) -> str:
+    return base64.urlsafe_b64encode(token.encode()).decode().rstrip("=")
+
+
+def _decode_cookie_token(value: str) -> str | None:
+    try:
+        padded = value + ("=" * (-len(value) % 4))
+        return base64.b64decode(padded, altchars=b"-_", validate=True).decode()
+    except binascii.Error, UnicodeDecodeError, ValueError:
+        return None
 
 
 def _set_auth_cookie(response: Response, request: Request, token: str) -> None:
     response.set_cookie(
         key=WEB_AUTH_COOKIE,
-        value=token,
+        value=_encode_cookie_token(token),
         httponly=True,
         samesite="lax",
         secure=request.url.scheme == "https",
@@ -101,6 +117,10 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
         try:
             raw_token, source = _token_from_request(request)
             if not raw_token:
+                if source == "cookie" and request.method.upper() == "GET":
+                    response = RedirectResponse(_login_url(path), status_code=303)
+                    _clear_auth_cookie(response)
+                    return response
                 return _browser_missing_auth_response(request)
             request.state.user_context = verify_bearer_token(
                 raw_token,
