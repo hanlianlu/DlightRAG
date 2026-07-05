@@ -269,7 +269,7 @@ def _file_response_if_present(path: Path) -> FileResponse | None:
         if not path.is_file():
             return None
     except OSError:
-        logger.debug("Skipping inaccessible file candidate: %s", path, exc_info=True)
+        logger.debug("Skipping inaccessible file candidate", exc_info=True)
         return None
     content_type, _ = mimetypes.guess_type(str(path))
     return FileResponse(path, media_type=content_type or "application/octet-stream")
