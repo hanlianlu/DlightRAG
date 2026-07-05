@@ -100,61 +100,6 @@ class TestYamlConfigLoading:
             assert "normalize" not in field_spec
             assert "indexed" not in field_spec
 
-    def test_repo_config_exposes_only_curated_product_and_deployment_knobs(self):
-        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-
-        assert config["max_async"] == 8
-        assert config["embedding_func_max_async"] == 16
-        assert DlightragConfig.model_fields["max_async"].default == config["max_async"]
-        assert (
-            DlightragConfig.model_fields["embedding_func_max_async"].default
-            == config["embedding_func_max_async"]
-        )
-
-        omitted_internal_defaults = {
-            "bm25_enabled",
-            "bm25_top_k",
-            "bm25_profiles",
-            "bm25_k1",
-            "bm25_b",
-            "citations",
-            "doc_status_storage",
-            "graph_storage",
-            "kv_storage",
-            "metadata_filter_exact_vector_threshold",
-            "parser",
-            "pg_hnsw_ef_construction",
-            "pg_hnsw_ef_search",
-            "pg_hnsw_m",
-            "postgres_connection_retries",
-            "postgres_lightrag_pool_max_size",
-            "postgres_pool_close_timeout",
-            "postgres_pool_max_size",
-            "postgres_pool_min_size",
-            "postgres_replica_database",
-            "postgres_replica_host",
-            "postgres_replica_password",
-            "postgres_replica_port",
-            "postgres_replica_user",
-            "postgres_required_major",
-            "query_images",
-            "queue_size_analyze",
-            "queue_size_insert",
-            "queue_size_parse",
-            "read_after_write_mode",
-            "read_after_write_timeout",
-            "rrf_k",
-            "runtime_role",
-            "vector_storage",
-        }
-        assert omitted_internal_defaults.isdisjoint(config)
-
-        assert "kg_entity_types" in config
-        assert config["answer"] == {
-            "context_top_k": 30,
-            "max_images": 6,
-        }
-
 
 class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):

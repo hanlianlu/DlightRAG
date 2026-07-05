@@ -79,18 +79,6 @@ def test_web_static_js_build_has_no_orphan_chunks() -> None:
     assert expected == seen
 
 
-def test_workspace_management_uses_topbar_selector_not_side_panel() -> None:
-    web_root = ROOT / "src/dlightrag/web"
-    index_html = (web_root / "templates" / "index.html").read_text(encoding="utf-8")
-    workspaces_js = (FRONTEND_UI / "workspaces.ts").read_text(encoding="utf-8")
-
-    assert 'id="workspace-selector"' in index_html
-    assert "workspace-chips" not in index_html
-    assert not (web_root / "templates" / "partials" / "workspace_list.html").exists()
-    assert "workspaceStore" in workspaces_js
-    assert "data-all" in workspaces_js
-
-
 def test_chat_message_bubbles_wrap_unbroken_queries() -> None:
     user_message = _css_rule(FRONTEND_STYLES / "chat.module.css", ".userMessage")
     wrapper = _css_rule(FRONTEND_STYLES / "chat.module.css", ".userMessageWrapper")

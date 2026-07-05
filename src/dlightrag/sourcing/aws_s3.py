@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """AWS S3 data source using aiobotocore (native async)."""
 
-import logging
 from collections.abc import AsyncIterator
 from inspect import isawaitable
 from pathlib import Path
@@ -12,8 +11,6 @@ from botocore.exceptions import BotoCoreError, NoCredentialsError, PartialCreden
 
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.uri import parse_remote_uri
-
-logger = logging.getLogger(__name__)
 
 
 class S3PresignError(RuntimeError):

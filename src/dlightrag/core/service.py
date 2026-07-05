@@ -82,25 +82,6 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
 # specific number is irrelevant beyond uniqueness within DlightRAG.
 _PG_INIT_LOCK_KEY = 0x446C_6967_6874_0001  # "Dlight\x00\x01"
 
-# LightRAG storage attribute names — authoritative list referenced by reset
-# tests to assert that areset() iterates over the full set. The reset module
-# itself uses dynamic ``vars()`` discovery; this constant exists as the test
-# contract / documentation of what should be covered.
-_STORAGE_ATTRS = (
-    "full_docs",
-    "text_chunks",
-    "full_entities",
-    "full_relations",
-    "entity_chunks",
-    "relation_chunks",
-    "entities_vdb",
-    "relationships_vdb",
-    "chunks_vdb",
-    "chunk_entity_relation_graph",
-    "llm_response_cache",
-    "doc_status",
-)
-
 _REMOTE_INGEST_BATCH_SIZE = 64
 _REMOTE_DOWNLOAD_CONCURRENCY = 8
 _PROCESS_COUNT_ENV_VARS = ("WEB_CONCURRENCY", "UVICORN_WORKERS", "GUNICORN_WORKERS")

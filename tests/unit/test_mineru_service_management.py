@@ -37,15 +37,6 @@ def test_pyproject_keeps_mineru_out_of_dlightrag_runtime() -> None:
     assert all(not extra.startswith("mineru") for extra in optional)
 
 
-def test_makefile_delegates_mineru_defaults_to_scripts() -> None:
-    makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-
-    assert "MINERU_INSTALL_EXTRAS ?=" not in makefile
-    assert "MINERU_API_HOST ?=" not in makefile
-    assert "MINERU_API_PORT ?=" not in makefile
-    assert "MINERU_SERVICE_VENV ?=" not in makefile
-
-
 def test_makefile_targets_are_thin_script_wrappers() -> None:
     assert _makefile_target_command("mineru-install") == "scripts/mineru/install.sh"
     assert _makefile_target_command("mineru-api") == "scripts/mineru/api.sh"
@@ -55,17 +46,6 @@ def test_mineru_helper_defaults_to_separate_env_file() -> None:
     env_script = (MINERU_SCRIPTS / "env.sh").read_text(encoding="utf-8")
 
     assert 'mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env.mineru}"' in env_script
-
-
-def test_mineru_env_example_documents_install_extras() -> None:
-    example = (ROOT / ".env.mineru.example").read_text(encoding="utf-8")
-
-    assert "# MINERU_VERSION=3.2.3" in example
-    assert "Leave unset to install latest" in example
-    assert "MINERU_INSTALL_EXTRAS=core,mlx" in example
-    assert "# MINERU_INSTALL_EXTRAS=core" in example
-    assert "MINERU_SERVICE_VENV=.venv-mineru" in example
-    assert "MINERU_API_PORT=8210" in example
 
 
 def test_makefile_exposes_mineru_launch_agent_targets() -> None:

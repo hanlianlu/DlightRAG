@@ -1,7 +1,6 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Data models for multi-path retrieval."""
 
-import warnings
 from datetime import datetime
 from typing import Any
 
@@ -48,19 +47,3 @@ class MetadataFilter(BaseModel):
     def is_empty(self) -> bool:
         """Return True if no filter criteria are set."""
         return all(v is None for v in self.model_dump().values())
-
-
-def _validate_filter_coverage() -> None:
-    """Warn at import time if searchable fields are missing from MetadataFilter."""
-    from dlightrag.core.retrieval.metadata_fields import searchable_field_ids
-
-    filter_fields = set(MetadataFilter.model_fields.keys())
-    missing = searchable_field_ids() - filter_fields
-    if missing:
-        warnings.warn(
-            f"MetadataFilter missing searchable fields: {missing}",
-            stacklevel=2,
-        )
-
-
-_validate_filter_coverage()

@@ -13,6 +13,7 @@ from dlightrag.config import RerankConfig
 from dlightrag.models.rerank import (
     _aliyun_rerank,
     _azure_cohere_rerank,
+    _azure_cohere_rerank_url,
     _build_scored_chunks,
     _chat_llm_rerank,
     _cohere_rerank,
@@ -816,6 +817,20 @@ class TestCohereRerank:
 
 
 class TestAzureCohereRerank:
+    def test_project_endpoint_matching_uses_hostname_only(self):
+        assert (
+            _azure_cohere_rerank_url("https://project.services.ai.azure.com")
+            == "https://project.services.ai.azure.com/providers/cohere/v2/rerank"
+        )
+        assert (
+            _azure_cohere_rerank_url("https://example.com/path/.services.ai.azure.com")
+            == "https://example.com/path/.services.ai.azure.com/v1/rerank"
+        )
+        assert (
+            _azure_cohere_rerank_url("https://project.services.ai.azure.com.example.com")
+            == "https://project.services.ai.azure.com.example.com/v1/rerank"
+        )
+
     async def test_project_endpoint_uses_provider_route(self):
         client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.88}]})
 

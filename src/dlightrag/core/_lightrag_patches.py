@@ -43,16 +43,12 @@ import asyncpg.exceptions
 
 logger = logging.getLogger(__name__)
 
-_PATCHED = False
 PatchName = Literal["configure_age", "execute"]
+_FAILED_DOC_PATCH_ATTR = "_dlightrag_preserves_failed_docs"
 
 
 def apply() -> None:
     """Apply all LightRAG patches. Idempotent."""
-    global _PATCHED
-    if _PATCHED:
-        return
-
     applied = []
     if _patch_configure_age():
         applied.append("configure_age")
@@ -64,7 +60,6 @@ def apply() -> None:
         applied.append("mineru_auxiliary_blocks")
     if _patch_failed_doc_loop():
         applied.append("preserve_failed_docs")
-    _PATCHED = True
     if applied:
         logger.info("Applied LightRAG patches: %s", ", ".join(applied))
     else:
@@ -228,6 +223,8 @@ def _patch_failed_doc_loop() -> bool:
 
     original = _PipelineMixin._validate_and_fix_document_consistency
 
+    if getattr(original, _FAILED_DOC_PATCH_ATTR, False):
+        return False
     if not _failed_doc_reset_needs_patch(original):
         return False
 
@@ -264,6 +261,7 @@ def _patch_failed_doc_loop() -> bool:
 
         return result
 
+    setattr(patched_validate_and_fix, _FAILED_DOC_PATCH_ATTR, True)
     _PipelineMixin._validate_and_fix_document_consistency = (  # type: ignore[assignment]
         patched_validate_and_fix
     )

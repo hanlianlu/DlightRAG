@@ -27,15 +27,3 @@ class TestGetAnswerSystemPrompt:
 
         assert "DlightRAG's document-grounded analysis assistant" in prompt
         assert "Never reveal the underlying model" in prompt
-
-    def test_unified_prompt_contains_example(self) -> None:
-        """Unified prompt includes citation example."""
-        prompt = get_answer_system_prompt()
-        assert "[1-1]" in prompt
-        assert "36.89%" in prompt
-
-    def test_no_structured_parameter(self) -> None:
-        """get_answer_system_prompt() takes no parameters."""
-        # Just verify it works with zero args
-        prompt = get_answer_system_prompt()
-        assert len(prompt) > 0

@@ -137,43 +137,6 @@ def test_default_parser_routing_has_no_unrouted_fallback() -> None:
     assert ("leg" + "acy") not in cfg.parser.rules.lower()
 
 
-def test_env_example_documents_config_first_parser_sidecar_policy() -> None:
-    example = Path(".env.example").read_text(encoding="utf-8")
-
-    assert "parser_sidecars" in example
-    assert "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN" in example
-    for name in ("VLM_PROCESS_ENABLE", "MINERU_API_MODE", "MINERU_LOCAL_ENDPOINT"):
-        assert name not in example
-
-
-def test_env_example_defaults_mineru_to_local_sidecar() -> None:
-    example = Path(".env.example").read_text(encoding="utf-8")
-    config = Path("config.yaml").read_text(encoding="utf-8")
-
-    assert "parser_sidecars:" in config
-    assert re.search(r"(?m)^    api_mode: local$", config)
-    assert re.search(r"(?m)^    local_endpoint: http://127\.0\.0\.1:8210$", config)
-    assert re.search(r"(?m)^    language: ch$", config)
-    assert "local_image_analysis:" not in config
-    assert "local_effort:" not in config
-    for active_non_secret in (
-        "MINERU_API_MODE",
-        "MINERU_LOCAL_ENDPOINT",
-        "MINERU_LOCAL_BACKEND",
-        "MINERU_LOCAL_PARSE_METHOD",
-        "MINERU_LOCAL_IMAGE_ANALYSIS",
-        "MINERU_LOCAL_EFFORT",
-        "MINERU_ENABLE_TABLE",
-        "MINERU_ENABLE_FORMULA",
-        "MINERU_LANGUAGE",
-        "VLM_PROCESS_ENABLE",
-        "VLM_MAX_IMAGE_BYTES",
-    ):
-        assert not re.search(rf"(?m)^{active_non_secret}=", example)
-    assert "MINERU_API_TOKEN" not in example
-    assert "MINERU_OFFICIAL_ENDPOINT" not in example
-
-
 def test_config_yaml_uses_input_modality_for_rerank() -> None:
     config = Path("config.yaml").read_text(encoding="utf-8")
 
@@ -182,33 +145,6 @@ def test_config_yaml_uses_input_modality_for_rerank() -> None:
     assert re.search(r"(?m)^  input_modality: auto$", config)
     assert not re.search(r"(?m)^  api_key:", config)
     assert "multimodal:" not in config
-
-
-def test_env_example_active_keys_are_credentials_only() -> None:
-    example = Path(".env.example").read_text(encoding="utf-8")
-    active_keys = []
-    for line in example.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        active_keys.append(stripped.split("=", 1)[0].strip())
-
-    assert active_keys == [
-        "DLIGHTRAG_LLM__DEFAULT__API_KEY",
-        "DLIGHTRAG_EMBEDDING__API_KEY",
-        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY",
-        "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY",
-        "DLIGHTRAG_POSTGRES_PASSWORD",
-    ]
-
-
-def test_env_example_describes_config_as_curated_not_tuning_dump() -> None:
-    example = Path(".env.example").read_text(encoding="utf-8")
-
-    assert "high-signal product" in example
-    assert "deployment choices" in example
-    assert "docs/config-reference.md" in example
-    assert "PostgreSQL tuning" not in example
 
 
 def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:

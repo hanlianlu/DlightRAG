@@ -5,10 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Literal
-
-if TYPE_CHECKING:
-    from dlightrag.core.retrieval.models import MetadataFilter
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -87,7 +84,7 @@ class MetadataFieldRegistry:
             return None
         return field_def
 
-    def normalize_filter(self, filters: MetadataFilter) -> MetadataFilter:
+    def normalize_filter(self, filters: Any) -> Any:
         custom = getattr(filters, "custom", None)
         if not custom:
             return filters

@@ -76,6 +76,31 @@ class TestFileEndpoint:
         resp = await client.get("/api/files/%2e%2e/%2e%2e/%2e%2e/etc/passwd")
         assert resp.status_code == 403
 
+    async def test_rejects_symlink_escape(self, client: AsyncClient, tmp_working_dir: Path) -> None:
+        """Resolved local paths must stay inside the authorized workspace."""
+        workspace_dir = tmp_working_dir / "inputs" / "default"
+        workspace_dir.mkdir(parents=True)
+        outside_dir = tmp_working_dir / "outside"
+        outside_dir.mkdir()
+        direct_secret = outside_dir / "direct-secret.pdf"
+        direct_secret.write_bytes(b"direct secret")
+        canonical_secret = outside_dir / "canonical-secret.pdf"
+        canonical_secret.write_bytes(b"canonical secret")
+
+        try:
+            (workspace_dir / "direct.pdf").symlink_to(direct_secret)
+            (workspace_dir / "linked").symlink_to(outside_dir, target_is_directory=True)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlink creation unavailable: {exc}")
+
+        direct_resp = await client.get("/api/files/default/direct.pdf")
+        canonical_resp = await client.get("/api/files/canonical-secret.pdf")
+
+        assert direct_resp.status_code == 404
+        assert canonical_resp.status_code == 404
+        assert b"direct secret" not in direct_resp.content
+        assert b"canonical secret" not in canonical_resp.content
+
     async def test_canonicalizes_workspace_query_for_bare_filename(
         self, client: AsyncClient, tmp_working_dir: Path
     ) -> None:

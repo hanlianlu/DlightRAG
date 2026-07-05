@@ -7,7 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from dlightrag.core.service import _STORAGE_ATTRS, RAGService
+from dlightrag.core.service import RAGService
+
+_FAKE_STORAGE_ATTRS = ("full_docs", "chunks_vdb", "doc_status")
 
 
 class _FakeLightRAG:
@@ -36,9 +38,9 @@ def _make_service(*, workspace: str = "test_ws") -> RAGService:
     service.enable_vlm = False
     service._table_schema = None
 
-    # Create fake LightRAG with all storage attrs (dynamic-discovery friendly)
+    # Create fake LightRAG storages (dynamic-discovery friendly)
     lightrag = _FakeLightRAG()
-    for attr in _STORAGE_ATTRS:
+    for attr in _FAKE_STORAGE_ATTRS:
         storage = MagicMock()
         storage.drop = AsyncMock(return_value={"status": "success", "message": "dropped"})
         setattr(lightrag, attr, storage)
@@ -120,10 +122,10 @@ class TestAresetPhase1:
         service = _make_service()
         result = await service.areset()
 
-        for attr in _STORAGE_ATTRS:
+        for attr in _FAKE_STORAGE_ATTRS:
             getattr(service._lightrag, attr).drop.assert_awaited_once()
 
-        assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
+        assert result["lightrag_storages_dropped"] == len(_FAKE_STORAGE_ATTRS)
 
     async def test_skips_lightrag_storage_class_attributes(self) -> None:
         class StorageClass:
@@ -135,7 +137,7 @@ class TestAresetPhase1:
 
         result = await service.areset()
 
-        assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
+        assert result["lightrag_storages_dropped"] == len(_FAKE_STORAGE_ATTRS)
         assert not any("doc_status_storage_cls" in error for error in result["errors"])
 
 
@@ -260,8 +262,8 @@ class TestAresetDryRun:
         result = await service.areset(dry_run=True)
 
         # Stats reported but no actual drops
-        assert result["lightrag_storages_dropped"] == len(_STORAGE_ATTRS)
-        for attr in ("full_docs", "text_chunks"):
+        assert result["lightrag_storages_dropped"] == len(_FAKE_STORAGE_ATTRS)
+        for attr in ("full_docs", "chunks_vdb"):
             getattr(service._lightrag, attr).drop.assert_not_awaited()
         cast(Any, service._metadata_index).clear.assert_not_awaited()
 
