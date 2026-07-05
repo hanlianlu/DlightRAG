@@ -5,6 +5,7 @@ queries:
   - uses: security-and-quality
 
 paths:
+  - .github/workflows
   - src
   - frontend
   - scripts
