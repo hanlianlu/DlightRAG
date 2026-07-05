@@ -75,7 +75,7 @@ async def client(web_app):
 
 
 async def test_web_static_assets_are_not_browser_persistent(client):
-    resp = await client.get("/static/js/main.js")
+    resp = await client.get("/static/generated/js/main.js")
 
     assert resp.status_code == 200
     assert resp.headers["cache-control"] == "no-cache, no-store, must-revalidate"

@@ -3,11 +3,14 @@
 
 import base64
 import io
+import logging
 import mimetypes
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 _PILLOW_TO_MIME: dict[str, str] = {
     "JPEG": "image/jpeg",
@@ -48,7 +51,7 @@ def detect_image_mime(raw: bytes, *, fallback: str | None = None) -> str:
             if mime:
                 return mime
     except Exception:
-        pass
+        logger.debug("Could not detect image MIME from bytes", exc_info=True)
     if fallback and fallback.startswith("image/"):
         return fallback
     return "image/png"
@@ -63,7 +66,7 @@ def detect_image_mime_type(path: str | Path) -> str:
             if mime:
                 return mime
     except Exception:
-        pass
+        logger.debug("Could not detect image MIME for %s", file_path, exc_info=True)
     guessed = mimetypes.guess_type(str(file_path))[0]
     return guessed if guessed and guessed.startswith("image/") else "image/png"
 

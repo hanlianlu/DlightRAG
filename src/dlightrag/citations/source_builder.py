@@ -4,6 +4,7 @@ Groups chunks by reference_id into SourceReference objects with ChunkSnippets.
 Called by both web routes and API server after retrieval.
 """
 
+import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -14,6 +15,8 @@ from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from .indexer import CitationIndexer
 from .schemas import ChunkSnippet, SourceReference
 from .utils import filter_content_for_display
+
+logger = logging.getLogger(__name__)
 
 
 def build_sources(
@@ -133,7 +136,7 @@ def build_sources_from_chunks(
             try:
                 url = source_url_resolver.resolve(file_path)
             except Exception:
-                pass
+                logger.debug("Could not resolve source URL for %s", file_path, exc_info=True)
 
         cited_chunk_ids = None
         if cited_chunks is not None:

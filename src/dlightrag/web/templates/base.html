@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DlightRAG</title>
-    <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
+    <meta name="htmx-config" content='{"allowEval": false, "allowScriptTags": false}'>
+    <link rel="stylesheet" href="/static/generated/style.css?v={{ static_version() }}">
 
     <!-- Pygments code highlighting theme -->
     <link rel="stylesheet" href="/static/pygments.css?v={{ static_version() }}">
@@ -15,6 +16,6 @@
     <script>
         window.__DLIGHTRAG_STATIC_VERSION__ = "{{ static_version() }}";
     </script>
-    <script type="module" src="/static/js/main.js?v={{ static_version() }}"></script>
+    <script type="module" src="/static/generated/js/main.js?v={{ static_version() }}"></script>
 </body>
 </html>

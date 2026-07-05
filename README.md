@@ -318,8 +318,8 @@ npm run build
 npm run lint:css
 ```
 
-`npm run build` writes the browser bundle to `src/dlightrag/web/static/`; commit
-those generated files with frontend changes.
+`npm run build` writes the browser bundle to `src/dlightrag/web/static/generated/`;
+commit those generated files with frontend changes.
 
 Evaluation with RAGAS is documented in [docs/evaluation.md](docs/evaluation.md).
 

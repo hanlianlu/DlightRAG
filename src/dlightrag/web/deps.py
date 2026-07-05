@@ -181,7 +181,7 @@ def _citation_badges(text: str) -> Markup:
     # Restore code blocks
     result = _restore_code_blocks(result, protected)
 
-    return Markup(result)
+    return Markup(result)  # noqa: S704 - markdown escapes raw HTML; final partial is nh3-cleaned
 
 
 def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
@@ -202,7 +202,7 @@ def _highlight_content(text: str, phrases: list[str] | None = None) -> Markup:
                 count=1,
             )
 
-    return Markup(html)
+    return Markup(html)  # noqa: S704 - chunk HTML is nh3-cleaned before marking safe
 
 
 def _basename(path: str) -> str:

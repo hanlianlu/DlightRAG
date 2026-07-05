@@ -4,14 +4,11 @@ import {conversationStore} from '../stores/conversationStore.ts';
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
+import {fragmentFromSanitizedHtml, setSanitizedHtml} from './safe_html.ts';
 import chatStyles from '../styles/chat.module.css';
 
-// Security: all SSE HTML payloads are sanitized server-side by nh3
-// (src/dlightrag/web/safe_html.py → sanitize_html_fragment()) before they
-// reach any innerHTML below.  The sanitizer strips <script>, <style>,
-// <iframe>, on* attributes, and restricts URLs to http/https/data:image/.
-// If you add a new innerHTML call, ensure the data flows through
-// safe_answer_preview / safe_answer_done / safe_source_panel.
+// SSE HTML payloads are sanitized server-side by nh3 and again here before
+// browser insertion. Keep new HTML sinks behind frontend/lib/safe_html.ts.
 
 // ── types ────────────────────────────────────────────────────────────
 
@@ -173,7 +170,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
 
   function handlePreview(data: SSEData): void {
     const previewHtml = parseData(data);
-    turn.contentDiv.innerHTML = typeof previewHtml === 'string' ? previewHtml : '';
+    setSanitizedHtml(turn.contentDiv, typeof previewHtml === 'string' ? previewHtml : '');
     renderMath(turn.contentDiv);
     fixExternalLinks(turn.contentDiv);
     scrollToBottom(turn);
@@ -187,14 +184,16 @@ export function createAnswerRenderer(turn: ChatTurn) {
       imageIds = (payload as DonePayload).current_image_ids || [];
     }
 
-    const tmp = document.createElement('div');
-    tmp.innerHTML = html || '';
-    const answerContent = tmp.querySelector('#answer-content');
-    const sourceData = tmp.querySelector('#source-data');
-    const imageStrip = tmp.querySelector('.answer-image-strip');
-    const refList = tmp.querySelector('.answer-references');
+    const fragment = fragmentFromSanitizedHtml(html || '');
+    const answerContent = fragment.querySelector('#answer-content');
+    const sourceData = fragment.querySelector('#source-data');
+    const imageStrip = fragment.querySelector('.answer-image-strip');
+    const refList = fragment.querySelector('.answer-references');
 
-    if (answerContent) turn.contentDiv.innerHTML = answerContent.innerHTML;
+    if (answerContent) {
+      const answerNodes = Array.from(answerContent.childNodes).map((node) => node.cloneNode(true));
+      turn.contentDiv.replaceChildren(...answerNodes);
+    }
     if (imageStrip) {
       turn.contentDiv.appendChild(imageStrip.cloneNode(true));
     }
@@ -215,7 +214,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
     const highlightsHtml = parseData(data);
     const sourceData = turn.aiDiv.querySelector('.source-data');
     if (sourceData) {
-      sourceData.innerHTML = typeof highlightsHtml === 'string' ? highlightsHtml : '';
+      setSanitizedHtml(sourceData, typeof highlightsHtml === 'string' ? highlightsHtml : '');
     }
   }
 

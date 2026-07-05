@@ -48,14 +48,17 @@ def test_web_shell_does_not_block_on_external_cdn_scripts() -> None:
 
 def test_web_static_css_build_keeps_only_served_bundles() -> None:
     static_root = ROOT / "src/dlightrag/web/static"
+    generated_root = static_root / "generated"
 
     css_files = {path.name for path in static_root.glob("*.css")}
+    generated_css_files = {path.name for path in generated_root.glob("*.css")}
 
-    assert css_files == {"pygments.css", "style.css"}
+    assert css_files == {"pygments.css"}
+    assert generated_css_files == {"style.css"}
 
 
 def test_web_static_js_build_has_no_orphan_chunks() -> None:
-    static_js = ROOT / "src/dlightrag/web/static/js"
+    static_js = ROOT / "src/dlightrag/web/static/generated/js"
     import_pattern = re.compile(r"""(?:import\(`\./([^`]+\.js)`\)|from"\./([^"]+\.js)")""")
 
     expected = {path.name for path in static_js.glob("*.js")}

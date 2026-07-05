@@ -127,6 +127,7 @@ async def _file_list_response(request: Request, workspace: str):
     try:
         files = _file_view_models(await manager.list_ingested_files(workspace))
     except Exception:
+        logger.debug("Could not list files for workspace %s", workspace, exc_info=True)
         files = []
 
     # LightRAG's shared-storage pipeline_status is the authoritative ingest
@@ -139,7 +140,7 @@ async def _file_list_response(request: Request, workspace: str):
         if ingest_busy:
             status = ps
     except Exception:
-        pass
+        logger.debug("Could not read pipeline status for workspace %s", workspace, exc_info=True)
 
     return templates.TemplateResponse(
         request,
@@ -190,7 +191,11 @@ async def upload_files(
         ps = await manager.get_pipeline_status(selected_workspace)
         already_busy = bool(ps.get("busy"))
     except Exception:
-        pass
+        logger.debug(
+            "Could not read pipeline status before upload for workspace %s",
+            selected_workspace,
+            exc_info=True,
+        )
 
     bytes_written = 0
     upload_dir: Path | None = None
