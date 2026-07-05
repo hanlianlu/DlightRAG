@@ -407,7 +407,7 @@ def cmd_ragas_eval(args: argparse.Namespace) -> None:
         "***" if i > 0 and cmd[i - 1] == "--api-key" else part for i, part in enumerate(cmd)
     ]
     print(f"Running: {' '.join(display_cmd)}\n")
-    raise SystemExit(subprocess.run(cmd, check=False).returncode)
+    raise SystemExit(subprocess.run(cmd, check=False).returncode)  # noqa: S603 - fixed script argv
 
 
 def _add_filter_options(parser: argparse.ArgumentParser) -> None:

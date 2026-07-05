@@ -51,6 +51,7 @@ interface HTMXEvent extends Event {
     isError?: boolean;
     parameters?: Record<string, string>;
     pathInfo?: { requestPath: string };
+    serverResponse?: string;
     shouldSwap?: boolean;
     successful?: boolean;
     target?: Element;

@@ -1,0 +1,17 @@
+name: DlightRAG CodeQL
+
+queries:
+  - uses: security-extended
+  - uses: security-and-quality
+
+paths:
+  - src
+  - frontend
+  - scripts
+
+paths-ignore:
+  - src/dlightrag/web/static/generated/**
+  - src/dlightrag/web/static/vendor/**
+  - frontend/node_modules/**
+  - dist/**
+  - output/**

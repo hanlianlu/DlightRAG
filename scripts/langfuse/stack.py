@@ -7,6 +7,7 @@ import sys
 import urllib.request
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlparse
 
 OFFICIAL_COMPOSE_URL = "https://raw.githubusercontent.com/langfuse/langfuse/main/docker-compose.yml"
 
@@ -40,7 +41,10 @@ class StackResult(NamedTuple):
 def _read_source(source: Path | None) -> str:
     if source is not None:
         return source.read_text(encoding="utf-8")
-    with urllib.request.urlopen(OFFICIAL_COMPOSE_URL, timeout=30) as response:
+    parsed = urlparse(OFFICIAL_COMPOSE_URL)
+    if parsed.scheme != "https" or parsed.netloc != "raw.githubusercontent.com":
+        raise ValueError(f"unexpected Langfuse compose URL: {OFFICIAL_COMPOSE_URL}")
+    with urllib.request.urlopen(OFFICIAL_COMPOSE_URL, timeout=30) as response:  # noqa: S310
         return response.read().decode("utf-8")
 
 

@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import {ingestStore} from '../stores/ingestStore.ts';
+import {sanitizeHtml} from '../lib/safe_html.ts';
 import {openPanel, showToast} from './panel.ts';
 
 function htmxEvent(event: Event): HTMXEvent {
@@ -63,6 +64,9 @@ export function setupHtmxInteractions(): void {
 
     document.body.addEventListener('htmx:beforeSwap', function(event) {
         const detail = htmxEvent(event).detail;
+        if (typeof detail.serverResponse === 'string') {
+            detail.serverResponse = sanitizeHtml(detail.serverResponse);
+        }
         if (isPanelTarget(event) && detail.xhr.status >= 400) {
             detail.shouldSwap = true;
             detail.isError = false;

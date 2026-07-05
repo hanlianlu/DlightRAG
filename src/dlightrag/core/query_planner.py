@@ -196,7 +196,8 @@ class QueryPlanner:
         which one we have at init time so the hot path doesn't branch.
         """
         llm_func = self._llm_func
-        assert llm_func is not None  # plan() guards this before calling us
+        if llm_func is None:
+            raise RuntimeError("Query planning requires an LLM function")
 
         try:
             sig = inspect.signature(llm_func)

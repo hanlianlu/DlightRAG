@@ -7,8 +7,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
   root: '.',
   build: {
-    outDir: resolve(__dirname, '../src/dlightrag/web/static'),
-    emptyOutDir: false,
+    outDir: resolve(__dirname, '../src/dlightrag/web/static/generated'),
+    emptyOutDir: true,
     rollupOptions: {
       input: resolve(__dirname, 'ui/main.ts'),
       output: {

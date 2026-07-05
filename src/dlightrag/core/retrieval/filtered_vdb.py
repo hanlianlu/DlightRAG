@@ -81,7 +81,8 @@ class FilteredVectorStorage:
             else:
                 query_embedding = query
 
-        assert query_embedding is not None
+        if query_embedding is None:
+            raise RuntimeError("Filtered vector search requires a query embedding")
         if self._backend == "PGVectorStorage":
             return await self._pg_filtered_search(query_embedding, candidates, top_k)
         raise RuntimeError(f"Filtered vector search requires PGVectorStorage, got {self._backend}")

@@ -6,6 +6,7 @@ import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import {createWorkspace} from './workspaces.ts';
+import {setSanitizedHtml} from '../lib/safe_html.ts';
 
 const AI_MESSAGE_SELECTOR = '.' + chatStyles.aiMessage;
 
@@ -63,6 +64,20 @@ function htmxEvent(event: Event): HTMXEvent {
     return event as HTMXEvent;
 }
 
+function createCaretIcon(): SVGSVGElement {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', '8');
+    svg.setAttribute('height', '8');
+    svg.setAttribute('viewBox', '0 0 10 10');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '1.5');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M2.5 4 L5 6.5 L7.5 4');
+    svg.appendChild(path);
+    return svg;
+}
+
 export function openPanel(title?: string): void {
     const panel = document.getElementById('panel');
     if (!panel) return;
@@ -79,7 +94,7 @@ export function openPanel(title?: string): void {
         renderIngestPill();
     } else {
         titleEl.textContent = title;
-        if (ingestTarget) ingestTarget.innerHTML = '';
+        if (ingestTarget) ingestTarget.replaceChildren();
     }
 }
 
@@ -95,7 +110,7 @@ function showEmptyPanelPlaceholder(): void {
 export function applyPanelHtml(html: string): void {
     const panelContent = document.getElementById('panel-content');
     if (!panelContent) return;
-    panelContent.innerHTML = html;
+    setSanitizedHtml(panelContent, html);
     if (window.htmx && typeof window.htmx.process === 'function') {
         window.htmx.process(panelContent);
     }
@@ -123,7 +138,7 @@ function applyProgressBars(root: Element | null | undefined): void {
 function renderIngestPill(): void {
     const container = document.getElementById('ingest-target');
     if (!container) return;
-    container.innerHTML = '';
+    container.replaceChildren();
 
     const pill = document.createElement('span');
     pill.className = 'ingest-target-pill';
@@ -142,7 +157,7 @@ function renderIngestPill(): void {
 
     const caret = document.createElement('span');
     caret.className = 'ingest-target-caret';
-    caret.innerHTML = '<svg width="8" height="8" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 4 L5 6.5 L7.5 4"/></svg>';
+    caret.appendChild(createCaretIcon());
     pill.appendChild(caret);
 
     pill.addEventListener('click', (e) => {

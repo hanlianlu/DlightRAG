@@ -385,7 +385,7 @@ class RAGService:
                 while waited < 180:
                     # Jitter avoids thundering-herd when many workers
                     # retry on the same beat.
-                    jitter = random.uniform(0, backoff * 0.5)
+                    jitter = random.uniform(0, backoff * 0.5)  # noqa: S311 - non-security jitter
                     await asyncio.sleep(backoff + jitter)
                     waited += backoff + jitter
                     if await conn.fetchval("SELECT pg_try_advisory_lock($1)", _PG_INIT_LOCK_KEY):
@@ -954,7 +954,8 @@ class RAGService:
             raise RuntimeError("Ingestion engine not initialized")
         prepared_items: list[PreparedIngestFile] = []
         for document in documents:
-            assert document.path is not None
+            if document.path is None:
+                raise ValueError("local manifest documents require a path")
             file_path = Path(document.path)
             relative_to = self._local_manifest_relative_root(file_path)
             if replace:
@@ -1759,7 +1760,8 @@ class RAGService:
         if self._metadata_index is None:
             return []
         normalized_filters = self._normalize_metadata_filter(filters)
-        assert normalized_filters is not None
+        if normalized_filters is None:
+            return []
         return await self._metadata_index.query(normalized_filters)
 
     def _normalize_metadata_filter(self, filters: MetadataFilter | None) -> MetadataFilter | None:
