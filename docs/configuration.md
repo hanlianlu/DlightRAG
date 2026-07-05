@@ -284,8 +284,9 @@ reuses the startup vision probe for the selected scoring model: vision-capable
 models receive bounded image data plus text, and non-vision models receive VLM
 text only. HTTP rerankers follow their API contract: latest text rerankers such
 as `jina-reranker-v3`, `qwen3-rerank`, Voyage `rerank-2.5` family, and Cohere
-`rerank-v4.0` family receive chunk VLM text content, while `qwen3-vl-rerank`
-receives bounded image documents when chunks have `image_data`. Use
+`rerank-v4.0` family receive chunk VLM text content, while `jina-reranker-m0`
+and `qwen3-vl-rerank` receive bounded image documents when chunks have
+`image_data`. Use
 `input_modality: text` to force text-only reranking, or
 `input_modality: multimodal` for a self-hosted/new model that accepts image
 document objects.
@@ -294,7 +295,8 @@ document objects.
 rerank:
   strategy: chat_llm_reranker
   input_modality: auto
-  # Optional. Omitted defaults to 0.5 for chat_llm_reranker and 0.0 for provider rerankers.
+  # Optional. Omitted defaults to 0.5 for chat_llm_reranker.
+  # Provider rerankers keep all scored candidates before top_k when omitted.
   # score_threshold: 0.5
   max_concurrency: 8
   batch_size: 8

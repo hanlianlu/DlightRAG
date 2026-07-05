@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from dlightrag.core.answer import AnswerEngine
+from dlightrag.core.answer import NO_CONTEXT_DISCLAIMER, AnswerEngine
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 _PNG_B64 = (
@@ -145,6 +145,28 @@ class TestAnswerEngineGenerate:
         result = await engine.generate("test", contexts)
         assert result.answer is None
         assert result.contexts is contexts
+
+    @pytest.mark.asyncio
+    async def test_generate_empty_context_disclaims_general_knowledge(self) -> None:
+        model_func = AsyncMock(return_value="The capital of France is Paris.")
+        engine = AnswerEngine(model_func=model_func)
+        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+
+        result = await engine.generate("what is the capital of France?", contexts)
+
+        assert result.answer == f"{NO_CONTEXT_DISCLAIMER}\n\nThe capital of France is Paris."
+        assert result.trace["answer_no_context"] is True
+        model_func.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_generate_empty_chunks_with_query_image_still_calls_model(self) -> None:
+        model_func = AsyncMock(return_value="The image shows a chart.")
+        engine = AnswerEngine(model_func=model_func)
+        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+
+        await engine.generate("describe this image", contexts, query_images=[_image_block()])
+
+        model_func.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_generate_with_images(self) -> None:
@@ -304,7 +326,7 @@ class TestAnswerEngineStream:
         model_func = AsyncMock(return_value=mock_tokens())
         engine = AnswerEngine(model_func=model_func)
 
-        contexts: RetrievalContexts = {"chunks": []}
+        contexts = _text_contexts()
         ctx, token_iter = await engine.generate_stream("test", contexts)
 
         from dlightrag.citations.streaming import AnswerStream
@@ -319,6 +341,25 @@ class TestAnswerEngineStream:
         ctx, token_iter = await engine.generate_stream("test", contexts)
         assert token_iter is None
         assert ctx is contexts
+
+    @pytest.mark.asyncio
+    async def test_generate_stream_empty_context_disclaims_general_knowledge(self) -> None:
+        async def mock_stream():
+            yield "I am DlightRAG."
+
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
+        contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
+
+        ctx, token_iter = await engine.generate_stream("who are u", contexts)
+
+        assert ctx == contexts
+        assert token_iter is not None
+        assert [token async for token in token_iter] == [
+            f"{NO_CONTEXT_DISCLAIMER}\n\n",
+            "I am DlightRAG.",
+        ]
+        model_func.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_generate_stream_returns_packed_contexts_and_tokens(self) -> None:

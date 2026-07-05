@@ -31,6 +31,11 @@ from dlightrag.utils.images import image_data_uri
 
 logger = logging.getLogger(__name__)
 
+NO_CONTEXT_DISCLAIMER = (
+    "**General knowledge notice:** I couldn't find retrieved document context "
+    "for this question, so the answer below is not grounded in your documents."
+)
+
 
 @dataclass
 class _PreparedAnswerPrompt:
@@ -112,6 +117,14 @@ class AnswerEngine:
             contexts,
             context_top_k=context_top_k,
         )
+        no_context = not _has_answer_evidence(
+            prepared.contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
+        )
+        if no_context:
+            prepared.trace["answer_no_context"] = True
+
         messages = self._build_messages(
             system_prompt,
             prepared.user_prompt,
@@ -135,6 +148,8 @@ class AnswerEngine:
         )
 
         raw = await self.model_func(messages=messages)
+        if no_context:
+            raw = _prepend_no_context_disclaimer(str(raw))
 
         logger.info(
             "[AE] generate: LLM returned type=%s len=%d first200=%s",
@@ -195,6 +210,14 @@ class AnswerEngine:
             contexts,
             context_top_k=context_top_k,
         )
+        no_context = not _has_answer_evidence(
+            prepared.contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
+        )
+        if no_context:
+            prepared.trace["answer_no_context"] = True
+
         messages = self._build_messages(
             system_prompt,
             prepared.user_prompt,
@@ -218,6 +241,8 @@ class AnswerEngine:
         )
 
         token_iterator = await self.model_func(messages=messages, stream=True)
+        if no_context:
+            token_iterator = _prepend_no_context_stream(token_iterator)
 
         logger.info(
             "[AE] generate_stream: model_func returned type=%s",
@@ -569,6 +594,45 @@ class AnswerEngine:
             f"## Question\n{query}",
         ]
         return "\n\n".join(prompt_parts), indexer
+
+
+def _prepend_no_context_disclaimer(answer: str) -> str:
+    answer = answer.strip()
+    if not answer:
+        return NO_CONTEXT_DISCLAIMER
+    return f"{NO_CONTEXT_DISCLAIMER}\n\n{answer}"
+
+
+async def _prepend_no_context_stream(token_iterator: Any) -> AsyncIterator[str]:
+    yield f"{NO_CONTEXT_DISCLAIMER}\n\n"
+    if isinstance(token_iterator, str):
+        yield token_iterator
+        return
+    if token_iterator is None:
+        return
+    async for token in token_iterator:
+        yield token
+
+
+def _has_answer_evidence(
+    contexts: RetrievalContexts,
+    *,
+    query_images: list[dict[str, Any]] | None,
+    conversation_history: list[dict[str, Any]] | None,
+) -> bool:
+    if any(contexts.get(key) for key in ("chunks", "entities", "relationships")):
+        return True
+    if query_images:
+        return True
+    if not conversation_history:
+        return False
+    for message in conversation_history:
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "image_url" for block in content
+        ):
+            return True
+    return False
 
 
 # ── Internal keys & metadata formatting ──────────────────────────────────
