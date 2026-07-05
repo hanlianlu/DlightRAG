@@ -2,6 +2,7 @@
 """File operations API routes."""
 
 import mimetypes
+import os
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -167,15 +168,18 @@ async def serve_file(
     if ws_dir is None:
         raise HTTPException(403, "Access denied") from None
 
-    full_path = _contained_resolved_path(ws_dir, ws_dir / relative_path)
-    if full_path is not None:
-        return _file_response(full_path)
-
     # --- Canonical basename lookup ---
     # LightRAG canonicalizes file_path to just the basename (no directory
     # components).  The original file may live in __parsed__/ or another
     # workspace subdirectory.
-    bare_name = relative_path.name
+    bare_name = os.path.basename(relative_path.as_posix())
+    if not bare_name:
+        raise HTTPException(404, "File not found")
+
+    root_candidate = _contained_resolved_path(ws_dir, ws_dir / bare_name)
+    if root_candidate is not None:
+        return _file_response(root_candidate)
+
     if ws_dir.is_dir():
         for sub in _iter_workspace_lookup_dirs(ws_dir):
             candidate = _contained_resolved_path(ws_dir, sub / bare_name)
