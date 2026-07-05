@@ -61,6 +61,75 @@ async def test_unified_retriever_llm_empty_candidates_falls_back_unfiltered() ->
     assert bm25.search.await_args.kwargs["candidate_ids"] is None
 
 
+async def test_unified_retriever_llm_filtered_empty_falls_back_unfiltered() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    metadata_index = AsyncMock()
+    metadata_index.query.return_value = ["doc-1"]
+    stores = AsyncMock()
+    stores.chunk_ids_for_docs.return_value = ["filtered-chunk"]
+    backend = AsyncMock()
+    backend.aretrieve.side_effect = [
+        RetrievalResult(contexts={"chunks": [], "entities": [], "relationships": []}),
+        RetrievalResult(
+            contexts={"chunks": [{"chunk_id": "semantic-a"}], "entities": [], "relationships": []}
+        ),
+    ]
+    bm25 = AsyncMock()
+    bm25.search.side_effect = [[], []]
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+    )
+
+    result = await retriever.aretrieve(
+        "query",
+        metadata_filter=MetadataFilter(filename="maybe.pdf"),
+        metadata_filter_source="llm_inferred",
+    )
+
+    assert result.contexts["chunks"] == [{"chunk_id": "semantic-a"}]
+    assert result.trace["metadata_filter_relaxed"] is True
+    assert result.trace["metadata_candidate_count"] == 1
+    assert backend.aretrieve.await_count == 2
+    assert bm25.search.await_args_list[0].kwargs["candidate_ids"] == {"filtered-chunk"}
+    assert bm25.search.await_args_list[1].kwargs["candidate_ids"] is None
+
+
+async def test_unified_retriever_explicit_filtered_empty_stays_filtered() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    metadata_index = AsyncMock()
+    metadata_index.query.return_value = ["doc-1"]
+    stores = AsyncMock()
+    stores.chunk_ids_for_docs.return_value = ["filtered-chunk"]
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={"chunks": [], "entities": [], "relationships": []}
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = []
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+    )
+
+    result = await retriever.aretrieve(
+        "query",
+        metadata_filter=MetadataFilter(filename="exact.pdf"),
+        metadata_filter_source="explicit",
+    )
+
+    assert result.contexts["chunks"] == []
+    assert result.trace["metadata_filter_relaxed"] is False
+    backend.aretrieve.assert_awaited_once()
+    bm25.search.assert_awaited_once()
+
+
 async def test_unified_retriever_fuses_lightrag_and_bm25_chunks() -> None:
     from dlightrag.core.retrieval.protocols import RetrievalResult
 

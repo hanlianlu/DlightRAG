@@ -91,6 +91,9 @@ def _merge_raw_chunk_fields(chunk: dict[str, Any], raw_chunk: dict[str, Any]) ->
         chunk["file_path"] = raw_chunk.get("file_path", "")
     if not chunk.get("full_doc_id") and raw_chunk.get("full_doc_id"):
         chunk["full_doc_id"] = raw_chunk["full_doc_id"]
+    for key in ("sidecar", "sidecar_location"):
+        if not chunk.get(key) and raw_chunk.get(key) is not None:
+            chunk[key] = raw_chunk[key]
 
 
 def _chunk_sidecar(chunk: dict[str, Any], raw_chunk: dict[str, Any]) -> dict[str, Any]:

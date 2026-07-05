@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
+from urllib.parse import quote
 
 from dlightrag.citations import finalize_answer
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
@@ -79,12 +80,13 @@ def _retrieved_image_cards(
         image_url = chunk.get("image_url")
         thumb_url = chunk.get("thumbnail_url") or image_url
         image_data = chunk.get("image_data")
+        ws = chunk.get("_workspace") or workspace or default_workspace
+        if not image_url and not image_data and _is_visual_chunk(chunk):
+            image_url, thumb_url = _web_image_urls(ws, cid)
         if not image_url and not image_data:
             continue
-        ws = chunk.get("_workspace") or workspace or default_workspace
         if not image_url and image_data:
-            image_url = f"/web/images/{ws}/{cid}?size=full"
-            thumb_url = f"/web/images/{ws}/{cid}?size=thumb"
+            image_url, thumb_url = _web_image_urls(ws, cid)
         label = chunk.get("file_path", "") or f"Visual {existing_count + len(answer_images) + 1}"
         answer_images.append(
             {
@@ -96,6 +98,18 @@ def _retrieved_image_cards(
         )
         seen_img_ids.add(cid)
     return answer_images
+
+
+def _is_visual_chunk(chunk: dict[str, Any]) -> bool:
+    sidecar = chunk.get("sidecar")
+    return isinstance(sidecar, dict) and sidecar.get("type") == "drawing"
+
+
+def _web_image_urls(workspace: str, chunk_id: str) -> tuple[str, str]:
+    safe_ws = quote(str(workspace), safe="")
+    safe_chunk = quote(str(chunk_id), safe="")
+    base = f"/web/images/{safe_ws}/{safe_chunk}"
+    return f"{base}?size=full", f"{base}?size=thumb"
 
 
 async def stream_answer_events(

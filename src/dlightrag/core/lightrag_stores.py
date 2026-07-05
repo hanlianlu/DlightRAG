@@ -116,6 +116,10 @@ class LightRAGStores:
             }
             if full_doc_id:
                 chunk["full_doc_id"] = str(full_doc_id)
+            if not isinstance(content_raw, str):
+                for key in ("sidecar", "sidecar_location", "page_idx"):
+                    if content_raw.get(key) is not None:
+                        chunk[key] = content_raw[key]
             chunks.append(chunk)
         return chunks
 

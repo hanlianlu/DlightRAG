@@ -64,6 +64,35 @@ def test_project_contexts_for_client_accepts_lightrag_id_alias() -> None:
     ]
 
 
+def test_project_contexts_for_client_adds_visual_chunk_urls_without_inline_image_data() -> None:
+    from dlightrag.core.client_payloads import project_contexts_for_client
+
+    public = project_contexts_for_client(
+        {
+            "chunks": [
+                {
+                    "chunk_id": "doc-1-mm-drawing-001",
+                    "reference_id": "1",
+                    "file_path": "/private/report.pdf",
+                    "content": "[Image Name]architecture",
+                    "_workspace": "default",
+                    "sidecar": {"type": "drawing"},
+                },
+                {
+                    "chunk_id": "doc-1-chunk-001",
+                    "reference_id": "1",
+                    "file_path": "/private/report.pdf",
+                    "content": "plain text",
+                    "_workspace": "default",
+                },
+            ]
+        }
+    )
+
+    assert public["chunks"][0]["image_url"] == "/images/default/doc-1-mm-drawing-001?size=full"
+    assert "image_url" not in public["chunks"][1]
+
+
 def test_project_contexts_for_client_skips_chunks_without_public_id() -> None:
     from dlightrag.core.client_payloads import project_contexts_for_client
 
