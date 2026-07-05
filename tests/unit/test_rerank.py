@@ -12,6 +12,7 @@ import dlightrag.models.rerank as rerank_module
 from dlightrag.config import RerankConfig
 from dlightrag.models.rerank import (
     _aliyun_rerank,
+    _azure_cohere_rerank,
     _build_scored_chunks,
     _chat_llm_rerank,
     _cohere_rerank,
@@ -91,8 +92,8 @@ class TestBuildScoredChunks:
 
 class TestBuildRerankFunc:
     @staticmethod
-    def _capture_threshold(monkeypatch, func_name: str) -> dict[str, float]:
-        captured: dict[str, float] = {}
+    def _capture_threshold(monkeypatch, func_name: str) -> dict[str, float | None]:
+        captured: dict[str, float | None] = {}
 
         async def fake_rerank(query, chunks, top_k, **kwargs):
             captured["score_threshold"] = kwargs["score_threshold"]
@@ -133,7 +134,7 @@ class TestBuildRerankFunc:
         )
         await fn("query", [{"content": "chunk"}], 1)
 
-        assert captured["score_threshold"] == 0.0
+        assert captured["score_threshold"] is None
 
     async def test_explicit_provider_threshold_is_preserved(self, monkeypatch):
         captured = self._capture_threshold(monkeypatch, "_voyage_rerank")
@@ -594,6 +595,7 @@ class TestHttpRerank:
 class TestRerankInputModality:
     def test_auto_uses_known_model_capability(self):
         assert _resolve_input_modality("auto", "jina-reranker-v3") == "text"
+        assert _resolve_input_modality("auto", "jina-reranker-m0") == "multimodal"
         assert _resolve_input_modality("auto", "qwen3-vl-rerank") == "multimodal"
         assert _resolve_input_modality("auto", "rerank-2.5-lite") == "text"
         assert _resolve_input_modality("auto", "rerank-v4.0") == "text"
@@ -651,6 +653,23 @@ class TestJinaRerank:
         assert client.payload["documents"] == ["VLM text"]
         assert _PNG_B64 not in str(client.payload)
 
+    async def test_m0_auto_sends_multimodal_image_document(self):
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.8}]})
+
+        await _jina_rerank(
+            "query",
+            [{"content": "VLM text", "image_data": _PNG_B64}],
+            top_k=1,
+            url="https://api.jina.ai/v1/rerank",
+            model="jina-reranker-m0",
+            api_key="jina-key",
+            input_modality="auto",
+            client=cast(Any, client),
+        )
+
+        assert client.payload is not None
+        assert client.payload["documents"] == [{"image": f"data:image/png;base64,{_PNG_B64}"}]
+
 
 class TestAliyunRerank:
     async def test_qwen3_vl_auto_sends_dashscope_multimodal_payload(self):
@@ -706,7 +725,7 @@ class TestVoyageRerank:
     async def test_sends_voyage_text_payload(self):
         client = _CaptureClient(
             {
-                "results": [
+                "data": [
                     {"index": 1, "relevance_score": 0.91},
                     {"index": 0, "relevance_score": 0.2},
                 ]
@@ -736,6 +755,29 @@ class TestVoyageRerank:
             "truncation": True,
         }
         assert "RAW_IMAGE" not in str(client.payload)
+
+    async def test_default_threshold_keeps_negative_scores(self):
+        client = _CaptureClient(
+            {
+                "data": [
+                    {"index": 0, "relevance_score": -0.1},
+                    {"index": 1, "relevance_score": -0.2},
+                ]
+            }
+        )
+
+        result = await _voyage_rerank(
+            "query",
+            [{"content": "first"}, {"content": "second"}],
+            top_k=2,
+            api_key="voyage-key",
+            client=cast(Any, client),
+        )
+
+        assert result == [
+            {"content": "first", "rerank_score": -0.1},
+            {"content": "second", "rerank_score": -0.2},
+        ]
 
 
 class TestCohereRerank:
@@ -771,6 +813,51 @@ class TestCohereRerank:
             "top_n": 2,
         }
         assert "RAW_IMAGE" not in str(client.payload)
+
+
+class TestAzureCohereRerank:
+    async def test_project_endpoint_uses_provider_route(self):
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.88}]})
+
+        result = await _azure_cohere_rerank(
+            "query",
+            [{"content": "first"}, {"content": "second"}],
+            top_k=1,
+            endpoint="https://project.services.ai.azure.com",
+            api_key="azure-key",
+            deployment="Cohere-rerank-v4.0-pro",
+            score_threshold=0.5,
+            client=cast(Any, client),
+        )
+
+        assert result == [{"content": "first", "rerank_score": 0.88}]
+        assert client.url == "https://project.services.ai.azure.com/providers/cohere/v2/rerank"
+        assert client.headers is not None
+        assert client.headers["Authorization"] == "azure-key"
+        assert client.payload == {
+            "model": "Cohere-rerank-v4.0-pro",
+            "query": "query",
+            "documents": ["first", "second"],
+            "top_n": 1,
+        }
+
+    async def test_model_endpoint_uses_v1_rerank_route(self):
+        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.88}]})
+
+        await _azure_cohere_rerank(
+            "query",
+            [{"content": "first"}],
+            top_k=1,
+            endpoint="https://cohere-rerank-v4-pro.example.eastus.models.ai.azure.com/",
+            api_key="azure-key",
+            deployment="model",
+            client=cast(Any, client),
+        )
+
+        assert (
+            client.url
+            == "https://cohere-rerank-v4-pro.example.eastus.models.ai.azure.com/v1/rerank"
+        )
 
 
 class _CaptureClient:

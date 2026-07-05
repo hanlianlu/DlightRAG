@@ -50,6 +50,7 @@ ResolvedInputModality = Literal["text", "multimodal"]
 # Official rerank APIs that accept image documents as of the current docs.
 _MULTIMODAL_RERANK_MODELS: frozenset[str] = frozenset(
     {
+        "jina-reranker-m0",
         "qwen3-vl-rerank",
     }
 )
@@ -70,19 +71,15 @@ def _build_scored_chunks(
     chunks: list[dict[str, Any]],
     indexed_scores: list[dict[str, Any]],
     *,
-    score_threshold: float,
+    score_threshold: float | None,
     top_k: int,
 ) -> list[dict[str, Any]]:
-    """Parse HTTP reranker results into scored, thresholded, top-k chunks.
-
-    Shared by ``_http_rerank`` and ``_azure_cohere_rerank``. Both decode
-    the same response contract: ``{"results": [{"index": …, "relevance_score": …}, …]}``.
-    """
+    """Parse indexed reranker results into scored, thresholded, top-k chunks."""
     scored: list[dict[str, Any]] = []
     for r in indexed_scores:
         idx = r["index"]
         score = r["relevance_score"]
-        if score >= score_threshold:
+        if score_threshold is None or score >= score_threshold:
             chunk = chunks[idx].copy()
             chunk["rerank_score"] = score
             scored.append(chunk)
@@ -295,7 +292,7 @@ async def _http_rerank(
     url: str,
     model: str,
     api_key: str | None = None,
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     client: httpx.AsyncClient | None = None,
     multimodal: bool = True,
     image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
@@ -385,7 +382,7 @@ async def _jina_rerank(
     model: str = _JINA_RERANK_MODEL,
     api_key: str,
     input_modality: InputModality = "auto",
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     client: httpx.AsyncClient | None = None,
     image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
     image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
@@ -394,7 +391,7 @@ async def _jina_rerank(
     image_quality: int = _DEFAULT_IMAGE_QUALITY,
     image_min_quality: int = _DEFAULT_IMAGE_MIN_QUALITY,
 ) -> list[dict[str, Any]]:
-    """Jina reranker endpoint; latest v3 uses text documents."""
+    """Jina reranker endpoint; v3 is text-only, m0 accepts image documents."""
     if not chunks:
         return []
 
@@ -432,7 +429,7 @@ async def _aliyun_rerank(
     model: str = _ALIYUN_RERANK_MODEL,
     api_key: str,
     input_modality: InputModality = "auto",
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     client: httpx.AsyncClient | None = None,
     image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
     image_max_total_bytes: int = _DEFAULT_IMAGE_MAX_TOTAL_BYTES,
@@ -486,7 +483,7 @@ async def _voyage_rerank(
     url: str = _VOYAGE_RERANK_URL,
     model: str = _VOYAGE_RERANK_MODEL,
     api_key: str,
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, Any]]:
     """Voyage reranker endpoint: text documents, top_k."""
@@ -504,9 +501,13 @@ async def _voyage_rerank(
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
     data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
-    results = data.get("results", [])
 
-    return _build_scored_chunks(chunks, results, score_threshold=score_threshold, top_k=top_k)
+    return _build_scored_chunks(
+        chunks,
+        data.get("data", []),
+        score_threshold=score_threshold,
+        top_k=top_k,
+    )
 
 
 async def _cohere_rerank(
@@ -517,7 +518,7 @@ async def _cohere_rerank(
     url: str = _COHERE_RERANK_URL,
     model: str = _COHERE_RERANK_MODEL,
     api_key: str,
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, Any]]:
     """Cohere public reranker endpoint: text documents, top_n."""
@@ -550,6 +551,17 @@ _HTTP_RERANK_DEFAULTS: dict[str, tuple[str | None, str, bool, bool]] = {
 # ── Azure Cohere (text-only, enterprise) ─────────────────────────
 
 
+def _azure_cohere_rerank_url(endpoint: str) -> str:
+    base = endpoint.rstrip("/")
+    if base.endswith("/rerank"):
+        return base
+    if base.endswith("/providers/cohere"):
+        return f"{base}/v2/rerank"
+    if ".services.ai.azure.com" in base:
+        return f"{base}/providers/cohere/v2/rerank"
+    return f"{base}/v1/rerank"
+
+
 async def _azure_cohere_rerank(
     query: str,
     chunks: list[dict[str, Any]],
@@ -558,21 +570,22 @@ async def _azure_cohere_rerank(
     endpoint: str,
     api_key: str,
     deployment: str,
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> list[dict[str, Any]]:
     """Azure AI Services Cohere reranker (text-only)."""
     if not chunks:
         return []
 
-    rerank_url = (
-        endpoint
-        if "/providers/cohere/" in endpoint or endpoint.endswith("/rerank")
-        else f"{endpoint}/providers/cohere/v2/rerank"
-    )
+    rerank_url = _azure_cohere_rerank_url(endpoint)
     documents = [c.get("content", "") for c in chunks]
-    headers = {"api-key": api_key, "Content-Type": "application/json"}
-    json_body = {"model": deployment, "query": query, "documents": documents}
+    headers = {"Authorization": api_key, "Content-Type": "application/json"}
+    json_body = {
+        "model": deployment,
+        "query": query,
+        "documents": documents,
+        "top_n": min(top_k, len(documents)),
+    }
 
     if client is not None:
         resp = await client.post(rerank_url, headers=headers, json=json_body)
@@ -603,18 +616,17 @@ def build_rerank_func(
 
     strategy = rc.strategy
     score_threshold = rc.score_threshold
-    if score_threshold is None:
-        score_threshold = 0.5 if strategy == "chat_llm_reranker" else 0.0
     fn: Callable[..., Any]
 
     if strategy == "chat_llm_reranker":
         if ingest_func is None:
             raise ValueError("chat_llm_reranker requires a messages-first scoring callable")
+        chat_score_threshold = 0.5 if score_threshold is None else score_threshold
         fn = partial(
             _chat_llm_rerank,
             scoring_func=ingest_func,
             max_concurrency=rc.max_concurrency,
-            score_threshold=score_threshold,
+            score_threshold=chat_score_threshold,
             batch_size=rc.batch_size,
             multimodal=rc.input_modality != "text",
             image_max_bytes=rc.image_max_bytes,
