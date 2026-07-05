@@ -19,6 +19,7 @@ _build_answer_payload = _cli._build_answer_payload
 _build_ingest_kwargs = _cli._build_ingest_kwargs
 _build_retrieve_payload = _cli._build_retrieve_payload
 _validate_ingest_args = _cli._validate_ingest_args
+cmd_answer = _cli.cmd_answer
 cmd_ragas_eval = _cli.cmd_ragas_eval
 
 
@@ -136,6 +137,57 @@ def test_chat_payload_preserves_history_and_current_answer_options() -> None:
         "session_id": "session-1",
         "referenced_image_ids": ["img_1"],
     }
+
+
+def test_answer_cli_renders_structured_image_blocks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "answer": "The figure shows the flow [1-1].",
+                "references": [{"id": "1", "title": "paper.pdf"}],
+                "answer_images": [
+                    {
+                        "id": "fig-1",
+                        "source_ref": "1-1",
+                        "label": "paper.pdf",
+                        "url": "https://example.test/full.png",
+                        "thumbnail_url": "https://example.test/thumb.png",
+                    }
+                ],
+                "answer_blocks": [
+                    {"type": "markdown", "text": "The figure shows the flow [1-1]."},
+                    {"type": "image_ref", "image_id": "fig-1"},
+                ],
+            }
+
+    captured: dict[str, Any] = {}
+
+    def fake_post(url: str, *, json: dict[str, Any], headers: dict[str, str], timeout: int):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(_cli.httpx, "post", fake_post)
+    monkeypatch.setattr(_cli, "_get_api_url", lambda: "https://rag.example")
+    monkeypatch.setattr(_cli, "_headers", lambda: {})
+    monkeypatch.setattr(_cli, "_get_timeout", lambda: 15)
+
+    args = _parse_answer(["describe diagram"])
+    cmd_answer(args)
+
+    output = capsys.readouterr().out
+    assert captured["url"] == "https://rag.example/answer"
+    assert captured["json"]["query"] == "describe diagram"
+    assert "The figure shows the flow [1-1]." in output
+    assert "[image 1-1] paper.pdf https://example.test/thumb.png" in output
+    assert "References (1):" in output
 
 
 def test_ingest_kwargs_support_document_metadata_options() -> None:

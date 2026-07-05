@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.api import auth as auth_module
 from dlightrag.api.auth import UserContext, get_current_user, verify_bearer_token
 from dlightrag.api.server import create_app
-from dlightrag.citations.schemas import SourceReference
+from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.config import (
     AccessControlConfig,
     AccessControlRuleConfig,
@@ -1184,6 +1184,68 @@ class TestAnswerEndpoint:
         assert "sources" in body
         assert body["answer"] == "The answer is 42"
 
+    async def test_answer_includes_structured_images_and_blocks(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.aanswer = AsyncMock(
+            return_value=RetrievalResult(
+                answer="Diagram below [1-1].",
+                contexts={
+                    "chunks": [
+                        {
+                            "chunk_id": "fig-1",
+                            "reference_id": "1",
+                            "file_path": "/private/report.pdf",
+                            "content": "Figure evidence",
+                            "image_data": "base64-payload",
+                            "_workspace": "default",
+                        }
+                    ],
+                },
+                sources=[
+                    SourceReference(
+                        id="1",
+                        title="report.pdf",
+                        path="/private/report.pdf",
+                        chunks=[
+                            ChunkSnippet(
+                                chunk_id="fig-1",
+                                chunk_idx=1,
+                                content="Figure evidence",
+                                image_url="/images/default/fig-1?size=full",
+                                thumbnail_url="/images/default/fig-1?size=thumb",
+                            )
+                        ],
+                    )
+                ],
+                answer_images=[
+                    {
+                        "id": "fig-1",
+                        "chunk_id": "fig-1",
+                        "source_ref": "1-1",
+                        "url": "/images/default/fig-1?size=full",
+                        "thumbnail_url": "/images/default/fig-1?size=thumb",
+                        "label": "report.pdf",
+                    }
+                ],
+                answer_blocks=[
+                    {"type": "markdown", "text": "Diagram below [1-1]."},
+                    {"type": "image_ref", "image_id": "fig-1"},
+                ],
+            )
+        )
+        app.state.manager = mock_manager
+
+        resp = await client.post("/answer", json={"query": "show diagram", "stream": False})
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["answer_images"][0]["chunk_id"] == "fig-1"
+        assert body["answer_blocks"] == [
+            {"type": "markdown", "text": "Diagram below [1-1]."},
+            {"type": "image_ref", "image_id": "fig-1"},
+        ]
+
     async def test_answer_forwards_explicit_filters(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -1409,6 +1471,44 @@ class TestAnswerStreamMode:
         assert len(token_events) == 2
         assert token_events[0]["content"] == "Hi"
         assert token_events[1]["content"] == " there"
+
+    async def test_stream_done_includes_structured_images_and_blocks(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        async def mock_tokens():
+            yield "Diagram below [1-1]."
+
+        contexts = {
+            "chunks": [
+                {
+                    "chunk_id": "fig-1",
+                    "reference_id": "1",
+                    "file_path": "/private/report.pdf",
+                    "content": "Figure evidence",
+                    "image_data": "base64-payload",
+                    "_workspace": "default",
+                }
+            ]
+        }
+        mock_manager.aanswer_stream = AsyncMock(return_value=(contexts, mock_tokens()))
+        app.state.manager = mock_manager
+
+        resp = await client.post("/answer", json={"query": "show diagram", "stream": True})
+
+        import json as json_mod
+
+        events = [
+            json_mod.loads(line.removeprefix("data: "))
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+        done = events[-1]
+        assert done["type"] == "done"
+        assert done["answer_images"][0]["chunk_id"] == "fig-1"
+        assert done["answer_blocks"] == [
+            {"type": "markdown", "text": "Diagram below [1-1]."},
+            {"type": "image_ref", "image_id": "fig-1"},
+        ]
 
     async def test_stream_semantic_highlights_default_off(
         self,

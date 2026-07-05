@@ -35,6 +35,7 @@ from dlightrag.api.models import (
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
+from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
@@ -225,7 +226,14 @@ async def answer(
                         image_descriptions=image_descriptions or [],
                     )
                 )
-            yield sse_data_event(AnswerDoneStreamEvent(answer=finalized.answer))
+            answer_images = answer_images_from_sources(finalized.sources, contexts=contexts)
+            yield sse_data_event(
+                AnswerDoneStreamEvent(
+                    answer=finalized.answer,
+                    answer_images=answer_images,
+                    answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
+                )
+            )
         except asyncio.CancelledError:
             logger.debug("Client disconnected during SSE streaming")
             raise

@@ -57,6 +57,7 @@ def _image_contexts() -> RetrievalContexts:
                 "content": "Chart showing growth",
                 "page_idx": 1,
                 "image_data": _PNG_B64,
+                "_workspace": "default",
             },
         ],
         "entities": [],
@@ -183,6 +184,28 @@ class TestAnswerEngineGenerate:
         # Should have image_url entry + text entries
         assert any(item.get("type") == "image_url" for item in user_content)
         assert any(item.get("type") == "text" for item in user_content)
+
+    @pytest.mark.asyncio
+    async def test_generate_returns_structured_answer_images_for_sdk(self) -> None:
+        model_func = AsyncMock(return_value="The chart shows growth [1-1].")
+        engine = AnswerEngine(model_func=model_func)
+
+        result = await engine.generate("describe", _image_contexts())
+
+        assert result.answer_images == [
+            {
+                "id": "c1",
+                "chunk_id": "c1",
+                "source_ref": "1-1",
+                "url": "/images/default/c1?size=full",
+                "thumbnail_url": "/images/default/c1?size=thumb",
+                "label": "chart.pdf",
+            }
+        ]
+        assert result.answer_blocks == [
+            {"type": "markdown", "text": "The chart shows growth [1-1]."},
+            {"type": "image_ref", "image_id": "c1"},
+        ]
 
     @pytest.mark.asyncio
     async def test_query_images_do_not_consume_retrieved_visual_chunk_budget(self) -> None:

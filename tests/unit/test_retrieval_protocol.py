@@ -56,6 +56,8 @@ class TestRetrievalResultReferences:
     def test_default_empty_references(self) -> None:
         result = RetrievalResult()
         assert result.references == []
+        assert result.answer_images == []
+        assert result.answer_blocks == []
 
     def test_references_populated(self) -> None:
         from dlightrag.models.schemas import Reference

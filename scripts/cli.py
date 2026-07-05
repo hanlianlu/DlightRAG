@@ -228,6 +228,55 @@ def _build_ingest_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     return ingest_kwargs_from_payload(args)
 
 
+def _answer_images_by_id(data: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    images = data.get("answer_images") or []
+    if not isinstance(images, list):
+        return {}
+    return {
+        str(image["id"]): image for image in images if isinstance(image, dict) and image.get("id")
+    }
+
+
+def _format_answer_image_ref(image: dict[str, Any] | None, image_id: str) -> str:
+    if image is None:
+        return f"[image {image_id or '?'}]"
+
+    source_ref = str(image.get("source_ref") or image.get("id") or image_id or "?")
+    text = f"[image {source_ref}]"
+    label = str(image.get("label") or "").strip()
+    if label:
+        text = f"{text} {label}"
+    url = str(image.get("thumbnail_url") or image.get("url") or "").strip()
+    if url:
+        text = f"{text} {url}"
+    return text
+
+
+def _render_answer_for_terminal(data: dict[str, Any]) -> str:
+    """Render structured answer blocks in a terminal-friendly text form."""
+    fallback = str(data.get("answer") or "(no answer)")
+    blocks = data.get("answer_blocks") or []
+    if not isinstance(blocks, list) or not blocks:
+        images = _answer_images_by_id(data).values()
+        image_refs = [
+            _format_answer_image_ref(image, str(image.get("id") or "")) for image in images
+        ]
+        return "\n".join([fallback, *image_refs]) if image_refs else fallback
+
+    images_by_id = _answer_images_by_id(data)
+    rendered: list[str] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "markdown":
+            rendered.append(str(block.get("text") or ""))
+        elif block.get("type") == "image_ref":
+            image_id = str(block.get("image_id") or "")
+            rendered.append(f"\n{_format_answer_image_ref(images_by_id.get(image_id), image_id)}\n")
+
+    return "".join(rendered).strip() or fallback
+
+
 # ═══════════════════════════════════════════════════════════════════
 # ingest
 # ═══════════════════════════════════════════════════════════════════
@@ -307,8 +356,8 @@ def cmd_answer(args: argparse.Namespace) -> None:
     resp.raise_for_status()
     data = resp.json()
 
-    # Print answer first, then references, then sources
-    answer = data.get("answer") or "(no answer)"
+    # Print answer first, then validated references.
+    answer = _render_answer_for_terminal(data)
     print(f"Answer:\n{answer}\n")
 
     references = data.get("references") or []
@@ -366,8 +415,9 @@ def cmd_chat(args: argparse.Namespace) -> None:
 
         data = resp.json()
         answer_text = data.get("answer") or "(no answer)"
+        rendered_answer = _render_answer_for_terminal(data)
 
-        print(f"\nAssistant: {answer_text}")
+        print(f"\nAssistant: {rendered_answer}")
 
         sources = data.get("sources") or []
         if sources:

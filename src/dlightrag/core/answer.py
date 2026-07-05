@@ -171,15 +171,22 @@ class AnswerEngine:
         )
 
         # Convert sources to Reference objects for RetrievalResult
+        from dlightrag.core.answer_media import (
+            answer_blocks_from_markdown,
+            answer_images_from_sources,
+        )
         from dlightrag.models.schemas import Reference
 
         references = [Reference(id=s.id, title=s.title or s.path) for s in finalized.sources]
+        answer_images = answer_images_from_sources(finalized.sources, contexts=prepared.contexts)
 
         return RetrievalResult(
             answer=finalized.answer,
             contexts=prepared.contexts,
             references=references,
             sources=finalized.sources,
+            answer_images=answer_images,
+            answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
             trace=prepared.trace,
         )
 

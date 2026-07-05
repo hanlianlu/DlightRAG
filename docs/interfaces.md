@@ -331,6 +331,7 @@ deduplicated by LightRAG's document status and DlightRAG's content-hash guard.
 | REST API | JSON object | JSON object | SSE (`stream: true`) |
 | MCP Server | JSON text | JSON text | N/A |
 | Web UI | — | SSE (HTML) | Built-in |
+| CLI (`scripts/cli.py`) | JSON object printed to stdout | Terminal text; `answer_blocks` image refs render as image URL lines | N/A |
 
 ### Python SDK
 
@@ -348,6 +349,8 @@ result = await manager.aanswer(
 result.answer      # "The key findings are... [1-1] [2-3]"
 result.contexts    # same structure as retrieve, packed to what the answer model saw
 result.references  # validated cited documents, derived from inline citations
+result.answer_images  # cited visual assets available for rendering
+result.answer_blocks  # markdown/image_ref blocks for structured display
 
 # Streaming answer
 contexts, token_iter = await manager.aanswer_stream(query="What are the key findings?")
@@ -375,6 +378,10 @@ async for token in token_iter:
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
 
 ### REST API
+
+DlightRAG does not expose a public `/query` route. Use `/retrieve` when a
+client needs contexts only, and `/answer` when it needs generated text,
+validated citations, and structured answer media.
 
 ```bash
 # Retrieve
@@ -433,6 +440,20 @@ paths without deleting LightRAG rows, metadata, or local files.
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
   "references": [{"id": "1", "title": "report.pdf"}, {"id": "2", "title": "spec.pdf"}],
   "sources": [...],
+  "answer_images": [
+    {
+      "id": "fig-1",
+      "chunk_id": "fig-1",
+      "source_ref": "1-1",
+      "url": "/images/default/fig-1?size=full",
+      "thumbnail_url": "/images/default/fig-1?size=thumb",
+      "label": "report.pdf"
+    }
+  ],
+  "answer_blocks": [
+    {"type": "markdown", "text": "The diagram shows... [1-1]."},
+    {"type": "image_ref", "image_id": "fig-1"}
+  ],
   "trace": {...},
   "image_descriptions": ["Image 1: a line chart about revenue"],
   "current_image_ids": ["img_0"]
@@ -448,7 +469,7 @@ paths without deleting LightRAG rows, metadata, or local files.
 | `sources` | `{type, data}` | Validated cited sources, after all tokens and before done. Includes `highlight_phrases` when `semantic_highlights` is true and enrichment succeeds. |
 | `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
 | `image_meta` | `{type, current_image_ids, image_descriptions}` | Session image IDs and VLM image descriptions |
-| `done` | `{type, answer}` | Stream complete; `answer` is the final normalized answer body after citation validation |
+| `done` | `{type, answer, answer_images, answer_blocks}` | Stream complete; `answer` is the final normalized answer body after citation validation |
 | `error` | `{type, message}` | Error mid-stream |
 
 ```
@@ -464,7 +485,7 @@ data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
 
 data: {"type":"image_meta","current_image_ids":["img_0"],"image_descriptions":["Image 1: a line chart"]}
 
-data: {"type":"done","answer":"The key findings are..."}
+data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
 ```
 
 REST uses the same fields as the Python manager methods. `retrieve` and
@@ -484,7 +505,9 @@ MCP tools return JSON text with `sources` at top level:
   "answer": "The key findings are... [1-1]",
   "contexts": { "chunks": [...], "entities": [...], "relationships": [...] },
   "references": [{"id": "1", "title": "report.pdf"}],
-  "sources": [...]
+  "sources": [...],
+  "answer_images": [...],
+  "answer_blocks": [...]
 }
 ```
 

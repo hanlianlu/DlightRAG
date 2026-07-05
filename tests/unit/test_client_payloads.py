@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for transport-neutral client payload helpers."""
 
-from dlightrag.citations.schemas import SourceReference
+from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.models.schemas import Reference
 
@@ -132,6 +132,77 @@ def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
     assert "image_data" not in payload["contexts"]["chunks"][0]
     assert payload["references"] == [{"id": "1", "title": "report.pdf"}]
     assert payload["sources"][0]["id"] == "1"
+    assert payload["answer_images"] == []
+    assert payload["answer_blocks"] == []
     assert payload["trace"] == {"phase": "answer"}
     assert payload["image_descriptions"] == ["chart"]
     assert payload["current_image_ids"] == ["c1"]
+
+
+def test_answer_helpers_derive_visual_images_and_blocks() -> None:
+    from dlightrag.core.answer_media import (
+        answer_blocks_from_markdown,
+        answer_images_from_sources,
+    )
+
+    sources = [
+        SourceReference(
+            id="1",
+            title="report.pdf",
+            path="/private/report.pdf",
+            chunks=[
+                ChunkSnippet(
+                    chunk_id="fig-1",
+                    chunk_idx=1,
+                    content="Figure evidence",
+                    image_url="/images/default/fig-1?size=full",
+                    thumbnail_url="/images/default/fig-1?size=thumb",
+                )
+            ],
+        )
+    ]
+
+    images = answer_images_from_sources(sources)
+
+    assert images == [
+        {
+            "id": "fig-1",
+            "chunk_id": "fig-1",
+            "source_ref": "1-1",
+            "url": "/images/default/fig-1?size=full",
+            "thumbnail_url": "/images/default/fig-1?size=thumb",
+            "label": "report.pdf",
+        }
+    ]
+    assert answer_blocks_from_markdown("Diagram below [1-1]. Details after.", images) == [
+        {"type": "markdown", "text": "Diagram below [1-1]."},
+        {"type": "image_ref", "image_id": "fig-1"},
+        {"type": "markdown", "text": " Details after."},
+    ]
+
+
+def test_answer_payload_serializes_result_answer_images_and_blocks() -> None:
+    from dlightrag.core.client_payloads import answer_payload
+
+    result = RetrievalResult(
+        answer="Diagram below [1-1].",
+        answer_images=[
+            {
+                "id": "fig-1",
+                "chunk_id": "fig-1",
+                "source_ref": "1-1",
+                "url": "/images/default/fig-1?size=full",
+                "thumbnail_url": "/images/default/fig-1?size=thumb",
+                "label": "report.pdf",
+            }
+        ],
+        answer_blocks=[
+            {"type": "markdown", "text": "Diagram below [1-1]."},
+            {"type": "image_ref", "image_id": "fig-1"},
+        ],
+    )
+
+    payload = answer_payload(result)
+
+    assert payload["answer_images"] == result.answer_images
+    assert payload["answer_blocks"] == result.answer_blocks

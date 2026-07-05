@@ -103,6 +103,11 @@ DlightRAG /answer response              →  LightRAG RAGEvaluator format
 }
 ```
 
+Display-only answer fields such as `answer_images`, `answer_blocks`,
+`references`, `sources`, and `trace` remain part of the DlightRAG `/answer`
+contract, but the adapter deliberately ignores them. RAGAS evaluates the final
+answer text against textual chunk contexts, not frontend rendering metadata.
+
 Everything else — the RAGAS `evaluate()` call, the two-stage concurrency
 pipeline (RAG semaphore → RAGAS semaphore), tqdm progress bars, CSV/JSON
 export, benchmark statistics, and console summary table — runs unmodified
@@ -245,9 +250,10 @@ evaluation:
 ```
 
 This is a thin format-adapter — all evaluation logic lives in LightRAG's
-`lightrag.evaluation` module. When LightRAG updates `RAGEvaluator` (new
-metrics, better concurrency, bug fixes), DlightRAG gets the improvements
-without code changes.
+`lightrag.evaluation` module. The adapter owns only the `/answer` call and the
+text-context projection; answer media rendering stays with SDK/REST/MCP/Web/CLI
+clients. When LightRAG updates `RAGEvaluator` (new metrics, better concurrency,
+bug fixes), DlightRAG gets the improvements without code changes.
 
 ## Troubleshooting
 

@@ -77,6 +77,8 @@ class RetrievalResult:
     )
     references: list[Reference] = field(default_factory=list)
     sources: list[SourceReference] = field(default_factory=list)
+    answer_images: list[dict[str, Any]] = field(default_factory=list)
+    answer_blocks: list[dict[str, Any]] = field(default_factory=list)
     trace: dict[str, Any] = field(default_factory=dict)
     image_descriptions: list[str] = field(default_factory=list)
     current_image_ids: list[str] = field(default_factory=list)

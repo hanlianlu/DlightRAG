@@ -226,7 +226,7 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
             answer = result.get("answer", "No response generated")
             chunks = result.get("contexts", {}).get("chunks", [])
 
-            # Extract content strings from DlightRAG's structured chunks
+            # RAGAS scores textual grounding; display-only media blocks stay out.
             contexts: list[str] = []
             for chunk in chunks:
                 content = chunk.get("content", "")

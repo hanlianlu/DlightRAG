@@ -21,6 +21,8 @@ class AnswerDoneEvent(ClientContractModel):
     answer: str
     current_image_ids: list[str] = Field(default_factory=list)
     image_descriptions: list[str] | dict[str, str] = Field(default_factory=list)
+    answer_images: list[dict[str, Any]] = Field(default_factory=list)
+    answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class AnswerTraceEvent(ClientContractModel):

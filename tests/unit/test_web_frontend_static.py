@@ -144,6 +144,15 @@ def test_reference_labels_do_not_render_square_brackets() -> None:
     assert '<span class="source-doc-badge">{{ src.id | reference_label }}</span>' in source_panel
 
 
+def test_answer_image_strip_uses_shared_thumbnail_field() -> None:
+    answer_done = (ROOT / "src/dlightrag/web/templates/partials/answer_done.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "img.thumbnail_url" in answer_done
+    assert "img.thumb_url" not in answer_done
+
+
 def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
     resize_js = (FRONTEND_UI / "resize.ts").read_text(encoding="utf-8")
 
