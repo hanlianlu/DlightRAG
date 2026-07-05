@@ -9,8 +9,8 @@ Runtime interface:
 
 Reranking is handled by DlightRAG after retrieval fusion and provenance
 hydration, NOT through LightRAG's ``rerank_model_func``. DlightRAG's final
-candidate set can include BM25, metadata-injected, and multimodal chunks that
-LightRAG's native reranker cannot see as one list.
+candidate set can include BM25, LightRAG, and multimodal chunks that LightRAG's
+native reranker cannot see as one list.
 """
 
 import json
