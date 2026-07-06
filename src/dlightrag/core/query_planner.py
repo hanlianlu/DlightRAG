@@ -336,6 +336,20 @@ class QueryPlanner:
 
         # Validate filters
         clean = {k: v for k, v in raw_filters.items() if v is not None}
+        if clean and filter_confidence == "low":
+            logger.info("QueryPlanner: ignored low-confidence metadata filter proposal")
+            return QueryPlan(
+                original_query=query,
+                standalone_query=standalone,
+                bm25_query=data.get("bm25_query") or None,
+                referenced_image_ids=_clean_image_ids(data.get("referenced_image_ids")),
+                metadata_filter=None,
+                metadata_filter_source=None,
+                metadata_filter_confidence=filter_confidence or "low",
+                metadata_filter_evidence=filter_evidence
+                if isinstance(filter_evidence, list)
+                else None,
+            )
 
         # Handle date fields specially
         metadata_filter: MetadataFilter | None = None
