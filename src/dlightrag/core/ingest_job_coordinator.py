@@ -285,6 +285,14 @@ class IngestJobCoordinator:
         store = await self.get_store()
         return await store.get(job_id)
 
+    def has_active_workspace_job(self, workspace: str) -> bool:
+        """Return whether an in-process ingest task exists for *workspace*."""
+        workspace_id = normalize_workspace(workspace)
+        for job_id, task in self._tasks.items():
+            if self._workspaces.get(job_id) == workspace_id and not task.done():
+                return True
+        return False
+
     async def _fail_recovered_job(self, job_id: str, store: IngestJobStore, error: str) -> None:
         claimed = await store.claim_running(
             job_id,

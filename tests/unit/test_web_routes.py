@@ -47,6 +47,12 @@ def mock_manager():
     manager.get_pipeline_status = AsyncMock(
         return_value={"busy": False, "pending_enqueues": 0, "latest_message": ""}
     )
+    manager.get_file_panel_snapshot = AsyncMock(
+        return_value={
+            "files": [{"filename": "test.pdf", "file_path": "/tmp/test.pdf"}],
+            "pipeline_status": {"busy": False, "pending_enqueues": 0, "latest_message": ""},
+        }
+    )
     manager.delete_files = AsyncMock(return_value=[])
     manager.aingest = AsyncMock()
     manager.astart_ingest_job = AsyncMock(return_value={"job_id": "job-1", "status": "queued"})
@@ -570,10 +576,13 @@ class TestWebFiles:
     async def test_file_list_derives_display_name_from_path(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.list_ingested_files = AsyncMock(
-            return_value=[
-                {"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}
-            ]
+        mock_manager.get_file_panel_snapshot = AsyncMock(
+            return_value={
+                "files": [
+                    {"doc_id": "d1", "file_path": "/tmp/reports/q4.pdf", "status": "processed"}
+                ],
+                "pipeline_status": {"busy": False, "pending_enqueues": 0},
+            }
         )
 
         resp = await client.get("/web/files")
@@ -581,6 +590,29 @@ class TestWebFiles:
         assert resp.status_code == 200
         assert ">q4.pdf</span>" in resp.text
         assert 'title="/tmp/reports/q4.pdf"' in resp.text
+
+    async def test_file_list_uses_file_panel_snapshot_for_cold_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.list_workspaces = AsyncMock(return_value=["default", "cold_ws"])
+        mock_manager.get_file_panel_snapshot = AsyncMock(
+            return_value={
+                "files": [
+                    {"doc_id": "d1", "file_path": "/tmp/cold/report.pdf", "status": "processed"}
+                ],
+                "pipeline_status": {"busy": False, "pending_enqueues": 0},
+            }
+        )
+        mock_manager.list_ingested_files = AsyncMock(return_value=[])
+        mock_manager.get_pipeline_status = AsyncMock(return_value={"busy": False})
+
+        resp = await client.get("/web/files", params={"workspace": "cold-ws"})
+
+        assert resp.status_code == 200
+        assert ">report.pdf</span>" in resp.text
+        mock_manager.get_file_panel_snapshot.assert_awaited_once_with("cold_ws")
+        mock_manager.list_ingested_files.assert_not_awaited()
+        mock_manager.get_pipeline_status.assert_not_awaited()
 
     async def test_file_list_rejects_stale_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
@@ -591,6 +623,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
+        mock_manager.get_file_panel_snapshot.assert_not_awaited()
         mock_manager.list_ingested_files.assert_not_awaited()
         mock_manager.get_pipeline_status.assert_not_awaited()
 
@@ -604,6 +637,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
+        mock_manager.get_file_panel_snapshot.assert_not_awaited()
         mock_manager.list_ingested_files.assert_not_awaited()
         mock_manager.get_pipeline_status.assert_not_awaited()
 
@@ -615,8 +649,7 @@ class TestWebFiles:
         resp = await client.get("/web/files", params={"workspace": "test-fallback-ws"})
 
         assert resp.status_code == 200
-        mock_manager.list_ingested_files.assert_awaited_once_with("test_fallback_ws")
-        mock_manager.get_pipeline_status.assert_awaited_once_with("test_fallback_ws")
+        mock_manager.get_file_panel_snapshot.assert_awaited_once_with("test_fallback_ws")
 
     async def test_file_list_rejects_stale_workspace_without_default(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
@@ -627,6 +660,7 @@ class TestWebFiles:
 
         assert resp.status_code == 409
         assert "Workspace no longer exists" in resp.text
+        mock_manager.get_file_panel_snapshot.assert_not_awaited()
         mock_manager.list_ingested_files.assert_not_awaited()
 
     async def test_ingest_status_rejects_stale_workspace(

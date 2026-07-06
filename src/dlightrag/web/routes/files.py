@@ -125,31 +125,22 @@ async def file_list(
 
 async def _file_list_response(request: Request, workspace: str):
     manager = get_manager(request)
+    status: dict[str, Any] = {}
     try:
-        files = _file_view_models(await manager.list_ingested_files(workspace))
+        snapshot = await manager.get_file_panel_snapshot(workspace)
+        files = _file_view_models(list(snapshot.get("files") or []))
+        status = dict(snapshot.get("pipeline_status") or {})
     except Exception:
         logger.debug(
-            "Could not list files for workspace %s",
+            "Could not read files panel snapshot for workspace %s",
             log_safe(workspace),
             exc_info=True,
         )
         files = []
 
-    # LightRAG's shared-storage pipeline_status is the authoritative ingest
-    # activity signal across API, MCP, Web, restart, and scale-out.
-    ingest_busy = False
-    status: dict[str, Any] = {}
-    try:
-        ps = await manager.get_pipeline_status(workspace)
-        ingest_busy = ps.get("busy", False) or ps.get("pending_enqueues", 0) > 0
-        if ingest_busy:
-            status = ps
-    except Exception:
-        logger.debug(
-            "Could not read pipeline status for workspace %s",
-            log_safe(workspace),
-            exc_info=True,
-        )
+    ingest_busy = status.get("busy", False) or status.get("pending_enqueues", 0) > 0
+    if not ingest_busy:
+        status = {}
 
     return templates.TemplateResponse(
         request,

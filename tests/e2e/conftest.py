@@ -27,10 +27,15 @@ from playwright.sync_api import Browser, Page, sync_playwright
 from dlightrag.api.server import create_app
 
 MOCK_WORKSPACES = [
-    {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"}
+    {"workspace": "default", "display_name": "Default", "embedding_model": "voyage-multimodal-3.5"},
+    {
+        "workspace": "research",
+        "display_name": "Research",
+        "embedding_model": "voyage-multimodal-3.5",
+    },
 ]
 
-MOCK_WORKSPACE_LIST = ["default"]
+MOCK_WORKSPACE_LIST = ["default", "research"]
 
 
 def _free_port() -> int:
@@ -64,6 +69,10 @@ def e2e_base_url() -> Generator[str, Any]:
     manager.list_workspace_records.return_value = MOCK_WORKSPACES
     manager.list_ingested_files.return_value = []
     manager.get_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
+    manager.get_file_panel_snapshot.return_value = {
+        "files": [],
+        "pipeline_status": {"busy": False, "pending_enqueues": 0},
+    }
     manager.aingest.return_value = {"job_id": "e2e-test-job", "file_count": 1}
     manager.adelete_files.return_value = {"deleted_count": 0}
 

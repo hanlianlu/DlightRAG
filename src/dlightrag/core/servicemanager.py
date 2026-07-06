@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from dlightrag.core.query_images import QueryImageEnhancer
     from dlightrag.core.session_images import SessionImageStore
     from dlightrag.storage.checkpoint_pg import PGCheckpointStore
+    from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag.core.answer import AnswerEngine
@@ -251,6 +252,7 @@ class RAGServiceManager:
         self._session_images: SessionImageStore | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._checkpoint: PGCheckpointStore | None = None
+        self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._supports_vision: bool | None = None
         self._rerank_supports_vision: bool | None = None
@@ -619,10 +621,42 @@ class RAGServiceManager:
     async def get_ingest_job(self, job_id: str) -> dict[str, Any] | None:
         return await self._ingest_jobs.get_job(job_id)
 
+    def _get_file_panel_store(self) -> PGFilePanelStore:
+        if self._file_panel_store is None:
+            from dlightrag.storage.file_panel import PGFilePanelStore
+
+            self._file_panel_store = PGFilePanelStore()
+        return self._file_panel_store
+
     async def acreate_workspace(self, workspace: str, *, display_name: str | None = None) -> None:
         """Initialize a workspace through the public manager API."""
         svc = await self._get_service(workspace)
         await svc.aregister_workspace(display_name=display_name)
+
+    async def get_file_panel_snapshot(self, workspace: str) -> dict[str, Any]:
+        """Return files-panel data without warming a cold RAG service."""
+        workspace_id = normalize_workspace(workspace)
+        files = await self._get_file_panel_store().list_processed_files(workspace_id)
+
+        if workspace_id in self._services:
+            pipeline_status = await self._services[workspace_id].aget_pipeline_status()
+        elif self._ingest_jobs.has_active_workspace_job(workspace_id):
+            pipeline_status = {
+                "busy": True,
+                "pending_enqueues": 0,
+                "latest_message": "Starting ingest...",
+            }
+        else:
+            pipeline_status = {
+                "busy": False,
+                "pending_enqueues": 0,
+                "latest_message": "",
+            }
+
+        return {
+            "files": files,
+            "pipeline_status": pipeline_status,
+        }
 
     async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""
