@@ -854,7 +854,8 @@ class RAGService:
                 stored_file_path=stored_file_path,
             )
 
-        file_path = stage_input_file(
+        file_path = await asyncio.to_thread(
+            stage_input_file,
             input_root=self._workspace_input_root(),
             file_path=file_path,
             relative_to=source_root,
@@ -900,7 +901,8 @@ class RAGService:
                 )
 
         staged_paths = [
-            stage_input_file(
+            await asyncio.to_thread(
+                stage_input_file,
                 input_root=self._workspace_input_root(),
                 file_path=file_path,
                 relative_to=source_root,
@@ -947,7 +949,8 @@ class RAGService:
                         relative_to=relative_to,
                     )
                 )
-            staged = stage_input_file(
+            staged = await asyncio.to_thread(
+                stage_input_file,
                 input_root=self._workspace_input_root(),
                 file_path=file_path,
                 relative_to=relative_to,
@@ -1445,7 +1448,7 @@ class RAGService:
             if not path_str:
                 raise ValueError("'path' is required for local source_type")
             local_path = Path(path_str)
-            file_paths = iter_ingestable_files(local_path)
+            file_paths = await asyncio.to_thread(iter_ingestable_files, local_path)
             common_kwargs = {
                 "replace": replace,
                 "title": kwargs.get("title"),

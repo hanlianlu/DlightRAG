@@ -134,7 +134,7 @@ class UnifiedIngestionEngine:
         if existing_status is not None and replace:
             await self._cleanup_partial_doc(doc_id)
         elif existing_status is not None and existing_status.get("status") == "processed":
-            current_hash = _file_sha256(file_path)
+            current_hash = await asyncio.to_thread(_file_sha256, file_path)
             stored_hash = existing_status.get("content_hash")
             if stored_hash and current_hash == stored_hash:
                 return {
@@ -217,7 +217,7 @@ class UnifiedIngestionEngine:
                 if existing_status is not None and replace:
                     await self._cleanup_partial_doc(entry.doc_id)
                 elif existing_status is not None and existing_status.get("status") == "processed":
-                    current_hash = _file_sha256(entry.parser_path)
+                    current_hash = await asyncio.to_thread(_file_sha256, entry.parser_path)
                     stored_hash = existing_status.get("content_hash")
                     if stored_hash and current_hash == stored_hash:
                         results_by_index[entry.index] = {
@@ -462,7 +462,7 @@ class UnifiedIngestionEngine:
             image_path = asset.image_path
             if not image_path.exists():
                 continue
-            dims = _image_dims(image_path)
+            dims = await asyncio.to_thread(_image_dims, image_path)
             if dims is not None and (
                 dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
             ):
@@ -514,13 +514,18 @@ class UnifiedIngestionEngine:
 
 
 async def _embed_image_path(embedder: Any, image_path: Path) -> list[float]:
-    from PIL import Image
-
-    image = Image.open(image_path).convert("RGB")
+    image = await asyncio.to_thread(_open_rgb_image, image_path)
     try:
         return (await embedder.embed_index_images([image]))[0]
     finally:
         image.close()
+
+
+def _open_rgb_image(path: Path) -> Any:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        return image.convert("RGB")
 
 
 def _file_sha256(path: Path) -> str:

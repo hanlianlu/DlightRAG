@@ -695,6 +695,30 @@ async def test_reingest_skips_when_content_hash_matches(tmp_path: Path) -> None:
     deps["lightrag"].apipeline_enqueue_documents.assert_not_awaited()
 
 
+async def test_reingest_hash_check_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
+    import dlightrag.core.ingestion.engine as engine_module
+
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-1"],
+        "content_hash": _file_sha256_static(source),
+        "status": "processed",
+    }
+    calls = []
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(engine_module.asyncio, "to_thread", fake_to_thread)
+
+    await engine.aingest_file(source, replace=False)
+
+    assert engine_module._file_sha256 in calls
+
+
 def _file_sha256_static(path: Path) -> str:
     import hashlib
 
@@ -739,6 +763,51 @@ async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
 
     assert result.get("source_kind") != "skipped"
     deps["lightrag"].apipeline_enqueue_documents.assert_awaited_once()
+
+
+async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    import dlightrag.core.ingestion.engine as engine_module
+
+    artifact_dir = tmp_path / "sample.parsed"
+    artifact_dir.mkdir()
+    (artifact_dir / "sample.blocks.jsonl").write_text("{}\n", encoding="utf-8")
+    image_path = artifact_dir / "chart.png"
+    Image.new("RGB", (128, 128), color=(255, 0, 0)).save(image_path)
+    (artifact_dir / "sample.drawings.json").write_text(
+        json.dumps(
+            {
+                "drawings": {
+                    "im-1": {
+                        "path": "chart.png",
+                        "llm_analyze_result": {"status": "success"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine, deps = _make_engine()
+    deps["stores"].overwrite_chunk_vectors = AsyncMock()
+    deps["multimodal_embedder"].embed_index_images = AsyncMock(return_value=[[0.1, 0.2]])
+    calls = []
+
+    async def fake_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(engine_module.asyncio, "to_thread", fake_to_thread)
+
+    await engine._overwrite_sidecar_image_vectors(
+        doc_id="doc-1",
+        sidecar_location=artifact_dir.as_uri(),
+        chunk_ids={"doc-1-mm-drawing-000"},
+    )
+
+    assert "_image_dims" in calls
+    assert "_open_rgb_image" in calls
+    deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
 
 
 def test_sidecar_dir_from_location_handles_file_scheme() -> None:

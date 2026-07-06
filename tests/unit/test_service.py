@@ -1208,6 +1208,38 @@ class TestRAGServiceLightRAGMainPath:
         assert (staged_root / "b.pdf").read_bytes() == b"fake"
         assert (staged_root / "nested" / "c.pptx").read_bytes() == b"fake"
 
+    async def test_aingest_local_directory_offloads_scan_and_staging(
+        self,
+        test_config: DlightragConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import dlightrag.core.service as service_module
+
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        (docs_dir / "a.pdf").write_bytes(b"a")
+        (docs_dir / "b.pdf").write_bytes(b"b")
+        calls = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            calls.append(func)
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(service_module.asyncio, "to_thread", fake_to_thread)
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_file = AsyncMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 2, "errors": [], "results": []}
+        )
+
+        await service.aingest(source_type="local", path=str(docs_dir))
+
+        assert service_module.iter_ingestable_files in calls
+        assert calls.count(service_module.stage_input_file) == 2
+
     async def test_aingest_explicit_upload_batch_directory_is_ingestable(
         self, test_config: DlightragConfig, tmp_path: Path
     ) -> None:

@@ -151,6 +151,61 @@ def test_api_server_has_no_eager_module_app() -> None:
     assert not hasattr(server, "app")
 
 
+def test_api_server_installs_six_worker_default_executor(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typing import Any, cast
+
+    import dlightrag.api.server as server
+
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.args = args
+            self.kwargs = kwargs
+
+    class FakeLoop:
+        def __init__(self) -> None:
+            self.executor = None
+
+        def set_default_executor(self, executor) -> None:
+            self.executor = executor
+
+    loop = FakeLoop()
+    monkeypatch.setattr(server.asyncio, "get_running_loop", lambda: loop)
+    monkeypatch.setattr(server, "ThreadPoolExecutor", FakeExecutor)
+
+    executor = server._install_default_executor()
+
+    assert loop.executor is executor
+    assert cast(Any, executor).kwargs["max_workers"] == 6
+
+
+async def test_lifespan_shuts_down_executor_when_manager_create_fails(
+    test_config: DlightragConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dlightrag.api.server as server
+
+    class FakeExecutor:
+        def __init__(self) -> None:
+            self.shutdown_calls = []
+
+        def shutdown(self, **kwargs) -> None:
+            self.shutdown_calls.append(kwargs)
+
+    async def fail_create(*, config) -> None:
+        raise RuntimeError("boom")
+
+    app = FastAPI()
+    app.state.config = test_config
+    executor = FakeExecutor()
+    monkeypatch.setattr(server, "_install_default_executor", lambda: executor)
+    monkeypatch.setattr(server.RAGServiceManager, "create", fail_create)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with server.lifespan(app):
+            pass
+
+    assert executor.shutdown_calls == [{"wait": False, "cancel_futures": True}]
+
+
 class TestAuthMiddleware:
     """Test pluggable auth (none / simple / jwt)."""
 
