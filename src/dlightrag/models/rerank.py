@@ -607,6 +607,27 @@ async def _azure_cohere_rerank(
 # ── Factory ──────────────────────────────────────────────────────
 
 
+class _RerankCallable:
+    """Callable that owns its httpx client lifecycle.
+
+    Wraps the strategy function (partial + traced) and the httpx client
+    so RAGService can ``await rerank_func.aclose()`` at shutdown.
+    """
+
+    __slots__ = ("_fn", "_client")
+
+    def __init__(self, fn: Callable[..., Any], *, client: httpx.AsyncClient | None = None) -> None:
+        self._fn = fn
+        self._client = client
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._fn(*args, **kwargs)
+
+    async def aclose(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+
+
 def build_rerank_func(
     rc: RerankConfig,
     ingest_func: Callable[..., Any] | None = None,
@@ -621,6 +642,7 @@ def build_rerank_func(
     strategy = rc.strategy
     score_threshold = rc.score_threshold
     fn: Callable[..., Any]
+    client: httpx.AsyncClient | None = None
 
     if strategy == "chat_llm_reranker":
         if ingest_func is None:
@@ -746,7 +768,10 @@ def build_rerank_func(
     else:
         raise ValueError(f"Unknown rerank strategy: {strategy}")
 
-    return wrap_rerank_func(fn, name=f"rerank/{strategy}")
+    return _RerankCallable(
+        fn=wrap_rerank_func(fn, name=f"rerank/{strategy}"),
+        client=client,
+    )
 
 
 __all__ = [
