@@ -7,6 +7,7 @@ Supports two formats:
 
 import logging
 import re
+from collections import defaultdict
 
 from .indexer import CitationIndexer
 
@@ -57,7 +58,7 @@ def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str
     for m in DOC_CITATION_PATTERN.finditer(answer_text):
         positions.append((m.start(), m.group(1), None))
 
-    result: dict[str, list[str]] = {}
+    result: defaultdict[str, list[str]] = defaultdict(list)
     seen: set[tuple[str, str]] = set()
     for _, ref_id, chunk_idx in sorted(positions, key=lambda item: item[0]):
         if chunk_idx is not None:
@@ -68,7 +69,7 @@ def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str
             if (ref_id, chunk_id) in seen:
                 continue
             seen.add((ref_id, chunk_id))
-            result.setdefault(ref_id, []).append(chunk_id)
+            result[ref_id].append(chunk_id)
             continue
 
         max_idx = indexer.get_max_chunk_idx(ref_id)
@@ -78,7 +79,7 @@ def extract_cited_chunks(indexer: CitationIndexer, answer_text: str) -> dict[str
             chunk_id = indexer.get_chunk_id(ref_id, idx)
             if chunk_id and (ref_id, chunk_id) not in seen:
                 seen.add((ref_id, chunk_id))
-                result.setdefault(ref_id, []).append(chunk_id)
+                result[ref_id].append(chunk_id)
 
     return result
 

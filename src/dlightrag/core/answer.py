@@ -341,10 +341,7 @@ class AnswerEngine:
 
         # ---- Phase 3: RAG context uses its own budget ----
         if chunk_image_blocks_by_chunk_id is None:
-            prepared = self._prepare_prompt_context(
-                "",
-                contexts,
-            )
+            prepared = self._prepare_prompt_context("", contexts)
             contexts = prepared.contexts
             indexer = prepared.indexer
             chunk_image_blocks_by_chunk_id = prepared.chunk_image_blocks
@@ -512,7 +509,9 @@ class AnswerEngine:
             ref_id = str(chunk.get("reference_id", ""))
             if ref_id not in doc_groups:
                 doc_order.append(ref_id)
-            doc_groups.setdefault(ref_id, []).append(chunk)
+                doc_groups[ref_id] = [chunk]
+            else:
+                doc_groups[ref_id].append(chunk)
 
         blocks: list[dict[str, Any]] = []
         blocks.append({"type": "text", "text": "## Document Excerpts"})

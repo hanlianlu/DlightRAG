@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from collections.abc import Awaitable, Callable, Sequence
 
 from pydantic import BaseModel, Field
@@ -308,7 +308,7 @@ async def extract_highlights_for_sources(
         task_name="highlight-batch",
     )
 
-    chunk_phrases: dict[str, set[str]] = {}
+    chunk_phrases: defaultdict[str, set[str]] = defaultdict(set)
     task_errors = 0
     batch_errors = 0
     for batch, res in zip(batches, batch_results, strict=True):
@@ -319,7 +319,7 @@ async def extract_highlights_for_sources(
             continue
         for chunk_id, hp in res:
             if hp.phrases:
-                chunk_phrases.setdefault(chunk_id, set()).update(hp.phrases)
+                chunk_phrases[chunk_id].update(hp.phrases)
 
     highlighted_chunks = 0
     phrase_count = 0

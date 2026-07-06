@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Answer media registry and block helpers."""
 
+from collections import defaultdict
 from typing import Any
 from urllib.parse import urlparse
 
@@ -53,13 +54,13 @@ def answer_blocks_from_markdown(
     text = answer or ""
     if not text:
         return []
-    by_ref: dict[str, list[dict[str, Any]]] = {}
+    by_ref: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for image in images:
         source_ref = str(image.get("source_ref") or "")
         if source_ref:
-            by_ref.setdefault(source_ref, []).append(image)
+            by_ref[source_ref].append(image)
             source_id = source_ref.split("-", 1)[0]
-            by_ref.setdefault(source_id, []).append(image)
+            by_ref[source_id].append(image)
 
     blocks: list[dict[str, Any]] = []
     seen_images: set[str] = set()
