@@ -200,6 +200,7 @@ class TestRAGServiceClose:
         assert await_args is not None
         kwargs = await_args.kwargs
         assert kwargs["param"].mode == "naive"
+        assert kwargs["param"].enable_rerank is False
 
 
 # ---------------------------------------------------------------------------

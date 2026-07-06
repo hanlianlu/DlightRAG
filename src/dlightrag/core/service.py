@@ -607,7 +607,9 @@ class RAGService:
         try:
             from lightrag import QueryParam
 
-            await self._lightrag.aquery("__warmup__", param=QueryParam(mode="naive"))
+            await self._lightrag.aquery(
+                "__warmup__", param=QueryParam(mode="naive", enable_rerank=False)
+            )
             logger.info("LightRAG worker warm-up complete")
         except Exception:
             logger.debug("LightRAG worker warm-up failed (non-critical)", exc_info=True)
