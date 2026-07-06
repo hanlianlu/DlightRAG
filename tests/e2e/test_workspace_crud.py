@@ -53,3 +53,37 @@ def test_workspace_create_input_visible(page):
     assert create_row.is_visible()
     assert create_row.locator(".ui-popover-input").is_visible()
     assert create_row.locator(".ui-popover-create-btn").is_visible()
+
+
+@pytest.mark.e2e
+def test_workspace_selector_labels_all_when_scope_covers_every_workspace(page):
+    """Selecting every workspace individually promotes the topbar scope to All."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+
+    assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
+    assert (
+        page.locator(
+            ".ui-popover--workspace .ui-popover-item", has_text="All Workspaces"
+        ).get_attribute("aria-selected")
+        == "true"
+    )
+
+
+@pytest.mark.e2e
+def test_workspace_selector_all_sets_default_primary(page):
+    """Selecting All is explicit and resets single-workspace surfaces to default."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="All Workspaces").click()
+    page.locator("#files-btn").click()
+
+    page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
+    assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
+    assert page.locator(".ingest-target-name").text_content() == "default"

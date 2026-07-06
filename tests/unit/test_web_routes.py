@@ -273,6 +273,17 @@ class TestWebIndex:
         assert "Test Workspace" in resp.text
         assert 'id="ws-add-btn"' not in resp.text
 
+    async def test_index_renders_primary_workspace_for_last_selected_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        client.cookies.set("dlightrag_workspace", "test_ws")
+        client.cookies.set("dlightrag_workspace_ids", "default,test_ws")
+
+        resp = await client.get("/web/")
+
+        assert resp.status_code == 200
+        assert 'data-primary="test_ws"' in resp.text
+
     def test_web_markup_keeps_behavior_in_static_js(self) -> None:
         web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"
         checked = list((web_root / "templates").rglob("*.html")) + [web_root / "deps.py"]
@@ -784,7 +795,13 @@ class TestWebWorkspaceCreate:
         )
         assert resp.status_code == 200
         assert "workspaceCreated" in resp.headers["hx-trigger"]
-        assert "new_workspace" in resp.headers["set-cookie"]
+        set_cookies = resp.headers.get_list("set-cookie")
+        assert any(
+            cookie.startswith("dlightrag_workspace=new_workspace;") for cookie in set_cookies
+        )
+        assert any(
+            cookie.startswith("dlightrag_workspace_ids=new_workspace;") for cookie in set_cookies
+        )
         mock_manager.acreate_workspace.assert_awaited_once_with(
             "new_workspace",
             display_name="new workspace",
@@ -844,6 +861,27 @@ class TestWebWorkspaceDelete:
         assert "workspaceDeleted" in resp.headers["hx-trigger"]
         assert "dlightrag_workspace=default" in resp.headers["set-cookie"]
         mock_manager.areset.assert_awaited_once_with(workspace="test_ws")
+
+    async def test_delete_default_workspace_selects_first_remaining_workspace(
+        self, client: AsyncClient, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.areset = AsyncMock(return_value={"workspaces": {}, "total_errors": 0})
+        mock_manager.list_workspaces = AsyncMock(return_value=["research"])
+
+        resp = await client.post(
+            "/web/workspaces/delete",
+            data={"workspace_name": "default", "confirm_name": "default"},
+        )
+
+        assert resp.status_code == 200
+        trigger = json.loads(resp.headers["hx-trigger"])
+        assert trigger["workspaceDeleted"] == {
+            "workspace": "default",
+            "next_workspace": "research",
+        }
+        set_cookies = resp.headers.get_list("set-cookie")
+        assert any(cookie.startswith("dlightrag_workspace=research;") for cookie in set_cookies)
+        assert any(cookie.startswith("dlightrag_workspace_ids=research;") for cookie in set_cookies)
 
     async def test_delete_hyphen_workspace_emits_canonical_workspace(
         self, client: AsyncClient, test_config: DlightragConfig, mock_manager
