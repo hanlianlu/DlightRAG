@@ -196,6 +196,15 @@
     color: var(--color-text-muted);
 }
 
+#upload-spinner {
+    display: none;
+    justify-content: center;
+}
+
+.upload-zone.is-uploading #upload-spinner {
+    display: flex;
+}
+
 .spinner {
     width: calc(var(--size-icon-sm) * 0.75);
     height: calc(var(--size-icon-sm) * 0.75);

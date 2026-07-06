@@ -121,6 +121,65 @@ def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     assert 'stroke="currentColor"' in source_panel
 
 
+def test_files_panel_requests_are_controller_owned() -> None:
+    index = (ROOT / "src/dlightrag/web/templates/index.html").read_text(encoding="utf-8")
+    file_list = (ROOT / "src/dlightrag/web/templates/partials/file_list.html").read_text(
+        encoding="utf-8"
+    )
+    progress = (ROOT / "src/dlightrag/web/templates/partials/ingest_progress.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'id="files-btn"' in index
+    assert 'hx-get="/web/files"' not in index
+
+    assert 'hx-post="/web/files/upload"' not in file_list
+    assert 'hx-delete="/web/files"' not in file_list
+    assert 'data-action="delete-file"' in file_list
+    assert "data-file-path=" in file_list
+
+    assert 'id="ingest-progress"' in progress
+    assert "hx-get" not in progress
+    assert "hx-trigger" not in progress
+    assert "hx-sync" not in progress
+
+
+def test_panel_modules_have_separate_shell_source_and_files_controllers() -> None:
+    main_js = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    panel_js = (FRONTEND_UI / "panel.ts").read_text(encoding="utf-8")
+    htmx_js = (FRONTEND_UI / "htmx.ts").read_text(encoding="utf-8")
+    files_panel_js = (FRONTEND_UI / "files-panel.ts").read_text(encoding="utf-8")
+    source_panel_js = (FRONTEND_UI / "source-panel.ts").read_text(encoding="utf-8")
+
+    assert "setupPanel" in main_js
+    assert "setupFilesPanel" in main_js
+    assert "setupSourcePanel" in main_js
+
+    for forbidden in (
+        "/web/files",
+        "upload-form",
+        "filterSource",
+        "ingestStore",
+        "createWorkspace",
+    ):
+        assert forbidden not in panel_js
+
+    assert "refreshFilePanel" in files_panel_js
+    assert "uploadFilesToWorkspace" in files_panel_js
+    assert "startIngestPolling" in files_panel_js
+    assert "AbortController" in files_panel_js
+    assert "/web/files/upload" in files_panel_js
+    assert "/web/ingest-status" in files_panel_js
+
+    assert "filterSource" in source_panel_js
+    assert "openRefSource" in source_panel_js
+    assert "showAllSources" in source_panel_js
+
+    assert "/web/files" not in htmx_js
+    assert "isStaleFilePanelResponse" not in htmx_js
+    assert "ingestStore" not in htmx_js
+
+
 def test_reference_labels_do_not_render_square_brackets() -> None:
     partials = ROOT / "src/dlightrag/web/templates/partials"
     answer_done = (partials / "answer_done.html").read_text(encoding="utf-8")

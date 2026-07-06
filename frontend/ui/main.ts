@@ -13,8 +13,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         {setupImageInputs},
         {setupMathRendering},
         {setupPanel},
+        {setupSourcePanel},
+        {setupFilesPanel},
         {setupPanelResize},
-        {setupFolderInput},
         {initWorkspaces},
     ] = await Promise.all([
         import('./chat.ts'),
@@ -22,8 +23,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         import('./images.ts'),
         import('./mathjax.ts'),
         import('./panel.ts'),
+        import('./source-panel.ts'),
+        import('./files-panel.ts'),
         import('./resize.ts'),
-        import('./folder-upload.ts'),
         import('./workspaces.ts'),
     ]);
 
@@ -34,10 +36,11 @@ document.addEventListener('DOMContentLoaded', async function() {
 
     initWorkspaces();
     setupPanel();
+    setupSourcePanel();
+    setupFilesPanel();
     setupPanelResize();
     setupHtmxInteractions();
     setupImageInputs();
-    setupFolderInput();
     setupQueryForm();
     setupMathRendering();
 

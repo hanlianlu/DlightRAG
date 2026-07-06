@@ -1,6 +1,7 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {detectDropItems, uploadFolderToWorkspace} from './folder-upload.ts';
+import {detectDropItems} from './folder-upload.ts';
+import {uploadFilesToWorkspace} from './files-panel.ts';
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 
@@ -307,7 +308,7 @@ export function setupImageInputs(): void {
         );
 
         if (result.files.length > 0) {
-            await uploadFolderToWorkspace(result.files, result.folderName);
+            await uploadFilesToWorkspace(result.files, result.folderName);
         }
     });
     document.addEventListener('paste', function(e) {

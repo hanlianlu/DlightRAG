@@ -1,8 +1,4 @@
-<div id="ingest-progress"
-     hx-get="/web/ingest-status?workspace={{ workspace }}"
-     hx-trigger="every 2s"
-     hx-target="this"
-     hx-swap="outerHTML">
+<div id="ingest-progress">
     <div class="file-status">
         <div class="spinner"></div>
         <span>{{ status.latest_message or "Ingesting..." }}</span>
