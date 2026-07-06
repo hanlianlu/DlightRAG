@@ -11,8 +11,6 @@ from typing import Any
 from dlightrag.storage.migrations import Migration, apply_migrations
 from dlightrag.utils import normalize_workspace
 
-TABLE = "dlightrag_workspace_meta"
-
 _CREATE = """
 CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
     workspace       TEXT PRIMARY KEY,
