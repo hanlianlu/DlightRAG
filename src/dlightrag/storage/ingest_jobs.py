@@ -13,18 +13,18 @@ DEFAULT_STALE_RUNNING_SECONDS = 24 * 3600
 DEFAULT_PRUNE_BATCH_SIZE = 1000
 ABANDONED_ERROR = "ingest job abandoned after process exit"
 
-_CREATE = f"""
-CREATE TABLE IF NOT EXISTS {TABLE} (
+_CREATE = """
+CREATE TABLE IF NOT EXISTS dlightrag_ingest_jobs (
     job_id          TEXT PRIMARY KEY,
     workspace       TEXT NOT NULL,
     source_type     TEXT NOT NULL,
     status          TEXT NOT NULL,
-    request_json    JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    request_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
     total_items     INTEGER NOT NULL DEFAULT 0,
     processed_items INTEGER NOT NULL DEFAULT 0,
     failed_items    INTEGER NOT NULL DEFAULT 0,
     current_window  INTEGER NOT NULL DEFAULT 0,
-    result_json     JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    result_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
     errors          JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -42,19 +42,13 @@ _CREATE_INDEXES = (
     f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_status_lease ON {TABLE} (status, lease_expires_at)",
 )
 
-_ROW_COLUMNS = """
-job_id, workspace, source_type, status, request_json, total_items,
-processed_items, failed_items, current_window, result_json, errors,
-created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
-"""
-
-_INSERT = f"""
-INSERT INTO {TABLE} (job_id, workspace, source_type, status, request_json)
+_INSERT = """
+INSERT INTO dlightrag_ingest_jobs (job_id, workspace, source_type, status, request_json)
 VALUES ($1, $2, $3, 'queued', $4::jsonb)
 """
 
-_CLAIM_RUNNING = f"""
-UPDATE {TABLE}
+_CLAIM_RUNNING = """
+UPDATE dlightrag_ingest_jobs
 SET status = 'running',
     lease_owner = $2,
     lease_expires_at = NOW() + ($3 * INTERVAL '1 second'),
@@ -63,12 +57,15 @@ SET status = 'running',
 WHERE job_id = $1
   AND status IN ('queued', 'running')
   AND (lease_owner = $2 OR lease_expires_at IS NULL OR lease_expires_at < NOW())
-RETURNING {_ROW_COLUMNS}
+RETURNING
+job_id, workspace, source_type, status, request_json, total_items,
+processed_items, failed_items, current_window, result_json, errors,
+created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
 """
 
-_HEARTBEAT = f"""
+_HEARTBEAT = """
 WITH updated AS (
-    UPDATE {TABLE}
+    UPDATE dlightrag_ingest_jobs
     SET lease_expires_at = NOW() + ($3 * INTERVAL '1 second'),
         updated_at = NOW()
     WHERE job_id = $1
@@ -79,9 +76,9 @@ WITH updated AS (
 SELECT COUNT(*)::int FROM updated
 """
 
-_RECORD_WINDOW = f"""
+_RECORD_WINDOW = """
 WITH updated AS (
-    UPDATE {TABLE}
+    UPDATE dlightrag_ingest_jobs
     SET total_items = total_items + $2,
         processed_items = processed_items + $3,
         failed_items = failed_items + $4,
@@ -96,9 +93,9 @@ WITH updated AS (
 SELECT COUNT(*)::int FROM updated
 """
 
-_FINISH = f"""
+_FINISH = """
 WITH updated AS (
-    UPDATE {TABLE}
+    UPDATE dlightrag_ingest_jobs
     SET status = 'succeeded',
         result_json = $2::jsonb,
         lease_owner = NULL,
@@ -112,9 +109,9 @@ WITH updated AS (
 SELECT COUNT(*)::int FROM updated
 """
 
-_FAIL = f"""
+_FAIL = """
 WITH updated AS (
-    UPDATE {TABLE}
+    UPDATE dlightrag_ingest_jobs
     SET status = 'failed',
         errors = errors || $2::jsonb,
         lease_owner = NULL,
@@ -128,15 +125,21 @@ WITH updated AS (
 SELECT COUNT(*)::int FROM updated
 """
 
-_GET = f"""
-SELECT {_ROW_COLUMNS}
-FROM {TABLE}
+_GET = """
+SELECT
+job_id, workspace, source_type, status, request_json, total_items,
+processed_items, failed_items, current_window, result_json, errors,
+created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
+FROM dlightrag_ingest_jobs
 WHERE job_id = $1
 """
 
-_LIST_RECOVERABLE = f"""
-SELECT {_ROW_COLUMNS}
-FROM {TABLE}
+_LIST_RECOVERABLE = """
+SELECT
+job_id, workspace, source_type, status, request_json, total_items,
+processed_items, failed_items, current_window, result_json, errors,
+created_at, updated_at, started_at, finished_at, lease_owner, lease_expires_at
+FROM dlightrag_ingest_jobs
 WHERE (
     status = 'queued'
     OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at < NOW()))
@@ -146,16 +149,16 @@ ORDER BY updated_at ASC
 LIMIT $2
 """
 
-_MARK_ABANDONED = f"""
+_MARK_ABANDONED = """
 WITH updated AS (
-    UPDATE {TABLE}
+    UPDATE dlightrag_ingest_jobs
     SET status = 'failed',
         errors = errors || $2::jsonb,
         updated_at = NOW(),
         finished_at = NOW()
     WHERE job_id IN (
         SELECT job_id
-        FROM {TABLE}
+        FROM dlightrag_ingest_jobs
         WHERE status IN ('queued', 'running')
           AND updated_at < NOW() - ($1 * INTERVAL '1 second')
         ORDER BY updated_at ASC
@@ -166,12 +169,12 @@ WITH updated AS (
 SELECT COUNT(*)::int FROM updated
 """
 
-_PRUNE_COMPLETED = f"""
+_PRUNE_COMPLETED = """
 WITH deleted AS (
-    DELETE FROM {TABLE}
+    DELETE FROM dlightrag_ingest_jobs
     WHERE job_id IN (
         SELECT job_id
-        FROM {TABLE}
+        FROM dlightrag_ingest_jobs
         WHERE status IN ('succeeded', 'failed')
           AND COALESCE(finished_at, updated_at) < NOW() - ($1 * INTERVAL '1 second')
         ORDER BY COALESCE(finished_at, updated_at) ASC
@@ -182,9 +185,9 @@ WITH deleted AS (
 SELECT COUNT(*)::int FROM deleted
 """
 
-_DELETE_WORKSPACE = f"""
+_DELETE_WORKSPACE = """
 WITH deleted AS (
-    DELETE FROM {TABLE}
+    DELETE FROM dlightrag_ingest_jobs
     WHERE workspace = $1
     RETURNING 1
 )

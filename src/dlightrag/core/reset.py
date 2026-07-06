@@ -290,7 +290,7 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
 
             qualified_table = await _quote_public_table(conn, table)
             count_row = await conn.fetchrow(
-                f"SELECT COUNT(*) as count FROM {qualified_table} WHERE workspace = $1",
+                f"SELECT COUNT(*) as count FROM {qualified_table} WHERE workspace = $1",  # noqa: S608
                 workspace,
             )
             count = count_row["count"] if count_row else 0
@@ -298,17 +298,17 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
             if count > 0:
                 if not dry_run:
                     await conn.execute(
-                        f"DELETE FROM {qualified_table} WHERE workspace = $1",
+                        f"DELETE FROM {qualified_table} WHERE workspace = $1",  # noqa: S608
                         workspace,
                     )
                 cleaned += 1
 
             if not dry_run and table.startswith("dlightrag_"):
                 remaining = await conn.fetchrow(
-                    f"SELECT EXISTS (SELECT 1 FROM {qualified_table}) AS has_rows"
+                    f"SELECT EXISTS (SELECT 1 FROM {qualified_table}) AS has_rows"  # noqa: S608
                 )
                 if not remaining["has_rows"]:
-                    await conn.execute(f"DROP TABLE {qualified_table}")
+                    await conn.execute(f"DROP TABLE {qualified_table}")  # noqa: S608
 
         return cleaned
     except Exception as exc:

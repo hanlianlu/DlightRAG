@@ -15,8 +15,8 @@ from dlightrag.storage.migrations import Migration, apply_migrations
 
 TABLE = "dlightrag_checkpoints"
 
-_CREATE = f"""
-CREATE TABLE IF NOT EXISTS {TABLE} (
+_CREATE = """
+CREATE TABLE IF NOT EXISTS dlightrag_checkpoints (
     id              BIGSERIAL PRIMARY KEY,
     session_id      TEXT NOT NULL,
     workspace       TEXT NOT NULL DEFAULT 'default',
@@ -39,13 +39,13 @@ _CREATE_INDEXES = (
     f"ON {TABLE} (session_id, updated_at DESC)",
 )
 
-_SAVE_TURN_PAIR = f"""
+_SAVE_TURN_PAIR = """
 WITH next_turn AS (
     SELECT COALESCE(MAX(turn_number), 0) + 1 AS turn_number
-    FROM {TABLE}
+    FROM dlightrag_checkpoints
     WHERE session_id = $1
 )
-INSERT INTO {TABLE}
+INSERT INTO dlightrag_checkpoints
     (session_id, workspace, turn_number, query, answer,
      query_content, answer_content, cited_chunk_ids, context_chunks)
 SELECT $1, $2, turn_number, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8::jsonb
@@ -61,35 +61,35 @@ ON CONFLICT (session_id, turn_number) DO UPDATE SET
 RETURNING turn_number
 """
 
-_GET_HISTORY = f"""
+_GET_HISTORY = """
 SELECT turn_number, query, answer, query_content, answer_content
-FROM {TABLE}
+FROM dlightrag_checkpoints
 WHERE session_id = $1
 ORDER BY turn_number ASC
 LIMIT $2
 """
 
-_DELETE_WORKSPACE = f"""
+_DELETE_WORKSPACE = """
 WITH deleted AS (
-    DELETE FROM {TABLE}
+    DELETE FROM dlightrag_checkpoints
     WHERE workspace = $1
     RETURNING 1
 )
 SELECT COUNT(*)::int FROM deleted
 """
 
-_PRUNE_OLD = f"""
+_PRUNE_OLD = """
 WITH deleted AS (
-    DELETE FROM {TABLE}
+    DELETE FROM dlightrag_checkpoints
     WHERE updated_at < NOW() - ($1 * INTERVAL '1 day')
     RETURNING 1
 )
 SELECT COUNT(*)::int FROM deleted
 """
 
-_DELETE_SESSION = f"""
+_DELETE_SESSION = """
 WITH deleted AS (
-    DELETE FROM {TABLE}
+    DELETE FROM dlightrag_checkpoints
     WHERE session_id = $1
     RETURNING 1
 )

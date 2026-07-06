@@ -139,13 +139,11 @@ class LightRAGStores:
             raise RuntimeError("Vector overwrite requires PGVectorStorage")
 
         chunks_table = pg_qualified_identifier(chunks_vdb.table_name)
-        sql = f"""
-            UPDATE {chunks_table}
-            SET content_vector=$3,
-                update_time=$4
-            WHERE workspace=$1
-              AND id=$2
-        """
+        sql = (
+            f"UPDATE {chunks_table} "  # noqa: S608 - validated by pg_qualified_identifier.
+            "SET content_vector=$3, update_time=$4 "
+            "WHERE workspace=$1 AND id=$2"
+        )
 
         async def _execute(connection: Any) -> None:
             for batch in self._chunk_vector_values(values):
@@ -220,14 +218,12 @@ class LightRAGStores:
         workspace = getattr(text_chunks, "workspace", "default")
         chunk_ids = list(labels)
         languages = [labels[chunk_id] for chunk_id in chunk_ids]
-        sql = f"""
-            UPDATE LIGHTRAG_DOC_CHUNKS AS chunks
-            SET {BM25_LANGUAGE_COLUMN}=labels.language,
-                update_time=CURRENT_TIMESTAMP
-            FROM UNNEST($2::text[], $3::text[]) AS labels(id, language)
-            WHERE chunks.workspace=$1
-              AND chunks.id=labels.id
-        """
+        sql = (
+            "UPDATE LIGHTRAG_DOC_CHUNKS AS chunks "  # noqa: S608 - internal table constant.
+            f"SET {BM25_LANGUAGE_COLUMN}=labels.language, update_time=CURRENT_TIMESTAMP "
+            "FROM UNNEST($2::text[], $3::text[]) AS labels(id, language) "
+            "WHERE chunks.workspace=$1 AND chunks.id=labels.id"
+        )
 
         async def _execute(connection: Any) -> None:
             await connection.execute(sql, workspace, chunk_ids, languages)

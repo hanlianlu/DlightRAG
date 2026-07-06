@@ -117,7 +117,7 @@ class FilteredVectorStorage:
         if len(candidate_ids) <= self._exact_threshold:
             rows = await self._run_pg_operation(
                 lambda conn: conn.fetch(
-                    f"WITH candidate_ids(id) AS (SELECT unnest($3::text[])), "
+                    f"WITH candidate_ids(id) AS (SELECT unnest($3::text[])), "  # noqa: S608
                     f"candidate_rows AS MATERIALIZED ("
                     f"  SELECT v.id, v.content, v.file_path, v.full_doc_id, v.content_vector "
                     f"  FROM {table_name} v "
@@ -149,7 +149,7 @@ class FilteredVectorStorage:
                 await conn.execute("SET LOCAL hnsw.iterative_scan = 'relaxed_order'")
                 await conn.execute("SET LOCAL hnsw.max_scan_tuples = 20000")
                 return await conn.fetch(
-                    f"WITH nearest_results AS MATERIALIZED ("
+                    f"WITH nearest_results AS MATERIALIZED ("  # noqa: S608
                     f"  SELECT id, content, file_path, full_doc_id, "
                     f"  1 - (content_vector <=> $1::{vector_cast}) AS score, "
                     f"  content_vector <=> $1::{vector_cast} AS distance "

@@ -261,7 +261,7 @@ class PGMetadataIndex:
             idx += 1
 
         where = " AND ".join(conditions)
-        sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"
+        sql = f"SELECT doc_id FROM dlightrag_doc_metadata WHERE {where}"  # noqa: S608
 
         async def _operation(conn: Any) -> list[Any]:
             return await conn.fetch(sql, *params)

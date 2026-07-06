@@ -1,9 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for the opt-in PG18 E2E smoke harness."""
 
+from typing import Any
+
 from tests.e2e.pg18_harness import (
     REQUIRED_EXTENSIONS,
     e2e_enabled,
+    install_fake_model_functions,
     missing_preload_libraries,
     pg_conn_kwargs_from_env,
 )
@@ -46,3 +49,16 @@ def test_pg18_harness_validates_preloaded_libraries() -> None:
         "pg_textsearch",
         "pg_jieba",
     ]
+
+
+def test_pg18_fake_model_factories_match_service_initialization(monkeypatch) -> None:
+    from dlightrag.core import service as service_module
+
+    embedder = install_fake_model_functions(monkeypatch, dim=8)
+    config: Any = object()
+
+    assert service_module.get_default_model_func_for_lightrag(config) is not None
+    assert service_module.get_rerank_func(config, supports_vision=True) is None
+    assert service_module.build_role_llm_configs(config) is None
+    assert service_module.get_multimodal_embedder(config) is embedder
+    assert service_module.get_embedding_func(config, embedder=embedder).embedding_dim == 8

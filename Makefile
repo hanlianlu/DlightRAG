@@ -6,7 +6,7 @@ LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(L
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
 LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env" --host "$(LANGFUSE_HOST)"
 
-.PHONY: mineru-install mineru-api mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health ci ci-full
+.PHONY: mineru-install mineru-api mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -69,11 +69,21 @@ hooks:
 ci:
 	uv sync --group dev
 	uv run ruff check src/ tests/ scripts/
+	uv run ruff check src/ scripts/ --select S
 	uv run ruff format --check src/ tests/ scripts/
 	uv run pyright
 	uv run lint-imports
+	$(MAKE) frontend-ci
 	uv run pytest tests/unit -v --tb=short
 	@echo "CI (fast) passed."
+
+frontend-ci:
+	npm --prefix frontend ci
+	npm --prefix frontend run typecheck
+	npm --prefix frontend run lint:css
+	npm --prefix frontend run build
+	npm --prefix frontend audit --omit=dev
+	@echo "Frontend CI passed."
 
 # Full local: includes integration tests (needs PostgreSQL + pgvector)
 ci-full: ci
@@ -85,9 +95,9 @@ ci-full: ci
 .PHONY: test-e2e
 
 test-e2e:
-	$(PYTHON) -m pytest tests/e2e/ -v -m e2e --tb=short
+	uv run pytest tests/e2e/ -v -m e2e --tb=short
 
 # Full + E2E: needs PostgreSQL 18 with AGE; model calls are faked in tests
-ci-e2e: ci-full
+ci-e2e: ci-full test-e2e
 	DLIGHTRAG_RUN_E2E_PG18=1 uv run pytest tests/e2e -v --tb=short -m e2e_pg18
 	@echo "CI (e2e) passed."

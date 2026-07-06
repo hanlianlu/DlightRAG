@@ -13,8 +13,8 @@ from dlightrag.utils import normalize_workspace
 
 TABLE = "dlightrag_workspace_meta"
 
-_CREATE = f"""
-CREATE TABLE IF NOT EXISTS {TABLE} (
+_CREATE = """
+CREATE TABLE IF NOT EXISTS dlightrag_workspace_meta (
     workspace       TEXT PRIMARY KEY,
     display_name    TEXT NOT NULL DEFAULT '',
     embedding_model TEXT NOT NULL DEFAULT '',
@@ -24,15 +24,19 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
 """
 
 _MIGRATIONS = (
-    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
-    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''",
-    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
-    f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
-    f"UPDATE {TABLE} SET display_name = workspace WHERE display_name = ''",
+    "ALTER TABLE dlightrag_workspace_meta "
+    "ADD COLUMN IF NOT EXISTS display_name TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE dlightrag_workspace_meta "
+    "ADD COLUMN IF NOT EXISTS embedding_model TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE dlightrag_workspace_meta "
+    "ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()",
+    "ALTER TABLE dlightrag_workspace_meta "
+    "ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()",
+    "UPDATE dlightrag_workspace_meta SET display_name = workspace WHERE display_name = ''",
 )
 
-_UPSERT = f"""
-INSERT INTO {TABLE} (workspace, display_name, embedding_model)
+_UPSERT = """
+INSERT INTO dlightrag_workspace_meta (workspace, display_name, embedding_model)
 VALUES ($1, $2, $3)
 ON CONFLICT (workspace)
 DO UPDATE SET display_name = EXCLUDED.display_name,
@@ -40,19 +44,19 @@ DO UPDATE SET display_name = EXCLUDED.display_name,
               updated_at = NOW()
 """
 
-_LIST = f"""
+_LIST = """
 SELECT workspace, display_name, embedding_model, created_at, updated_at
-FROM {TABLE}
+FROM dlightrag_workspace_meta
 ORDER BY workspace
 """
 
-_DELETE = f"DELETE FROM {TABLE} WHERE workspace = $1"
+_DELETE = "DELETE FROM dlightrag_workspace_meta WHERE workspace = $1"
 
-_EXISTS = f"SELECT 1 FROM {TABLE} WHERE workspace = $1 LIMIT 1"
+_EXISTS = "SELECT 1 FROM dlightrag_workspace_meta WHERE workspace = $1 LIMIT 1"
 
-_CANONICALIZATION_ROWS = f"""
+_CANONICALIZATION_ROWS = """
 SELECT workspace, display_name, embedding_model
-FROM {TABLE}
+FROM dlightrag_workspace_meta
 ORDER BY workspace
 """
 
