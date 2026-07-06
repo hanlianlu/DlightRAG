@@ -102,6 +102,31 @@ provider is text-only or the probe fails, DlightRAG automatically skips direct
 image vector overwrite and query-image vector retrieval while leaving LightRAG's
 semantic multimodal path enabled.
 
+## LLM Structured Output
+
+Planner and other small control-plane calls pass a `StructuredOutput` contract
+through the shared LLM factory. Model configuration decides which provider
+request format is used:
+
+```yaml
+llm:
+  roles:
+    keyword:
+      provider: openai
+      model: deepseek-v4-flash
+      base_url: https://api.deepseek.com
+      structured_output: json_object
+```
+
+`structured_output` defaults to `auto`. Auto uses schema-constrained output for
+providers with a native schema path: OpenAI's default endpoint, Anthropic
+native `output_config.format`, and Gemini native `response_schema`.
+OpenAI-compatible endpoints with a custom `base_url` default to `json_object`
+because feature parity is provider-specific. Set `structured_output` to
+`json_schema` only for a custom OpenAI-compatible endpoint known to support
+strict JSON schema response formats. Anthropic native does not support the
+lower-confidence `json_object` mode; use `auto` or `json_schema`.
+
 ## Remote Source URLs
 
 By default, Azure Blob, S3, and URL source files are not copied into DlightRAG

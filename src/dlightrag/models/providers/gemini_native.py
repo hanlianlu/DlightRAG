@@ -8,6 +8,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,11 @@ class GeminiProvider(CompletionProvider):
             config["temperature"] = temperature
         if max_tokens is not None:
             config["max_output_tokens"] = max_tokens
-        if response_format and response_format.get("type") == "json_object":
+        schema = json_schema_from_response_format(response_format)
+        if schema is not None:
+            config["response_mime_type"] = "application/json"
+            config["response_schema"] = schema
+        elif response_format and response_format.get("type") == "json_object":
             config["response_mime_type"] = "application/json"
 
         if model_kwargs:

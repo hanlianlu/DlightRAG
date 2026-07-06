@@ -7,6 +7,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,6 @@ except ImportError:
 
 _ANTHROPIC_TOP_LEVEL_KEYS = frozenset({"thinking", "metadata", "extra_headers"})
 _DATA_URI_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$", re.DOTALL)
-_JSON_SYSTEM_HINT = "Respond with valid JSON only. Do not include any text outside the JSON object."
 
 
 def _extract_system(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
@@ -65,13 +65,29 @@ def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
     return result
 
 
+def _apply_response_format(
+    call_kwargs: dict[str, Any],
+    response_format: dict[str, Any] | None,
+) -> None:
+    if response_format and response_format.get("type") == "json_object":
+        raise ValueError("Anthropic native structured output requires json_schema")
+    schema = json_schema_from_response_format(response_format)
+    if schema is not None:
+        call_kwargs["output_config"] = {
+            "format": {
+                "type": "json_schema",
+                "schema": schema,
+            }
+        }
+
+
 class AnthropicProvider(CompletionProvider):
     """Anthropic Claude models via native SDK.
 
     System messages extracted as ``system`` top-level parameter.
     Image data-URI converted to Anthropic base64 source format.
     model_kwargs keys ``thinking``, ``metadata``, ``extra_headers`` routed to SDK top-level.
-    JSON response_format injected as system instruction.
+    JSON schema response_format routed to ``output_config.format``.
     """
 
     def __init__(self, **kwargs: Any) -> None:
@@ -121,8 +137,7 @@ class AnthropicProvider(CompletionProvider):
         if temperature is not None:
             call_kwargs["temperature"] = temperature
 
-        if response_format and response_format.get("type") == "json_object":
-            call_kwargs["system"] = (call_kwargs.get("system") or "") + "\n\n" + _JSON_SYSTEM_HINT
+        _apply_response_format(call_kwargs, response_format)
 
         if model_kwargs:
             for key in _ANTHROPIC_TOP_LEVEL_KEYS:
@@ -161,8 +176,7 @@ class AnthropicProvider(CompletionProvider):
         if temperature is not None:
             call_kwargs["temperature"] = temperature
 
-        if response_format and response_format.get("type") == "json_object":
-            call_kwargs["system"] = (call_kwargs.get("system") or "") + "\n\n" + _JSON_SYSTEM_HINT
+        _apply_response_format(call_kwargs, response_format)
 
         if model_kwargs:
             for key in _ANTHROPIC_TOP_LEVEL_KEYS:
