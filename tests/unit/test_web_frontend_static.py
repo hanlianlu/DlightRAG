@@ -187,6 +187,10 @@ def test_reference_labels_do_not_render_square_brackets() -> None:
 
     assert "[{{ src.id }}]" not in answer_done
     assert "[{{ src.id }}]" not in source_panel
+    assert 'class="answer-ref-item"' in answer_done
+    assert 'data-action="open-ref-source"' in answer_done
+    assert 'role="button"' in answer_done
+    assert 'tabindex="0"' in answer_done
     assert '<span class="answer-ref-id">{{ src.id | reference_label }}</span>' in answer_done
     assert '<span class="source-doc-badge">{{ src.id | reference_label }}</span>' in source_panel
 

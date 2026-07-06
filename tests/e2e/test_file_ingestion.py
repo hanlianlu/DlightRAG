@@ -14,16 +14,6 @@ def test_ingestion_panel_opens(page):
 
     page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
     assert page.locator("#panel-title").text_content() == "FILES"
-
-
-@pytest.mark.e2e
-def test_empty_file_list_renders(page):
-    """When no files are ingested, the panel shows an empty state or file-list structure."""
-    page.goto("/web/")
-    page.wait_for_selector(".app", timeout=10000)
-
-    page.click("#files-btn")
-
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
 
 
