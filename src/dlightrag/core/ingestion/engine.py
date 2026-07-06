@@ -257,7 +257,6 @@ class UnifiedIngestionEngine:
                     current_hash = await asyncio.to_thread(_file_sha256, entry.parser_path)
                     stored_hash = existing_status.get("content_hash")
                     if stored_hash and current_hash == stored_hash:
-                        await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
                         results_by_index[entry.index] = {
                             "doc_id": entry.doc_id,
                             "source_kind": "skipped",
