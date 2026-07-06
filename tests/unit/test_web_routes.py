@@ -457,6 +457,7 @@ class TestWebSSEBoundary:
             "image_descriptions": [],
             "answer_images": [],
             "answer_blocks": [],
+            "checkpoint_saved": True,
         }
 
     async def test_answer_done_html_strips_unsafe_urls(

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Browser-facing answer stream presenter for the web UI."""
 
+import dataclasses
 import logging
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -24,6 +25,11 @@ from dlightrag.web.sse import sse_event
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
 async def _session_image_cards(
     *,
     manager: Any,
@@ -41,6 +47,7 @@ async def _session_image_cards(
                 scope=scope,
             )
         except Exception:
+            logger.warning("Failed to load %d session images", len(image_ids), exc_info=True)
             stored_session_images = []
 
     answer_images: list[dict[str, Any]] = []
@@ -62,6 +69,125 @@ async def _session_image_cards(
             }
         )
     return answer_images
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _AnswerPayload:
+    done: AnswerDoneEvent
+    sources: list[Any]
+    flat_contexts: list[dict[str, Any]]
+
+
+async def _build_answer_done_payload(
+    *,
+    clean_answer: str,
+    contexts: dict[str, Any],
+    current_image_ids: list[str],
+    image_descriptions: Any,
+    manager: Any,
+    session_id: str,
+    scope: RequestScope | None,
+    cfg: Any,
+    workspace: str,
+) -> _AnswerPayload:
+    """Build the done-event payload from retrieval contexts and LLM output."""
+    session_cards = await _session_image_cards(
+        manager=manager,
+        session_id=session_id,
+        image_ids=current_image_ids,
+        image_descriptions=image_descriptions,
+        scope=scope,
+    )
+    resolver = SourceUrlResolver(
+        input_dir=str(cfg.input_dir_path),
+        workspace=workspace or manager.config.workspace,
+    )
+    finalized = finalize_answer(
+        clean_answer,
+        contexts,
+        source_url_resolver=resolver,
+        image_url_prefix="/web/images",
+        default_workspace=workspace or manager.config.workspace,
+    )
+    cited_images = answer_images_from_sources(
+        finalized.sources,
+        contexts={"chunks": finalized.flat_contexts},
+    )
+    answer_images = session_cards + cited_images
+    answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
+
+    done = AnswerDoneEvent(
+        html=safe_answer_done(
+            answer=finalized.answer,
+            sources=finalized.sources,
+            answer_images=answer_images,
+        ),
+        answer=finalized.answer,
+        current_image_ids=current_image_ids,
+        image_descriptions=image_descriptions,
+        answer_images=answer_images,
+        answer_blocks=answer_blocks,
+    )
+    return _AnswerPayload(done, finalized.sources, finalized.flat_contexts)
+
+
+async def _save_checkpoint(
+    *,
+    manager: Any,
+    session_id: str,
+    query: str,
+    answer: str,
+    query_images: list[dict[str, Any]],
+    current_image_ids: list[str],
+    contexts: dict[str, Any],
+    sources: list[Any],
+    workspace: str,
+    scope: RequestScope | None,
+) -> bool:
+    """Persist conversation turn.  Returns False when the save failed."""
+    save_checkpoint = getattr(manager, "save_turn_checkpoint", None)
+    if not callable(save_checkpoint):
+        return True  # no checkpoint backend — not a failure
+
+    save_checkpoint_func = cast(Callable[..., Awaitable[None]], save_checkpoint)
+    try:
+        cited_ids = [s.id for s in sources if s.id]
+
+        query_content: list[dict[str, Any]] | None = None
+        if query_images and current_image_ids:
+            query_content = [{"type": "text", "text": query}]
+            for img_id in current_image_ids:
+                query_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"dlightrag-image://{img_id}"},
+                    }
+                )
+
+        answer_content: list[dict[str, Any]] | None = None
+        if answer:
+            answer_content = [{"type": "text", "text": answer}]
+
+        await save_checkpoint_func(
+            session_id=session_id,
+            query=query,
+            answer=answer,
+            query_content=query_content,
+            answer_content=answer_content,
+            contexts=contexts,
+            cited_chunk_ids=cited_ids,
+            workspace=workspace,
+            scope=scope,
+        )
+        return True
+    except Exception:
+        logger.warning("Checkpoint save failed", exc_info=True)
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Main SSE stream
+# ---------------------------------------------------------------------------
 
 
 async def stream_answer_events(
@@ -102,6 +228,7 @@ async def stream_answer_events(
         yield sse_event("progress", AnswerProgressEvent(phase="generating"))
         logger.info("[SSE] stream started")
 
+        # ── Stream tokens ──────────────────────────────────────────
         accumulated_text = ""
         last_preview_ts = 0.0
         last_preview_len = 0
@@ -127,92 +254,44 @@ async def stream_answer_events(
         current_image_ids = getattr(token_iter, "current_image_ids", []) or []
         image_descriptions = getattr(token_iter, "image_descriptions", []) or []
 
-        session_cards = await _session_image_cards(
-            manager=manager,
-            session_id=session_id,
-            image_ids=current_image_ids,
-            image_descriptions=image_descriptions,
-            scope=scope,
-        )
-        resolver = SourceUrlResolver(
-            input_dir=str(cfg.input_dir_path),
-            workspace=workspace or manager.config.workspace,
-        )
-        finalized = finalize_answer(
-            clean_answer,
-            contexts,
-            source_url_resolver=resolver,
-            image_url_prefix="/web/images",
-            default_workspace=workspace or manager.config.workspace,
-        )
-        cited_images = answer_images_from_sources(
-            finalized.sources,
-            contexts={"chunks": finalized.flat_contexts},
-        )
-        answer_images = session_cards + cited_images
-        answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
-
-        done_payload = AnswerDoneEvent(
-            html=safe_answer_done(
-                answer=finalized.answer,
-                sources=finalized.sources,
-                answer_images=answer_images,
-            ),
-            answer=finalized.answer,
+        # ── Build done payload ─────────────────────────────────────
+        effective_workspace = workspace or manager.config.workspace
+        payload = await _build_answer_done_payload(
+            clean_answer=clean_answer,
+            contexts=contexts,
             current_image_ids=current_image_ids,
             image_descriptions=image_descriptions,
-            answer_images=answer_images,
-            answer_blocks=answer_blocks,
+            manager=manager,
+            session_id=session_id,
+            scope=scope,
+            cfg=cfg,
+            workspace=effective_workspace,
         )
-        yield sse_event("done", done_payload)
 
-        save_checkpoint = getattr(manager, "save_turn_checkpoint", None)
-        if callable(save_checkpoint):
-            save_checkpoint_func = cast(Callable[..., Awaitable[None]], save_checkpoint)
-            try:
-                cited_ids = [s.id for s in finalized.sources if s.id]
+        # ── Save checkpoint (before done event, so checkpoint_saved is accurate) ──
+        checkpoint_saved = await _save_checkpoint(
+            manager=manager,
+            session_id=session_id or "",
+            query=query,
+            answer=payload.done.answer,
+            query_images=query_images,
+            current_image_ids=current_image_ids,
+            contexts=contexts,
+            sources=payload.sources,
+            workspace=effective_workspace,
+            scope=scope,
+        )
+        payload.done.checkpoint_saved = checkpoint_saved
+        yield sse_event("done", payload.done)
 
-                # Build multimodal query_content / answer_content for
-                # future round-trip restoration.  Store image REFERENCES
-                # (dlightrag-image://) not base64 payloads.
-                query_content: list[dict[str, Any]] | None = None
-                if query_images and current_image_ids:
-                    query_content = [{"type": "text", "text": query}]
-                    for img_id in current_image_ids:
-                        query_content.append(
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"dlightrag-image://{img_id}"},
-                            }
-                        )
-
-                answer_content: list[dict[str, Any]] | None = None
-                if finalized.answer:
-                    answer_content = [{"type": "text", "text": finalized.answer}]
-
-                await save_checkpoint_func(
-                    session_id=session_id or "",
-                    query=query,
-                    answer=finalized.answer,
-                    query_content=query_content,
-                    answer_content=answer_content,
-                    contexts=contexts,
-                    cited_chunk_ids=cited_ids,
-                    workspace=workspace or manager.config.workspace,
-                    scope=scope,
-                )
-            except Exception:
-                logger.warning("Checkpoint save failed", exc_info=True)
-        else:
-            logger.debug("Manager does not expose save_turn_checkpoint; skipping checkpoint")
-
+        # ── Post-done enrichment (trace, highlights) ───────────────
         trace = getattr(token_iter, "trace", None)
         if isinstance(trace, dict) and trace:
             yield sse_event("trace", AnswerTraceEvent(trace=trace))
 
         highlighted_sources = await enrich_semantic_highlights(
-            finalized.sources,
-            answer_text=finalized.answer,
+            payload.sources,
+            answer_text=payload.done.answer,
             config=cfg,
         )
         has_highlights = any(

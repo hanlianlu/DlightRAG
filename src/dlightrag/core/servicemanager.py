@@ -82,8 +82,36 @@ class _ScopedAnswerStream:
         finally:
             self._release()
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
+    @property
+    def answer(self) -> str:
+        return getattr(self._inner, "answer", "")
+
+    @property
+    def trace(self) -> Any:
+        return getattr(self._inner, "trace", None)
+
+    @trace.setter
+    def trace(self, value: Any) -> None:
+        if self._inner is not None:
+            self._inner.trace = value  # type: ignore[attr-defined]
+
+    @property
+    def current_image_ids(self) -> Any:
+        return getattr(self._inner, "current_image_ids", None)
+
+    @current_image_ids.setter
+    def current_image_ids(self, value: Any) -> None:
+        if self._inner is not None:
+            self._inner.current_image_ids = value  # type: ignore[attr-defined]
+
+    @property
+    def image_descriptions(self) -> Any:
+        return getattr(self._inner, "image_descriptions", None)
+
+    @image_descriptions.setter
+    def image_descriptions(self, value: Any) -> None:
+        if self._inner is not None:
+            self._inner.image_descriptions = value  # type: ignore[attr-defined]
 
     def _release(self) -> None:
         if not self._released:

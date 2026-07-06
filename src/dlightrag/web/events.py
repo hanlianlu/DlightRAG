@@ -23,6 +23,7 @@ class AnswerDoneEvent(ClientContractModel):
     image_descriptions: list[str] | dict[str, str] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    checkpoint_saved: bool = True
 
 
 class AnswerTraceEvent(ClientContractModel):
