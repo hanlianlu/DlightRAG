@@ -66,7 +66,8 @@ export function initWorkspaces(): void {
         } catch (_) {
             active = [];
         }
-        workspaceStore.init(records, active);
+        const primary = selector.getAttribute('data-primary') || '';
+        workspaceStore.init(records, active, primary);
     } catch (_) {
         // data-all attribute may be absent; start with empty records
     }
@@ -106,9 +107,9 @@ function renderWorkspaceSelector(): void {
     if (activeCount === 0 || allSelected) {
         label.textContent = total > 0 ? `All Workspaces (${total})` : 'All Workspaces';
     } else if (activeCount === 1) {
-        label.textContent = workspaceName(workspaceStore.active[0]);
+        label.textContent = workspaceName(workspaceStore.primary);
     } else {
-        label.textContent = `Workspaces (${activeCount})`;
+        label.textContent = `${workspaceName(workspaceStore.primary)} + ${activeCount - 1}`;
     }
 }
 
@@ -118,6 +119,24 @@ function selectAllWorkspaces(): void {
     renderWorkspaceSelector();
     closeWorkspacePopover();
     openWorkspacePopover();
+}
+
+function allWorkspacesSelected(): boolean {
+    const allIds = workspaceStore.records.map((item) => item.workspace);
+    return allIds.length > 0 && allIds.every(
+        (workspace) => workspaceStore.active.indexOf(workspace) >= 0,
+    );
+}
+
+function updateAllWorkspaceItemState(container: Element): void {
+    const item = container.querySelector<HTMLElement>('[data-workspace-all="true"]');
+    if (!item) return;
+    const selected = allWorkspacesSelected();
+    item.setAttribute('aria-selected', selected ? 'true' : 'false');
+    const check = item.firstElementChild;
+    if (check instanceof HTMLElement) {
+        check.classList.toggle(workspaceStyles.on, selected);
+    }
 }
 
 export function openWorkspacePopover(): void {
@@ -136,13 +155,12 @@ export function openWorkspacePopover(): void {
 
     const allItem = document.createElement('div');
     allItem.className = `ui-popover-item ${workspaceStyles.workspacePopoverAll}`;
+    allItem.dataset.workspaceAll = 'true';
     allItem.setAttribute('tabindex', '0');
     allItem.setAttribute('role', 'option');
     const allCheck = document.createElement('div');
-    const allIds = workspaceStore.records.map((item) => item.workspace);
-    const isAllSelected = allIds.length > 0 && allIds.every(
-        (workspace) => workspaceStore.active.indexOf(workspace) >= 0,
-    );
+    const isAllSelected = allWorkspacesSelected();
+    allItem.setAttribute('aria-selected', isAllSelected ? 'true' : 'false');
     allCheck.className = `${workspaceStyles.workspacePopoverCheck}${isAllSelected ? ' ' + workspaceStyles.on : ''}`;
     allItem.appendChild(allCheck);
     allItem.appendChild(document.createTextNode('All Workspaces'));
@@ -191,6 +209,7 @@ export function openWorkspacePopover(): void {
             toggleWorkspace(record.workspace);
             check.classList.toggle(workspaceStyles.on, workspaceStore.active.indexOf(record.workspace) >= 0);
             item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+            updateAllWorkspaceItemState(popover);
         });
         item.addEventListener('keydown', (event) => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -198,6 +217,7 @@ export function openWorkspacePopover(): void {
                 toggleWorkspace(record.workspace);
                 check.classList.toggle(workspaceStyles.on, workspaceStore.active.indexOf(record.workspace) >= 0);
                 item.setAttribute('aria-selected', workspaceStore.active.indexOf(record.workspace) >= 0 ? 'true' : 'false');
+                updateAllWorkspaceItemState(popover);
             }
         });
         popover.appendChild(item);

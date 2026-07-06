@@ -10,6 +10,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from dlightrag.access_control import AccessAction
+from dlightrag.utils import normalize_workspace
 from dlightrag.web.deps import (
     enforce_web_access,
     error_response,
@@ -30,26 +31,59 @@ def _sanitize_cookie_value(value: str) -> str:
     return re.sub(r"[\r\n]", "", re.sub(r"[^A-Za-z0-9,_-]", "", value)).strip(",")
 
 
-async def _set_workspace_cookies(
-    response: HTMLResponse,
-    request: Request,
-    manager: Any,
-) -> None:
-    """Set workspace cookies from DB state.
+def _ordered_unique(workspaces: list[str]) -> list[str]:
+    result: list[str] = []
+    for workspace in workspaces:
+        if workspace and workspace not in result:
+            result.append(workspace)
+    return result
 
-    Cookie values are always derived from the DB workspace registry so they
-    never originate from unvalidated user input.
-    """
+
+async def _visible_workspace_names(request: Request, manager: Any) -> list[str]:
     records = [{"workspace": workspace} for workspace in await manager.list_workspaces()]
     visible = await filter_web_workspace_records(request, AccessAction.WORKSPACE_QUERY, records)
-    workspaces = [str(row["workspace"]) for row in visible]
+    return [str(row["workspace"]) for row in visible]
+
+
+def _default_workspace(workspaces: list[str]) -> str:
     if not workspaces:
+        return ""
+    return "default" if "default" in workspaces else workspaces[0]
+
+
+def _cookie_active_workspaces(request: Request, visible_workspaces: list[str]) -> list[str]:
+    visible = set(visible_workspaces)
+    raw = request.cookies.get("dlightrag_workspace_ids", "")
+    active = [normalize_workspace(item.strip()) for item in raw.split(",") if item.strip()]
+    return _ordered_unique([workspace for workspace in active if workspace in visible])
+
+
+def _set_workspace_cookies(
+    response: HTMLResponse,
+    request: Request,
+    visible_workspaces: list[str],
+    *,
+    active_workspaces: list[str] | None = None,
+    primary_workspace: str | None = None,
+) -> None:
+    """Persist selector state using only visible DB-sourced workspace names."""
+    if not visible_workspaces:
         response.delete_cookie("dlightrag_workspace", path="/")
         response.delete_cookie("dlightrag_workspace_ids", path="/")
         return
-    # Cookie values are purely DB-sourced, never from user input.
-    primary = "default" if "default" in workspaces else workspaces[0]
-    joined = ",".join(workspaces)
+    visible = set(visible_workspaces)
+    active = _ordered_unique(
+        [workspace for workspace in (active_workspaces or []) if workspace in visible]
+    )
+    if not active:
+        fallback = (
+            primary_workspace
+            if primary_workspace in visible
+            else _default_workspace(visible_workspaces)
+        )
+        active = [fallback] if fallback else []
+    primary = primary_workspace if primary_workspace in active else active[0]
+    joined = ",".join(active)
     secure = request.url.scheme == "https"
     response.set_cookie(
         key="dlightrag_workspace",
@@ -75,7 +109,7 @@ async def create_workspace(
     workspace_name: str = Form(default=""),
 ):
     """Create a new workspace and return updated workspace list."""
-    from dlightrag.utils import normalize_workspace, validate_workspace_name
+    from dlightrag.utils import validate_workspace_name
 
     manager = get_manager(request)
 
@@ -108,7 +142,14 @@ async def create_workspace(
             "HX-Trigger": json.dumps({"workspaceCreated": {"workspace": ws, "display_name": name}})
         },
     )
-    await _set_workspace_cookies(response, request, manager)
+    visible_workspaces = await _visible_workspace_names(request, manager)
+    _set_workspace_cookies(
+        response,
+        request,
+        visible_workspaces,
+        active_workspaces=[ws],
+        primary_workspace=ws,
+    )
     return response
 
 
@@ -119,8 +160,6 @@ async def delete_workspace(
     confirm_name: str = Form(default=""),
 ):
     """Delete a workspace after type-to-confirm verification."""
-    from dlightrag.utils import normalize_workspace
-
     manager = get_manager(request)
     name = workspace_name.strip()
     confirm = confirm_name.strip()
@@ -142,8 +181,9 @@ async def delete_workspace(
             status_code=500,
         )
 
-    workspaces = await manager.list_workspaces()
-    next_workspace = "default" if "default" in workspaces else None
+    visible_workspaces = await _visible_workspace_names(request, manager)
+    active = _cookie_active_workspaces(request, visible_workspaces)
+    next_workspace = active[0] if active else _default_workspace(visible_workspaces)
 
     response = HTMLResponse(
         "",
@@ -158,5 +198,11 @@ async def delete_workspace(
             )
         },
     )
-    await _set_workspace_cookies(response, request, manager)
+    _set_workspace_cookies(
+        response,
+        request,
+        visible_workspaces,
+        active_workspaces=active or ([next_workspace] if next_workspace else []),
+        primary_workspace=next_workspace,
+    )
     return response

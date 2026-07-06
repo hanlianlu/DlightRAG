@@ -123,6 +123,8 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
         active = [primary]
     if not active and "default" in known:
         active = ["default"]
+    if primary not in active:
+        primary = active[0] if active else ""
 
     return templates.TemplateResponse(
         request,
@@ -130,6 +132,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
         {
             "workspace": workspace,
             "workspaces": workspaces,
+            "primary_workspace": primary,
             "active_workspaces": active,
         },
     )

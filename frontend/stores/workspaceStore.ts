@@ -17,6 +17,7 @@ function clearCookie(name: string): void {
 class WorkspaceStore extends Store {
   #records: WorkspaceRecord[] = [];
   #active: string[] = [];
+  #primary = '';
 
   get records(): readonly WorkspaceRecord[] {
     return this.#records;
@@ -27,12 +28,17 @@ class WorkspaceStore extends Store {
   }
 
   get primary(): string {
-    return this.#active[0] || '';
+    return this.#primary || this.#fallbackPrimary();
   }
 
-  init(records: WorkspaceRecord[], active: string[]): void {
+  get defaultWorkspace(): string {
+    return this.#defaultWorkspace();
+  }
+
+  init(records: WorkspaceRecord[], active: string[], primary = ''): void {
     this.#records = records;
-    this.#active = active;
+    this.#active = this.#validActive(active);
+    this.#primary = this.#validPrimary(primary);
     this.#syncCookies();
   }
 
@@ -41,8 +47,10 @@ class WorkspaceStore extends Store {
     if (idx >= 0) {
       if (this.#active.length <= 1) return;
       this.#active.splice(idx, 1);
+      if (this.#primary === workspace) this.#primary = this.#fallbackPrimary();
     } else {
       this.#active.push(workspace);
+      this.#primary = workspace;
     }
     this.#syncCookies();
     this.emit('workspaceToggled', { workspaces: [...this.#active] });
@@ -51,6 +59,7 @@ class WorkspaceStore extends Store {
   select(workspace: string): void {
     if (!workspace) return;
     this.#active = [workspace];
+    this.#primary = workspace;
     this.#syncCookies();
     this.emit('workspaceToggled', { workspaces: [...this.#active] });
   }
@@ -58,8 +67,8 @@ class WorkspaceStore extends Store {
   selectAll(): void {
     if (this.#records.length === 0) return;
     const allIds = this.#records.map((r) => r.workspace);
-    const allSelected = allIds.every((w) => this.#active.includes(w));
-    this.#active = allSelected ? [allIds[0]!] : [...allIds];
+    this.#active = [...allIds];
+    this.#primary = this.#defaultWorkspace();
     this.#syncCookies();
     this.emit('workspaceToggled', { workspaces: [...this.#active] });
   }
@@ -69,6 +78,7 @@ class WorkspaceStore extends Store {
       this.#records.push(record);
     }
     this.#active = [record.workspace];
+    this.#primary = record.workspace;
     this.#syncCookies();
     this.emit('workspaceCreated', { workspace: record.workspace, displayName: record.displayName });
   }
@@ -77,8 +87,40 @@ class WorkspaceStore extends Store {
     this.#records = this.#records.filter((r) => r.workspace !== workspace);
     const remaining = this.#active.filter((a) => a !== workspace);
     this.#active = remaining.length > 0 ? remaining : nextWorkspace ? [nextWorkspace] : [];
+    if (this.#primary === workspace || !this.#active.includes(this.#primary)) {
+      this.#primary = this.#fallbackPrimary(nextWorkspace);
+    }
     this.#syncCookies();
     this.emit('workspaceDeleted', { workspace, nextWorkspace });
+  }
+
+  #validActive(active: string[]): string[] {
+    const known = new Set(this.#records.map((record) => record.workspace));
+    const result: string[] = [];
+    active.forEach((workspace) => {
+      if (known.has(workspace) && !result.includes(workspace)) result.push(workspace);
+    });
+    if (result.length > 0) return result;
+    const fallback = this.#defaultWorkspace();
+    return fallback ? [fallback] : [];
+  }
+
+  #validPrimary(primary: string): string {
+    if (primary && this.#active.includes(primary)) return primary;
+    return this.#fallbackPrimary(primary);
+  }
+
+  #defaultWorkspace(): string {
+    return this.#records.find((record) => record.workspace === 'default')?.workspace
+      || this.#records[0]?.workspace
+      || '';
+  }
+
+  #fallbackPrimary(preferred = ''): string {
+    if (preferred && this.#active.includes(preferred)) return preferred;
+    const defaultWorkspace = this.#defaultWorkspace();
+    if (defaultWorkspace && this.#active.includes(defaultWorkspace)) return defaultWorkspace;
+    return this.#active[0] || '';
   }
 
   #syncCookies(): void {
@@ -87,7 +129,7 @@ class WorkspaceStore extends Store {
       clearCookie(ACTIVE_COOKIE);
       return;
     }
-    setCookie(PRIMARY_COOKIE, this.#active[0]!);
+    setCookie(PRIMARY_COOKIE, this.primary);
     setCookie(ACTIVE_COOKIE, this.#active.join(','));
   }
 }

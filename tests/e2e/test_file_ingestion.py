@@ -48,3 +48,17 @@ def test_file_panel_workspace_switch_replaces_loading_state(page):
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     assert "Loading files..." not in page.locator("#panel-content").text_content()
     assert page.locator(".ingest-target-name").text_content() == "research"
+
+
+@pytest.mark.e2e
+def test_file_panel_uses_last_selected_topbar_workspace(page):
+    """Files defaults to the last explicitly selected topbar workspace."""
+    page.goto("/web/")
+    page.wait_for_selector(".app", timeout=10000)
+
+    page.click("#workspace-selector")
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.click("#files-btn")
+
+    page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
+    assert page.locator(".ingest-target-name").text_content() == "research"
