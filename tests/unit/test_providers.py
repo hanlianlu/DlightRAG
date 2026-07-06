@@ -90,21 +90,45 @@ class TestAnthropicProvider:
             assert "extra_body" not in call_kwargs
 
     @pytest.mark.asyncio
-    async def test_json_response_format_adds_system_instruction(self):
-        """Anthropic doesn't support response_format natively; inject JSON instruction."""
+    async def test_json_object_response_format_is_rejected(self):
+        p = get_provider("anthropic", api_key="test-key")
+        with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            cast(Any, p)._client = None
+            with pytest.raises(ValueError, match="json_schema"):
+                await p.complete(
+                    [{"role": "user", "content": "hi"}],
+                    "claude-sonnet-4-20250514",
+                    response_format={"type": "json_object"},
+                )
+            MockSDK.return_value.messages.create.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_json_schema_response_format_uses_output_config(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"key": "val"}')]
+        mock_response.content = [MagicMock(text='{"answer": "ok"}')]
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
             await p.complete(
                 [{"role": "user", "content": "hi"}],
                 "claude-sonnet-4-20250514",
-                response_format={"type": "json_object"},
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "demo_plan", "schema": schema, "strict": True},
+                },
             )
             call_kwargs = MockSDK.return_value.messages.create.call_args[1]
-            assert "json" in call_kwargs["system"].lower()
+            assert call_kwargs["output_config"] == {
+                "format": {"type": "json_schema", "schema": schema}
+            }
+            assert "system" not in call_kwargs
 
     @pytest.mark.asyncio
     async def test_complete_converts_https_image_url(self):
@@ -275,3 +299,31 @@ class TestGeminiProvider:
 
         assert tokens == ["hel", "lo"]
         mock_client.aio.models.generate_content_stream.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_json_schema_response_format_uses_response_schema(self):
+        p = get_provider("gemini", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.text = '{"answer": "ok"}'
+        schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        with patch("dlightrag.models.providers.gemini_native.genai") as mock_genai:
+            mock_client = MagicMock()
+            mock_genai.Client.return_value = mock_client
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            cast(Any, p)._client = None
+            await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "gemini-2.5-flash",
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "demo_plan", "schema": schema, "strict": True},
+                },
+            )
+            call_kwargs = mock_client.aio.models.generate_content.call_args[1]
+            assert call_kwargs["config"]["response_mime_type"] == "application/json"
+            assert call_kwargs["config"]["response_schema"] == schema

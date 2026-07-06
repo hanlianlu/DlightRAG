@@ -22,6 +22,7 @@ llm:
     provider: openai
     model: google/gemini-3.5-flash
     base_url: https://openrouter.ai/api/v1
+    structured_output: json_object
     temperature: 0.5
     timeout: 120.0
   roles:
@@ -29,6 +30,7 @@ llm:
       provider: openai
       model: deepseek-v4-flash
       base_url: https://api.deepseek.com
+      structured_output: json_object
       temperature: 0.0
       timeout: 120.0
       model_kwargs:
@@ -38,6 +40,7 @@ llm:
       provider: openai
       model: deepseek-v4-flash
       base_url: https://api.deepseek.com
+      structured_output: json_object
       temperature: 0.0
       timeout: 120.0
       model_kwargs:

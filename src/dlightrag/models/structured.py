@@ -10,6 +10,18 @@ from pydantic import BaseModel
 from dlightrag.utils.text import extract_json
 
 
+def json_schema_from_response_format(
+    response_format: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Extract a JSON Schema from DlightRAG's internal response_format contract."""
+    if not response_format or response_format.get("type") != "json_schema":
+        return None
+    json_schema = response_format.get("json_schema")
+    if not isinstance(json_schema, dict) or not isinstance(json_schema.get("schema"), dict):
+        raise ValueError("json_schema response_format requires json_schema.schema")
+    return json_schema["schema"]
+
+
 def _strict_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Return an OpenAI strict-mode friendly JSON schema copy."""
     normalized = json.loads(json.dumps(schema))
@@ -39,17 +51,21 @@ class StructuredOutput:
     schema: type[BaseModel]
     strict: bool = True
 
+    def json_schema_response_format(self) -> dict[str, Any]:
+        """Return DlightRAG's internal JSON-schema response_format contract."""
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": self.name,
+                "schema": _strict_json_schema(self.schema.model_json_schema()),
+                "strict": self.strict,
+            },
+        }
+
     def response_format_for_provider(self, provider: str) -> dict[str, Any]:
-        """Return the response_format shape supported by the configured provider."""
-        if provider == "openai":
-            return {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": self.name,
-                    "schema": _strict_json_schema(self.schema.model_json_schema()),
-                    "strict": self.strict,
-                },
-            }
+        """Return the strongest structured-output contract supported by provider."""
+        if provider in {"openai", "anthropic", "gemini"}:
+            return self.json_schema_response_format()
         return {"type": "json_object"}
 
     def parse(self, raw: Any) -> BaseModel:

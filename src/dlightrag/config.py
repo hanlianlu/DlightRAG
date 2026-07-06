@@ -19,7 +19,7 @@ import ssl
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, ClassVar, Literal, TypedDict
+from typing import Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode
 
 from dotenv import dotenv_values
@@ -116,10 +116,17 @@ class ModelConfig(BaseModel):
     model: str
     api_key: str | None = None
     base_url: str | None = None
+    structured_output: Literal["auto", "json_schema", "json_object"] = "auto"
     temperature: float | None = Field(default=None, ge=0)
     timeout: float = Field(default=120.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_structured_output_mode(self) -> Self:
+        if self.provider == "anthropic" and self.structured_output == "json_object":
+            raise ValueError("Anthropic native structured output requires json_schema")
+        return self
 
 
 class EmbeddingConfig(BaseModel):

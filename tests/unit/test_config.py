@@ -59,6 +59,7 @@ class TestModelConfig:
         assert cfg.temperature is None
         assert cfg.timeout == 120.0
         assert cfg.max_retries == 3
+        assert cfg.structured_output == "auto"
         assert cfg.model_kwargs == {}
 
     def test_anthropic_provider(self):
@@ -73,15 +74,25 @@ class TestModelConfig:
         cfg = ModelConfig(model="gpt-5.4-mini", model_kwargs={"top_p": 0.9})
         assert cfg.model_kwargs == {"top_p": 0.9}
 
+    def test_structured_output_mode(self):
+        cfg = ModelConfig(model="deepseek-v4-flash", structured_output="json_object")
+        assert cfg.structured_output == "json_object"
+
     @pytest.mark.parametrize(
         "kwargs",
         [
             {"model": "gpt-5.4-mini", "temperature": -0.1},
             {"model": "gpt-5.4-mini", "timeout": 0},
             {"model": "gpt-5.4-mini", "max_retries": -1},
+            {"model": "gpt-5.4-mini", "structured_output": "json_yaml"},
+            {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4",
+                "structured_output": "json_object",
+            },
         ],
     )
-    def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:
+    def test_rejects_invalid_model_config_values(self, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValidationError):
             ModelConfig(**kwargs)
 
