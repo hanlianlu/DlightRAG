@@ -3,7 +3,6 @@
 
 import json
 import logging
-import re
 from typing import Any
 
 from fastapi import APIRouter, Form, Request
@@ -21,14 +20,6 @@ from dlightrag.web.deps import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def _sanitize_cookie_value(value: str) -> str:
-    """Keep only valid workspace name characters (alphanumeric, dash, underscore, comma).
-
-    CRLF characters (\\r, \\n) are explicitly stripped to prevent HTTP header injection.
-    """
-    return re.sub(r"[\r\n]", "", re.sub(r"[^A-Za-z0-9,_-]", "", value)).strip(",")
 
 
 def _ordered_unique(workspaces: list[str]) -> list[str]:
@@ -66,28 +57,46 @@ def _set_workspace_cookies(
     active_workspaces: list[str] | None = None,
     primary_workspace: str | None = None,
 ) -> None:
-    """Persist selector state using only visible DB-sourced workspace names."""
-    if not visible_workspaces:
+    """Persist selector state using only canonical workspace names.
+
+    All workspace values are server-trusted (sourced from the DB or
+    normalized via ``normalize_workspace`` before reaching this function),
+    so cookie values are set directly without runtime sanitization.
+    """
+    canonical_visible = _ordered_unique(
+        [normalize_workspace(w) for w in visible_workspaces if normalize_workspace(w)]
+    )
+    visible = set(canonical_visible)
+    if not visible:
         response.delete_cookie("dlightrag_workspace", path="/")
         response.delete_cookie("dlightrag_workspace_ids", path="/")
         return
-    visible = set(visible_workspaces)
-    active = _ordered_unique(
-        [workspace for workspace in (active_workspaces or []) if workspace in visible]
+
+    canonical_active = _ordered_unique(
+        [
+            normalize_workspace(w)
+            for w in (active_workspaces or [])
+            if normalize_workspace(w) in visible
+        ]
     )
+    active = canonical_active
     if not active:
         fallback = (
-            primary_workspace
-            if primary_workspace in visible
-            else _default_workspace(visible_workspaces)
+            normalize_workspace(primary_workspace)
+            if primary_workspace and normalize_workspace(primary_workspace) in visible
+            else _default_workspace(canonical_visible)
         )
         active = [fallback] if fallback else []
-    primary = primary_workspace if primary_workspace in active else active[0]
+    primary = (
+        normalize_workspace(primary_workspace)
+        if primary_workspace and normalize_workspace(primary_workspace) in active
+        else active[0]
+    )
     joined = ",".join(active)
     secure = request.url.scheme == "https"
     response.set_cookie(
         key="dlightrag_workspace",
-        value=_sanitize_cookie_value(primary),
+        value=primary,
         httponly=False,
         samesite="lax",
         secure=secure,
@@ -95,7 +104,7 @@ def _set_workspace_cookies(
     )
     response.set_cookie(
         key="dlightrag_workspace_ids",
-        value=_sanitize_cookie_value(joined),
+        value=joined,
         httponly=False,
         samesite="lax",
         secure=secure,
