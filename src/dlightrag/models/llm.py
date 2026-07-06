@@ -161,8 +161,22 @@ def get_keyword_model_func(config: DlightragConfig) -> Callable:
     )
 
 
+def get_planner_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
+    """Messages-first planner callable using keyword role config or default LLM."""
+    cfg = model_for_role(config, "keyword")
+    func = _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
+    if not bounded:
+        return func
+    return _queue_managed_completion_func(
+        func,
+        max_async=config.max_async,
+        timeout=cfg.timeout,
+        queue_name="DlightRAG planner LLM func",
+    )
+
+
 def get_query_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
-    """Messages-first query callable for AnswerEngine and QueryPlanner.
+    """Messages-first query callable for AnswerEngine.
 
     Uses ``config.llm.roles.query`` if set, otherwise ``config.llm.default``.
     """
@@ -344,6 +358,7 @@ __all__ = [
     "get_extract_model_func",
     "get_keyword_model_func",
     "get_multimodal_embedder",
+    "get_planner_model_func",
     "get_query_model_func",
     "get_rerank_func",
     "get_vlm_model_func",

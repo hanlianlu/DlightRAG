@@ -827,10 +827,10 @@ class RAGServiceManager:
     def _get_query_planner(self) -> QueryPlanner:
         """Lazy-create QueryPlanner with schema TTL refresh."""
         if self._query_planner is None:
-            from dlightrag.models.llm import get_query_model_func
+            from dlightrag.models.llm import get_planner_model_func
 
             self._query_planner = QueryPlanner(
-                llm_func=get_query_model_func(self._config),
+                llm_func=get_planner_model_func(self._config),
                 schema_provider=self._get_schema,
                 schema_ttl=300.0,
             )

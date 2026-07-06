@@ -13,8 +13,8 @@
 # ─────────────────────────────────────────────────────────────────
 # LLM roles follow LightRAG role names exactly:
 #   extract — entity/relationship extraction and ingest-time semantic projection
-#   keyword — LightRAG retrieval keyword extraction
-#   query   — answer generation and query planning
+#   keyword — LightRAG retrieval keyword extraction and query planning
+#   query   — answer generation
 #   vlm     — image/table/equation analysis
 
 llm:
