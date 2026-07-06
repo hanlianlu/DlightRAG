@@ -62,7 +62,6 @@ export async function submitQuery(query: string): Promise<void> {
         conversationStore.append(
             query,
             renderer.answer,
-            renderer.imageIds,
             imageData.length > 0 ? imageData : undefined,
         );
     }

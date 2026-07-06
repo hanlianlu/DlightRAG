@@ -87,3 +87,18 @@ def test_workspace_selector_all_sets_default_primary(page):
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
     assert page.locator(".ingest-target-name").text_content() == "default"
+
+
+@pytest.mark.e2e
+def test_workspace_selector_auto_all_sets_default_primary(page):
+    """Selecting every workspace individually also resets single-workspace surfaces."""
+    page.goto("/web/")
+    page.wait_for_selector("#workspace-selector", timeout=10000)
+
+    page.locator("#workspace-selector").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator("#files-btn").click()
+
+    page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
+    assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
+    assert page.locator(".ingest-target-name").text_content() == "default"

@@ -6,12 +6,9 @@ from collections.abc import AsyncIterator
 from datetime import UTC
 from pathlib import Path
 
-from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from azure.storage.blob import generate_blob_sas
 
-try:
-    from azure.storage.blob import generate_blob_sas
-except ImportError:  # pragma: no cover
-    generate_blob_sas = None  # type: ignore[assignment]
+from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 
 
 def _parse_connection_string(connection_string: str) -> dict[str, str]:
@@ -77,9 +74,6 @@ def generate_azure_sas_url(
     account_key = parsed.get("AccountKey", "")
     if not account_name or not account_key:
         raise ValueError("Connection string missing AccountName or AccountKey")
-
-    if generate_blob_sas is None:
-        raise ImportError("azure-storage-blob is required for SAS URL generation")
 
     sas_token = generate_blob_sas(
         account_name=account_name,

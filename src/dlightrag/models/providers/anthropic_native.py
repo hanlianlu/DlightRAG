@@ -6,15 +6,12 @@ import re
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from anthropic import AsyncAnthropic
+
 from dlightrag.models.providers.base import CompletionProvider
 from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
-
-try:
-    from anthropic import AsyncAnthropic
-except ImportError:
-    AsyncAnthropic = None  # type: ignore[assignment, misc]
 
 _ANTHROPIC_TOP_LEVEL_KEYS = frozenset({"thinking", "metadata", "extra_headers"})
 _DATA_URI_RE = re.compile(r"^data:(image/[^;]+);base64,(.+)$", re.DOTALL)
@@ -101,10 +98,6 @@ class AnthropicProvider(CompletionProvider):
 
     def _get_client(self) -> Any:
         if self._client is None:
-            if AsyncAnthropic is None:
-                raise ImportError(
-                    "anthropic SDK not installed. Install with: pip install dlightrag[anthropic]"
-                )
             self._client = AsyncAnthropic(
                 api_key=self._api_key,
                 timeout=self._timeout,

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for PGCheckpointStore."""
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -79,7 +80,11 @@ class TestSaveTurnPair:
         conn.fetchrows = [{"turn_number": 1}]
         conn.fetches = [
             [
-                {"turn_number": 1, "query": "Hello", "answer": "Hi there!"},
+                {
+                    "turn_number": 1,
+                    "query_content": [{"type": "text", "text": "Hello"}],
+                    "answer_content": [{"type": "text", "text": "Hi there!"}],
+                },
             ]
         ]
         store = _make_store(conn)
@@ -96,9 +101,15 @@ class TestSaveTurnPair:
 
         history = await store.get_history("s1")
         assert history == [
-            {"role": "user", "content": "Hello"},
-            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi there!"}]},
         ]
+
+        insert_calls = [c for c in conn.executed if "INSERT INTO" in str(c[0]).upper()]
+        assert insert_calls
+        args = insert_calls[0][1]
+        assert json.loads(args[4]) == [{"type": "text", "text": "Hello"}]
+        assert json.loads(args[5]) == [{"type": "text", "text": "Hi there!"}]
 
     async def test_turn_number_auto_increments(self) -> None:
         """Two sequential saves get turn numbers 1 and 2."""
@@ -145,6 +156,8 @@ class TestSaveTurnPair:
         insert_calls = [c for c in conn.executed if "INSERT INTO" in str(c[0]).upper()]
         assert insert_calls
         args = insert_calls[0][1]
+        assert json.loads(args[4]) == [{"type": "text", "text": "q"}]
+        assert json.loads(args[5]) == [{"type": "text", "text": "a"}]
         context_json = args[7]
         assert isinstance(context_json, str)
         assert "c1" in context_json
@@ -154,8 +167,20 @@ class TestSaveTurnPair:
         conn = _Conn()
         conn.fetchrows = [{"turn_number": 1}, {"turn_number": 1}]
         conn.fetches = [
-            [{"turn_number": 1, "query": "alice-q", "answer": "alice-a"}],
-            [{"turn_number": 1, "query": "bob-q", "answer": "bob-a"}],
+            [
+                {
+                    "turn_number": 1,
+                    "query_content": [{"type": "text", "text": "alice-q"}],
+                    "answer_content": [{"type": "text", "text": "alice-a"}],
+                }
+            ],
+            [
+                {
+                    "turn_number": 1,
+                    "query_content": [{"type": "text", "text": "bob-q"}],
+                    "answer_content": [{"type": "text", "text": "bob-a"}],
+                }
+            ],
         ]
         store = _make_store(conn)
 
@@ -178,8 +203,8 @@ class TestSaveTurnPair:
 
         alice = await store.get_history("scoped:alice:s1")
         bob = await store.get_history("scoped:bob:s1")
-        assert alice[0]["content"] == "alice-q"
-        assert bob[0]["content"] == "bob-q"
+        assert alice[0]["content"] == [{"type": "text", "text": "alice-q"}]
+        assert bob[0]["content"] == [{"type": "text", "text": "bob-q"}]
 
 
 class TestGetHistory:
@@ -187,9 +212,21 @@ class TestGetHistory:
         conn = _Conn()
         conn.fetches = [
             [
-                {"turn_number": 1, "query": "q1", "answer": "a1"},
-                {"turn_number": 2, "query": "q2", "answer": "a2"},
-                {"turn_number": 3, "query": "q3", "answer": "a3"},
+                {
+                    "turn_number": 1,
+                    "query_content": [{"type": "text", "text": "q1"}],
+                    "answer_content": [{"type": "text", "text": "a1"}],
+                },
+                {
+                    "turn_number": 2,
+                    "query_content": [{"type": "text", "text": "q2"}],
+                    "answer_content": [{"type": "text", "text": "a2"}],
+                },
+                {
+                    "turn_number": 3,
+                    "query_content": [{"type": "text", "text": "q3"}],
+                    "answer_content": [{"type": "text", "text": "a3"}],
+                },
             ]
         ]
         store = _make_store(conn)
@@ -292,8 +329,16 @@ class TestConcurrentWrites:
         conn.fetchrows = [{"turn_number": 1}, {"turn_number": 2}]
         conn.fetches = [
             [
-                {"turn_number": 1, "query": "q1", "answer": "a1"},
-                {"turn_number": 2, "query": "q2", "answer": "a2"},
+                {
+                    "turn_number": 1,
+                    "query_content": [{"type": "text", "text": "q1"}],
+                    "answer_content": [{"type": "text", "text": "a1"}],
+                },
+                {
+                    "turn_number": 2,
+                    "query_content": [{"type": "text", "text": "q2"}],
+                    "answer_content": [{"type": "text", "text": "a2"}],
+                },
             ]
         ]
         store = _make_store(conn)
@@ -410,26 +455,6 @@ class TestSaveMultimodalTurn:
         assert len(history) == 2
         assert history[0]["content"] == [{"type": "text", "text": "look"}]
         assert history[1]["content"] == [{"type": "text", "text": "nice"}]
-
-    async def test_falls_back_to_text_when_jsonb_null(self) -> None:
-        conn = _Conn()
-        conn.fetchrows = [{"turn_number": 1}]
-        conn.fetches = [
-            [
-                {
-                    "turn_number": 1,
-                    "query": "plain query",
-                    "answer": "plain answer",
-                    "query_content": None,
-                    "answer_content": None,
-                }
-            ]
-        ]
-        store = _make_store(conn)
-
-        history = await store.get_history("s1")
-        assert history[0]["content"] == "plain query"
-        assert history[1]["content"] == "plain answer"
 
     async def test_migration_includes_new_columns(self) -> None:
         """0002_checkpoints_multimodal migration exists."""

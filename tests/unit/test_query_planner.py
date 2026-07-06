@@ -107,6 +107,42 @@ class TestPlanWithLLM:
         assert isinstance(structured_output, StructuredOutput)
         assert structured_output.name == "query_plan"
 
+    async def test_llm_call_uses_messages_first_contract(self):
+        calls: list[tuple[list[dict[str, object]], StructuredOutput]] = []
+
+        async def llm(*, messages: list[dict[str, object]], structured_output: StructuredOutput):
+            calls.append((messages, structured_output))
+            return json.dumps({"standalone_query": "messages-first", "filters": {}})
+
+        planner = QueryPlanner(llm_func=llm)
+
+        plan = await planner.plan("what is X")
+
+        assert plan.standalone_query == "messages-first"
+        assert len(calls) == 1
+        messages, structured_output = calls[0]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "system"
+        assert isinstance(messages[0]["content"], str)
+        assert messages[1] == {"role": "user", "content": "what is X"}
+        assert isinstance(structured_output, StructuredOutput)
+
+    async def test_lightrag_prompt_style_callable_is_not_planner_contract(self):
+        async def llm(
+            prompt: str,  # noqa: ARG001
+            *,
+            system_prompt: str,  # noqa: ARG001
+            structured_output: StructuredOutput,  # noqa: ARG001
+        ) -> str:
+            return json.dumps({"standalone_query": "legacy prompt style", "filters": {}})
+
+        planner = QueryPlanner(llm_func=llm)
+
+        with patch("dlightrag.core.query_planner.asyncio.sleep", new=AsyncMock()):
+            plan = await planner.plan("what is X")
+
+        assert plan.standalone_query == "what is X"
+
     async def test_rewrite_with_history(self):
         llm = AsyncMock(
             return_value=json.dumps(
