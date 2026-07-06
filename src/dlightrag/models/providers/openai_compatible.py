@@ -92,7 +92,7 @@ class OpenAICompatibleProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> CompletionOutput:
         call_kwargs: dict[str, Any] = {"model": model, "messages": messages}
         if temperature is not None:
             call_kwargs["temperature"] = temperature

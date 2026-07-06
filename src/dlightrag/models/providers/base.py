@@ -44,6 +44,14 @@ class CompletionProvider(ABC):
     connections.
     """
 
+    supports_native_json_schema: bool = False
+    """Whether this provider natively supports JSON schema structured output.
+
+    Set to ``True`` on providers whose SDK accepts a JSON Schema directly
+    (Anthropic, Gemini).  Providers without native support fall back to
+    ``json_object`` mode or a strict-mode json_schema via the OpenAI API.
+    """
+
     supports_vision: bool | None = None
     """Whether this provider's model accepts ``image_url`` content blocks.
 
@@ -77,7 +85,7 @@ class CompletionProvider(ABC):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> CompletionOutput:
         raise NotImplementedError
 
     @abstractmethod

@@ -27,8 +27,11 @@ DEMO_STRUCTURED_OUTPUT = StructuredOutput(name="demo_plan", schema=DemoPlan)
 
 
 class CapturingProvider:
-    def __init__(self, seen: dict[str, Any]) -> None:
+    supports_native_json_schema: bool = False
+
+    def __init__(self, seen: dict[str, Any], *, supports_native_json_schema: bool = False) -> None:
         self.seen = seen
+        self.supports_native_json_schema = supports_native_json_schema
 
     async def complete(self, **kwargs: Any) -> str:
         self.seen.update(kwargs)
@@ -38,11 +41,21 @@ class CapturingProvider:
         raise AssertionError("stream should not be called")
 
 
-def _capture_provider(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, dict[str, Any]]:
+def _capture_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    supports_native_json_schema: bool = False,
+) -> tuple[Any, dict[str, Any]]:
     from dlightrag.models import llm
 
     seen: dict[str, Any] = {}
-    monkeypatch.setattr(llm, "get_provider", lambda *args, **kwargs: CapturingProvider(seen))
+    monkeypatch.setattr(
+        llm,
+        "get_provider",
+        lambda *args, **kwargs: CapturingProvider(
+            seen, supports_native_json_schema=supports_native_json_schema
+        ),
+    )
     return llm, seen
 
 
@@ -229,7 +242,7 @@ class TestMakeCompletionFunc:
     async def test_structured_output_auto_uses_json_schema_for_native_providers(
         self, monkeypatch, provider, model
     ):
-        llm, seen = _capture_provider(monkeypatch)
+        llm, seen = _capture_provider(monkeypatch, supports_native_json_schema=True)
         func = llm._make_completion_func(
             ModelConfig(provider=provider, model=model, api_key="sk-test")
         )
