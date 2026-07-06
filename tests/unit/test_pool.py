@@ -246,20 +246,18 @@ class TestPGPoolGet:
         )
 
     @pytest.mark.asyncio
-    async def test_run_retries_transient_errors_with_fresh_pool(self) -> None:
-        """run() retries transient connection failures after closing the stale pool."""
+    async def test_run_retries_operation_on_transient_error_without_destroying_pool(self) -> None:
+        """Transient errors retry the operation on the same pool — the pool survives."""
         from dlightrag.storage.pool import PGPool
 
-        stale_pool = MagicMock()
-        stale_pool.close = AsyncMock()
-        fresh_pool = MagicMock()
-        fresh_pool.close = AsyncMock()
+        the_pool = MagicMock()
+        the_pool.close = AsyncMock()
         pool = PGPool()
 
         stale_conn = object()
         fresh_conn = object()
-        stale_pool.acquire.return_value.__aenter__.return_value = stale_conn
-        fresh_pool.acquire.return_value.__aenter__.return_value = fresh_conn
+        # First acquire yields the stale connection; second gives a healthy one.
+        the_pool.acquire.return_value.__aenter__.side_effect = [stale_conn, fresh_conn]
 
         mock_config = MagicMock()
         mock_config.postgres_pool_min_size = 2
@@ -269,7 +267,6 @@ class TestPGPoolGet:
         mock_config.postgres_connection_retries = 2
         mock_config.postgres_connection_retry_backoff = 0
         mock_config.postgres_connection_retry_backoff_max = 0
-        mock_config.postgres_pool_close_timeout = 5
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
             "port": 5432,
@@ -292,7 +289,7 @@ class TestPGPoolGet:
         with (
             patch(
                 "dlightrag.storage.pool.asyncpg.create_pool",
-                new=AsyncMock(side_effect=[stale_pool, fresh_pool]),
+                new=AsyncMock(return_value=the_pool),
             ) as mock_create,
             patch("dlightrag.config.get_config", return_value=mock_config),
         ):
@@ -300,5 +297,6 @@ class TestPGPoolGet:
 
         assert result == "ok"
         assert calls == 2
-        assert mock_create.call_count == 2
-        stale_pool.close.assert_awaited_once()
+        assert mock_create.call_count == 1
+        # The pool must NOT be closed — pool.acquire() handles stale connections internally
+        the_pool.close.assert_not_awaited()

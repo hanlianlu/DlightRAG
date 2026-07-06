@@ -5,6 +5,7 @@ Called by both web routes and API server after retrieval.
 """
 
 import logging
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -74,7 +75,7 @@ def build_sources_from_chunks(
     allowed_by_ref = {ref_id: set(chunk_ids) for ref_id, chunk_ids in (cited_chunks or {}).items()}
 
     # Group by reference_id, preserving first-appearance order
-    groups: dict[str, list[dict[str, Any]]] = {}
+    groups: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
     for chunk in chunks:
         ref_id = str(chunk.get("reference_id", ""))
         if not ref_id:
@@ -83,7 +84,7 @@ def build_sources_from_chunks(
             allowed = allowed_by_ref.get(ref_id, set())
             if not allowed or chunk.get("chunk_id") not in allowed:
                 continue
-        groups.setdefault(ref_id, []).append(chunk)
+        groups[ref_id].append(chunk)
 
     sources: list[SourceReference] = []
     ref_ids = list(cited_chunks) if cited_chunks is not None else list(groups)

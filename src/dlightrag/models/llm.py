@@ -11,8 +11,6 @@ from functools import partial
 from typing import Any
 from urllib.parse import urlparse
 
-import numpy as np
-
 from dlightrag.config import DlightragConfig, ModelConfig
 from dlightrag.models.llm_roles import LIGHTRAG_ROLE_NAMES, model_for_role
 from dlightrag.models.providers import get_provider
@@ -282,7 +280,9 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
 
     cfg = config.embedding
 
-    async def embed_func(texts: list[str], *, context: str = "document") -> np.ndarray:
+    async def embed_func(texts: list[str], *, context: str = "document") -> Any:
+        import numpy as np
+
         embed_context = "query" if context == "query" else "document"
         result = await active_embedder.embed_texts(texts, context=embed_context)
         # LightRAG's EmbeddingFunc validates via result.size — requires numpy

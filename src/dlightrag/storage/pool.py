@@ -29,7 +29,6 @@ _DEFAULT_MAX_SIZE = 10
 _DEFAULT_RETRY_ATTEMPTS = 10
 _DEFAULT_RETRY_BACKOFF = 3.0
 _DEFAULT_RETRY_BACKOFF_MAX = 30.0
-_DEFAULT_POOL_CLOSE_TIMEOUT = 5.0
 
 T = TypeVar("T")
 
@@ -94,7 +93,13 @@ class PGPool:
         self,
         operation: Callable[[Any], Awaitable[T]],
     ) -> T:
-        """Execute an operation through the shared pool with transient retry."""
+        """Execute an operation through the shared pool with transient retry.
+
+        Retries the *operation* on transient errors — never destroys the pool.
+        asyncpg's built-in connection health checks handle bad connections;
+        destroying the pool amplifies one transient failure into a cascading
+        disruption for all concurrent callers.
+        """
         from dlightrag.config import get_config
 
         config = get_config()
@@ -116,10 +121,6 @@ class PGPool:
                 )
             ),
         )
-        pool_close_timeout = max(
-            0.0,
-            float(getattr(config, "postgres_pool_close_timeout", _DEFAULT_POOL_CLOSE_TIMEOUT)),
-        )
 
         for attempt in range(1, attempts + 1):
             try:
@@ -127,7 +128,6 @@ class PGPool:
                 async with pool.acquire() as conn:
                     return await operation(conn)
             except self._transient_exceptions as exc:
-                await self.close(timeout=pool_close_timeout)
                 if attempt >= attempts:
                     raise
                 sleep_for = min(backoff * (2 ** (attempt - 1)), backoff_max)
