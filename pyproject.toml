@@ -2,7 +2,7 @@
 
 [project]
 name = "dlightrag"
-version = "1.6.0"
+version = "1.6.1"
 description = "Multimodal RAG with knowledge graph and contextual intelligence"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
@@ -17,7 +17,7 @@ dependencies = [
     "google-genai>=2.10.0",
     # PostgreSQL
     "asyncpg>=0.31.0",
-    "pgvector>=0.4.2",
+    "pgvector>=0.5.0",
     # Config
     "pydantic>=2.11.0",
     "pydantic-settings>=2.13.1",
