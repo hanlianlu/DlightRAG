@@ -6,74 +6,67 @@ import {closestElement, openPanel} from './panel.ts';
 
 const AI_MESSAGE_SELECTOR = '.' + chatStyles.aiMessage;
 
-function openRefSource(refItem: HTMLElement): void {
-    const ref = refItem.dataset.ref;
-    const answerEl = refItem.closest(AI_MESSAGE_SELECTOR);
-    if (!answerEl) return;
+function findSourceData(answerEl: Element): HTMLElement | null {
+    for (const child of answerEl.children) {
+        if (child instanceof HTMLElement && child.classList.contains('source-data')) return child;
+    }
+    return null;
+}
+
+function copySourcePanelFromAnswer(answerEl: Element): boolean {
     const panelContent = document.getElementById('panel-content');
-    if (!panelContent) return;
-    const sourceData = answerEl.querySelector('.source-data');
-    if (!sourceData) return;
+    if (!panelContent) return false;
+    const sourceData = findSourceData(answerEl);
+    if (!sourceData) return false;
 
     panelContent.replaceChildren();
     const clone = sourceData.cloneNode(true);
-    if (!(clone instanceof HTMLElement)) return;
+    if (!(clone instanceof HTMLElement)) return false;
     clone.classList.remove('hidden');
     while (clone.firstChild) panelContent.appendChild(clone.firstChild);
+    return true;
+}
+
+function setExpandedSource(ref?: string, chunk?: string): void {
+    const panelContent = document.getElementById('panel-content');
+    if (!panelContent) return;
 
     panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
+        const isActiveDoc = doc.dataset.ref === ref;
         const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
-        if (doc.dataset.ref === ref) {
-            doc.classList.add('expanded');
-            if (chunksContainer) chunksContainer.hidden = false;
-        } else {
-            doc.classList.remove('expanded');
-            if (chunksContainer) chunksContainer.hidden = true;
+        doc.classList.toggle('expanded', isActiveDoc);
+        if (chunksContainer) chunksContainer.hidden = !isActiveDoc;
+
+        if (isActiveDoc && chunk) {
+            doc.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
+                const active = c.dataset.chunk === chunk;
+                c.hidden = !active;
+                c.classList.toggle('active', active);
+            });
         }
     });
 
     const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
     if (showAllBtn) showAllBtn.hidden = false;
     renderExpandedSourceMath(panelContent);
+}
+
+function openRefSource(refItem: HTMLElement): void {
+    const ref = refItem.dataset.ref;
+    const answerEl = refItem.closest(AI_MESSAGE_SELECTOR);
+    if (!answerEl) return;
+    if (!copySourcePanelFromAnswer(answerEl)) return;
+    setExpandedSource(ref);
     openPanel('SOURCES');
 }
 
 export function filterSource(badge: HTMLElement): void {
     const ref = badge.dataset.ref;
     const chunk = badge.dataset.chunk;
-    const panelContent = document.getElementById('panel-content');
     const answerEl = badge.closest(AI_MESSAGE_SELECTOR);
-    if (!panelContent || !answerEl) return;
-    const sourceData = answerEl.querySelector('.source-data');
-    if (!sourceData) return;
-
-    panelContent.replaceChildren();
-    const clone = sourceData.cloneNode(true);
-    if (!(clone instanceof HTMLElement)) return;
-    clone.classList.remove('hidden');
-    while (clone.firstChild) panelContent.appendChild(clone.firstChild);
-
-    panelContent.querySelectorAll<HTMLElement>('.source-doc').forEach(function(doc) {
-        const chunksContainer = doc.querySelector<HTMLElement>('.source-doc-chunks');
-        if (doc.dataset.ref === ref) {
-            doc.classList.add('expanded');
-            if (chunksContainer) chunksContainer.hidden = false;
-            if (chunk) {
-                doc.querySelectorAll<HTMLElement>('.source-chunk').forEach(function(c) {
-                    const active = c.dataset.chunk === chunk;
-                    c.hidden = !active;
-                    c.classList.toggle('active', active);
-                });
-            }
-        } else {
-            doc.classList.remove('expanded');
-            if (chunksContainer) chunksContainer.hidden = true;
-        }
-    });
-
-    const showAllBtn = panelContent.querySelector<HTMLElement>('.show-all-btn');
-    if (showAllBtn) showAllBtn.hidden = false;
-    renderExpandedSourceMath(panelContent);
+    if (!answerEl) return;
+    if (!copySourcePanelFromAnswer(answerEl)) return;
+    setExpandedSource(ref, chunk);
     openPanel('SOURCES');
 }
 
@@ -150,6 +143,12 @@ export function setupSourcePanel(): void {
         if (badge) {
             e.preventDefault();
             filterSource(badge);
+            return;
+        }
+        const refItem = closestElement<HTMLElement>(e.target, '[data-action="open-ref-source"]');
+        if (refItem) {
+            e.preventDefault();
+            openRefSource(refItem);
         }
     });
 

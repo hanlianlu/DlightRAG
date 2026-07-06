@@ -403,7 +403,7 @@ export async function uploadFilesToWorkspace(
         if (isAbortError(error)) return;
         showToast('Upload failed: ' + (error instanceof Error ? error.message : String(error)), 5000);
     } finally {
-        setUploadBusy(false);
+        if (isCurrentPanelRequest(request)) setUploadBusy(false);
         finishPanelRequest(request);
     }
 }
@@ -451,10 +451,11 @@ function replaceIngestProgressHtml(html: string, workspace: string): void {
 }
 
 async function pollIngestStatus(workspace: string): Promise<void> {
-    ingestPollController = new AbortController();
+    const controller = new AbortController();
+    ingestPollController = controller;
     try {
         const response = await fetch(filePanelUrl('/web/ingest-status', workspace), {
-            signal: ingestPollController.signal,
+            signal: controller.signal,
         });
         const html = await response.text();
         if (workspace !== ingestStore.workspace) return;
@@ -467,7 +468,7 @@ async function pollIngestStatus(workspace: string): Promise<void> {
         if (isAbortError(error)) return;
         if (workspace === ingestStore.workspace) startIngestPolling(workspace);
     } finally {
-        ingestPollController = null;
+        if (ingestPollController === controller) ingestPollController = null;
     }
 }
 
