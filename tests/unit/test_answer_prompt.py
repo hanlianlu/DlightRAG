@@ -22,6 +22,22 @@ class TestGetAnswerSystemPrompt:
         assert "[n-m]" in prompt
         assert "inline" in prompt.lower()
 
+    def test_unified_prompt_contains_answer_abstention_guard(self) -> None:
+        prompt = get_answer_system_prompt()
+
+        assert "no substantive fact" in prompt
+        assert "output only this abstention message" in prompt
+        assert "没有找到足够依据回答这个问题" in prompt
+        assert "I could not find enough support" in prompt
+
+    def test_unified_prompt_prevents_reference_list_as_evidence(self) -> None:
+        prompt = get_answer_system_prompt()
+
+        assert "reference list only as an ID-to-document map" in prompt
+        assert "not evidence by itself" in prompt
+        assert "Do not cite missing information" in prompt
+        assert "do not output any citation markers" in prompt
+
     def test_unified_prompt_declares_product_identity(self) -> None:
         prompt = get_answer_system_prompt()
 
