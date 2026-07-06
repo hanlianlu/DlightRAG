@@ -278,8 +278,7 @@ class TestPlanWithLLM:
         assert plan.metadata_filter.date_from is None
         assert plan.metadata_filter.doc_author == "Auth"
 
-    async def test_low_confidence_llm_filter_is_used_with_retriever_safety_net(self):
-        """Low-confidence filters pass through; the retriever auto-relaxes on empty results."""
+    async def test_low_confidence_llm_filter_is_ignored(self):
         llm = AsyncMock(
             return_value=json.dumps(
                 {
@@ -291,10 +290,8 @@ class TestPlanWithLLM:
         )
         planner = QueryPlanner(llm_func=llm)
         plan = await planner.plan("tell me about Ada's ideas")
-        assert plan.metadata_filter is not None
-        assert plan.metadata_filter_source == "llm_inferred"
+        assert plan.metadata_filter is None
         assert plan.metadata_filter_confidence == "low"
-        assert plan.metadata_filter.doc_author == "Ada"
 
     async def test_high_confidence_filter_does_not_require_static_evidence_gate(self):
         llm = AsyncMock(
