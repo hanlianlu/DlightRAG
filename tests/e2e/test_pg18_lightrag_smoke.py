@@ -8,7 +8,6 @@ Run with:
 from pathlib import Path
 
 import pytest
-from PIL import Image
 
 from dlightrag.config import set_config
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
@@ -18,7 +17,6 @@ from tests.e2e.pg18_harness import (
     RUN_E2E_ENV,
     e2e_enabled,
     fetch_pg_prereq_report,
-    image_seed,
     install_fake_model_functions,
     make_e2e_config,
     make_workspace_name,
@@ -56,7 +54,7 @@ async def test_pg18_extensions_and_preload_are_ready(pg_conn) -> None:
     assert report.missing_preload_libraries == []
 
 
-async def test_unified_image_ingest_replace_and_filtered_retrieval(
+async def test_unified_text_ingest_replace_and_filtered_retrieval(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -74,23 +72,28 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
     install_fake_model_functions(monkeypatch, dim=cfg.embedding.dim)
 
     service = await RAGService.create(config=cfg, enable_vlm=True)
-    image_path = tmp_path / "native-image.png"
-    Image.new("RGB", (16, 16), "green").save(image_path)
+    doc_path = tmp_path / "pg18-native-smoke.md"
+    doc_text = (
+        "# PG18 native smoke document\n\n"
+        "This document proves metadata filtering, BM25 retrieval, vector storage, "
+        "and replace semantics against the PostgreSQL 18 LightRAG path.\n"
+    )
+    doc_path.write_text(doc_text, encoding="utf-8")
 
     try:
         first = await service.aingest(
             source_type="local",
-            path=str(image_path),
+            path=str(doc_path),
             replace=True,
-            title="PG18 E2E Image",
+            title="PG18 E2E Document",
             metadata={"e2e_case": " pg18 "},
             metadata_policy="validate",
         )
         second = await service.aingest(
             source_type="local",
-            path=str(image_path),
+            path=str(doc_path),
             replace=True,
-            title="PG18 E2E Image",
+            title="PG18 E2E Document",
             metadata={"e2e_case": " pg18 "},
             metadata_policy="validate",
         )
@@ -101,8 +104,8 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
         assert first["chunks"] == second["chunks"]
 
         metadata = await service.aget_metadata(doc_id)
-        assert metadata["filename"] == image_path.name
-        assert metadata["doc_title"] == "PG18 E2E Image"
+        assert metadata["filename"] == doc_path.name
+        assert metadata["doc_title"] == "PG18 E2E Document"
 
         doc_ids = await service.asearch_metadata(MetadataFilter(custom={"e2e_case": "pg18"}))
         assert doc_ids == [doc_id]
@@ -117,14 +120,15 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
 
         assert service._bm25 is not None
         bm25_rows = await service._bm25.search(
-            "Native image",
+            "PG18 native smoke document",
             candidate_ids=set(candidate_chunks),
             top_k=5,
         )
         assert any(row["chunk_id"] == chunk_id for row in bm25_rows)
 
-        with Image.open(image_path) as image:
-            query_embedding = stable_vector(image_seed(image), dim=cfg.embedding.dim)
+        raw_chunks = await service._lightrag_stores.get_text_chunks([chunk_id])
+        indexed_text = str(raw_chunks[0]["content"])
+        query_embedding = stable_vector(f"document:{indexed_text}", dim=cfg.embedding.dim)
         async with metadata_filter_scope({"missing-chunk"}):
             assert (
                 await service._lightrag.chunks_vdb.query(
@@ -142,7 +146,7 @@ async def test_unified_image_ingest_replace_and_filtered_retrieval(
             )
         assert any(row["id"] == chunk_id for row in vector_rows)
 
-        assert (await service.aget_metadata(doc_id))["filename"] == image_path.name
+        assert (await service.aget_metadata(doc_id))["filename"] == doc_path.name
     finally:
         if service._initialized:
             await service.areset(keep_files=False)

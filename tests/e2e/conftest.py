@@ -22,7 +22,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from playwright.sync_api import Browser, Page, Playwright
+from playwright.sync_api import Browser, Page, sync_playwright
 
 from dlightrag.api.server import create_app
 
@@ -94,11 +94,14 @@ def e2e_base_url() -> Generator[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def browser(playwright: Playwright) -> Generator[Browser, Any]:
+def browser() -> Generator[Browser, Any]:
     """Module-scoped browser — reuse across tests for speed."""
-    b = playwright.chromium.launch(headless=True)
-    yield b
-    b.close()
+    with sync_playwright() as pw:
+        b = pw.chromium.launch(headless=True)
+        try:
+            yield b
+        finally:
+            b.close()
 
 
 @pytest.fixture

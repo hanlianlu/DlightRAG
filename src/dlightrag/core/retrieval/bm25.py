@@ -150,16 +150,16 @@ def build_bm25_sql(
         f"AND {BM25_LANGUAGE_COLUMN} = '{_sql_language_literal(language)}'" if language else ""
     )
     limit_placeholder = "$4" if candidate_ids is not None else "$3"
-    return f"""
-        SELECT id, content, file_path, full_doc_id,
-               -(content <@> to_bm25query($1, '{safe_index}')) AS score
-        FROM {BM25_TABLE}
-        WHERE workspace = $2
-        {candidate_clause}
-        {language_clause}
-        ORDER BY content <@> to_bm25query($1, '{safe_index}')
-        LIMIT {limit_placeholder}
-    """
+    return (
+        f"SELECT id, content, file_path, full_doc_id, "  # noqa: S608
+        f"-(content <@> to_bm25query($1, '{safe_index}')) AS score "
+        f"FROM {BM25_TABLE} "
+        "WHERE workspace = $2 "
+        f"{candidate_clause} "
+        f"{language_clause} "
+        f"ORDER BY content <@> to_bm25query($1, '{safe_index}') "
+        f"LIMIT {limit_placeholder}"
+    )
 
 
 class PostgresBM25:

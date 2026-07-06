@@ -235,10 +235,16 @@ def install_fake_model_functions(monkeypatch: Any, *, dim: int = 8) -> FakeMulti
         "get_default_model_func_for_lightrag",
         lambda _config: fake_lightrag_llm,
     )
-    monkeypatch.setattr(service_module, "get_rerank_func", lambda _config: None)
+    monkeypatch.setattr(
+        service_module,
+        "get_rerank_func",
+        lambda _config, *, supports_vision=None: None,
+    )
     monkeypatch.setattr(service_module, "build_role_llm_configs", lambda _config: None)
     monkeypatch.setattr(
-        service_module, "get_embedding_func", lambda _config: fake_embedding_func(dim=dim)
+        service_module,
+        "get_embedding_func",
+        lambda _config, *, embedder=None: fake_embedding_func(dim=dim),
     )
     monkeypatch.setattr(
         service_module,

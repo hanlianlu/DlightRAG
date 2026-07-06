@@ -6,7 +6,7 @@ from typing import Any
 
 MIGRATIONS_TABLE = "dlightrag_schema_migrations"
 
-_CREATE_LEDGER = f"""CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
+_CREATE_LEDGER = """CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations (
     scope       TEXT NOT NULL,
     version     TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
@@ -15,13 +15,13 @@ _CREATE_LEDGER = f"""CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
 )
 """
 
-_SELECT_APPLIED = f"""SELECT 1
-FROM {MIGRATIONS_TABLE}
+_SELECT_APPLIED = """SELECT 1
+FROM dlightrag_schema_migrations
 WHERE scope = $1 AND version = $2
 LIMIT 1
 """
 
-_INSERT_APPLIED = f"""INSERT INTO {MIGRATIONS_TABLE} (scope, version, description)
+_INSERT_APPLIED = """INSERT INTO dlightrag_schema_migrations (scope, version, description)
 VALUES ($1, $2, $3)
 ON CONFLICT (scope, version) DO NOTHING
 """
