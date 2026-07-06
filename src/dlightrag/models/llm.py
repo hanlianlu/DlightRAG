@@ -20,8 +20,6 @@ from dlightrag.models.structured import StructuredOutput
 
 logger = logging.getLogger(__name__)
 
-_NATIVE_JSON_SCHEMA_PROVIDERS = frozenset({"anthropic", "gemini"})
-
 
 def _is_default_openai_endpoint(base_url: str | None) -> bool:
     if not base_url:
@@ -33,6 +31,8 @@ def _is_default_openai_endpoint(base_url: str | None) -> bool:
 def _structured_response_format(
     structured_output: StructuredOutput,
     cfg: ModelConfig,
+    *,
+    provider: Any | None = None,
 ) -> dict[str, Any]:
     mode = cfg.structured_output
     if mode == "json_object":
@@ -41,7 +41,7 @@ def _structured_response_format(
         return structured_output.response_format_for_provider(cfg.provider)
     if cfg.provider == "openai" and _is_default_openai_endpoint(cfg.base_url):
         return structured_output.response_format_for_provider("openai")
-    if cfg.provider in _NATIVE_JSON_SCHEMA_PROVIDERS:
+    if provider is not None and getattr(provider, "supports_native_json_schema", False):
         return structured_output.response_format_for_provider(cfg.provider)
     return {"type": "json_object"}
 
@@ -93,7 +93,9 @@ def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) 
         if structured_output is not None:
             if not isinstance(structured_output, StructuredOutput):
                 raise TypeError("structured_output must be a StructuredOutput")
-            response_format = response_format or _structured_response_format(structured_output, cfg)
+            response_format = response_format or _structured_response_format(
+                structured_output, cfg, provider=provider
+            )
         model_kwargs = {**cfg.model_kwargs, **kw}
         if stream:
             return provider.stream(

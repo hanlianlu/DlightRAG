@@ -9,7 +9,7 @@ from typing import Any
 
 from google import genai
 
-from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
 from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
@@ -17,6 +17,21 @@ logger = logging.getLogger(__name__)
 _GEMINI_CONFIG_KEYS = frozenset({"safety_settings", "cached_content", "thinking_config"})
 _ROLE_MAP = {"user": "user", "assistant": "model"}
 _DATA_URI_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
+
+
+def _gemini_usage(response: Any) -> dict[str, int] | None:
+    """Extract token usage from a Gemini SDK response."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return None
+    result: dict[str, int] = {}
+    for key in ("prompt_token_count", "candidates_token_count", "total_token_count"):
+        value = getattr(usage, key, None)
+        if isinstance(value, int):
+            # Map to canonical keys expected by observability layer
+            canonical = key.replace("_token_count", "_tokens")
+            result[canonical] = value
+    return result or None
 
 
 def _convert_content(content: str | list[Any]) -> str | list[Any]:
@@ -61,18 +76,28 @@ class GeminiProvider(CompletionProvider):
     ``thinking_config`` routed to config dict.
     """
 
+    supports_native_json_schema: bool = True
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._client: Any = None
 
     async def aclose(self) -> None:
         if self._client is not None:
-            # google-genai Client is not async-closeable; drop reference
+            await self._client.aclose()
             self._client = None
 
     def _get_client(self) -> Any:
         if self._client is None:
-            self._client = genai.Client(api_key=self._api_key)
+            http_opts: dict[str, Any] = {}
+            if self._base_url is not None:
+                http_opts["base_url"] = self._base_url
+            if self._timeout:
+                http_opts["timeout"] = int(self._timeout * 1000)
+            self._client = genai.Client(
+                api_key=self._api_key,
+                http_options=genai.types.HttpOptions(**http_opts) if http_opts else None,
+            )
         return self._client
 
     def _build_args(
@@ -130,7 +155,7 @@ class GeminiProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> CompletionOutput:
         model_id, contents, config = self._build_args(
             messages,
             model,
@@ -142,7 +167,10 @@ class GeminiProvider(CompletionProvider):
         response = await self._get_client().aio.models.generate_content(
             model=model_id, contents=contents, config=config
         )
-        return response.text or ""
+        return CompletionOutput(
+            response.text or "",
+            usage_details=_gemini_usage(response),
+        )
 
     async def stream(
         self,

@@ -8,7 +8,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
-from dlightrag.models.providers.base import CompletionProvider
+from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
 from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
@@ -62,6 +62,24 @@ def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
     return result
 
 
+def _anthropic_usage(response: Any) -> dict[str, int] | None:
+    """Extract token usage from an Anthropic SDK response."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None
+    result: dict[str, int] = {}
+    for key in (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    ):
+        value = getattr(usage, key, None)
+        if isinstance(value, int):
+            result[key] = value
+    return result or None
+
+
 def _apply_response_format(
     call_kwargs: dict[str, Any],
     response_format: dict[str, Any] | None,
@@ -86,6 +104,8 @@ class AnthropicProvider(CompletionProvider):
     model_kwargs keys ``thinking``, ``metadata``, ``extra_headers`` routed to SDK top-level.
     JSON schema response_format routed to ``output_config.format``.
     """
+
+    supports_native_json_schema: bool = True
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -114,7 +134,7 @@ class AnthropicProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
-    ) -> str:
+    ) -> CompletionOutput:
         system, non_system = _extract_system(messages)
 
         call_kwargs: dict[str, Any] = {
@@ -141,7 +161,10 @@ class AnthropicProvider(CompletionProvider):
                 call_kwargs["extra_body"] = extra
 
         response = await self._get_client().messages.create(**call_kwargs)
-        return "".join(block.text for block in response.content)
+        return CompletionOutput(
+            "".join(block.text for block in response.content),
+            usage_details=_anthropic_usage(response),
+        )
 
     async def stream(
         self,
