@@ -78,7 +78,6 @@ async def test_generate_rag_response_translates_answer_contract(monkeypatch: pyt
         "query": "What changed?",
         "stream": False,
         "top_k": 7,
-        "chunk_top_k": 21,
     }
     assert captured["headers"]["authorization"] == "Bearer secret"
     assert result == {"answer": "grounded answer", "contexts": ["first chunk", "second chunk"]}

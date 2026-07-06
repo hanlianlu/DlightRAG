@@ -196,6 +196,38 @@ async def test_unified_retriever_does_not_cap_fused_chunks_to_candidate_limit() 
     ]
 
 
+async def test_unified_retriever_keeps_distinct_chunks_with_same_content_prefix() -> None:
+    from dlightrag.core.retrieval.protocols import RetrievalResult
+
+    shared = "The quick brown fox jumps. " + "x" * 173
+    metadata_index = AsyncMock()
+    stores = AsyncMock()
+    backend = AsyncMock()
+    backend.aretrieve.return_value = RetrievalResult(
+        contexts={
+            "chunks": [
+                {"chunk_id": "semantic-a", "content": shared + " semantic suffix"},
+            ],
+            "entities": [],
+            "relationships": [],
+        }
+    )
+    bm25 = AsyncMock()
+    bm25.search.return_value = [
+        {"chunk_id": "bm25-b", "content": shared + " bm25 suffix"},
+    ]
+    retriever = UnifiedRetriever(
+        backend=backend,
+        bm25=bm25,
+        metadata_index=metadata_index,
+        stores=stores,
+    )
+
+    result = await retriever.aretrieve("query", top_k=2)
+
+    assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["semantic-a", "bm25-b"]
+
+
 async def test_unified_retriever_logs_retrieval_mix_summary(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

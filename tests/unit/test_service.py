@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from lightrag.constants import DEFAULT_COSINE_THRESHOLD
 
 from dlightrag.config import DlightragConfig
 from dlightrag.core.ingestion.engine import PreparedIngestFile
@@ -373,9 +374,9 @@ class TestRAGServiceFileManagement:
 class TestBuildVectorDbKwargs:
     """Test _build_vector_db_kwargs passthrough."""
 
-    def test_default_has_cosine_threshold(self, test_config: DlightragConfig) -> None:
+    def test_default_uses_lightrag_cosine_threshold(self, test_config: DlightragConfig) -> None:
         result = RAGService._build_vector_db_kwargs(test_config)
-        assert result == {"cosine_better_than_threshold": 0.3}
+        assert result == {"cosine_better_than_threshold": DEFAULT_COSINE_THRESHOLD}
 
     def test_passthrough_merges_kwargs(self, test_config: DlightragConfig) -> None:
         test_config.vector_db_kwargs = {
@@ -384,7 +385,7 @@ class TestBuildVectorDbKwargs:
             "hnsw_m": 32,
         }
         result = RAGService._build_vector_db_kwargs(test_config)
-        assert result["cosine_better_than_threshold"] == 0.3
+        assert result["cosine_better_than_threshold"] == DEFAULT_COSINE_THRESHOLD
         assert result["index_type"] == "HNSW_SQ"
         assert result["sq_type"] == "SQ8"
         assert result["hnsw_m"] == 32

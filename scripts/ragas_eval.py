@@ -208,7 +208,6 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
                 "query": question,
                 "stream": False,
                 "top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")),
-                "chunk_top_k": int(os.getenv("EVAL_QUERY_TOP_K", "10")) * 3,
             }
 
             headers: dict[str, str] = {}

@@ -47,29 +47,3 @@ def format_bm25_top(chunks: list[ContextRow], *, limit: int = 3) -> str:
     if len(chunks) > limit:
         parts.append(f"+{len(chunks) - limit}")
     return ",".join(parts) if parts else "none"
-
-
-def dedup_chunks_by_content(
-    chunks: list[ContextRow],
-    *,
-    prefix_len: int = 200,
-) -> list[ContextRow]:
-    """Remove chunks whose content prefix matches an earlier chunk.
-
-    Keeps the first occurrence (highest fusion score, since chunks are
-    pre-sorted by score descending). Two chunks with different IDs but
-    identical first *prefix_len* characters are considered duplicates.
-    """
-    seen: set[str] = set()
-    result: list[ContextRow] = []
-    for chunk in chunks:
-        content = str(chunk.get("content", ""))
-        key = content[:prefix_len] if len(content) >= prefix_len else content
-        if not key:
-            result.append(chunk)
-            continue
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(chunk)
-    return result
