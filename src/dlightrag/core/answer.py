@@ -15,6 +15,7 @@ Both streaming and non-streaming paths use the same freetext system prompt.
 Sources are projected from validated inline citation markers.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
@@ -44,6 +45,15 @@ class _PreparedAnswerPrompt:
     indexer: CitationIndexer
     chunk_image_blocks: dict[str, dict[str, Any]]
     trace: dict[str, Any]
+
+
+@dataclass
+class _PreparedModelCall:
+    contexts: RetrievalContexts
+    messages: list[dict[str, Any]]
+    indexer: CitationIndexer
+    trace: dict[str, Any]
+    no_context: bool
 
 
 class AnswerEngine:
@@ -111,29 +121,13 @@ class AnswerEngine:
             logger.info("[AE] generate: no model_func available, returning None answer")
             return RetrievalResult(answer=None, contexts=contexts)
 
-        system_prompt = get_answer_system_prompt()
-        prepared = self._prepare_prompt_context(
+        prepared = await asyncio.to_thread(
+            self._prepare_model_call,
             query,
             contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
             context_top_k=context_top_k,
-        )
-        no_context = not _has_answer_evidence(
-            prepared.contexts,
-            query_images=query_images,
-            conversation_history=conversation_history,
-        )
-        if no_context:
-            prepared.trace["answer_no_context"] = True
-
-        messages = self._build_messages(
-            system_prompt,
-            prepared.user_prompt,
-            prepared.contexts,
-            indexer=prepared.indexer,
-            conversation_history=conversation_history,
-            query_images=query_images,
-            chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
-            trace=prepared.trace,
         )
 
         logger.info(
@@ -147,8 +141,8 @@ class AnswerEngine:
             query[:60],
         )
 
-        raw = await self.model_func(messages=messages)
-        if no_context:
+        raw = await self.model_func(messages=prepared.messages)
+        if prepared.no_context:
             raw = _prepend_no_context_disclaimer(str(raw))
 
         logger.info(
@@ -211,29 +205,13 @@ class AnswerEngine:
             logger.info("[AE] generate_stream: no model_func, returning None")
             return contexts, None
 
-        system_prompt = get_answer_system_prompt()
-        prepared = self._prepare_prompt_context(
+        prepared = await asyncio.to_thread(
+            self._prepare_model_call,
             query,
             contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
             context_top_k=context_top_k,
-        )
-        no_context = not _has_answer_evidence(
-            prepared.contexts,
-            query_images=query_images,
-            conversation_history=conversation_history,
-        )
-        if no_context:
-            prepared.trace["answer_no_context"] = True
-
-        messages = self._build_messages(
-            system_prompt,
-            prepared.user_prompt,
-            prepared.contexts,
-            indexer=prepared.indexer,
-            conversation_history=conversation_history,
-            query_images=query_images,
-            chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
-            trace=prepared.trace,
         )
 
         logger.info(
@@ -247,8 +225,8 @@ class AnswerEngine:
             query[:60],
         )
 
-        token_iterator = await self.model_func(messages=messages, stream=True)
-        if no_context:
+        token_iterator = await self.model_func(messages=prepared.messages, stream=True)
+        if prepared.no_context:
             token_iterator = _prepend_no_context_stream(token_iterator)
 
         logger.info(
@@ -267,6 +245,46 @@ class AnswerEngine:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _prepare_model_call(
+        self,
+        query: str,
+        contexts: RetrievalContexts,
+        *,
+        query_images: list[dict[str, Any]] | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        context_top_k: int | None = None,
+    ) -> _PreparedModelCall:
+        system_prompt = get_answer_system_prompt()
+        prepared = self._prepare_prompt_context(
+            query,
+            contexts,
+            context_top_k=context_top_k,
+        )
+        no_context = not _has_answer_evidence(
+            prepared.contexts,
+            query_images=query_images,
+            conversation_history=conversation_history,
+        )
+        if no_context:
+            prepared.trace["answer_no_context"] = True
+        messages = self._build_messages(
+            system_prompt,
+            prepared.user_prompt,
+            prepared.contexts,
+            indexer=prepared.indexer,
+            conversation_history=conversation_history,
+            query_images=query_images,
+            chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
+            trace=prepared.trace,
+        )
+        return _PreparedModelCall(
+            contexts=prepared.contexts,
+            messages=messages,
+            indexer=prepared.indexer,
+            trace=prepared.trace,
+            no_context=no_context,
+        )
 
     def _build_messages(
         self,

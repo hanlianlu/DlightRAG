@@ -279,6 +279,32 @@ class TestAnswerEngineGenerate:
         assert result.trace["answer_context_images_skipped"] == 1
 
     @pytest.mark.asyncio
+    async def test_generate_prepares_model_payload_off_event_loop(self, monkeypatch) -> None:
+        """Image budgeting and prompt packing should not run on the event loop."""
+        from types import SimpleNamespace
+
+        import dlightrag.core.answer as answer_module
+
+        calls = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            calls.append(func.__name__)
+            return func(*args, **kwargs)
+
+        monkeypatch.setattr(
+            answer_module,
+            "asyncio",
+            SimpleNamespace(to_thread=fake_to_thread),
+            raising=False,
+        )
+        model_func = AsyncMock(return_value="answer")
+        engine = AnswerEngine(model_func=model_func)
+
+        await engine.generate("query", _image_contexts())
+
+        assert "_prepare_model_call" in calls
+
+    @pytest.mark.asyncio
     async def test_generate_limits_final_prompt_contexts(self) -> None:
         """generate() limits final prompt chunks while retrieval can over-fetch."""
         raw = "The first item matters [1-1]."
@@ -455,6 +481,34 @@ class TestAnswerEngineStream:
 
         assert isinstance(token_iter, AnswerStream)
         assert token_iter._indexer is not None
+
+    @pytest.mark.asyncio
+    async def test_generate_stream_prepares_model_payload_off_event_loop(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        import dlightrag.core.answer as answer_module
+
+        calls = []
+
+        async def fake_to_thread(func, *args, **kwargs):
+            calls.append(func.__name__)
+            return func(*args, **kwargs)
+
+        async def mock_stream():
+            yield "token"
+
+        monkeypatch.setattr(
+            answer_module,
+            "asyncio",
+            SimpleNamespace(to_thread=fake_to_thread),
+            raising=False,
+        )
+        model_func = AsyncMock(return_value=mock_stream())
+        engine = AnswerEngine(model_func=model_func)
+
+        await engine.generate_stream("query", _image_contexts())
+
+        assert "_prepare_model_call" in calls
 
 
 # ---------------------------------------------------------------------------
@@ -653,7 +707,7 @@ class TestBuildMessages:
 
 
 # ---------------------------------------------------------------------------
-# TestAnswerEngine -- Internal helpers (preserved)
+# TestAnswerEngine -- Internal helpers
 # ---------------------------------------------------------------------------
 
 
