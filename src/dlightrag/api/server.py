@@ -6,10 +6,8 @@ All endpoint logic lives in routes.py; this module handles app lifecycle,
 middleware, exception handlers, and router mounting.
 """
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -23,16 +21,6 @@ from dlightrag.app_state import request_config
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 logger = logging.getLogger(__name__)
-_DEFAULT_EXECUTOR_WORKERS = 6
-
-
-def _install_default_executor() -> ThreadPoolExecutor:
-    executor = ThreadPoolExecutor(
-        max_workers=_DEFAULT_EXECUTOR_WORKERS,
-        thread_name_prefix="dlightrag-io",
-    )
-    asyncio.get_running_loop().set_default_executor(executor)
-    return executor
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -42,20 +30,16 @@ def _install_default_executor() -> ThreadPoolExecutor:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    executor = _install_default_executor()
-    manager: RAGServiceManager | None = None
     try:
-        try:
-            manager = await RAGServiceManager.create(config=request_config(_app))
-        except Exception:
-            logger.exception("Failed to initialize RAG service manager")
-            raise
-        _app.state.manager = manager
+        manager = await RAGServiceManager.create(config=request_config(_app))
+    except Exception:
+        logger.exception("Failed to initialize RAG service manager")
+        raise
+    _app.state.manager = manager
+    try:
         yield
     finally:
-        if manager is not None:
-            await manager.close()
-        executor.shutdown(wait=False, cancel_futures=True)
+        await manager.close()
 
 
 # ═══════════════════════════════════════════════════════════════════
