@@ -153,3 +153,10 @@ def test_compose_routes_container_mineru_to_host_sidecar_by_default() -> None:
     assert (
         "MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}"
     ) in compose
+
+
+def test_codeql_config_filters_self_referential_advanced_setup_alert() -> None:
+    config = Path(".github/codeql/codeql-config.yml").read_text(encoding="utf-8")
+
+    assert "query-filters:" in config
+    assert "id: actions/unnecessary-use-of-advanced-config" in config
