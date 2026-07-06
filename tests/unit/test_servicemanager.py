@@ -956,6 +956,50 @@ class TestDelegation:
         result = await manager.list_ingested_files("ws_a")
         assert result == [{"doc": "d1"}]
 
+    async def test_file_panel_snapshot_does_not_initialize_cold_workspace(self, test_cfg) -> None:
+        store = AsyncMock()
+        store.list_processed_files.return_value = [
+            {"doc_id": "d1", "file_path": "/tmp/report.pdf", "status": "processed"}
+        ]
+        manager = RAGServiceManager(config=test_cfg)
+        manager._get_file_panel_store = MagicMock(return_value=store)  # type: ignore[method-assign]
+        manager._get_service = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("files panel snapshot must not initialize services")
+        )
+
+        result = await manager.get_file_panel_snapshot("Ws-A")
+
+        assert result == {
+            "files": [{"doc_id": "d1", "file_path": "/tmp/report.pdf", "status": "processed"}],
+            "pipeline_status": {"busy": False, "pending_enqueues": 0, "latest_message": ""},
+        }
+        store.list_processed_files.assert_awaited_once_with("ws_a")
+        manager._get_service.assert_not_awaited()
+
+    async def test_file_panel_snapshot_reads_pipeline_status_for_warm_workspace(
+        self, test_cfg
+    ) -> None:
+        store = AsyncMock()
+        store.list_processed_files.return_value = []
+        svc = AsyncMock()
+        svc.aget_pipeline_status.return_value = {
+            "busy": True,
+            "pending_enqueues": 1,
+            "latest_message": "Indexing",
+        }
+        manager = RAGServiceManager(config=test_cfg)
+        manager._get_file_panel_store = MagicMock(return_value=store)  # type: ignore[method-assign]
+        manager._services["ws_a"] = svc
+
+        result = await manager.get_file_panel_snapshot("Ws-A")
+
+        assert result["pipeline_status"] == {
+            "busy": True,
+            "pending_enqueues": 1,
+            "latest_message": "Indexing",
+        }
+        svc.aget_pipeline_status.assert_awaited_once()
+
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_delete_files_delegates(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()
