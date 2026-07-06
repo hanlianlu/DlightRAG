@@ -20,7 +20,8 @@ def rrf_fuse(rankings: list[list[ContextRow]], *, k: int = 60) -> list[ContextRo
             if not cid:
                 continue
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (k + rank + 1)
-            best.setdefault(cid, dict(row))
+            if cid not in best:
+                best[cid] = dict(row)
 
     fused: list[ContextRow] = []
     for cid, row in best.items():

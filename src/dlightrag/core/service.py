@@ -711,6 +711,12 @@ class RAGService:
         # tasks that block asyncio.run() from exiting.
         await self._shutdown_worker_pools()
 
+        if self._rerank_func is not None and hasattr(self._rerank_func, "aclose"):
+            try:
+                await self._rerank_func.aclose()
+            except Exception:
+                logger.warning("Failed to close rerank function", exc_info=True)
+
         if self._multimodal_embedder is not None:
             try:
                 await self._multimodal_embedder.aclose()

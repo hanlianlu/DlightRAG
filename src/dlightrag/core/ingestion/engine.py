@@ -137,12 +137,15 @@ class UnifiedIngestionEngine:
             current_hash = await asyncio.to_thread(_file_sha256, file_path)
             stored_hash = existing_status.get("content_hash")
             if stored_hash and current_hash == stored_hash:
-                return {
-                    "doc_id": doc_id,
-                    "source_kind": "skipped",
-                    "reason": "content_hash_match",
-                    "chunks": existing_status.get("chunks_list", []),
-                }
+                return await self._maybe_update_metadata(
+                    file_path,
+                    doc_id,
+                    title=title,
+                    author=author,
+                    metadata=metadata,
+                    metadata_policy=metadata_policy,
+                    chunks=existing_status.get("chunks_list", []),
+                )
 
         metadata_record = self._prepare_metadata_record(
             file_path,
@@ -156,6 +159,40 @@ class UnifiedIngestionEngine:
             doc_id=doc_id,
             metadata_record=metadata_record,
         )
+
+    async def _maybe_update_metadata(
+        self,
+        file_path: str | Path,
+        doc_id: str,
+        *,
+        title: str | None,
+        author: str | None,
+        metadata: Mapping[str, Any] | None,
+        metadata_policy: MetadataIngestPolicy | None,
+        chunks: list[str],
+    ) -> dict[str, Any]:
+        """Apply metadata-only update when content hash matches."""
+        if title is None and author is None and metadata is None:
+            return {
+                "doc_id": doc_id,
+                "source_kind": "skipped",
+                "reason": "content_hash_match",
+                "chunks": chunks,
+            }
+        metadata_record = self._prepare_metadata_record(
+            Path(file_path),
+            title=title,
+            author=author,
+            metadata=metadata,
+            metadata_policy=metadata_policy,
+        )
+        await self._metadata_index.upsert(doc_id, metadata_record)
+        return {
+            "doc_id": doc_id,
+            "source_kind": "metadata_updated",
+            "reason": "content_hash_match",
+            "chunks": chunks,
+        }
 
     async def aingest_files(
         self,
@@ -220,6 +257,7 @@ class UnifiedIngestionEngine:
                     current_hash = await asyncio.to_thread(_file_sha256, entry.parser_path)
                     stored_hash = existing_status.get("content_hash")
                     if stored_hash and current_hash == stored_hash:
+                        await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
                         results_by_index[entry.index] = {
                             "doc_id": entry.doc_id,
                             "source_kind": "skipped",
