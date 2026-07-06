@@ -848,6 +848,27 @@ class TestAnswerViaEngine:
             engine2 = manager._get_answer_engine()
             assert engine2 is engine
 
+    def test_get_query_planner_uses_planner_model_func(self, test_cfg) -> None:
+        """QueryPlanner uses the text planning factory, not the answer/query role."""
+        manager = RAGServiceManager(config=test_cfg)
+        planner_func = MagicMock()
+
+        with (
+            patch(
+                "dlightrag.models.llm.get_planner_model_func",
+                return_value=planner_func,
+                create=True,
+            ) as mock_planner,
+            patch("dlightrag.models.llm.get_query_model_func") as mock_query,
+        ):
+            planner = manager._get_query_planner()
+            planner2 = manager._get_query_planner()
+
+        mock_planner.assert_called_once_with(test_cfg)
+        mock_query.assert_not_called()
+        assert planner2 is planner
+        assert planner._llm_func is planner_func
+
     async def test_stream_concurrency_is_held_until_iterator_finishes(self, test_cfg) -> None:
         cfg = test_cfg.model_copy(update={"max_async": 1})
         manager = RAGServiceManager(config=cfg)

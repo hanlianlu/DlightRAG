@@ -65,6 +65,50 @@ class TestMakeCompletionFunc:
         assert callable(getattr(func, "shutdown", None))
         assert not hasattr(raw_func, "shutdown")
 
+    def test_planner_model_func_prefers_keyword_role_and_is_queue_managed(self, monkeypatch):
+        from dlightrag.models import llm
+
+        captured: dict[str, Any] = {}
+
+        def fake_make_completion_func(cfg, default_api_key=None):
+            captured["model"] = cfg.model
+            captured["default_api_key"] = default_api_key
+            return f"completion:{cfg.model}"
+
+        def fake_queue_managed_completion_func(func, *, max_async, timeout, queue_name):
+            captured["func"] = func
+            captured["max_async"] = max_async
+            captured["timeout"] = timeout
+            captured["queue_name"] = queue_name
+            return f"queued:{func}"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        monkeypatch.setattr(
+            llm, "_queue_managed_completion_func", fake_queue_managed_completion_func
+        )
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
+                roles=LLMRolesConfig(
+                    keyword=ModelConfig(provider="openai", model="deepseek-v4-flash")
+                ),
+            ),
+            embedding=_embedding_config(),
+            max_async=7,
+        )
+
+        func = llm.get_planner_model_func(cfg)
+
+        assert func == "queued:completion:deepseek-v4-flash"
+        assert captured == {
+            "model": "deepseek-v4-flash",
+            "default_api_key": "sk-chat",
+            "func": "completion:deepseek-v4-flash",
+            "max_async": 7,
+            "timeout": 120.0,
+            "queue_name": "DlightRAG planner LLM func",
+        }
+
     def test_vlm_model_func_is_queue_managed_by_default(self):
         from dlightrag.models import llm
 
