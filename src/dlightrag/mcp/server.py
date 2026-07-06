@@ -159,7 +159,7 @@ async def _filter_workspace_records(records: list[dict[str, Any]]) -> list[dict[
     name="retrieve",
     description=(
         "Query the RAG knowledge base for relevant information. Supports structured "
-        "metadata filters for precise document lookups."
+        "metadata filters and default or selected workspaces for precise document lookups."
     ),
 )
 async def retrieve_tool(
@@ -206,7 +206,7 @@ async def retrieve_tool(
     name="answer",
     description=(
         "Ask a question and get an LLM-generated answer backed by retrieved context "
-        "from the knowledge base."
+        "from the default or selected workspaces in the knowledge base."
     ),
 )
 async def answer_tool(
@@ -264,7 +264,14 @@ async def answer_tool(
     return answer_payload(result)
 
 
-@mcp_app.tool(name="list_workspaces", description="List all registered workspaces.")
+@mcp_app.tool(
+    name="list_workspaces",
+    description=(
+        "List workspaces visible to the current user. Returns workspace ids plus "
+        "records containing workspace, display_name, embedding_model, created_at, "
+        "and updated_at. Use display_name as the user-facing workspace label."
+    ),
+)
 async def list_workspaces_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
     records = await manager.list_workspace_records()
@@ -275,7 +282,14 @@ async def list_workspaces_tool() -> dict[str, Any]:
     }
 
 
-@mcp_app.tool(name="create_workspace", description="Create an empty DlightRAG workspace.")
+@mcp_app.tool(
+    name="create_workspace",
+    description=(
+        "Create and register an empty DlightRAG workspace. Optional display_name is "
+        "the user-facing label; response returns normalized workspace id, display_name, "
+        "and created."
+    ),
+)
 async def create_workspace_tool(
     workspace: Annotated[str, Field(description="Workspace name to create.")],
     display_name: Annotated[
@@ -298,7 +312,14 @@ async def create_workspace_tool(
     }
 
 
-@mcp_app.tool(name="delete_workspace", description="Delete/reset one DlightRAG workspace.")
+@mcp_app.tool(
+    name="delete_workspace",
+    description=(
+        "Delete/reset one DlightRAG workspace and remove its registry row. Supports "
+        "dry_run and keep_files; response returns normalized workspace id, deleted, "
+        "and result."
+    ),
+)
 async def delete_workspace_tool(
     workspace: Annotated[str, Field(description="Workspace name to delete.")],
     keep_files: Annotated[
@@ -329,7 +350,13 @@ async def delete_workspace_tool(
     }
 
 
-@mcp_app.tool(name="ingest", description="Ingest document(s) into the RAG knowledge base.")
+@mcp_app.tool(
+    name="ingest",
+    description=(
+        "Start a durable ingest job for local, URL, Azure Blob, or S3 documents into "
+        "a workspace. Response includes job_id, status, and workspace."
+    ),
+)
 async def ingest_tool(
     source_type: Annotated[SourceTypeParam, Field(description="Type of data source")],
     path: Annotated[
@@ -444,7 +471,13 @@ async def ingest_tool(
     return await manager.astart_ingest_job(workspace_name, ingest_spec)
 
 
-@mcp_app.tool(name="ingest_job_status", description="Return the status of an ingest job.")
+@mcp_app.tool(
+    name="ingest_job_status",
+    description=(
+        "Return status for an ingest job_id returned by ingest, including the job workspace "
+        "when available."
+    ),
+)
 async def ingest_job_status_tool(
     job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
 ) -> dict[str, Any]:
@@ -460,7 +493,12 @@ async def ingest_job_status_tool(
     return result
 
 
-@mcp_app.tool(name="list_files", description="List all documents ingested in the knowledge base.")
+@mcp_app.tool(
+    name="list_files",
+    description=(
+        "List documents ingested in one workspace. Response returns files, count, and workspace."
+    ),
+)
 async def list_files_tool(
     workspace: Annotated[
         str | None,
@@ -475,7 +513,13 @@ async def list_files_tool(
     return {"files": files, "count": len(files), "workspace": workspace_name}
 
 
-@mcp_app.tool(name="delete_files", description="Delete documents from the knowledge base.")
+@mcp_app.tool(
+    name="delete_files",
+    description=(
+        "Delete or dry_run matching documents from one workspace by filename or file_path. "
+        "Response returns results and workspace."
+    ),
+)
 async def delete_files_tool(
     filenames: Annotated[
         list[str] | None,

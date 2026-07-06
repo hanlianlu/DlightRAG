@@ -143,6 +143,32 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "ingest_job_status" in names
 
 
+async def test_mcp_management_tool_descriptions_explain_contracts() -> None:
+    tools = {tool.name: tool for tool in await mcp_server.mcp_app.list_tools()}
+
+    expected_fragments = {
+        "list_workspaces": [
+            "visible",
+            "records",
+            "display_name",
+            "embedding_model",
+            "created_at",
+            "updated_at",
+        ],
+        "create_workspace": ["display_name", "user-facing", "normalized", "created"],
+        "delete_workspace": ["dry_run", "keep_files", "deleted", "result"],
+        "ingest": ["durable", "job_id", "status", "workspace"],
+        "ingest_job_status": ["job_id", "status", "workspace"],
+        "list_files": ["files", "count", "workspace"],
+        "delete_files": ["dry_run", "results", "workspace"],
+    }
+
+    for tool_name, fragments in expected_fragments.items():
+        description = (tools[tool_name].description or "").lower()
+        for fragment in fragments:
+            assert fragment.lower() in description, f"{tool_name} missing {fragment!r}"
+
+
 def test_mcp_security_defaults_are_loopback_only() -> None:
     cfg = cast(Any, DlightragConfig)()
 
