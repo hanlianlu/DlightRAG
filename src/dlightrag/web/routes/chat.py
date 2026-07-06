@@ -54,12 +54,15 @@ async def get_checkpoint_history(
         )
         return JSONResponse({"history": history})
     except Exception:
-        logger.debug(
+        logger.warning(
             "Failed to load checkpoint history for session %s",
             log_safe(session_id),
             exc_info=True,
         )
-        return JSONResponse({"history": []})
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to load conversation history",
+        ) from None
 
 
 @router.delete("/history")
@@ -83,12 +86,15 @@ async def delete_checkpoint_history(
         )
         return JSONResponse({"deleted": deleted})
     except Exception:
-        logger.debug(
+        logger.warning(
             "Failed to delete checkpoint history for session %s",
             log_safe(session_id),
             exc_info=True,
         )
-        return JSONResponse({"deleted": 0})
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to delete conversation history",
+        ) from None
 
 
 @router.get("/", response_class=HTMLResponse)

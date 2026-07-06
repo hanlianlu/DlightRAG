@@ -1,8 +1,10 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Streaming answer wrapper with post-stream citation validation."""
 
+import inspect
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
+from typing import Any, cast
 
 from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.parser import clean_invalid_citations, strip_generated_references_section
@@ -39,6 +41,14 @@ class AnswerStream(AsyncIterator[str]):
 
     async def __anext__(self) -> str:
         return await self._gen.__anext__()
+
+    async def aclose(self) -> None:
+        """Cancel the underlying LLM stream to stop wasting tokens on disconnect."""
+        aclose = getattr(self._raw, "aclose", None)
+        if callable(aclose):
+            result = aclose()
+            if inspect.isawaitable(result):
+                await cast(Awaitable[Any], result)
 
     async def _iterate(self) -> AsyncIterator[str]:  # type: ignore[override]
         async for chunk in self._raw:
