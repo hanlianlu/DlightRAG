@@ -115,7 +115,7 @@ class TestBuildRerankFunc:
             lambda *args, **kwargs: object(),
         )
 
-    async def test_chat_llm_default_threshold_filters_weak_scores(self, monkeypatch):
+    async def test_chat_llm_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
         captured = self._capture_threshold(monkeypatch, "_chat_llm_rerank")
 
         fn = build_rerank_func(
@@ -124,7 +124,7 @@ class TestBuildRerankFunc:
         )
         await fn("query", [{"content": "chunk"}], 1)
 
-        assert captured["score_threshold"] == 0.5
+        assert captured["score_threshold"] is None
 
     async def test_provider_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
         captured = self._capture_threshold(monkeypatch, "_voyage_rerank")

@@ -166,7 +166,7 @@ async def _chat_llm_rerank(
     *,
     scoring_func: Callable[..., Any],
     max_concurrency: int = 4,
-    score_threshold: float = 0.5,
+    score_threshold: float | None = None,
     batch_size: int = _DEFAULT_BATCH_SIZE,
     multimodal: bool = True,
     image_max_bytes: int = _DEFAULT_IMAGE_MAX_BYTES,
@@ -269,10 +269,9 @@ async def _chat_llm_rerank(
     if not all_results and chunks:
         raise RuntimeError("All rerank batches failed")
 
-    # Apply threshold
     scored = []
     for chunk, score in all_results:
-        if score >= score_threshold:
+        if score_threshold is None or score >= score_threshold:
             out = chunk.copy()
             out["rerank_score"] = score
             scored.append(out)
@@ -626,12 +625,11 @@ def build_rerank_func(
     if strategy == "chat_llm_reranker":
         if ingest_func is None:
             raise ValueError("chat_llm_reranker requires a messages-first scoring callable")
-        chat_score_threshold = 0.5 if score_threshold is None else score_threshold
         fn = partial(
             _chat_llm_rerank,
             scoring_func=ingest_func,
             max_concurrency=rc.max_concurrency,
-            score_threshold=chat_score_threshold,
+            score_threshold=score_threshold,
             batch_size=rc.batch_size,
             multimodal=rc.input_modality != "text",
             image_max_bytes=rc.image_max_bytes,

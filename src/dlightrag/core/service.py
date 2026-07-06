@@ -18,7 +18,7 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import Any, Literal, cast
 
-from lightrag.constants import PARSED_DIR_NAME
+from lightrag.constants import DEFAULT_COSINE_THRESHOLD, PARSED_DIR_NAME
 
 from dlightrag.config import DlightragConfig, get_config
 from dlightrag.core.client_contracts import IngestDocument, SourceType
@@ -216,7 +216,9 @@ class RAGService:
     @staticmethod
     def _build_vector_db_kwargs(config: DlightragConfig) -> dict[str, Any]:
         """Build vector_db_storage_cls_kwargs from config.vector_db_kwargs passthrough."""
-        kwargs: dict[str, Any] = {"cosine_better_than_threshold": 0.3}
+        kwargs: dict[str, Any] = {
+            "cosine_better_than_threshold": DEFAULT_COSINE_THRESHOLD,
+        }
         kwargs.update(config.vector_db_kwargs)
         return kwargs
 

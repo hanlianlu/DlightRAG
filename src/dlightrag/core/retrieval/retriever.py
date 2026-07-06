@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from dlightrag.core.retrieval.filtered_vdb import metadata_filter_scope
-from dlightrag.core.retrieval.fusion import dedup_chunks_by_content, format_bm25_top, rrf_fuse
+from dlightrag.core.retrieval.fusion import format_bm25_top, rrf_fuse
 from dlightrag.core.retrieval.metadata_path import metadata_retrieve
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import (
@@ -139,7 +139,6 @@ class UnifiedRetriever:
             fused = rrf_fuse([semantic_chunks, bm25_chunks], k=self._rrf_k)
         else:
             fused = list(semantic_chunks)
-        fused = dedup_chunks_by_content(fused)
         lightrag_result.contexts["chunks"] = fused
         trace["fused_chunk_count"] = len(lightrag_result.contexts["chunks"])
         if candidate_ids is not None and metadata_filter_source == "llm_inferred" and not fused:

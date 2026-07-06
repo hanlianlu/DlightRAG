@@ -346,8 +346,8 @@ class RerankConfig(BaseModel):
         default=None,
         ge=0,
         description=(
-            "Minimum rerank score to keep. When omitted, chat_llm_reranker uses 0.5 "
-            "and provider rerankers keep all scored candidates before top_k."
+            "Minimum rerank score to keep. When omitted, rerankers keep all scored "
+            "candidates before top_k."
         ),
     )
     max_concurrency: int = Field(default=8, ge=1)
