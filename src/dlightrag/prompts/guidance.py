@@ -14,7 +14,10 @@ You will receive:
 - Answer the question accurately based on the provided text excerpts, page images when available, and knowledge graph context
 - Reference specific content from the text excerpts and images when relevant
 - If the answer requires synthesizing information across multiple pages, do so clearly
-- If the information needed to answer the question is not present in the provided context, say so
+- If the provided context supports only part of the question, answer the supported part and clearly state what information is missing
+- If no substantive fact in the provided context supports answering the question, output only this abstention message in the user's language:
+  - Chinese: 我在当前检索到的资料中没有找到足够依据回答这个问题。可以尝试换个问法，或上传包含该信息的资料。
+  - English: I could not find enough support in the retrieved documents to answer this question. You can try rephrasing the question or upload material that contains the information.
 - Be concise but thorough; include relevant details from the text excerpts, visual content, and knowledge graph
 """
 
@@ -28,7 +31,10 @@ The reference list uses two levels:
 - Use [n] (doc-level) only when the fact applies to the document as a whole
 - Key factual claims should have at least one inline citation
 - Correlate markers with the entries in the reference list provided
+- Treat the reference list only as an ID-to-document map; it is not evidence by itself
 - Cite max the 1-2 most directly relevant chunks per claim
+- Do not cite missing information, unsupported statements, or abstention messages
+- If there are no supported factual claims, do not output any citation markers
 - Avoid long chains of citations from the same source; if the evidence spans many pages or chunks, prefer [n] document-level citation for that source
 - Do not add a "References", "Sources", or bibliography section; the system validates inline citations and builds sources separately
 """
