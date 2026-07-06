@@ -1,10 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {applyPanelHtml} from './panel.ts';
-import {ingestStore} from '../stores/ingestStore.ts';
-import {showToast} from './toast.ts';
-
-type RelativeFile = File & {
+export type RelativeFile = File & {
     _relativePath?: string;
     webkitRelativePath?: string;
 };
@@ -37,14 +33,10 @@ interface DropDetectionResult {
     folderName: string | null;
 }
 
-function withRelativePath(file: File, path: string): RelativeFile {
+export function withRelativePath(file: File, path: string): RelativeFile {
     const relativeFile = file as RelativeFile;
     relativeFile._relativePath = path;
     return relativeFile;
-}
-
-function eventElement(event: Event): Element | null {
-    return event.target instanceof Element ? event.target : null;
 }
 
 async function traverseDirectory(entry: WebkitFileSystemEntry, basePath: string): Promise<RelativeFile[]> {
@@ -198,75 +190,4 @@ export async function detectDropItems(
     }
 
     return {files: allFiles, folderName: folderName};
-}
-
-/**
- * Upload files to workspace, preserving directory structure.
- */
-export async function uploadFolderToWorkspace(files: RelativeFile[], folderName: string | null): Promise<void> {
-    if (files.length === 0) return;
-
-    const formData = new FormData();
-    formData.append('workspace', ingestStore.workspace);
-    files.forEach(function (file) {
-        const path = file._relativePath || file.name;
-        formData.append('files', file, path);
-    });
-
-    const label = folderName || (files.length === 1 ? files[0].name : files.length + ' files');
-    showToast('Uploading ' + label + '...');
-
-    try {
-        const resp = await fetch('/web/files/upload', {
-            method: 'POST',
-            body: formData,
-        });
-        if (resp.ok) {
-            const html = await resp.text();
-            applyPanelHtml(html);
-            showToast('Uploaded ' + label);
-        } else {
-            const text = await resp.text();
-            showToast('Upload failed: ' + (text || resp.statusText));
-        }
-    } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        showToast('Upload failed: ' + message);
-    }
-}
-
-/**
- * Set up folder input (webkitdirectory) and Files panel button delegation.
- */
-export function setupFolderInput(): void {
-    const folderInput = document.getElementById('folder-input') as HTMLInputElement | null;
-    if (!folderInput) return;
-
-    folderInput.addEventListener('change', async function () {
-        const fileList = folderInput.files;
-        if (!fileList || fileList.length === 0) return;
-        const rawFiles = Array.from(fileList);
-
-        let folderName: string | null = null;
-        const augmented = rawFiles.map(function (f) {
-            const path = f.webkitRelativePath || f.name;
-            const file = withRelativePath(f, path);
-            if (!folderName && f.webkitRelativePath) {
-                const parts = f.webkitRelativePath.split('/');
-                folderName = parts[0];
-            }
-            return file;
-        });
-
-        await uploadFolderToWorkspace(augmented, folderName);
-        folderInput.value = '';
-    });
-
-    // Delegated click for "Upload Folder" button in Files panel
-    document.addEventListener('click', function (e) {
-        const btn = eventElement(e)?.closest('[data-action="upload-folder"]');
-        if (btn) {
-            folderInput.click();
-        }
-    });
 }

@@ -15,18 +15,9 @@
             Folder
         </button>
     </div>
-    <form id="upload-form"
-          hx-post="/web/files/upload"
-          hx-target="#panel-content"
-          hx-swap="innerHTML"
-          hx-encoding="multipart/form-data"
-          hx-indicator="#upload-spinner"
-          class="hidden">
-        <input type="hidden" name="workspace" value="{{ workspace }}">
-        <input type="file" id="file-input" name="files" multiple>
-    </form>
+    <input class="hidden" type="file" id="file-input" name="files" multiple>
+    <div id="upload-spinner" class="file-status">Uploading...</div>
 </div>
-<div id="upload-spinner" class="file-status htmx-indicator">Uploading...</div>
 
 {% if files %}
 {% for file in files %}
@@ -35,11 +26,8 @@
     <button class="file-delete"
             type="button"
             aria-label="Delete {{ file.file_name }}"
-            hx-delete="/web/files"
-            hx-vals='{"file_path": {{ file.file_path | tojson }}}'
-            hx-target="#panel-content"
-            hx-swap="innerHTML"
-            hx-confirm="Delete {{ file.file_name }}?">
+            data-action="delete-file"
+            data-file-path="{{ file.file_path | e }}">
         <svg class="file-delete-icon" width="14" height="14" viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="18" y1="6" x2="6" y2="18"/>
