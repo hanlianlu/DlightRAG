@@ -8,7 +8,6 @@ asyncpg store that reuses DlightRAG's existing ``pg_pool`` and
 """
 
 import json
-from contextlib import suppress
 from typing import Any
 
 from dlightrag.storage.migrations import Migration, apply_migrations
@@ -62,9 +61,13 @@ RETURNING turn_number
 """
 
 _GET_HISTORY = """
-SELECT turn_number, query, answer, query_content, answer_content
+SELECT turn_number, query_content, answer_content
 FROM dlightrag_checkpoints
 WHERE session_id = $1
+  AND query_content IS NOT NULL
+  AND answer_content IS NOT NULL
+  AND jsonb_typeof(query_content) = 'array'
+  AND jsonb_typeof(answer_content) = 'array'
 ORDER BY turn_number ASC
 LIMIT $2
 """
@@ -113,42 +116,50 @@ _SCHEMA_MIGRATIONS = (
 )
 
 
-def _resolve_content(jsonb_val: Any, text_fallback: Any) -> str | list[dict[str, Any]]:
-    """Resolve stored content to its canonical form.
+def _text_content(text: str) -> list[dict[str, Any]]:
+    return [{"type": "text", "text": text}]
 
-    Prefers the JSONB value when it is a non-empty list; falls back to
-    the plain-text column.  Handles ``None`` (missing column or NULL row),
-    asyncpg's occasional ``str``-for-JSONB behaviour, and empty strings.
-    """
-    if jsonb_val is None:
-        return str(text_fallback or "")
-    if isinstance(jsonb_val, list):
-        return jsonb_val
+
+def _content_for_storage(
+    content: list[dict[str, Any]] | None,
+    text: str,
+) -> list[dict[str, Any]]:
+    return content if content is not None else _text_content(text)
+
+
+def _content_from_jsonb(jsonb_val: Any) -> list[dict[str, Any]]:
+    """Return checkpoint JSONB content as content blocks."""
+    blocks = jsonb_val
     if isinstance(jsonb_val, str):
-        with suppress(json.JSONDecodeError, TypeError):
-            parsed = json.loads(jsonb_val)
-            if isinstance(parsed, list):
-                return parsed
-        if jsonb_val.strip():
-            return jsonb_val
-    text = str(text_fallback or "")
-    return text
+        try:
+            blocks = json.loads(jsonb_val)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError("checkpoint content must be a JSON array") from exc
+
+    if not isinstance(blocks, list):
+        raise ValueError("checkpoint content must be a JSON array")
+
+    result: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            raise ValueError("checkpoint content blocks must be JSON objects")
+        result.append(block)
+    return result
 
 
 class PGCheckpointStore:
     """PostgreSQL-backed conversation checkpoint store.
 
-    One row per conversation turn (query + answer pair).  Context chunks and
-    cited chunk IDs are stored as JSONB for potential future use; the public
-    ``get_history`` API returns only ``{role, content}`` dicts, matching the
-    old SQLite contract.
+    One row per conversation turn (query + answer pair). Content blocks,
+    context chunks, and cited chunk IDs are stored as JSONB; the public
+    ``get_history`` API returns ``{role, content}`` dicts.
 
     Usage::
 
         store = PGCheckpointStore()
         await store.initialize()               # idempotent DDL
         turn = await store.save_turn_pair(...)  # returns turn_number
-        history = await store.get_history(sid)  # list[dict[str, str]]
+        history = await store.get_history(sid)  # list[dict[str, Any]]
     """
 
     def __init__(self, *, pool: Any = None) -> None:
@@ -207,6 +218,8 @@ class PGCheckpointStore:
 
         chunks = contexts.get("chunks", []) if isinstance(contexts, dict) else []
         chunk_list = chunks if isinstance(chunks, list) else []
+        stored_query_content = _content_for_storage(query_content, query)
+        stored_answer_content = _content_for_storage(answer_content, answer)
 
         async def _operation(conn: Any) -> int:
             row = await conn.fetchrow(
@@ -215,8 +228,8 @@ class PGCheckpointStore:
                 workspace,
                 query,
                 answer,
-                json.dumps(query_content) if query_content is not None else None,
-                json.dumps(answer_content) if answer_content is not None else None,
+                json.dumps(stored_query_content),
+                json.dumps(stored_answer_content),
                 json.dumps(cited_chunk_ids or []),
                 json.dumps(chunk_list),
             )
@@ -232,9 +245,9 @@ class PGCheckpointStore:
     ) -> list[dict[str, Any]]:
         """Return conversation history as list of {role, content} dicts.
 
-        Prefers ``query_content`` / ``answer_content`` JSONB columns when
-        present; falls back to the plain-text ``query`` / ``answer`` columns
-        for backward compatibility with pre-multimodal rows.
+        Uses the canonical ``query_content`` / ``answer_content`` JSONB columns.
+        Rows without structured content are ignored rather than reconstructed
+        from legacy text columns.
         """
         await self._ensure_initialized()
 
@@ -242,11 +255,9 @@ class PGCheckpointStore:
             rows = await conn.fetch(_GET_HISTORY, session_id, max_turns)
             history: list[dict[str, Any]] = []
             for row in rows:
-                # query → user
-                qc = _resolve_content(row.get("query_content"), row["query"])
+                qc = _content_from_jsonb(row["query_content"])
                 history.append({"role": "user", "content": qc})
-                # answer → assistant
-                ac = _resolve_content(row.get("answer_content"), row["answer"])
+                ac = _content_from_jsonb(row["answer_content"])
                 history.append({"role": "assistant", "content": ac})
             return history
 

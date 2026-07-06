@@ -16,12 +16,7 @@ class ConversationStore extends Store {
     return this.#history;
   }
 
-  append(
-    query: string,
-    answer: string,
-    imageIds: string[],
-    queryImages?: string[],
-  ): void {
+  append(query: string, answer: string, queryImages?: string[]): void {
     let userContent: MessageContent;
     if (queryImages && queryImages.length > 0) {
       const blocks: ContentBlock[] = [

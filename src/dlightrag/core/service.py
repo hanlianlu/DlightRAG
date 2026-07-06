@@ -872,9 +872,6 @@ class RAGService:
             metadata=metadata,
             metadata_policy=metadata_policy,
         )
-        if hasattr(result, "model_dump"):
-            result = result.model_dump()
-
         return result
 
     async def _aingest_local_files(
@@ -921,9 +918,6 @@ class RAGService:
             metadata=metadata,
             metadata_policy=metadata_policy,
         )
-        if hasattr(result, "model_dump"):
-            result = result.model_dump()
-
         return result
 
     async def _aingest_local_manifest(
@@ -977,9 +971,6 @@ class RAGService:
             metadata=metadata,
             metadata_policy=metadata_policy,
         )
-        if hasattr(result, "model_dump"):
-            result = result.model_dump()
-
         return result
 
     def _workspace_input_root(self) -> Path:

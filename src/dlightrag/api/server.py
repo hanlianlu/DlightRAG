@@ -111,28 +111,22 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     # -- API routes --
     application.include_router(router)
 
-    # -- Web frontend (optional — only if jinja2 is installed) --
+    # -- Web frontend --
     if include_web:
-        try:
-            import importlib.util
+        from dlightrag.web.auth import WebAuthMiddleware
+        from dlightrag.web.deps import _TEMPLATE_DIR
+        from dlightrag.web.routes import router as web_router
+        from dlightrag.web.static_files import NoCacheStaticFiles
 
-            if importlib.util.find_spec("jinja2"):
-                from dlightrag.web.auth import WebAuthMiddleware
-                from dlightrag.web.deps import _TEMPLATE_DIR
-                from dlightrag.web.routes import router as web_router
-                from dlightrag.web.static_files import NoCacheStaticFiles
-
-                application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
-                application.include_router(web_router)
-                _static_dir = _TEMPLATE_DIR.parent / "static"
-                if _static_dir.exists():
-                    application.mount(
-                        "/static",
-                        NoCacheStaticFiles(directory=str(_static_dir)),
-                        name="static",
-                    )
-        except ImportError:
-            pass  # Web frontend not installed
+        application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
+        application.include_router(web_router)
+        _static_dir = _TEMPLATE_DIR.parent / "static"
+        if _static_dir.exists():
+            application.mount(
+                "/static",
+                NoCacheStaticFiles(directory=str(_static_dir)),
+                name="static",
+            )
 
     return application
 

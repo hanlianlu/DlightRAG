@@ -52,6 +52,7 @@ class WorkspaceStore extends Store {
       this.#active.push(workspace);
       this.#primary = workspace;
     }
+    if (this.#allWorkspacesActive()) this.#primary = this.#defaultWorkspace();
     this.#syncCookies();
     this.emit('workspaceToggled', { workspaces: [...this.#active] });
   }
@@ -106,8 +107,14 @@ class WorkspaceStore extends Store {
   }
 
   #validPrimary(primary: string): string {
+    if (this.#allWorkspacesActive()) return this.#defaultWorkspace();
     if (primary && this.#active.includes(primary)) return primary;
     return this.#fallbackPrimary(primary);
+  }
+
+  #allWorkspacesActive(): boolean {
+    return this.#records.length > 0
+      && this.#records.every((record) => this.#active.includes(record.workspace));
   }
 
   #defaultWorkspace(): string {

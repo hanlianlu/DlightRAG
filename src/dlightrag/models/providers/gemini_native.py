@@ -7,6 +7,8 @@ import re
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from google import genai
+
 from dlightrag.models.providers.base import CompletionProvider
 from dlightrag.models.structured import json_schema_from_response_format
 
@@ -15,11 +17,6 @@ logger = logging.getLogger(__name__)
 _GEMINI_CONFIG_KEYS = frozenset({"safety_settings", "cached_content", "thinking_config"})
 _ROLE_MAP = {"user": "user", "assistant": "model"}
 _DATA_URI_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
-
-try:
-    from google import genai
-except ImportError:
-    genai = None  # type: ignore[assignment]
 
 
 def _convert_content(content: str | list[Any]) -> str | list[Any]:
@@ -75,10 +72,6 @@ class GeminiProvider(CompletionProvider):
 
     def _get_client(self) -> Any:
         if self._client is None:
-            if genai is None:
-                raise ImportError(
-                    "google-genai SDK not installed. Install with: pip install dlightrag[gemini]"
-                )
             self._client = genai.Client(api_key=self._api_key)
         return self._client
 
