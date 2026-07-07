@@ -211,7 +211,7 @@ class TestHighlightExtractor:
         sources = [
             SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
         ]
-        answer_text = "The report is supported by all chunks [1]."
+        answer_text = " ".join(f"Chunk {i} is supported [1-{i}]." for i in range(1, 10))
 
         highlighted = await extract_highlights_for_sources(
             sources,
@@ -266,7 +266,7 @@ class TestHighlightExtractor:
         sources = [
             SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
         ]
-        answer_text = "The report is supported by all chunks [1]."
+        answer_text = " ".join(f"Chunk {i} is supported [1-{i}]." for i in range(1, 17))
 
         await extract_highlights_for_sources(
             sources,
@@ -277,3 +277,43 @@ class TestHighlightExtractor:
         )
 
         assert peak_active == 2
+
+    @pytest.mark.asyncio
+    async def test_doc_level_citation_fan_out_is_capped(self):
+        """A doc-level [n] citation highlights only the first few chunks, not all."""
+        seen_items: list[str] = []
+
+        async def batch_llm(*, messages, **kwargs) -> str:
+            user_prompt = messages[-1]["content"]
+            items = json.loads(user_prompt.split("Items:\n", 1)[1])
+            seen_items.extend(item["id"] for item in items)
+            return json.dumps(
+                {
+                    "items": [
+                        {"id": item["id"], "phrases": ["hit"], "confidence": 0.9} for item in items
+                    ]
+                }
+            )
+
+        chunks = [
+            ChunkSnippet(chunk_id=f"c{i}", chunk_idx=i + 1, content=f"Content hit for chunk {i}.")
+            for i in range(10)
+        ]
+        sources = [
+            SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
+        ]
+        answer_text = "The report supports the answer [1]."
+
+        highlighted = await extract_highlights_for_sources(
+            sources,
+            answer_text,
+            batch_llm,
+            batch_size=8,
+            max_concurrency=2,
+        )
+
+        # Doc-level [1] fans out to only the first few chunks, not all ten.
+        assert len(seen_items) == 3
+        assert highlighted[0].chunks is not None
+        highlighted_count = sum(1 for c in highlighted[0].chunks if c.highlight_phrases)
+        assert highlighted_count == 3

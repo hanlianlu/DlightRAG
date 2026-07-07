@@ -36,15 +36,20 @@ class CitationIndexer:
                 valid_chunk_ids.add(cid)
 
         ref_chunks: dict[str, list[str]] = {}
+        # Parallel per-ref sets give O(1) membership so build_index is O(C),
+        # not O(C^2) over a growing list.
+        seen_by_ref: dict[str, set[str]] = {}
         for ctx in contexts:
             ref_id = str(ctx.get("reference_id", ""))
             if not ref_id:
                 continue
             chunk_id = ctx.get("chunk_id")
             if chunk_id and chunk_id in valid_chunk_ids:
-                ref_chunks.setdefault(ref_id, [])
-                if chunk_id not in ref_chunks[ref_id]:
-                    ref_chunks[ref_id].append(chunk_id)
+                seen = seen_by_ref.setdefault(ref_id, set())
+                ordered = ref_chunks.setdefault(ref_id, [])
+                if chunk_id not in seen:
+                    seen.add(chunk_id)
+                    ordered.append(chunk_id)
                     # Store metadata on first encounter
                     self._chunk_meta[chunk_id] = {
                         "page_idx": ctx.get("page_idx", 0),
@@ -58,9 +63,11 @@ class CitationIndexer:
                 if source_id:
                     for sid in split_source_ids(source_id):
                         if sid in valid_chunk_ids:
-                            ref_chunks.setdefault(ref_id, [])
-                            if sid not in ref_chunks[ref_id]:
-                                ref_chunks[ref_id].append(sid)
+                            seen = seen_by_ref.setdefault(ref_id, set())
+                            ordered = ref_chunks.setdefault(ref_id, [])
+                            if sid not in seen:
+                                seen.add(sid)
+                                ordered.append(sid)
 
         for ref_id, chunk_ids in ref_chunks.items():
             self._index[ref_id] = {}
