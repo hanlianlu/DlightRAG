@@ -80,7 +80,7 @@ SELECT COUNT(*)::int FROM updated
 # deserialize it) stay bounded on large, high-failure ingests.
 _MAX_JOB_ERRORS = 200
 
-_RECORD_WINDOW = f"""
+_RECORD_WINDOW = """
 WITH updated AS (
     UPDATE dlightrag_ingest_jobs
     SET total_items = total_items + $2,
@@ -88,7 +88,7 @@ WITH updated AS (
         failed_items = failed_items + $4,
         current_window = $5,
         errors = CASE
-            WHEN jsonb_array_length(errors) >= {_MAX_JOB_ERRORS} THEN errors
+            WHEN jsonb_array_length(errors) >= $9 THEN errors
             ELSE errors || $6::jsonb
         END,
         lease_expires_at = NOW() + ($8 * INTERVAL '1 second'),
@@ -307,6 +307,7 @@ class PGIngestJobStore:
                 json.dumps(errors),
                 lease_owner,
                 lease_seconds,
+                _MAX_JOB_ERRORS,
             )
             return int(updated or 0)
 
