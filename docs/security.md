@@ -286,7 +286,10 @@ access_control:
 | Internal shared service | Use `simple` only behind trusted network boundaries |
 | Enterprise multi-user | Use `jwt` with JWKS from the external IdP and enable `jwt_claims` when workspace permissions are required |
 
-MCP streamable HTTP binds to loopback by default; enable auth to expose it. Its
-Host/Origin DNS-rebinding allowlist applies only under `auth_mode: none` and
-auto-disables once auth is on -- no allowlist tuning needed.
+MCP streamable HTTP binds to loopback (`127.0.0.1`) by default, reachable only
+from the local machine. To make it reachable from other hosts, set a
+non-loopback `mcp_host` and enable auth -- an unauthenticated non-loopback MCP
+would let any client call ingest/delete. The Host/Origin DNS-rebinding allowlist
+needs no tuning: it applies only under `auth_mode: none` and auto-disables once
+auth is on.
 
