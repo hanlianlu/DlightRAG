@@ -23,6 +23,30 @@ class AccessAction:
     JOB_READ = "job.read"
 
 
+# Named action bundles usable anywhere an action pattern is accepted (e.g. a
+# jwt_claims rule's ``actions``), so rules need not enumerate every action.
+# ``reader``, ``editor``, and ``admin`` are reserved names.
+_READER_ACTIONS: tuple[str, ...] = (
+    AccessAction.WORKSPACE_QUERY,
+    AccessAction.WORKSPACE_LIST_FILES,
+    AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+    AccessAction.WORKSPACE_READ_METADATA,
+    AccessAction.WORKSPACE_READ_VISUAL_ASSET,
+)
+_EDITOR_ACTIONS: tuple[str, ...] = (
+    *_READER_ACTIONS,
+    AccessAction.WORKSPACE_INGEST,
+    AccessAction.WORKSPACE_UPDATE_METADATA,
+    AccessAction.WORKSPACE_DELETE_FILES,
+    AccessAction.JOB_READ,
+)
+ACTION_PRESETS: dict[str, tuple[str, ...]] = {
+    "reader": _READER_ACTIONS,
+    "editor": _EDITOR_ACTIONS,
+    "admin": ("*",),
+}
+
+
 class AccessDeniedError(PermissionError):
     """Raised when an authenticated user is not authorized for a resource."""
 
@@ -102,11 +126,17 @@ def _claim_matches(claims: Mapping[str, Any], claim_name: str, expected: str) ->
 
 
 def _action_matches(patterns: Sequence[str], action: str) -> bool:
-    return any(
+    return any(_pattern_allows_action(pattern, action) for pattern in patterns)
+
+
+def _pattern_allows_action(pattern: str, action: str) -> bool:
+    preset = ACTION_PRESETS.get(pattern)
+    if preset is not None:
+        return any(_pattern_allows_action(entry, action) for entry in preset)
+    return (
         pattern == "*"
         or pattern == action
         or (pattern.endswith(".*") and action.startswith(pattern[:-1]))
-        for pattern in patterns
     )
 
 
@@ -115,6 +145,7 @@ def _workspace_matches(patterns: Sequence[str], workspace: str | None) -> bool:
 
 
 __all__ = [
+    "ACTION_PRESETS",
     "AccessAction",
     "AccessControl",
     "AccessDeniedError",
