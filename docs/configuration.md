@@ -383,28 +383,17 @@ access-control deployment guidance. The related config fields are `auth_mode`,
 ## MCP Streamable HTTP
 
 DlightRAG's HTTP MCP server uses the current Streamable HTTP transport on a
-single `/mcp` endpoint. It does not expose the deprecated HTTP+SSE `/sse` and
-`/messages` endpoint pair. Local deployments should keep the default loopback
-binding and Host/Origin allowlist:
+single `/mcp` endpoint (it does not expose the deprecated HTTP+SSE `/sse` +
+`/messages` pair). It binds to loopback by default:
 
 ```yaml
 mcp_transport: streamable-http
 mcp_host: 127.0.0.1
 mcp_port: 8101
-mcp_allowed_hosts:
-  - "127.0.0.1:*"
-  - "localhost:*"
-  - "[::1]:*"
-mcp_allowed_origins:
-  - "http://127.0.0.1:*"
-  - "http://localhost:*"
-  - "http://[::1]:*"
 ```
 
-These Host/Origin allowlists are enforced only when `auth_mode: none`. Enabling
-`auth_mode` (simple or jwt) turns DNS-rebinding protection off automatically --
-the bearer check supersedes it -- so exposing MCP beyond loopback needs only
-auth, not allowlist tuning. See [security.md](security.md).
+To expose MCP beyond loopback, set `mcp_host` and enable `auth_mode`. See
+[security.md](security.md).
 
 ## Citations
 
@@ -437,21 +426,15 @@ extraction for every interface.
 max_conversation_turns: 50
 max_conversation_tokens: 150000
 max_upload_bytes: 104857600
-url_ingest_max_bytes: 104857600
-url_ingest_private_host_allowlist: []
 max_upload_size_mb: 512
 ingest_timeout:
 request_timeout: 300
 ```
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
-applies to Web uploads. `url_ingest_max_bytes` caps each public HTTPS URL
-download before parser staging. `url_ingest_private_host_allowlist` keeps
-private/internal URL fetch disabled by default while allowing explicit trusted
-hosts for enterprise deployments.
-`ingest_timeout` limits how long synchronous SDK/REST/MCP ingest calls wait.
-When it expires, the ingest job keeps running and callers receive/read the job
-status instead of cancelling the ingest.
+applies to Web uploads. `ingest_timeout` limits how long synchronous
+SDK/REST/MCP ingest calls wait. When it expires, the ingest job keeps running
+and callers receive/read the job status instead of cancelling the ingest.
 
 Ingest job state is stored in `dlightrag_ingest_jobs`. DlightRAG keeps this as
 operational state rather than user-facing configuration: recent queued/running

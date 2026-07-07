@@ -260,8 +260,7 @@ mode, then adds metadata filtering, BM25, optional direct image retrieval, RRF
 fusion, reranking, answer packing, citations, and optional semantic highlights.
 The detailed mechanism is in [docs/retrieval-answer.md](docs/retrieval-answer.md).
 
-**Observability.** Langfuse tracing is optional. If Langfuse keys are absent,
-tracing is a no-op. Configuration is documented in
+**Observability.** Langfuse tracing is optional and configured in
 [docs/configuration.md](docs/configuration.md).
 
 ## Security Model

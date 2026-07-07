@@ -78,9 +78,9 @@ Connection budgets are split deliberately:
   pool and is bridged to `POSTGRES_MAX_CONNECTIONS`.
 - `postgres_pool_min_size` / `postgres_pool_max_size` control DlightRAG-owned
   domain stores such as metadata, workspaces, checkpoints, and BM25.
-- Docker Compose defaults `max_connections` to `80`, enough for the checked-in
-  API + MCP local profile with headroom. Production deployments should size the
-  server limit from the number of DlightRAG processes and their two pool caps.
+- Docker Compose defaults `max_connections` to `80` for the local profile.
+  Production deployments should size the server limit from the number of
+  DlightRAG processes and their two pool caps.
 
 At startup, DlightRAG logs a connection sanity line using the connected
 server's real `max_connections`. If common process-count env vars such as
@@ -115,8 +115,7 @@ ledger for domain schema changes. This applies to DlightRAG tables such as
 and AGE graph schemas remain managed by LightRAG.
 
 DlightRAG ensures these idempotent DDL migrations on startup and records their
-versions in the ledger. All application surfaces use the same configured
-PostgreSQL endpoint.
+versions in the ledger.
 
 ## LightRAG AGE Contract Patches
 
@@ -153,21 +152,6 @@ from dlightrag.core._lightrag_patches import required_patch_names
 from lightrag.kg.postgres_impl import PostgreSQLDB
 
 print(required_patch_names(PostgreSQLDB))
-```
-
-Implementation equivalent:
-
-```python
-def _configure_age_needs_patch(method):
-    source = inspect.getsource(method)
-    return not (
-        "ag_catalog.ag_graph" in source
-        and "DuplicateSchemaError" in source
-    )
-
-def _execute_needs_patch(method):
-    source = inspect.getsource(method)
-    return "DuplicateSchemaError" not in source
 ```
 
 ## PG Pool Architecture

@@ -101,12 +101,10 @@ finally:
     await manager.close()
 ```
 
-`iter_assets()` and `download_asset_to_file()` in the example are methods on
-your own Bynder client wrapper. DlightRAG calls `aiter_documents()` to discover
-`SourceDocument` descriptors and `amaterialize_document(document, destination)`
-to write each document into parser staging without loading the whole object into
-memory. Ingest-call `metadata` is the batch default; `SourceDocument.metadata`
-overlays it for that document.
+DlightRAG calls `aiter_documents()` to discover `SourceDocument` descriptors and
+`amaterialize_document(document, destination)` to write each document into parser
+staging without loading the whole object into memory. Ingest-call `metadata` is
+the batch default; `SourceDocument.metadata` overlays it for that document.
 
 ### REST API
 
@@ -137,11 +135,10 @@ to the same URL without query or fragment so signed tokens are not stored.
 Pass `source_uri` for one URL or `source_uris` for a URL batch when the durable
 source identity is a SaaS asset id, CMS URI, or another stable reference.
 
-Remote source files are transient by default for S3, Azure Blob, URL, and SDK
-connectors. Set `retain_remote_source_files: true` in config, or pass
-`retain_source_file` on one ingest call, to keep fetched files under the
-workspace input root; stored metadata `file_path` then points at that retained
-local file.
+Remote source files are transient by default. Enabling retention with
+`retain_remote_source_files` in config or per-call `retain_source_file` keeps
+fetched files under the workspace input root and points stored metadata
+`file_path` at that retained local file.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -498,9 +495,7 @@ data: {"type":"image_meta","current_image_ids":["img_0"],"image_descriptions":["
 data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
 ```
 
-REST uses the same fields as the Python manager methods. `retrieve` and
-`answer` both accept `chunk_top_k`, `filters`, `query_images`, and
-`multimodal_content`; `answer` also accepts `semantic_highlights`.
+REST uses the same fields as the Python manager methods.
 
 Web streaming uses the same answer pipeline but always attempts semantic
 highlights when citation highlighting is enabled. If phrases are found, Web

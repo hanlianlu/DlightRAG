@@ -86,9 +86,8 @@ RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
         text excerpts, KG context, source metadata, optional images
 ```
 
-LightRAG's `hybrid` mode is not used as a public downgrade path. The
-DlightRAG hybrid layer is the combination of LightRAG `mix` retrieval,
-pg_textsearch BM25, direct image retrieval, and RRF fusion.
+LightRAG's `hybrid` mode is not used as a public downgrade path; the pipeline
+above is the DlightRAG hybrid layer.
 
 BM25 runs against the same LightRAG `LIGHTRAG_DOC_CHUNKS` rows through
 DlightRAG-managed pg_textsearch profiles. During ingest, DlightRAG labels each

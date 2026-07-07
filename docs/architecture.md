@@ -72,10 +72,8 @@ query
   -> answer packing with citations, bounded images, and optional highlights
 ```
 
-DlightRAG uses LightRAG `mix` as the base retrieval mode. The DlightRAG hybrid
-layer is the combination of LightRAG `mix`, metadata filtering, pg_textsearch
-BM25, direct image retrieval, RRF fusion, hydration, reranking, and answer
-packing.
+DlightRAG uses LightRAG `mix` as the base retrieval mode; the steps shown
+around it form the DlightRAG hybrid layer.
 
 Use [retrieval-answer.md](retrieval-answer.md) for the detailed retrieval,
 filtering, reranking, citation, and multimodal-answer behavior.
