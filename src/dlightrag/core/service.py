@@ -181,6 +181,7 @@ class RAGService:
         self.config = config or get_config()
         self.enable_vlm = enable_vlm
         self._initialized: bool = False
+        self._warmup_task: asyncio.Task[None] | None = None
 
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
@@ -598,7 +599,7 @@ class RAGService:
         # use, which adds ~100 s to the first query after restart.  Trigger
         # init now so real users never pay that cost.
         try:
-            asyncio.create_task(self._warmup_lightrag_workers())
+            self._warmup_task = asyncio.create_task(self._warmup_lightrag_workers())
         except RuntimeError:
             pass  # no event loop running (e.g. sync test setup)
 
@@ -707,6 +708,17 @@ class RAGService:
 
     async def close(self) -> None:
         """Clean up storages and worker pools (best-effort)."""
+        # Cancel the background warmup task so it cannot run against
+        # half-closed resources during shutdown.
+        if self._warmup_task is not None:
+            self._warmup_task.cancel()
+            try:
+                await self._warmup_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.warning("Warmup task raised during shutdown", exc_info=True)
+            self._warmup_task = None
         # Shutdown LightRAG worker pools first — they hold background asyncio
         # tasks that block asyncio.run() from exiting.
         await self._shutdown_worker_pools()

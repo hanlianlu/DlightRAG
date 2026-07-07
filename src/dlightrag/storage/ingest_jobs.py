@@ -76,14 +76,21 @@ WITH updated AS (
 SELECT COUNT(*)::int FROM updated
 """
 
-_RECORD_WINDOW = """
+# Cap retained per-job error entries so the JSONB column (and status polls that
+# deserialize it) stay bounded on large, high-failure ingests.
+_MAX_JOB_ERRORS = 200
+
+_RECORD_WINDOW = f"""
 WITH updated AS (
     UPDATE dlightrag_ingest_jobs
     SET total_items = total_items + $2,
         processed_items = processed_items + $3,
         failed_items = failed_items + $4,
         current_window = $5,
-        errors = errors || $6::jsonb,
+        errors = CASE
+            WHEN jsonb_array_length(errors) >= {_MAX_JOB_ERRORS} THEN errors
+            ELSE errors || $6::jsonb
+        END,
         lease_expires_at = NOW() + ($8 * INTERVAL '1 second'),
         updated_at = NOW()
     WHERE job_id = $1
