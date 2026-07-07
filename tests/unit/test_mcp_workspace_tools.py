@@ -180,6 +180,16 @@ def test_mcp_security_defaults_are_loopback_only() -> None:
     ]
 
 
+def test_mcp_dns_rebinding_protection_follows_auth_mode() -> None:
+    none_cfg = cast(Any, DlightragConfig)()
+    simple_cfg = cast(Any, DlightragConfig)(auth_mode="simple", api_auth_token="test-token")
+    jwt_cfg = cast(Any, DlightragConfig)(auth_mode="jwt", jwt_verification_key="test-key")
+
+    assert none_cfg.mcp_dns_rebinding_protection is True
+    assert simple_cfg.mcp_dns_rebinding_protection is False
+    assert jwt_cfg.mcp_dns_rebinding_protection is False
+
+
 async def test_mcp_rejects_unknown_mode_without_schema_wrapper(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool("answer", {"query": "x", "mode": "mix"})
 

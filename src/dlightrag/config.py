@@ -939,14 +939,15 @@ class DlightragConfig(BaseSettings):
         default_factory=lambda: list(_LOCAL_MCP_ALLOWED_HOSTS),
         description=(
             "Allowed Host header values for MCP streamable-http DNS rebinding protection. "
-            "Use explicit deployment hostnames before exposing MCP beyond loopback."
+            "Only enforced when auth_mode='none' (see mcp_dns_rebinding_protection); with "
+            "auth enabled the bearer check supersedes this list."
         ),
     )
     mcp_allowed_origins: list[str] = Field(
         default_factory=lambda: list(_LOCAL_MCP_ALLOWED_ORIGINS),
         description=(
             "Allowed Origin header values for MCP streamable-http DNS rebinding protection. "
-            "Origin may be absent for non-browser clients."
+            "Only enforced when auth_mode='none'. Origin may be absent for non-browser clients."
         ),
     )
 
@@ -1215,6 +1216,18 @@ class DlightragConfig(BaseSettings):
     @property
     def checkpoint_session_ttl_seconds(self) -> int:
         return int(self.checkpoint_session_ttl_days) * 24 * 60 * 60
+
+    @property
+    def mcp_dns_rebinding_protection(self) -> bool:
+        """Enable MCP Host/Origin allowlist checks only when auth is off.
+
+        Follows ``auth_mode``: with auth on (simple/jwt) the bearer check already
+        rejects unauthorized DNS-rebinding requests, so the allowlist is redundant
+        and would only risk locking out legitimate networked clients. With
+        ``auth_mode='none'`` (the local default) the allowlist is the sole
+        defense, so it stays on.
+        """
+        return self.auth_mode == "none"
 
     def _pg_ssl_value(self) -> ssl.SSLContext | bool | None:
         """Return asyncpg's ssl argument matching LightRAG's SSL mode semantics."""
