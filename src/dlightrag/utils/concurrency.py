@@ -30,6 +30,21 @@ async def bounded_gather(
 ) -> list[Any]:
     """Run coroutines with bounded concurrency, preserving input order.
 
+    Thin convenience wrapper over :func:`bounded_map` (identity worker).
+
+    When to use which
+    -----------------
+    Prefer ``bounded_gather`` when you already hold a list of coroutines,
+    especially heterogeneous or multi-argument calls that read most naturally
+    as a comprehension, e.g. ``[score(start, batch) for start, batch in xs]``.
+    Prefer :func:`bounded_map` when you start from plain data plus a single
+    async worker (map semantics): it avoids the intermediate coroutine list
+    and creates coroutines lazily, so only ``max_concurrent`` exist at once
+    (cheaper for large inputs, no dangling "coroutine was never awaited"
+    warnings if the run is cancelled). Both share the same concurrency
+    mechanism and error convention, so the choice is about input shape, not
+    behaviour.
+
     Parameters
     ----------
     coros:
@@ -65,6 +80,20 @@ async def bounded_map[T, R](
 
     Unlike ``bounded_gather``, this accepts plain input items and creates each
     worker coroutine only when a worker slot is available.
+
+    When to use which
+    -----------------
+    Prefer ``bounded_map`` when you start from plain data plus a single async
+    worker (map semantics): only ``max_concurrent`` coroutines exist at once,
+    which is cheaper for large inputs and avoids dangling "coroutine was never
+    awaited" warnings on cancellation. Prefer :func:`bounded_gather` when you
+    already hold a list of coroutines, especially heterogeneous or
+    multi-argument calls that read most naturally as a comprehension. Both
+    share the same concurrency mechanism and error convention, so the choice
+    is about input shape, not behaviour.
+
+    Results preserve input order; a failed item contributes its ``Exception``
+    instead of its return value.
     """
     if not items:
         return []
