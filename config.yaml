@@ -175,19 +175,20 @@ answer:
 # ─────────────────────────────────────────────────────────────────
 
 # Auth secrets are best kept in .env.
+# jwt_audience accepts one value or a list, e.g. ["api://dlightrag", "<proxy-client-id>"]
+
 # auth_mode: simple
 # api_auth_token: ""
 # jwt_verification_key: ""
 # jwt_jwks_url: ""
 # jwt_issuer: ""
-# jwt_audience accepts one value or a list, e.g. ["api://dlightrag", "<proxy-client-id>"]
 # jwt_audience: ""
 # jwt_algorithm: "HS256"
 
 # Resource authorization. Default allow_all lets any authenticated caller use
 # any workspace. Switch to jwt_claims to map verified JWT claims to workspace
 # and action permissions; requires auth_mode: jwt and at least one rule.
-#
+
 # Rule fields:
 #   claim      - verified JWT claim name (on Entra, prefer App Role `roles`
 #                over `groups`).
