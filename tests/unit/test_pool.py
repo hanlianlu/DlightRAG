@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for dlightrag.storage.pool.PGPool singleton."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
@@ -27,6 +28,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_command_timeout = None
         mock_config.postgres_server_settings_dict.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "testhost",
@@ -167,6 +169,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = 128
+        mock_config.postgres_command_timeout = None
         mock_config.postgres_server_settings_dict.return_value = {
             "hnsw.ef_search": "384",
             "application_name": "dlightrag",
@@ -215,6 +218,7 @@ class TestPGPoolGet:
         mock_config.postgres_pool_min_size = 2
         mock_config.postgres_pool_max_size = 10
         mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_command_timeout = None
         mock_config.postgres_server_settings_dict.return_value = {}
         mock_config.pg_connection_kwargs.return_value = {
             "host": "primary",
@@ -300,3 +304,86 @@ class TestPGPoolGet:
         assert mock_create.call_count == 1
         # The pool must NOT be closed — pool.acquire() handles stale connections internally
         the_pool.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_get_applies_command_timeout(self) -> None:
+        """A configured command_timeout is forwarded to asyncpg.create_pool."""
+        from dlightrag.storage.pool import PGPool
+
+        mock_pool = MagicMock()
+        pool = PGPool()
+
+        mock_config = MagicMock()
+        mock_config.postgres_pool_min_size = 2
+        mock_config.postgres_pool_max_size = 10
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_command_timeout = 60.0
+        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.pg_connection_kwargs.return_value = {
+            "host": "primary",
+            "port": 5432,
+            "user": "writer",
+            "password": "secret",
+            "database": "dlightrag",
+        }
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool", new=AsyncMock(return_value=mock_pool)
+            ) as mock_create,
+            patch("dlightrag.config.get_config", return_value=mock_config),
+        ):
+            await pool.get()
+
+        assert mock_create.call_args.kwargs["command_timeout"] == 60.0
+
+    @pytest.mark.asyncio
+    async def test_run_acquires_with_configured_timeout(self) -> None:
+        """run() passes the configured acquire timeout to pool.acquire()."""
+        from dlightrag.storage.pool import PGPool
+
+        the_pool = MagicMock()
+        the_pool.acquire.return_value.__aenter__.return_value = object()
+        pool = PGPool()
+
+        mock_config = MagicMock()
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_command_timeout = None
+        mock_config.postgres_acquire_timeout = 12.5
+        mock_config.postgres_connection_retries = 1
+        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+
+        async def operation(conn):  # noqa: ANN001, ANN202
+            return "ok"
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=the_pool),
+            ),
+            patch("dlightrag.config.get_config", return_value=mock_config),
+        ):
+            result = await pool.run(operation)
+
+        assert result == "ok"
+        the_pool.acquire.assert_called_once_with(timeout=12.5)
+
+    @pytest.mark.asyncio
+    async def test_close_terminates_on_timeout(self) -> None:
+        """If graceful close exceeds the timeout, the pool is force-terminated."""
+        from dlightrag.storage.pool import PGPool
+
+        async def _hang() -> None:
+            await asyncio.sleep(10)
+
+        mock_pool = MagicMock()
+        mock_pool.close = AsyncMock(side_effect=_hang)
+        mock_pool.terminate = MagicMock()
+        pool = PGPool()
+        pool._pool = mock_pool
+
+        await pool.close(timeout=0.01)
+
+        mock_pool.terminate.assert_called_once()
+        assert pool._pool is None

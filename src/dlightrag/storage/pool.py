@@ -77,6 +77,8 @@ class PGPool:
             statement_cache_size = getattr(config, "postgres_statement_cache_size", None)
             if statement_cache_size is not None:
                 pool_kwargs["statement_cache_size"] = int(statement_cache_size)
+            if config.postgres_command_timeout is not None:
+                pool_kwargs["command_timeout"] = config.postgres_command_timeout
             server_settings = config.postgres_server_settings_dict()
             if server_settings:
                 pool_kwargs["server_settings"] = server_settings
@@ -125,7 +127,7 @@ class PGPool:
         for attempt in range(1, attempts + 1):
             try:
                 pool = await self.get()
-                async with pool.acquire() as conn:
+                async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
                     return await operation(conn)
             except self._transient_exceptions as exc:
                 if attempt >= attempts:
@@ -158,7 +160,10 @@ class PGPool:
                 await asyncio.wait_for(pool.close(), timeout=timeout)
             logger.info("DlightRAG domain store pool closed")
         except TimeoutError:
-            logger.error("DlightRAG domain store pool close timed out after %.2fs", timeout)
+            logger.error(
+                "DlightRAG domain store pool close timed out after %.2fs; terminating", timeout
+            )
+            pool.terminate()
         except Exception:
             logger.warning("DlightRAG domain store pool close failed", exc_info=True)
         finally:
