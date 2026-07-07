@@ -964,6 +964,14 @@ class DlightragConfig(BaseSettings):
         default="none",
         description="API auth strategy: 'none', 'simple' (bearer token), 'jwt'.",
     )
+    allow_insecure_no_auth: bool = Field(
+        default=False,
+        description=(
+            "Permit binding to a non-loopback api_host with auth_mode='none'. Off by "
+            "default: the server refuses to start in that unsafe combination unless "
+            "explicitly enabled (e.g. a trusted private network)."
+        ),
+    )
     jwt_verification_key: str | None = Field(
         default=None,
         description=(
@@ -1127,9 +1135,15 @@ class DlightragConfig(BaseSettings):
         if self.jwt_jwks_url and not (self.jwt_issuer and self.jwt_audience):
             raise ValueError("jwt_jwks_url requires jwt_issuer and jwt_audience")
         if self.auth_mode == "none" and self.api_host not in _LOCAL_API_HOSTS:
+            if not self.allow_insecure_no_auth:
+                raise ValueError(
+                    "auth_mode='none' with a non-loopback api_host is refused: any client "
+                    "could read, ingest, and delete every workspace. Enable authentication "
+                    "(auth_mode='simple' or 'jwt'), bind DLIGHTRAG_API_HOST to 127.0.0.1, or "
+                    "set allow_insecure_no_auth=true to override on a trusted network."
+                )
             warnings.warn(
-                "api_host is non-loopback while auth_mode='none'; set auth_mode or bind "
-                "DLIGHTRAG_API_HOST to 127.0.0.1 for local-only use.",
+                "auth_mode='none' on a non-loopback api_host (allow_insecure_no_auth=true).",
                 stacklevel=2,
             )
         # Browsers reject allow_origins=['*'] with credentials. When auth is

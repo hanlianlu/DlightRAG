@@ -254,8 +254,8 @@ class TestDlightragConfigNested:
         assert cfg.api_host == "127.0.0.1"
         assert cfg.auth_mode == "none"
 
-    def test_public_api_host_without_auth_warns(self):
-        with pytest.warns(UserWarning, match="api_host"):
+    def test_public_api_host_without_auth_is_refused(self):
+        with pytest.raises(ValueError, match="non-loopback"):
             DlightragConfig(
                 embedding=EmbeddingConfig(
                     provider="voyage",
@@ -266,6 +266,21 @@ class TestDlightragConfigNested:
                 api_host="0.0.0.0",
                 auth_mode="none",
             )
+
+    def test_public_api_host_without_auth_allows_explicit_override(self):
+        with pytest.warns(UserWarning, match="allow_insecure_no_auth"):
+            cfg = DlightragConfig(
+                embedding=EmbeddingConfig(
+                    provider="voyage",
+                    model="voyage-multimodal-3.5",
+                    api_key="sk-test",
+                    startup_probe=False,
+                ),
+                api_host="0.0.0.0",
+                auth_mode="none",
+                allow_insecure_no_auth=True,
+            )
+        assert cfg.allow_insecure_no_auth is True
 
     def test_minimal_config(self, tmp_path, monkeypatch):
         """Only embedding required; llm defaults are nested under llm.default."""

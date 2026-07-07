@@ -810,7 +810,10 @@ class RAGServiceManager:
                 results[ws] = ws_result
                 total_errors += len(ws_result.get("errors", []))
             except Exception as exc:
-                results[ws] = {"error": str(exc), "ingest_jobs_cancelled": cancelled_jobs}
+                results[ws] = {
+                    "error": "workspace reset failed",
+                    "ingest_jobs_cancelled": cancelled_jobs,
+                }
                 total_errors += 1
                 logger.warning(
                     "Failed to reset workspace '%s': %s",

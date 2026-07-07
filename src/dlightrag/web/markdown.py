@@ -113,16 +113,22 @@ def _math_inline_rule(state: StateInline, silent: bool) -> bool:
 
 
 def _render_math_inline(_renderer, tokens: list, idx: int, _options, _env) -> str:
-    """Re-wrap math content with its original delimiters for MathJax."""
+    """Re-wrap math content with its original delimiters for MathJax.
+
+    The content is HTML-escaped so the downstream sanitizer (nh3) is not the
+    sole barrier against markup smuggled between math delimiters; MathJax reads
+    the decoded text content, so escaping does not affect rendering.
+    """
     token = tokens[idx]
+    content = _html.escape(token.content, quote=False)
     markup = getattr(token, "markup", "$")
     if markup == "$$":
-        return f"$${token.content}$$"
+        return f"$${content}$$"
     if markup == "\\[":
-        return f"\\[{token.content}\\]"
+        return f"\\[{content}\\]"
     if markup == "\\(":
-        return f"\\({token.content}\\)"
-    return f"${token.content}$"
+        return f"\\({content}\\)"
+    return f"${content}$"
 
 
 # ---------------------------------------------------------------------------

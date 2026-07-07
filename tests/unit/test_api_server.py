@@ -75,9 +75,10 @@ def mock_service():
 
 
 @pytest.fixture
-def mock_manager(mock_service):
+def mock_manager(mock_service, test_config):
     """Create a mock RAGServiceManager that delegates to mock_service."""
     manager = AsyncMock()
+    manager.config = test_config
     manager.aingest = mock_service.aingest
     manager.astart_ingest_job = AsyncMock(
         return_value={

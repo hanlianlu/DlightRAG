@@ -13,6 +13,7 @@ from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
+from dlightrag.utils import log_safe
 from dlightrag.web.events import (
     AnswerDoneEvent,
     AnswerErrorEvent,
@@ -211,7 +212,7 @@ async def stream_answer_events(
         yield sse_event("meta", AnswerMetaEvent(history_kept=history_kept))
 
         t0 = time.monotonic()
-        logger.info("[SSE] query received: %s", query[:80])
+        logger.debug("[SSE] query received: %s", log_safe(query))
 
         yield sse_event("progress", AnswerProgressEvent(phase="planning"))
 

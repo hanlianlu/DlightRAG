@@ -105,8 +105,8 @@ def create_app(*, include_web: bool = True) -> FastAPI:
         request: Request,  # noqa: ARG001
         exc: PermissionError,
     ) -> JSONResponse:
-        body = ErrorDetail(detail=str(exc), error_type="validation")
-        return JSONResponse(status_code=409, content=body.model_dump())
+        body = ErrorDetail(detail=str(exc), error_type="auth")
+        return JSONResponse(status_code=403, content=body.model_dump())
 
     # -- API routes --
     application.include_router(router)

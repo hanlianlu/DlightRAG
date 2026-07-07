@@ -1,12 +1,16 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """System status and health API routes."""
 
+import logging
+
 from fastapi import APIRouter, Request
 
 from dlightrag.api.models import HealthResponse
 from dlightrag.app_state import request_config
 
 from .deps import get_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -42,8 +46,9 @@ async def health(request: Request) -> dict[str, object]:
         await conn.fetchval("SELECT 1")
         await conn.close()
         status["postgres"] = "connected"
-    except Exception as e:
-        status["postgres"] = f"error: {e}"
+    except Exception:
+        logger.warning("Health check: PostgreSQL probe failed", exc_info=True)
+        status["postgres"] = "error"
         status["status"] = "degraded"
 
     return status
