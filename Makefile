@@ -6,13 +6,16 @@ LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(L
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
 LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env" --host "$(LANGFUSE_HOST)"
 
-.PHONY: mineru-install mineru-api mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
+.PHONY: mineru-install mineru-api mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
 
 mineru-install:
 	scripts/mineru/install.sh
 
 mineru-api:
 	scripts/mineru/api.sh
+
+mineru-title-aided:
+	scripts/mineru/title_aided.sh
 
 mineru-service-install:
 	scripts/mineru/launch_agent.sh install
