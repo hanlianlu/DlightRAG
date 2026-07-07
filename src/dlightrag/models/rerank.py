@@ -13,6 +13,7 @@ candidate set can include BM25, LightRAG, and multimodal chunks that LightRAG's
 native reranker cannot see as one list.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -186,42 +187,46 @@ async def _chat_llm_rerank(
     ) -> list[tuple[dict[str, Any], float]]:
         prompt = LISTWISE_RERANK_PROMPT.format(query=query, n=len(batch))
 
-        content: list[dict[str, Any]] = []
-        content.append({"type": "text", "text": prompt})
-        image_budget = ImagePayloadBudget(
-            max_total_bytes=image_max_total_bytes,
-            max_bytes_per_image=image_max_bytes,
-            max_px=image_max_px,
-            min_px=image_min_px,
-            quality=image_quality,
-            min_quality=image_min_quality,
-        )
-
-        for i, chunk in enumerate(batch):
-            content.append({"type": "text", "text": f"\nCandidate {i + 1}:"})
-            image_included = False
-            if multimodal:
-                img = chunk.get("image_data")
-                if img:
-                    bounded = image_budget.add_base64(
-                        img,
-                        label=f"rerank:{batch_start + i}",
+        def _build_content() -> list[dict[str, Any]]:
+            # PIL decode/resize/JPEG re-encode is CPU-bound; build the payload
+            # (including image bounding) off the event loop. The budget is local
+            # to this batch, so running it in a worker thread is safe.
+            content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+            image_budget = ImagePayloadBudget(
+                max_total_bytes=image_max_total_bytes,
+                max_bytes_per_image=image_max_bytes,
+                max_px=image_max_px,
+                min_px=image_min_px,
+                quality=image_quality,
+                min_quality=image_min_quality,
+            )
+            for i, chunk in enumerate(batch):
+                content.append({"type": "text", "text": f"\nCandidate {i + 1}:"})
+                image_included = False
+                if multimodal:
+                    img = chunk.get("image_data")
+                    if img:
+                        bounded = image_budget.add_base64(
+                            img,
+                            label=f"rerank:{batch_start + i}",
+                        )
+                        if bounded is not None:
+                            uri, _ = bounded
+                            content.append({"type": "image_url", "image_url": {"url": uri}})
+                            image_included = True
+                if chunk.get("content"):
+                    # image_included=True → image carries rich signal, keep text short.
+                    # image_included=False → text-only path (either multimodal disabled,
+                    # or image exceeded budget, or chunk had no image): send full VLM
+                    # text description for accurate reranking.
+                    text_limit = 500 if image_included else None
+                    text_preview = (
+                        chunk["content"] if text_limit is None else chunk["content"][:text_limit]
                     )
-                    if bounded is not None:
-                        uri, _ = bounded
-                        content.append({"type": "image_url", "image_url": {"url": uri}})
-                        image_included = True
-            if chunk.get("content"):
-                # image_included=True → image carries rich signal, keep text short.
-                # image_included=False → text-only path (either multimodal disabled,
-                # or image exceeded budget, or chunk had no image): send full VLM
-                # text description for accurate reranking.
-                text_limit = 500 if image_included else None
-                text_preview = (
-                    chunk["content"] if text_limit is None else chunk["content"][:text_limit]
-                )
-                content.append({"type": "text", "text": text_preview})
+                    content.append({"type": "text", "text": text_preview})
+            return content
 
+        content = await asyncio.to_thread(_build_content)
         messages = [{"role": "user", "content": content}]
         try:
             resp = await scoring_func(messages=messages)
@@ -394,7 +399,8 @@ async def _jina_rerank(
     if not chunks:
         return []
 
-    documents = _build_rerank_documents(
+    documents = await asyncio.to_thread(
+        _build_rerank_documents,
         chunks,
         input_modality=_resolve_input_modality(input_modality, model),
         image_max_bytes=image_max_bytes,
@@ -453,7 +459,8 @@ async def _aliyun_rerank(
         data = await _post_rerank_json(url=url, payload=payload, headers=headers, client=client)
         results = data.get("results", [])
     else:
-        documents = _build_rerank_documents(
+        documents = await asyncio.to_thread(
+            _build_rerank_documents,
             chunks,
             input_modality=_resolve_input_modality(input_modality, model),
             image_max_bytes=image_max_bytes,

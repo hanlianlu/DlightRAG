@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 _MAX_INPUT_CHARS = 4096
 _MAX_CONCURRENT_HIGHLIGHTS = 8
 _DEFAULT_HIGHLIGHT_BATCH_SIZE = 8
+# Doc-level [n] citations otherwise fan out across every chunk of the document,
+# so a single [n] on a large doc becomes chunks x citing-sentences LLM items.
+# Cap doc-level sentences to the first few (highest-ranked) chunks per doc.
+_MAX_DOC_LEVEL_HIGHLIGHT_CHUNKS = 3
 
 
 class HighlightPhrases(BaseModel):
@@ -268,16 +272,25 @@ async def extract_highlights_for_sources(
         if not src.chunks:
             continue
         chunk_count += len(src.chunks)
+        doc_level_sentences = citing_sentences.get(src.id, [])
+        doc_level_chunks_used = 0
         for chunk in src.chunks:
             if not chunk.content:
                 continue
             text_chunk_count += 1
-            # Collect sentences from chunk-level [n-m] and doc-level [n] citations
+            # Chunk-level [n-m] citations always highlight their own chunk.
             chunk_key = f"{src.id}-{chunk.chunk_idx}"
             sentences = list(citing_sentences.get(chunk_key, []))
-            for s in citing_sentences.get(src.id, []):
-                if s not in sentences:
-                    sentences.append(s)
+            # Doc-level [n] citations fan out only to the first few chunks of the
+            # doc, bounding total items at O(chunk-level + N x doc-sentences).
+            if doc_level_sentences and doc_level_chunks_used < _MAX_DOC_LEVEL_HIGHLIGHT_CHUNKS:
+                added_doc_level = False
+                for s in doc_level_sentences:
+                    if s not in sentences:
+                        sentences.append(s)
+                        added_doc_level = True
+                if added_doc_level:
+                    doc_level_chunks_used += 1
             for sentence in sentences:
                 items.append((chunk.chunk_id, chunk.content, sentence))
 
