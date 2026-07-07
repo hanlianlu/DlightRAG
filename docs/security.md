@@ -84,6 +84,60 @@ jwt_audience: api://dlightrag
 
 `jwt_issuer` and `jwt_audience` are required when `jwt_jwks_url` is set.
 
+## Azure Entra ID (MSAL + JWKS)
+
+A concrete instance of the JWKS setup above. DlightRAG is the resource server:
+a browser client acquires a token from Entra with MSAL, then calls DlightRAG,
+which validates it against Entra's published keys. DlightRAG holds no secret and
+never contacts MSAL itself.
+
+Register one **App Registration** for the API and copy three values into config:
+
+| Entra value | Where to find it | Used for |
+|---|---|---|
+| Directory (tenant) ID | App registration → Overview | building `jwt_jwks_url` and `jwt_issuer` |
+| Application (client) ID | App registration → Overview | `jwt_audience` (v2 access tokens) |
+| Application ID URI | Expose an API | the resource clients request a scope on |
+
+Set the API app's `accessTokenAcceptedVersion` to `2` (Manifest) so tokens carry
+the v2 issuer and audience below, and expose at least one delegated scope such as
+`access_as_user`. The client must request that scope: a token's audience is
+derived from the requested scope, so without it Entra never mints a token
+audienced for DlightRAG.
+
+```yaml
+auth_mode: jwt
+jwt_algorithm: RS256
+jwt_jwks_url: https://login.microsoftonline.com/<TENANT_ID>/discovery/v2.0/keys
+jwt_issuer:  https://login.microsoftonline.com/<TENANT_ID>/v2.0
+jwt_audience: <API_CLIENT_ID>
+```
+
+JWKS serves public keys, so these values are not secret and can live in
+`config.yaml`. DlightRAG uses the token's `sub` claim as `user_id`.
+
+For per-workspace authorization, define **App Roles** on the API registration and
+assign AD groups to them in the matching Enterprise Application. Assigned roles
+land in the token's `roles` claim (including delegated user tokens), which
+`access_control: jwt_claims` matches:
+
+```yaml
+access_control:
+  mode: jwt_claims
+  rules:
+    - claim: roles
+      value: finance.readers
+      workspaces: [finance]
+      actions: [workspace.query, workspace.list_files]
+```
+
+| Gotcha | Detail |
+|---|---|
+| v1 vs v2 | With `accessTokenAcceptedVersion: 2`, `iss` ends in `/v2.0` and `aud` is the client-id GUID. Left at v1, `iss` is `https://sts.windows.net/<tenant>/` and `aud` is `api://<client-id>`. Decode a real token at jwt.ms and match `iss`/`aud` exactly. |
+| Roles, not groups | Entra `groups` holds group object IDs (not names) and is replaced by an overage reference past ~200 groups. App Roles emit stable string values in `roles`. |
+| Algorithm | Entra signs with `RS256`; do not leave the `HS256` default. |
+| CORS | The bundled `/web` UI is same-origin, so `cors_allow_origins` does not affect it. Pin explicit origins for a separately hosted SPA; browsers reject `["*"]` once that SPA sends credentials. |
+
 ## Access Control
 
 Authentication answers "who is calling?" Access control answers "what can this
@@ -114,8 +168,8 @@ access_control:
 
 `jwt_claims` requires `auth_mode: jwt` and at least one rule. Claim matching
 supports string claims and list-like claims. Workspace patterns support `*`.
-Action patterns support exact actions, `*`, and prefixes such as
-`workspace.*`.
+Action patterns support exact actions, `*`, prefixes such as `workspace.*`, and
+the named presets `reader`, `editor`, and `admin` (see below).
 
 Actions enforced by REST, Web, and MCP include:
 
@@ -133,6 +187,27 @@ Actions enforced by REST, Web, and MCP include:
 | `workspace.delete` | Delete workspace |
 | `workspace.reset` | Reset workspace |
 | `job.read` | Read ingest job status |
+
+**Action presets.** `actions` is a list, and each entry may be an exact action,
+a `workspace.*` prefix, `*`, or one of the built-in presets below. A caller is
+allowed when any entry matches, so presets and exact actions can be combined
+(for example `actions: [reader, workspace.update_metadata]`):
+
+| Preset | Expands to |
+|---|---|
+| `reader` | `workspace.query`, `workspace.list_files`, `workspace.download_source`, `workspace.read_metadata`, `workspace.read_visual_asset` |
+| `editor` | `reader` plus `workspace.ingest`, `workspace.update_metadata`, `workspace.delete_files`, `job.read` |
+| `admin` | `*` (every action, including `workspace.create`, `workspace.delete`, `workspace.reset`) |
+
+```yaml
+access_control:
+  mode: jwt_claims
+  rules:
+    - claim: roles
+      value: finance.editors
+      workspaces: [finance]
+      actions: [editor]
+```
 
 ## Deployment Posture
 

@@ -181,6 +181,22 @@ answer:
 # jwt_audience: ""
 # jwt_algorithm: "HS256"
 
+# Resource authorization. Default allow_all lets any authenticated caller use
+# any workspace. Switch to jwt_claims to map verified JWT claims to workspace
+# and action permissions; requires auth_mode: jwt and at least one rule.
+# See docs/security.md for the field reference and an Azure Entra example.
+# access_control:
+#   mode: jwt_claims
+#   rules:
+#     - claim: roles                 # App Role value (preferred over groups on Entra)
+#       value: finance.readers
+#       workspaces: [finance]        # exact name(s) or "*" (quote a bare *)
+#       actions: [reader]            # list; each item = a preset (reader|editor|
+#                                    #   admin), an exact action, "workspace.*", or
+#                                    #   "*". Any match grants access, so you may mix,
+#                                    #   e.g. [reader, workspace.update_metadata].
+#                                    #   Full reference: docs/security.md.
+
 # Langfuse keys belong in .env. Non-secret SDK behavior can be set here when
 # a deployment needs it.
 # langfuse_host: http://localhost:3300
