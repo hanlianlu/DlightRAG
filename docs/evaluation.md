@@ -73,13 +73,8 @@ A JSON file with a `test_cases` array:
 | `ground_truth` | yes | The expected answer; used for recall/relevance scoring |
 | `project` | no | Optional grouping label shown in results |
 
-Place the dataset anywhere and pass `--dataset`:
-
-```bash
-uv run python scripts/ragas_eval.py --dataset my_tests.json
-```
-
-A ``--dataset`` is always required — there is no built-in default.
+Place the dataset anywhere and pass `--dataset`; it is always required, with no
+built-in default.
 
 ## How the Adapter Works
 
@@ -130,12 +125,10 @@ eval credentials from DlightRAG's own config:
 | ``DLIGHTRAG_API_URL`` | ``config.api_host``:``config.api_port`` |
 | ``DLIGHTRAG_API_TOKEN`` | ``config.api_auth_token`` (simple); explicit external bearer token for jwt |
 
-This means **no extra ``.env`` entries are needed** for no-auth and simple-auth
-setups — run from the repo root with just ``--dataset``, and everything
-auto-resolves from ``config.yaml`` + ``.env``. JWT deployments must provide an
-externally issued bearer token via ``DLIGHTRAG_API_TOKEN``. Native-SDK-only LLM
-providers (Anthropic, Gemini) need an explicit ``EVAL_LLM_BINDING_API_KEY``
-because RAGAS requires an OpenAI-compatible API.
+JWT deployments must provide an externally issued bearer token via
+``DLIGHTRAG_API_TOKEN``. Native-SDK-only LLM providers (Anthropic, Gemini) need
+an explicit ``EVAL_LLM_BINDING_API_KEY`` because RAGAS requires an
+OpenAI-compatible API.
 
 ### Explicit overrides
 
@@ -227,27 +220,6 @@ evaluation:
 ```
 
 ## Adapter Note
-
-```
-┌────────────────────────────────────────────────────┐
-│  scripts/ragas_eval.py                             │
-│                                                    │
-│  DlightRAGAdapterEvaluator(RAGEvaluator)           │
-│    └─ generate_rag_response()  ← OVERRIDE          │
-│         POST /answer → translate format            │
-│                                                    │
-│  Everything else inherited from RAGEvaluator:      │
-│    • RAGAS evaluate() with 4 metrics               │
-│    • Two-stage semaphore pipeline                  │
-│    • tqdm progress bars                            │
-│    • CSV/JSON export                               │
-│    • Benchmark stats + console table               │
-└────────────────────────────────────────────────────┘
-         │                              ▲
-         │ POST /answer                 │ RAGAS calls eval LLM
-         ▼                              │
-   DlightRAG API                  OpenAI / custom endpoint
-```
 
 This is a thin format-adapter — all evaluation logic lives in LightRAG's
 `lightrag.evaluation` module. The adapter owns only the `/answer` call and the
