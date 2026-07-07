@@ -715,6 +715,8 @@ class RAGService:
             try:
                 await self._warmup_task
             except asyncio.CancelledError:
+                # Expected: we cancelled the task above and await it only to
+                # observe completion during shutdown.
                 pass
             except Exception:
                 logger.warning("Warmup task raised during shutdown", exc_info=True)
