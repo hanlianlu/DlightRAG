@@ -4,7 +4,7 @@ import {conversationStore} from '../stores/conversationStore.ts';
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
-import {fragmentFromSanitizedHtml, setSanitizedHtml} from './safe_html.ts';
+import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
 import chatStyles from '../styles/chat.module.css';
 
 // SSE HTML payloads are sanitized server-side by nh3 and again here before
@@ -101,6 +101,16 @@ function scrollToBottom(turn: ChatTurn): void {
 
 // ── public API ────────────────────────────────────────────────────────
 
+// Cap rendered chat DOM nodes (~HISTORY_CAP turns x user+ai) so long-lived
+// sessions don't accumulate an unbounded number of message nodes.
+const MAX_CHAT_MESSAGE_NODES = 200;
+
+function pruneOldMessages(chatMessages: HTMLElement): void {
+  while (chatMessages.childElementCount > MAX_CHAT_MESSAGE_NODES) {
+    chatMessages.firstElementChild?.remove();
+  }
+}
+
 export function createChatTurn(query: string): ChatTurn {
   const chatMessages = document.getElementById('chat-messages')!;
   const chatArea = document.getElementById('chat-area')!;
@@ -137,6 +147,7 @@ export function createChatTurn(query: string): ChatTurn {
   aiDiv.appendChild(contentDiv);
 
   chatMessages.appendChild(aiDiv);
+  pruneOldMessages(chatMessages);
 
   const turn: ChatTurn = {chatArea, aiDiv, contentDiv};
   scrollToBottom(turn);
@@ -170,7 +181,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
 
   function handlePreview(data: SSEData): void {
     const previewHtml = parseData(data);
-    setSanitizedHtml(turn.contentDiv, typeof previewHtml === 'string' ? previewHtml : '');
+    setSanitizedLlmHtml(turn.contentDiv, typeof previewHtml === 'string' ? previewHtml : '');
     renderMath(turn.contentDiv);
     fixExternalLinks(turn.contentDiv);
     scrollToBottom(turn);
@@ -184,7 +195,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
       imageIds = (payload as DonePayload).current_image_ids || [];
     }
 
-    const fragment = fragmentFromSanitizedHtml(html || '');
+    const fragment = llmFragmentFromSanitizedHtml(html || '');
     const answerContent = fragment.querySelector('#answer-content');
     const sourceData = fragment.querySelector('#source-data');
     const imageStrip = fragment.querySelector('.answer-image-strip');
@@ -214,7 +225,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
     const highlightsHtml = parseData(data);
     const sourceData = turn.aiDiv.querySelector('.source-data');
     if (sourceData) {
-      setSanitizedHtml(sourceData, typeof highlightsHtml === 'string' ? highlightsHtml : '');
+      setSanitizedLlmHtml(sourceData, typeof highlightsHtml === 'string' ? highlightsHtml : '');
     }
   }
 

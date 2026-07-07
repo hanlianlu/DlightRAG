@@ -191,6 +191,14 @@ function _navigateLightbox(direction: number): void {
     _showLightboxImage(box, images[newIdx]);
 }
 
+let _lightboxReturnFocus: HTMLElement | null = null;
+
+function _lightboxFocusables(box: HTMLElement): HTMLElement[] {
+    return Array.from(box.querySelectorAll<HTMLElement>('button')).filter(
+        (el) => el.offsetParent !== null,
+    );
+}
+
 function ensureLightbox(): LightboxElement {
     let box = document.getElementById('image-lightbox') as LightboxElement | null;
     if (box) return box;
@@ -199,6 +207,10 @@ function ensureLightbox(): LightboxElement {
     box.id = 'image-lightbox';
     box.className = lightboxStyles.imageLightbox;
     box.setAttribute('aria-hidden', 'true');
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    box.setAttribute('aria-label', 'Image viewer');
+    box.tabIndex = -1;
 
     const prev = document.createElement('button');
     prev.className = lightboxStyles.imageLightboxPrev;
@@ -245,6 +257,8 @@ function ensureLightbox(): LightboxElement {
 export function openLightbox(src: unknown): void {
     const safeUrl = _safeImageUrl(src);
     if (!safeUrl) return;
+    _lightboxReturnFocus =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const box = ensureLightbox();
     box.setAttribute('data-current-src', safeUrl.href);
     const img = box.__lightboxImg;
@@ -253,6 +267,7 @@ export function openLightbox(src: unknown): void {
     box.classList.add(lightboxStyles.open);
     box.setAttribute('aria-hidden', 'false');
     _updateNavButtons(box);
+    box.focus();
 }
 
 export function closeLightbox(): void {
@@ -263,6 +278,10 @@ export function closeLightbox(): void {
     box.removeAttribute('data-current-src');
     const img = box.__lightboxImg;
     if (img) img.removeAttribute('src');
+    if (_lightboxReturnFocus) {
+        _lightboxReturnFocus.focus();
+        _lightboxReturnFocus = null;
+    }
 }
 
 export function setupImageInputs(): void {
@@ -335,5 +354,26 @@ export function setupImageInputs(): void {
         if (!box || !box.classList.contains(lightboxStyles.open)) return;
         if (e.key === 'ArrowLeft') { e.preventDefault(); _navigateLightbox(-1); }
         if (e.key === 'ArrowRight') { e.preventDefault(); _navigateLightbox(1); }
+        if (e.key === 'Tab') {
+            const focusables = _lightboxFocusables(box);
+            if (focusables.length === 0) {
+                e.preventDefault();
+                box.focus();
+                return;
+            }
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const active = document.activeElement;
+            if (e.shiftKey && active === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && active === last) {
+                e.preventDefault();
+                first.focus();
+            } else if (!box.contains(active)) {
+                e.preventDefault();
+                first.focus();
+            }
+        }
     });
 }
