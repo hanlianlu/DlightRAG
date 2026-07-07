@@ -92,8 +92,7 @@ class _ScopedAnswerStream:
 
     @trace.setter
     def trace(self, value: Any) -> None:
-        if self._inner is not None:
-            self._inner.trace = value  # type: ignore[attr-defined]
+        self._inner.trace = value  # type: ignore[attr-defined]
 
     @property
     def current_image_ids(self) -> Any:
@@ -101,8 +100,7 @@ class _ScopedAnswerStream:
 
     @current_image_ids.setter
     def current_image_ids(self, value: Any) -> None:
-        if self._inner is not None:
-            self._inner.current_image_ids = value  # type: ignore[attr-defined]
+        self._inner.current_image_ids = value  # type: ignore[attr-defined]
 
     @property
     def image_descriptions(self) -> Any:
@@ -110,8 +108,7 @@ class _ScopedAnswerStream:
 
     @image_descriptions.setter
     def image_descriptions(self, value: Any) -> None:
-        if self._inner is not None:
-            self._inner.image_descriptions = value  # type: ignore[attr-defined]
+        self._inner.image_descriptions = value  # type: ignore[attr-defined]
 
     def _release(self) -> None:
         if not self._released:
