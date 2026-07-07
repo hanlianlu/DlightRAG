@@ -84,6 +84,10 @@ jwt_audience: api://dlightrag
 
 `jwt_issuer` and `jwt_audience` are required when `jwt_jwks_url` is set.
 
+`jwt_audience` may be a single value or a list; a token passes when its `aud`
+matches any entry, so one deployment can trust tokens minted for different
+audiences (for example a browser front door and direct API clients).
+
 ## Azure Entra ID (MSAL + JWKS)
 
 A concrete instance of the JWKS setup above. DlightRAG is the resource server:
@@ -137,6 +141,71 @@ access_control:
 | Roles, not groups | Entra `groups` holds group object IDs (not names) and is replaced by an overage reference past ~200 groups. App Roles emit stable string values in `roles`. |
 | Algorithm | Entra signs with `RS256`; do not leave the `HS256` default. |
 | CORS | The bundled `/web` UI is same-origin, so `cors_allow_origins` does not affect it. Pin explicit origins for a separately hosted SPA; browsers reject `["*"]` once that SPA sends credentials. |
+
+## Ingress Topology (Per-Surface Front Doors)
+
+REST and Web share one process on `api_port` (8100); MCP is a separate
+streamable-http listener on `mcp_port` (8101). All surfaces share one
+`auth_mode`, yet each can sit behind a different front door -- as long as every
+request carries a bearer JWT that the single `auth_mode: jwt` can verify.
+
+| Surface | Port · path | Caller | Front door |
+|---|---|---|---|
+| Web UI | 8100 · `/web` | Browsers | oauth2-proxy injects `Authorization: Bearer` |
+| REST API | 8100 · `/api` | Programmatic | none -- client sends its own bearer |
+| MCP | 8101 · `/mcp` | Agents | none -- client sends its own bearer |
+
+Only browsers need an interactive redirect, so oauth2-proxy fronts `/web` alone;
+API and MCP clients already hold a token, so DlightRAG verifies them directly --
+no proxy, and no Easy Auth (unavailable on AKS regardless).
+
+Apply the auth annotation to the `/web` route only:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dlightrag-web            # browser UI -- gated by oauth2-proxy
+  annotations:
+    nginx.ingress.kubernetes.io/auth-url: https://oauth2-proxy.example.com/oauth2/auth
+    nginx.ingress.kubernetes.io/auth-signin: https://oauth2-proxy.example.com/oauth2/start?rd=$escaped_request_uri
+spec:
+  rules:
+    - host: rag.example.com
+      http:
+        paths:
+          - path: /web
+            pathType: Prefix
+            backend:
+              service: { name: dlightrag, port: { number: 8100 } }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dlightrag-api            # API + MCP -- DlightRAG verifies the bearer itself
+spec:
+  rules:
+    - host: rag.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: { name: dlightrag, port: { number: 8100 } }
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service: { name: dlightrag-mcp, port: { number: 8101 } }
+```
+
+If oauth2-proxy forwards a token whose `aud` differs from the API/MCP clients',
+list both so one `auth_mode: jwt` accepts each:
+
+```yaml
+jwt_audience:
+  - api://dlightrag             # direct API / MCP clients
+  - <oauth2-proxy-client-id>    # browser token forwarded by the proxy
+```
 
 ## Access Control
 

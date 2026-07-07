@@ -180,6 +180,7 @@ answer:
 # jwt_verification_key: ""
 # jwt_jwks_url: ""
 # jwt_issuer: ""
+# jwt_audience accepts one value or a list, e.g. ["api://dlightrag", "<proxy-client-id>"]
 # jwt_audience: ""
 # jwt_algorithm: "HS256"
 
