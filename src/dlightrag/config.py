@@ -998,6 +998,15 @@ class DlightragConfig(BaseSettings):
         gt=0,
         description="Timeout in seconds for retrieve/answer/query operations.",
     )
+    answer_stream_idle_timeout: float = Field(
+        default=120.0,
+        gt=0,
+        description=(
+            "Max seconds to wait for the next streamed answer token. Guards against "
+            "a stalled upstream LLM holding a streaming request (and its pooled "
+            "connection) open indefinitely."
+        ),
+    )
     stalled_doc_timeout_seconds: int = Field(
         default=3600,
         description=(

@@ -34,6 +34,7 @@ from dlightrag.api.models import (
 )
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
+from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
@@ -187,15 +188,11 @@ async def answer(
         yield sse_data_event(AnswerContextStreamEvent(data=public_contexts))
         answer_parts: list[str] = []
         try:
-            if token_iter is None:
-                pass
-            elif isinstance(token_iter, str):
-                answer_parts.append(token_iter)
-                yield sse_data_event(AnswerTokenStreamEvent(content=token_iter))
-            else:
-                async for chunk in token_iter:
-                    answer_parts.append(chunk)
-                    yield sse_data_event(AnswerTokenStreamEvent(content=chunk))
+            async for chunk in iter_answer_tokens(
+                token_iter, idle_timeout=manager.config.answer_stream_idle_timeout
+            ):
+                answer_parts.append(chunk)
+                yield sse_data_event(AnswerTokenStreamEvent(content=chunk))
 
             full_answer = "".join(answer_parts)
             clean_answer = getattr(token_iter, "answer", None) or full_answer
@@ -242,6 +239,8 @@ async def answer(
             yield sse_data_event(
                 AnswerErrorStreamEvent(message="Internal server error during streaming")
             )
+        finally:
+            await aclose_answer_stream(token_iter)
 
     return StreamingResponse(
         event_generator(),

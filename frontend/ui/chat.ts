@@ -8,6 +8,13 @@ import {streamSSE} from '../lib/sse.ts';
 import {createAnswerRenderer, createChatTurn, setAnswerError} from '../lib/chat_renderer.ts';
 
 let queryInFlight = false;
+let currentQueryController: AbortController | null = null;
+const STREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** Abort the in-flight answer request (user stop / navigation), if any. */
+export function cancelQuery(): void {
+    currentQueryController?.abort(new DOMException('Query cancelled', 'AbortError'));
+}
 
 function submitComposerForm(form: HTMLFormElement): void {
     form.requestSubmit();
@@ -21,6 +28,17 @@ export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
 
+    const controller = new AbortController();
+    currentQueryController = controller;
+    let idleTimer = 0;
+    const armIdleTimeout = (): void => {
+        clearTimeout(idleTimer);
+        idleTimer = window.setTimeout(
+            () => controller.abort(new DOMException('Stream idle timeout', 'TimeoutError')),
+            STREAM_IDLE_TIMEOUT_MS,
+        );
+    };
+
     const turn = createChatTurn(query);
     const imageData = getPendingImageData();
     clearImages();
@@ -29,9 +47,11 @@ export async function submitQuery(query: string): Promise<void> {
     let success = false;
 
     try {
+        armIdleTimeout();
         const response = await fetch('/web/answer', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
+            signal: controller.signal,
             body: JSON.stringify({
                 query: query,
                 images: imageData,
@@ -49,12 +69,18 @@ export async function submitQuery(query: string): Promise<void> {
         const activeRenderer = createAnswerRenderer(turn);
         renderer = activeRenderer;
         await streamSSE(response, function(eventType, data) {
+            armIdleTimeout();
             activeRenderer.handle(eventType, data);
         });
         success = !activeRenderer.failed;
     } catch (_) {
-        setAnswerError(turn, 'Connection error. Please try again.');
+        setAnswerError(
+            turn,
+            controller.signal.aborted ? 'Answer stopped.' : 'Connection error. Please try again.',
+        );
     } finally {
+        clearTimeout(idleTimer);
+        if (currentQueryController === controller) currentQueryController = null;
         queryInFlight = false;
     }
 
@@ -98,6 +124,10 @@ export function setupQueryForm(): void {
     let allowNextLineBreak = false;
 
     queryInput.addEventListener('keydown', function(e: KeyboardEvent) {
+        if (e.key === 'Escape' && queryInFlight) {
+            cancelQuery();
+            return;
+        }
         if (e.key !== 'Enter') return;
         allowNextLineBreak = e.shiftKey === true;
     });
