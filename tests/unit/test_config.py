@@ -49,6 +49,36 @@ def _default_test_config() -> DlightragConfig:
     )
 
 
+class TestJwtAudience:
+    @staticmethod
+    def _config(value: Any) -> DlightragConfig:
+        return _settings_config(
+            embedding=EmbeddingConfig(
+                provider="voyage",
+                model="voyage-multimodal-3.5",
+                api_key="sk-test",
+                dim=1024,
+                startup_probe=False,
+            ),
+            jwt_audience=value,
+        )
+
+    def test_single_string_preserved(self) -> None:
+        assert self._config("api://dlightrag").jwt_audience == "api://dlightrag"
+
+    def test_list_preserved(self) -> None:
+        assert self._config(["api://dlightrag", "proxy-id"]).jwt_audience == [
+            "api://dlightrag",
+            "proxy-id",
+        ]
+
+    def test_json_array_string_parsed(self) -> None:
+        assert self._config('["a", "b"]').jwt_audience == ["a", "b"]
+
+    def test_blank_becomes_none(self) -> None:
+        assert self._config("   ").jwt_audience is None
+
+
 class TestModelConfig:
     def test_defaults(self):
         cfg = ModelConfig(model="gpt-5.4-mini")
