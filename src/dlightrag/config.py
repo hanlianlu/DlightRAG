@@ -660,6 +660,23 @@ class DlightragConfig(BaseSettings):
     postgres_pool_max_size: int = Field(
         default=10, description="DlightRAG domain store pool max connections."
     )
+    postgres_command_timeout: float | None = Field(
+        default=60.0,
+        gt=0,
+        description=(
+            "Default per-statement timeout (seconds) for DlightRAG domain store "
+            "connections, so one hung query cannot hold a pooled connection forever. "
+            "None disables the cap."
+        ),
+    )
+    postgres_acquire_timeout: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Max seconds to wait for a free DlightRAG domain store connection before "
+            "raising, so callers cannot block indefinitely when the pool is saturated."
+        ),
+    )
     postgres_lightrag_pool_max_size: int = Field(
         default=16,
         ge=1,
