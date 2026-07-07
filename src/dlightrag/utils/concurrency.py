@@ -9,8 +9,6 @@ from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
-_MISSING = object()
-
 
 async def shutdown_async_callable(func: Any, *, graceful: bool = True) -> None:
     """Best-effort shutdown for LightRAG priority-queue wrapped callables."""
@@ -98,7 +96,7 @@ async def bounded_map[T, R](
     if not items:
         return []
 
-    results: list[R | Exception | object] = [_MISSING] * len(items)
+    results: dict[int, R | Exception] = {}
     queue: asyncio.Queue[tuple[int, T]] = asyncio.Queue()
     for idx, item in enumerate(items):
         queue.put_nowait((idx, item))
@@ -121,10 +119,4 @@ async def bounded_map[T, R](
         for _ in range(min(max(1, max_concurrent), len(items))):
             tg.create_task(_worker())
 
-    final: list[R | Exception] = []
-    for item in results:
-        if item is _MISSING:
-            final.append(RuntimeError("bounded_map worker returned no result"))
-        else:
-            final.append(cast(R | Exception, item))
-    return final
+    return [results[idx] for idx in range(len(items))]

@@ -123,7 +123,7 @@ class URLDataSource(AsyncDataSource):
         try:
             for _ in range(_MAX_REDIRECTS + 1):
                 async with client.stream("GET", current_url) as response:
-                    status_code = int(getattr(response, "status_code", 200) or 200)
+                    status_code = response.status_code
                     if status_code in _REDIRECT_STATUSES:
                         current_url = _redirect_target(
                             current_url,
