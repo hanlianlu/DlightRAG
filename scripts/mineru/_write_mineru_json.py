@@ -28,7 +28,8 @@ def main() -> None:
     existing: dict = {}
     if os.path.isfile(target):
         try:
-            raw = open(target).read().strip()
+            with open(target) as fh:
+                raw = fh.read().strip()
             if raw:
                 existing = json.loads(raw)
         except (json.JSONDecodeError, OSError) as exc:
@@ -49,15 +50,12 @@ def main() -> None:
         json.dump(existing, fh, indent=2, ensure_ascii=False)
         fh.write("\n")
 
-    masked = (
-        api_key[:4] + "*" * max(0, len(api_key) - 8) + api_key[-4:]
-        if len(api_key) > 8
-        else api_key[:4] + "***"
-    )
+    # Never echo key material (even partially): report only presence + length.
+    key_status = f"set ({len(api_key)} chars)" if api_key else "MISSING"
     print(f"==> Wrote {target}")
     print(f"    model : {model}")
     print(f"    url   : {base_url}")
-    print(f"    key   : {masked}")
+    print(f"    key   : {key_status}")
 
 
 if __name__ == "__main__":
