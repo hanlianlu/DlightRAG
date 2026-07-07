@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
 from dlightrag.citations import finalize_answer
+from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
@@ -204,6 +205,7 @@ async def stream_answer_events(
 ) -> AsyncIterator[str]:
     """Yield browser SSE events for one answer request."""
     full_answer = ""
+    token_iter: AsyncIterator[str] | str | None = None
     try:
         history_kept = len(conversation_history) if conversation_history else 0
         yield sse_event("meta", AnswerMetaEvent(history_kept=history_kept))
@@ -233,22 +235,18 @@ async def stream_answer_events(
         last_preview_ts = 0.0
         last_preview_len = 0
 
-        if token_iter is None:
-            pass
-        elif isinstance(token_iter, str):
-            full_answer = token_iter
-            yield sse_event("token", token_iter)
-        else:
-            async for chunk in token_iter:
-                full_answer += chunk
-                accumulated_text += chunk
-                yield sse_event("token", chunk)
-                now = time.monotonic()
-                new_chars = len(accumulated_text) - last_preview_len
-                if now - last_preview_ts > 0.3 and new_chars > 20:
-                    yield sse_event("preview", safe_answer_preview(accumulated_text))
-                    last_preview_ts = now
-                    last_preview_len = len(accumulated_text)
+        async for chunk in iter_answer_tokens(
+            token_iter, idle_timeout=manager.config.answer_stream_idle_timeout
+        ):
+            full_answer += chunk
+            accumulated_text += chunk
+            yield sse_event("token", chunk)
+            now = time.monotonic()
+            new_chars = len(accumulated_text) - last_preview_len
+            if now - last_preview_ts > 0.3 and new_chars > 20:
+                yield sse_event("preview", safe_answer_preview(accumulated_text))
+                last_preview_ts = now
+                last_preview_len = len(accumulated_text)
 
         clean_answer = getattr(token_iter, "answer", None) or full_answer
         current_image_ids = getattr(token_iter, "current_image_ids", []) or []
@@ -306,6 +304,8 @@ async def stream_answer_events(
     except Exception:
         logger.exception("Answer streaming failed")
         yield sse_event("error", AnswerErrorEvent(message="Service error. Please try again."))
+    finally:
+        await aclose_answer_stream(token_iter)
 
 
 __all__ = ["stream_answer_events"]

@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Streaming answer wrapper with post-stream citation validation."""
 
+import asyncio
 import inspect
 import logging
 from collections.abc import AsyncIterator, Awaitable
@@ -69,4 +70,42 @@ class AnswerStream(AsyncIterator[str]):
         )
 
 
-__all__ = ["AnswerStream"]
+async def iter_answer_tokens(
+    token_iter: AsyncIterator[str] | str | None,
+    *,
+    idle_timeout: float,
+) -> AsyncIterator[str]:
+    """Yield answer tokens with a per-token inactivity deadline.
+
+    Each token fetch is bounded by ``idle_timeout`` seconds so a stalled upstream
+    LLM raises ``TimeoutError`` instead of hanging the request forever. ``str`` and
+    ``None`` iterators are passed through. Closing the underlying stream is the
+    caller's responsibility (see :func:`aclose_answer_stream`).
+    """
+    if token_iter is None:
+        return
+    if isinstance(token_iter, str):
+        yield token_iter
+        return
+    aiterator = token_iter.__aiter__()
+    while True:
+        try:
+            async with asyncio.timeout(idle_timeout):
+                chunk = await aiterator.__anext__()
+        except StopAsyncIteration:
+            break
+        yield chunk
+
+
+async def aclose_answer_stream(token_iter: object) -> None:
+    """Close an answer token iterator if it supports ``aclose``.
+
+    Releases the bounded answer-stream slot and cancels the upstream LLM
+    connection. No-op for ``None``/``str`` iterators.
+    """
+    aclose = getattr(token_iter, "aclose", None)
+    if aclose is not None:
+        await aclose()
+
+
+__all__ = ["AnswerStream", "aclose_answer_stream", "iter_answer_tokens"]

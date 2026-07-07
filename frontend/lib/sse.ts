@@ -70,11 +70,16 @@ export async function streamSSE(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
 
-  while (true) {
-    const result = await reader.read();
-    if (result.done) break;
-    parser.push(decoder.decode(result.value, {stream: true}));
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      parser.push(decoder.decode(result.value, {stream: true}));
+    }
+    parser.push(decoder.decode());
+    parser.flush();
+  } finally {
+    // Release the underlying connection on any exit (completion, error, abort).
+    reader.cancel().catch(() => {});
   }
-  parser.push(decoder.decode());
-  parser.flush();
 }
