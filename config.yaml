@@ -139,12 +139,14 @@ workspace: default
 # Docker Compose supplies local PostgreSQL defaults. Set these for an external
 # PostgreSQL write endpoint. Managed replicas and reader routing belong to the
 # PostgreSQL/infrastructure layer, not DlightRAG application config.
+# postgres_ssl_mode options include disable | allow | prefer | require | verify-ca | verify-full
+
 # postgres_host: localhost
 # postgres_port: 5432
 # postgres_user: dlightrag
 # postgres_password: dlightrag
 # postgres_database: dlightrag
-# postgres_ssl_mode: require  # disable | allow | prefer | require | verify-ca | verify-full
+# postgres_ssl_mode: require
 # postgres_ssl_root_cert:
 
 # High-level concurrency. Lower these for small local model endpoints; raise
@@ -184,18 +186,23 @@ answer:
 # Resource authorization. Default allow_all lets any authenticated caller use
 # any workspace. Switch to jwt_claims to map verified JWT claims to workspace
 # and action permissions; requires auth_mode: jwt and at least one rule.
-# See docs/security.md for the field reference and an Azure Entra example.
+#
+# Rule fields:
+#   claim      - verified JWT claim name (on Entra, prefer App Role `roles`
+#                over `groups`).
+#   value      - claim value to match.
+#   workspaces - exact name(s) or "*" (quote a bare *).
+#   actions    - list; each item is a preset (reader|editor|admin), an exact
+#                action, "workspace.*", or "*". Any match grants access, so you
+#                may mix, e.g. [reader, workspace.update_metadata].
+# Full reference: docs/security.md.
 # access_control:
 #   mode: jwt_claims
 #   rules:
-#     - claim: roles                 # App Role value (preferred over groups on Entra)
+#     - claim: roles
 #       value: finance.readers
-#       workspaces: [finance]        # exact name(s) or "*" (quote a bare *)
-#       actions: [reader]            # list; each item = a preset (reader|editor|
-#                                    #   admin), an exact action, "workspace.*", or
-#                                    #   "*". Any match grants access, so you may mix,
-#                                    #   e.g. [reader, workspace.update_metadata].
-#                                    #   Full reference: docs/security.md.
+#       workspaces: [finance]
+#       actions: [reader]
 
 # Langfuse keys belong in .env. Non-secret SDK behavior can be set here when
 # a deployment needs it.
