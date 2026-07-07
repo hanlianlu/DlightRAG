@@ -19,12 +19,12 @@ import ssl
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, ClassVar, Literal, Self, TypedDict
+from typing import Annotated, Any, ClassVar, Literal, Self, TypedDict
 from urllib.parse import urlencode
 
 from dotenv import dotenv_values
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 _YAML_FILE = "config.yaml"
 _ENV_FILE = ".env"
@@ -988,10 +988,44 @@ class DlightragConfig(BaseSettings):
         default=None,
         description="Expected JWT issuer. Required with jwt_jwks_url.",
     )
-    jwt_audience: str | None = Field(
+    jwt_audience: Annotated[str | list[str] | None, NoDecode] = Field(
         default=None,
-        description="Expected JWT audience. Required with jwt_jwks_url.",
+        description=(
+            "Expected JWT audience(s). A single string or a list of strings; a "
+            "token is accepted when its aud matches any entry. A list lets one "
+            "deployment trust tokens minted for different audiences (e.g. a "
+            "browser front door and direct API clients). Required with jwt_jwks_url."
+        ),
     )
+
+    @field_validator("jwt_audience", mode="before")
+    @classmethod
+    def _normalize_jwt_audience(cls, value: Any) -> str | list[str] | None:
+        """Accept a single audience, a list, or (from env) a JSON-array string.
+
+        NoDecode keeps pydantic-settings from JSON-parsing env values, so a
+        plain ``DLIGHTRAG_JWT_AUDIENCE=api://x`` still works while a JSON array
+        string enables multiple audiences from the environment.
+        """
+        if value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            if not text.startswith("["):
+                return text
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    "jwt_audience string must be a plain audience or a JSON array"
+                ) from exc
+        if isinstance(value, (list, tuple)):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return items or None
+        raise ValueError("jwt_audience must be a string or a list of strings")
+
     jwt_algorithm: Literal["HS256", "HS384", "HS512", "RS256", "RS384", "RS512", "ES256"] = Field(
         default="HS256",
         description="JWT signature algorithm — restricted to safe HMAC/RSA/ECDSA variants. "

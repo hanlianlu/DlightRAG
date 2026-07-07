@@ -578,6 +578,37 @@ class TestVerifyBearerToken:
         with pytest.raises(HTTPException, match="Invalid token"):
             verify_bearer_token(token, test_config)
 
+    def test_jwt_jwks_url_accepts_any_of_multiple_audiences(
+        self,
+        test_config: DlightragConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        test_config.auth_mode = "jwt"
+        test_config.jwt_jwks_url = "https://login.example.com/discovery/keys"
+        test_config.jwt_issuer = "https://login.example.com/tenant/v2.0"
+        test_config.jwt_audience = ["api://dlightrag", "proxy-client-id"]
+        test_config.jwt_algorithm = "HS256"
+
+        payload = {
+            "sub": "user-42",
+            "iss": test_config.jwt_issuer,
+            "aud": "proxy-client-id",
+            "exp": datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=1),
+        }
+        jwks_secret = "jwks-secret-for-unit-tests-32-bytes"
+        token = jwt.encode(payload, jwks_secret, algorithm="HS256", headers={"kid": "key-1"})
+
+        class FakeJwksClient:
+            def get_signing_key_from_jwt(self, raw_token: str):
+                assert raw_token == token
+                return SimpleNamespace(key=jwks_secret)
+
+        monkeypatch.setattr(auth_module, "_jwks_client", lambda _url: FakeJwksClient())
+
+        ctx = verify_bearer_token(token, test_config)
+
+        assert ctx.user_id == "user-42"
+
     def test_jwt_expired_token_raises_401(self, test_config: DlightragConfig) -> None:
         test_config.auth_mode = "jwt"
         test_config.jwt_verification_key = _JWT_VERIFICATION_KEY
