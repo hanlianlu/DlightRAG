@@ -198,6 +198,16 @@ class TestFileEndpoint:
         assert resp.status_code == 302
         assert resp.headers["location"] == "https://cdn.example.com/report.pdf?sig=x&download=1"
 
+    async def test_https_source_rejects_unsafe_target(self, client: AsyncClient) -> None:
+        """Credentialed / localhost / private targets are refused, not redirected."""
+        for bad in (
+            "https://localhost/secret",
+            "https://127.0.0.1/secret",
+            "https://user:pass@example.com/x",
+        ):
+            resp = await client.get(f"/api/files/{bad}", follow_redirects=False)
+            assert resp.status_code == 400, bad
+
 
 class TestFileEndpointAzureRedirect:
     @patch(

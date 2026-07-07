@@ -24,6 +24,7 @@ from dlightrag.sourcing.aws_s3 import (
     generate_s3_presigned_url,
 )
 from dlightrag.sourcing.azure_blob import generate_azure_sas_url
+from dlightrag.sourcing.url import validate_public_https_url
 from dlightrag.utils import normalize_workspace
 
 from .deps import enforce_access, get_manager, resolve_workspace
@@ -141,6 +142,13 @@ async def serve_file(
         return RedirectResponse(url=signed_url, status_code=302)
 
     if file_path.startswith("https://"):
+        # Only redirect to a safe public source URL — the same invariant URL
+        # ingestion enforces. Blocks credentialed / localhost / private-IP-literal
+        # targets so the endpoint cannot be abused as an open/SSRF-adjacent redirect.
+        try:
+            validate_public_https_url(file_path)
+        except ValueError as exc:
+            raise HTTPException(400, "Invalid source URL") from exc
         return RedirectResponse(url=file_path, status_code=302)
 
     # --- Unknown remote scheme ---

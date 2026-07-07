@@ -30,6 +30,11 @@ services:
       <<: *common-env
       DLIGHTRAG_API_HOST: "0.0.0.0"
       DLIGHTRAG_API_PORT: "8100"
+      # The container binds 0.0.0.0, but the port above is published to
+      # 127.0.0.1 only, so no-auth is acceptable for local dev. Set
+      # DLIGHTRAG_AUTH_MODE=simple + DLIGHTRAG_API_AUTH_TOKEN (and drop this
+      # override) before publishing the port on a non-loopback address.
+      DLIGHTRAG_ALLOW_INSECURE_NO_AUTH: "true"
     env_file: .env
     extra_hosts:
       - "host.docker.internal:host-gateway"

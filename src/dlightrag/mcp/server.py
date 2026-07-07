@@ -78,8 +78,15 @@ class DlightRAGFastMCP(FastMCP):
             self._reject_unknown_arguments(name, arguments or {})
             return await super().call_tool(name, arguments or {})
         except Exception as exc:
-            logger.exception("MCP tool '%s' failed: %s", name, exc)
-            return [TextContent(type="text", text=f"Error: {exc}")]
+            # FastMCP wraps tool-body errors as ToolError(...) from the original, so
+            # inspect __cause__ as well. Surface user-facing validation/authorization
+            # messages; hide unexpected internals behind a generic message.
+            user_error = exc if isinstance(exc, ValueError | PermissionError) else exc.__cause__
+            if isinstance(user_error, ValueError | PermissionError):
+                logger.warning("MCP tool '%s' rejected: %s", name, user_error)
+                return [TextContent(type="text", text=f"Error: {user_error}")]
+            logger.exception("MCP tool '%s' failed", name)
+            return [TextContent(type="text", text="Error: internal tool failure")]
 
     def _reject_unknown_arguments(self, name: str, arguments: Mapping[str, Any]) -> None:
         tool = self._tool_manager._tools.get(name)

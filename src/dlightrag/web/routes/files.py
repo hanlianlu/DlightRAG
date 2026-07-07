@@ -234,11 +234,11 @@ async def upload_files(
                 shutil.rmtree(upload_dir, ignore_errors=True)
             return error_response("No valid files selected")
 
-    except Exception as e:
+    except Exception:
         logger.exception("Upload staging failed")
         if upload_dir is not None:
             shutil.rmtree(upload_dir, ignore_errors=True)
-        return error_response(f"Upload failed: {e}", status_code=500)
+        return error_response("Upload failed. Please try again.", status_code=500)
 
     try:
         await manager.astart_ingest_job(
@@ -337,8 +337,8 @@ async def delete_files(
 
     try:
         await manager.delete_files(selected_workspace, file_paths=file_paths)
-    except Exception as e:
+    except Exception:
         logger.exception("Delete failed")
-        return error_response(f"Delete failed: {e}", status_code=500)
+        return error_response("Delete failed. Please try again.", status_code=500)
 
     return await _file_list_response(request, selected_workspace)

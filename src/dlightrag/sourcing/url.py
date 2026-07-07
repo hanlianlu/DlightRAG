@@ -284,6 +284,16 @@ def _document_key_from_url(
     return name
 
 
+def validate_public_https_url(raw_url: str, *, resolve_host: bool = False) -> str:
+    """Return *raw_url* if it is a safe public HTTPS URL, else raise ``ValueError``.
+
+    Rejects non-HTTPS schemes, embedded credentials, and localhost/``.local``/
+    private/non-global IP-literal hosts. With ``resolve_host=True`` the hostname
+    is additionally resolved and every address checked (blocking DNS lookup).
+    """
+    return _validate_public_https_url(raw_url, resolve_host=resolve_host)
+
+
 def _clean_filename(value: str) -> str:
     candidate = value.replace("\\", "/")
     name = PurePosixPath(candidate).name
@@ -306,4 +316,4 @@ def _dedupe_key(key: str, existing: dict[str, str]) -> str:
         digest += 1
 
 
-__all__ = ["URLDataSource"]
+__all__ = ["URLDataSource", "validate_public_https_url"]
