@@ -18,6 +18,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+class LeaseLostError(RuntimeError):
+    """This worker's ingest-job lease was taken over by another owner mid-run."""
+
+
 _RECOVERABLE_SOURCE_TYPES = {"local", "azure_blob", "s3", "url"}
 _JOB_LEASE_SECONDS = 300
 _JOB_HEARTBEAT_SECONDS = 60
@@ -343,7 +348,7 @@ class IngestJobCoordinator:
                 lease_seconds=_JOB_LEASE_SECONDS,
             )
             if not updated:
-                raise RuntimeError("ingest job lease lost")
+                raise LeaseLostError("ingest job lease lost")
 
         try:
             svc = await self._get_service(workspace)
@@ -366,7 +371,7 @@ class IngestJobCoordinator:
                     lease_seconds=_JOB_LEASE_SECONDS,
                 )
                 if not updated:
-                    raise RuntimeError("ingest job lease lost")
+                    raise LeaseLostError("ingest job lease lost")
             finished = await store.finish(
                 job_id,
                 result=await self._job_result_with_totals(store, job_id, result),
@@ -386,6 +391,11 @@ class IngestJobCoordinator:
             else:
                 cleanup_after_run = False
             raise
+        except LeaseLostError:
+            # Another worker re-claimed this job (detected via record_window).
+            # Do not fail it or delete its source files — the new owner owns them.
+            logger.warning("Ingest job %s lease lost mid-run; yielding to new owner", job_id)
+            cleanup_after_run = False
         except Exception as exc:
             await store.fail(
                 job_id,
