@@ -669,7 +669,7 @@ async def run_streamable_http(host: str, port: int) -> None:
     await _ensure_manager()
 
     transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
+        enable_dns_rebinding_protection=cfg.mcp_dns_rebinding_protection,
         allowed_hosts=cfg.mcp_allowed_hosts,
         allowed_origins=cfg.mcp_allowed_origins,
     )

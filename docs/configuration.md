@@ -401,8 +401,10 @@ mcp_allowed_origins:
   - "http://[::1]:*"
 ```
 
-Set explicit hostnames/origins and enable `auth_mode` before exposing MCP on a
-non-loopback network. Use [security.md](security.md) for exposure guidance.
+These Host/Origin allowlists are enforced only when `auth_mode: none`. Enabling
+`auth_mode` (simple or jwt) turns DNS-rebinding protection off automatically --
+the bearer check supersedes it -- so exposing MCP beyond loopback needs only
+auth, not allowlist tuning. See [security.md](security.md).
 
 ## Citations
 
