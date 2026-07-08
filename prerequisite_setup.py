@@ -460,21 +460,42 @@ def run_models_step(prompter: Prompter) -> dict:
     }
 
 
+class SetupCancelled(Exception):
+    """Raised when the user picks the in-menu Quit option (a clean, non-error exit)."""
+
+
+QUIT_CHOICE = "✕ Quit setup"
+
+
+def with_quit(choices: list[str]) -> list[str]:
+    """Append the Quit sentinel so every menu offers a no-Ctrl+C way out."""
+    return [*choices, QUIT_CHOICE]
+
+
+def check_quit(answer: str) -> str:
+    """Turn a Quit selection into a clean SetupCancelled; pass everything else through."""
+    if answer == QUIT_CHOICE:
+        raise SetupCancelled
+    return answer
+
+
 def _questionary_prompter() -> Prompter:
     import questionary
 
+    # unsafe_ask(): let Ctrl+C / Ctrl+D propagate as KeyboardInterrupt / EOFError
+    # (caught once in main) instead of silently returning None and crashing later.
     class _Q(Prompter):
         def select(self, message: str, choices: list[str]) -> str:
-            return questionary.select(message, choices=choices).ask()
+            return check_quit(questionary.select(message, choices=with_quit(choices)).unsafe_ask())
 
         def text(self, message: str, default: str = "") -> str:
-            return questionary.text(message, default=default).ask()
+            return questionary.text(message, default=default).unsafe_ask()
 
         def password(self, message: str) -> str:
-            return questionary.password(message).ask()
+            return questionary.password(message).unsafe_ask()
 
         def confirm(self, message: str, default: bool = False) -> bool:
-            return questionary.confirm(message, default=default).ask()
+            return questionary.confirm(message, default=default).unsafe_ask()
 
     return _Q()
 
@@ -507,45 +528,53 @@ def wait_for_health(url: str, *, attempts=60, delay=2.0, probe=probe_health, sle
     return False
 
 
-def main() -> int:
+def main(prompter: Prompter | None = None) -> int:
     from rich.console import Console
 
     console = Console()
     console.rule("[bold]DlightRAG setup")
+    console.print("[dim]Pick '✕ Quit setup' in any menu, or press Ctrl+C, to cancel.[/dim]")
     failed = [c for c in run_preflight() if not c.ok]
     for c in failed:
         console.print(f"[red]missing[/red] {c.name} — {c.hint}")
     if failed:
         return 1
 
-    prompter = _questionary_prompter()
+    prompter = prompter or _questionary_prompter()
     info = detect_platform()
-    result = run_models_step(prompter)
     try:
-        validate_config()
-    except Exception as exc:
-        backup = result.get("config_backup")
-        if backup is not None:
-            CONFIG_PATH.write_bytes(backup.read_bytes())
-        console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
-        return 1
+        result = run_models_step(prompter)
+        try:
+            validate_config()
+        except Exception as exc:
+            backup = result.get("config_backup")
+            if backup is not None:
+                CONFIG_PATH.write_bytes(backup.read_bytes())
+            console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
+            return 1
 
-    run_mineru_step(prompter, info, has_gpu=has_nvidia_gpu(), llm_title_aided=result["llm"])
+        run_mineru_step(prompter, info, has_gpu=has_nvidia_gpu(), llm_title_aided=result["llm"])
 
-    console.print("Starting DlightRAG + PostgreSQL…")
-    try:
-        _default_runner(docker_up_command())
-    except Exception as exc:
-        console.print(f"[red]docker compose up failed:[/red] {exc}")
-        return 1
+        console.print("Starting DlightRAG + PostgreSQL…")
+        try:
+            _default_runner(docker_up_command())
+        except Exception as exc:
+            console.print(f"[red]docker compose up failed:[/red] {exc}")
+            return 1
 
-    if wait_for_health(API_HEALTH_URL):
-        console.print(f"[green]Ready![/green] Open [link={WEB_URL}]{WEB_URL}[/link]")
-    else:
+        if wait_for_health(API_HEALTH_URL):
+            console.print(f"[green]Ready![/green] Open [link={WEB_URL}]{WEB_URL}[/link]")
+        else:
+            console.print(
+                f"[yellow]Not healthy yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
+            )
+        return 0
+    except KeyboardInterrupt, EOFError, SetupCancelled:
         console.print(
-            f"[yellow]Not healthy yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
+            "\n[yellow]Setup cancelled.[/yellow] Re-run any time with "
+            "[bold]uv run prerequisite_setup.py[/bold]"
         )
-    return 0
+        return 130
 
 
 if __name__ == "__main__":
