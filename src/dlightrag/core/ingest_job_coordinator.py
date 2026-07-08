@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from dlightrag.core.client_contracts import SourceType
-from dlightrag.utils import normalize_workspace
+from dlightrag.utils import log_safe, normalize_workspace
 
 if TYPE_CHECKING:
     from dlightrag.core.service import RAGService
@@ -197,7 +197,9 @@ class IngestJobCoordinator:
             errors = result.setdefault("errors", [])
             if isinstance(errors, list):
                 errors.append(f"ingest_jobs: {exc}")
-            logger.warning("Failed to delete ingest jobs for workspace '%s': %s", workspace, exc)
+            logger.warning(
+                "Failed to delete ingest jobs for workspace '%s': %s", log_safe(workspace), exc
+            )
 
     async def cancel_for_workspace(self, workspace: str) -> int:
         job_ids = [
