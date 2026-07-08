@@ -608,7 +608,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "json-repair", specifier = ">=0.58.0" },
     { name = "langchain-text-splitters" },
-    { name = "langfuse", specifier = ">=4.13.1" },
+    { name = "langfuse", specifier = ">=4.13.2" },
     { name = "lightrag-hku", specifier = ">=1.5.4" },
     { name = "lingua-language-detector", specifier = ">=2.2.0" },
     { name = "markdown-it-py", extras = ["plugins"], specifier = ">=3.0" },
@@ -1124,7 +1124,7 @@ wheels = [
 
 [[package]]
 name = "langfuse"
-version = "4.13.1"
+version = "4.13.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -1136,14 +1136,14 @@ dependencies = [
     { name = "pydantic" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/13/42/7c209bbb3e1e131bf914b8cf65f3d70d6a717dc001509de962d0020f4481/langfuse-4.13.1.tar.gz", hash = "sha256:f322cfe3f27e34c7b32a288fe7a326bf2758e19bd90dd32760ef3f43974f6911", size = 362085, upload-time = "2026-07-07T15:51:41.981Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/00/16324f1c0d244fee3c4e4ac00e8a422f1afb8873e963182dac7fbf8b34e8/langfuse-4.13.2.tar.gz", hash = "sha256:4484c5d949dd1c5cabab74c179c7e5c19be203940852bf90d1ba5870215eac6a", size = 362128, upload-time = "2026-07-08T15:54:07.889Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/ec/5ad1a9f0bf084a608f26f96a6320e60fcfc6968fe70ce92d4f4d44dce761/langfuse-4.13.1-py3-none-any.whl", hash = "sha256:445d54b8a0dfc972d04abe2501fd61c66645d57e279b45f45a619d49174d53db", size = 636576, upload-time = "2026-07-07T15:51:40.672Z" },
+    { url = "https://files.pythonhosted.org/packages/95/67/40641c2e7897990d1264d16037788c5cc1adb5c967d0f04bcf56c6119336/langfuse-4.13.2-py3-none-any.whl", hash = "sha256:b5b48b02438835316e5bf61266b89faaff0687fb8ebd765d62d5a489401dc56a", size = 636577, upload-time = "2026-07-08T15:54:08.967Z" },
 ]
 
 [[package]]
 name = "langsmith"
-version = "0.9.8"
+version = "0.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1161,9 +1161,9 @@ dependencies = [
     { name = "xxhash" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/68/8d8471233ee0cd82c2af946d76f80a01aeb8bb04160c392c1229fddf5d3d/langsmith-0.9.8.tar.gz", hash = "sha256:8c3d6a6d5246a3ea6d439b726d59edefba31dfb251de9eedb256119bbea4439e", size = 4710812, upload-time = "2026-07-06T19:06:10.866Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e8/53/18bc9169517c274681402f3714d1975ff687e8e175a9fea2b8087db99747/langsmith-0.10.0.tar.gz", hash = "sha256:1bc97a28e4b7a0f2e2f5419668592b3bf460ba5d886991ad725fb2778aa2e236", size = 4708392, upload-time = "2026-07-08T13:28:28.081Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4a/67/a85caaa99117bbc988a0df7faa39e7f68344361854638d86bcce0ffe3619/langsmith-0.9.8-py3-none-any.whl", hash = "sha256:098da9fc6c184284f17913cb813a41e28c5ab1508e90bd50db40c28166681017", size = 671148, upload-time = "2026-07-06T19:06:08.911Z" },
+    { url = "https://files.pythonhosted.org/packages/64/cf/41d4077d82dce88fb8f6c02938dd5937b5a74cd67bfd7bdb5206277752ca/langsmith-0.10.0-py3-none-any.whl", hash = "sha256:63aec1105b776b8c65a32b002b29ada02469cd26c91beeb2fc2831b247f4da27", size = 652557, upload-time = "2026-07-08T13:28:26.366Z" },
 ]
 
 [[package]]
@@ -1812,14 +1812,14 @@ wheels = [
 
 [[package]]
 name = "proto-plus"
-version = "1.28.0"
+version = "1.28.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "protobuf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c9/56/e647b0c675392d2da368da7b6f158f7368b18542fd6f7d7400a2f39de000/proto_plus-1.28.0.tar.gz", hash = "sha256:38e5696342835b08fc116f30a25665b29531cda9d5d5643e9b81fc312385abd9", size = 57221, upload-time = "2026-05-07T08:04:50.811Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/44/767757fd2cdd4a60d7e4440d9f7b491d6131103d313638d2c03e06c268fb/proto_plus-1.28.1.tar.gz", hash = "sha256:832e68e7fe064cf90ab153b6e5eb935b27891bb89aaeb68b115e9b702f6cb168", size = 57166, upload-time = "2026-07-08T17:04:02.367Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7c/20/b122d4626976acb81132036d2ad1bb35a1a8775fceb837ec30964622516a/proto_plus-1.28.0-py3-none-any.whl", hash = "sha256:a630604310899e73c59ec302e5765c058d412b2f090b9c79c8822589f14955b8", size = 50410, upload-time = "2026-05-07T08:03:31.962Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/34/2f2b57dbfd145b995a29847a16b0903fce5ef6ad3c7aad740a609c5d3678/proto_plus-1.28.1-py3-none-any.whl", hash = "sha256:6660f5f1970874bdcfc3088b435188a36a37bd3596668f7d726417c4ae8cfbed", size = 50408, upload-time = "2026-07-08T17:03:34.532Z" },
 ]
 
 [[package]]
