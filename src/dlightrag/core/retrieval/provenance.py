@@ -11,10 +11,12 @@ from typing import Any
 
 from dlightrag.core.sidecar_provenance import (
     BlockProvenance,
+    block_ids_from_multimodal_item,
     block_ids_from_sidecar,
     explicit_item_bbox,
     explicit_item_page_index,
     first_provenance_for_blocks,
+    is_multimodal_sidecar,
     load_block_provenance_index,
     resolve_sidecar_asset_path,
     sidecar_dir_from_location,
@@ -126,7 +128,12 @@ async def _provenance_from_block_sidecar(
     block_index_cache: dict[Path, dict[str, BlockProvenance]],
 ) -> BlockProvenance | None:
     block_ids = block_ids_from_sidecar(sidecar)
-    if not block_ids:
+    # Multimodal chunks (table/drawing/equation) reference their own modality
+    # item id, not a block, so ``block_ids`` is empty here. Their source block
+    # is recoverable from the modality sidecar file, resolved below once the
+    # artifact dir is known.
+    needs_item_lookup = not block_ids and is_multimodal_sidecar(sidecar)
+    if not block_ids and not needs_item_lookup:
         return None
 
     artifact_dir = await _artifact_dir_for_chunk(
@@ -137,6 +144,11 @@ async def _provenance_from_block_sidecar(
     )
     if artifact_dir is None or not artifact_dir.exists():
         return None
+
+    if needs_item_lookup:
+        block_ids = await asyncio.to_thread(block_ids_from_multimodal_item, artifact_dir, sidecar)
+        if not block_ids:
+            return None
 
     cache_key = artifact_dir.resolve()
     if cache_key not in block_index_cache:

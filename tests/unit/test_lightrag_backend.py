@@ -189,6 +189,67 @@ async def test_backend_hydrates_text_chunk_page_from_lightrag_block_sidecar(
     assert result.contexts["chunks"][0]["full_doc_id"] == "doc-1"
 
 
+async def test_backend_hydrates_multimodal_chunk_page_from_sidecar_item(
+    tmp_path: Path,
+) -> None:
+    """Table/drawing/equation chunks reference a modality item id, not a block;
+    provenance is recovered via the item's ``blockid`` in ``*.tables.json``."""
+    parsed_dir = tmp_path / "sample.parsed"
+    parsed_dir.mkdir()
+    (parsed_dir / "sample.blocks.jsonl").write_text(
+        json.dumps(
+            {
+                "type": "content",
+                "blockid": "block-9",
+                "content": "<table>…</table>",
+                "positions": [{"type": "bbox", "anchor": 4, "range": [1, 2, 3, 4]}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (parsed_dir / "sample.tables.json").write_text(
+        json.dumps({"version": "1.0", "tables": {"tb-1": {"id": "tb-1", "blockid": "block-9"}}}),
+        encoding="utf-8",
+    )
+
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={
+            "data": {
+                "chunks": [
+                    {"id": "doc-1-mm-table-000", "content": "[Table Name] X", "file_path": "/d.pdf"}
+                ],
+                "entities": [],
+                "relationships": [],
+            }
+        }
+    )
+    stores = _stores(
+        raw_chunks=[
+            {
+                "id": "doc-1-mm-table-000",
+                "content": "[Table Name] X",
+                "file_path": "/d.pdf",
+                "full_doc_id": "doc-1",
+                "sidecar": {
+                    "type": "table",
+                    "id": "tb-1",
+                    "refs": [{"type": "table", "id": "tb-1"}],
+                },
+            }
+        ],
+        full_doc={"sidecar_location": parsed_dir.as_uri()},
+    )
+
+    backend = LightRAGMixBackend(lightrag=lightrag, stores=stores)
+    result = await backend.aretrieve("question")
+
+    chunk = result.contexts["chunks"][0]
+    assert chunk["page_idx"] == 5
+    assert chunk["bbox"] == {"page_index": 4, "range": [1, 2, 3, 4]}
+
+
 async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     image_path = tmp_path / "img.png"
     _write_image(image_path)
