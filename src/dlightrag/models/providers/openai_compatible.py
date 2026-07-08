@@ -7,55 +7,20 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.models.providers.base import (
+    CompletionOutput,
+    CompletionProvider,
+    usage_mapping,
+    usage_to_dict,
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _usage_mapping(usage: Any) -> dict[str, Any]:
-    """Flatten a usage payload to a plain mapping, including SDK extra fields.
-
-    Works across OpenAI-compatible SDK objects (declared fields live in
-    ``__dict__``, provider extras in ``model_extra``), plain dicts, and simple
-    namespaces, so no provider-specific unpacking is needed.
-    """
-    if isinstance(usage, dict):
-        return usage
-    base = getattr(usage, "__dict__", None)
-    extra = getattr(usage, "model_extra", None)
-    if not base and not extra:
-        return {}
-    return {**(base or {}), **(extra or {})}
-
-
-def _usage_to_dict(usage: Any) -> dict[str, int] | None:
-    """Extract integer token counters from an OpenAI-compatible usage payload.
-
-    Allow-list-free and provider-agnostic: every integer field is captured, so
-    flat counters (DeepSeek ``prompt_cache_hit_tokens``) and any future field
-    surface automatically. One level of nested ``*_details`` objects
-    (OpenAI/Azure/Zhipu ``prompt_tokens_details.cached_tokens``) is flattened
-    to ``parent.child`` keys, keeping sibling counters unambiguous.
-    """
-    if usage is None:
-        return None
-    result: dict[str, int] = {}
-    for key, value in _usage_mapping(usage).items():
-        if isinstance(value, bool):
-            continue
-        if isinstance(value, int):
-            result[key] = value
-            continue
-        for sub_key, sub_value in _usage_mapping(value).items():
-            if isinstance(sub_value, int) and not isinstance(sub_value, bool):
-                result[f"{key}.{sub_key}"] = sub_value
-    return result or None
 
 
 def _cost_to_dict(usage: Any) -> dict[str, float] | None:
     if usage is None:
         return None
-    cost = _usage_mapping(usage).get("cost")
+    cost = usage_mapping(usage).get("cost")
     if isinstance(cost, int | float) and not isinstance(cost, bool):
         return {"total": float(cost)}
     return None
@@ -78,7 +43,6 @@ class OpenAICompatibleProvider(CompletionProvider):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._client: AsyncOpenAI | None = None
-        self.last_reasoning: str = ""
 
     async def aclose(self) -> None:
         if self._client is not None:
@@ -126,7 +90,7 @@ class OpenAICompatibleProvider(CompletionProvider):
         self.last_reasoning = self._extract_reasoning(message)
         return CompletionOutput(
             message.content or "",
-            usage_details=_usage_to_dict(getattr(response, "usage", None)),
+            usage_details=usage_to_dict(getattr(response, "usage", None)),
             cost_details=_cost_to_dict(getattr(response, "usage", None)),
         )
 

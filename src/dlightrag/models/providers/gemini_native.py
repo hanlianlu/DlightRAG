@@ -9,7 +9,7 @@ from typing import Any
 
 from google import genai
 
-from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.models.providers.base import CompletionOutput, CompletionProvider, usage_to_dict
 from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
@@ -20,18 +20,17 @@ _DATA_URI_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
 
 
 def _gemini_usage(response: Any) -> dict[str, int] | None:
-    """Extract token usage from a Gemini SDK response."""
-    usage = getattr(response, "usage_metadata", None)
-    if usage is None:
+    """Extract token usage from a Gemini SDK response.
+
+    Uses the shared allow-list-free extractor, then maps Gemini's
+    ``*_token_count`` names to the ``*_tokens`` convention used by the other
+    providers so counters (incl. ``cached_content`` and ``thoughts``) stay
+    consistent in observability.
+    """
+    raw = usage_to_dict(getattr(response, "usage_metadata", None))
+    if not raw:
         return None
-    result: dict[str, int] = {}
-    for key in ("prompt_token_count", "candidates_token_count", "total_token_count"):
-        value = getattr(usage, key, None)
-        if isinstance(value, int):
-            # Map to canonical keys expected by observability layer
-            canonical = key.replace("_token_count", "_tokens")
-            result[canonical] = value
-    return result or None
+    return {key.replace("_token_count", "_tokens"): value for key, value in raw.items()}
 
 
 def _convert_content(content: str | list[Any]) -> str | list[Any]:
@@ -84,7 +83,7 @@ class GeminiProvider(CompletionProvider):
 
     async def aclose(self) -> None:
         if self._client is not None:
-            await self._client.aclose()
+            await self._client.aio.aclose()
             self._client = None
 
     def _get_client(self) -> Any:

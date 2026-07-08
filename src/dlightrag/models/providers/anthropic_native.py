@@ -8,7 +8,7 @@ from typing import Any
 
 from anthropic import AsyncAnthropic
 
-from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
+from dlightrag.models.providers.base import CompletionOutput, CompletionProvider, usage_to_dict
 from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
@@ -60,24 +60,6 @@ def _convert_content(content: str | list[Any]) -> str | list[dict[str, Any]]:
         else:
             result.append(block)
     return result
-
-
-def _anthropic_usage(response: Any) -> dict[str, int] | None:
-    """Extract token usage from an Anthropic SDK response."""
-    usage = getattr(response, "usage", None)
-    if usage is None:
-        return None
-    result: dict[str, int] = {}
-    for key in (
-        "input_tokens",
-        "output_tokens",
-        "cache_creation_input_tokens",
-        "cache_read_input_tokens",
-    ):
-        value = getattr(usage, key, None)
-        if isinstance(value, int):
-            result[key] = value
-    return result or None
 
 
 def _apply_response_format(
@@ -161,10 +143,12 @@ class AnthropicProvider(CompletionProvider):
                 call_kwargs["extra_body"] = extra
 
         response = await self._get_client().messages.create(**call_kwargs)
-        return CompletionOutput(
-            "".join(block.text for block in response.content),
-            usage_details=_anthropic_usage(response),
+        content = response.content
+        self.last_reasoning = "".join(
+            b.thinking for b in content if getattr(b, "type", None) == "thinking"
         )
+        text = "".join(b.text for b in content if getattr(b, "type", None) == "text")
+        return CompletionOutput(text, usage_details=usage_to_dict(getattr(response, "usage", None)))
 
     async def stream(
         self,
@@ -203,6 +187,13 @@ class AnthropicProvider(CompletionProvider):
                 call_kwargs["extra_body"] = extra
 
         response = await self._get_client().messages.create(**call_kwargs)
+        reasoning_parts: list[str] = []
         async for event in response:
-            if event.type == "content_block_delta" and event.delta.type == "text_delta":
-                yield event.delta.text
+            if event.type != "content_block_delta":
+                continue
+            delta = event.delta
+            if delta.type == "text_delta":
+                yield delta.text
+            elif delta.type == "thinking_delta":
+                reasoning_parts.append(delta.thinking)
+        self.last_reasoning = "".join(reasoning_parts)

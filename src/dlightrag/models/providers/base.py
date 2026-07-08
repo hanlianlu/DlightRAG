@@ -6,6 +6,51 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 
+def usage_mapping(usage: Any) -> dict[str, Any]:
+    """Flatten a usage payload to a plain mapping, including SDK extra fields.
+
+    Handles OpenAI/Anthropic/Gemini SDK objects (declared fields in
+    ``__dict__``, provider extras in ``model_extra``), plain dicts, and simple
+    namespaces uniformly. ``_``-prefixed keys are dropped so mock or
+    SDK-internal attributes never leak into usage.
+    """
+    if isinstance(usage, dict):
+        raw: dict[str, Any] = usage
+    else:
+        base = getattr(usage, "__dict__", None)
+        extra = getattr(usage, "model_extra", None)
+        if not isinstance(extra, dict):
+            extra = None
+        if not base and not extra:
+            return {}
+        raw = {**(base or {}), **(extra or {})}
+    return {k: v for k, v in raw.items() if not (isinstance(k, str) and k.startswith("_"))}
+
+
+def usage_to_dict(usage: Any) -> dict[str, int] | None:
+    """Extract integer token counters from a provider usage payload.
+
+    Allow-list-free and provider-agnostic: every integer field is captured, so
+    flat counters (DeepSeek ``prompt_cache_hit_tokens``, Anthropic
+    ``cache_read_input_tokens``, Gemini ``thoughts_token_count``) and future
+    fields surface automatically. One level of nested ``*_details`` /
+    ``cache_creation`` objects is flattened to ``parent.child`` keys.
+    """
+    if usage is None:
+        return None
+    result: dict[str, int] = {}
+    for key, value in usage_mapping(usage).items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            result[key] = value
+            continue
+        for sub_key, sub_value in usage_mapping(value).items():
+            if isinstance(sub_value, int) and not isinstance(sub_value, bool):
+                result[f"{key}.{sub_key}"] = sub_value
+    return result or None
+
+
 class CompletionOutput(str):
     """Completion text with optional observability metadata.
 
@@ -74,6 +119,7 @@ class CompletionProvider(ABC):
         self._timeout = timeout
         self._max_retries = max_retries
         self.supports_vision: bool | None = None
+        self.last_reasoning: str = ""
 
     @abstractmethod
     async def complete(

@@ -44,7 +44,7 @@ class TestAnthropicProvider:
     async def test_complete_extracts_system_message(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="reply")]
+        mock_response.content = [MagicMock(type="text", text="reply")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
@@ -64,7 +64,7 @@ class TestAnthropicProvider:
     async def test_complete_defaults_max_tokens(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="ok")]
+        mock_response.content = [MagicMock(type="text", text="ok")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
@@ -76,7 +76,7 @@ class TestAnthropicProvider:
     async def test_complete_routes_thinking_to_top_level(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="thought")]
+        mock_response.content = [MagicMock(type="text", text="thought")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
@@ -106,7 +106,7 @@ class TestAnthropicProvider:
     async def test_json_schema_response_format_uses_output_config(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text='{"answer": "ok"}')]
+        mock_response.content = [MagicMock(type="text", text='{"answer": "ok"}')]
         schema = {
             "type": "object",
             "properties": {"answer": {"type": "string"}},
@@ -134,7 +134,7 @@ class TestAnthropicProvider:
     async def test_complete_converts_https_image_url(self):
         p = get_provider("anthropic", api_key="test-key")
         mock_response = MagicMock()
-        mock_response.content = [MagicMock(text="ok")]
+        mock_response.content = [MagicMock(type="text", text="ok")]
         with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
             MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
             cast(Any, p)._client = None
@@ -158,6 +158,37 @@ class TestAnthropicProvider:
                 "type": "image",
                 "source": {"type": "url", "url": "https://example.com/chart.png"},
             }
+
+    @pytest.mark.asyncio
+    async def test_complete_handles_thinking_blocks_and_usage(self):
+        p = get_provider("anthropic", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(type="thinking", thinking="let me think"),
+            MagicMock(type="text", text="answer"),
+        ]
+        mock_response.usage = SimpleNamespace(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=3,
+            cache_creation=SimpleNamespace(ephemeral_5m_input_tokens=7),
+        )
+        with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            MockSDK.return_value.messages.create = AsyncMock(return_value=mock_response)
+            cast(Any, p)._client = None
+            result = await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "claude-sonnet-4-20250514",
+                model_kwargs={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+            )
+        assert result == "answer"
+        assert cast(Any, p).last_reasoning == "let me think"
+        assert result.usage_details == {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 3,
+            "cache_creation.ephemeral_5m_input_tokens": 7,
+        }
 
 
 class TestOpenAICompatibleProvider:
@@ -376,3 +407,42 @@ class TestGeminiProvider:
             call_kwargs = mock_client.aio.models.generate_content.call_args[1]
             assert call_kwargs["config"]["response_mime_type"] == "application/json"
             assert call_kwargs["config"]["response_schema"] == schema
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_async_client(self):
+        p = get_provider("gemini", api_key="test-key")
+        mock_client = MagicMock()
+        mock_client.aio.aclose = AsyncMock()
+        cast(Any, p)._client = mock_client
+        await p.aclose()
+        mock_client.aio.aclose.assert_awaited_once()
+        assert cast(Any, p)._client is None
+
+    @pytest.mark.asyncio
+    async def test_complete_captures_cache_and_thought_tokens(self):
+        p = get_provider("gemini", api_key="test-key")
+        mock_response = MagicMock()
+        mock_response.text = "ok"
+        mock_response.usage_metadata = SimpleNamespace(
+            prompt_token_count=100,
+            candidates_token_count=50,
+            total_token_count=150,
+            cached_content_token_count=80,
+            thoughts_token_count=20,
+        )
+        with patch("dlightrag.models.providers.gemini_native.genai") as mock_genai:
+            mock_client = MagicMock()
+            mock_genai.Client.return_value = mock_client
+            mock_client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+            cast(Any, p)._client = None
+            result = await p.complete(
+                [{"role": "user", "content": "hi"}],
+                "gemini-2.5-flash",
+            )
+        assert result.usage_details == {
+            "prompt_tokens": 100,
+            "candidates_tokens": 50,
+            "total_tokens": 150,
+            "cached_content_tokens": 80,
+            "thoughts_tokens": 20,
+        }
