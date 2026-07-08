@@ -11,35 +11,52 @@ from dlightrag.models.providers.base import CompletionOutput, CompletionProvider
 
 logger = logging.getLogger(__name__)
 
-_USAGE_INT_KEYS = frozenset(
-    {
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-        "input_tokens",
-        "output_tokens",
-    }
-)
+
+def _usage_mapping(usage: Any) -> dict[str, Any]:
+    """Flatten a usage payload to a plain mapping, including SDK extra fields.
+
+    Works across OpenAI-compatible SDK objects (declared fields live in
+    ``__dict__``, provider extras in ``model_extra``), plain dicts, and simple
+    namespaces, so no provider-specific unpacking is needed.
+    """
+    if isinstance(usage, dict):
+        return usage
+    base = getattr(usage, "__dict__", None)
+    extra = getattr(usage, "model_extra", None)
+    if not base and not extra:
+        return {}
+    return {**(base or {}), **(extra or {})}
 
 
 def _usage_to_dict(usage: Any) -> dict[str, int] | None:
+    """Extract integer token counters from an OpenAI-compatible usage payload.
+
+    Allow-list-free and provider-agnostic: every integer field is captured, so
+    flat counters (DeepSeek ``prompt_cache_hit_tokens``) and any future field
+    surface automatically. One level of nested ``*_details`` objects
+    (OpenAI/Azure/Zhipu ``prompt_tokens_details.cached_tokens``) is flattened
+    to ``parent.child`` keys, keeping sibling counters unambiguous.
+    """
     if usage is None:
         return None
-    raw = usage if isinstance(usage, dict) else getattr(usage, "__dict__", {})
-    result = {
-        key: int(value)
-        for key, value in raw.items()
-        if key in _USAGE_INT_KEYS and isinstance(value, int)
-    }
+    result: dict[str, int] = {}
+    for key, value in _usage_mapping(usage).items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            result[key] = value
+            continue
+        for sub_key, sub_value in _usage_mapping(value).items():
+            if isinstance(sub_value, int) and not isinstance(sub_value, bool):
+                result[f"{key}.{sub_key}"] = sub_value
     return result or None
 
 
 def _cost_to_dict(usage: Any) -> dict[str, float] | None:
     if usage is None:
         return None
-    raw = usage if isinstance(usage, dict) else getattr(usage, "__dict__", {})
-    cost = raw.get("cost")
-    if isinstance(cost, int | float):
+    cost = _usage_mapping(usage).get("cost")
+    if isinstance(cost, int | float) and not isinstance(cost, bool):
         return {"total": float(cost)}
     return None
 
@@ -52,8 +69,10 @@ class OpenAICompatibleProvider(CompletionProvider):
     (DeepSeek thinking, Kimi partial, etc.).
 
     Tracks ``last_reasoning`` — the ``reasoning_content`` from the most
-    recent completion or stream call.  Consumers of thinking-mode models
-    must echo this back on the assistant message in follow-up requests.
+    recent completion or stream call.  It is exposed for optional display
+    or observability only and is never fed back into conversation history:
+    re-injecting reasoning wastes context and some providers (DeepSeek's
+    legacy reasoner) reject a ``reasoning_content`` field in input.
     """
 
     def __init__(self, **kwargs: Any) -> None:

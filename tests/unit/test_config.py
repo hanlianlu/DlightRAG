@@ -96,6 +96,11 @@ class TestModelConfig:
         cfg = ModelConfig(provider="anthropic", model="claude-3-5-sonnet")
         assert cfg.provider == "anthropic"
 
+    def test_provider_name_is_case_insensitive(self):
+        assert ModelConfig(provider=cast(Any, "OpenAI"), model="x").provider == "openai"
+        assert ModelConfig(provider=cast(Any, " GEMINI "), model="x").provider == "gemini"
+        assert ModelConfig(provider=cast(Any, "Anthropic"), model="x").provider == "anthropic"
+
     def test_invalid_provider(self):
         with pytest.raises(ValidationError):
             ModelConfig(provider=cast(Any, "invalid"), model="test")
@@ -192,6 +197,11 @@ class TestRerankConfig:
     def test_cohere_strategy(self):
         cfg = RerankConfig(strategy="cohere_reranker", model="rerank-v4.0-fast", api_key="key")
         assert cfg.strategy == "cohere_reranker"
+
+    def test_provider_name_is_case_insensitive(self):
+        assert RerankConfig(provider=cast(Any, "OpenAI")).provider == "openai"
+        assert RerankConfig(provider=cast(Any, " Gemini ")).provider == "gemini"
+        assert RerankConfig().provider is None
 
     @pytest.mark.parametrize(
         "kwargs",

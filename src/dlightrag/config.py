@@ -107,6 +107,11 @@ def _load_lightrag_sidecar_env(env_file: Any, *, force: bool = False) -> None:
                 os.environ[key] = value
 
 
+def _canonical_provider_name(value: Any) -> Any:
+    """Fold provider names to canonical lowercase (e.g. ``OpenAI`` -> ``openai``)."""
+    return value.strip().lower() if isinstance(value, str) else value
+
+
 class ModelConfig(BaseModel):
     """Reusable model configuration block."""
 
@@ -121,6 +126,10 @@ class ModelConfig(BaseModel):
     timeout: float = Field(default=120.0, gt=0)
     max_retries: int = Field(default=3, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider", mode="before")
+    def _fold_provider(cls, value: Any) -> Any:
+        return _canonical_provider_name(value)
 
     @model_validator(mode="after")
     def validate_structured_output_mode(self) -> Self:
@@ -393,6 +402,10 @@ class RerankConfig(BaseModel):
     )
     temperature: float | None = Field(default=None, ge=0)
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("provider", mode="before")
+    def _fold_provider(cls, value: Any) -> Any:
+        return _canonical_provider_name(value)
 
 
 class CitationHighlightConfig(BaseModel):

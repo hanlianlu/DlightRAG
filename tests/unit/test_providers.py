@@ -197,6 +197,55 @@ class TestOpenAICompatibleProvider:
         assert result.cost_details == {"total": 0.002}
 
     @pytest.mark.asyncio
+    async def test_complete_captures_provider_extra_token_counters(self):
+        # DeepSeek-style flat counters arrive as SDK ``model_extra`` fields.
+        class _Usage:
+            model_extra = {"prompt_cache_hit_tokens": 8, "prompt_cache_miss_tokens": 2}
+
+            def __init__(self) -> None:
+                self.prompt_tokens = 10
+                self.completion_tokens = 5
+                self.total_tokens = 15
+
+        p = get_provider("openai", api_key="test-key")
+        mock_response = SimpleNamespace(usage=_Usage())
+        mock_response.choices = [MagicMock(message=MagicMock(content="hi"))]
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
+            result = await p.complete([{"role": "user", "content": "hi"}], "deepseek-v4-flash")
+        assert result.usage_details == {
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "prompt_cache_hit_tokens": 8,
+            "prompt_cache_miss_tokens": 2,
+        }
+
+    @pytest.mark.asyncio
+    async def test_complete_flattens_nested_token_details(self):
+        # OpenAI/Azure/Zhipu-style nested detail objects are flattened.
+        p = get_provider("openai", api_key="test-key")
+        usage = SimpleNamespace(
+            prompt_tokens=100,
+            completion_tokens=50,
+            total_tokens=150,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=80),
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=20),
+        )
+        mock_response = SimpleNamespace(usage=usage)
+        mock_response.choices = [MagicMock(message=MagicMock(content="hi"))]
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(return_value=mock_response)
+            result = await p.complete([{"role": "user", "content": "hi"}], "gpt-5.4-mini")
+        assert result.usage_details == {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "prompt_tokens_details.cached_tokens": 80,
+            "completion_tokens_details.reasoning_tokens": 20,
+        }
+
+    @pytest.mark.asyncio
     async def test_complete_routes_model_kwargs_to_extra_body(self):
         p = get_provider("openai", api_key="test-key")
         mock_response = MagicMock()
