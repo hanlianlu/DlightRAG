@@ -481,3 +481,236 @@ def test_main_cancel_exits_cleanly(wiz, tmp_path, monkeypatch, kind):
             raise exc
 
     assert wiz.main(prompter=_Cancel()) == 130
+
+
+# --- §11 re-run menu: detection / summary / dispatch ----------------------
+class _NullConsole:
+    def print(self, *args, **kwargs):
+        pass
+
+    def rule(self, *args, **kwargs):
+        pass
+
+
+def _info(wiz):
+    return wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
+
+
+def test_is_configured_true_when_keys_present(wiz, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(
+        "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_EMBEDDING__API_KEY=sk-b\n",
+        encoding="utf-8",
+    )
+    assert wiz.is_configured(env) is True
+
+
+def test_is_configured_false_when_missing_key(wiz, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\n", encoding="utf-8")
+    assert wiz.is_configured(env) is False
+
+
+def test_is_configured_false_when_no_env(wiz, tmp_path):
+    assert wiz.is_configured(tmp_path / "missing.env") is False
+
+
+def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n"
+        "  default:\n    provider: openai\n    model: gpt-x\n    base_url: https://api.x\n"
+        "  roles:\n    extract:\n      provider: openai\n      model: cheap\n"
+        "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
+        "rerank:\n  enabled: true\n  strategy: voyage_reranker\n"
+        "parser_sidecars:\n  mineru:\n    api_mode: local\n"
+        "workspace: default\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text(
+        "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-a\nDLIGHTRAG_EMBEDDING__API_KEY=sk-b\n",
+        encoding="utf-8",
+    )
+    s = wiz.read_config_summary(cfg, env)
+    assert s["llm_default"] == {"provider": "openai", "model": "gpt-x", "base_url": "https://api.x"}
+    assert s["llm_roles"]["extract"] == {"provider": "openai", "model": "cheap"}
+    assert s["embedding"]["dim"] == 1024
+    assert s["rerank"] == {"strategy": "voyage_reranker", "enabled": True}
+    assert s["mineru_mode"] == "local"
+    assert s["workspace"] == "default"
+    assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
+    assert "sk-a" not in repr(s) and "sk-b" not in repr(s)
+
+
+def test_home_start_brings_up_stack(wiz, monkeypatch):
+    ups: list = []
+    monkeypatch.setattr(wiz, "_default_runner", lambda cmd: ups.append(cmd))
+    monkeypatch.setattr(wiz, "wait_for_health", lambda url, **k: True)
+    prompter = _ScriptedPrompter([wiz.MENU_START])
+    rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
+    assert rc == 0
+    assert ups == [["docker", "compose", "up", "-d"]]
+
+
+def test_home_show_then_start(wiz, monkeypatch):
+    shown: list = []
+    monkeypatch.setattr(wiz, "read_config_summary", lambda c, e: {"ok": True})
+    monkeypatch.setattr(wiz, "render_summary", lambda console, s: shown.append(s))
+    monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: 0)
+    prompter = _ScriptedPrompter([wiz.MENU_SHOW, wiz.MENU_START])
+    rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
+    assert rc == 0
+    assert shown == [{"ok": True}]
+
+
+def test_home_change_then_start(wiz, monkeypatch):
+    changed: list = []
+    monkeypatch.setattr(wiz, "run_change_settings", lambda console, p, info: changed.append(True))
+    monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: 0)
+    prompter = _ScriptedPrompter([wiz.MENU_CHANGE, wiz.MENU_START])
+    rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
+    assert rc == 0
+    assert changed == [True]
+
+
+def test_home_reset_without_wipe(wiz, monkeypatch):
+    wiped: list = []
+    monkeypatch.setattr(wiz, "run_first_time_setup", lambda console, p, info, **k: 0)
+    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: wiped.append(True))
+    prompter = _ScriptedPrompter([wiz.MENU_RESET, False])
+    rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
+    assert rc == 0
+    assert wiped == []
+
+
+def test_home_reset_with_wipe(wiz, monkeypatch):
+    wiped: list = []
+    monkeypatch.setattr(wiz, "run_first_time_setup", lambda console, p, info, **k: 0)
+    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: wiped.append(True))
+    prompter = _ScriptedPrompter([wiz.MENU_RESET, True])
+    rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
+    assert rc == 0
+    assert wiped == [True]
+
+
+def test_home_reset_declined_returns_to_menu(wiz, monkeypatch):
+    monkeypatch.setattr(wiz, "run_first_time_setup", lambda console, p, info, **k: None)
+    monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: 0)
+    wiped: list = []
+    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: wiped.append(True))
+    prompter = _ScriptedPrompter([wiz.MENU_RESET, wiz.MENU_START])
+    rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
+    assert rc == 0
+    assert wiped == []
+
+
+def test_change_models_only(wiz, monkeypatch):
+    monkeypatch.setattr(
+        wiz, "run_models_step", lambda p, **k: {"llm": {"base_url": "u"}, "config_backup": None}
+    )
+    monkeypatch.setattr(wiz, "validate_config", lambda: None)
+    mineru: list = []
+    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_MODELS]), _info(wiz))
+    assert mineru == []
+
+
+def test_change_mineru_only(wiz, monkeypatch):
+    models: list = []
+    monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: models.append(True))
+    mineru: list = []
+    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_MINERU]), _info(wiz))
+    assert models == []
+    assert mineru == [True]
+
+
+def test_change_everything_runs_both(wiz, monkeypatch):
+    monkeypatch.setattr(
+        wiz, "run_models_step", lambda p, **k: {"llm": {"base_url": "u"}, "config_backup": None}
+    )
+    monkeypatch.setattr(wiz, "validate_config", lambda: None)
+    mineru: list = []
+    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_ALL]), _info(wiz))
+    assert mineru == [True]
+
+
+def test_change_back_does_nothing(wiz, monkeypatch):
+    touched: list = []
+    monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: touched.append("models"))
+    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: touched.append("mineru"))
+    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_BACK]), _info(wiz))
+    assert touched == []
+
+
+def test_change_models_declined_makes_no_change(wiz, monkeypatch):
+    monkeypatch.setattr(wiz, "run_models_step", lambda p, **k: None)
+    mineru: list = []
+    monkeypatch.setattr(wiz, "run_mineru_step", lambda *a, **k: mineru.append(True) or True)
+    wiz.run_change_settings(_NullConsole(), _ScriptedPrompter([wiz.SEC_MODELS]), _info(wiz))
+    assert mineru == []
+
+
+_MODELS_ANSWERS = [
+    "DeepSeek",
+    "deepseek-v4-flash",
+    "",
+    "sk-llm",
+    False,  # no advanced extract/keyword roles
+    "Voyage",
+    "voyage-multimodal-3.5",
+    "",
+    "sk-embed",
+    "Reuse my LLM",
+]
+
+
+def _models_cfg(tmp_path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: old\n    base_url: https://old\n"
+        "embedding:\n  provider: voyage\n  model: old\n  dim: 1024\n"
+        "rerank:\n  strategy: voyage_reranker\n",
+        encoding="utf-8",
+    )
+    return cfg
+
+
+def test_models_step_confirm_declined_leaves_config(wiz, tmp_path, monkeypatch):
+    cfg = _models_cfg(tmp_path)
+    original = cfg.read_text(encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    prompter = _ScriptedPrompter([*_MODELS_ANSWERS, False])  # decline the overwrite
+    assert wiz.run_models_step(prompter, require_confirm=True) is None
+    assert cfg.read_text(encoding="utf-8") == original
+
+
+def test_models_step_confirm_accepted_writes(wiz, tmp_path, monkeypatch):
+    cfg = _models_cfg(tmp_path)
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    prompter = _ScriptedPrompter([*_MODELS_ANSWERS, True])  # accept the overwrite
+    assert wiz.run_models_step(prompter, require_confirm=True) is not None
+    assert "deepseek-v4-flash" in cfg.read_text(encoding="utf-8")
+
+
+def test_mineru_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
+    monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
+    ran: list = []
+    info = wiz.PlatformInfo(os="macos", arch="arm64", is_wsl=False)
+    prompter = _ScriptedPrompter(["Local (recommended)", False])  # decline overwrite
+    applied = wiz.run_mineru_step(
+        prompter, info, has_gpu=False, runner=lambda c: ran.append(c), require_confirm=True
+    )
+    assert applied is False
+    assert ran == []
+    assert "api_mode: official" in cfg.read_text(encoding="utf-8")

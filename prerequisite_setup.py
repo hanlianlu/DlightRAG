@@ -352,15 +352,18 @@ def run_mineru_step(
     has_gpu: bool,
     llm_title_aided: dict | None = None,
     runner=_default_runner,
-) -> None:
+    require_confirm: bool = False,
+) -> bool:
     choice = prompter.select(
         "Document parser (MinerU)",
         ["Local (recommended)", "Official cloud API"],
     )
     if choice == "Official cloud API":
         token = prompter.password("MinerU API token")
+        if require_confirm and not prompter.confirm(MINERU_OVERWRITE_CONFIRM, default=False):
+            return False
         configure_mineru_official(token)
-        return
+        return True
 
     extras = select_mineru_extras(info, has_gpu=has_gpu)
     title_aided = None
@@ -370,6 +373,9 @@ def run_mineru_step(
         and prompter.confirm("Improve heading detection with your LLM (title-aided)?", default=True)
     ):
         title_aided = llm_title_aided
+    # Confirm AFTER collecting choices, right before overwriting existing settings.
+    if require_confirm and not prompter.confirm(MINERU_OVERWRITE_CONFIRM, default=False):
+        return False
     configure_mineru_local_env(extras, title_aided=title_aided)
 
     service_model = resolve_service_model(info, systemd_available=systemd_user_available())
@@ -377,6 +383,7 @@ def run_mineru_step(
         runner(cmd)
     if service_model == "foreground":
         _note_foreground_mineru()
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -412,7 +419,7 @@ def _ask_model(
     return name, model, (base_url or None), key
 
 
-def run_models_step(prompter: Prompter) -> dict:
+def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dict | None:
     config_backup = backup_file(CONFIG_PATH)
     backup_file(ENV_PATH)
     if not ENV_PATH.exists() and ENV_EXAMPLE_PATH.exists():
@@ -446,6 +453,10 @@ def run_models_step(prompter: Prompter) -> dict:
     if rerank_env is not None:
         env_values[rerank_env] = prompter.password("Reranker API key")
 
+    # Confirm AFTER collecting answers, right before overwriting existing settings.
+    if require_confirm and not prompter.confirm(MODELS_OVERWRITE_CONFIRM, default=False):
+        return None
+
     write_config_yaml(
         CONFIG_PATH,
         llm_default=llm_block,
@@ -464,7 +475,41 @@ class SetupCancelled(Exception):
     """Raised when the user picks the in-menu Quit option (a clean, non-error exit)."""
 
 
-QUIT_CHOICE = "✕ Quit setup"
+QUIT_CHOICE = "✕ Quit · 退出"
+
+
+# Home menu — shown only when DlightRAG is already configured (see is_configured).
+MENU_START = "Start DlightRAG · 启动"
+MENU_CHANGE = "Change settings · 修改设置"
+MENU_SHOW = "Show settings · 查看设置"
+MENU_RESET = "Start over · 重新配置"
+HOME_CHOICES = [MENU_START, MENU_CHANGE, MENU_SHOW, MENU_RESET]
+HOME_PROMPT = "DlightRAG is already set up — what next? · DlightRAG 已配置，接下来做什么？"
+
+# "Change settings" sub-menu (section-level, per the design).
+SEC_MODELS = "Models & API keys · 模型与密钥"
+SEC_MINERU = "Document parsing (MinerU) · 文档解析"
+SEC_ALL = "Everything · 全部"
+SEC_BACK = "← Back · 返回"
+CHANGE_CHOICES = [SEC_MODELS, SEC_MINERU, SEC_ALL, SEC_BACK]
+CHANGE_PROMPT = "What do you want to change? · 你想修改什么？"
+
+MODELS_OVERWRITE_CONFIRM = (
+    "Overwrite your current model settings and API keys with these answers? · "
+    "用这些答案覆盖当前的模型设置与密钥？"
+)
+MINERU_OVERWRITE_CONFIRM = (
+    "Overwrite your current document-parsing (MinerU) settings? · 覆盖当前的文档解析设置？"
+)
+RESET_WIPE_CONFIRM = (
+    "Delete ALL documents you've already added (vectors, graph)? This cannot be undone. · "
+    "删除所有已导入的文档（向量、图谱）？此操作不可恢复"
+)
+
+REQUIRED_ENV_KEYS = (
+    "DLIGHTRAG_LLM__DEFAULT__API_KEY",
+    "DLIGHTRAG_EMBEDDING__API_KEY",
+)
 
 
 def with_quit(choices: list[str]) -> list[str]:
@@ -528,12 +573,219 @@ def wait_for_health(url: str, *, attempts=60, delay=2.0, probe=probe_health, sle
     return False
 
 
+# ---------------------------------------------------------------------------
+# Re-run menu: view / change / start over (shown only when already configured)
+# ---------------------------------------------------------------------------
+def _read_env(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if path.exists():
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            if "=" in raw and not raw.lstrip().startswith("#"):
+                key, value = raw.split("=", 1)
+                values[key.strip()] = value.strip()
+    return values
+
+
+def is_configured(env_path: Path | None = None) -> bool:
+    """True when .env already holds the required API keys (a prior successful setup)."""
+    env = _read_env(env_path or ENV_PATH)
+    return all(env.get(key) for key in REQUIRED_ENV_KEYS)
+
+
+def read_config_summary(config_path: Path, env_path: Path) -> dict:
+    """Build a display-ready, masked summary of the current config (never secrets)."""
+    data = _yaml().load(config_path)
+    env = _read_env(env_path)
+    llm = data.get("llm", {}) or {}
+    default = llm.get("default", {}) or {}
+    roles = llm.get("roles", {}) or {}
+    embedding = data.get("embedding", {}) or {}
+    rerank = data.get("rerank", {}) or {}
+    mineru = (data.get("parser_sidecars", {}) or {}).get("mineru", {}) or {}
+    return {
+        "llm_default": {
+            "provider": default.get("provider", "?"),
+            "model": default.get("model", "?"),
+            "base_url": default.get("base_url"),
+        },
+        "llm_roles": {
+            role: {
+                "provider": (block or {}).get("provider", "?"),
+                "model": (block or {}).get("model", "?"),
+            }
+            for role, block in roles.items()
+        },
+        "embedding": {
+            "provider": embedding.get("provider", "?"),
+            "model": embedding.get("model", "?"),
+            "dim": embedding.get("dim", "?"),
+        },
+        "rerank": {
+            "strategy": rerank.get("strategy", "?"),
+            "enabled": bool(rerank.get("enabled", False)),
+        },
+        "mineru_mode": mineru.get("api_mode", "?"),
+        "workspace": data.get("workspace", "default"),
+        "keys_set": {
+            "LLM": bool(env.get("DLIGHTRAG_LLM__DEFAULT__API_KEY")),
+            "Embedding": bool(env.get("DLIGHTRAG_EMBEDDING__API_KEY")),
+            "Rerank": bool(env.get("DLIGHTRAG_RERANK__API_KEY")),
+        },
+    }
+
+
+def render_summary(console, summary: dict) -> None:
+    from rich.table import Table
+
+    table = Table(title="Current settings · 当前配置", show_header=False)
+    default = summary["llm_default"]
+    table.add_row("LLM", f"{default['provider']} · {default['model']}")
+    if default.get("base_url"):
+        table.add_row("", f"[dim]{default['base_url']}[/dim]")
+    for role, block in summary["llm_roles"].items():
+        table.add_row(f"  • {role}", f"{block['provider']} · {block['model']}")
+    embedding = summary["embedding"]
+    table.add_row(
+        "Embedding", f"{embedding['provider']} · {embedding['model']} (dim {embedding['dim']})"
+    )
+    rerank = summary["rerank"]
+    table.add_row("Rerank", f"{rerank['strategy']} ({'on' if rerank['enabled'] else 'off'})")
+    table.add_row("MinerU", summary["mineru_mode"])
+    table.add_row("Workspace", summary["workspace"])
+    table.add_row(
+        "API keys",
+        "   ".join(
+            f"{name}: {'set ✓' if ok else 'missing ✗'}" for name, ok in summary["keys_set"].items()
+        ),
+    )
+    console.print(table)
+
+
+def _bring_up_stack(console) -> int:
+    console.print("Starting DlightRAG + PostgreSQL… · 正在启动…")
+    try:
+        _default_runner(docker_up_command())
+    except Exception as exc:
+        console.print(f"[red]docker compose up failed:[/red] {exc}")
+        return 1
+    if wait_for_health(API_HEALTH_URL):
+        console.print(f"[green]Ready![/green] Open [link={WEB_URL}]{WEB_URL}[/link] · 已就绪")
+    else:
+        console.print(
+            f"[yellow]Not healthy yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
+        )
+    return 0
+
+
+def _apply_and_validate(console, result: dict) -> bool:
+    """Validate the freshly written config; restore backup and report on failure."""
+    try:
+        validate_config()
+        return True
+    except Exception as exc:
+        backup = result.get("config_backup")
+        if backup is not None:
+            CONFIG_PATH.write_bytes(backup.read_bytes())
+        console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
+        return False
+
+
+def run_first_time_setup(
+    console, prompter: Prompter, info: PlatformInfo, *, require_confirm: bool = False
+) -> int | None:
+    result = run_models_step(prompter, require_confirm=require_confirm)
+    if result is None:
+        console.print("No changes made. · 未做任何更改")
+        return None
+    if not _apply_and_validate(console, result):
+        return 1
+    run_mineru_step(
+        prompter,
+        info,
+        has_gpu=has_nvidia_gpu(),
+        llm_title_aided=result["llm"],
+        require_confirm=require_confirm,
+    )
+    return _bring_up_stack(console)
+
+
+def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None:
+    section = prompter.select(CHANGE_PROMPT, CHANGE_CHOICES)
+    if section == SEC_BACK:
+        return
+    changed = False
+    result = None
+    if section in (SEC_MODELS, SEC_ALL):
+        result = run_models_step(prompter, require_confirm=True)
+        if result is None:
+            console.print("No changes made. · 未做任何更改")
+            return
+        if not _apply_and_validate(console, result):
+            return
+        changed = True
+    if section in (SEC_MINERU, SEC_ALL):
+        if run_mineru_step(
+            prompter,
+            info,
+            has_gpu=has_nvidia_gpu(),
+            llm_title_aided=result["llm"] if result else None,
+            require_confirm=True,
+        ):
+            changed = True
+    if changed:
+        console.print(
+            "[green]Saved.[/green] Pick 'Start DlightRAG' to (re)launch. · 已保存，选择“启动”重新运行"
+        )
+    else:
+        console.print("No changes made. · 未做任何更改")
+
+
+def _wipe_data(console, *, runner=_default_runner) -> None:
+    console.print("Erasing ingested data… · 正在清除已导入数据…")
+    try:
+        runner(["uv", "run", "scripts/reset.py", "--all", "-y"])
+    except Exception as exc:
+        console.print(
+            f"[yellow]Couldn't erase data automatically ({exc}); "
+            f"run `uv run scripts/reset.py --all` yourself.[/yellow]"
+        )
+
+
+def run_start_over(console, prompter: Prompter, info: PlatformInfo) -> int | None:
+    console.print(
+        "[bold]Start over[/bold] — re-enter settings; nothing changes until you confirm. · "
+        "[bold]重新配置[/bold]：重新输入设置，确认前不会改动"
+    )
+    rc = run_first_time_setup(console, prompter, info, require_confirm=True)
+    if rc != 0:  # None (declined the overwrite) or 1 (invalid config)
+        return rc
+    # Confirm the irreversible data wipe immediately before doing it.
+    if prompter.confirm(RESET_WIPE_CONFIRM, default=False):
+        _wipe_data(console)
+    return rc
+
+
+def run_home(console, prompter: Prompter, info: PlatformInfo) -> int:
+    while True:
+        choice = prompter.select(HOME_PROMPT, HOME_CHOICES)
+        if choice == MENU_START:
+            return _bring_up_stack(console)
+        if choice == MENU_RESET:
+            rc = run_start_over(console, prompter, info)
+            if rc is not None:
+                return rc
+        elif choice == MENU_CHANGE:
+            run_change_settings(console, prompter, info)
+        elif choice == MENU_SHOW:
+            render_summary(console, read_config_summary(CONFIG_PATH, ENV_PATH))
+
+
 def main(prompter: Prompter | None = None) -> int:
     from rich.console import Console
 
     console = Console()
     console.rule("[bold]DlightRAG setup")
-    console.print("[dim]Pick '✕ Quit setup' in any menu, or press Ctrl+C, to cancel.[/dim]")
+    console.print("[dim]Pick '✕ Quit · 退出' in any menu, or press Ctrl+C, to cancel.[/dim]")
     failed = [c for c in run_preflight() if not c.ok]
     for c in failed:
         console.print(f"[red]missing[/red] {c.name} — {c.hint}")
@@ -543,32 +795,10 @@ def main(prompter: Prompter | None = None) -> int:
     prompter = prompter or _questionary_prompter()
     info = detect_platform()
     try:
-        result = run_models_step(prompter)
-        try:
-            validate_config()
-        except Exception as exc:
-            backup = result.get("config_backup")
-            if backup is not None:
-                CONFIG_PATH.write_bytes(backup.read_bytes())
-            console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
-            return 1
-
-        run_mineru_step(prompter, info, has_gpu=has_nvidia_gpu(), llm_title_aided=result["llm"])
-
-        console.print("Starting DlightRAG + PostgreSQL…")
-        try:
-            _default_runner(docker_up_command())
-        except Exception as exc:
-            console.print(f"[red]docker compose up failed:[/red] {exc}")
-            return 1
-
-        if wait_for_health(API_HEALTH_URL):
-            console.print(f"[green]Ready![/green] Open [link={WEB_URL}]{WEB_URL}[/link]")
-        else:
-            console.print(
-                f"[yellow]Not healthy yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
-            )
-        return 0
+        if is_configured():
+            return run_home(console, prompter, info)
+        rc = run_first_time_setup(console, prompter, info)
+        return 0 if rc is None else rc
     except KeyboardInterrupt, EOFError, SetupCancelled:
         console.print(
             "\n[yellow]Setup cancelled.[/yellow] Re-run any time with "
