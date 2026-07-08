@@ -43,7 +43,7 @@ dependencies = [
     # REST API server
     "PyJWT>=2.8.0",
     "fastapi>=0.135.1",
-    "uvicorn[standard]>=0.50.2",
+    "uvicorn[standard]>=0.51.0",
     "python-multipart>=0.0.22",
     # Web frontend
     "jinja2>=3.1",
