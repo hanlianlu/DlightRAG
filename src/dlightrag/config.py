@@ -128,6 +128,7 @@ class ModelConfig(BaseModel):
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", mode="before")
+    @classmethod
     def _fold_provider(cls, value: Any) -> Any:
         return _canonical_provider_name(value)
 
@@ -404,6 +405,7 @@ class RerankConfig(BaseModel):
     model_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("provider", mode="before")
+    @classmethod
     def _fold_provider(cls, value: Any) -> Any:
         return _canonical_provider_name(value)
 
