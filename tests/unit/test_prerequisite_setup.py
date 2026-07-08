@@ -521,7 +521,9 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "llm:\n"
         "  default:\n    provider: openai\n    model: gpt-x\n    base_url: https://api.x\n"
         "  roles:\n    extract:\n      provider: openai\n      model: cheap\n"
+        "      base_url: https://api.deepseek.com\n"
         "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
+        "  base_url: https://api.voyageai.com/v1\n"
         "rerank:\n  enabled: true\n  strategy: voyage_reranker\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
         "workspace: default\n",
@@ -534,8 +536,13 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     )
     s = wiz.read_config_summary(cfg, env)
     assert s["llm_default"] == {"provider": "openai", "model": "gpt-x", "base_url": "https://api.x"}
-    assert s["llm_roles"]["extract"] == {"provider": "openai", "model": "cheap"}
+    assert s["llm_roles"]["extract"] == {
+        "provider": "openai",
+        "model": "cheap",
+        "base_url": "https://api.deepseek.com",
+    }
     assert s["embedding"]["dim"] == 1024
+    assert s["embedding"]["base_url"] == "https://api.voyageai.com/v1"
     assert s["rerank"] == {"strategy": "voyage_reranker", "enabled": True}
     assert s["mineru_mode"] == "local"
     assert s["workspace"] == "default"

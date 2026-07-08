@@ -11,6 +11,16 @@
 # ─────────────────────────────────────────────────────────────────
 # Models
 # ─────────────────────────────────────────────────────────────────
+# `provider` selects the API protocol / SDK family — not the vendor brand.
+# It accepts exactly three values (case-insensitive):
+#   openai     Any OpenAI-compatible endpoint. Choose the vendor with base_url:
+#              OpenAI, DeepSeek, OpenRouter, Azure OpenAI, MiniMax, Qwen, Zhipu,
+#              local vLLM / Ollama, … all use provider: openai.
+#   anthropic  Anthropic Claude, native SDK (leave base_url unset).
+#   gemini     Google Gemini, native SDK (leave base_url unset).
+# There is no provider: deepseek / openrouter / azure — those are provider:
+# openai plus the matching base_url (an unknown value is rejected at load time).
+#
 # LLM roles follow LightRAG role names exactly:
 #   extract — entity/relationship extraction and ingest-time semantic projection
 #   keyword — LightRAG retrieval keyword extraction and query planning
