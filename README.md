@@ -4,10 +4,10 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-DlightRAG is a multimodal RAG service built on LightRAG main. LightRAG provides fusional one-hop Graph traversal and Vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, direct image-vector alignment, orchestration, citations, highlighting, standardized interfaces.
+DlightRAG is a production ready multimodal RAG service built on LightRAG. It 
+offers superior context intelligence, great accuracy with citation / highlight grounding, and unified interfaces for REST, Web, MCP, and Python SDK clients. It is designed for developers, seasoned users and teams who need a reliable RAG core service with cutting edge features integrated into their workflows and products. 
 
-Status: Python 3.14. Storage: PostgreSQL 18 with pgvector, Apache AGE,
-pg_textsearch, and pg_jieba. License: Apache-2.0.
+Status: Python 3.14. Storage: PostgreSQL 18 ecosystem. License: Apache-2.0.
 
 ## Architecture At A Glance
 
@@ -24,10 +24,7 @@ Clients
   -> PostgreSQL 18 storage ecosystem
 ```
 
-DlightRAG has one unified production RAG path: DlightRAG stages sources and metadata,
-LightRAG performs parser/KG/vector/chunk/doc-status work, additionally DlightRAG adds
-metadata filtering, BM25, direct visual retrieval, cited and highlighted answers, jobs, and
-interfaces. The full runtime and code-layer view is in
+DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, direct image-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime and code-layer view is in
 [docs/architecture.md](docs/architecture.md).
 
 ## Choose Your Deployment Path
@@ -56,13 +53,14 @@ Python is not required for the Docker path.
 # Install uv — macOS/Linux (see the uv docs for the Windows PowerShell command)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install make (git is usually already present):
-#   macOS          xcode-select --install       # Command Line Tools; or: brew install make
+# Install make if you don't have it (git is usually already present):
+#   macOS          xcode-select --install       # or: brew install make
 #   Debian/Ubuntu  sudo apt-get install -y make
 #   Fedora/RHEL    sudo dnf install -y make
-#   Windows        use WSL2 — the make + MinerU shell scripts need a POSIX shell;
-#                  install Docker Desktop with the WSL2 backend, then run every
-#                  step below inside your WSL2 Linux shell
+#   Windows        no POSIX make on Windows — use WSL2 (Ubuntu): install Docker
+#                  Desktop with the WSL2 backend, then inside WSL2 follow the
+#                  Debian/Ubuntu line above. uv, make, and Python 3.14 all live
+#                  inside WSL2 (a Linux environment), not on Windows.
 ```
 
 The Docker Quick Start does **not** require `uv sync` — DlightRAG itself runs
@@ -126,17 +124,15 @@ endpoint into DlightRAG containers as `http://host.docker.internal:8210`.
 ```bash
 docker compose up -d
 docker compose ps
-curl http://localhost:8100/health
 ```
 
 This starts:
-
 | Service | Purpose | Host port |
 |---|---|---|
 | `dlightrag-api` | REST API + Web UI | `127.0.0.1:8100` |
 | `dlightrag-mcp` | MCP streamable HTTP server | `127.0.0.1:8101` |
 | `lightrag-gui` | Upstream LightRAG graph browser | `127.0.0.1:9621` |
-| `postgres` | PG18 + pgvector + AGE + pg_textsearch + pg_jieba | `5432` |
+| `postgres` | PG18 ecosystem | `5432` |
 
 4. Open the Web UI:
 
@@ -319,17 +315,10 @@ gateway for login and token issuance. Full guidance is in
 
 ## Operations And Development
 
-Offline vector maintenance:
+Use [docs/operations.md](docs/operations.md) for the full stop/rebuild/restart
+sequence and maintenance safety notes.
 
-```bash
-uv run dlightrag-rebuild-vdb --target check
-uv run dlightrag-rebuild-vdb --target all --yes
-```
-
-Use [docs/operations.md](docs/operations.md) for rebuild and maintenance safety
-notes.
-
-Development setup:
+### Development setup:
 
 ```bash
 uv sync
