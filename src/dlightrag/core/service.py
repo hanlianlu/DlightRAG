@@ -1706,6 +1706,19 @@ class RAGService:
             fetched_meta = {
                 k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
             }
+            # Surface the document's canonical source location and display name
+            # under dedicated keys. The LightRAG chunk ``file_path`` is a
+            # canonicalized parser basename, which is wrong for download when the
+            # real source lives elsewhere -- a non-retained remote object
+            # (``s3://``/``azure://``/``https://`` URI), a retained remote copy,
+            # or a nested folder upload. Source/citation building prefers these
+            # so the "Download source" link resolves in every situation.
+            source_path = meta.get("file_path")
+            if isinstance(source_path, str) and source_path:
+                fetched_meta["source_file_path"] = source_path
+            display_name = meta.get("filename")
+            if isinstance(display_name, str) and display_name:
+                fetched_meta["source_file_name"] = display_name
             if fetched_meta:
                 doc_meta[doc_id] = fetched_meta
 

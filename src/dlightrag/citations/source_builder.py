@@ -96,6 +96,11 @@ def build_sources_from_chunks(
         metadata = first.get("metadata", {})
         catalog = catalog_by_id.get(ref_id)
         file_path = catalog.path if catalog else first.get("file_path", "")
+        # The chunk file_path is a canonicalized parser basename; the enrichment
+        # step surfaces the document's real source location (local staged path,
+        # retained remote copy, or remote s3:///azure:///https:// URI) which is
+        # what the download URL must resolve against.
+        source_path = metadata.get("source_file_path") or file_path
 
         def _citation_order(chunk: dict[str, Any], ref_id: str = ref_id) -> int:
             chunk_idx = chunk.get("chunk_idx")
@@ -133,11 +138,11 @@ def build_sources_from_chunks(
             )
 
         url = catalog.url if catalog else None
-        if url is None and source_url_resolver and file_path:
+        if url is None and source_url_resolver and source_path:
             try:
-                url = source_url_resolver.resolve(file_path)
+                url = source_url_resolver.resolve(source_path)
             except Exception:
-                logger.debug("Could not resolve source URL for %s", file_path, exc_info=True)
+                logger.debug("Could not resolve source URL for %s", source_path, exc_info=True)
 
         cited_chunk_ids = None
         if cited_chunks is not None:
@@ -148,6 +153,7 @@ def build_sources_from_chunks(
             SourceReference(
                 id=ref_id,
                 title=(catalog.title if catalog else None)
+                or metadata.get("source_file_name")
                 or metadata.get("file_name")
                 or (Path(file_path).name if file_path else None),
                 path=file_path,

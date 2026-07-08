@@ -68,7 +68,11 @@ class SourceUrlResolver:
             return None
 
         relative = self.resolve_relative(raw_path)
-        return f"{self._base_url}/{relative}" if relative else None
+        if not relative:
+            return None
+        # Percent-encode path segments (spaces, unicode, reserved chars) while
+        # keeping "/" as the separator so the resulting href is a valid URL.
+        return f"{self._base_url}/{quote(relative, safe='/')}"
 
     def resolve_relative(self, raw_path: str) -> str | None:
         """Extract an endpoint-relative source path.

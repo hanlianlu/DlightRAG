@@ -31,6 +31,10 @@ from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
 
+# Upper bound on directory entries scanned when locating a source file by its
+# canonical basename. Keeps a single download request cheap on large workspaces.
+_MAX_WORKSPACE_SCAN_ENTRIES = 50_000
+
 
 @router.get("/files", response_model=FileListResponse)
 async def list_files(
@@ -176,25 +180,10 @@ async def serve_file(
     if ws_dir is None:
         raise HTTPException(403, "Access denied") from None
 
-    # --- Canonical basename lookup ---
-    # LightRAG canonicalizes file_path to just the basename (no directory
-    # components).  The original file may live in __parsed__/ or another
-    # workspace subdirectory.
-    bare_name = os.path.basename(relative_path.as_posix())
-    if not bare_name:
+    resolved = _resolve_workspace_file(ws_dir, relative_path)
+    if resolved is None:
         raise HTTPException(404, "File not found")
-
-    root_candidate = _contained_resolved_path(ws_dir, ws_dir / bare_name)
-    if root_candidate is not None:
-        return _file_response(root_candidate)
-
-    if ws_dir.is_dir():
-        for sub in _iter_workspace_lookup_dirs(ws_dir):
-            candidate = _contained_resolved_path(ws_dir, sub / bare_name)
-            if candidate is not None:
-                return _file_response(candidate)
-
-    raise HTTPException(404, "File not found")
+    return _file_response(resolved)
 
 
 def _resolve_local_file_scope(
@@ -238,26 +227,60 @@ def _ensure_safe_local_file_path(file_path: str) -> None:
         raise HTTPException(403, "Access denied")
 
 
-def _iter_workspace_lookup_dirs(ws_dir: Path) -> list[Path]:
-    """Yield workspace subdirectories to search for bare filenames.
+def _resolve_workspace_file(ws_dir: Path, relative_path: Path) -> Path | None:
+    """Locate a source file under a workspace input dir, robust to nesting.
 
-    ``__parsed__/`` comes first because every parsed document gets a copy
-    there during ingestion.  Other immediate subdirectories follow.
+    Retrieval canonicalizes ``file_path`` to a bare basename, but the original
+    source may be staged at the workspace root, inside a folder-upload subtree,
+    or under staging dirs (``__uploads__/<batch>/``, ``__remote_sources__/<type>/``,
+    ``__parsed__/``). Resolve in order of increasing cost, always confirming the
+    resolved path stays inside the workspace (blocks symlink / traversal escapes).
     """
-    dirs: list[Path] = []
-    parsed: Path | None = None
-    try:
-        for entry in ws_dir.iterdir():
-            if entry.is_dir():
-                if entry.name == "__parsed__":
-                    parsed = entry
-                else:
-                    dirs.append(entry)
-    except OSError:
-        return []
-    if parsed is not None:
-        dirs.insert(0, parsed)
-    return dirs
+    # 1. Exact relative path -- handles URLs that already carry the full staged
+    #    path (e.g. folder uploads projected from an absolute stored file_path).
+    if relative_path.parts:
+        exact = _contained_resolved_path(ws_dir, ws_dir / relative_path)
+        if exact is not None and exact.is_file():
+            return exact
+
+    bare_name = os.path.basename(relative_path.as_posix())
+    if not bare_name:
+        return None
+
+    # 2. Directly under the workspace root (canonical staged single file).
+    root_candidate = _contained_resolved_path(ws_dir, ws_dir / bare_name)
+    if root_candidate is not None and root_candidate.is_file():
+        return root_candidate
+
+    if not ws_dir.is_dir():
+        return None
+
+    # 3. Bounded, symlink-safe recursive search for the basename anywhere under
+    #    the workspace (nested folder uploads, __uploads__/<batch>/,
+    #    __remote_sources__/<type>/, __parsed__/ copies).
+    return _find_file_by_basename(ws_dir, bare_name)
+
+
+def _find_file_by_basename(ws_dir: Path, bare_name: str) -> Path | None:
+    """Depth-first search for ``bare_name`` under ``ws_dir``.
+
+    ``followlinks=False`` prevents descending through directory symlinks, and
+    every candidate is re-validated with :func:`_contained_resolved_path` so a
+    symlinked file that resolves outside the workspace is rejected. The scan is
+    bounded to keep a single download request cheap on large workspaces.
+    """
+    scanned = 0
+    for dirpath, dirnames, filenames in os.walk(ws_dir, followlinks=False):
+        # Skip hidden staging/temp directories in place.
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        scanned += len(dirnames) + len(filenames)
+        if scanned > _MAX_WORKSPACE_SCAN_ENTRIES:
+            break
+        if bare_name in filenames:
+            candidate = _contained_resolved_path(ws_dir, Path(dirpath) / bare_name)
+            if candidate is not None and candidate.is_file():
+                return candidate
+    return None
 
 
 def _contained_resolved_path(
@@ -276,4 +299,11 @@ def _contained_resolved_path(
 
 def _file_response(path: Path) -> FileResponse:
     content_type, _ = mimetypes.guess_type(str(path))
-    return FileResponse(path, media_type=content_type or "application/octet-stream")
+    # Set an explicit download filename so the browser saves the original name
+    # (Content-Disposition: attachment) instead of guessing from the URL or, on
+    # error, saving an API JSON body.
+    return FileResponse(
+        path,
+        media_type=content_type or "application/octet-stream",
+        filename=path.name,
+    )

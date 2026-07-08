@@ -60,6 +60,62 @@ class TestFileEndpoint:
         assert b"%PDF-1.4 canonical input content" in resp.content
         assert resp.headers["content-type"] == "application/pdf"
 
+    async def test_streams_nested_upload_batch_file(
+        self, client: AsyncClient, tmp_working_dir: Path
+    ) -> None:
+        """Bare basename resolves a file staged under __uploads__/<batch>/ (2 levels deep)."""
+        staged = (
+            tmp_working_dir
+            / "inputs"
+            / "default"
+            / "__uploads__"
+            / "b1a2c3d4"
+            / "PyCaret 3.0 cheat_sheet.pdf"
+        )
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"%PDF-1.4 nested upload content")
+
+        resp = await client.get("/api/files/default/PyCaret%203.0%20cheat_sheet.pdf")
+
+        assert resp.status_code == 200
+        assert b"%PDF-1.4 nested upload content" in resp.content
+        assert "attachment" in resp.headers.get("content-disposition", "")
+        # Starlette RFC 5987-encodes non-ASCII / spaced filenames (filename*=).
+        assert "PyCaret%203.0%20cheat_sheet.pdf" in resp.headers.get("content-disposition", "")
+
+    async def test_streams_retained_remote_source_file(
+        self, client: AsyncClient, tmp_working_dir: Path
+    ) -> None:
+        """Retained remote sources live under __remote_sources__/<type>/ (2 levels deep)."""
+        staged = (
+            tmp_working_dir
+            / "inputs"
+            / "default"
+            / "__remote_sources__"
+            / "s3"
+            / "report__a1b2c3d4e5f6.pdf"
+        )
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"%PDF-1.4 retained remote content")
+
+        resp = await client.get("/api/files/default/report__a1b2c3d4e5f6.pdf")
+
+        assert resp.status_code == 200
+        assert b"%PDF-1.4 retained remote content" in resp.content
+
+    async def test_streams_deeply_nested_folder_upload(
+        self, client: AsyncClient, tmp_working_dir: Path
+    ) -> None:
+        """Folder uploads nested more than one level deep are still resolvable by basename."""
+        staged = tmp_working_dir / "inputs" / "default" / "topic" / "sub" / "deep.pdf"
+        staged.parent.mkdir(parents=True)
+        staged.write_bytes(b"%PDF-1.4 deep folder content")
+
+        resp = await client.get("/api/files/default/deep.pdf")
+
+        assert resp.status_code == 200
+        assert b"%PDF-1.4 deep folder content" in resp.content
+
     async def test_does_not_stream_from_working_dir(
         self, client: AsyncClient, tmp_working_dir: Path
     ) -> None:

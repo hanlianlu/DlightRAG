@@ -1419,12 +1419,50 @@ class TestRAGServiceLightRAGMainPath:
 
         await service._enrich_chunks_with_metadata(result)
 
-        assert result.contexts["chunks"][0]["metadata"] == {"department": "finance"}
+        assert result.contexts["chunks"][0]["metadata"] == {
+            "department": "finance",
+            "source_file_name": "report.pdf",
+        }
         assert "metadata" not in result.contexts["chunks"][1]
         service._metadata_index.get_many.assert_awaited_once_with(["doc-right"])
         service._metadata_index.get.assert_not_awaited()
         service._metadata_index.find_by_file_path.assert_not_awaited()
         service._metadata_index.find_by_filename.assert_not_awaited()
+
+    async def test_metadata_enrichment_surfaces_canonical_source_path(
+        self, test_config: DlightragConfig
+    ) -> None:
+        """Non-retained remote docs surface their real source URI + display name
+        so the download link resolves to the remote object, not a parser basename."""
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = RAGService(config=test_config)
+        service._metadata_index = AsyncMock()
+        service._metadata_index.get_many = AsyncMock(
+            return_value={
+                "doc-remote": {
+                    "filename": "report.pdf",
+                    "file_path": "s3://my-bucket/reports/report.pdf",
+                }
+            }
+        )
+        result = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {
+                        "chunk_id": "chunk-1",
+                        "full_doc_id": "doc-remote",
+                        "file_path": "report__a1b2c3d4e5f6.pdf",
+                    }
+                ]
+            }
+        )
+
+        await service._enrich_chunks_with_metadata(result)
+
+        meta = result.contexts["chunks"][0]["metadata"]
+        assert meta["source_file_path"] == "s3://my-bucket/reports/report.pdf"
+        assert meta["source_file_name"] == "report.pdf"
 
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
         """close() finalizes LightRAG storages."""

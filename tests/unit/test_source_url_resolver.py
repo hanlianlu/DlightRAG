@@ -71,6 +71,18 @@ class TestResolve:
         resolver = SourceUrlResolver()
         assert resolver.resolve("default/docs/report.pdf") == "/api/files/default/docs/report.pdf"
 
+    def test_relative_path_with_spaces_and_unicode_is_encoded(self) -> None:
+        """Local hrefs must percent-encode spaces / unicode but keep '/' separators."""
+        resolver = SourceUrlResolver()
+        assert (
+            resolver.resolve("default/PyCaret 3.0 cheat_sheet.pdf")
+            == "/api/files/default/PyCaret%203.0%20cheat_sheet.pdf"
+        )
+        assert (
+            resolver.resolve("default/世界运行的底层逻辑.pdf")
+            == "/api/files/default/%E4%B8%96%E7%95%8C%E8%BF%90%E8%A1%8C%E7%9A%84%E5%BA%95%E5%B1%82%E9%80%BB%E8%BE%91.pdf"
+        )
+
     def test_windows_relative_path_is_projected_as_posix(self) -> None:
         resolver = SourceUrlResolver()
         assert resolver.resolve(r"default\docs\report.pdf") == "/api/files/default/docs/report.pdf"
