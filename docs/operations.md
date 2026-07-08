@@ -79,6 +79,10 @@ the same app image so it sees the same `config.yaml`, environment, network, and
 storage volume:
 
 ```bash
+# Read-only check — safe while the stack is running:
+docker compose run --rm dlightrag-api dlightrag-rebuild-vdb --target check
+
+# Rebuild — stop writers first, then restart them afterward:
 docker compose stop dlightrag-api dlightrag-mcp lightrag-gui
 docker compose run --rm dlightrag-api dlightrag-rebuild-vdb --target all --yes
 docker compose up -d dlightrag-api dlightrag-mcp
