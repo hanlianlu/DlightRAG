@@ -4,11 +4,7 @@
 [![CI](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml/badge.svg)](https://github.com/hanlianlu/dlightrag/actions/workflows/ci.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/hanlianlu/DlightRAG)
 
-DlightRAG is a multimodal RAG service built on LightRAG main. LightRAG owns
-document parsing, staged ingest, chunks, document status, vectors, and the
-knowledge graph. DlightRAG adds product-layer metadata governance,
-PostgreSQL BM25, direct image-vector alignment, answer orchestration,
-citations, REST, Web, SDK, and MCP interfaces.
+DlightRAG is a multimodal RAG service built on LightRAG main. LightRAG provides fusional one-hop Graph traversal and Vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, direct image-vector alignment, orchestration, citations, highlighting, standardized interfaces.
 
 Status: Python 3.14. Storage: PostgreSQL 18 with pgvector, Apache AGE,
 pg_textsearch, and pg_jieba. License: Apache-2.0.
@@ -28,9 +24,9 @@ Clients
   -> PostgreSQL 18 storage ecosystem
 ```
 
-DlightRAG has one production RAG path: DlightRAG stages sources and metadata,
-LightRAG performs parser/KG/vector/chunk/doc-status work, and DlightRAG adds
-metadata filtering, BM25, direct visual retrieval, cited answers, jobs, and
+DlightRAG has one unified production RAG path: DlightRAG stages sources and metadata,
+LightRAG performs parser/KG/vector/chunk/doc-status work, additionally DlightRAG adds
+metadata filtering, BM25, direct visual retrieval, cited and highlighted answers, jobs, and
 interfaces. The full runtime and code-layer view is in
 [docs/architecture.md](docs/architecture.md).
 
@@ -52,7 +48,9 @@ MinerU as an independent service/router or use the official API.
 
 **Prerequisites.** Install [Docker + Compose](https://docs.docker.com/get-docker/)
 (runs the API and PostgreSQL), [`uv`](https://docs.astral.sh/uv/) (builds the
-isolated MinerU sidecar environment), plus `git` and `make`.
+isolated MinerU sidecar environment), plus `git` and `make`. DlightRAG targets
+**Python 3.14**; `uv` installs it for you (`uv python install 3.14`), so a system
+Python is not required for the Docker path.
 
 ```bash
 # Install uv — macOS/Linux (see the uv docs for the Windows PowerShell command)
