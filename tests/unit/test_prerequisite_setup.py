@@ -441,3 +441,43 @@ def test_wait_for_health_gives_up(wiz):
         wiz.wait_for_health("u", attempts=3, delay=0, probe=lambda url: False, sleep=lambda _: None)
         is False
     )
+
+
+def test_with_quit_appends_sentinel(wiz):
+    assert wiz.with_quit(["A", "B"]) == ["A", "B", wiz.QUIT_CHOICE]
+
+
+def test_check_quit_passes_through_normal_answer(wiz):
+    assert wiz.check_quit("A") == "A"
+
+
+def test_check_quit_raises_setup_cancelled(wiz):
+    with pytest.raises(wiz.SetupCancelled):
+        wiz.check_quit(wiz.QUIT_CHOICE)
+
+
+@pytest.mark.parametrize("kind", ["ctrl_c", "ctrl_d", "menu_quit"])
+def test_main_cancel_exits_cleanly(wiz, tmp_path, monkeypatch, kind):
+    """Ctrl+C, Ctrl+D, or the in-menu Quit all exit 130 with no traceback."""
+    monkeypatch.setattr(wiz, "run_preflight", lambda: [])  # pretend all tools present
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("llm:\n  default:\n    provider: openai\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    exc = {"ctrl_c": KeyboardInterrupt, "ctrl_d": EOFError, "menu_quit": wiz.SetupCancelled}[kind]
+
+    class _Cancel(wiz.Prompter):
+        def select(self, message, choices):
+            raise exc
+
+        def text(self, message, default=""):
+            raise exc
+
+        def password(self, message):
+            raise exc
+
+        def confirm(self, message, default=False):
+            raise exc
+
+    assert wiz.main(prompter=_Cancel()) == 130
