@@ -26,6 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
 ENV_PATH = REPO_ROOT / ".env"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
+MINERU_ENV_PATH = REPO_ROOT / ".env.mineru"
+MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +284,81 @@ def systemd_user_available() -> bool:
         check=False,
     )
     return result.returncode == 0 or "running" in result.stdout or "degraded" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# MinerU parser: official cloud vs local install + hybrid background service
+# ---------------------------------------------------------------------------
+def configure_mineru_official(token: str) -> None:
+    write_config_yaml(CONFIG_PATH, mineru_api_mode="official")
+    upsert_env(ENV_PATH, {"DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN": token})
+
+
+def configure_mineru_local_env(extras: str, *, title_aided: dict | None = None) -> None:
+    if not MINERU_ENV_PATH.exists() and MINERU_ENV_EXAMPLE_PATH.exists():
+        MINERU_ENV_PATH.write_bytes(MINERU_ENV_EXAMPLE_PATH.read_bytes())
+    values = {"MINERU_INSTALL_EXTRAS": extras}
+    if title_aided:
+        values["MINERU_TITLE_AIDED_ENABLE"] = "true"
+        values["MINERU_TITLE_AIDED_API_KEY"] = title_aided["api_key"]
+        values["MINERU_TITLE_AIDED_BASE_URL"] = title_aided["base_url"]
+        values["MINERU_TITLE_AIDED_MODEL"] = title_aided["model"]
+    upsert_env(MINERU_ENV_PATH, values)
+    write_config_yaml(CONFIG_PATH, mineru_api_mode="local")
+
+
+def build_mineru_local_commands(service_model: str, *, title_aided: bool) -> list[list[str]]:
+    cmds: list[list[str]] = [["make", "mineru-install"]]
+    if title_aided:
+        cmds.append(["make", "mineru-title-aided"])
+    if service_model in ("launchd", "systemd-user"):
+        cmds.append(["make", "mineru-service-install"])
+    return cmds
+
+
+def _default_runner(cmd: list[str]) -> None:
+    subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+
+
+def _note_foreground_mineru() -> None:
+    from rich.console import Console
+
+    Console().print(
+        "[yellow]No background service available.[/yellow] Start MinerU in another "
+        "terminal with:  make mineru-api"
+    )
+
+
+def run_mineru_step(
+    prompter: Prompter,
+    info: PlatformInfo,
+    *,
+    has_gpu: bool,
+    llm_title_aided: dict | None = None,
+    runner=_default_runner,
+) -> None:
+    choice = prompter.select(
+        "Document parser (MinerU)",
+        ["Local (recommended)", "Official cloud API"],
+    )
+    if choice == "Official cloud API":
+        token = prompter.password("MinerU API token")
+        configure_mineru_official(token)
+        return
+
+    extras = select_mineru_extras(info, has_gpu=has_gpu)
+    title_aided = None
+    if llm_title_aided and prompter.confirm(
+        "Improve heading detection with your LLM (title-aided)?", default=True
+    ):
+        title_aided = llm_title_aided
+    configure_mineru_local_env(extras, title_aided=title_aided)
+
+    service_model = resolve_service_model(info, systemd_available=systemd_user_available())
+    for cmd in build_mineru_local_commands(service_model, title_aided=bool(title_aided)):
+        runner(cmd)
+    if service_model == "foreground":
+        _note_foreground_mineru()
 
 
 # ---------------------------------------------------------------------------

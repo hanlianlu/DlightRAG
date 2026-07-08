@@ -262,3 +262,90 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     env_text = env.read_text(encoding="utf-8")
     assert "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-llm" in env_text
     assert "DLIGHTRAG_EMBEDDING__API_KEY=sk-embed" in env_text
+
+
+# --- Plan 2 Task 1: MinerU config helpers ---------------------------------
+def test_configure_mineru_official(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
+    env = tmp_path / ".env"
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    wiz.configure_mineru_official("tok-123")
+    assert "api_mode: official" in cfg.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN=tok-123" in env.read_text(encoding="utf-8")
+
+
+def test_configure_mineru_local_env_writes_extras_and_title_aided(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    mineru_env = tmp_path / ".env.mineru"
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "MINERU_ENV_PATH", mineru_env)
+    monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
+    wiz.configure_mineru_local_env(
+        "core,mlx",
+        title_aided={
+            "api_key": "sk",
+            "base_url": "https://api.deepseek.com",
+            "model": "deepseek-v4-flash",
+        },
+    )
+    text = mineru_env.read_text(encoding="utf-8")
+    assert "MINERU_INSTALL_EXTRAS=core,mlx" in text
+    assert "MINERU_TITLE_AIDED_ENABLE=true" in text
+    assert "MINERU_TITLE_AIDED_MODEL=deepseek-v4-flash" in text
+    assert "api_mode: local" in cfg.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "service_model,title_aided,expected",
+    [
+        ("launchd", False, [["make", "mineru-install"], ["make", "mineru-service-install"]]),
+        (
+            "systemd-user",
+            True,
+            [
+                ["make", "mineru-install"],
+                ["make", "mineru-title-aided"],
+                ["make", "mineru-service-install"],
+            ],
+        ),
+        ("foreground", False, [["make", "mineru-install"]]),
+    ],
+)
+def test_build_mineru_local_commands(wiz, service_model, title_aided, expected):
+    assert wiz.build_mineru_local_commands(service_model, title_aided=title_aided) == expected
+
+
+# --- Plan 2 Task 2: run_mineru_step fork ----------------------------------
+def test_run_mineru_step_official(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: local\n", encoding="utf-8")
+    env = tmp_path / ".env"
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    ran: list = []
+    info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
+    prompter = _ScriptedPrompter(["Official cloud API", "tok-xyz"])
+    wiz.run_mineru_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
+    assert "api_mode: official" in cfg.read_text(encoding="utf-8")
+    assert ran == []
+
+
+def test_run_mineru_step_local_runs_commands(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
+    monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
+    monkeypatch.setattr(wiz, "systemd_user_available", lambda: False)
+    ran: list = []
+    info = wiz.PlatformInfo(os="macos", arch="arm64", is_wsl=False)
+    prompter = _ScriptedPrompter(["Local (recommended)", False])
+    wiz.run_mineru_step(prompter, info, has_gpu=False, runner=lambda cmd: ran.append(cmd))
+    assert ["make", "mineru-install"] in ran
+    assert ["make", "mineru-service-install"] in ran
+    assert "MINERU_INSTALL_EXTRAS=core,mlx" in (tmp_path / ".env.mineru").read_text(
+        encoding="utf-8"
+    )
