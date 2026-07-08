@@ -17,23 +17,25 @@ mineru-api:
 mineru-title-aided:
 	scripts/mineru/title_aided.sh
 
+# Background MinerU service — dispatched per OS by service.sh
+# (macOS: launchd | Linux/WSL2: systemd --user).
 mineru-service-install:
-	scripts/mineru/launch_agent.sh install
+	scripts/mineru/service.sh install
 
 mineru-service-start:
-	scripts/mineru/launch_agent.sh start
+	scripts/mineru/service.sh start
 
 mineru-service-stop:
-	scripts/mineru/launch_agent.sh stop
+	scripts/mineru/service.sh stop
 
 mineru-service-status:
-	scripts/mineru/launch_agent.sh status
+	scripts/mineru/service.sh status
 
 mineru-service-logs:
-	scripts/mineru/launch_agent.sh logs
+	scripts/mineru/service.sh logs
 
 mineru-service-uninstall:
-	scripts/mineru/launch_agent.sh uninstall
+	scripts/mineru/service.sh uninstall
 
 langfuse-stack:
 	$(LANGFUSE_STACK)

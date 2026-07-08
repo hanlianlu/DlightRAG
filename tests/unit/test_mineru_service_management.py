@@ -48,12 +48,22 @@ def test_mineru_helper_defaults_to_separate_env_file() -> None:
     assert 'mineru_env_file="${MINERU_ENV_FILE:-$mineru_repo_root/.env.mineru}"' in env_script
 
 
-def test_makefile_exposes_mineru_launch_agent_targets() -> None:
+def test_makefile_dispatches_mineru_service_targets() -> None:
     for action in ("install", "start", "stop", "status", "logs", "uninstall"):
         assert (
             _makefile_target_command(f"mineru-service-{action}")
-            == f"scripts/mineru/launch_agent.sh {action}"
+            == f"scripts/mineru/service.sh {action}"
         )
+
+
+def test_mineru_service_dispatcher_routes_per_os() -> None:
+    dispatcher = MINERU_SCRIPTS / "service.sh"
+    systemd = MINERU_SCRIPTS / "systemd_service.sh"
+    assert dispatcher.exists() and os.access(dispatcher, os.X_OK)
+    assert systemd.exists() and os.access(systemd, os.X_OK)
+    body = dispatcher.read_text(encoding="utf-8")
+    assert "launch_agent.sh" in body  # macOS route
+    assert "systemd_service.sh" in body  # Linux / WSL2 route
 
 
 def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:
