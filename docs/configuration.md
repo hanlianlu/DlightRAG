@@ -27,8 +27,8 @@ Keep these in normal `config.yaml`:
 - metadata schema: `metadata.fields`
 - domain entity guidance: `kg_entity_types`, `extraction.entity_type_prompt_file`
 - PostgreSQL endpoint and workspace identity: `workspace`, `postgres_*`
-- high-level concurrency: `max_async`, `embedding_func_max_async`,
-  `max_parallel_*`
+- high-level concurrency raised above upstream defaults: `max_async`,
+  `embedding_func_max_async`, `embedding_batch_num`
 - retrieval/answer breadth: `top_k`, `chunk_top_k`, `direct_visual_top_k`,
   `answer.*`
 - auth and observability mode switches when they are not secret
@@ -39,6 +39,7 @@ they need to change:
 - storage backend literals
 - parser routing rules
 - PostgreSQL retry/backoff internals
+- per-stage ingest worker counts (`max_parallel_*`) that match LightRAG defaults
 - queue sizes
 - HNSW index internals
 - BM25 language profile signatures and k1/b tuning
@@ -203,16 +204,29 @@ postgres_pool_close_timeout: 5.0
 Use [postgresql.md](postgresql.md) for production sizing, SSL, shared memory, and extension
 notes.
 
-## Staged Ingest Queues
+## Ingestion Concurrency And Queues
 
-The root config exposes worker concurrency. Queue sizes are internal backpressure
-settings and should only change after measuring parser/analyze/insert pressure.
+`config.yaml` keeps only the concurrency knobs raised above LightRAG's upstream
+defaults (`max_async`, `embedding_func_max_async`, `embedding_batch_num`). The
+per-stage worker counts below already match LightRAG's defaults, so they are
+omitted from `config.yaml` and follow DlightRAG's code defaults; set them
+explicitly (in `config.yaml` or via `DLIGHTRAG_*` env) only when a deployment
+needs different parallelism:
+
+```yaml
+max_parallel_insert: 3        # insert workers (code/LightRAG default 3)
+max_parallel_parse_native: 5  # native + legacy parser workers (default 5)
+max_parallel_parse_mineru: 2  # MinerU parser workers (default 2)
+max_parallel_analyze: 5       # VLM analysis workers (default 5)
+```
+
+Queue sizes are internal backpressure settings and should only change after
+measuring parser/analyze/insert pressure:
 
 ```yaml
 queue_size_parse: 20
-queue_size_analyze: 32
+queue_size_analyze: 100
 queue_size_insert: 4
-embedding_batch_num: 10
 embedding_request_timeout: 120
 ```
 

@@ -804,9 +804,11 @@ class DlightragConfig(BaseSettings):
         description="LightRAG staged pipeline parse queue size.",
     )
     queue_size_analyze: int = Field(
-        default=32,
+        default=100,
         ge=1,
-        description="LightRAG staged pipeline multimodal analysis queue size.",
+        description="LightRAG staged pipeline multimodal analysis queue size. "
+        "Matches LightRAG's DEFAULT_QUEUE_SIZE_ANALYZE (100); never set the code "
+        "default below the upstream default.",
     )
     queue_size_insert: int = Field(
         default=4,

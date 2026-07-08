@@ -50,6 +50,28 @@ MinerU as an independent service/router or use the official API.
 
 ## Quick Start
 
+**Prerequisites.** Install [Docker + Compose](https://docs.docker.com/get-docker/)
+(runs the API and PostgreSQL), [`uv`](https://docs.astral.sh/uv/) (builds the
+isolated MinerU sidecar environment), plus `git` and `make`.
+
+```bash
+# Install uv — macOS/Linux (see the uv docs for the Windows PowerShell command)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install make (git is usually already present):
+#   macOS          xcode-select --install       # Command Line Tools; or: brew install make
+#   Debian/Ubuntu  sudo apt-get install -y make
+#   Fedora/RHEL    sudo dnf install -y make
+#   Windows        use WSL2 — the make + MinerU shell scripts need a POSIX shell;
+#                  install Docker Desktop with the WSL2 backend, then run every
+#                  step below inside your WSL2 Linux shell
+```
+
+The Docker Quick Start does **not** require `uv sync` — DlightRAG itself runs
+inside containers, and `make mineru-install` builds its own isolated
+`.venv-mineru`. Run `uv sync` only for the [Native API Variant](#native-api-variant)
+or [development](#operations-and-development).
+
 1. Clone the repo and create a secrets file:
 
 ```bash
