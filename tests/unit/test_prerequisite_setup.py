@@ -524,7 +524,7 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
         "      base_url: https://api.deepseek.com\n"
         "embedding:\n  provider: voyage\n  model: voyage-x\n  dim: 1024\n"
         "  base_url: https://api.voyageai.com/v1\n"
-        "rerank:\n  enabled: true\n  strategy: voyage_reranker\n"
+        "rerank:\n  enabled: true\n  strategy: voyage_reranker\n  model: rerank-2.5-lite\n"
         "parser_sidecars:\n  mineru:\n    api_mode: local\n"
         "workspace: default\n",
         encoding="utf-8",
@@ -543,7 +543,12 @@ def test_read_config_summary_masks_secrets_and_extracts(wiz, tmp_path):
     }
     assert s["embedding"]["dim"] == 1024
     assert s["embedding"]["base_url"] == "https://api.voyageai.com/v1"
-    assert s["rerank"] == {"strategy": "voyage_reranker", "enabled": True}
+    assert s["rerank"] == {
+        "strategy": "voyage_reranker",
+        "enabled": True,
+        "model": "rerank-2.5-lite",
+        "base_url": None,
+    }
     assert s["mineru_mode"] == "local"
     assert s["workspace"] == "default"
     assert s["keys_set"] == {"LLM": True, "Embedding": True, "Rerank": False}
@@ -694,6 +699,7 @@ def test_models_step_confirm_declined_leaves_config(wiz, tmp_path, monkeypatch):
     prompter = _ScriptedPrompter([*_MODELS_ANSWERS, False])  # decline the overwrite
     assert wiz.run_models_step(prompter, require_confirm=True) is None
     assert cfg.read_text(encoding="utf-8") == original
+    assert not list(cfg.parent.glob(f"{cfg.name}.bak-*"))
 
 
 def test_models_step_confirm_accepted_writes(wiz, tmp_path, monkeypatch):
@@ -704,6 +710,7 @@ def test_models_step_confirm_accepted_writes(wiz, tmp_path, monkeypatch):
     prompter = _ScriptedPrompter([*_MODELS_ANSWERS, True])  # accept the overwrite
     assert wiz.run_models_step(prompter, require_confirm=True) is not None
     assert "deepseek-v4-flash" in cfg.read_text(encoding="utf-8")
+    assert list(cfg.parent.glob(f"{cfg.name}.bak-*"))
 
 
 def test_mineru_step_confirm_declined_skips_write(wiz, tmp_path, monkeypatch):

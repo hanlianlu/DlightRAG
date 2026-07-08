@@ -420,11 +420,6 @@ def _ask_model(
 
 
 def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dict | None:
-    config_backup = backup_file(CONFIG_PATH)
-    backup_file(ENV_PATH)
-    if not ENV_PATH.exists() and ENV_EXAMPLE_PATH.exists():
-        ENV_PATH.write_bytes(ENV_EXAMPLE_PATH.read_bytes())
-
     env_values: dict[str, str] = {}
 
     from rich.console import Console
@@ -463,6 +458,14 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
     # Confirm AFTER collecting answers, right before overwriting existing settings.
     if require_confirm and not prompter.confirm(MODELS_OVERWRITE_CONFIRM, default=False):
         return None
+
+    # Back up config and any pre-existing .env only now — right before writing —
+    # so aborted or declined runs never leave a stray .bak behind.
+    config_backup = backup_file(CONFIG_PATH)
+    if ENV_PATH.exists():
+        backup_file(ENV_PATH)
+    elif ENV_EXAMPLE_PATH.exists():
+        ENV_PATH.write_bytes(ENV_EXAMPLE_PATH.read_bytes())
 
     write_config_yaml(
         CONFIG_PATH,
@@ -632,6 +635,8 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
         "rerank": {
             "strategy": rerank.get("strategy", "?"),
             "enabled": bool(rerank.get("enabled", False)),
+            "model": rerank.get("model"),
+            "base_url": rerank.get("base_url"),
         },
         "mineru_mode": mineru.get("api_mode", "?"),
         "workspace": data.get("workspace", "default"),
@@ -662,7 +667,11 @@ def render_summary(console, summary: dict) -> None:
     if embedding.get("base_url"):
         table.add_row("", f"[dim]{embedding['base_url']}[/dim]")
     rerank = summary["rerank"]
-    table.add_row("Rerank", f"{rerank['strategy']} ({'on' if rerank['enabled'] else 'off'})")
+    rerank_model = f" · {rerank['model']}" if rerank.get("model") else ""
+    rerank_state = "on" if rerank["enabled"] else "off"
+    table.add_row("Rerank", f"{rerank['strategy']}{rerank_model} ({rerank_state})")
+    if rerank.get("base_url"):
+        table.add_row("", f"[dim]{rerank['base_url']}[/dim]")
     table.add_row("MinerU", summary["mineru_mode"])
     table.add_row("Workspace", summary["workspace"])
     table.add_row(
