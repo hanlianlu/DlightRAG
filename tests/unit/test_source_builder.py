@@ -179,6 +179,37 @@ class TestBuildSources:
 
         assert sources[0].url == "https://cdn.example.com//data/report.pdf"
 
+    def test_prefers_enriched_source_path_for_url_and_title(self) -> None:
+        """Non-retained remote: chunk file_path is a parser basename, but the
+        enriched metadata carries the real source URI + display name."""
+        chunk = _chunk("c1", "ref-1", file_path="report__a1b2c3d4e5f6.pdf")
+        chunk["metadata"] = {
+            "source_file_path": "s3://my-bucket/reports/report.pdf",
+            "source_file_name": "report.pdf",
+        }
+        contexts = {"chunks": [chunk]}
+
+        class FakeResolver:
+            def resolve(self, path: str) -> str:
+                return f"/api/files/{path}"
+
+        sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
+
+        assert sources[0].title == "report.pdf"
+        assert sources[0].url == "/api/files/s3://my-bucket/reports/report.pdf"
+
+    def test_falls_back_to_chunk_path_without_enrichment(self) -> None:
+        """When no enriched source path exists, the chunk file_path drives the URL."""
+        contexts = {"chunks": [_chunk("c1", "ref-1", file_path="default/report.pdf")]}
+
+        class FakeResolver:
+            def resolve(self, path: str) -> str:
+                return f"/api/files/{path}"
+
+        sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
+
+        assert sources[0].url == "/api/files/default/report.pdf"
+
     def test_skips_chunks_without_reference_id(self) -> None:
         contexts = {
             "chunks": [
