@@ -427,6 +427,13 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
 
     env_values: dict[str, str] = {}
 
+    from rich.console import Console
+
+    Console().print(
+        "[dim]Provider = API protocol (openai / anthropic / gemini). Pick your vendor below — "
+        "DeepSeek, OpenRouter, Azure, etc. map to the OpenAI-compatible protocol automatically.[/dim]"
+    )
+
     name, model, base_url, key = _ask_model(prompter, PROVIDERS_LLM, "LLM")
     llm_block, llm_env = resolve_llm_choice(name, model=model, base_url=base_url)
     env_values[llm_env] = key
@@ -612,6 +619,7 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             role: {
                 "provider": (block or {}).get("provider", "?"),
                 "model": (block or {}).get("model", "?"),
+                "base_url": (block or {}).get("base_url"),
             }
             for role, block in roles.items()
         },
@@ -619,6 +627,7 @@ def read_config_summary(config_path: Path, env_path: Path) -> dict:
             "provider": embedding.get("provider", "?"),
             "model": embedding.get("model", "?"),
             "dim": embedding.get("dim", "?"),
+            "base_url": embedding.get("base_url"),
         },
         "rerank": {
             "strategy": rerank.get("strategy", "?"),
@@ -644,10 +653,14 @@ def render_summary(console, summary: dict) -> None:
         table.add_row("", f"[dim]{default['base_url']}[/dim]")
     for role, block in summary["llm_roles"].items():
         table.add_row(f"  • {role}", f"{block['provider']} · {block['model']}")
+        if block.get("base_url"):
+            table.add_row("", f"[dim]{block['base_url']}[/dim]")
     embedding = summary["embedding"]
     table.add_row(
         "Embedding", f"{embedding['provider']} · {embedding['model']} (dim {embedding['dim']})"
     )
+    if embedding.get("base_url"):
+        table.add_row("", f"[dim]{embedding['base_url']}[/dim]")
     rerank = summary["rerank"]
     table.add_row("Rerank", f"{rerank['strategy']} ({'on' if rerank['enabled'] else 'off'})")
     table.add_row("MinerU", summary["mineru_mode"])

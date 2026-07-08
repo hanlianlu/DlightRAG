@@ -103,6 +103,30 @@ provider is text-only or the probe fails, DlightRAG automatically skips direct
 image vector overwrite and query-image vector retrieval while leaving LightRAG's
 semantic multimodal path enabled.
 
+## LLM Providers
+
+`provider` names the API protocol and SDK family DlightRAG speaks — not the
+vendor brand. It accepts exactly three values (case-insensitive):
+
+| `provider`  | Transport               | Use for                                                                                                                | `base_url`      |
+| ----------- | ----------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `openai`    | OpenAI Chat Completions | OpenAI, DeepSeek, OpenRouter, Azure OpenAI, MiniMax, Qwen, Zhipu, vLLM/Ollama, and any other OpenAI-compatible endpoint | Vendor endpoint |
+| `anthropic` | Anthropic native SDK    | Anthropic Claude                                                                                                       | Omit (native)   |
+| `gemini`    | Google GenAI SDK        | Google Gemini                                                                                                          | Omit (native)   |
+
+Pick the vendor through `base_url`, never through `provider`. DeepSeek and
+OpenRouter are `provider: openai` plus their `base_url` — there is no
+`provider: deepseek` or `provider: openrouter`, and any unknown value is
+rejected when the config loads.
+
+```yaml
+llm:
+  default:
+    provider: openai                    # protocol family, not the vendor
+    model: deepseek-v4-flash
+    base_url: https://api.deepseek.com   # ← the vendor is selected here
+```
+
 ## LLM Structured Output
 
 Planner and other small control-plane calls pass a `StructuredOutput` contract

@@ -204,7 +204,7 @@ async def main() -> None:
         working_dir="./dlightrag_storage/sdk_demo",
         llm=LLMConfig(
             default=ModelConfig(
-                provider="openai",
+                provider="openai",  # protocol family: openai | anthropic | gemini (vendor via base_url)
                 model="gpt-4.1-mini",
                 api_key=os.environ["OPENAI_API_KEY"],
                 temperature=0.2,
