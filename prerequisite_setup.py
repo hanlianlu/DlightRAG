@@ -19,6 +19,7 @@ import datetime as _dt
 import platform
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +29,8 @@ ENV_PATH = REPO_ROOT / ".env"
 ENV_EXAMPLE_PATH = REPO_ROOT / ".env.example"
 MINERU_ENV_PATH = REPO_ROOT / ".env.mineru"
 MINERU_ENV_EXAMPLE_PATH = REPO_ROOT / ".env.mineru.example"
+API_HEALTH_URL = "http://localhost:8100/health"
+WEB_URL = "http://localhost:8100/web/"
 
 
 # ---------------------------------------------------------------------------
@@ -348,8 +351,10 @@ def run_mineru_step(
 
     extras = select_mineru_extras(info, has_gpu=has_gpu)
     title_aided = None
-    if llm_title_aided and prompter.confirm(
-        "Improve heading detection with your LLM (title-aided)?", default=True
+    if (
+        llm_title_aided
+        and llm_title_aided.get("base_url")
+        and prompter.confirm("Improve heading detection with your LLM (title-aided)?", default=True)
     ):
         title_aided = llm_title_aided
     configure_mineru_local_env(extras, title_aided=title_aided)
@@ -394,8 +399,8 @@ def _ask_model(
     return name, model, (base_url or None), key
 
 
-def run_models_step(prompter: Prompter) -> None:
-    backup_file(CONFIG_PATH)
+def run_models_step(prompter: Prompter) -> dict:
+    config_backup = backup_file(CONFIG_PATH)
     backup_file(ENV_PATH)
     if not ENV_PATH.exists() and ENV_EXAMPLE_PATH.exists():
         ENV_PATH.write_bytes(ENV_EXAMPLE_PATH.read_bytes())
@@ -436,6 +441,10 @@ def run_models_step(prompter: Prompter) -> None:
         rerank=rerank_block,
     )
     upsert_env(ENV_PATH, env_values)
+    return {
+        "llm": {"api_key": key, "base_url": llm_block.get("base_url"), "model": model},
+        "config_backup": config_backup,
+    }
 
 
 def _questionary_prompter() -> Prompter:
@@ -457,6 +466,34 @@ def _questionary_prompter() -> Prompter:
     return _Q()
 
 
+# ---------------------------------------------------------------------------
+# Docker bring-up + health poll
+# ---------------------------------------------------------------------------
+def docker_up_command() -> list[str]:
+    return ["docker", "compose", "up", "-d"]
+
+
+def probe_health(url: str, *, opener=None) -> bool:
+    import urllib.request
+
+    opener = opener or urllib.request.urlopen
+    try:
+        with opener(url, timeout=5) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except Exception:
+        return False
+
+
+def wait_for_health(url: str, *, attempts=60, delay=2.0, probe=probe_health, sleep=None) -> bool:
+    sleep = sleep or time.sleep
+    for i in range(attempts):
+        if probe(url):
+            return True
+        if i < attempts - 1:
+            sleep(delay)
+    return False
+
+
 def main() -> int:
     from rich.console import Console
 
@@ -467,10 +504,34 @@ def main() -> int:
         console.print(f"[red]missing[/red] {c.name} — {c.hint}")
     if failed:
         return 1
-    run_models_step(_questionary_prompter())
-    console.print(
-        "[green]Models configured.[/green] Next: MinerU (Plan 2) and Docker bring-up (Plan 3)."
-    )
+
+    prompter = _questionary_prompter()
+    info = detect_platform()
+    result = run_models_step(prompter)
+    try:
+        validate_config()
+    except Exception as exc:
+        backup = result.get("config_backup")
+        if backup is not None:
+            CONFIG_PATH.write_bytes(backup.read_bytes())
+        console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
+        return 1
+
+    run_mineru_step(prompter, info, has_gpu=has_nvidia_gpu(), llm_title_aided=result["llm"])
+
+    console.print("Starting DlightRAG + PostgreSQL…")
+    try:
+        _default_runner(docker_up_command())
+    except Exception as exc:
+        console.print(f"[red]docker compose up failed:[/red] {exc}")
+        return 1
+
+    if wait_for_health(API_HEALTH_URL):
+        console.print(f"[green]Ready![/green] Open [link={WEB_URL}]{WEB_URL}[/link]")
+    else:
+        console.print(
+            f"[yellow]Not healthy yet — check `docker compose ps`, then open[/yellow] {WEB_URL}"
+        )
     return 0
 
 

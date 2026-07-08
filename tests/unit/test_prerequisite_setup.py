@@ -349,3 +349,82 @@ def test_run_mineru_step_local_runs_commands(wiz, tmp_path, monkeypatch):
     assert "MINERU_INSTALL_EXTRAS=core,mlx" in (tmp_path / ".env.mineru").read_text(
         encoding="utf-8"
     )
+
+
+# --- Plan 3: creds return, title-aided reuse, docker bring-up --------------
+def test_models_step_returns_llm_creds(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: x\n    base_url: https://x\n"
+        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
+        "rerank:\n  strategy: voyage_reranker\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", tmp_path / ".env")
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
+    prompter = _ScriptedPrompter(
+        [
+            "DeepSeek",
+            "deepseek-v4-flash",
+            "",
+            "sk-llm",
+            False,
+            "Voyage",
+            "voyage-multimodal-3.5",
+            "",
+            "sk-embed",
+            "Reuse my LLM",
+        ]
+    )
+    result = wiz.run_models_step(prompter)
+    assert result["llm"] == {
+        "api_key": "sk-llm",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash",
+    }
+
+
+def test_run_mineru_step_local_title_aided(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("parser_sidecars:\n  mineru:\n    api_mode: official\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "MINERU_ENV_PATH", tmp_path / ".env.mineru")
+    monkeypatch.setattr(wiz, "MINERU_ENV_EXAMPLE_PATH", tmp_path / "missing")
+    monkeypatch.setattr(wiz, "systemd_user_available", lambda: True)
+    ran: list = []
+    info = wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
+    prompter = _ScriptedPrompter(["Local (recommended)", True])
+    creds = {
+        "api_key": "sk",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-v4-flash",
+    }
+    wiz.run_mineru_step(
+        prompter, info, has_gpu=False, llm_title_aided=creds, runner=lambda cmd: ran.append(cmd)
+    )
+    assert ["make", "mineru-title-aided"] in ran
+    assert "MINERU_TITLE_AIDED_MODEL=deepseek-v4-flash" in (tmp_path / ".env.mineru").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_docker_up_command(wiz):
+    assert wiz.docker_up_command() == ["docker", "compose", "up", "-d"]
+
+
+def test_wait_for_health_success(wiz):
+    calls = {"n": 0}
+
+    def probe(url):
+        calls["n"] += 1
+        return calls["n"] >= 2
+
+    assert wiz.wait_for_health("u", attempts=5, delay=0, probe=probe, sleep=lambda _: None) is True
+
+
+def test_wait_for_health_gives_up(wiz):
+    assert (
+        wiz.wait_for_health("u", attempts=3, delay=0, probe=lambda url: False, sleep=lambda _: None)
+        is False
+    )
