@@ -3,6 +3,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/mineru/env.sh
 source "$script_dir/env.sh"
 
 label="com.hanlianlyu.dlightrag.mineru-api"

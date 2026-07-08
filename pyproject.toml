@@ -66,6 +66,7 @@ dev = [
     "pytest-playwright>=0.8.0",
     "ruamel.yaml>=0.18",
     "ruff>=0.15.0",
+    "shellcheck-py>=0.10",
 ]
 
 [project.urls]
