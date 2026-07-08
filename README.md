@@ -72,6 +72,23 @@ inside containers, and `make mineru-install` builds its own isolated
 `.venv-mineru`. Run `uv sync` only for the [Native API Variant](#native-api-variant)
 or [development](#operations-and-development).
 
+### One-command setup (recommended)
+
+From a fresh clone, an interactive wizard configures your models, sets up MinerU
+(local or the official cloud API), brings up the stack, and ends with a clickable
+Web UI link:
+
+```bash
+git clone https://github.com/hanlianlu/dlightrag.git
+cd dlightrag
+uv run prerequisite_setup.py
+```
+
+It writes `config.yaml` and `.env` for you (with timestamped backups) and is safe
+to re-run. Prefer the manual steps below if you'd rather configure everything by hand.
+
+### Manual setup
+
 1. Clone the repo and create a secrets file:
 
 ```bash
