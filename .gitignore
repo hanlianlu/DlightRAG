@@ -40,6 +40,9 @@ Thumbs.db
 .env.mineru
 !.env.mineru.example
 
+# Wizard backups (prerequisite_setup.py writes <file>.bak-<timestamp>)
+*.bak-*
+
 # Worktrees
 .worktrees/
 

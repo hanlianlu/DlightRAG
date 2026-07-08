@@ -160,6 +160,19 @@ def test_backup_file_missing_returns_none(wiz, tmp_path):
     assert wiz.backup_file(tmp_path / "nope.yaml") is None
 
 
+def test_backup_file_keeps_only_latest(wiz, tmp_path):
+    f = tmp_path / "config.yaml"
+    f.write_text("current\n", encoding="utf-8")
+    # Two pre-existing older backups (older timestamps sort first).
+    (tmp_path / "config.yaml.bak-20200101000000").write_text("old0\n", encoding="utf-8")
+    (tmp_path / "config.yaml.bak-20200101000001").write_text("old1\n", encoding="utf-8")
+    backup = wiz.backup_file(f)
+    assert backup is not None
+    remaining = sorted(p.name for p in tmp_path.glob("config.yaml.bak-*"))
+    assert remaining == [backup.name]  # only the freshly-created backup survives
+    assert backup.read_text(encoding="utf-8") == "current\n"
+
+
 # --- Task 6: detection + preflight ----------------------------------------
 def test_detect_platform_apple_silicon(wiz, monkeypatch):
     monkeypatch.setattr(wiz.platform, "system", lambda: "Darwin")

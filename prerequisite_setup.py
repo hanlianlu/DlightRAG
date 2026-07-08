@@ -181,12 +181,25 @@ def upsert_env(path: Path, values: dict[str, str]) -> None:
 # ---------------------------------------------------------------------------
 # Backup + validation
 # ---------------------------------------------------------------------------
-def backup_file(path: Path) -> Path | None:
+MAX_BACKUPS = 1  # keep only the most recent <file>.bak-<timestamp> per file
+
+
+def _prune_backups(path: Path, *, keep: int) -> None:
+    """Delete all but the newest ``keep`` ``<name>.bak-*`` siblings of ``path``."""
+    if keep < 0:
+        return
+    backups = sorted(path.parent.glob(f"{path.name}.bak-*"), key=lambda p: p.name)
+    for old in backups[: len(backups) - keep]:
+        old.unlink(missing_ok=True)
+
+
+def backup_file(path: Path, *, keep: int = MAX_BACKUPS) -> Path | None:
     if not path.exists():
         return None
     stamp = _dt.datetime.now().strftime("%Y%m%d%H%M%S")
     backup = path.with_name(f"{path.name}.bak-{stamp}")
     backup.write_bytes(path.read_bytes())
+    _prune_backups(path, keep=keep)
     return backup
 
 
