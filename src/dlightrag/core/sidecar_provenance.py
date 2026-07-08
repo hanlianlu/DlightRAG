@@ -88,6 +88,50 @@ def block_ids_from_sidecar(sidecar: dict[str, Any]) -> list[str]:
     return block_ids
 
 
+# Multimodal chunks (table / drawing / equation) carry a ``{type, id, refs}``
+# sidecar that references their own modality item id (``tb-``/``im-``/``eq-``)
+# rather than a source block. Each modality file records the originating
+# ``blockid``, so page/bbox provenance is recoverable by an id lookup.
+_MULTIMODAL_ITEM_FILES: dict[str, tuple[str, str]] = {
+    "table": ("*.tables.json", "tables"),
+    "drawing": ("*.drawings.json", "drawings"),
+    "equation": ("*.equations.json", "equations"),
+}
+
+
+def is_multimodal_sidecar(sidecar: dict[str, Any]) -> bool:
+    """Return whether a chunk sidecar is a table / drawing / equation item."""
+    return sidecar.get("type") in _MULTIMODAL_ITEM_FILES
+
+
+def block_ids_from_multimodal_item(artifact_dir: Path, sidecar: dict[str, Any]) -> list[str]:
+    """Resolve a multimodal chunk's source block id from its sidecar item file.
+
+    The sidecar ``id`` keys the matching ``*.tables.json`` / ``*.drawings.json``
+    / ``*.equations.json`` item, which records the ``blockid`` it was lifted
+    from. Returns an empty list when the sidecar is not multimodal, the item is
+    absent, or no modality file is readable.
+    """
+    kind = sidecar.get("type")
+    spec = _MULTIMODAL_ITEM_FILES.get(kind) if isinstance(kind, str) else None
+    item_id = sidecar.get("id")
+    if spec is None or not isinstance(item_id, str) or not item_id:
+        return []
+
+    glob_pattern, root_key = spec
+    for path in sorted(artifact_dir.glob(glob_pattern)):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError, OSError:
+            continue
+        items = payload.get(root_key) if isinstance(payload, dict) else None
+        item = items.get(item_id) if isinstance(items, dict) else None
+        block_id = item.get("blockid") if isinstance(item, dict) else None
+        if isinstance(block_id, str) and block_id:
+            return [block_id]
+    return []
+
+
 def first_provenance_for_blocks(
     block_ids: list[str],
     index: dict[str, BlockProvenance],
