@@ -14,6 +14,7 @@ x-common-env: &common-env
   # route that externally managed sidecar through Docker's host alias unless
   # explicitly overridden.
   MINERU_LOCAL_ENDPOINT: ${MINERU_DOCKER_LOCAL_ENDPOINT:-http://host.docker.internal:8210}
+  # OFFICIAL_ENDPOINT: https://mineru.net
 
 x-app-image: &app-image dlightrag:local
 x-app-build: &app-build
