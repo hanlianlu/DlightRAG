@@ -78,6 +78,7 @@ ci:
 	uv run ruff format --check src/ tests/ scripts/
 	uv run pyright
 	uv run lint-imports
+	uv run shellcheck $$(git ls-files '*.sh')
 	$(MAKE) frontend-ci
 	uv run pytest tests/unit -v --tb=short
 	@echo "CI (fast) passed."
