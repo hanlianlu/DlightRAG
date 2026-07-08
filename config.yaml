@@ -149,14 +149,19 @@ workspace: default
 # postgres_ssl_mode: require
 # postgres_ssl_root_cert:
 
-# High-level concurrency. Lower these for small local model endpoints; raise
-# them only after provider rate limits and PostgreSQL capacity are understood.
-max_async: 8
-embedding_func_max_async: 16
-max_parallel_insert: 3
-max_parallel_parse_native: 5
-max_parallel_parse_mineru: 2
-max_parallel_analyze: 5
+# High-level concurrency — only knobs raised above LightRAG's upstream defaults
+# stay here. The per-stage worker counts (max_parallel_insert/parse_native/
+# parse_mineru/analyze) and queue sizes follow the code defaults; see
+# docs/configuration.md to tune them. Lower max_async for small local model
+# endpoints; raise it only after provider rate limits and PostgreSQL capacity
+# are understood.
+max_async: 8                  # LightRAG default 4
+embedding_func_max_async: 16  # LightRAG default 8
+# One batch per provider embedding request (no client-side sub-batching), so
+# keep this <= the provider's per-request cap. Voyage allows 128, so 32 is safe
+# and cuts embedding calls ~3x vs the code default (10); lower toward 10 for
+# small-cap providers like DashScope native.
+embedding_batch_num: 32       # LightRAG default 10
 
 # ─────────────────────────────────────────────────────────────────
 # Retrieval and Answering

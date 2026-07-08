@@ -558,7 +558,7 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
         "max_parallel_parse_mineru": 2,
         "max_parallel_analyze": 5,
         "queue_size_parse": 20,
-        "queue_size_analyze": 32,
+        "queue_size_analyze": 100,
         "queue_size_insert": 4,
     }
 
