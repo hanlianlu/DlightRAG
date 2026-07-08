@@ -61,16 +61,13 @@ embedding:
   dim: 1024
   max_token_size: 8192
   asymmetric: auto
-  # Capability check only; does not write to LightRAG storage or PostgreSQL.
-  startup_probe: true
 
 rerank:
   enabled: true
   strategy: voyage_reranker
   model: rerank-2.5-lite
   input_modality: auto
-  # voyage_reranker sends text documents to Voyage /v1/rerank.
-  # Keep the credential in .env as DLIGHTRAG_RERANK__API_KEY.
+  ## Keep the credential in .env as DLIGHTRAG_RERANK__API_KEY.
 
 # ─────────────────────────────────────────────────────────────────
 # Parser and Ingestion
@@ -80,8 +77,8 @@ working_dir: ./dlightrag_storage
 
 extraction:
   language: English
-  # YAML file name under PROMPT_DIR/entity_type (default ./prompts/entity_type).
-  # Must be a file name such as domain-entities.yaml, not a path.
+  ## YAML file name under PROMPT_DIR/entity_type (default ./prompts/entity_type).
+  ## Must be a file name such as domain-entities.yaml, not a path.
   entity_type_prompt_file:
 
 parser_sidecars:
@@ -95,7 +92,7 @@ parser_sidecars:
     auxiliary_block_policy: conservative
     # api_mode: official
     # official_endpoint: https://mineru.net
-    # Put DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN in .env.
+    ## Put DLIGHTRAG_PARSER_SIDECARS__MINERU__API_TOKEN in .env.
 
 # ─────────────────────────────────────────────────────────────────
 # Product Schema
@@ -105,19 +102,18 @@ metadata:
   allow_ad_hoc_json: true
   default_ingest_policy: validate
   fields: {}
-  # Declare custom user metadata fields here only when they should become
-  # filterable. Undeclared metadata is still stored in metadata_json when
-  # allow_ad_hoc_json is true, but it is not promoted to declared filters.
-  # String exact filters default to casefold_trim for stable human-entered
-  # matching; set normalizer: identity only for case-sensitive identifiers.
-  # Example:
+  ## Declare custom user metadata fields here only when they should become
+  ## filterable. Undeclared metadata is still stored in metadata_json when
+  ## allow_ad_hoc_json is true, but it is not promoted to declared filters.
+  ## Example:
+
   # fields:
   #   department:
   #     type: string
   #     filter_ops: ["exact"]
 
-# Entity guidance is product-level domain shaping. For deeper domain profiles,
-# prefer extraction.entity_type_prompt_file and prompts/entity_type/*.yaml.
+## Entity guidance is product-level domain shaping. For deeper domain profiles,
+## prefer extraction.entity_type_prompt_file and prompts/entity_type/*.yaml.
 kg_entity_types:
   - Product
   - Component
@@ -136,10 +132,8 @@ kg_entity_types:
 
 workspace: default
 
-# Docker Compose supplies local PostgreSQL defaults. Set these for an external
-# PostgreSQL write endpoint. Managed replicas and reader routing belong to the
-# PostgreSQL/infrastructure layer, not DlightRAG application config.
-# postgres_ssl_mode options include disable | allow | prefer | require | verify-ca | verify-full
+## Docker Compose supplies local PostgreSQL defaults. Update these and Docker Compose for an external PostgreSQL endpoint. 
+## postgres_ssl_mode options include disable | allow | prefer | require | verify-ca | verify-full
 
 # postgres_host: localhost
 # postgres_port: 5432
@@ -149,18 +143,11 @@ workspace: default
 # postgres_ssl_mode: require
 # postgres_ssl_root_cert:
 
-# High-level concurrency — only knobs raised above LightRAG's upstream defaults
-# stay here. The per-stage worker counts (max_parallel_insert/parse_native/
-# parse_mineru/analyze) and queue sizes follow the code defaults; see
-# docs/configuration.md to tune them. Lower max_async for small local model
-# endpoints; raise it only after provider rate limits and PostgreSQL capacity
-# are understood.
+## See docs/configuration.md to tune them. Raise it only after provider rate limits 
+## and PostgreSQL capacity are understood.
+
 max_async: 8                  # LightRAG default 4
 embedding_func_max_async: 16  # LightRAG default 8
-# One batch per provider embedding request (no client-side sub-batching), so
-# keep this <= the provider's per-request cap. Voyage allows 128, so 32 is safe
-# and cuts embedding calls ~3x vs the code default (10); lower toward 10 for
-# small-cap providers like DashScope native.
 embedding_batch_num: 32       # LightRAG default 10
 
 # ─────────────────────────────────────────────────────────────────
@@ -179,8 +166,8 @@ answer:
 # Security and Observability
 # ─────────────────────────────────────────────────────────────────
 
-# Auth secrets are best kept in .env.
-# jwt_audience accepts one value or a list, e.g. ["api://dlightrag", "<proxy-client-id>"]
+## Auth secrets are better kept in .env.
+## jwt_audience accepts one value or a list, e.g. ["api://dlightrag", "<proxy-client-id>"]
 
 # auth_mode: simple
 # api_auth_token: ""
@@ -190,19 +177,20 @@ answer:
 # jwt_audience: ""
 # jwt_algorithm: "HS256"
 
-# Resource authorization. Default allow_all lets any authenticated caller use
-# any workspace. Switch to jwt_claims to map verified JWT claims to workspace
-# and action permissions; requires auth_mode: jwt and at least one rule.
+## Resource authorization. Default allow_all lets any authenticated caller use
+## any workspace. Switch to jwt_claims to map verified JWT claims to workspace
+## and action permissions; requires auth_mode: jwt and at least one rule.
 
-# Rule fields:
-#   claim      - verified JWT claim name (on Entra, prefer App Role `roles`
-#                over `groups`).
-#   value      - claim value to match.
-#   workspaces - exact name(s) or "*" (quote a bare *).
-#   actions    - list; each item is a preset (reader|editor|admin), an exact
-#                action, "workspace.*", or "*". Any match grants access, so you
-#                may mix, e.g. [reader, workspace.update_metadata].
-# Full reference: docs/security.md.
+## Rule fields:
+##   claim      - verified JWT claim name (on Entra, prefer App Role `roles`
+##                over `groups`).
+##   value      - claim value to match.
+##   workspaces - exact name(s) or "*" (quote a bare *).
+##   actions    - list; each item is a preset (reader|editor|admin), an exact
+##                action, "workspace.*", or "*". Any match grants access, so you
+##                may mix, e.g. [reader, workspace.update_metadata].
+## Full reference: docs/security.md.
+
 # access_control:
 #   mode: jwt_claims
 #   rules:
@@ -211,8 +199,9 @@ answer:
 #       workspaces: [finance]
 #       actions: [reader]
 
-# Langfuse keys belong in .env. Non-secret SDK behavior can be set here when
-# a deployment needs it.
+## Langfuse keys belong in .env. Non-secret SDK behavior can be set here when
+## a deployment needs it.
+
 # langfuse_host: http://localhost:3300
 # langfuse_export_external_spans: false
 # langfuse_environment: production
