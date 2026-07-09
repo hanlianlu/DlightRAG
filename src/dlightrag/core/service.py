@@ -488,6 +488,22 @@ class RAGService:
         self._lightrag = lightrag
         logger.info("LightRAG storages initialized")
 
+        # Restore the request's tracing context inside LightRAG's embedding
+        # worker pool. LightRAG wraps our embedding func in its own persistent
+        # queue whose workers snapshot a stale OpenTelemetry context at creation
+        # time; without this the retrieve-phase query embedding either detaches
+        # into its own Langfuse trace or attaches to a stale span from an earlier
+        # request. Binding the trace context OUTSIDE that pool captures the active
+        # context on the calling task and re-attaches it in the worker, so the
+        # embedding nests under the current request span. Mutate the func in place
+        # (not dataclasses.replace): LightRAG's storages already hold this exact
+        # EmbeddingFunc object from construction, so a fresh instance would never
+        # reach them. No-op when tracing is disabled.
+        if lightrag.embedding_func is not None:
+            from dlightrag.observability import bind_trace_context
+
+            lightrag.embedding_func.func = bind_trace_context(lightrag.embedding_func.func)
+
         # Wrap chunks_vdb for metadata in-filtering
         if lightrag.chunks_vdb is not None:
             await LightRAGContractGuard(lightrag).verify_all()

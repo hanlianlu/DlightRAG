@@ -249,6 +249,27 @@ async def test_embedding_wrapper_uses_embedding_observation() -> None:
     assert obs.updates == [{"output": {"embedding_count": 1}}]
 
 
+async def test_embedding_wrapper_keeps_carrier_out_of_provider_and_metadata() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+    seen_kwargs: dict[str, Any] = {}
+
+    async def embed(inputs: list[str], **kwargs: Any) -> list[list[float]]:
+        seen_kwargs.update(kwargs)
+        return [[0.1, 0.2]]
+
+    traced = observability.wrap_embedding_func(embed, name="embed_test")
+    bound = observability.bind_trace_context(traced)
+
+    result = await bound(["hello"], context="document")
+
+    assert result == [[0.1, 0.2]]
+    # the OTEL context carrier is consumed by the embedding wrapper: it reaches
+    # neither the provider call nor the observation metadata
+    assert observability._CONTEXT_CARRIER_KEY not in seen_kwargs
+    assert observability._CONTEXT_CARRIER_KEY not in client.observations[0].kwargs["metadata"]
+
+
 async def test_trace_observation_nests_child_observations() -> None:
     client = _RecordingLangfuse()
     observability._client = client
@@ -284,11 +305,6 @@ async def test_trace_observation_update_is_noop_without_client() -> None:
 
     async with observability.trace_observation("disabled", as_type="chain") as trace:
         trace.update(output={"answer_len": 12})
-
-
-def test_capture_context_none_when_disabled() -> None:
-    # No Langfuse client -> nothing to capture, callers stay a no-op
-    assert observability.capture_context() is None
 
 
 def test_init_tracing_filters_external_spans_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -427,36 +427,25 @@ async def _stream_with_observation(
 # ---------------------------------------------------------------------------
 
 
-def capture_context() -> Any | None:
-    """Snapshot the active OpenTelemetry context for restoring in a detached task.
-
-    Used to nest post-response work (e.g. streamed-answer semantic highlights,
-    which runs after the pipeline span has closed) back under the request trace.
-    ``None`` when tracing (or its OpenTelemetry dependency) is unavailable, so
-    callers stay a no-op without Langfuse.
-    """
-    if _client is None or _otel_context_api is None:
-        return None
-    return _otel_context_api.get_current()
-
-
 def bind_trace_context(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Restore the caller's tracing context when *fn* later runs detached.
 
-    DlightRAG runs its LLM calls in LightRAG's persistent worker-pool queues,
-    whose workers do not inherit the request's async context. Without this, a
-    generation observation created in a worker (or in the SSE task that consumes
-    a streamed answer) would detach into its own Langfuse trace. This captures
-    the active OpenTelemetry context at call time and carries it to the
-    observation, which re-attaches it so the generation nests under the request
-    trace as a true child. No-op when tracing (or its OpenTelemetry dependency)
-    is unavailable, so callers work unchanged when Langfuse is absent.
+    DlightRAG runs its LLM and embedding calls in LightRAG's persistent
+    worker-pool queues, whose workers do not inherit the request's async
+    context. Without this, an observation created in a worker (or in the SSE
+    task that consumes a streamed answer) would detach into its own Langfuse
+    trace. This snapshots the active OpenTelemetry context at call time and
+    carries it to the observation, which re-attaches it so the work nests under
+    the request trace as a true child. No-op when tracing (or its OpenTelemetry
+    dependency) is unavailable, so callers work unchanged when Langfuse is
+    absent.
     """
     if _client is None or _otel_context_api is None:
         return fn
+    otel_api = _otel_context_api  # local narrows Optional[module] for the closure
 
     async def _bound(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault(_CONTEXT_CARRIER_KEY, capture_context())
+        kwargs.setdefault(_CONTEXT_CARRIER_KEY, otel_api.get_current())
         return await fn(*args, **kwargs)
 
     return _bound
@@ -517,6 +506,7 @@ def wrap_embedding_func(fn: Callable[..., Any], *, name: str = "embedding") -> C
         return fn
 
     async def _traced(inputs: Any, **kwargs: Any) -> Any:
+        otel_context = kwargs.pop(_CONTEXT_CARRIER_KEY, None)
         metadata = {**kwargs}
         if isinstance(inputs, list):
             metadata["input_count"] = len(inputs)
@@ -532,6 +522,7 @@ def wrap_embedding_func(fn: Callable[..., Any], *, name: str = "embedding") -> C
             kwargs,
             observation_kwargs=observation_kwargs,
             output_builder=_embedding_output_summary,
+            otel_context=otel_context,
         )
 
     return _traced
