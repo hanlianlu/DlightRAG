@@ -177,6 +177,46 @@ class TestMakeCompletionFunc:
         llm.build_role_llm_configs(cfg)  # handed to LightRAG → root
         assert roots and all(roots)
 
+    def test_owned_funcs_are_not_root(self, monkeypatch):
+        from dlightrag.models import llm
+
+        roots: list[bool] = []
+
+        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+            roots.append(root)
+            return f"completion:{cfg.model}"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(provider="openai", model="m", api_key="sk")),
+            embedding=_embedding_config(),
+        )
+
+        llm.get_query_model_func(cfg)  # answer → nests
+        llm.get_vlm_model_func(cfg)  # vlm → nests
+        llm.get_keyword_model_func(cfg)  # highlights → nests
+        assert roots == [False, False, False]
+
+    def test_embedding_func_is_root(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from dlightrag.models import llm
+
+        captured: dict[str, Any] = {}
+
+        def fake_wrap_embedding_func(fn, *, name="embedding", root=False):
+            captured["root"] = root
+            return fn
+
+        monkeypatch.setattr("dlightrag.observability.wrap_embedding_func", fake_wrap_embedding_func)
+        cfg = DlightragConfig(
+            llm=LLMConfig(default=ModelConfig(provider="openai", model="m", api_key="sk")),
+            embedding=_embedding_config(),
+        )
+
+        llm.get_embedding_func(cfg, embedder=SimpleNamespace(supports_asymmetric=False))
+        assert captured["root"] is True
+
     @pytest.mark.asyncio
     async def test_structured_output_uses_openai_json_schema(self, monkeypatch):
         llm, seen = _capture_provider(monkeypatch)
@@ -322,35 +362,6 @@ class TestGetDefaultModelFunc:
             embedding=_embedding_config(),
         )
         func = get_default_model_func(config)
-        assert callable(func)
-
-
-class TestGetExtractModelFunc:
-    def test_uses_default_llm_when_extract_role_is_unset(self):
-        from dlightrag.models.llm import get_extract_model_func
-
-        config = DlightragConfig(
-            llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat")
-            ),
-            embedding=_embedding_config(),
-        )
-        func = get_extract_model_func(config)
-        assert callable(func)
-
-    def test_explicit_extract_role(self):
-        from dlightrag.models.llm import get_extract_model_func
-
-        config = DlightragConfig(
-            llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
-                roles=LLMRolesConfig(
-                    extract=ModelConfig(provider="anthropic", model="claude-3-5-sonnet")
-                ),
-            ),
-            embedding=_embedding_config(),
-        )
-        func = get_extract_model_func(config)
         assert callable(func)
 
 
