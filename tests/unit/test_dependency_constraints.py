@@ -51,12 +51,14 @@ def test_postgres_dockerfile_targets_pg18_ecosystem() -> None:
     assert "pgvector/pgvector:pg18" in dockerfile
     assert "postgresql-server-dev-18" in dockerfile
     assert "--branch PG18" in dockerfile
-    assert "ARG PG_TEXTSEARCH_REF=v1.3.0" in dockerfile
+    # A pin is required (no floating main/latest), but the exact patch version is
+    # intentionally NOT asserted so routine version bumps don't break the test.
+    assert re.search(r"ARG PG_TEXTSEARCH_REF=v\d+\.\d+", dockerfile)
     assert (
         "git clone --branch ${PG_TEXTSEARCH_REF} --depth 1 https://github.com/timescale/pg_textsearch.git"
         in dockerfile
     )
-    assert "ARG PG_JIEBA_REF=v2.0.1" in dockerfile
+    assert re.search(r"ARG PG_JIEBA_REF=v\d+\.\d+", dockerfile)
     assert (
         "git clone --branch ${PG_JIEBA_REF} --depth 1 --recurse-submodules https://github.com/jaiminpan/pg_jieba.git"
         in dockerfile
