@@ -97,7 +97,7 @@ def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:
         else "core"
     )
     assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
+        f"venv --python 3.13 {service_env}",
         f"pip install --python {service_env}/bin/python -U mineru[{default_extras}]>=3.4.3",
     ]
 
@@ -133,7 +133,7 @@ def test_mineru_installer_defaults_to_mlx_on_apple_silicon(tmp_path: Path) -> No
     )
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
+        f"venv --python 3.13 {service_env}",
         f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.4.3",
     ]
 
@@ -169,7 +169,7 @@ def test_mineru_installer_defaults_to_core_off_apple_silicon(tmp_path: Path) -> 
     )
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
+        f"venv --python 3.13 {service_env}",
         f"pip install --python {service_env}/bin/python -U mineru[core]>=3.4.3",
     ]
 
@@ -208,7 +208,7 @@ def test_mineru_installer_reads_mineru_values_from_env_file(tmp_path: Path) -> N
     )
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
+        f"venv --python 3.13 {service_env}",
         f"pip install --python {service_env}/bin/python -U mineru[core,lmdeploy]==3.2.3",
     ]
 
@@ -240,7 +240,7 @@ def test_mineru_installer_can_pin_version(tmp_path: Path) -> None:
     )
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
+        f"venv --python 3.13 {service_env}",
         f"pip install --python {service_env}/bin/python -U mineru[core,mlx]==3.2.3",
     ]
 
@@ -273,8 +273,42 @@ def test_mineru_installer_honors_min_version_floor(tmp_path: Path) -> None:
     )
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
-        f"venv {service_env}",
+        f"venv --python 3.13 {service_env}",
         f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.5.0",
+    ]
+
+
+def test_mineru_installer_pins_python_interpreter(tmp_path: Path) -> None:
+    capture = tmp_path / "uv.txt"
+    bin_dir = tmp_path / "bin"
+    service_env = tmp_path / "mineru-env"
+    bin_dir.mkdir()
+    fake_uv = bin_dir / "uv"
+    _write_executable(
+        fake_uv,
+        '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$MINERU_CAPTURE"\n',
+    )
+
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MINERU_CAPTURE"] = str(capture)
+    env["MINERU_SERVICE_VENV"] = str(service_env)
+    env["MINERU_PYTHON"] = "3.12"
+    env["MINERU_INSTALL_EXTRAS"] = "core,mlx"
+    env["MINERU_ENV_FILE"] = str(tmp_path / "missing.env")
+    env.pop("MINERU_VERSION", None)
+    env.pop("MINERU_MIN_VERSION", None)
+
+    subprocess.run(
+        [str(MINERU_SCRIPTS / "install.sh")],
+        cwd=ROOT,
+        env=env,
+        check=True,
+    )
+
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        f"venv --python 3.12 {service_env}",
+        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.4.3",
     ]
 
 
