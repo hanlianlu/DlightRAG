@@ -208,6 +208,7 @@ async def answer(
                     finalized.sources,
                     answer_text=finalized.answer,
                     config=manager.config,
+                    parent_context=getattr(token_iter, "otel_context", None),
                 )
 
             yield sse_data_event(AnswerSourcesStreamEvent(data=finalized.sources))

@@ -292,6 +292,7 @@ async def stream_answer_events(
             payload.sources,
             answer_text=payload.done.answer,
             config=cfg,
+            parent_context=getattr(token_iter, "otel_context", None),
         )
         has_highlights = any(
             chunk.highlight_phrases
