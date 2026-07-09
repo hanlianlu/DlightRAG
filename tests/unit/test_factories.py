@@ -94,7 +94,7 @@ class TestMakeCompletionFunc:
         func = _make_completion_func(cfg, default_api_key="sk-default")
         assert callable(func)
 
-    def test_query_model_func_is_queue_managed_by_default(self):
+    def test_query_model_func_is_direct_not_queue_managed(self):
         from dlightrag.models import llm
 
         cfg = DlightragConfig(
@@ -103,33 +103,23 @@ class TestMakeCompletionFunc:
         )
 
         func = llm.get_query_model_func(cfg)
-        raw_func = llm.get_query_model_func(cfg, bounded=False)
 
+        # DlightRAG-owned: a plain completion callable, not a queue-managed wrapper
         assert callable(func)
-        assert callable(getattr(func, "shutdown", None))
-        assert not hasattr(raw_func, "shutdown")
+        assert not hasattr(func, "shutdown")
 
-    def test_planner_model_func_prefers_keyword_role_and_is_queue_managed(self, monkeypatch):
+    def test_planner_model_func_prefers_keyword_role_direct(self, monkeypatch):
         from dlightrag.models import llm
 
         captured: dict[str, Any] = {}
 
-        def fake_make_completion_func(cfg, default_api_key=None):
+        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
             captured["model"] = cfg.model
             captured["default_api_key"] = default_api_key
+            captured["root"] = root
             return f"completion:{cfg.model}"
 
-        def fake_queue_managed_completion_func(func, *, max_async, timeout, queue_name):
-            captured["func"] = func
-            captured["max_async"] = max_async
-            captured["timeout"] = timeout
-            captured["queue_name"] = queue_name
-            return f"queued:{func}"
-
         monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
-        monkeypatch.setattr(
-            llm, "_queue_managed_completion_func", fake_queue_managed_completion_func
-        )
         cfg = DlightragConfig(
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk-chat"),
@@ -143,17 +133,15 @@ class TestMakeCompletionFunc:
 
         func = llm.get_planner_model_func(cfg)
 
-        assert func == "queued:completion:deepseek-v4-flash"
+        # DlightRAG-owned planner: direct completion (no queue), nests (root=False)
+        assert func == "completion:deepseek-v4-flash"
         assert captured == {
             "model": "deepseek-v4-flash",
             "default_api_key": "sk-chat",
-            "func": "completion:deepseek-v4-flash",
-            "max_async": 7,
-            "timeout": 120.0,
-            "queue_name": "DlightRAG planner LLM func",
+            "root": False,
         }
 
-    def test_vlm_model_func_is_queue_managed_by_default(self):
+    def test_vlm_model_func_is_direct_not_queue_managed(self):
         from dlightrag.models import llm
 
         cfg = DlightragConfig(
@@ -163,8 +151,31 @@ class TestMakeCompletionFunc:
 
         func = llm.get_vlm_model_func(cfg)
 
+        # DlightRAG-owned: a plain completion callable, not a queue-managed wrapper
         assert callable(func)
-        assert callable(getattr(func, "shutdown", None))
+        assert not hasattr(func, "shutdown")
+
+    def test_lightrag_facing_funcs_use_root(self, monkeypatch):
+        from dlightrag.models import llm
+
+        roots: list[bool] = []
+
+        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+            roots.append(root)
+            return f"completion:{cfg.model}"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="gpt-5.4-mini", api_key="sk"),
+                roles=LLMRolesConfig(keyword=ModelConfig(provider="openai", model="kw")),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        llm.get_default_model_func(cfg)  # handed to LightRAG → root
+        llm.build_role_llm_configs(cfg)  # handed to LightRAG → root
+        assert roots and all(roots)
 
     @pytest.mark.asyncio
     async def test_structured_output_uses_openai_json_schema(self, monkeypatch):
