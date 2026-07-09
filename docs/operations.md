@@ -203,6 +203,39 @@ way it reaches the MinerU sidecar. Your browser and `make langfuse-health` use
 host alias reaching a loopback-bound port can need extra host networking. If
 `langfuse_host` is unset, DlightRAG falls back to Langfuse Cloud.
 
+### Cost Tracking
+
+By default a generation shows token usage but no cost: DlightRAG reports token
+counts on every LLM call and reports a cost only when the provider returns one.
+Add cost in either of two ways.
+
+Model prices in Langfuse (works for any provider). In the Langfuse UI, open
+Settings and add a model definition whose match pattern matches the model name
+DlightRAG sends (the generation's `model`, e.g. `deepseek-v4-flash`), with input
+and output prices. Langfuse then computes cost from the reported
+`input`/`output`/`total` token usage.
+
+Provider-returned cost (OpenRouter). OpenRouter can return the actual charged
+cost when usage accounting is enabled. This is provider-specific, so enable it
+per model rather than in the shared default, and keep it off non-OpenRouter
+roles (they may reject an unknown `usage` body field):
+
+```yaml
+llm:
+  default:
+    provider: openai
+    base_url: https://openrouter.ai/api/v1
+    model: google/gemini-3.5-flash
+    model_kwargs:
+      usage:
+        include: true
+```
+
+DlightRAG forwards the response's `usage.cost` to Langfuse as the generation's
+cost. Providers that do not return a cost field (for example DeepSeek) need the
+model-price approach above. Recreate the app containers after editing
+`config.yaml`.
+
 ### Apply Changes To A Running Stack
 
 The DlightRAG app services load `.env` with Compose `env_file`, which is read
