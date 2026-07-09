@@ -203,6 +203,70 @@ class TestOpenAICompatibleProvider:
         assert result == "hello"
 
     @pytest.mark.asyncio
+    async def test_stream_captures_usage_and_cost_from_final_chunk(self):
+        p = get_provider("openai", api_key="test-key")
+
+        async def _fake_stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="he", model_extra=None))],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="llo", model_extra=None))],
+                usage=None,
+            )
+            # Final usage-only chunk (empty choices), as sent with include_usage.
+            yield SimpleNamespace(
+                choices=[],
+                usage=SimpleNamespace(
+                    prompt_tokens=5, completion_tokens=2, total_tokens=7, cost=0.0012
+                ),
+            )
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = AsyncMock(
+                return_value=_fake_stream()
+            )
+            stream = cast(Any, p).stream([{"role": "user", "content": "hi"}], "gpt")
+            chunks = [c async for c in stream]
+
+        assert chunks == ["he", "llo"]
+        assert cast(Any, p).last_usage_details == {
+            "prompt_tokens": 5,
+            "completion_tokens": 2,
+            "total_tokens": 7,
+        }
+        assert cast(Any, p).last_cost_details == {"total": 0.0012}
+
+    @pytest.mark.asyncio
+    async def test_stream_falls_back_when_stream_options_unsupported(self):
+        p = get_provider("openai", api_key="test-key")
+        calls: list[dict[str, Any]] = []
+
+        async def _fake_stream():
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="hi", model_extra=None))],
+                usage=None,
+            )
+
+        async def _create(**kwargs: Any):
+            calls.append(kwargs)
+            if "stream_options" in kwargs:
+                raise RuntimeError("stream_options not supported")
+            return _fake_stream()
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = _create
+            stream = cast(Any, p).stream([{"role": "user", "content": "hi"}], "gpt")
+            chunks = [c async for c in stream]
+
+        assert chunks == ["hi"]
+        assert len(calls) == 2
+        assert "stream_options" in calls[0]
+        assert "stream_options" not in calls[1]
+        assert cast(Any, p).last_usage_details is None
+
+    @pytest.mark.asyncio
     async def test_complete_returns_usage_and_cost_metadata(self):
         p = get_provider("openai", api_key="test-key")
         usage = SimpleNamespace(

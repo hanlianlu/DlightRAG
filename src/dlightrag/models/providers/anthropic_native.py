@@ -186,10 +186,20 @@ class AnthropicProvider(CompletionProvider):
             if extra:
                 call_kwargs["extra_body"] = extra
 
+        self.last_usage_details = None
         response = await self._get_client().messages.create(**call_kwargs)
         reasoning_parts: list[str] = []
+        usage_start: Any = None
+        usage_delta: Any = None
         async for event in response:
-            if event.type != "content_block_delta":
+            etype = getattr(event, "type", None)
+            if etype == "message_start":
+                usage_start = getattr(getattr(event, "message", None), "usage", None)
+            elif etype == "message_delta":
+                event_usage = getattr(event, "usage", None)
+                if event_usage is not None:
+                    usage_delta = event_usage
+            if etype != "content_block_delta":
                 continue
             delta = event.delta
             if delta.type == "text_delta":
@@ -197,3 +207,13 @@ class AnthropicProvider(CompletionProvider):
             elif delta.type == "thinking_delta":
                 reasoning_parts.append(delta.thinking)
         self.last_reasoning = "".join(reasoning_parts)
+        try:
+            merged: dict[str, int] = {}
+            for src in (usage_start, usage_delta):
+                if src is not None:
+                    part = usage_to_dict(src)
+                    if part:
+                        merged.update(part)
+            self.last_usage_details = merged or None
+        except Exception:  # noqa: BLE001 - best-effort observability
+            self.last_usage_details = None

@@ -94,6 +94,22 @@ class OpenAICompatibleProvider(CompletionProvider):
             cost_details=_cost_to_dict(getattr(response, "usage", None)),
         )
 
+    async def _open_stream(self, call_kwargs: dict[str, Any]) -> Any:
+        """Open a streaming completion, requesting token usage when supported.
+
+        ``stream_options={"include_usage": True}`` is the OpenAI-standard way to
+        get a final usage chunk, but not every OpenAI-compatible endpoint accepts
+        it. Fall back to a plain stream (no usage) rather than fail the call.
+        """
+        client = self._get_client()
+        try:
+            return await client.chat.completions.create(
+                **call_kwargs, stream_options={"include_usage": True}
+            )
+        except Exception:  # noqa: BLE001 - unsupported option must not break streaming
+            logger.debug("stream_options unsupported; streaming without usage", exc_info=True)
+            return await client.chat.completions.create(**call_kwargs)
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -117,10 +133,19 @@ class OpenAICompatibleProvider(CompletionProvider):
             call_kwargs["response_format"] = response_format
         if model_kwargs:
             call_kwargs["extra_body"] = model_kwargs
-        response = await self._get_client().chat.completions.create(**call_kwargs)
+        self.last_usage_details = None
+        self.last_cost_details = None
+        response = await self._open_stream(call_kwargs)
         reasoning_parts: list[str] = []
+        usage: Any = None
         async for chunk in response:
-            delta = chunk.choices[0].delta
+            chunk_usage = getattr(chunk, "usage", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            delta = choices[0].delta
             extras = getattr(delta, "model_extra", None) or {}
             rc = extras.get("reasoning_content")
             if isinstance(rc, str) and rc:
@@ -128,3 +153,10 @@ class OpenAICompatibleProvider(CompletionProvider):
             if delta.content is not None:
                 yield delta.content
         self.last_reasoning = "".join(reasoning_parts)
+        if usage is not None:
+            try:
+                self.last_usage_details = usage_to_dict(usage)
+                self.last_cost_details = _cost_to_dict(usage)
+            except Exception:  # noqa: BLE001 - usage is best-effort observability
+                self.last_usage_details = None
+                self.last_cost_details = None
