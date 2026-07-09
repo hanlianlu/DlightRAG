@@ -163,14 +163,6 @@ def get_default_model_func(config: DlightragConfig) -> Callable:
     return _make_completion_func(config.llm.default, root=True)
 
 
-def get_extract_model_func(config: DlightragConfig) -> Callable:
-    """Messages-first extract callable using role config or default LLM."""
-    return _make_completion_func(
-        model_for_role(config, "extract"),
-        default_api_key=config.llm.default.api_key,
-    )
-
-
 def get_keyword_model_func(config: DlightragConfig) -> Callable:
     """Messages-first keyword callable using role config or default LLM."""
     return _make_completion_func(
@@ -359,7 +351,6 @@ __all__ = [
     "get_default_model_func",
     "get_default_model_func_for_lightrag",
     "get_embedding_func",
-    "get_extract_model_func",
     "get_keyword_model_func",
     "get_multimodal_embedder",
     "get_planner_model_func",
