@@ -2,8 +2,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
+mineru_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/mineru/env.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
+source "$mineru_script_dir/env.sh"
 
 load_mineru_env_key MINERU_API_HOST
 load_mineru_env_key MINERU_API_PORT
@@ -31,5 +32,10 @@ Override MinerU install extras when the machine needs them:
 EOF
   exit 127
 fi
+
+# Load scripts/mineru/sitecustomize.py at interpreter startup (also inherited by
+# MinerU's spawned worker processes) to raise Pillow's decompression-bomb ceiling
+# so large multi-page document scans parse instead of failing to load.
+export PYTHONPATH="${mineru_script_dir}${PYTHONPATH:+:${PYTHONPATH}}"
 
 exec "$mineru_api" --host "$host" --port "$port" "$@"
