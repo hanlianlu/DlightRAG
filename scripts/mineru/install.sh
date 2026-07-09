@@ -7,7 +7,13 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
 load_mineru_env_key MINERU_SERVICE_VENV
 load_mineru_env_key MINERU_VERSION
+load_mineru_env_key MINERU_MIN_VERSION
 load_mineru_env_key MINERU_INSTALL_EXTRAS
+
+# Lowest MinerU release DlightRAG supports. Fresh installs and `-U` upgrades must
+# land on this version or newer ("and onward"). Override MINERU_MIN_VERSION in
+# .env.mineru to raise the floor, or set MINERU_VERSION to pin an exact release.
+default_mineru_min_version="3.4.3"
 
 default_mineru_install_extras() {
   local system machine
@@ -22,10 +28,13 @@ default_mineru_install_extras() {
 
 venv="${MINERU_SERVICE_VENV:-.venv-mineru}"
 version="${MINERU_VERSION:-}"
+min_version="${MINERU_MIN_VERSION:-$default_mineru_min_version}"
 extras="${MINERU_INSTALL_EXTRAS:-$(default_mineru_install_extras)}"
 package="mineru[$extras]"
 if [[ -n "$version" ]]; then
   package="$package==$version"
+elif [[ -n "$min_version" ]]; then
+  package="$package>=$min_version"
 fi
 
 if ! command -v uv >/dev/null 2>&1; then
