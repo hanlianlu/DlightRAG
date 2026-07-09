@@ -72,8 +72,16 @@ def _adapt_for_lightrag(completion_func: Callable) -> Callable:
     return wrapper
 
 
-def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) -> partial:
-    """Build a messages-first completion callable from config."""
+def _make_completion_func(
+    cfg: ModelConfig, default_api_key: str | None = None, *, root: bool = False
+) -> partial:
+    """Build a messages-first completion callable from config.
+
+    ``root=True`` marks the generation as its own Langfuse root trace — used for
+    funcs handed to LightRAG, whose worker pool would otherwise run them in a
+    stale context. DlightRAG-owned funcs keep ``root=False`` so they nest under
+    the active request span.
+    """
     api_key = cfg.api_key or default_api_key
     provider = get_provider(
         cfg.provider,
@@ -144,40 +152,15 @@ def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) 
         name=f"llm_{cfg.model}",
         model=cfg.model,
         model_parameters={"temperature": cfg.temperature} if cfg.temperature is not None else None,
+        root=root,
     )
 
     return partial(traced_func)
 
 
-def _queue_managed_completion_func(
-    completion_func: Callable,
-    *,
-    max_async: int,
-    timeout: float,
-    queue_name: str,
-) -> Callable:
-    """Apply LightRAG's priority queue wrapper to a messages-first callable.
-
-    The queued callable is wrapped with ``bind_trace_context`` so the caller's
-    Langfuse context is restored inside the queue worker; otherwise the
-    generation observation would detach into its own trace. No-op when tracing
-    is disabled.
-    """
-    from lightrag.utils import priority_limit_async_func_call
-
-    from dlightrag.observability import bind_trace_context
-
-    queued = priority_limit_async_func_call(
-        max_async,
-        llm_timeout=timeout,
-        queue_name=queue_name,
-    )(completion_func)
-    return bind_trace_context(queued)
-
-
 def get_default_model_func(config: DlightragConfig) -> Callable:
-    """Messages-first callable for the configured default LLM."""
-    return _make_completion_func(config.llm.default)
+    """Messages-first callable for the configured default LLM (handed to LightRAG)."""
+    return _make_completion_func(config.llm.default, root=True)
 
 
 def get_extract_model_func(config: DlightragConfig) -> Callable:
@@ -196,52 +179,34 @@ def get_keyword_model_func(config: DlightragConfig) -> Callable:
     )
 
 
-def get_planner_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
-    """Messages-first planner callable using keyword role config or default LLM."""
+def get_planner_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first planner callable (DlightRAG-owned; nests under the request).
+
+    Uses ``config.llm.roles.keyword`` if set, otherwise ``config.llm.default``.
+    Concurrency is bounded by the caller's semaphore (RAGServiceManager).
+    """
     cfg = model_for_role(config, "keyword")
-    func = _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
-    if not bounded:
-        return func
-    return _queue_managed_completion_func(
-        func,
-        max_async=config.max_async,
-        timeout=cfg.timeout,
-        queue_name="DlightRAG planner LLM func",
-    )
+    return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
 
 
-def get_query_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
-    """Messages-first query callable for AnswerEngine.
+def get_query_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first query callable for AnswerEngine (DlightRAG-owned; nests).
 
     Uses ``config.llm.roles.query`` if set, otherwise ``config.llm.default``.
+    Concurrency is bounded by ``RAGServiceManager._answer_stream_sem``.
     """
     cfg = model_for_role(config, "query")
-    func = _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
-    if not bounded:
-        return func
-    return _queue_managed_completion_func(
-        func,
-        max_async=config.max_async,
-        timeout=cfg.timeout,
-        queue_name="DlightRAG query LLM func",
-    )
+    return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
 
 
-def get_vlm_model_func(config: DlightragConfig, *, bounded: bool = True) -> Callable:
-    """Messages-first VLM callable for vlm_parser, multimodal_query, and unified extractor.
+def get_vlm_model_func(config: DlightragConfig) -> Callable:
+    """Messages-first VLM callable for the query image enhancer (DlightRAG-owned; nests).
 
     Uses ``config.llm.roles.vlm`` if set, otherwise ``config.llm.default``.
+    Concurrency is bounded by the caller's semaphore (RAGServiceManager).
     """
     cfg = model_for_role(config, "vlm")
-    func = _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
-    if not bounded:
-        return func
-    return _queue_managed_completion_func(
-        func,
-        max_async=config.max_async,
-        timeout=cfg.timeout,
-        queue_name="DlightRAG VLM LLM func",
-    )
+    return _make_completion_func(cfg, default_api_key=config.llm.default.api_key)
 
 
 def _lightrag_adapted(
@@ -269,7 +234,9 @@ def build_role_llm_configs(config: DlightragConfig) -> dict[str, Any] | None:
         role_cfg: ModelConfig | None = getattr(config.llm.roles, role)
         if role_cfg is None:
             continue
-        completion = _make_completion_func(role_cfg, default_api_key=config.llm.default.api_key)
+        completion = _make_completion_func(
+            role_cfg, default_api_key=config.llm.default.api_key, root=True
+        )
         overrides[role] = RoleLLMConfig(
             func=_adapt_for_lightrag(completion),
             timeout=int(role_cfg.timeout),
@@ -301,7 +268,7 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
 
     from dlightrag.observability import wrap_embedding_func
 
-    traced_embed_func = wrap_embedding_func(embed_func, name=f"embed_{cfg.model}")
+    traced_embed_func = wrap_embedding_func(embed_func, name=f"embed_{cfg.model}", root=True)
 
     return EmbeddingFunc(
         embedding_dim=cfg.dim,
