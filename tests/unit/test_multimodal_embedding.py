@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for context-aware multimodal embedding."""
 
+import io
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,6 +14,7 @@ from dlightrag.models.providers.embed_providers import (
     QwenOpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
+from dlightrag.utils.images import decode_image_base64
 
 
 def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
@@ -53,6 +55,26 @@ def test_image_embedder_uses_asymmetric_by_default_for_capable_provider() -> Non
     assert embedder.supports_asymmetric is True
     assert index_payload["input_type"] == "document"
     assert query_payload["input_type"] == "query"
+
+
+def test_image_embedder_bounds_oversized_images_before_send() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=1024,
+        provider=VoyageEmbedProvider(),
+    )
+
+    payload = embedder.build_image_payload_for_test(
+        Image.new("RGB", (6000, 5000), "white"), context="document"
+    )
+
+    data_uri = payload["inputs"][0]["content"][0]["image_base64"]
+    raw, _ = decode_image_base64(data_uri)
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert max(decoded.size) <= 4096
+        assert decoded.width * decoded.height <= 15_000_000
 
 
 def test_image_embedder_can_disable_asymmetric_for_capable_provider() -> None:

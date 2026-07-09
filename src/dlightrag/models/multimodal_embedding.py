@@ -15,6 +15,7 @@ from dlightrag.models.embedding_inputs import (
 )
 from dlightrag.models.providers.embed_base import EmbedProvider
 from dlightrag.utils.concurrency import bounded_map
+from dlightrag.utils.images import bounded_embedding_image_data_uri
 
 logger = logging.getLogger(__name__)
 
@@ -145,9 +146,10 @@ class MultimodalEmbedder:
 
     def _build_image_payload(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
         self._ensure_image_support()
+        data_uri = bounded_embedding_image_data_uri(image)
         return self.provider.build_payload(
             self.model,
-            [ImageEmbeddingInput.from_pil(image)],
+            [ImageEmbeddingInput(data_uri=data_uri)],
             context=context,
             asymmetric=self.asymmetric,
             output_dimension=self.dim,

@@ -32,6 +32,7 @@ from dlightrag.core.retrieval.metadata_fields import (
     normalize_user_metadata,
 )
 from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
+from dlightrag.utils import log_safe
 
 logger = logging.getLogger(__name__)
 
@@ -499,19 +500,30 @@ class UnifiedIngestionEngine:
             image_path = asset.image_path
             if not image_path.exists():
                 continue
-            dims = await asyncio.to_thread(_image_dims, image_path)
-            if dims is not None and (
-                dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
-            ):
-                logger.debug(
-                    "Skipping sidecar image %s (%dx%d < %dpx min)",
-                    image_path,
-                    dims[0],
-                    dims[1],
-                    self._min_image_pixel,
+            try:
+                dims = await asyncio.to_thread(_image_dims, image_path)
+                if dims is not None and (
+                    dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
+                ):
+                    logger.debug(
+                        "Skipping sidecar image %s (%dx%d < %dpx min)",
+                        image_path,
+                        dims[0],
+                        dims[1],
+                        self._min_image_pixel,
+                    )
+                    continue
+                vector = await _embed_image_path(self._multimodal_embedder, image_path)
+            except Exception:
+                # One unreadable/oversized image (e.g. a decompression bomb the
+                # PIL guard rejects) must not fail the whole document — skip its
+                # direct vector and keep the parsed text/other images.
+                logger.warning(
+                    "Skipping sidecar image that could not be embedded: %s",
+                    log_safe(str(image_path)),
+                    exc_info=True,
                 )
                 continue
-            vector = await _embed_image_path(self._multimodal_embedder, image_path)
             vectors[chunk_id] = vector
 
         if vectors:

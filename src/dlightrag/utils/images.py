@@ -24,6 +24,17 @@ _PASSTHROUGH_FORMATS = {"JPEG", "PNG", "WEBP"}
 _DATA_URI_PREFIX = "data:"
 _IMAGE_DETAIL_VALUES = frozenset({"auto", "low", "high"})
 
+# Embedding image bounds — conservative and provider-agnostic. Voyage multimodal
+# caps each image at 16M pixels / 20MB; other multimodal embedders are similar or
+# looser. Staying under a 15M-pixel ceiling keeps a JPEG q90 payload to a few MB,
+# so the byte budget is rarely the binding constraint — the pixel cap does the work.
+EMBED_IMAGE_MAX_PX = 4096
+EMBED_IMAGE_MAX_PIXELS = 15_000_000
+EMBED_IMAGE_MAX_BYTES = 14 * 1024 * 1024
+EMBED_IMAGE_QUALITY = 90
+EMBED_IMAGE_MIN_QUALITY = 70
+EMBED_IMAGE_MIN_PX = 256
+
 
 def split_data_uri(value: str) -> tuple[str | None, str]:
     """Return ``(mime, base64_payload)`` for a data URI or raw base64 string."""
@@ -182,6 +193,88 @@ def _quality_steps(quality: int, min_quality: int) -> list[int]:
     return values
 
 
+def _fit_pixel_budget(image: Image.Image, *, max_px: int, max_pixels: int) -> Image.Image:
+    """Downscale so the long edge <= ``max_px`` and total pixels <= ``max_pixels``."""
+    width, height = image.size
+    long_edge = max(width, height)
+    total = width * height
+    scale = 1.0
+    if long_edge > max_px:
+        scale = min(scale, max_px / long_edge)
+    if total > max_pixels:
+        scale = min(scale, (max_pixels / total) ** 0.5)
+    if scale >= 1.0:
+        return image
+    next_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+    return image.resize(next_size, Image.Resampling.LANCZOS)
+
+
+def _encode_image(image: Image.Image, image_format: str, **params: Any) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format=image_format, **params)
+    return buffer.getvalue()
+
+
+def bounded_embedding_image_data_uri(
+    image: Image.Image,
+    *,
+    max_px: int = EMBED_IMAGE_MAX_PX,
+    max_pixels: int = EMBED_IMAGE_MAX_PIXELS,
+    max_bytes: int = EMBED_IMAGE_MAX_BYTES,
+    quality: int = EMBED_IMAGE_QUALITY,
+    min_quality: int = EMBED_IMAGE_MIN_QUALITY,
+    min_px: int = EMBED_IMAGE_MIN_PX,
+) -> str:
+    """Return a fidelity-first, provider-safe image data URI for embedding.
+
+    Unlike :func:`bounded_image_data_uri` (answer payloads, which *skip* images
+    they cannot fit cleanly), this always returns a payload — for indexing a
+    slightly degraded vector beats dropping the image. Fidelity is preserved in
+    decreasing order:
+
+    1. Fit the pixel budget (long edge ``<= max_px`` and total ``<= max_pixels``).
+    2. Keep it lossless (PNG) when that already fits ``max_bytes``.
+    3. Step JPEG quality down from ``quality`` to ``min_quality``.
+    4. Progressively downscale (x0.85) and retry the JPEG ladder down to ``min_px``.
+
+    JPEG size scales roughly linearly with pixel count, so the ladder is
+    monotonic and converges within a few steps for any input.
+    """
+    max_px = max(1, int(max_px))
+    max_pixels = max(1, int(max_pixels))
+    max_bytes = max(1, int(max_bytes))
+    quality = min(95, max(1, int(quality)))
+    min_quality = min(quality, max(1, int(min_quality)))
+    min_px = max(1, min(max_px, int(min_px)))
+
+    working = image if image.mode in ("RGB", "L") else image.convert("RGB")
+    working = _fit_pixel_budget(working, max_px=max_px, max_pixels=max_pixels)
+
+    lossless = _encode_image(working, "PNG")
+    if len(lossless) <= max_bytes:
+        return f"data:image/png;base64,{base64.b64encode(lossless).decode('ascii')}"
+
+    qualities = _quality_steps(quality, min_quality)
+    current = working
+    while True:
+        for current_quality in qualities:
+            payload = _encode_image(current, "JPEG", quality=current_quality, optimize=True)
+            if len(payload) <= max_bytes:
+                return f"data:image/jpeg;base64,{base64.b64encode(payload).decode('ascii')}"
+        long_edge = max(current.size)
+        if long_edge <= min_px:
+            break
+        next_long_edge = max(min_px, int(long_edge * 0.85))
+        scale = next_long_edge / long_edge
+        next_size = (max(1, int(current.width * scale)), max(1, int(current.height * scale)))
+        if next_size == current.size:
+            break
+        current = current.resize(next_size, Image.Resampling.LANCZOS)
+
+    payload = _encode_image(current, "JPEG", quality=min_quality, optimize=True)
+    return f"data:image/jpeg;base64,{base64.b64encode(payload).decode('ascii')}"
+
+
 def thumbnail_bytes(
     raw: bytes, *, max_px: int, output_mime: str | None = None
 ) -> tuple[bytes, str]:
@@ -230,6 +323,7 @@ def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "bounded_embedding_image_data_uri",
     "bounded_image_data_uri",
     "decode_image_base64",
     "detect_image_mime",
