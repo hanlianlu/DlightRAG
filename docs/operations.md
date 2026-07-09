@@ -122,3 +122,156 @@ intentionally disabled.
   already been recreated or migrated for the new dimension.
 - A nonzero exit code means the rebuild reported errors or storage setup failed;
   inspect the command output before restarting writers.
+
+## Local Langfuse Observability
+
+DlightRAG can send LLM, embedding, and reranking traces to Langfuse. The repo
+bundles a self-hosted Langfuse stack for local development so you do not need a
+Langfuse Cloud account. It runs as its own Docker Compose project on isolated
+ports and is wired to DlightRAG by two helper scripts under `scripts/langfuse/`.
+
+Non-secret SDK behavior (`langfuse_host`, `langfuse_export_external_spans`,
+`langfuse_environment`, sample rate, timeout) lives in
+[configuration.md](configuration.md). This section covers running the stack.
+
+Prerequisites: Docker and Compose. The Langfuse stack is separate from the
+DlightRAG Compose stack and stores its files in a sibling directory
+(`../langfuse-local` by default, `LANGFUSE_LOCAL_DIR`).
+
+### Start And View Traces
+
+```bash
+make langfuse-up
+```
+
+That single target runs the whole chain: it downloads and port-patches the
+official Langfuse compose file, syncs project keys into both env files, then
+starts the stack in the background. Then open the UI:
+
+- URL: `http://localhost:3300`
+- Email: `admin@localhost.local`
+- Password: the generated `LANGFUSE_INIT_USER_PASSWORD` in
+  `../langfuse-local/.env`
+- Project: `DlightRAG_Local` → **Tracing → Traces**
+
+Traces appear only after DlightRAG runs a model call (a query or ingest), so
+trigger one request if the list is empty.
+
+### Targets
+
+| Target | Behavior |
+|---|---|
+| `make langfuse-stack` | Download the official Langfuse compose file and patch it for isolated local ports. Does not start anything. |
+| `make langfuse-bootstrap` | Run `langfuse-stack`, then sync project keys so the local stack and DlightRAG's `.env` share one credential pair. |
+| `make langfuse-up` | Run `langfuse-bootstrap`, then start the stack (`docker compose up -d`). |
+| `make langfuse-down` | Stop the stack. |
+| `make langfuse-reset` | Delete the stack's data volumes (all traces). Destructive; needs `CONFIRM=1`. |
+| `make langfuse-restart` | Re-sync keys and recreate the web/worker services. |
+| `make langfuse-status` | Show stack container status. |
+| `make langfuse-logs` | Follow web/worker logs (foreground; Ctrl+C to exit). |
+| `make langfuse-health` | Curl the host-facing health endpoint. |
+
+### How Keys Are Synced
+
+`scripts/langfuse/headless.py` keeps one public/secret key pair on both sides:
+it writes `LANGFUSE_INIT_PROJECT_*` into `../langfuse-local/.env` (the stack's
+headless initialization) and the matching `DLIGHTRAG_LANGFUSE_PUBLIC_KEY` /
+`DLIGHTRAG_LANGFUSE_SECRET_KEY` into DlightRAG's `.env`. Both keys are required;
+if either is missing, DlightRAG starts with tracing disabled. The keys are
+generated once and reused, so re-running bootstrap does not rotate them.
+
+Langfuse only reads `LANGFUSE_INIT_*` on first database initialization. After
+the project exists, changing a key in `.env` does not change the key stored in
+Langfuse. To rotate keys, change them in the Langfuse UI or reset the stack's
+data volume.
+
+### Trace Endpoint Address
+
+`langfuse_host` in [config.yaml](../config.yaml) is where the app sends traces.
+It is non-secret, so it stays in `config.yaml`; `make langfuse-up` only writes
+the secret keys to `.env`. Set it for how DlightRAG itself runs:
+
+| DlightRAG run mode | `langfuse_host` |
+|---|---|
+| Docker Compose (default) | `http://host.docker.internal:3300` |
+| Native (non-Docker) | `http://localhost:3300` |
+
+Inside a container `localhost` is the container itself, so a Dockerized app
+reaches the host-published Langfuse port through the Docker host alias, the same
+way it reaches the MinerU sidecar. Your browser and `make langfuse-health` use
+`http://localhost:3300` because they run on the host. On native Linux Docker, a
+host alias reaching a loopback-bound port can need extra host networking. If
+`langfuse_host` is unset, DlightRAG falls back to Langfuse Cloud.
+
+### Apply Changes To A Running Stack
+
+The DlightRAG app services load `.env` with Compose `env_file`, which is read
+when a container is created. `docker compose restart` does not reload it. After
+`make langfuse-up` first writes the Langfuse keys (or after you change
+`langfuse_host` in `config.yaml`), recreate the app containers so they pick up
+the values:
+
+```bash
+docker compose up -d --force-recreate dlightrag-api dlightrag-mcp
+```
+
+Confirm the target from the logs:
+
+```bash
+docker compose logs dlightrag-api | grep -i "langfuse tracing"
+# Langfuse tracing enabled → http://host.docker.internal:3300
+```
+
+If a log line shows `→ https://cloud.langfuse.com`, the app started without
+`langfuse_host` set and is using the code default; set it in `config.yaml` and
+recreate the containers.
+
+### Stop Or Disable
+
+- Stop the stack: `make langfuse-down`.
+- Disable tracing without removing the stack: clear
+  `DLIGHTRAG_LANGFUSE_PUBLIC_KEY` and `DLIGHTRAG_LANGFUSE_SECRET_KEY` in `.env`,
+  then recreate the app containers. With no keys, DlightRAG runs with tracing
+  off and never contacts Langfuse.
+
+### Reset And Password Recovery
+
+The UI login password and the project API keys are seeded once, on the stack's
+first database initialization, from `LANGFUSE_INIT_*` in
+`../langfuse-local/.env`. After that the database is authoritative: editing
+those values in `.env` has no effect, and the stored password is a one-way hash.
+
+Try the non-destructive options first:
+
+- Forgot the UI password, `.env` still present: read it back.
+
+  ```bash
+  grep LANGFUSE_INIT_USER_PASSWORD ../langfuse-local/.env
+  ```
+
+- Locked out of the UI but the keys are intact: traces are still readable
+  through the public API with the key pair (no UI login required).
+
+  ```bash
+  curl -u "$DLIGHTRAG_LANGFUSE_PUBLIC_KEY:$DLIGHTRAG_LANGFUSE_SECRET_KEY" \
+    http://localhost:3300/api/public/traces
+  ```
+
+- Deleted `../langfuse-local/.env`: the API keys are recoverable because
+  DlightRAG's `.env` still holds the same pair. `make langfuse-bootstrap`
+  rewrites the stack env from those keys (and generates a new password). The
+  running database keeps the old password until you reset it.
+
+Full reset (last resort). This deletes all Langfuse traces. DlightRAG's own
+data is a separate Compose project and is not affected:
+
+```bash
+make langfuse-bootstrap                 # regenerate ../langfuse-local/.env (fresh password)
+make langfuse-reset CONFIRM=1           # remove the stack's data volumes
+make langfuse-up                        # re-initialize from the new seed
+grep LANGFUSE_INIT_USER_PASSWORD ../langfuse-local/.env   # read the new password
+```
+
+Because bootstrap recovers the same API keys from DlightRAG's `.env`, tracing
+keeps working after the reset with no change on the DlightRAG side; only the
+trace history and the login password change.

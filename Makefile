@@ -1,12 +1,16 @@
 LANGFUSE_LOCAL_DIR ?= $(abspath ../langfuse-local)
 LANGFUSE_PROJECT ?= langfuse
+# Host-facing URL: your browser and `make langfuse-health` reach the stack here.
+# Where the DlightRAG app SENDS traces is non-secret config (langfuse_host in
+# config.yaml: host.docker.internal:3300 for the Dockerized app, localhost:3300
+# for a native run), so bootstrap does not manage it — it only syncs the keys.
 LANGFUSE_HOST ?= http://localhost:3300
 PYTHON ?= python3
 LANGFUSE_COMPOSE = docker compose --env-file "$(LANGFUSE_LOCAL_DIR)/.env" -p $(LANGFUSE_PROJECT) -f "$(LANGFUSE_LOCAL_DIR)/docker-compose.yml"
 LANGFUSE_STACK = $(PYTHON) scripts/langfuse/stack.py --dir "$(LANGFUSE_LOCAL_DIR)"
-LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env" --host "$(LANGFUSE_HOST)"
+LANGFUSE_BOOTSTRAP = $(PYTHON) scripts/langfuse/headless.py --langfuse-env "$(LANGFUSE_LOCAL_DIR)/.env" --dlightrag-env ".env"
 
-.PHONY: mineru-install mineru-api mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
+.PHONY: mineru-install mineru-api mineru-title-aided mineru-service-install mineru-service-start mineru-service-stop mineru-service-status mineru-service-logs mineru-service-uninstall langfuse-stack langfuse-bootstrap langfuse-up langfuse-down langfuse-reset langfuse-restart langfuse-status langfuse-logs langfuse-health ci frontend-ci ci-full
 
 mineru-install:
 	scripts/mineru/install.sh
@@ -48,6 +52,20 @@ langfuse-up: langfuse-bootstrap
 
 langfuse-down:
 	$(LANGFUSE_COMPOSE) down
+
+# Destructive: removes the local Langfuse data volumes (all traces). DlightRAG's
+# own data is a separate Compose project and is NOT touched. Guarded by CONFIRM=1.
+# Recover the login password first if possible (it is stored in
+# $(LANGFUSE_LOCAL_DIR)/.env as LANGFUSE_INIT_USER_PASSWORD). After a reset run
+# `make langfuse-up` to re-initialize from a fresh headless seed.
+langfuse-reset:
+	@if [ "$(CONFIRM)" != "1" ]; then \
+		echo "langfuse-reset DELETES all local Langfuse data (traces)."; \
+		echo "DlightRAG's own RAG data is a separate project and is NOT affected."; \
+		echo "Re-run to confirm:  make langfuse-reset CONFIRM=1"; \
+		exit 1; \
+	fi
+	$(LANGFUSE_COMPOSE) down -v
 
 langfuse-restart: langfuse-bootstrap
 	$(LANGFUSE_COMPOSE) up -d --force-recreate langfuse-web langfuse-worker

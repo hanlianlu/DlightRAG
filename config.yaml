@@ -209,9 +209,11 @@ answer:
 #       workspaces: [finance]
 #       actions: [reader]
 
-## Langfuse keys belong in .env. Non-secret SDK behavior can be set here when
-## a deployment needs it.
-
-# langfuse_host: http://localhost:3300
+## Langfuse keys (secret) belong in .env. Non-secret SDK behavior lives here.
+## langfuse_host is where the app SENDS traces, set for how DlightRAG runs:
+##   Dockerized app + bundled local stack -> http://host.docker.internal:3300
+##   Native (non-Docker) app              -> http://localhost:3300
+## Unset falls back to Langfuse Cloud. See docs/operations.md.
+langfuse_host: http://host.docker.internal:3300
 # langfuse_export_external_spans: false
 # langfuse_environment: production
