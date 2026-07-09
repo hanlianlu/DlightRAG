@@ -2,7 +2,7 @@
 """Abstract base for LLM completion providers."""
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from typing import Any
 
 
@@ -49,6 +49,37 @@ def usage_to_dict(usage: Any) -> dict[str, int] | None:
             if isinstance(sub_value, int) and not isinstance(sub_value, bool):
                 result[f"{key}.{sub_key}"] = sub_value
     return result or None
+
+
+def capture_stream_usage(
+    holder: dict[str, Any] | None,
+    usage: Any,
+    *,
+    cost_fn: Callable[[Any], dict[str, float] | None] | None = None,
+) -> None:
+    """Record a streaming call's usage/cost into a per-call holder, best-effort.
+
+    ``holder`` is created once per streaming request by the tracing layer, so
+    there is no shared provider state (safe under concurrency). Parsing failures
+    are swallowed — streaming usage is optional observability and must never
+    break the stream.
+    """
+    if holder is None or usage is None:
+        return
+    try:
+        details = usage_to_dict(usage)
+    except AttributeError, TypeError:
+        details = None
+    if details:
+        holder["usage_details"] = details
+    if cost_fn is None:
+        return
+    try:
+        cost = cost_fn(usage)
+    except AttributeError, TypeError:
+        cost = None
+    if cost:
+        holder["cost_details"] = cost
 
 
 class CompletionOutput(str):
@@ -120,10 +151,6 @@ class CompletionProvider(ABC):
         self._max_retries = max_retries
         self.supports_vision: bool | None = None
         self.last_reasoning: str = ""
-        # Best-effort usage/cost captured from the most recent streaming call
-        # (non-streaming calls return usage on the CompletionOutput instead).
-        self.last_usage_details: dict[str, int] | None = None
-        self.last_cost_details: dict[str, float] | None = None
 
     @abstractmethod
     async def complete(
@@ -148,6 +175,7 @@ class CompletionProvider(ABC):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore[return]
         raise NotImplementedError
 

@@ -159,6 +159,7 @@ class AnthropicProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore
         system, non_system = _extract_system(messages)
 
@@ -186,7 +187,6 @@ class AnthropicProvider(CompletionProvider):
             if extra:
                 call_kwargs["extra_body"] = extra
 
-        self.last_usage_details = None
         response = await self._get_client().messages.create(**call_kwargs)
         reasoning_parts: list[str] = []
         usage_start: Any = None
@@ -207,13 +207,16 @@ class AnthropicProvider(CompletionProvider):
             elif delta.type == "thinking_delta":
                 reasoning_parts.append(delta.thinking)
         self.last_reasoning = "".join(reasoning_parts)
-        try:
+        if usage_holder is not None:
             merged: dict[str, int] = {}
             for src in (usage_start, usage_delta):
-                if src is not None:
+                if src is None:
+                    continue
+                try:
                     part = usage_to_dict(src)
-                    if part:
-                        merged.update(part)
-            self.last_usage_details = merged or None
-        except Exception:  # noqa: BLE001 - best-effort observability
-            self.last_usage_details = None
+                except AttributeError, TypeError:
+                    part = None
+                if part:
+                    merged.update(part)
+            if merged:
+                usage_holder["usage_details"] = merged

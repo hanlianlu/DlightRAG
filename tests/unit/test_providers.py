@@ -190,6 +190,37 @@ class TestAnthropicProvider:
             "cache_creation.ephemeral_5m_input_tokens": 7,
         }
 
+    @pytest.mark.asyncio
+    async def test_stream_merges_message_start_and_delta_usage(self):
+        p = get_provider("anthropic", api_key="test-key")
+        holder: dict[str, Any] = {}
+
+        async def fake_stream():
+            yield SimpleNamespace(
+                type="message_start",
+                message=SimpleNamespace(usage=SimpleNamespace(input_tokens=10, output_tokens=0)),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="hi"),
+            )
+            yield SimpleNamespace(type="message_delta", usage=SimpleNamespace(output_tokens=6))
+
+        with patch("dlightrag.models.providers.anthropic_native.AsyncAnthropic") as MockSDK:
+            MockSDK.return_value.messages.create = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            tokens = [
+                t
+                async for t in cast(Any, p).stream(
+                    [{"role": "user", "content": "hi"}],
+                    "claude-sonnet-4-20250514",
+                    usage_holder=holder,
+                )
+            ]
+
+        assert tokens == ["hi"]
+        assert holder == {"usage_details": {"input_tokens": 10, "output_tokens": 6}}
+
 
 class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio
@@ -205,6 +236,7 @@ class TestOpenAICompatibleProvider:
     @pytest.mark.asyncio
     async def test_stream_captures_usage_and_cost_from_final_chunk(self):
         p = get_provider("openai", api_key="test-key")
+        holder: dict[str, Any] = {}
 
         async def _fake_stream():
             yield SimpleNamespace(
@@ -227,20 +259,24 @@ class TestOpenAICompatibleProvider:
             mock_client.return_value.chat.completions.create = AsyncMock(
                 return_value=_fake_stream()
             )
-            stream = cast(Any, p).stream([{"role": "user", "content": "hi"}], "gpt")
+            stream = cast(Any, p).stream(
+                [{"role": "user", "content": "hi"}], "gpt", usage_holder=holder
+            )
             chunks = [c async for c in stream]
 
         assert chunks == ["he", "llo"]
-        assert cast(Any, p).last_usage_details == {
-            "prompt_tokens": 5,
-            "completion_tokens": 2,
-            "total_tokens": 7,
+        assert holder == {
+            "usage_details": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+            "cost_details": {"total": 0.0012},
         }
-        assert cast(Any, p).last_cost_details == {"total": 0.0012}
 
     @pytest.mark.asyncio
     async def test_stream_falls_back_when_stream_options_unsupported(self):
+        import httpx
+        from openai import BadRequestError
+
         p = get_provider("openai", api_key="test-key")
+        holder: dict[str, Any] = {}
         calls: list[dict[str, Any]] = []
 
         async def _fake_stream():
@@ -252,19 +288,42 @@ class TestOpenAICompatibleProvider:
         async def _create(**kwargs: Any):
             calls.append(kwargs)
             if "stream_options" in kwargs:
-                raise RuntimeError("stream_options not supported")
+                raise BadRequestError(
+                    "stream_options unsupported",
+                    response=httpx.Response(400, request=httpx.Request("POST", "https://t/v1")),
+                    body=None,
+                )
             return _fake_stream()
 
         with patch.object(p, "_get_client") as mock_client:
             mock_client.return_value.chat.completions.create = _create
-            stream = cast(Any, p).stream([{"role": "user", "content": "hi"}], "gpt")
+            stream = cast(Any, p).stream(
+                [{"role": "user", "content": "hi"}], "gpt", usage_holder=holder
+            )
             chunks = [c async for c in stream]
 
         assert chunks == ["hi"]
         assert len(calls) == 2
         assert "stream_options" in calls[0]
         assert "stream_options" not in calls[1]
-        assert cast(Any, p).last_usage_details is None
+        assert holder == {}  # the fallback stream carries no usage
+
+    @pytest.mark.asyncio
+    async def test_stream_does_not_retry_on_non_badrequest_error(self):
+        p = get_provider("openai", api_key="test-key")
+        calls: list[dict[str, Any]] = []
+
+        async def _create(**kwargs: Any):
+            calls.append(kwargs)
+            raise RuntimeError("network down")
+
+        with patch.object(p, "_get_client") as mock_client:
+            mock_client.return_value.chat.completions.create = _create
+            stream = cast(Any, p).stream([{"role": "user", "content": "hi"}], "gpt")
+            with pytest.raises(RuntimeError, match="network down"):
+                _ = [c async for c in stream]
+
+        assert len(calls) == 1  # genuine errors are not retried
 
     @pytest.mark.asyncio
     async def test_complete_returns_usage_and_cost_metadata(self):
@@ -443,6 +502,43 @@ class TestGeminiProvider:
 
         assert tokens == ["hel", "lo"]
         mock_client.aio.models.generate_content_stream.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_stream_captures_usage_metadata(self):
+        p = get_provider("gemini", api_key="test-key")
+        holder: dict[str, Any] = {}
+
+        async def fake_stream():
+            yield SimpleNamespace(text="hel", usage_metadata=None)
+            yield SimpleNamespace(
+                text="lo",
+                usage_metadata=SimpleNamespace(
+                    prompt_token_count=12, candidates_token_count=4, total_token_count=16
+                ),
+            )
+
+        with patch("dlightrag.models.providers.gemini_native.genai") as mock_genai:
+            mock_client = MagicMock()
+            mock_genai.Client.return_value = mock_client
+            mock_client.aio.models.generate_content_stream = AsyncMock(return_value=fake_stream())
+            cast(Any, p)._client = None
+            tokens = [
+                t
+                async for t in cast(Any, p).stream(
+                    [{"role": "user", "content": "hi"}],
+                    "gemini-2.0-flash",
+                    usage_holder=holder,
+                )
+            ]
+
+        assert tokens == ["hel", "lo"]
+        assert holder == {
+            "usage_details": {
+                "prompt_token_count": 12,
+                "candidates_token_count": 4,
+                "total_token_count": 16,
+            }
+        }
 
     @pytest.mark.asyncio
     async def test_json_schema_response_format_uses_response_schema(self):

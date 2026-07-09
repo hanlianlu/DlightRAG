@@ -204,10 +204,22 @@ class _ObservationHandle:
 _USAGE_INPUT_KEYS = ("prompt_tokens", "input_tokens", "prompt_token_count")
 _USAGE_OUTPUT_KEYS = ("completion_tokens", "output_tokens", "candidates_token_count")
 _USAGE_TOTAL_KEYS = ("total_tokens", "total_token_count")
+_USAGE_CACHED_INPUT_KEYS = (
+    "prompt_tokens_details.cached_tokens",  # OpenAI
+    "prompt_cache_hit_tokens",  # DeepSeek
+    "cache_read_input_tokens",  # Anthropic
+    "cached_content_token_count",  # Gemini
+)
 
 
 def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
-    """Map provider token usage to Langfuse canonical input/output/total."""
+    """Map provider token usage to Langfuse canonical usage types.
+
+    Langfuse sums every usageDetails value into ``total`` unless ``total`` is
+    provided, so an explicit ``total`` is always emitted when known to avoid
+    triple-counting. Cached input tokens are surfaced as ``input_cached_tokens``
+    (informational; reported cost comes from cost_details or a model price).
+    """
 
     def _first(keys: tuple[str, ...]) -> int | None:
         for key in keys:
@@ -219,6 +231,7 @@ def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
     inp = _first(_USAGE_INPUT_KEYS)
     out = _first(_USAGE_OUTPUT_KEYS)
     total = _first(_USAGE_TOTAL_KEYS)
+    cached = _first(_USAGE_CACHED_INPUT_KEYS)
     if total is None and (inp is not None or out is not None):
         total = (inp or 0) + (out or 0)
 
@@ -229,6 +242,8 @@ def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
         details["output"] = out
     if total is not None:
         details["total"] = total
+    if cached:
+        details["input_cached_tokens"] = cached
     return details or raw
 
 
@@ -260,24 +275,13 @@ def _observation_update_kwargs(
     return update
 
 
-def _attach_stream_usage(
-    observation: Any,
-    usage_getter: Callable[[], tuple[dict[str, int] | None, dict[str, float] | None]] | None,
-) -> None:
-    """Best-effort: attach usage/cost a provider captured during streaming.
+def _attach_stream_usage(observation: Any, usage_holder: dict[str, Any]) -> None:
+    """Attach usage/cost the provider recorded into the per-call holder.
 
     Streaming yields text only, so usage (when the provider/model reports it)
-    arrives out of band. Any failure here is non-fatal — the answer already
-    streamed successfully.
+    arrives out of band in ``usage_holder``, populated during iteration.
     """
-    if usage_getter is None:
-        return
-    try:
-        usage_details, cost_details = usage_getter()
-    except Exception:
-        logger.debug("Langfuse streaming usage getter failed (non-fatal)", exc_info=True)
-        return
-    update = _usage_cost_update(usage_details, cost_details)
+    update = _usage_cost_update(usage_holder.get("usage_details"), usage_holder.get("cost_details"))
     if update:
         _safe_update(observation, **update)
 
@@ -340,10 +344,13 @@ async def _stream_with_observation(
     kwargs: dict[str, Any],
     *,
     observation_kwargs: dict[str, Any],
-    usage_getter: Callable[[], tuple[dict[str, int] | None, dict[str, float] | None]] | None = None,
 ) -> AsyncIterator[str]:
+    # Fresh per-call holder: the provider records streaming usage into it, so
+    # there is no shared provider state (safe under concurrency).
+    usage_holder: dict[str, Any] = {}
+    call_kwargs = {**kwargs, "usage_holder": usage_holder}
     if _client is None:
-        stream = await fn(messages, **kwargs)
+        stream = await fn(messages, **call_kwargs)
         async for chunk in stream:
             yield chunk
         return
@@ -353,7 +360,7 @@ async def _stream_with_observation(
         observation = cm.__enter__()
     except Exception:
         logger.debug("Langfuse streaming observation start failed (non-fatal)", exc_info=True)
-        stream = await fn(messages, **kwargs)
+        stream = await fn(messages, **call_kwargs)
         async for chunk in stream:
             yield chunk
         return
@@ -364,7 +371,7 @@ async def _stream_with_observation(
     tb: TracebackType | None = None
     try:
         try:
-            stream = await fn(messages, **kwargs)
+            stream = await fn(messages, **call_kwargs)
             async for chunk in stream:
                 chunks.append(chunk)
                 yield chunk
@@ -375,7 +382,7 @@ async def _stream_with_observation(
             _safe_update(observation, level="ERROR", status_message=str(caught))
             raise
         _safe_update(observation, output=_truncate_text("".join(chunks)))
-        _attach_stream_usage(observation, usage_getter)
+        _attach_stream_usage(observation, usage_holder)
     finally:
         _exit_observation(cm, exc_type, exc, tb)
 
@@ -391,7 +398,6 @@ def wrap_chat_func(
     name: str = "llm",
     model: str | None = None,
     model_parameters: dict[str, Any] | None = None,
-    usage_getter: Callable[[], tuple[dict[str, int] | None, dict[str, float] | None]] | None = None,
 ) -> Callable[..., Any]:
     """Wrap an async LLM completion callable with Langfuse generation tracking."""
     if _client is None:
@@ -420,7 +426,6 @@ def wrap_chat_func(
                 messages,
                 kwargs,
                 observation_kwargs=observation_kwargs,
-                usage_getter=usage_getter,
             )
 
         return await _run_with_observation(

@@ -5,11 +5,12 @@ import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 from dlightrag.models.providers.base import (
     CompletionOutput,
     CompletionProvider,
+    capture_stream_usage,
     usage_mapping,
     usage_to_dict,
 )
@@ -106,7 +107,8 @@ class OpenAICompatibleProvider(CompletionProvider):
             return await client.chat.completions.create(
                 **call_kwargs, stream_options={"include_usage": True}
             )
-        except Exception:  # noqa: BLE001 - unsupported option must not break streaming
+        except BadRequestError:
+            # Endpoint rejected stream_options (400) — stream again without it.
             logger.debug("stream_options unsupported; streaming without usage", exc_info=True)
             return await client.chat.completions.create(**call_kwargs)
 
@@ -119,6 +121,7 @@ class OpenAICompatibleProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore
         call_kwargs: dict[str, Any] = {
             "model": model,
@@ -133,8 +136,6 @@ class OpenAICompatibleProvider(CompletionProvider):
             call_kwargs["response_format"] = response_format
         if model_kwargs:
             call_kwargs["extra_body"] = model_kwargs
-        self.last_usage_details = None
-        self.last_cost_details = None
         response = await self._open_stream(call_kwargs)
         reasoning_parts: list[str] = []
         usage: Any = None
@@ -153,10 +154,4 @@ class OpenAICompatibleProvider(CompletionProvider):
             if delta.content is not None:
                 yield delta.content
         self.last_reasoning = "".join(reasoning_parts)
-        if usage is not None:
-            try:
-                self.last_usage_details = usage_to_dict(usage)
-                self.last_cost_details = _cost_to_dict(usage)
-            except Exception:  # noqa: BLE001 - usage is best-effort observability
-                self.last_usage_details = None
-                self.last_cost_details = None
+        capture_stream_usage(usage_holder, usage, cost_fn=_cost_to_dict)

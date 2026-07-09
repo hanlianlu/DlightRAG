@@ -9,7 +9,12 @@ from typing import Any
 
 from google import genai
 
-from dlightrag.models.providers.base import CompletionOutput, CompletionProvider, usage_to_dict
+from dlightrag.models.providers.base import (
+    CompletionOutput,
+    CompletionProvider,
+    capture_stream_usage,
+    usage_to_dict,
+)
 from dlightrag.models.structured import json_schema_from_response_format
 
 logger = logging.getLogger(__name__)
@@ -180,6 +185,7 @@ class GeminiProvider(CompletionProvider):
         max_tokens: int | None = None,
         response_format: dict[str, Any] | None = None,
         model_kwargs: dict[str, Any] | None = None,
+        usage_holder: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str]:  # type: ignore
         model_id, contents, config = self._build_args(
             messages,
@@ -189,7 +195,6 @@ class GeminiProvider(CompletionProvider):
             response_format=response_format,
             model_kwargs=model_kwargs,
         )
-        self.last_usage_details = None
         response = await self._get_client().aio.models.generate_content_stream(
             model=model_id, contents=contents, config=config
         )
@@ -200,8 +205,4 @@ class GeminiProvider(CompletionProvider):
                 usage = chunk_usage
             if chunk.text:
                 yield chunk.text
-        if usage is not None:
-            try:
-                self.last_usage_details = usage_to_dict(usage)
-            except Exception:  # noqa: BLE001 - best-effort observability
-                self.last_usage_details = None
+        capture_stream_usage(usage_holder, usage)

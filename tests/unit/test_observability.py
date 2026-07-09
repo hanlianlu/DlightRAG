@@ -184,21 +184,22 @@ async def test_streaming_generation_attaches_usage_and_cost() -> None:
     observability._client = client
 
     async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        holder = kwargs.get("usage_holder")
+
         async def stream() -> Any:
             yield "hel"
             yield "lo"
+            if holder is not None:  # provider records usage at stream end
+                holder["usage_details"] = {
+                    "prompt_tokens": 5,
+                    "completion_tokens": 2,
+                    "total_tokens": 7,
+                }
+                holder["cost_details"] = {"total": 0.001}
 
         return stream()
 
-    wrapped = observability.wrap_chat_func(
-        complete,
-        name="llm_stream",
-        model="stream-model",
-        usage_getter=lambda: (
-            {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
-            {"total": 0.001},
-        ),
-    )
+    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
 
     token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
     result = [chunk async for chunk in token_iterator]
@@ -211,8 +212,7 @@ async def test_streaming_generation_attaches_usage_and_cost() -> None:
 
 
 async def test_streaming_generation_no_usage_is_graceful() -> None:
-    # Provider that reports no streaming usage (getter returns None) must not add
-    # a usage update, and must not break the stream.
+    # A provider that records no streaming usage must not add a usage update.
     client = _RecordingLangfuse()
     observability._client = client
 
@@ -222,12 +222,7 @@ async def test_streaming_generation_no_usage_is_graceful() -> None:
 
         return stream()
 
-    wrapped = observability.wrap_chat_func(
-        complete,
-        name="llm_stream",
-        model="stream-model",
-        usage_getter=lambda: (None, None),
-    )
+    wrapped = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
 
     token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
     assert [chunk async for chunk in token_iterator] == ["x"]
