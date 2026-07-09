@@ -1603,6 +1603,7 @@ class TestAnswerStreamMode:
             sources: list[SourceReference],
             answer_text: str | None,
             config: DlightragConfig,
+            parent_context: object = None,
         ) -> list[SourceReference]:
             assert answer_text == "Market growth improved [1-1]."
             chunks = sources[0].chunks

@@ -427,6 +427,19 @@ async def _stream_with_observation(
 # ---------------------------------------------------------------------------
 
 
+def capture_context() -> Any | None:
+    """Snapshot the active OpenTelemetry context for restoring in a detached task.
+
+    Used to nest post-response work (e.g. streamed-answer semantic highlights,
+    which runs after the pipeline span has closed) back under the request trace.
+    ``None`` when tracing (or its OpenTelemetry dependency) is unavailable, so
+    callers stay a no-op without Langfuse.
+    """
+    if _client is None or _otel_context_api is None:
+        return None
+    return _otel_context_api.get_current()
+
+
 def bind_trace_context(fn: Callable[..., Any]) -> Callable[..., Any]:
     """Restore the caller's tracing context when *fn* later runs detached.
 
@@ -442,10 +455,8 @@ def bind_trace_context(fn: Callable[..., Any]) -> Callable[..., Any]:
     if _client is None or _otel_context_api is None:
         return fn
 
-    otel_api = _otel_context_api
-
     async def _bound(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault(_CONTEXT_CARRIER_KEY, otel_api.get_current())
+        kwargs.setdefault(_CONTEXT_CARRIER_KEY, capture_context())
         return await fn(*args, **kwargs)
 
     return _bound
@@ -555,8 +566,15 @@ async def trace_observation(
     as_type: str = "span",
     input: Any | None = None,
     metadata: Any | None = None,
+    parent_context: Any = None,
 ) -> AsyncIterator[_ObservationHandle]:
-    """Mark a DlightRAG operation as a Langfuse v4 observation."""
+    """Mark a DlightRAG operation as a Langfuse v4 observation.
+
+    ``parent_context`` optionally re-attaches a context captured via
+    :func:`capture_context` so the observation nests under a request trace even
+    when it runs in a detached task (e.g. streamed-answer post-processing after
+    the pipeline span has already closed).
+    """
     if _client is None:
         yield _ObservationHandle(None)
         return
@@ -565,25 +583,29 @@ async def trace_observation(
         observation_kwargs["input"] = input
     if metadata is not None:
         observation_kwargs["metadata"] = metadata
-    try:
-        cm = _client.start_as_current_observation(**observation_kwargs)
-        observation = cm.__enter__()
-    except Exception:
-        logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
-        yield _ObservationHandle(None)
-        return
-
-    exc_type: type[BaseException] | None = None
-    exc: BaseException | None = None
-    tb: TracebackType | None = None
+    token = _attach_context(parent_context)
     try:
         try:
-            yield _ObservationHandle(observation)
-        except BaseException as caught:
-            exc_type = type(caught)
-            exc = caught
-            tb = caught.__traceback__
-            _safe_update(observation, level="ERROR", status_message=str(caught))
-            raise
+            cm = _client.start_as_current_observation(**observation_kwargs)
+            observation = cm.__enter__()
+        except Exception:
+            logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
+            yield _ObservationHandle(None)
+            return
+
+        exc_type: type[BaseException] | None = None
+        exc: BaseException | None = None
+        tb: TracebackType | None = None
+        try:
+            try:
+                yield _ObservationHandle(observation)
+            except BaseException as caught:
+                exc_type = type(caught)
+                exc = caught
+                tb = caught.__traceback__
+                _safe_update(observation, level="ERROR", status_message=str(caught))
+                raise
+        finally:
+            _exit_observation(cm, exc_type, exc, tb)
     finally:
-        _exit_observation(cm, exc_type, exc, tb)
+        _detach_context(token)

@@ -286,6 +286,29 @@ async def test_trace_observation_update_is_noop_without_client() -> None:
         trace.update(output={"answer_len": 12})
 
 
+def test_capture_context_none_when_disabled() -> None:
+    # No Langfuse client -> nothing to capture, callers stay a no-op
+    assert observability.capture_context() is None
+
+
+async def test_trace_observation_accepts_parent_context() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    # A captured context re-nests detached post-response work (e.g. streamed
+    # highlights); it drives the OTEL attach only and must not leak into the
+    # Langfuse observation payload.
+    parent = observability.capture_context()
+    async with observability.trace_observation(
+        "semantic_highlights", as_type="chain", parent_context=parent
+    ) as trace:
+        trace.update(output={"count": 1})
+
+    obs = client.observations[0]
+    assert obs.kwargs["name"] == "semantic_highlights"
+    assert "parent_context" not in obs.kwargs
+
+
 def test_init_tracing_filters_external_spans_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 

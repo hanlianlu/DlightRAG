@@ -1406,7 +1406,7 @@ class RAGServiceManager:
             supports_vision=self._supports_vision,
         )
 
-        from dlightrag.observability import trace_observation
+        from dlightrag.observability import capture_context, trace_observation
 
         try:
             async with asyncio.timeout(self._config.request_timeout):
@@ -1455,6 +1455,7 @@ class RAGServiceManager:
                         stream_meta = cast(Any, stream)
                         stream_meta.current_image_ids = prepared.current_image_ids
                         stream_meta.image_descriptions = prepared.descriptions
+                        stream_meta.otel_context = capture_context()
                         answer_trace = getattr(stream_meta, "trace", None)
                         stream_meta.trace = (
                             {
