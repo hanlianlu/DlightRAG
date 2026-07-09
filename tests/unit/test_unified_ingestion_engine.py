@@ -810,6 +810,49 @@ async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeyp
     deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
 
 
+async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypatch) -> None:
+    import json
+
+    import dlightrag.core.ingestion.engine as engine_module
+
+    artifact_dir = tmp_path / "sample.parsed"
+    artifact_dir.mkdir()
+    (artifact_dir / "sample.blocks.jsonl").write_text("{}\n", encoding="utf-8")
+    Image.new("RGB", (128, 128), color=(0, 128, 255)).save(artifact_dir / "chart.png")
+    (artifact_dir / "sample.drawings.json").write_text(
+        json.dumps(
+            {
+                "drawings": {
+                    "im-1": {
+                        "path": "chart.png",
+                        "llm_analyze_result": {"status": "success"},
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine, deps = _make_engine()
+    deps["stores"].overwrite_chunk_vectors = AsyncMock()
+    deps["multimodal_embedder"].embed_index_images = AsyncMock(
+        side_effect=RuntimeError("provider rejected oversized image")
+    )
+
+    async def fake_to_thread(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(engine_module.asyncio, "to_thread", fake_to_thread)
+
+    # A single unembeddable image must not raise or fail the whole document.
+    await engine._overwrite_sidecar_image_vectors(
+        doc_id="doc-1",
+        sidecar_location=artifact_dir.as_uri(),
+        chunk_ids={"doc-1-mm-drawing-000"},
+    )
+
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
+
+
 def test_sidecar_dir_from_location_handles_file_scheme() -> None:
     from pathlib import Path
 

@@ -7,7 +7,11 @@ import io
 from PIL import Image
 
 from dlightrag.core.answer_images import AnswerImageBudget
-from dlightrag.utils.images import bounded_image_data_uri
+from dlightrag.utils.images import (
+    bounded_embedding_image_data_uri,
+    bounded_image_data_uri,
+    decode_image_base64,
+)
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -126,6 +130,55 @@ def test_bounded_image_data_uri_preserves_small_budgeted_png() -> None:
     uri, byte_count = bounded
     assert uri == data_uri
     assert byte_count == len(raw)
+
+
+def test_bounded_embedding_image_keeps_small_image_lossless() -> None:
+    uri = bounded_embedding_image_data_uri(Image.new("RGB", (100, 100), "white"))
+
+    assert uri.startswith("data:image/png;base64,")
+    raw, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert decoded.size == (100, 100)
+
+
+def test_bounded_embedding_image_caps_long_edge_and_total_pixels() -> None:
+    uri = bounded_embedding_image_data_uri(Image.new("RGB", (5000, 4000), "white"))
+
+    raw, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert max(decoded.size) <= 4096
+        assert decoded.width * decoded.height <= 15_000_000
+
+
+def test_bounded_embedding_image_caps_total_pixels_when_long_edge_fits() -> None:
+    # 4000x4000 = 16MP: long edge is under 4096 but the total exceeds the 15MP cap.
+    uri = bounded_embedding_image_data_uri(Image.new("RGB", (4000, 4000), "white"))
+
+    raw, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert decoded.width * decoded.height <= 15_000_000
+
+
+def test_bounded_embedding_image_converges_under_tight_byte_budget() -> None:
+    # Noise resists compression, so PNG is skipped and the JPEG/downscale ladder
+    # must run to satisfy the byte budget; it always returns a payload.
+    noise = Image.effect_noise((2000, 2000), 200).convert("RGB")
+
+    uri = bounded_embedding_image_data_uri(noise, max_bytes=200_000)
+
+    assert uri.startswith("data:image/jpeg;base64,")
+    raw, _ = decode_image_base64(uri)
+    assert len(raw) <= 200_000
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert max(decoded.size) >= 1
+
+
+def test_bounded_embedding_image_converts_non_rgb_modes() -> None:
+    uri = bounded_embedding_image_data_uri(Image.new("RGBA", (128, 128), (255, 0, 0, 128)))
+
+    raw, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert decoded.size == (128, 128)
 
 
 def _jpeg_bytes(size: tuple[int, int], *, quality: int) -> bytes:
