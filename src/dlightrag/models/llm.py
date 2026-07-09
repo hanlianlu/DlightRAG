@@ -156,14 +156,23 @@ def _queue_managed_completion_func(
     timeout: float,
     queue_name: str,
 ) -> Callable:
-    """Apply LightRAG's priority queue wrapper to a messages-first callable."""
+    """Apply LightRAG's priority queue wrapper to a messages-first callable.
+
+    The queued callable is wrapped with ``bind_trace_context`` so the caller's
+    Langfuse context is restored inside the queue worker; otherwise the
+    generation observation would detach into its own trace. No-op when tracing
+    is disabled.
+    """
     from lightrag.utils import priority_limit_async_func_call
 
-    return priority_limit_async_func_call(
+    from dlightrag.observability import bind_trace_context
+
+    queued = priority_limit_async_func_call(
         max_async,
         llm_timeout=timeout,
         queue_name=queue_name,
     )(completion_func)
+    return bind_trace_context(queued)
 
 
 def get_default_model_func(config: DlightragConfig) -> Callable:
