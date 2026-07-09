@@ -225,7 +225,7 @@ llm:
   default:
     provider: openai
     base_url: https://openrouter.ai/api/v1
-    model: google/gemini-3.5-flash
+    model: google/gemini-3.1-flash-lite
     model_kwargs:
       usage:
         include: true
