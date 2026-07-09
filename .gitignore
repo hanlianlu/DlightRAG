@@ -20,6 +20,7 @@ ENV/
 # Local planning artifacts
 docs/plans/
 docs/superpowers/
+docs/upstream/
 superpowers/
 .superpowers/
 
