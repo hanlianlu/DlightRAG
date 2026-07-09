@@ -142,6 +142,7 @@ def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) 
         name=f"llm_{cfg.model}",
         model=cfg.model,
         model_parameters={"temperature": cfg.temperature} if cfg.temperature is not None else None,
+        usage_getter=lambda: (provider.last_usage_details, provider.last_cost_details),
     )
 
     return partial(traced_func)

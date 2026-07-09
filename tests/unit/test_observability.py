@@ -179,6 +179,61 @@ async def test_chat_wrapper_traces_streaming_generation() -> None:
     assert client.active == []
 
 
+async def test_streaming_generation_attaches_usage_and_cost() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        async def stream() -> Any:
+            yield "hel"
+            yield "lo"
+
+        return stream()
+
+    wrapped = observability.wrap_chat_func(
+        complete,
+        name="llm_stream",
+        model="stream-model",
+        usage_getter=lambda: (
+            {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
+            {"total": 0.001},
+        ),
+    )
+
+    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
+    result = [chunk async for chunk in token_iterator]
+
+    assert result == ["hel", "lo"]
+    assert client.observations[0].updates == [
+        {"output": "hello"},
+        {"usage_details": {"input": 5, "output": 2, "total": 7}, "cost_details": {"total": 0.001}},
+    ]
+
+
+async def test_streaming_generation_no_usage_is_graceful() -> None:
+    # Provider that reports no streaming usage (getter returns None) must not add
+    # a usage update, and must not break the stream.
+    client = _RecordingLangfuse()
+    observability._client = client
+
+    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
+        async def stream() -> Any:
+            yield "x"
+
+        return stream()
+
+    wrapped = observability.wrap_chat_func(
+        complete,
+        name="llm_stream",
+        model="stream-model",
+        usage_getter=lambda: (None, None),
+    )
+
+    token_iterator = await wrapped(messages=[{"role": "user", "content": "hi"}], stream=True)
+    assert [chunk async for chunk in token_iterator] == ["x"]
+    assert client.observations[0].updates == [{"output": "x"}]
+
+
 async def test_embedding_wrapper_uses_embedding_observation() -> None:
     client = _RecordingLangfuse()
     observability._client = client

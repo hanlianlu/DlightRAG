@@ -120,6 +120,10 @@ class CompletionProvider(ABC):
         self._max_retries = max_retries
         self.supports_vision: bool | None = None
         self.last_reasoning: str = ""
+        # Best-effort usage/cost captured from the most recent streaming call
+        # (non-streaming calls return usage on the CompletionOutput instead).
+        self.last_usage_details: dict[str, int] | None = None
+        self.last_cost_details: dict[str, float] | None = None
 
     @abstractmethod
     async def complete(

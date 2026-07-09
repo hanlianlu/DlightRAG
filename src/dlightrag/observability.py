@@ -232,19 +232,54 @@ def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
     return details or raw
 
 
+def _usage_cost_update(
+    usage_details: dict[str, int] | None,
+    cost_details: dict[str, float] | None,
+) -> dict[str, Any]:
+    """Normalized usage/cost fields for a Langfuse observation update."""
+    update: dict[str, Any] = {}
+    if usage_details:
+        update["usage_details"] = _langfuse_usage_details(usage_details)
+    if cost_details:
+        update["cost_details"] = cost_details
+    return update
+
+
 def _observation_update_kwargs(
     result: Any,
     *,
     output_builder: Callable[[Any], Any],
 ) -> dict[str, Any]:
     update: dict[str, Any] = {"output": output_builder(result)}
-    usage_details = getattr(result, "usage_details", None)
-    if usage_details:
-        update["usage_details"] = _langfuse_usage_details(usage_details)
-    cost_details = getattr(result, "cost_details", None)
-    if cost_details:
-        update["cost_details"] = cost_details
+    update.update(
+        _usage_cost_update(
+            getattr(result, "usage_details", None),
+            getattr(result, "cost_details", None),
+        )
+    )
     return update
+
+
+def _attach_stream_usage(
+    observation: Any,
+    usage_getter: Callable[[], tuple[dict[str, int] | None, dict[str, float] | None]] | None,
+) -> None:
+    """Best-effort: attach usage/cost a provider captured during streaming.
+
+    Streaming yields text only, so usage (when the provider/model reports it)
+    arrives out of band. Any failure here is non-fatal — the answer already
+    streamed successfully.
+    """
+    if usage_getter is None:
+        return
+    try:
+        usage_details, cost_details = usage_getter()
+    except Exception:
+        logger.debug("Langfuse streaming usage getter failed (non-fatal)", exc_info=True)
+        return
+    update = _usage_cost_update(usage_details, cost_details)
+    if update:
+        _safe_update(observation, **update)
 
 
 def _exit_observation(
@@ -305,6 +340,7 @@ async def _stream_with_observation(
     kwargs: dict[str, Any],
     *,
     observation_kwargs: dict[str, Any],
+    usage_getter: Callable[[], tuple[dict[str, int] | None, dict[str, float] | None]] | None = None,
 ) -> AsyncIterator[str]:
     if _client is None:
         stream = await fn(messages, **kwargs)
@@ -339,6 +375,7 @@ async def _stream_with_observation(
             _safe_update(observation, level="ERROR", status_message=str(caught))
             raise
         _safe_update(observation, output=_truncate_text("".join(chunks)))
+        _attach_stream_usage(observation, usage_getter)
     finally:
         _exit_observation(cm, exc_type, exc, tb)
 
@@ -354,6 +391,7 @@ def wrap_chat_func(
     name: str = "llm",
     model: str | None = None,
     model_parameters: dict[str, Any] | None = None,
+    usage_getter: Callable[[], tuple[dict[str, int] | None, dict[str, float] | None]] | None = None,
 ) -> Callable[..., Any]:
     """Wrap an async LLM completion callable with Langfuse generation tracking."""
     if _client is None:
@@ -382,6 +420,7 @@ def wrap_chat_func(
                 messages,
                 kwargs,
                 observation_kwargs=observation_kwargs,
+                usage_getter=usage_getter,
             )
 
         return await _run_with_observation(

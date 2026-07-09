@@ -189,9 +189,19 @@ class GeminiProvider(CompletionProvider):
             response_format=response_format,
             model_kwargs=model_kwargs,
         )
+        self.last_usage_details = None
         response = await self._get_client().aio.models.generate_content_stream(
             model=model_id, contents=contents, config=config
         )
+        usage: Any = None
         async for chunk in response:
+            chunk_usage = getattr(chunk, "usage_metadata", None)
+            if chunk_usage is not None:
+                usage = chunk_usage
             if chunk.text:
                 yield chunk.text
+        if usage is not None:
+            try:
+                self.last_usage_details = usage_to_dict(usage)
+            except Exception:  # noqa: BLE001 - best-effort observability
+                self.last_usage_details = None
