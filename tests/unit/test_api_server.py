@@ -1603,7 +1603,6 @@ class TestAnswerStreamMode:
             sources: list[SourceReference],
             answer_text: str | None,
             config: DlightragConfig,
-            parent_context: object = None,
         ) -> list[SourceReference]:
             assert answer_text == "Market growth improved [1-1]."
             chunks = sources[0].chunks
@@ -1670,16 +1669,23 @@ class TestAnswerStreamMode:
         assert len(error_events) == 1
         assert "Internal server error" in error_events[0]["message"]
 
-    async def test_stream_service_unavailable_503(
+    async def test_stream_setup_error_becomes_sse_error_event(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        """Pre-stream errors return normal HTTP 503."""
+        """Setup errors during streaming surface as an SSE error event (200), not HTTP 503.
+
+        The root trace span now wraps the whole streamed response, so
+        ``aanswer_stream`` runs inside the SSE generator; its errors are streamed
+        as an error event instead of a pre-stream HTTP status.
+        """
         mock_manager.aanswer_stream = AsyncMock(
             side_effect=RAGServiceUnavailableError("RAG not ready")
         )
         app.state.manager = mock_manager
         resp = await client.post("/answer", json={"query": "hello", "stream": True})
-        assert resp.status_code == 503
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        assert "Internal server error during streaming" in resp.text
 
     async def test_stream_false_returns_json(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
