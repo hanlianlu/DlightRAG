@@ -296,27 +296,6 @@ async def test_embedding_wrapper_uses_embedding_observation() -> None:
     assert obs.updates == [{"output": {"embedding_count": 1}}]
 
 
-async def test_embedding_wrapper_keeps_carrier_out_of_provider_and_metadata() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-    seen_kwargs: dict[str, Any] = {}
-
-    async def embed(inputs: list[str], **kwargs: Any) -> list[list[float]]:
-        seen_kwargs.update(kwargs)
-        return [[0.1, 0.2]]
-
-    traced = observability.wrap_embedding_func(embed, name="embed_test")
-    bound = observability.bind_trace_context(traced)
-
-    result = await bound(["hello"], context="document")
-
-    assert result == [[0.1, 0.2]]
-    # the OTEL context carrier is consumed by the embedding wrapper: it reaches
-    # neither the provider call nor the observation metadata
-    assert observability._CONTEXT_CARRIER_KEY not in seen_kwargs
-    assert observability._CONTEXT_CARRIER_KEY not in client.observations[0].kwargs["metadata"]
-
-
 async def test_trace_observation_nests_child_observations() -> None:
     client = _RecordingLangfuse()
     observability._client = client
@@ -497,49 +476,3 @@ def test_shutdown_tracing_uses_sdk_shutdown_and_clears_client() -> None:
     assert client.shutdown_called is True
     assert client.flushed is False
     assert observability._client is None
-
-
-def test_bind_trace_context_noop_when_disabled() -> None:
-    async def fn() -> None: ...
-
-    # _client is None (autouse fixture) -> returned unchanged, zero overhead
-    assert observability.bind_trace_context(fn) is fn
-
-
-async def test_bind_trace_context_injects_context_carrier() -> None:
-    observability._client = _RecordingLangfuse()
-    seen_kwargs: dict[str, Any] = {}
-
-    async def inner(**kwargs: Any) -> str:
-        seen_kwargs.update(kwargs)
-        return "ok"
-
-    bound = observability.bind_trace_context(inner)
-    assert await bound(messages=[]) == "ok"
-    # the caller's OTEL context is captured and carried to the (detached) worker
-    assert observability._CONTEXT_CARRIER_KEY in seen_kwargs
-
-
-async def test_streaming_generation_keeps_carrier_out_of_provider_and_metadata() -> None:
-    client = _RecordingLangfuse()
-    observability._client = client
-    seen_kwargs: dict[str, Any] = {}
-
-    async def complete(messages: list[dict[str, Any]], **kwargs: Any) -> Any:
-        seen_kwargs.update(kwargs)
-
-        async def stream() -> Any:
-            yield "hi"
-
-        return stream()
-
-    traced = observability.wrap_chat_func(complete, name="llm_stream", model="stream-model")
-    bound = observability.bind_trace_context(traced)
-
-    token_iterator = await bound(messages=[{"role": "user", "content": "q"}], stream=True)
-    assert [chunk async for chunk in token_iterator] == ["hi"]
-
-    # the OTEL context carrier is consumed by the wrapper: it never reaches the
-    # provider call nor the observation metadata
-    assert observability._CONTEXT_CARRIER_KEY not in seen_kwargs
-    assert observability._CONTEXT_CARRIER_KEY not in client.observations[0].kwargs["metadata"]

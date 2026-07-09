@@ -12,11 +12,6 @@ from contextlib import asynccontextmanager
 from types import TracebackType
 from typing import Any
 
-try:
-    from opentelemetry import context as _otel_context_api
-except ImportError:  # pragma: no cover - opentelemetry ships with langfuse
-    _otel_context_api = None  # type: ignore[assignment]
-
 logger = logging.getLogger(__name__)
 
 _client: Any = None  # Langfuse client when enabled, None otherwise
@@ -303,26 +298,6 @@ def _exit_observation(
         logger.debug("Langfuse observation close failed (non-fatal)", exc_info=True)
 
 
-_CONTEXT_CARRIER_KEY = "__langfuse_otel_context__"
-
-
-def _attach_context(otel_context: Any) -> Any:
-    """Make a captured OTEL context current; return a detach token (or None)."""
-    if otel_context is None or _otel_context_api is None:
-        return None
-    return _otel_context_api.attach(otel_context)
-
-
-def _detach_context(token: Any) -> None:
-    """Detach an OTEL token, tolerating async cross-task teardown (non-fatal)."""
-    if token is None or _otel_context_api is None:
-        return
-    try:
-        _otel_context_api.detach(token)
-    except Exception:
-        logger.debug("Langfuse context detach mismatch (non-fatal)", exc_info=True)
-
-
 async def _run_with_observation(
     fn: Callable[..., Any],
     args: tuple[Any, ...],
@@ -330,42 +305,37 @@ async def _run_with_observation(
     *,
     observation_kwargs: dict[str, Any],
     output_builder: Callable[[Any], Any] = _safe_output,
-    otel_context: Any = None,
 ) -> Any:
     """Run an async callable inside a Langfuse observation without retrying it."""
     if _client is None:
         return await fn(*args, **kwargs)
 
-    token = _attach_context(otel_context)
+    try:
+        cm = _client.start_as_current_observation(**observation_kwargs)
+        observation = cm.__enter__()
+    except Exception:
+        logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
+        return await fn(*args, **kwargs)
+
+    exc_type: type[BaseException] | None = None
+    exc: BaseException | None = None
+    tb: TracebackType | None = None
     try:
         try:
-            cm = _client.start_as_current_observation(**observation_kwargs)
-            observation = cm.__enter__()
-        except Exception:
-            logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
-            return await fn(*args, **kwargs)
-
-        exc_type: type[BaseException] | None = None
-        exc: BaseException | None = None
-        tb: TracebackType | None = None
-        try:
-            try:
-                result = await fn(*args, **kwargs)
-            except BaseException as caught:
-                exc_type = type(caught)
-                exc = caught
-                tb = caught.__traceback__
-                _safe_update(observation, level="ERROR", status_message=str(caught))
-                raise
-            _safe_update(
-                observation,
-                **_observation_update_kwargs(result, output_builder=output_builder),
-            )
-            return result
-        finally:
-            _exit_observation(cm, exc_type, exc, tb)
+            result = await fn(*args, **kwargs)
+        except BaseException as caught:
+            exc_type = type(caught)
+            exc = caught
+            tb = caught.__traceback__
+            _safe_update(observation, level="ERROR", status_message=str(caught))
+            raise
+        _safe_update(
+            observation,
+            **_observation_update_kwargs(result, output_builder=output_builder),
+        )
+        return result
     finally:
-        _detach_context(token)
+        _exit_observation(cm, exc_type, exc, tb)
 
 
 async def _stream_with_observation(
@@ -374,7 +344,6 @@ async def _stream_with_observation(
     kwargs: dict[str, Any],
     *,
     observation_kwargs: dict[str, Any],
-    otel_context: Any = None,
 ) -> AsyncIterator[str]:
     # Fresh per-call holder: the provider records streaming usage into it, so
     # there is no shared provider state (safe under concurrency).
@@ -386,69 +355,41 @@ async def _stream_with_observation(
             yield chunk
         return
 
-    token = _attach_context(otel_context)
+    try:
+        cm = _client.start_as_current_observation(**observation_kwargs)
+        observation = cm.__enter__()
+    except Exception:
+        logger.debug("Langfuse streaming observation start failed (non-fatal)", exc_info=True)
+        stream = await fn(messages, **call_kwargs)
+        async for chunk in stream:
+            yield chunk
+        return
+
+    chunks: list[str] = []
+    exc_type: type[BaseException] | None = None
+    exc: BaseException | None = None
+    tb: TracebackType | None = None
     try:
         try:
-            cm = _client.start_as_current_observation(**observation_kwargs)
-            observation = cm.__enter__()
-        except Exception:
-            logger.debug("Langfuse streaming observation start failed (non-fatal)", exc_info=True)
             stream = await fn(messages, **call_kwargs)
             async for chunk in stream:
+                chunks.append(chunk)
                 yield chunk
-            return
-
-        chunks: list[str] = []
-        exc_type: type[BaseException] | None = None
-        exc: BaseException | None = None
-        tb: TracebackType | None = None
-        try:
-            try:
-                stream = await fn(messages, **call_kwargs)
-                async for chunk in stream:
-                    chunks.append(chunk)
-                    yield chunk
-            except BaseException as caught:
-                exc_type = type(caught)
-                exc = caught
-                tb = caught.__traceback__
-                _safe_update(observation, level="ERROR", status_message=str(caught))
-                raise
-            _safe_update(observation, output=_truncate_text("".join(chunks)))
-            _attach_stream_usage(observation, usage_holder)
-        finally:
-            _exit_observation(cm, exc_type, exc, tb)
+        except BaseException as caught:
+            exc_type = type(caught)
+            exc = caught
+            tb = caught.__traceback__
+            _safe_update(observation, level="ERROR", status_message=str(caught))
+            raise
+        _safe_update(observation, output=_truncate_text("".join(chunks)))
+        _attach_stream_usage(observation, usage_holder)
     finally:
-        _detach_context(token)
+        _exit_observation(cm, exc_type, exc, tb)
 
 
 # ---------------------------------------------------------------------------
 # Factory wrappers — called once at build time, not per request
 # ---------------------------------------------------------------------------
-
-
-def bind_trace_context(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Restore the caller's tracing context when *fn* later runs detached.
-
-    DlightRAG runs its LLM and embedding calls in LightRAG's persistent
-    worker-pool queues, whose workers do not inherit the request's async
-    context. Without this, an observation created in a worker (or in the SSE
-    task that consumes a streamed answer) would detach into its own Langfuse
-    trace. This snapshots the active OpenTelemetry context at call time and
-    carries it to the observation, which re-attaches it so the work nests under
-    the request trace as a true child. No-op when tracing (or its OpenTelemetry
-    dependency) is unavailable, so callers work unchanged when Langfuse is
-    absent.
-    """
-    if _client is None or _otel_context_api is None:
-        return fn
-    otel_api = _otel_context_api  # local narrows Optional[module] for the closure
-
-    async def _bound(*args: Any, **kwargs: Any) -> Any:
-        kwargs.setdefault(_CONTEXT_CARRIER_KEY, otel_api.get_current())
-        return await fn(*args, **kwargs)
-
-    return _bound
 
 
 def wrap_chat_func(
@@ -465,7 +406,6 @@ def wrap_chat_func(
     client = _client
 
     async def _traced(messages: Any, **kwargs: Any) -> Any:
-        otel_context = kwargs.pop(_CONTEXT_CARRIER_KEY, None)
         metadata = {k: v for k, v in kwargs.items() if k not in {"messages", "stream"}}
         observation_kwargs: dict[str, Any] = {
             "as_type": "generation",
@@ -490,7 +430,6 @@ def wrap_chat_func(
                 messages,
                 kwargs,
                 observation_kwargs=observation_kwargs,
-                otel_context=otel_context,
             )
 
         return await _run_with_observation(
@@ -498,7 +437,6 @@ def wrap_chat_func(
             (messages,),
             kwargs,
             observation_kwargs=observation_kwargs,
-            otel_context=otel_context,
         )
 
     return _traced
@@ -513,7 +451,6 @@ def wrap_embedding_func(
     client = _client
 
     async def _traced(inputs: Any, **kwargs: Any) -> Any:
-        otel_context = kwargs.pop(_CONTEXT_CARRIER_KEY, None)
         metadata = {**kwargs}
         if isinstance(inputs, list):
             metadata["input_count"] = len(inputs)
@@ -531,7 +468,6 @@ def wrap_embedding_func(
             kwargs,
             observation_kwargs=observation_kwargs,
             output_builder=_embedding_output_summary,
-            otel_context=otel_context,
         )
 
     return _traced
