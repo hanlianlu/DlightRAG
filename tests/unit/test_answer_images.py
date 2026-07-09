@@ -11,6 +11,7 @@ from dlightrag.utils.images import (
     bounded_embedding_image_data_uri,
     bounded_image_data_uri,
     decode_image_base64,
+    flatten_image_to_rgb,
 )
 
 _PNG_B64 = (
@@ -179,6 +180,30 @@ def test_bounded_embedding_image_converts_non_rgb_modes() -> None:
     raw, _ = decode_image_base64(uri)
     with Image.open(io.BytesIO(raw)) as decoded:
         assert decoded.size == (128, 128)
+
+
+def test_flatten_image_composites_transparency_over_white() -> None:
+    # A fully transparent pixel: naive convert("RGB") keeps its stored RGB (here
+    # black); compositing over white must yield white instead.
+    flat = flatten_image_to_rgb(Image.new("RGBA", (8, 8), (0, 0, 0, 0)))
+
+    assert flat.mode == "RGB"
+    assert flat.getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_bounded_embedding_image_flattens_transparency_over_white() -> None:
+    uri = bounded_embedding_image_data_uri(Image.new("RGBA", (64, 64), (0, 0, 0, 0)))
+
+    raw, _ = decode_image_base64(uri)
+    with Image.open(io.BytesIO(raw)) as decoded:
+        assert decoded.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+
+
+def test_decode_ceiling_supports_large_scans() -> None:
+    from PIL import Image as PILImage
+
+    assert PILImage.MAX_IMAGE_PIXELS is not None
+    assert PILImage.MAX_IMAGE_PIXELS >= 250_000_000
 
 
 def _jpeg_bytes(size: tuple[int, int], *, quality: int) -> bytes:
