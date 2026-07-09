@@ -36,7 +36,6 @@ class BootstrapResult(NamedTuple):
     langfuse_env: Path
     dlightrag_env: Path
     public_key: str
-    host: str
 
 
 def _clean_value(raw: str) -> str:
@@ -89,11 +88,15 @@ def bootstrap(
     *,
     langfuse_env: Path,
     dlightrag_env: Path,
-    host: str,
     public_key: str | None = None,
     secret_key: str | None = None,
 ) -> BootstrapResult:
-    """Sync local Langfuse headless init keys into DlightRAG's .env."""
+    """Sync local Langfuse headless init keys into DlightRAG's .env.
+
+    Only the secret key pair is written to DlightRAG's ``.env``. Non-secret SDK
+    behavior (``langfuse_host``, ``langfuse_export_external_spans``, ...) belongs
+    in ``config.yaml`` and is intentionally not managed here.
+    """
     langfuse = read_env(langfuse_env)
     dlightrag = read_env(dlightrag_env)
 
@@ -128,8 +131,6 @@ def bootstrap(
 
     _set_value(dlightrag, "DLIGHTRAG_LANGFUSE_PUBLIC_KEY", resolved_public, overwrite=True)
     _set_value(dlightrag, "DLIGHTRAG_LANGFUSE_SECRET_KEY", resolved_secret, overwrite=True)
-    _set_value(dlightrag, "DLIGHTRAG_LANGFUSE_HOST", host, overwrite=True)
-    _set_value(dlightrag, "DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS", "false", overwrite=False)
 
     write_env(langfuse)
     write_env(dlightrag)
@@ -138,7 +139,6 @@ def bootstrap(
         langfuse_env=langfuse_env,
         dlightrag_env=dlightrag_env,
         public_key=resolved_public,
-        host=host,
     )
 
 
@@ -149,7 +149,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--langfuse-env", type=Path, required=True)
     parser.add_argument("--dlightrag-env", type=Path, default=Path(".env"))
-    parser.add_argument("--host", default="http://localhost:3300")
     parser.add_argument("--public-key", default=None)
     parser.add_argument("--secret-key", default=None)
     return parser
@@ -160,14 +159,10 @@ def main(argv: list[str] | None = None) -> int:
     result = bootstrap(
         langfuse_env=args.langfuse_env,
         dlightrag_env=args.dlightrag_env,
-        host=args.host,
         public_key=args.public_key,
         secret_key=args.secret_key,
     )
-    print(
-        "Langfuse headless project keys synced "
-        f"(public key: {result.public_key}, host: {result.host})"
-    )
+    print(f"Langfuse headless project keys synced (public key: {result.public_key})")
     print(f"  Langfuse env: {result.langfuse_env}")
     print(f"  DlightRAG env: {result.dlightrag_env}")
     return 0

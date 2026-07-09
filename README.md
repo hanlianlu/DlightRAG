@@ -293,8 +293,10 @@ mode, then adds metadata filtering, BM25, optional direct image retrieval, RRF
 fusion, reranking, answer packing, citations, and optional semantic highlights.
 The detailed mechanism is in [docs/retrieval-answer.md](docs/retrieval-answer.md).
 
-**Observability.** Langfuse tracing is optional and configured in
-[docs/configuration.md](docs/configuration.md).
+**Observability.** Langfuse tracing is optional. Non-secret SDK behavior is set
+in [docs/configuration.md](docs/configuration.md). To run the bundled local
+Langfuse stack (`make langfuse-up`) and view traces, see
+[docs/operations.md](docs/operations.md#local-langfuse-observability).
 
 ## Security Model
 

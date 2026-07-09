@@ -23,7 +23,6 @@ def test_bootstrap_creates_matching_headless_and_dlightrag_env(tmp_path: Path) -
     result = bootstrap(
         langfuse_env=langfuse_env,
         dlightrag_env=dlightrag_env,
-        host="http://localhost:3300",
         public_key="pk-test",
         secret_key="sk-test",
     )
@@ -43,8 +42,9 @@ def test_bootstrap_creates_matching_headless_and_dlightrag_env(tmp_path: Path) -
     dlightrag_values = read_env(dlightrag_env).values
     assert dlightrag_values["DLIGHTRAG_LANGFUSE_PUBLIC_KEY"] == "pk-test"
     assert dlightrag_values["DLIGHTRAG_LANGFUSE_SECRET_KEY"] == "sk-test"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_HOST"] == "http://localhost:3300"
-    assert dlightrag_values["DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS"] == "false"
+    # Non-secret SDK behavior stays in config.yaml, not .env.
+    assert "DLIGHTRAG_LANGFUSE_HOST" not in dlightrag_values
+    assert "DLIGHTRAG_LANGFUSE_EXPORT_EXTERNAL_SPANS" not in dlightrag_values
 
 
 def test_bootstrap_reuses_existing_langfuse_init_project_keys(tmp_path: Path) -> None:
@@ -60,7 +60,6 @@ def test_bootstrap_reuses_existing_langfuse_init_project_keys(tmp_path: Path) ->
     bootstrap(
         langfuse_env=langfuse_env,
         dlightrag_env=dlightrag_env,
-        host="http://localhost:3300",
     )
 
     langfuse_values = read_env(langfuse_env).values
@@ -82,7 +81,6 @@ def test_bootstrap_accepts_headless_keys_from_environment(
     bootstrap(
         langfuse_env=langfuse_env,
         dlightrag_env=dlightrag_env,
-        host="http://localhost:3300",
     )
 
     langfuse_values = read_env(langfuse_env).values
@@ -111,7 +109,6 @@ def test_bootstrap_preserves_user_choices(tmp_path: Path) -> None:
     bootstrap(
         langfuse_env=langfuse_env,
         dlightrag_env=dlightrag_env,
-        host="http://localhost:3300",
     )
 
     langfuse_values = read_env(langfuse_env).values
