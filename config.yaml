@@ -35,6 +35,9 @@ llm:
     structured_output: json_object
     temperature: 0.5
     timeout: 120.0
+    model_kwargs:
+      usage:
+        include: true
   roles:
     extract:
       provider: openai
