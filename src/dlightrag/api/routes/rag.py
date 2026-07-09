@@ -55,6 +55,7 @@ from dlightrag.core.ingestion.uploads import (
     write_upload_stream,
 )
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+from dlightrag.observability import trace_observation
 
 from .deps import (
     enforce_access,
@@ -172,76 +173,84 @@ async def answer(
         )
         return answer_payload(result)
 
-    contexts, token_iter = await manager.aanswer_stream(
-        body.query,
-        conversation_history=dump_optional_list(body.conversation_history),
-        workspaces=body.workspaces,
-        top_k=body.top_k,
-        chunk_top_k=body.chunk_top_k,
-        answer_context_top_k=body.answer_context_top_k,
-        scope=scope,
-        **kwargs,
-    )
-
     async def event_generator() -> AsyncIterator[str]:
-        public_contexts = project_contexts_for_client(contexts)
-        yield sse_data_event(AnswerContextStreamEvent(data=public_contexts))
-        answer_parts: list[str] = []
-        try:
-            async for chunk in iter_answer_tokens(
-                token_iter, idle_timeout=manager.config.answer_stream_idle_timeout
-            ):
-                answer_parts.append(chunk)
-                yield sse_data_event(AnswerTokenStreamEvent(content=chunk))
-
-            full_answer = "".join(answer_parts)
-            clean_answer = getattr(token_iter, "answer", None) or full_answer
-            _resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
-            finalized = finalize_answer(
-                clean_answer,
-                contexts,
-                source_contexts=public_contexts,
-                source_url_resolver=_resolver,
-            )
-            if body.semantic_highlights:
-                finalized.sources = await enrich_semantic_highlights(
-                    finalized.sources,
-                    answer_text=finalized.answer,
-                    config=manager.config,
-                    parent_context=getattr(token_iter, "otel_context", None),
+        token_iter: AsyncIterator[str] | None = None
+        async with trace_observation(
+            "answer_stream_pipeline",
+            as_type="chain",
+            input={"query": body.query},
+            metadata={
+                "workspaces": body.workspaces,
+                "history_turns": len(body.conversation_history or []),
+            },
+        ):
+            try:
+                contexts, token_iter = await manager.aanswer_stream(
+                    body.query,
+                    conversation_history=dump_optional_list(body.conversation_history),
+                    workspaces=body.workspaces,
+                    top_k=body.top_k,
+                    chunk_top_k=body.chunk_top_k,
+                    answer_context_top_k=body.answer_context_top_k,
+                    scope=scope,
+                    **kwargs,
                 )
+                public_contexts = project_contexts_for_client(contexts)
+                yield sse_data_event(AnswerContextStreamEvent(data=public_contexts))
+                answer_parts: list[str] = []
+                async for chunk in iter_answer_tokens(
+                    token_iter, idle_timeout=manager.config.answer_stream_idle_timeout
+                ):
+                    answer_parts.append(chunk)
+                    yield sse_data_event(AnswerTokenStreamEvent(content=chunk))
 
-            yield sse_data_event(AnswerSourcesStreamEvent(data=finalized.sources))
-            trace = getattr(token_iter, "trace", None)
-            if isinstance(trace, dict) and trace:
-                yield sse_data_event(AnswerTraceStreamEvent(data=trace))
-            image_ids = getattr(token_iter, "current_image_ids", None)
-            image_descriptions = getattr(token_iter, "image_descriptions", None)
-            if image_ids or image_descriptions:
+                full_answer = "".join(answer_parts)
+                clean_answer = getattr(token_iter, "answer", None) or full_answer
+                _resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
+                finalized = finalize_answer(
+                    clean_answer,
+                    contexts,
+                    source_contexts=public_contexts,
+                    source_url_resolver=_resolver,
+                )
+                if body.semantic_highlights:
+                    finalized.sources = await enrich_semantic_highlights(
+                        finalized.sources,
+                        answer_text=finalized.answer,
+                        config=manager.config,
+                    )
+
+                yield sse_data_event(AnswerSourcesStreamEvent(data=finalized.sources))
+                trace = getattr(token_iter, "trace", None)
+                if isinstance(trace, dict) and trace:
+                    yield sse_data_event(AnswerTraceStreamEvent(data=trace))
+                image_ids = getattr(token_iter, "current_image_ids", None)
+                image_descriptions = getattr(token_iter, "image_descriptions", None)
+                if image_ids or image_descriptions:
+                    yield sse_data_event(
+                        AnswerImageMetaStreamEvent(
+                            current_image_ids=image_ids or [],
+                            image_descriptions=image_descriptions or [],
+                        )
+                    )
+                answer_images = answer_images_from_sources(finalized.sources, contexts=contexts)
                 yield sse_data_event(
-                    AnswerImageMetaStreamEvent(
-                        current_image_ids=image_ids or [],
-                        image_descriptions=image_descriptions or [],
+                    AnswerDoneStreamEvent(
+                        answer=finalized.answer,
+                        answer_images=answer_images,
+                        answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
                     )
                 )
-            answer_images = answer_images_from_sources(finalized.sources, contexts=contexts)
-            yield sse_data_event(
-                AnswerDoneStreamEvent(
-                    answer=finalized.answer,
-                    answer_images=answer_images,
-                    answer_blocks=answer_blocks_from_markdown(finalized.answer, answer_images),
+            except asyncio.CancelledError:
+                logger.debug("Client disconnected during SSE streaming")
+                raise
+            except Exception:
+                logger.exception("Error during SSE streaming")
+                yield sse_data_event(
+                    AnswerErrorStreamEvent(message="Internal server error during streaming")
                 )
-            )
-        except asyncio.CancelledError:
-            logger.debug("Client disconnected during SSE streaming")
-            raise
-        except Exception:
-            logger.exception("Error during SSE streaming")
-            yield sse_data_event(
-                AnswerErrorStreamEvent(message="Internal server error during streaming")
-            )
-        finally:
-            await aclose_answer_stream(token_iter)
+            finally:
+                await aclose_answer_stream(token_iter)
 
     return StreamingResponse(
         event_generator(),

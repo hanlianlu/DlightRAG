@@ -1406,66 +1406,38 @@ class RAGServiceManager:
             supports_vision=self._supports_vision,
         )
 
-        from dlightrag.observability import capture_context, trace_observation
-
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                async with trace_observation(
-                    "answer_stream_pipeline",
-                    as_type="chain",
-                    input={"query": query},
-                    metadata={
-                        "workspaces": ws_list,
-                        "history_turns": len(conversation_history or []),
-                        "query_image_count": len(query_images or []),
-                    },
-                ) as pipeline_trace:
-                    plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
-                        query,
-                        conversation_history=conversation_history,
-                        query_images=query_images,
-                        ws_list=ws_list,
-                        scope=scoped,
-                        kwargs=kwargs,
-                        log_plan=True,
-                    )
-                    async with trace_observation(
-                        "answer_stream_setup",
-                        as_type="chain",
-                        input={"query": plan.standalone_query},
-                        metadata={
-                            "context_chunks": len(retrieval.contexts.get("chunks", [])),
-                            "context_top_k": limits.context_top_k,
-                        },
-                    ) as setup_trace:
-                        contexts, stream = await self.agenerate_stream_from_contexts(
-                            plan.standalone_query,
-                            retrieval.contexts,
-                            query_images=prepared.answer_images or None,
-                            conversation_history=conversation_history,
-                            context_top_k=limits.context_top_k,
-                        )
-                        stream_output = {
-                            **_context_output(contexts),
-                            "streaming": stream is not None,
+                plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
+                    query,
+                    conversation_history=conversation_history,
+                    query_images=query_images,
+                    ws_list=ws_list,
+                    scope=scoped,
+                    kwargs=kwargs,
+                    log_plan=True,
+                )
+                contexts, stream = await self.agenerate_stream_from_contexts(
+                    plan.standalone_query,
+                    retrieval.contexts,
+                    query_images=prepared.answer_images or None,
+                    conversation_history=conversation_history,
+                    context_top_k=limits.context_top_k,
+                )
+                if stream is not None:
+                    stream_meta = cast(Any, stream)
+                    stream_meta.current_image_ids = prepared.current_image_ids
+                    stream_meta.image_descriptions = prepared.descriptions
+                    answer_trace = getattr(stream_meta, "trace", None)
+                    stream_meta.trace = (
+                        {
+                            **retrieval.trace,
+                            **answer_trace,
                         }
-                        setup_trace.update(output=stream_output)
-                        pipeline_trace.update(output=stream_output)
-                    if stream is not None:
-                        stream_meta = cast(Any, stream)
-                        stream_meta.current_image_ids = prepared.current_image_ids
-                        stream_meta.image_descriptions = prepared.descriptions
-                        stream_meta.otel_context = capture_context()
-                        answer_trace = getattr(stream_meta, "trace", None)
-                        stream_meta.trace = (
-                            {
-                                **retrieval.trace,
-                                **answer_trace,
-                            }
-                            if isinstance(answer_trace, dict)
-                            else retrieval.trace
-                        )
-                    return contexts, stream
+                        if isinstance(answer_trace, dict)
+                        else retrieval.trace
+                    )
+                return contexts, stream
         except TimeoutError as e:
             raise RAGServiceUnavailableError(
                 detail=f"Request timed out after {self._config.request_timeout}s"

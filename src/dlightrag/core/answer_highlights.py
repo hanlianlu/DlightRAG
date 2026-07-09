@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dlightrag.citations.highlight import extract_highlights_for_sources
 from dlightrag.citations.schemas import SourceReference
@@ -19,7 +19,6 @@ async def enrich_semantic_highlights(
     *,
     answer_text: str | None,
     config: DlightragConfig,
-    parent_context: Any = None,
 ) -> list[SourceReference]:
     """Return sources with optional semantic highlight phrases."""
     highlight_cfg = config.citations.highlights
@@ -36,7 +35,6 @@ async def enrich_semantic_highlights(
             "semantic_highlights",
             as_type="chain",
             metadata={"source_count": len(sources), "text_chunk_count": text_chunk_count},
-            parent_context=parent_context,
         ) as trace:
             highlighted = await asyncio.wait_for(
                 extract_highlights_for_sources(

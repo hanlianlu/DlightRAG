@@ -566,15 +566,8 @@ async def trace_observation(
     as_type: str = "span",
     input: Any | None = None,
     metadata: Any | None = None,
-    parent_context: Any = None,
 ) -> AsyncIterator[_ObservationHandle]:
-    """Mark a DlightRAG operation as a Langfuse v4 observation.
-
-    ``parent_context`` optionally re-attaches a context captured via
-    :func:`capture_context` so the observation nests under a request trace even
-    when it runs in a detached task (e.g. streamed-answer post-processing after
-    the pipeline span has already closed).
-    """
+    """Mark a DlightRAG operation as a Langfuse v4 observation."""
     if _client is None:
         yield _ObservationHandle(None)
         return
@@ -583,29 +576,25 @@ async def trace_observation(
         observation_kwargs["input"] = input
     if metadata is not None:
         observation_kwargs["metadata"] = metadata
-    token = _attach_context(parent_context)
+    try:
+        cm = _client.start_as_current_observation(**observation_kwargs)
+        observation = cm.__enter__()
+    except Exception:
+        logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
+        yield _ObservationHandle(None)
+        return
+
+    exc_type: type[BaseException] | None = None
+    exc: BaseException | None = None
+    tb: TracebackType | None = None
     try:
         try:
-            cm = _client.start_as_current_observation(**observation_kwargs)
-            observation = cm.__enter__()
-        except Exception:
-            logger.debug("Langfuse observation start failed (non-fatal)", exc_info=True)
-            yield _ObservationHandle(None)
-            return
-
-        exc_type: type[BaseException] | None = None
-        exc: BaseException | None = None
-        tb: TracebackType | None = None
-        try:
-            try:
-                yield _ObservationHandle(observation)
-            except BaseException as caught:
-                exc_type = type(caught)
-                exc = caught
-                tb = caught.__traceback__
-                _safe_update(observation, level="ERROR", status_message=str(caught))
-                raise
-        finally:
-            _exit_observation(cm, exc_type, exc, tb)
+            yield _ObservationHandle(observation)
+        except BaseException as caught:
+            exc_type = type(caught)
+            exc = caught
+            tb = caught.__traceback__
+            _safe_update(observation, level="ERROR", status_message=str(caught))
+            raise
     finally:
-        _detach_context(token)
+        _exit_observation(cm, exc_type, exc, tb)

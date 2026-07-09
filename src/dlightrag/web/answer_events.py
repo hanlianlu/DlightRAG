@@ -13,6 +13,7 @@ from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
+from dlightrag.observability import trace_observation
 from dlightrag.utils import log_safe
 from dlightrag.web.events import (
     AnswerDoneEvent,
@@ -204,7 +205,44 @@ async def stream_answer_events(
     session_id: str,
     scope: RequestScope | None = None,
 ) -> AsyncIterator[str]:
-    """Yield browser SSE events for one answer request."""
+    """Yield browser SSE events for one answer request, under a request-root span."""
+    ws_list = workspaces or [workspace or manager.config.workspace]
+    async with trace_observation(
+        "answer_stream_pipeline",
+        as_type="chain",
+        input={"query": query},
+        metadata={
+            "workspaces": ws_list,
+            "history_turns": len(conversation_history) if conversation_history else 0,
+        },
+    ):
+        async for event in _emit_answer_events(
+            manager=manager,
+            cfg=cfg,
+            query=query,
+            conversation_history=conversation_history,
+            ws_list=ws_list,
+            workspace=workspace,
+            query_images=query_images,
+            session_id=session_id,
+            scope=scope,
+        ):
+            yield event
+
+
+async def _emit_answer_events(
+    *,
+    manager: Any,
+    cfg: Any,
+    query: str,
+    conversation_history: list[dict[str, Any]] | None,
+    ws_list: list[str],
+    workspace: str,
+    query_images: list[dict[str, Any]],
+    session_id: str,
+    scope: RequestScope | None = None,
+) -> AsyncIterator[str]:
+    """Emit the SSE event sequence for one answer request."""
     full_answer = ""
     token_iter: AsyncIterator[str] | str | None = None
     try:
@@ -216,7 +254,6 @@ async def stream_answer_events(
 
         yield sse_event("progress", AnswerProgressEvent(phase="planning"))
 
-        ws_list = workspaces or [workspace or manager.config.workspace]
         contexts, token_iter = await manager.aanswer_stream(
             query,
             conversation_history=conversation_history,
@@ -292,7 +329,6 @@ async def stream_answer_events(
             payload.sources,
             answer_text=payload.done.answer,
             config=cfg,
-            parent_context=getattr(token_iter, "otel_context", None),
         )
         has_highlights = any(
             chunk.highlight_phrases
