@@ -84,6 +84,7 @@ def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) 
     )
 
     async def completion_wrapper(messages: list[dict[str, Any]], **kw: Any) -> Any:
+        usage_holder = kw.pop("usage_holder", None)
         stream = kw.pop("stream", False)
         response_format = kw.pop("response_format", None)
         max_tokens = kw.pop("max_tokens", None)
@@ -103,6 +104,7 @@ def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) 
                 max_tokens=max_tokens,
                 response_format=response_format,
                 model_kwargs=model_kwargs,
+                usage_holder=usage_holder,
             )
         try:
             return await provider.complete(
@@ -142,7 +144,6 @@ def _make_completion_func(cfg: ModelConfig, default_api_key: str | None = None) 
         name=f"llm_{cfg.model}",
         model=cfg.model,
         model_parameters={"temperature": cfg.temperature} if cfg.temperature is not None else None,
-        usage_getter=lambda: (provider.last_usage_details, provider.last_cost_details),
     )
 
     return partial(traced_func)
