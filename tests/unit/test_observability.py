@@ -98,10 +98,35 @@ async def test_chat_wrapper_updates_generation_usage_and_cost_details() -> None:
     assert client.observations[0].updates == [
         {
             "output": "answer",
-            "usage_details": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+            "usage_details": {"input": 3, "output": 2, "total": 5},
             "cost_details": {"total": 0.001},
         }
     ]
+
+
+def test_langfuse_usage_details_normalizes_overlapping_provider_keys() -> None:
+    # DeepSeek-style usage mixes components, an aggregate, and cache counters;
+    # Langfuse sums every value into total, so forwarding raw triple-counts.
+    raw = {
+        "prompt_tokens": 3911,
+        "completion_tokens": 254,
+        "total_tokens": 4165,
+        "prompt_cache_hit_tokens": 0,
+        "prompt_cache_miss_tokens": 3911,
+    }
+    assert observability._langfuse_usage_details(raw) == {
+        "input": 3911,
+        "output": 254,
+        "total": 4165,
+    }
+
+
+def test_langfuse_usage_details_derives_total_when_absent() -> None:
+    assert observability._langfuse_usage_details({"input_tokens": 10, "output_tokens": 4}) == {
+        "input": 10,
+        "output": 4,
+        "total": 14,
+    }
 
 
 async def test_chat_wrapper_does_not_retry_model_call_on_error() -> None:

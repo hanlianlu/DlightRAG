@@ -197,6 +197,41 @@ class _ObservationHandle:
             _safe_update(self._observation, **kwargs)
 
 
+# Provider usage key synonyms → Langfuse canonical usage types. Langfuse sums
+# every usageDetails value into `total` unless `total` is provided, so forwarding
+# raw provider usage (which mixes component counters, an aggregate, and cache
+# breakdowns) triple-counts tokens. Normalize to input/output/total.
+_USAGE_INPUT_KEYS = ("prompt_tokens", "input_tokens", "prompt_token_count")
+_USAGE_OUTPUT_KEYS = ("completion_tokens", "output_tokens", "candidates_token_count")
+_USAGE_TOTAL_KEYS = ("total_tokens", "total_token_count")
+
+
+def _langfuse_usage_details(raw: dict[str, int]) -> dict[str, int]:
+    """Map provider token usage to Langfuse canonical input/output/total."""
+
+    def _first(keys: tuple[str, ...]) -> int | None:
+        for key in keys:
+            value = raw.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                return value
+        return None
+
+    inp = _first(_USAGE_INPUT_KEYS)
+    out = _first(_USAGE_OUTPUT_KEYS)
+    total = _first(_USAGE_TOTAL_KEYS)
+    if total is None and (inp is not None or out is not None):
+        total = (inp or 0) + (out or 0)
+
+    details: dict[str, int] = {}
+    if inp is not None:
+        details["input"] = inp
+    if out is not None:
+        details["output"] = out
+    if total is not None:
+        details["total"] = total
+    return details or raw
+
+
 def _observation_update_kwargs(
     result: Any,
     *,
@@ -205,7 +240,7 @@ def _observation_update_kwargs(
     update: dict[str, Any] = {"output": output_builder(result)}
     usage_details = getattr(result, "usage_details", None)
     if usage_details:
-        update["usage_details"] = usage_details
+        update["usage_details"] = _langfuse_usage_details(usage_details)
     cost_details = getattr(result, "cost_details", None)
     if cost_details:
         update["cost_details"] = cost_details
