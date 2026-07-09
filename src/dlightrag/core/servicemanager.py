@@ -282,6 +282,7 @@ class RAGServiceManager:
         self._supports_vision: bool | None = None
         self._rerank_supports_vision: bool | None = None
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
+        self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
     @property
     def config(self) -> DlightragConfig:
@@ -852,13 +853,28 @@ class RAGServiceManager:
             )
         return self._answer_engine
 
+    def _sem_bound(self, func: Callable[..., Any]) -> Callable[..., Any]:
+        """Cap a DlightRAG-owned LLM callable by the direct-LLM concurrency semaphore.
+
+        Replaces the old per-func priority queue: planner/vlm now run inline (so
+        they nest under the request span), and this semaphore preserves the
+        ``max_async`` concurrency bound the queue used to provide.
+        """
+        sem = self._direct_llm_sem
+
+        async def _bounded(*args: Any, **kwargs: Any) -> Any:
+            async with sem:
+                return await func(*args, **kwargs)
+
+        return _bounded
+
     def _get_query_planner(self) -> QueryPlanner:
         """Lazy-create QueryPlanner with schema TTL refresh."""
         if self._query_planner is None:
             from dlightrag.models.llm import get_planner_model_func
 
             self._query_planner = QueryPlanner(
-                llm_func=get_planner_model_func(self._config),
+                llm_func=self._sem_bound(get_planner_model_func(self._config)),
                 schema_provider=self._get_schema,
                 schema_ttl=300.0,
             )
@@ -986,7 +1002,7 @@ class RAGServiceManager:
 
             cfg = self._config.query_images
             self._query_image_enhancer = QueryImageEnhancer(
-                vlm_func=get_vlm_model_func(self._config),
+                vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
                 max_images=cfg.max_described_images,
             )
         return self._query_image_enhancer
