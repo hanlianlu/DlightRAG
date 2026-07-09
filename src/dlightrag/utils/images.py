@@ -12,6 +12,15 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
+# Pillow's decompression-bomb guard defaults to ~89.5MP (warn) / ~179MP (raise).
+# DlightRAG ingests large document scans, so raise the decode ceiling: images up
+# to 250MP decode cleanly, 250-500MP still decode (with a warning), and only truly
+# absurd gigapixel bombs are rejected — and any over-limit image is caught and
+# skipped per-image at ingest rather than failing the whole document. A 250MP RGB
+# decode is ~750MB (RGBA ~1GB), comfortable on DlightRAG's 32GB+ target hosts.
+MAX_DECODE_IMAGE_PIXELS = 250_000_000
+Image.MAX_IMAGE_PIXELS = MAX_DECODE_IMAGE_PIXELS
+
 _PILLOW_TO_MIME: dict[str, str] = {
     "JPEG": "image/jpeg",
     "PNG": "image/png",
@@ -193,6 +202,24 @@ def _quality_steps(quality: int, min_quality: int) -> list[int]:
     return values
 
 
+def flatten_image_to_rgb(image: Image.Image) -> Image.Image:
+    """Flatten any image mode to RGB, compositing alpha over a white background.
+
+    Naive ``Image.convert("RGB")`` strips alpha *without* compositing, which turns
+    transparent regions black (or leftover garbage RGB). Document figures/logos are
+    authored to sit on white, so composite over white to preserve their intended
+    appearance before dropping the alpha channel — which the embedding model does
+    not use and which JPEG (the large-image encoding) cannot carry anyway.
+    """
+    if image.mode == "RGB":
+        return image
+    if image.mode in ("RGBA", "LA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        return Image.alpha_composite(background, rgba).convert("RGB")
+    return image.convert("RGB")
+
+
 def _fit_pixel_budget(image: Image.Image, *, max_px: int, max_pixels: int) -> Image.Image:
     """Downscale so the long edge <= ``max_px`` and total pixels <= ``max_pixels``."""
     width, height = image.size
@@ -247,7 +274,7 @@ def bounded_embedding_image_data_uri(
     min_quality = min(quality, max(1, int(min_quality)))
     min_px = max(1, min(max_px, int(min_px)))
 
-    working = image if image.mode in ("RGB", "L") else image.convert("RGB")
+    working = flatten_image_to_rgb(image)
     working = _fit_pixel_budget(working, max_px=max_px, max_pixels=max_pixels)
 
     lossless = _encode_image(working, "PNG")
@@ -328,6 +355,7 @@ __all__ = [
     "decode_image_base64",
     "detect_image_mime",
     "detect_image_mime_type",
+    "flatten_image_to_rgb",
     "image_bytes_to_data_uri",
     "image_data_uri",
     "image_url_block",

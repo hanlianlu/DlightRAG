@@ -573,8 +573,11 @@ async def _embed_image_path(embedder: Any, image_path: Path) -> list[float]:
 def _open_rgb_image(path: Path) -> Any:
     from PIL import Image
 
+    from dlightrag.utils.images import flatten_image_to_rgb
+
     with Image.open(path) as image:
-        return image.convert("RGB")
+        image.load()
+        return flatten_image_to_rgb(image)
 
 
 def _file_sha256(path: Path) -> str:
