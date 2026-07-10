@@ -35,6 +35,10 @@ from dlightrag.core.client_requests import (
     managed_local_ingest_path,
     query_kwargs_from_payload,
 )
+from dlightrag.core.query_workspaces import (
+    NoQueryableWorkspacesError,
+    resolve_query_workspaces,
+)
 from dlightrag.core.scope import RequestScope, current_request_scope, request_scope_context
 from dlightrag.core.servicemanager import RAGServiceManager
 from dlightrag.mcp.contracts import (
@@ -162,6 +166,34 @@ async def _filter_workspace_records(records: list[dict[str, Any]]) -> list[dict[
     return [row for row in records if str(row["workspace"]) in allowed]
 
 
+async def _resolve_authorized_query_workspaces(
+    manager: RAGServiceManager,
+    *,
+    workspaces: list[str] | None,
+    all_workspaces: bool,
+) -> list[str]:
+    """Resolve MCP query targets after applying the current request ACL."""
+    available: list[str] | None = None
+    if all_workspaces:
+        records = await manager.alist_workspace_records()
+        visible = await _filter_workspace_records(records)
+        available = [str(row["workspace"]) for row in visible]
+
+    try:
+        resolved = resolve_query_workspaces(
+            default_workspace=_get_config().workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            available_workspaces=available,
+        )
+    except NoQueryableWorkspacesError:
+        raise PermissionError("No workspaces are available for query") from None
+
+    if not all_workspaces:
+        await _enforce_workspaces_access(AccessAction.WORKSPACE_QUERY, resolved)
+    return resolved
+
+
 @mcp_app.tool(
     name="retrieve",
     description=(
@@ -183,6 +215,13 @@ async def retrieve_tool(
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),
     ] = None,
+    all_workspaces: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Search all workspaces visible to the current caller.",
+        ),
+    ] = False,
     filters: Annotated[
         dict[str, Any] | None,
         Field(default=None, description="Metadata filters for structured queries."),
@@ -196,11 +235,15 @@ async def retrieve_tool(
 ) -> dict[str, Any]:
     args = RetrieveInput.model_validate(locals())
     manager = await _ensure_manager()
-    await _enforce_workspaces_access(AccessAction.WORKSPACE_QUERY, args.workspaces)
-    scope = current_request_scope().for_workspaces(args.workspaces)
+    resolved_workspaces = await _resolve_authorized_query_workspaces(
+        manager,
+        workspaces=args.workspaces,
+        all_workspaces=args.all_workspaces,
+    )
+    scope = current_request_scope().for_workspaces(resolved_workspaces)
     result = await manager.aretrieve(
         args.query,
-        workspaces=args.workspaces,
+        workspaces=resolved_workspaces,
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,
         scope=scope,
@@ -234,6 +277,13 @@ async def answer_tool(
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),
     ] = None,
+    all_workspaces: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Search all workspaces visible to the current caller.",
+        ),
+    ] = False,
     filters: Annotated[
         dict[str, Any] | None,
         Field(default=None, description="Metadata filters for structured queries."),
@@ -255,12 +305,16 @@ async def answer_tool(
 ) -> dict[str, Any]:
     args = AnswerInput.model_validate(locals())
     manager = await _ensure_manager()
-    await _enforce_workspaces_access(AccessAction.WORKSPACE_QUERY, args.workspaces)
-    scope = current_request_scope().for_workspaces(args.workspaces)
+    resolved_workspaces = await _resolve_authorized_query_workspaces(
+        manager,
+        workspaces=args.workspaces,
+        all_workspaces=args.all_workspaces,
+    )
+    scope = current_request_scope().for_workspaces(resolved_workspaces)
     result = await manager.aanswer(
         args.query,
         conversation_history=dump_optional_list(args.conversation_history),
-        workspaces=args.workspaces,
+        workspaces=resolved_workspaces,
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,
         answer_context_top_k=args.answer_context_top_k,
