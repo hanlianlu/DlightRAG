@@ -147,7 +147,6 @@ class EmbeddingConfig(BaseModel):
     provider: Literal[
         "voyage",
         "dashscope_qwen",
-        "qwen_openai_compatible",
         "gemini",
         "jina",
         "openai_compatible",
@@ -158,6 +157,7 @@ class EmbeddingConfig(BaseModel):
     base_url: str | None = None
     dim: int = Field(default=1024, ge=1)
     max_token_size: int = Field(default=8192, ge=1)
+    input_modality: Literal["auto", "text", "multimodal"] = "auto"
     asymmetric: Literal["auto", "require", "disable"] = "auto"
     startup_probe: bool = True
     model_kwargs: dict[str, Any] = Field(default_factory=dict)

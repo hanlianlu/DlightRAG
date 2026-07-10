@@ -10,6 +10,7 @@ from dlightrag.models.embedding_inputs import (
     MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
+from dlightrag.models.providers import embed_providers
 from dlightrag.models.providers.embed_base import EmbedProvider
 from dlightrag.models.providers.embed_providers import (
     DashScopeQwenEmbedProvider,
@@ -17,9 +18,7 @@ from dlightrag.models.providers.embed_providers import (
     JinaEmbedProvider,
     OllamaEmbedProvider,
     OpenAICompatibleEmbedProvider,
-    QwenOpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
-    detect_embed_provider,
 )
 
 
@@ -141,8 +140,8 @@ def test_jina_payload_uses_url_for_remote_images() -> None:
     assert payload["input"] == [{"url": "https://example.com/image.png"}]
 
 
-def test_qwen_openai_compatible_payload_preserves_image_data_uri_without_task_hint() -> None:
-    provider = QwenOpenAICompatibleEmbedProvider()
+def test_openai_compatible_payload_preserves_image_data_uri_without_task_hint() -> None:
+    provider = OpenAICompatibleEmbedProvider()
     payload = provider.build_payload(
         "qwen3-vl-embedding-2b",
         [ImageEmbeddingInput(data_uri="data:image/png;base64,abc")],
@@ -157,44 +156,24 @@ def test_qwen_openai_compatible_payload_preserves_image_data_uri_without_task_hi
     assert "input_type" not in payload
 
 
-class TestDetectProvider:
-    def test_explicit_openai_compatible(self) -> None:
-        p = detect_embed_provider("any-model", provider="openai_compatible")
-        assert isinstance(p, OpenAICompatibleEmbedProvider)
-        assert p.supports_images is False
+@pytest.mark.parametrize(
+    ("provider_name", "provider_type"),
+    [
+        ("voyage", VoyageEmbedProvider),
+        ("dashscope_qwen", DashScopeQwenEmbedProvider),
+        ("gemini", GeminiEmbedProvider),
+        ("jina", JinaEmbedProvider),
+        ("openai_compatible", OpenAICompatibleEmbedProvider),
+        ("ollama", OllamaEmbedProvider),
+    ],
+)
+def test_get_embed_provider_uses_explicit_registry(
+    provider_name: str,
+    provider_type: type[EmbedProvider],
+) -> None:
+    assert isinstance(embed_providers.get_embed_provider(provider_name), provider_type)
 
-    def test_openai_alias_is_not_an_embedding_provider(self) -> None:
-        with pytest.raises(ValueError, match="Unknown embed provider"):
-            detect_embed_provider("any-model", provider="openai")
 
-    def test_explicit_voyage(self) -> None:
-        p = detect_embed_provider("any-model", provider="voyage")
-        assert isinstance(p, VoyageEmbedProvider)
-
-    def test_explicit_qwen_openai_compatible(self) -> None:
-        p = detect_embed_provider("any-model", provider="qwen_openai_compatible")
-        assert isinstance(p, QwenOpenAICompatibleEmbedProvider)
-        assert p.supports_images is True
-
-    def test_auto_detect_voyage_from_model(self) -> None:
-        p = detect_embed_provider("voyage-multimodal-3.5")
-        assert isinstance(p, VoyageEmbedProvider)
-
-    def test_auto_detect_jina_from_model(self) -> None:
-        p = detect_embed_provider("jina-embeddings-v4")
-        assert isinstance(p, JinaEmbedProvider)
-
-    def test_auto_detect_dashscope_qwen(self) -> None:
-        p = detect_embed_provider("qwen3-vl-embedding")
-        assert isinstance(p, DashScopeQwenEmbedProvider)
-
-    def test_auto_detect_qwen_openai_compatible_from_non_dashscope_base_url(self) -> None:
-        p = detect_embed_provider(
-            "qwen3-vl-embedding-2b",
-            base_url="http://localhost:1234/v1",
-        )
-        assert isinstance(p, QwenOpenAICompatibleEmbedProvider)
-
-    def test_auto_detect_ollama_from_base_url(self) -> None:
-        p = detect_embed_provider("nomic-embed", base_url="http://localhost:11434")
-        assert isinstance(p, OllamaEmbedProvider)
+def test_get_embed_provider_rejects_unknown_provider() -> None:
+    with pytest.raises(ValueError, match="Unknown embedding provider 'openai'"):
+        embed_providers.get_embed_provider("openai")
