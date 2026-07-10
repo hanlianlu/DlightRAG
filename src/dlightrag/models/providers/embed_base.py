@@ -8,22 +8,15 @@ from dlightrag.models.embedding_inputs import EmbeddingInput
 
 EmbeddingContext = Literal["query", "document"]
 EmbedContext = EmbeddingContext
+ImageInputCapability = Literal["unsupported", "opt_in", "native"]
 
 
 class EmbedProvider(ABC):
-    """Strategy for provider-specific multimodal embedding API protocols.
-
-    Lifecycle: callers SHOULD ``await provider.aclose()`` when done to
-    release connection pools.  The default is a no-op; providers that
-    hold persistent clients override this.
-    """
+    """Strategy for provider-specific multimodal embedding API protocols."""
 
     endpoint: str = ""
-    supports_images: bool = False
-    supports_fused_inputs: bool = False
+    image_input_capability: ImageInputCapability = "unsupported"
     supports_asymmetric: bool = False
-    default_dim: int | None = None
-    known_dims: frozenset[int] | None = None
 
     @abstractmethod
     def build_payload(
@@ -45,15 +38,6 @@ class EmbedProvider(ABC):
         """Return provider-specific auth headers."""
         return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
-    @property
-    def max_images_per_request(self) -> int:
-        """Hard API limit on images per request."""
-        return 128
-
     def parse_response(self, data: dict) -> list[list[float]]:
         """Extract vectors from OpenAI-compatible JSON response."""
         return [item["embedding"] for item in data["data"]]
-
-    async def aclose(self) -> None:
-        """Release provider resources (clients, pools).  No-op by default."""
-        return

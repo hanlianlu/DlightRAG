@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 EmbeddingContext = Literal["query", "document"]
 AsymmetricMode = Literal["auto", "require", "disable"]
+EmbeddingInputModality = Literal["auto", "text", "multimodal"]
+ResolvedEmbeddingInputModality = Literal["text", "multimodal"]
 
 
 def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
@@ -34,6 +36,22 @@ def resolve_asymmetric(provider: EmbedProvider, mode: AsymmetricMode) -> bool:
     return False
 
 
+def resolve_embedding_input_modality(
+    provider: EmbedProvider,
+    mode: EmbeddingInputModality,
+) -> ResolvedEmbeddingInputModality:
+    """Resolve configured input policy against one transport serializer."""
+    if mode == "text":
+        return "text"
+    if mode == "auto":
+        return "multimodal" if provider.image_input_capability == "native" else "text"
+    if provider.image_input_capability == "unsupported":
+        raise ValueError(
+            f"{provider.__class__.__name__} cannot satisfy input_modality='multimodal'"
+        )
+    return "multimodal"
+
+
 class MultimodalEmbedder:
     """Embed text, and images when the provider supports a shared vector space."""
 
@@ -45,6 +63,7 @@ class MultimodalEmbedder:
         api_key: str,
         dim: int,
         provider: EmbedProvider,
+        input_modality: EmbeddingInputModality = "auto",
         asymmetric: AsymmetricMode = "auto",
         batch_size: int = 4,
         timeout: float = 120.0,
@@ -53,7 +72,8 @@ class MultimodalEmbedder:
         self.base_url = base_url.rstrip("/") if base_url else "https://api.openai.com/v1"
         self.dim = dim
         self.provider = provider
-        self.supports_images = provider.supports_images
+        self.input_modality = resolve_embedding_input_modality(provider, input_modality)
+        self.supports_images = self.input_modality == "multimodal"
         self.asymmetric = resolve_asymmetric(provider, asymmetric)
         self.supports_asymmetric = self.asymmetric
         self.batch_size = batch_size

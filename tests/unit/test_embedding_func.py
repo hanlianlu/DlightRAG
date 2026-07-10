@@ -8,7 +8,7 @@ import pytest
 
 from dlightrag.config import DlightragConfig, EmbeddingConfig
 from dlightrag.models.embedding import httpx_embed
-from dlightrag.models.llm import get_embedding_func
+from dlightrag.models.llm import get_embedding_func, get_multimodal_embedder
 from dlightrag.models.providers.embed_providers import OpenAICompatibleEmbedProvider
 
 
@@ -92,6 +92,25 @@ def test_embedding_func_enables_asymmetric_by_default_for_capable_provider() -> 
     embedding_func = get_embedding_func(cfg)
 
     assert embedding_func.supports_asymmetric is True
+
+
+async def test_multimodal_embedder_factory_applies_input_modality() -> None:
+    cfg = DlightragConfig(
+        embedding=EmbeddingConfig(
+            provider="voyage",
+            model="voyage-multimodal-3.5",
+            api_key="sk-test",
+            dim=1024,
+            input_modality="text",
+            startup_probe=False,
+        )
+    )
+
+    embedder = get_multimodal_embedder(cfg)
+    try:
+        assert embedder.supports_images is False
+    finally:
+        await embedder.aclose()
 
 
 def test_embedding_func_uses_lightrag_symmetric_fallback_for_unsupported_auto() -> None:

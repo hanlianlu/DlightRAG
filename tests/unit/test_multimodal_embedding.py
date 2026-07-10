@@ -7,13 +7,101 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from PIL import Image
 
-from dlightrag.models.multimodal_embedding import MultimodalEmbedder
+from dlightrag.models.multimodal_embedding import (
+    EmbeddingInputModality,
+    MultimodalEmbedder,
+    ResolvedEmbeddingInputModality,
+    resolve_embedding_input_modality,
+)
+from dlightrag.models.providers.embed_base import EmbedProvider
 from dlightrag.models.providers.embed_providers import (
     GeminiEmbedProvider,
     OllamaEmbedProvider,
+    OpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
 from dlightrag.utils.images import decode_image_base64
+
+
+@pytest.mark.parametrize(
+    ("provider", "configured", "resolved"),
+    [
+        (VoyageEmbedProvider(), "auto", "multimodal"),
+        (VoyageEmbedProvider(), "text", "text"),
+        (VoyageEmbedProvider(), "multimodal", "multimodal"),
+        (OpenAICompatibleEmbedProvider(), "auto", "text"),
+        (OpenAICompatibleEmbedProvider(), "text", "text"),
+        (OpenAICompatibleEmbedProvider(), "multimodal", "multimodal"),
+        (OllamaEmbedProvider(), "auto", "text"),
+        (OllamaEmbedProvider(), "text", "text"),
+    ],
+)
+def test_resolve_embedding_input_modality(
+    provider: EmbedProvider,
+    configured: EmbeddingInputModality,
+    resolved: ResolvedEmbeddingInputModality,
+) -> None:
+    assert resolve_embedding_input_modality(provider, configured) == resolved
+
+
+def test_ollama_rejects_required_multimodal_input() -> None:
+    with pytest.raises(
+        ValueError,
+        match="OllamaEmbedProvider cannot satisfy input_modality='multimodal'",
+    ):
+        resolve_embedding_input_modality(OllamaEmbedProvider(), "multimodal")
+
+
+async def test_native_multimodal_provider_can_be_forced_to_text() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=1024,
+        provider=VoyageEmbedProvider(),
+        input_modality="text",
+    )
+
+    try:
+        assert embedder.supports_images is False
+        with pytest.raises(ValueError, match="does not support image embeddings"):
+            embedder.build_image_payload_for_test(
+                Image.new("RGB", (1, 1), "white"), context="document"
+            )
+    finally:
+        await embedder.aclose()
+
+
+async def test_openai_compatible_auto_is_text_only() -> None:
+    embedder = MultimodalEmbedder(
+        model="qwen3-vl-embedding-2b",
+        base_url="http://127.0.0.1:1234/v1",
+        api_key="",
+        dim=2048,
+        provider=OpenAICompatibleEmbedProvider(),
+        input_modality="auto",
+    )
+
+    try:
+        assert embedder.supports_images is False
+    finally:
+        await embedder.aclose()
+
+
+async def test_openai_compatible_explicit_multimodal_enables_images() -> None:
+    embedder = MultimodalEmbedder(
+        model="qwen3-vl-embedding-2b",
+        base_url="http://127.0.0.1:1234/v1",
+        api_key="",
+        dim=2048,
+        provider=OpenAICompatibleEmbedProvider(),
+        input_modality="multimodal",
+    )
+
+    try:
+        assert embedder.supports_images is True
+    finally:
+        await embedder.aclose()
 
 
 def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
