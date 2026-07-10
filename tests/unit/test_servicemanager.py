@@ -56,7 +56,7 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
         RAGServiceManager.aretrieve,
         RAGServiceManager.aanswer,
         RAGServiceManager.aanswer_stream,
-        RAGServiceManager.delete_files,
+        RAGServiceManager.adelete_files,
     ):
         params = inspect.signature(method).parameters.values()
         assert all(param.kind is not inspect.Parameter.VAR_KEYWORD for param in params)
@@ -69,8 +69,8 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
     for name in (
         "path",
         "bucket",
-        "region",
-        "key",
+        "s3_region",
+        "s3_key",
         "prefix",
         "url",
         "urls",
@@ -98,7 +98,7 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
     ):
         assert name in answer_params
 
-    delete_params = inspect.signature(RAGServiceManager.delete_files).parameters
+    delete_params = inspect.signature(RAGServiceManager.adelete_files).parameters
     assert "dry_run" in delete_params
 
 
@@ -958,12 +958,12 @@ class TestDelegation:
             IngestSpec(
                 source_type="s3",
                 bucket="bucket",
-                key="docs/report.pdf",
-                region="eu-north-1",
+                s3_key="docs/report.pdf",
+                s3_region="eu-north-1",
             ),
         )
 
-        assert mock_svc.aingest.await_args.kwargs["region"] == "eu-north-1"
+        assert mock_svc.aingest.await_args.kwargs["s3_region"] == "eu-north-1"
 
     @patch("dlightrag.core.servicemanager.RAGService.create", new_callable=AsyncMock)
     async def test_aingest_source_delegates_directly_to_service(
@@ -998,7 +998,7 @@ class TestDelegation:
         mock_svc.alist_ingested_files.return_value = [{"doc": "d1"}]
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        result = await manager.list_ingested_files("ws_a")
+        result = await manager.alist_ingested_files("ws_a")
         assert result == [{"doc": "d1"}]
 
     async def test_file_panel_snapshot_does_not_initialize_cold_workspace(self, test_cfg) -> None:
@@ -1012,7 +1012,7 @@ class TestDelegation:
             side_effect=AssertionError("files panel snapshot must not initialize services")
         )
 
-        result = await manager.get_file_panel_snapshot("Ws-A")
+        result = await manager.aget_file_panel_snapshot("Ws-A")
 
         assert result == {
             "files": [{"doc_id": "d1", "file_path": "/tmp/report.pdf", "status": "processed"}],
@@ -1036,7 +1036,7 @@ class TestDelegation:
         manager._get_file_panel_store = MagicMock(return_value=store)  # type: ignore[method-assign]
         manager._services["ws_a"] = svc
 
-        result = await manager.get_file_panel_snapshot("Ws-A")
+        result = await manager.aget_file_panel_snapshot("Ws-A")
 
         assert result["pipeline_status"] == {
             "busy": True,
@@ -1051,7 +1051,7 @@ class TestDelegation:
         mock_svc.adelete_files.return_value = [{"status": "deleted"}]
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
-        result = await manager.delete_files("ws_a", filenames=["a.pdf"], dry_run=True)
+        result = await manager.adelete_files("ws_a", filenames=["a.pdf"], dry_run=True)
         assert result == [{"status": "deleted"}]
         mock_svc.adelete_files.assert_awaited_once_with(
             file_paths=None,
@@ -1101,7 +1101,7 @@ class TestIngestJobs:
         assert ingest_kwargs["bucket"] == "bucket"
         assert ingest_kwargs["prefix"] == "docs/"
         assert ingest_kwargs["_resume_from_window"] == 2
-        row = await manager.get_ingest_job("job-1")
+        row = await manager.aget_ingest_job("job-1")
         assert row is not None
         assert row["processed_items"] == 129
         assert row["result"]["processed"] == 129
@@ -1207,7 +1207,7 @@ class TestIngestJobs:
         task = manager._ingest_jobs._tasks[job["job_id"]]
 
         await asyncio.wait_for(task, timeout=1.0)
-        row = await manager.get_ingest_job(job["job_id"])
+        row = await manager.aget_ingest_job(job["job_id"])
 
         assert row is not None
         assert row["workspace"] == "project_a"
@@ -1239,7 +1239,7 @@ class TestIngestJobs:
             IngestSpec(source_type="local", path=str(staged_dir)),
         )
         await asyncio.wait_for(manager._ingest_jobs._tasks[job["job_id"]], timeout=1.0)
-        row = await manager.get_ingest_job(job["job_id"])
+        row = await manager.aget_ingest_job(job["job_id"])
 
         assert row is not None
         assert row["request"]["kwargs"] == {"path": str(staged_dir)}
@@ -1265,7 +1265,7 @@ class TestIngestJobs:
             IngestSpec(source_type="local", path=str(source_file)),
         )
         await asyncio.wait_for(manager._ingest_jobs._tasks[job["job_id"]], timeout=1.0)
-        row = await manager.get_ingest_job(job["job_id"])
+        row = await manager.aget_ingest_job(job["job_id"])
 
         assert row is not None
         assert "cleanup_paths" not in row["request"]
@@ -1338,7 +1338,7 @@ class TestIngestJobs:
 
         release.set()
         await asyncio.wait_for(task, timeout=1.0)
-        row = await manager.get_ingest_job(result["job_id"])
+        row = await manager.aget_ingest_job(result["job_id"])
         assert row is not None
         assert row["status"] == "succeeded"
         assert row["result"] == {"doc_id": "d1"}
@@ -1567,7 +1567,7 @@ class TestWorkspaceDiscovery:
             ]
         )
 
-        result = await manager.list_workspaces()
+        result = await manager.alist_workspaces()
 
         assert "project_a" in result
         assert "project_b" in result
@@ -1587,7 +1587,7 @@ class TestWorkspaceDiscovery:
             ]
         )
 
-        records = await manager.list_workspace_records()
+        records = await manager.alist_workspace_records()
 
         assert records == [
             {
@@ -1604,7 +1604,7 @@ class TestWorkspaceDiscovery:
         manager._workspace_registry = AsyncMock()
         manager._workspace_registry.list = AsyncMock(side_effect=RuntimeError("registry down"))
 
-        result = await manager.list_workspaces()
+        result = await manager.alist_workspaces()
 
         assert test_cfg.workspace in result
 

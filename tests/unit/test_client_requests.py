@@ -10,7 +10,7 @@ def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:
         {
             "source_type": "s3",
             "bucket": "my-bucket",
-            "region": "eu-north-1",
+            "s3_region": "eu-north-1",
             "metadata": {"source_system": "s3-prod"},
             "metadata_policy": "reject_unknown",
             "retain_source_file": True,
@@ -27,7 +27,7 @@ def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:
     assert spec == IngestSpec(
         source_type="s3",
         bucket="my-bucket",
-        region="eu-north-1",
+        s3_region="eu-north-1",
         metadata={"source_system": "s3-prod"},
         metadata_policy="reject_unknown",
         retain_source_file=True,

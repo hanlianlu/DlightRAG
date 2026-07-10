@@ -46,7 +46,7 @@ async def list_files(
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
-    files = await manager.list_ingested_files(ws)
+    files = await manager.alist_ingested_files(ws)
     return {"files": files, "count": len(files), "workspace": ws}
 
 
@@ -58,7 +58,7 @@ async def delete_files(
     manager = get_manager(request)
     ws = resolve_workspace(body.workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_DELETE_FILES, workspace=ws)
-    results = await manager.delete_files(
+    results = await manager.adelete_files(
         ws,
         file_paths=body.file_paths,
         filenames=body.filenames,
@@ -77,7 +77,7 @@ async def list_failed_files(
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_LIST_FILES, workspace=ws)
-    failed = await manager.list_failed_docs(ws)
+    failed = await manager.alist_failed_docs(ws)
     return {"failed": failed, "count": len(failed), "workspace": ws}
 
 
@@ -92,10 +92,10 @@ async def retry_failed_files(
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
-    return await manager.retry_failed_docs(ws)
+    return await manager.aretry_failed_docs(ws)
 
 
-@router.get("/api/files/{file_path:path}", response_model=None)
+@router.get("/files/raw/{file_path:path}", response_model=None)
 async def serve_file(
     file_path: str,
     request: Request,

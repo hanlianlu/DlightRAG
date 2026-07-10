@@ -111,7 +111,7 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             _die("local source requires a path. Usage: ingest <path> [--replace]")
         if args.container_name or args.blob_path or args.prefix:
             _die("--container, --blob-path, --prefix are only for azure_blob source")
-        if args.bucket or args.key:
+        if args.bucket or args.s3_key:
             _die("--bucket, --key are only for s3 source")
     elif source == "azure_blob":
         if args.path:
@@ -120,14 +120,14 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             _die("azure_blob requires --container")
         if args.blob_path and args.prefix:
             _die("--blob-path and --prefix are mutually exclusive")
-        if args.bucket or args.key:
+        if args.bucket or args.s3_key:
             _die("--bucket, --key are only for s3 source")
     elif source == "s3":
         if args.path:
             _die("positional path is not used with s3")
         if not args.bucket:
             _die("s3 requires --bucket")
-        if args.key and args.prefix:
+        if args.s3_key and args.prefix:
             _die("--key and --prefix are mutually exclusive for s3")
         if args.container_name or args.blob_path:
             _die("--container, --blob-path are only for azure_blob source")
@@ -297,7 +297,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
             f"Ingesting Azure Blob: container={args.container_name}, {target} (replace={args.replace})"
         )
     elif source == "s3":
-        target = args.key or (f"prefix={args.prefix}" if args.prefix else "entire bucket")
+        target = args.s3_key or (f"prefix={args.prefix}" if args.prefix else "entire bucket")
         print(f"Ingesting S3: bucket={args.bucket}, {target} (replace={args.replace})")
 
     config = get_config()
@@ -567,8 +567,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--blob-path", dest="blob_path", help="Specific blob (azure_blob)")
     p_ingest.add_argument("--prefix", help="Blob prefix filter (azure_blob/s3)")
     p_ingest.add_argument("--bucket", help="S3 bucket name")
-    p_ingest.add_argument("--region", help="S3 region name")
-    p_ingest.add_argument("--key", help="S3 object key")
+    p_ingest.add_argument("--region", dest="s3_region", help="S3 region name")
+    p_ingest.add_argument("--key", dest="s3_key", help="S3 object key")
     p_ingest.add_argument("--url", help="Public or signed HTTPS document URL")
     p_ingest.add_argument("--urls", nargs="+", help="Public or signed HTTPS document URLs")
     p_ingest.add_argument("--filename", help="Parser filename for a single URL")

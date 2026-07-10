@@ -114,7 +114,7 @@ async def get_ingest_job(
 ) -> dict[str, Any]:
     """Return durable ingest job status."""
     manager = get_manager(request)
-    job = await manager.get_ingest_job(job_id)
+    job = await manager.aget_ingest_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Ingest job not found")
     workspace = job.get("workspace")

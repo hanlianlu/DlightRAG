@@ -652,7 +652,7 @@ class TestRAGServiceLightRAGMainPath:
 
         with patch("dlightrag.sourcing.aws_s3.S3DataSource", return_value=mock_source):
             result = await service.aingest(
-                source_type="s3", bucket="my-bucket", key="docs/report.pdf"
+                source_type="s3", bucket="my-bucket", s3_key="docs/report.pdf"
             )
 
         service._ingestion_engine.aingest_file.assert_not_awaited()

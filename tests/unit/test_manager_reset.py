@@ -139,7 +139,7 @@ class TestManagerAresetAllWorkspaces:
 
         with (
             patch.object(
-                manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1", "ws2"]
+                manager, "alist_workspaces", new_callable=AsyncMock, return_value=["ws1", "ws2"]
             ),
             patch.object(manager, "_get_service", new_callable=AsyncMock, side_effect=[svc1, svc2]),
         ):
@@ -191,7 +191,7 @@ class TestManagerAresetNonexistentWorkspace:
         manager = _make_manager()
 
         with patch.object(
-            manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1", "ws2"]
+            manager, "alist_workspaces", new_callable=AsyncMock, return_value=["ws1", "ws2"]
         ):
             result = await manager.areset(workspace="does-not-exist")
 
@@ -234,7 +234,7 @@ class TestManagerAresetErrorHandling:
         manager = _make_manager()
 
         with (
-            patch.object(manager, "list_workspaces", new_callable=AsyncMock, return_value=["ws1"]),
+            patch.object(manager, "alist_workspaces", new_callable=AsyncMock, return_value=["ws1"]),
             patch.object(
                 manager,
                 "_get_service",

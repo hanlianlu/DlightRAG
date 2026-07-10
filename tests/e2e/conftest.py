@@ -65,11 +65,11 @@ def e2e_base_url() -> Generator[str, Any]:
 
     manager.aanswer_stream.side_effect = _mock_answer_stream
     manager.aget_checkpoint_history.return_value = []
-    manager.list_workspaces.return_value = MOCK_WORKSPACE_LIST
-    manager.list_workspace_records.return_value = MOCK_WORKSPACES
-    manager.list_ingested_files.return_value = []
-    manager.get_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
-    manager.get_file_panel_snapshot.return_value = {
+    manager.alist_workspaces.return_value = MOCK_WORKSPACE_LIST
+    manager.alist_workspace_records.return_value = MOCK_WORKSPACES
+    manager.alist_ingested_files.return_value = []
+    manager.aget_pipeline_status.return_value = {"busy": False, "pending_enqueues": 0}
+    manager.aget_file_panel_snapshot.return_value = {
         "files": [],
         "pipeline_status": {"busy": False, "pending_enqueues": 0},
     }

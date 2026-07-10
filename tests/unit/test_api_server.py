@@ -88,7 +88,7 @@ def mock_manager(mock_service, test_config):
             "status": "queued",
         }
     )
-    manager.get_ingest_job = AsyncMock(
+    manager.aget_ingest_job = AsyncMock(
         return_value={
             "job_id": "job-1",
             "workspace": "default",
@@ -99,10 +99,10 @@ def mock_manager(mock_service, test_config):
     )
     manager.aretrieve = mock_service.aretrieve
     manager.aanswer = mock_service.aanswer
-    manager.list_ingested_files = mock_service.alist_ingested_files
-    manager.delete_files = mock_service.adelete_files
-    manager.list_workspaces = AsyncMock(return_value=["default"])
-    manager.list_workspace_records = AsyncMock(
+    manager.alist_ingested_files = mock_service.alist_ingested_files
+    manager.adelete_files = mock_service.adelete_files
+    manager.alist_workspaces = AsyncMock(return_value=["default"])
+    manager.alist_workspace_records = AsyncMock(
         return_value=[
             {
                 "workspace": "default",
@@ -205,7 +205,7 @@ class TestWorkspaceLifecycleAPI:
         resp = await client.get("/files")
 
         assert resp.status_code == 200
-        mock_manager.list_ingested_files.assert_awaited_once_with("app_ws")
+        mock_manager.alist_ingested_files.assert_awaited_once_with("app_ws")
 
     async def test_list_workspaces_returns_records(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -218,13 +218,13 @@ class TestWorkspaceLifecycleAPI:
         body = resp.json()
         assert body["workspaces"] == ["default"]
         assert body["records"][0]["display_name"] == "default"
-        mock_manager.list_workspace_records.assert_awaited_once()
+        mock_manager.alist_workspace_records.assert_awaited_once()
 
     async def test_create_workspace_registers_empty_workspace(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
-        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post(
             "/workspaces",
@@ -246,7 +246,7 @@ class TestWorkspaceLifecycleAPI:
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
-        mock_manager.list_workspaces = AsyncMock(return_value=["default"])
+        mock_manager.alist_workspaces = AsyncMock(return_value=["default"])
 
         resp = await client.post("/workspaces", json={"workspace": "default"})
 
@@ -786,7 +786,7 @@ class TestIngestEndpoint:
             json={
                 "source_type": "s3",
                 "bucket": "my-bucket",
-                "key": "docs/file.pdf",
+                "s3_key": "docs/file.pdf",
             },
         )
 
@@ -794,7 +794,7 @@ class TestIngestEndpoint:
         assert resp.json()["job_id"] == "job-1"
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
-            IngestSpec(source_type="s3", bucket="my-bucket", key="docs/file.pdf"),
+            IngestSpec(source_type="s3", bucket="my-bucket", s3_key="docs/file.pdf"),
         )
         mock_manager.aingest.assert_not_awaited()
 
@@ -941,7 +941,7 @@ class TestIngestEndpoint:
         )
         mock_manager.aingest.assert_not_awaited()
 
-    async def test_get_ingest_job_status(
+    async def test_get_get_ingest_job(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
@@ -950,7 +950,7 @@ class TestIngestEndpoint:
 
         assert resp.status_code == 200
         assert resp.json()["processed_items"] == 64
-        mock_manager.get_ingest_job.assert_awaited_once_with("job-1")
+        mock_manager.aget_ingest_job.assert_awaited_once_with("job-1")
 
     @pytest.mark.usefixtures("_patch_manager")
     async def test_s3_key_and_prefix_mutually_exclusive(
@@ -1175,7 +1175,7 @@ class TestDeleteEndpoint:
             json={"filenames": ["report.pdf"]},
         )
         assert resp.status_code == 200
-        mock_manager.delete_files.assert_awaited_once()
+        mock_manager.adelete_files.assert_awaited_once()
 
     async def test_delete_by_file_paths(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
@@ -1198,7 +1198,7 @@ class TestDeleteEndpoint:
             json={"filenames": ["report.pdf"], "workspace": "project-y"},
         )
         assert resp.status_code == 200
-        call_kwargs = mock_manager.delete_files.call_args
+        call_kwargs = mock_manager.adelete_files.call_args
         assert call_kwargs[0][0] == "project_y"  # normalized: hyphens → underscores
 
     async def test_delete_forwards_dry_run(
@@ -1211,7 +1211,7 @@ class TestDeleteEndpoint:
             json={"filenames": ["report.pdf"], "dry_run": True},
         )
         assert resp.status_code == 200
-        assert mock_manager.delete_files.call_args.kwargs["dry_run"] is True
+        assert mock_manager.adelete_files.call_args.kwargs["dry_run"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1409,7 +1409,7 @@ class TestFilesEndpoint:
     async def test_list_files_count_matches(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
-        mock_manager.list_ingested_files = AsyncMock(return_value=["a.pdf", "b.pdf", "c.pdf"])
+        mock_manager.alist_ingested_files = AsyncMock(return_value=["a.pdf", "b.pdf", "c.pdf"])
         app.state.manager = mock_manager
         resp = await client.get("/files")
         assert resp.status_code == 200
@@ -1423,7 +1423,7 @@ class TestFilesEndpoint:
         app.state.manager = mock_manager
         resp = await client.get("/files?workspace=project-z")
         assert resp.status_code == 200
-        call_kwargs = mock_manager.list_ingested_files.call_args
+        call_kwargs = mock_manager.alist_ingested_files.call_args
         assert call_kwargs[0][0] == "project_z"  # normalized: hyphens → underscores
 
 

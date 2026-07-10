@@ -161,7 +161,7 @@ Set `retain_remote_source_files: true` to keep fetched remote files under the
 workspace input root by default, or pass `retain_source_file` on one SDK/REST/MCP
 ingest call to override that default. When retention is enabled, stored metadata
 `file_path` points at the retained workspace-local file, not the remote URI.
-`GET /api/files/{file_path}` redirects only when the stored source is a direct
+`GET /files/raw/{file_path}` redirects only when the stored source is a direct
 provider/source URL. Azure uses `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the
 standard AWS credential chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_SESSION_TOKEN`, `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS

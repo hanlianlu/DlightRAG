@@ -281,7 +281,7 @@ async def answer_tool(
 )
 async def list_workspaces_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
-    records = await manager.list_workspace_records()
+    records = await manager.alist_workspace_records()
     records = await _filter_workspace_records(records)
     return {
         "workspaces": [row["workspace"] for row in records],
@@ -308,7 +308,7 @@ async def create_workspace_tool(
     manager = await _ensure_manager()
     normalized_workspace, normalized_display_name = _normalize_workspace_argument(args)
     await _enforce_access(AccessAction.WORKSPACE_CREATE, normalized_workspace)
-    existing = await manager.list_workspaces()
+    existing = await manager.alist_workspaces()
     if normalized_workspace in existing:
         raise ValueError(f"Workspace '{normalized_display_name}' already exists")
     await manager.acreate_workspace(normalized_workspace, display_name=normalized_display_name)
@@ -382,11 +382,11 @@ async def ingest_tool(
         str | None,
         Field(default=None, description="S3 bucket name."),
     ] = None,
-    region: Annotated[
+    s3_region: Annotated[
         str | None,
         Field(default=None, description="S3 region name."),
     ] = None,
-    key: Annotated[
+    s3_key: Annotated[
         str | None,
         Field(default=None, description="S3 object key, single object or prefix."),
     ] = None,
@@ -479,20 +479,20 @@ async def ingest_tool(
 
 
 @mcp_app.tool(
-    name="ingest_job_status",
+    name="get_ingest_job",
     description=(
         "Return status for an ingest job_id returned by ingest, including the job workspace "
         "when available."
     ),
 )
-async def ingest_job_status_tool(
+async def get_ingest_job_tool(
     job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
 ) -> dict[str, Any]:
     args = IngestJobStatusInput.model_validate(locals())
     manager = await _ensure_manager()
     if not args.job_id:
         raise ValueError("job_id is required")
-    result = await manager.get_ingest_job(args.job_id)
+    result = await manager.aget_ingest_job(args.job_id)
     if result is None:
         raise ValueError(f"Ingest job not found: {args.job_id}")
     workspace = result.get("workspace")
@@ -516,7 +516,7 @@ async def list_files_tool(
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
     await _enforce_access(AccessAction.WORKSPACE_LIST_FILES, workspace_name)
-    files = await manager.list_ingested_files(workspace_name)
+    files = await manager.alist_ingested_files(workspace_name)
     return {"files": files, "count": len(files), "workspace": workspace_name}
 
 
@@ -549,7 +549,7 @@ async def delete_files_tool(
     manager = await _ensure_manager()
     workspace_name = args.workspace or _get_config().workspace
     await _enforce_access(AccessAction.WORKSPACE_DELETE_FILES, workspace_name)
-    results = await manager.delete_files(
+    results = await manager.adelete_files(
         workspace_name,
         filenames=args.filenames,
         file_paths=args.file_paths,

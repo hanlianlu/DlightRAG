@@ -13,7 +13,7 @@ def app():
     real_app = create_app(include_web=True)
 
     mock_manager = MagicMock()
-    mock_manager.get_file_panel_snapshot = AsyncMock(
+    mock_manager.aget_file_panel_snapshot = AsyncMock(
         return_value={
             "files": [
                 {"file_path": "/data/report.pdf", "file_name": "report.pdf"},
@@ -22,8 +22,8 @@ def app():
             "pipeline_status": {"busy": False, "pending_enqueues": 0},
         }
     )
-    mock_manager.list_workspaces = AsyncMock(return_value=["default", "finance"])
-    mock_manager.list_workspace_records = AsyncMock(
+    mock_manager.alist_workspaces = AsyncMock(return_value=["default", "finance"])
+    mock_manager.alist_workspace_records = AsyncMock(
         return_value=[
             {
                 "workspace": "default",

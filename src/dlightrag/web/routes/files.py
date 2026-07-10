@@ -54,7 +54,7 @@ async def _resolve_registered_workspace(
     try:
         known = {
             normalized
-            for item in await manager.list_workspaces()
+            for item in await manager.alist_workspaces()
             if (normalized := normalize_workspace(item))
         }
     except Exception:
@@ -72,7 +72,7 @@ async def _workspace_is_registered(request: Request, workspace: str) -> bool:
     try:
         known = {
             normalized
-            for item in await manager.list_workspaces()
+            for item in await manager.alist_workspaces()
             if (normalized := normalize_workspace(item))
         }
     except Exception:
@@ -127,7 +127,7 @@ async def _file_list_response(request: Request, workspace: str):
     manager = get_manager(request)
     status: dict[str, Any] = {}
     try:
-        snapshot = await manager.get_file_panel_snapshot(workspace)
+        snapshot = await manager.aget_file_panel_snapshot(workspace)
         files = _file_view_models(list(snapshot.get("files") or []))
         status = dict(snapshot.get("pipeline_status") or {})
     except Exception:
@@ -188,7 +188,7 @@ async def upload_files(
     # mechanism picks up new enqueues automatically after the current batch.
     already_busy = False
     try:
-        ps = await manager.get_pipeline_status(selected_workspace)
+        ps = await manager.aget_pipeline_status(selected_workspace)
         already_busy = bool(ps.get("busy"))
     except Exception:
         logger.debug(
@@ -294,7 +294,7 @@ async def ingest_status(
     manager = get_manager(request)
 
     try:
-        ps = await manager.get_pipeline_status(selected_workspace)
+        ps = await manager.aget_pipeline_status(selected_workspace)
     except Exception:
         ps = {"busy": False, "latest_message": "Status unavailable"}
 
@@ -336,7 +336,7 @@ async def delete_files(
     await enforce_web_access(request, AccessAction.WORKSPACE_DELETE_FILES, selected_workspace)
 
     try:
-        await manager.delete_files(selected_workspace, file_paths=file_paths)
+        await manager.adelete_files(selected_workspace, file_paths=file_paths)
     except Exception:
         logger.exception("Delete failed")
         return error_response("Delete failed. Please try again.", status_code=500)

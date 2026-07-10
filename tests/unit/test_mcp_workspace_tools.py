@@ -56,7 +56,7 @@ def _tool_json(result):
 @pytest.fixture
 def mock_mcp_manager(monkeypatch):
     manager = AsyncMock()
-    manager.list_workspaces = AsyncMock(return_value=["default"])
+    manager.alist_workspaces = AsyncMock(return_value=["default"])
     manager.acreate_workspace = AsyncMock()
     manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
     manager.aretrieve = AsyncMock()
@@ -72,11 +72,11 @@ def test_mcp_server_info_uses_dlightrag_version() -> None:
 
 
 async def test_mcp_success_payloads_keep_fastmcp_structured_output(mock_mcp_manager) -> None:
-    mock_mcp_manager.get_ingest_job = AsyncMock(
+    mock_mcp_manager.aget_ingest_job = AsyncMock(
         return_value={"job_id": "job-1", "status": "running"}
     )
 
-    result = await mcp_server.mcp_app.call_tool("ingest_job_status", {"job_id": "job-1"})
+    result = await mcp_server.mcp_app.call_tool("get_ingest_job", {"job_id": "job-1"})
 
     assert isinstance(result, tuple)
     assert _tool_json(result) == {"job_id": "job-1", "status": "running"}
@@ -127,7 +127,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "metadata" in ingest_props
     assert "url" in ingest_props
     assert "urls" in ingest_props
-    assert "region" in ingest_props
+    assert "s3_region" in ingest_props
     assert "filename" in ingest_props
     assert "source_uri" in ingest_props
     assert "source_uris" in ingest_props
@@ -140,7 +140,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
         "reject_unknown",
         "store_only",
     ]
-    assert "ingest_job_status" in names
+    assert "get_ingest_job" in names
 
 
 async def test_mcp_management_tool_descriptions_explain_contracts() -> None:
@@ -158,7 +158,7 @@ async def test_mcp_management_tool_descriptions_explain_contracts() -> None:
         "create_workspace": ["display_name", "user-facing", "normalized", "created"],
         "delete_workspace": ["dry_run", "keep_files", "deleted", "result"],
         "ingest": ["durable", "job_id", "status", "workspace"],
-        "ingest_job_status": ["job_id", "status", "workspace"],
+        "get_ingest_job": ["job_id", "status", "workspace"],
         "list_files": ["files", "count", "workspace"],
         "delete_files": ["dry_run", "results", "workspace"],
     }
@@ -306,7 +306,7 @@ async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:
 async def test_mcp_rejects_mutually_exclusive_s3_key_and_prefix(mock_mcp_manager) -> None:
     result = await mcp_server.mcp_app.call_tool(
         "ingest",
-        {"source_type": "s3", "bucket": "b", "key": "a.pdf", "prefix": "docs/"},
+        {"source_type": "s3", "bucket": "b", "s3_key": "a.pdf", "prefix": "docs/"},
     )
 
     assert "Error:" in _tool_text(result)
@@ -524,7 +524,7 @@ async def test_mcp_single_s3_key_defaults_to_background_job(mock_mcp_manager) ->
         {
             "source_type": "s3",
             "bucket": "bucket",
-            "key": "docs/file.pdf",
+            "s3_key": "docs/file.pdf",
             "workspace": "default",
         },
     )
@@ -532,13 +532,13 @@ async def test_mcp_single_s3_key_defaults_to_background_job(mock_mcp_manager) ->
     assert _tool_json(result)["job_id"] == "job-1"
     mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
         "default",
-        IngestSpec(source_type="s3", bucket="bucket", key="docs/file.pdf"),
+        IngestSpec(source_type="s3", bucket="bucket", s3_key="docs/file.pdf"),
     )
     mock_mcp_manager.aingest.assert_not_awaited()
 
 
-async def test_mcp_ingest_job_status_reads_manager_job(mock_mcp_manager) -> None:
-    mock_mcp_manager.get_ingest_job = AsyncMock(
+async def test_mcp_get_ingest_job_reads_manager_job(mock_mcp_manager) -> None:
+    mock_mcp_manager.aget_ingest_job = AsyncMock(
         return_value={
             "job_id": "job-1",
             "status": "running",
@@ -546,14 +546,14 @@ async def test_mcp_ingest_job_status_reads_manager_job(mock_mcp_manager) -> None
         }
     )
 
-    result = await mcp_server.mcp_app.call_tool("ingest_job_status", {"job_id": "job-1"})
+    result = await mcp_server.mcp_app.call_tool("get_ingest_job", {"job_id": "job-1"})
 
     assert _tool_json(result) == {
         "job_id": "job-1",
         "status": "running",
         "processed_items": 64,
     }
-    mock_mcp_manager.get_ingest_job.assert_awaited_once_with("job-1")
+    mock_mcp_manager.aget_ingest_job.assert_awaited_once_with("job-1")
 
 
 async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_contexts(
@@ -624,7 +624,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
 
 
 async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
-    mock_mcp_manager.delete_files = AsyncMock(return_value=[{"status": "would_delete"}])
+    mock_mcp_manager.adelete_files = AsyncMock(return_value=[{"status": "would_delete"}])
 
     result = await mcp_server.mcp_app.call_tool(
         "delete_files",
@@ -632,7 +632,7 @@ async def test_mcp_delete_files_forwards_dry_run(mock_mcp_manager) -> None:
     )
 
     assert _tool_json(result)["results"] == [{"status": "would_delete"}]
-    mock_mcp_manager.delete_files.assert_awaited_once_with(
+    mock_mcp_manager.adelete_files.assert_awaited_once_with(
         "default",
         filenames=["report.pdf"],
         file_paths=None,
