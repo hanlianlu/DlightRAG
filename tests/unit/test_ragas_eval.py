@@ -27,7 +27,7 @@ _run = _ragas_eval._run
 
 def test_ragas_eval_parser_requires_dataset() -> None:
     with pytest.raises(SystemExit):
-        _ragas_eval._build_parser().parse_args(["--api", "http://localhost:8100"])
+        _ragas_eval.build_parser().parse_args(["--api", "http://localhost:8100"])
 
 
 @pytest.mark.asyncio
