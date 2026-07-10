@@ -303,13 +303,12 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
                     )
                 cleaned += 1
 
-            if not dry_run and table.startswith("dlightrag_"):
-                remaining = await conn.fetchrow(
-                    f"SELECT EXISTS (SELECT 1 FROM {qualified_table}) AS has_rows"  # noqa: S608
-                )
-                if not remaining["has_rows"]:
-                    await conn.execute(f"DROP TABLE {qualified_table}")  # noqa: S608
-
+        # Do NOT drop emptied tables here. dlightrag_checkpoints, dlightrag_doc_metadata,
+        # and dlightrag_ingest_jobs are global migration-managed tables (schema owned by
+        # dlightrag_schema_migrations) that carry a workspace column, not per-workspace
+        # artifacts. Resetting the last workspace empties them; dropping them orphans the
+        # migration ledger and breaks the running app with UndefinedTableError until the
+        # next restart re-runs apply_migrations.
         return cleaned
     except Exception as exc:
         logger.warning("PG orphan table cleanup failed: %s", exc)
