@@ -31,7 +31,10 @@ from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.query_images import PreparedQueryImages, prepare_query_images
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
-from dlightrag.core.query_workspaces import resolve_query_workspaces
+from dlightrag.core.query_workspaces import (
+    resolve_query_workspaces,
+    validate_query_workspace_selection,
+)
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
@@ -1127,6 +1130,11 @@ class RAGServiceManager:
         workspaces: list[str] | None,
         all_workspaces: bool,
     ) -> list[str]:
+        validate_query_workspace_selection(
+            all_workspaces=all_workspaces,
+            workspace=workspace,
+            workspaces=workspaces,
+        )
         available = await self.alist_workspaces() if all_workspaces else None
         return resolve_query_workspaces(
             default_workspace=self._config.workspace,
