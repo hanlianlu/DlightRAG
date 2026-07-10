@@ -5,9 +5,14 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 
-from dlightrag.access_control import AccessDeniedError, access_control_from_config
+from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.app_state import request_config
 from dlightrag.config import get_config
+from dlightrag.core.query_workspaces import (
+    NoQueryableWorkspacesError,
+    WorkspaceSelectionConflictError,
+    resolve_query_workspaces,
+)
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager
 
@@ -68,3 +73,47 @@ async def filter_workspace_records(
     workspaces = [str(row["workspace"]) for row in records]
     allowed = set(await get_access_control(request).filter_workspaces(user, action, workspaces))
     return [row for row in records if str(row["workspace"]) in allowed]
+
+
+async def resolve_authorized_query_workspaces(
+    request: Request,
+    user: object,
+    *,
+    workspaces: list[str] | None,
+    all_workspaces: bool,
+) -> list[str]:
+    """Resolve query targets after applying the caller's existing ACL."""
+    available: list[str] | None = None
+    if all_workspaces:
+        records = await get_manager(request).alist_workspace_records()
+        visible = await filter_workspace_records(
+            request,
+            user,
+            AccessAction.WORKSPACE_QUERY,
+            records,
+        )
+        available = [str(row["workspace"]) for row in visible]
+
+    try:
+        resolved = resolve_query_workspaces(
+            default_workspace=request_config(request).workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            available_workspaces=available,
+        )
+    except NoQueryableWorkspacesError:
+        raise HTTPException(
+            status_code=403,
+            detail="No workspaces are available for query",
+        ) from None
+    except WorkspaceSelectionConflictError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    if not all_workspaces:
+        await enforce_workspaces_access(
+            request,
+            user,
+            AccessAction.WORKSPACE_QUERY,
+            resolved,
+        )
+    return resolved

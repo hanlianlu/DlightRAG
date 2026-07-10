@@ -14,6 +14,7 @@ from dlightrag.core.client_contracts import (
     IngestPayload,
     QueryImage,
 )
+from dlightrag.core.query_workspaces import QueryWorkspaceSelection
 
 # ═══════════════════════════════════════════════════════════════════
 # Request Models
@@ -38,11 +39,10 @@ class IngestRequest(IngestPayload):
     pass
 
 
-class RetrieveRequest(ClientContractModel):
+class RetrieveRequest(QueryWorkspaceSelection):
     query: str
     top_k: int | None = None
     chunk_top_k: int | None = None
-    workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
@@ -50,13 +50,12 @@ class RetrieveRequest(ClientContractModel):
     referenced_image_ids: list[str] | None = None
 
 
-class AnswerRequest(ClientContractModel):
+class AnswerRequest(QueryWorkspaceSelection):
     query: str
     stream: bool = True
     top_k: int | None = None
     chunk_top_k: int | None = None
     answer_context_top_k: int | None = Field(default=None, ge=1)
-    workspaces: list[str] | None = None
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     conversation_history: list[ConversationMessage] | None = None

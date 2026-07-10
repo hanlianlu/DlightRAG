@@ -59,9 +59,9 @@ from dlightrag.observability import trace_observation
 
 from .deps import (
     enforce_access,
-    enforce_workspaces_access,
     get_manager,
     request_scope,
+    resolve_authorized_query_workspaces,
     resolve_workspace,
 )
 
@@ -134,12 +134,17 @@ async def retrieve(
     """Retrieve contexts and sources without LLM answer generation."""
     manager = get_manager(request)
     kwargs = query_kwargs_from_payload(body)
-    await enforce_workspaces_access(request, user, AccessAction.WORKSPACE_QUERY, body.workspaces)
-    scope = request_scope(user, body.workspaces)
+    resolved_workspaces = await resolve_authorized_query_workspaces(
+        request,
+        user,
+        workspaces=body.workspaces,
+        all_workspaces=body.all_workspaces,
+    )
+    scope = request_scope(user, resolved_workspaces)
 
     result = await manager.aretrieve(
         body.query,
-        workspaces=body.workspaces,
+        workspaces=resolved_workspaces,
         top_k=body.top_k,
         chunk_top_k=body.chunk_top_k,
         scope=scope,
@@ -156,14 +161,19 @@ async def answer(
     """RAG query with LLM-generated answer. Set stream=true for SSE."""
     manager = get_manager(request)
     kwargs = query_kwargs_from_payload(body)
-    await enforce_workspaces_access(request, user, AccessAction.WORKSPACE_QUERY, body.workspaces)
-    scope = request_scope(user, body.workspaces)
+    resolved_workspaces = await resolve_authorized_query_workspaces(
+        request,
+        user,
+        workspaces=body.workspaces,
+        all_workspaces=body.all_workspaces,
+    )
+    scope = request_scope(user, resolved_workspaces)
 
     if not body.stream:
         result = await manager.aanswer(
             body.query,
             conversation_history=dump_optional_list(body.conversation_history),
-            workspaces=body.workspaces,
+            workspaces=resolved_workspaces,
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
             answer_context_top_k=body.answer_context_top_k,
@@ -180,7 +190,7 @@ async def answer(
             as_type="chain",
             input={"query": body.query},
             metadata={
-                "workspaces": body.workspaces,
+                "workspaces": resolved_workspaces,
                 "history_turns": len(body.conversation_history or []),
             },
         ):
@@ -188,7 +198,7 @@ async def answer(
                 contexts, token_iter = await manager.aanswer_stream(
                     body.query,
                     conversation_history=dump_optional_list(body.conversation_history),
-                    workspaces=body.workspaces,
+                    workspaces=resolved_workspaces,
                     top_k=body.top_k,
                     chunk_top_k=body.chunk_top_k,
                     answer_context_top_k=body.answer_context_top_k,
