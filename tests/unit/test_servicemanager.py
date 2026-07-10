@@ -467,6 +467,7 @@ class TestRouting:
         test_cfg,
     ) -> None:
         manager = RAGServiceManager(config=test_cfg)
+        manager.alist_workspaces = AsyncMock(return_value=["finance"])
 
         with pytest.raises(ValueError, match="all_workspaces"):
             await getattr(manager, method_name)(
@@ -474,6 +475,7 @@ class TestRouting:
                 all_workspaces=True,
                 **explicit_selection,
             )
+        manager.alist_workspaces.assert_not_awaited()
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aretrieve_default_workspace(self, mock_create, test_cfg) -> None:
