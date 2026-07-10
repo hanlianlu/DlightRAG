@@ -191,12 +191,12 @@ class TestBuildSources:
 
         class FakeResolver:
             def resolve(self, path: str) -> str:
-                return f"/api/files/{path}"
+                return f"/files/raw/{path}"
 
         sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
 
         assert sources[0].title == "report.pdf"
-        assert sources[0].url == "/api/files/s3://my-bucket/reports/report.pdf"
+        assert sources[0].url == "/files/raw/s3://my-bucket/reports/report.pdf"
 
     def test_falls_back_to_chunk_path_without_enrichment(self) -> None:
         """When no enriched source path exists, the chunk file_path drives the URL."""
@@ -204,11 +204,11 @@ class TestBuildSources:
 
         class FakeResolver:
             def resolve(self, path: str) -> str:
-                return f"/api/files/{path}"
+                return f"/files/raw/{path}"
 
         sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
 
-        assert sources[0].url == "/api/files/default/report.pdf"
+        assert sources[0].url == "/files/raw/default/report.pdf"
 
     def test_skips_chunks_without_reference_id(self) -> None:
         contexts = {

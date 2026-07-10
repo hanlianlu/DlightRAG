@@ -104,7 +104,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
 
     manager = get_manager(request)
     try:
-        workspaces = await manager.list_workspace_records()
+        workspaces = await manager.alist_workspace_records()
     except Exception:
         workspaces = [
             {

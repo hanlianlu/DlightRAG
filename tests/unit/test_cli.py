@@ -232,8 +232,8 @@ def test_ingest_kwargs_support_s3_region_and_retention() -> None:
 
     assert _build_ingest_kwargs(args) == {
         "bucket": "bucket",
-        "key": "docs/report.pdf",
-        "region": "eu-north-1",
+        "s3_key": "docs/report.pdf",
+        "s3_region": "eu-north-1",
         "retain_source_file": True,
         "replace": False,
     }

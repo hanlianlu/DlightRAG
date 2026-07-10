@@ -23,37 +23,37 @@ class TestResolve:
         resolver = SourceUrlResolver()
         assert (
             resolver.resolve("azure://mycontainer/doc.pdf")
-            == "/api/files/azure://mycontainer/doc.pdf"
+            == "/files/raw/azure://mycontainer/doc.pdf"
         )
 
     def test_s3_scheme_wrapped_into_endpoint(self) -> None:
         resolver = SourceUrlResolver()
-        assert resolver.resolve("s3://my-bucket/doc.pdf") == "/api/files/s3://my-bucket/doc.pdf"
+        assert resolver.resolve("s3://my-bucket/doc.pdf") == "/files/raw/s3://my-bucket/doc.pdf"
 
     def test_remote_source_query_fragment_and_space_are_encoded(self) -> None:
         resolver = SourceUrlResolver()
         assert resolver.resolve("s3://my-bucket/docs/report final.pdf?version=1#page=2") == (
-            "/api/files/s3://my-bucket/docs/report%20final.pdf%3Fversion%3D1%23page%3D2"
+            "/files/raw/s3://my-bucket/docs/report%20final.pdf%3Fversion%3D1%23page%3D2"
         )
         assert resolver.resolve("azure://container/docs/report final.pdf?version=1#page=2") == (
-            "/api/files/azure://container/docs/report%20final.pdf%3Fversion%3D1%23page%3D2"
+            "/files/raw/azure://container/docs/report%20final.pdf%3Fversion%3D1%23page%3D2"
         )
 
     def test_https_scheme_wrapped_into_endpoint(self) -> None:
         resolver = SourceUrlResolver()
         assert (
             resolver.resolve("https://api.bynder.com/docs/getting-started")
-            == "/api/files/https://api.bynder.com/docs/getting-started"
+            == "/files/raw/https://api.bynder.com/docs/getting-started"
         )
 
     def test_https_source_query_is_encoded_into_endpoint_path(self) -> None:
         resolver = SourceUrlResolver()
         assert resolver.resolve("https://cdn.example.com/report.pdf?sig=x&download=1") == (
-            "/api/files/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
+            "/files/raw/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
         )
 
     def test_absolute_artifact_marker_paths_are_not_projected(self) -> None:
-        """Only input_dir-scoped local files are projected into /api/files URLs."""
+        """Only input_dir-scoped local files are projected into /files/raw URLs."""
         resolver = SourceUrlResolver()
         assert resolver.resolve("/random/prefix/artifacts/page.png") is None
 
@@ -69,23 +69,23 @@ class TestResolve:
 
     def test_relative_path_is_projected(self) -> None:
         resolver = SourceUrlResolver()
-        assert resolver.resolve("default/docs/report.pdf") == "/api/files/default/docs/report.pdf"
+        assert resolver.resolve("default/docs/report.pdf") == "/files/raw/default/docs/report.pdf"
 
     def test_relative_path_with_spaces_and_unicode_is_encoded(self) -> None:
         """Local hrefs must percent-encode spaces / unicode but keep '/' separators."""
         resolver = SourceUrlResolver()
         assert (
             resolver.resolve("default/PyCaret 3.0 cheat_sheet.pdf")
-            == "/api/files/default/PyCaret%203.0%20cheat_sheet.pdf"
+            == "/files/raw/default/PyCaret%203.0%20cheat_sheet.pdf"
         )
         assert (
             resolver.resolve("default/世界运行的底层逻辑.pdf")
-            == "/api/files/default/%E4%B8%96%E7%95%8C%E8%BF%90%E8%A1%8C%E7%9A%84%E5%BA%95%E5%B1%82%E9%80%BB%E8%BE%91.pdf"
+            == "/files/raw/default/%E4%B8%96%E7%95%8C%E8%BF%90%E8%A1%8C%E7%9A%84%E5%BA%95%E5%B1%82%E9%80%BB%E8%BE%91.pdf"
         )
 
     def test_windows_relative_path_is_projected_as_posix(self) -> None:
         resolver = SourceUrlResolver()
-        assert resolver.resolve(r"default\docs\report.pdf") == "/api/files/default/docs/report.pdf"
+        assert resolver.resolve(r"default\docs\report.pdf") == "/files/raw/default/docs/report.pdf"
 
     def test_relative_traversal_is_not_projected(self) -> None:
         resolver = SourceUrlResolver()
@@ -103,7 +103,7 @@ class TestInputDir:
         """Local path under input_dir is stripped to relative."""
         resolver = SourceUrlResolver(input_dir="/data/input")
         result = resolver.resolve("/data/input/default/report.pdf")
-        assert result == "/api/files/default/report.pdf"
+        assert result == "/files/raw/default/report.pdf"
 
     def test_resolve_local_path_outside_input_dir(self) -> None:
         """Local path outside input_dir is not exposed."""
@@ -115,31 +115,31 @@ class TestInputDir:
         """Azure scheme wraps as-is."""
         resolver = SourceUrlResolver(input_dir="/data/input")
         result = resolver.resolve("azure://mycontainer/doc.pdf")
-        assert result == "/api/files/azure://mycontainer/doc.pdf"
+        assert result == "/files/raw/azure://mycontainer/doc.pdf"
 
     def test_resolve_s3_path(self) -> None:
         """S3 scheme wraps as-is."""
         resolver = SourceUrlResolver(input_dir="/data/input")
         result = resolver.resolve("s3://mybucket/key/doc.pdf")
-        assert result == "/api/files/s3://mybucket/key/doc.pdf"
+        assert result == "/files/raw/s3://mybucket/key/doc.pdf"
 
     def test_resolve_https_path(self) -> None:
         """URL sources wrap as-is."""
         resolver = SourceUrlResolver(input_dir="/data/input")
         result = resolver.resolve("https://api.bynder.com/docs/getting-started")
-        assert result == "/api/files/https://api.bynder.com/docs/getting-started"
+        assert result == "/files/raw/https://api.bynder.com/docs/getting-started"
 
     def test_resolve_workspace_scoped(self) -> None:
         """Workspace is baked into the relative path under input_dir."""
         resolver = SourceUrlResolver(input_dir="/data/input", workspace="ws-a")
         result = resolver.resolve("/data/input/ws-a/subdir/doc.pdf")
-        assert result == "/api/files/ws-a/subdir/doc.pdf"
+        assert result == "/files/raw/ws-a/subdir/doc.pdf"
 
     def test_resolve_workspace_bare_filename(self) -> None:
         """LightRAG basename-only file paths are scoped by workspace."""
         resolver = SourceUrlResolver(input_dir="/data/input", workspace="ws-a")
         result = resolver.resolve("report.pdf")
-        assert result == "/api/files/ws-a/report.pdf"
+        assert result == "/files/raw/ws-a/report.pdf"
 
     def test_input_dir_prefix_lookalike_is_not_treated_as_child(self) -> None:
         """Only real descendants of input_dir are stripped to endpoint-relative paths."""

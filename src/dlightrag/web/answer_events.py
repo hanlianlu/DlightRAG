@@ -44,7 +44,7 @@ async def _session_image_cards(
     stored_session_images: list[str] = []
     if image_ids:
         try:
-            stored_session_images = await manager.get_session_image_data(
+            stored_session_images = await manager.aget_session_image_data(
                 session_id,
                 image_ids,
                 scope=scope,
@@ -148,7 +148,7 @@ async def _save_checkpoint(
     scope: RequestScope | None,
 ) -> bool:
     """Persist conversation turn.  Returns False when the save failed."""
-    save_checkpoint = getattr(manager, "save_turn_checkpoint", None)
+    save_checkpoint = getattr(manager, "asave_turn_checkpoint", None)
     if not callable(save_checkpoint):
         return True  # no checkpoint backend — not a failure
 

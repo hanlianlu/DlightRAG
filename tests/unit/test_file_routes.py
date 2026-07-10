@@ -55,7 +55,7 @@ class TestFileEndpoint:
         canonical.parent.mkdir(parents=True)
         canonical.write_bytes(b"%PDF-1.4 canonical input content")
 
-        resp = await client.get("/api/files/default/docs/canonical.pdf")
+        resp = await client.get("/files/raw/default/docs/canonical.pdf")
         assert resp.status_code == 200
         assert b"%PDF-1.4 canonical input content" in resp.content
         assert resp.headers["content-type"] == "application/pdf"
@@ -75,7 +75,7 @@ class TestFileEndpoint:
         staged.parent.mkdir(parents=True)
         staged.write_bytes(b"%PDF-1.4 nested upload content")
 
-        resp = await client.get("/api/files/default/PyCaret%203.0%20cheat_sheet.pdf")
+        resp = await client.get("/files/raw/default/PyCaret%203.0%20cheat_sheet.pdf")
 
         assert resp.status_code == 200
         assert b"%PDF-1.4 nested upload content" in resp.content
@@ -98,7 +98,7 @@ class TestFileEndpoint:
         staged.parent.mkdir(parents=True)
         staged.write_bytes(b"%PDF-1.4 retained remote content")
 
-        resp = await client.get("/api/files/default/report__a1b2c3d4e5f6.pdf")
+        resp = await client.get("/files/raw/default/report__a1b2c3d4e5f6.pdf")
 
         assert resp.status_code == 200
         assert b"%PDF-1.4 retained remote content" in resp.content
@@ -111,7 +111,7 @@ class TestFileEndpoint:
         staged.parent.mkdir(parents=True)
         staged.write_bytes(b"%PDF-1.4 deep folder content")
 
-        resp = await client.get("/api/files/default/deep.pdf")
+        resp = await client.get("/files/raw/default/deep.pdf")
 
         assert resp.status_code == 200
         assert b"%PDF-1.4 deep folder content" in resp.content
@@ -124,12 +124,12 @@ class TestFileEndpoint:
         docs.mkdir(parents=True)
         (docs / "report.pdf").write_bytes(b"%PDF-1.4 test content")
 
-        resp = await client.get("/api/files/docs/report.pdf")
+        resp = await client.get("/files/raw/docs/report.pdf")
         assert resp.status_code == 404
 
     async def test_rejects_path_traversal(self, client: AsyncClient) -> None:
         """Security critical: URL-encoded .. must not escape input_dir."""
-        resp = await client.get("/api/files/%2e%2e/%2e%2e/%2e%2e/etc/passwd")
+        resp = await client.get("/files/raw/%2e%2e/%2e%2e/%2e%2e/etc/passwd")
         assert resp.status_code == 403
 
     async def test_rejects_symlink_escape(self, client: AsyncClient, tmp_working_dir: Path) -> None:
@@ -149,8 +149,8 @@ class TestFileEndpoint:
         except (NotImplementedError, OSError) as exc:
             pytest.skip(f"symlink creation unavailable: {exc}")
 
-        direct_resp = await client.get("/api/files/default/direct.pdf")
-        canonical_resp = await client.get("/api/files/canonical-secret.pdf")
+        direct_resp = await client.get("/files/raw/default/direct.pdf")
+        canonical_resp = await client.get("/files/raw/canonical-secret.pdf")
 
         assert direct_resp.status_code == 404
         assert canonical_resp.status_code == 404
@@ -164,7 +164,7 @@ class TestFileEndpoint:
         canonical.parent.mkdir(parents=True)
         canonical.write_bytes(b"%PDF-1.4 workspace query")
 
-        resp = await client.get("/api/files/report.pdf", params={"workspace": "test-ws"})
+        resp = await client.get("/files/raw/report.pdf", params={"workspace": "test-ws"})
 
         assert resp.status_code == 200
         assert b"%PDF-1.4 workspace query" in resp.content
@@ -176,7 +176,7 @@ class TestFileEndpoint:
         secret.parent.mkdir(parents=True)
         secret.write_bytes(b"secret workspace content")
 
-        resp = await client.get("/api/files/secret_ws/report.pdf", params={"workspace": "default"})
+        resp = await client.get("/files/raw/secret_ws/report.pdf", params={"workspace": "default"})
 
         assert resp.status_code == 403
         assert b"secret workspace content" not in resp.content
@@ -210,22 +210,22 @@ class TestFileEndpoint:
                 base_url="http://test",
                 follow_redirects=False,
             ) as c:
-                resp = await c.get("/api/files/secret_ws/report.pdf")
+                resp = await c.get("/files/raw/secret_ws/report.pdf")
 
         assert resp.status_code == 403
         assert b"secret workspace content" not in resp.content
 
     async def test_rejects_windows_absolute_path(self, client: AsyncClient) -> None:
-        resp = await client.get(r"/api/files/C:\Users\me\secret.pdf")
+        resp = await client.get(r"/files/raw/C:\Users\me\secret.pdf")
         assert resp.status_code == 403
 
     async def test_rejects_windows_path_traversal(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/files/default%5C..%5Csecret_ws%5Creport.pdf")
+        resp = await client.get("/files/raw/default%5C..%5Csecret_ws%5Creport.pdf")
         assert resp.status_code == 403
 
     async def test_azure_503_when_unconfigured(self, client: AsyncClient) -> None:
         """Azure request without connection_string → 503, not 500."""
-        resp = await client.get("/api/files/azure://container/blob.pdf")
+        resp = await client.get("/files/raw/azure://container/blob.pdf")
         assert resp.status_code == 503
 
     async def test_s3_503_when_unconfigured(self, client: AsyncClient) -> None:
@@ -236,19 +236,19 @@ class TestFileEndpoint:
         ) as mock_presign:
             mock_presign.side_effect = S3CredentialsUnavailable("missing credentials")
 
-            resp = await client.get("/api/files/s3://my-bucket/key.pdf")
+            resp = await client.get("/files/raw/s3://my-bucket/key.pdf")
 
         assert resp.status_code == 503
 
     async def test_https_source_redirects_to_original_url(self, client: AsyncClient) -> None:
-        resp = await client.get("/api/files/https://api.bynder.com/docs/getting-started")
+        resp = await client.get("/files/raw/https://api.bynder.com/docs/getting-started")
 
         assert resp.status_code == 302
         assert resp.headers["location"] == "https://api.bynder.com/docs/getting-started"
 
     async def test_https_source_redirect_preserves_encoded_query(self, client: AsyncClient) -> None:
         resp = await client.get(
-            "/api/files/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
+            "/files/raw/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
         )
 
         assert resp.status_code == 302
@@ -261,7 +261,7 @@ class TestFileEndpoint:
             "https://127.0.0.1/secret",
             "https://user:pass@example.com/x",
         ):
-            resp = await client.get(f"/api/files/{bad}", follow_redirects=False)
+            resp = await client.get(f"/files/raw/{bad}", follow_redirects=False)
             assert resp.status_code == 400, bad
 
 
@@ -286,7 +286,7 @@ class TestFileEndpointAzureRedirect:
                 base_url="http://test",
                 follow_redirects=False,
             ) as c:
-                resp = await c.get("/api/files/azure://mycontainer/doc.pdf")
+                resp = await c.get("/files/raw/azure://mycontainer/doc.pdf")
                 assert resp.status_code == 302
                 assert "blob.core.windows.net" in resp.headers["location"]
 
@@ -312,7 +312,7 @@ class TestFileEndpointS3Redirect:
                 base_url="http://test",
                 follow_redirects=False,
             ) as c:
-                resp = await c.get("/api/files/s3://my-bucket/docs/report.pdf")
+                resp = await c.get("/files/raw/s3://my-bucket/docs/report.pdf")
 
         assert resp.status_code == 302
         assert resp.headers["location"].startswith("https://my-bucket.s3.amazonaws.com/")

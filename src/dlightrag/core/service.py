@@ -1392,7 +1392,7 @@ class RAGService:
             from dlightrag.sourcing.aws_s3 import S3DataSource
 
             source = S3DataSource(
-                bucket=str(bucket), region=kwargs.get("region") or self.config.s3_region
+                bucket=str(bucket), region=kwargs.get("s3_region") or self.config.s3_region
             )
 
         common_kwargs = {
@@ -1417,7 +1417,7 @@ class RAGService:
                 ],
                 **common_kwargs,
             )
-        key = kwargs.get("key") or kwargs.get("blob_path")
+        key = kwargs.get("s3_key") or kwargs.get("blob_path")
         if key:
             return self._single_file_result(
                 await self.aingest_source(

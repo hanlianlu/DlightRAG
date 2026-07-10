@@ -36,7 +36,7 @@ async def list_workspaces(
 ) -> dict[str, Any]:
     """List all registered workspaces."""
     manager = get_manager(request)
-    records = await manager.list_workspace_records()
+    records = await manager.alist_workspace_records()
     records = await filter_workspace_records(request, user, AccessAction.WORKSPACE_QUERY, records)
     return {
         "workspaces": [row["workspace"] for row in records],
@@ -58,7 +58,7 @@ async def create_workspace(
     manager = get_manager(request)
     workspace, display_name = _normalize_create_body(body)
     await enforce_access(request, user, AccessAction.WORKSPACE_CREATE, workspace=workspace)
-    existing = await manager.list_workspaces()
+    existing = await manager.alist_workspaces()
     if workspace in existing:
         raise HTTPException(status_code=409, detail=f"Workspace '{display_name}' already exists")
 

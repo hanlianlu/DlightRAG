@@ -64,13 +64,13 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
             kwargs["prefix"] = prefix
     elif source_type == "s3":
         kwargs["bucket"] = _get(payload, "bucket")
-        region = _get(payload, "region")
-        key = _get(payload, "key")
+        s3_region = _get(payload, "s3_region")
+        s3_key = _get(payload, "s3_key")
         prefix = _get(payload, "prefix")
-        if region:
-            kwargs["region"] = region
-        if key:
-            kwargs["key"] = key
+        if s3_region:
+            kwargs["s3_region"] = s3_region
+        if s3_key:
+            kwargs["s3_key"] = s3_key
         if prefix is not None:
             kwargs["prefix"] = prefix
     elif source_type == "url":

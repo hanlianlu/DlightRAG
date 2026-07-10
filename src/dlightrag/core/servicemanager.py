@@ -439,7 +439,7 @@ class RAGServiceManager:
     ) -> dict[str, Any]:
         """Start an ingest job, wait according to config, and return the result if ready."""
         job = await self.astart_ingest_job(workspace, request)
-        row = await self.await_ingest_job(job["job_id"], timeout=self._config.ingest_timeout)
+        row = await self.ajoin_ingest_job(job["job_id"], timeout=self._config.ingest_timeout)
         if row is None:
             raise RAGServiceUnavailableError(detail=f"Ingest job disappeared: {job['job_id']}")
         status = str(row.get("status") or "")
@@ -635,7 +635,7 @@ class RAGServiceManager:
             **kwargs,
         )
 
-    async def await_ingest_job(
+    async def ajoin_ingest_job(
         self,
         job_id: str,
         *,
@@ -644,7 +644,7 @@ class RAGServiceManager:
         """Wait for an in-process ingest job without cancelling it on timeout."""
         return await self._ingest_jobs.await_job(job_id, timeout=timeout)
 
-    async def get_ingest_job(self, job_id: str) -> dict[str, Any] | None:
+    async def aget_ingest_job(self, job_id: str) -> dict[str, Any] | None:
         return await self._ingest_jobs.get_job(job_id)
 
     def _get_file_panel_store(self) -> PGFilePanelStore:
@@ -659,7 +659,7 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         await svc.aregister_workspace(display_name=display_name)
 
-    async def get_file_panel_snapshot(self, workspace: str) -> dict[str, Any]:
+    async def aget_file_panel_snapshot(self, workspace: str) -> dict[str, Any]:
         """Return files-panel data without warming a cold RAG service."""
         workspace_id = normalize_workspace(workspace)
         files = await self._get_file_panel_store().list_processed_files(workspace_id)
@@ -684,17 +684,17 @@ class RAGServiceManager:
             "pipeline_status": pipeline_status,
         }
 
-    async def list_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
+    async def alist_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""
         svc = await self._get_service(workspace)
         return await svc.alist_ingested_files()
 
-    async def get_pipeline_status(self, workspace: str) -> dict[str, Any]:
+    async def aget_pipeline_status(self, workspace: str) -> dict[str, Any]:
         """Return pipeline progress for a workspace."""
         svc = await self._get_service(workspace)
         return await svc.aget_pipeline_status()
 
-    async def delete_files(
+    async def adelete_files(
         self,
         workspace: str,
         *,
@@ -710,7 +710,7 @@ class RAGServiceManager:
             dry_run=dry_run,
         )
 
-    async def list_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
+    async def alist_failed_docs(self, workspace: str) -> list[dict[str, Any]]:
         """List FAILED documents in a specific workspace."""
         svc = await self._get_service(workspace)
         return await svc.alist_failed_docs()
@@ -720,7 +720,7 @@ class RAGServiceManager:
         svc = await self._get_service(workspace)
         return await svc.aget_visual_asset(chunk_id, size=size)
 
-    async def retry_failed_docs(self, workspace: str) -> dict[str, Any]:
+    async def aretry_failed_docs(self, workspace: str) -> dict[str, Any]:
         """Retry all FAILED documents in a specific workspace via re-ingest."""
         svc = await self._get_service(workspace)
         return await svc.aretry_failed_docs()
@@ -764,7 +764,7 @@ class RAGServiceManager:
         if workspace is not None:
             requested_workspace = workspace
             target_workspace = normalize_workspace(workspace)
-            known = await self.list_workspaces()
+            known = await self.alist_workspaces()
             if target_workspace not in known and target_workspace not in self._services:
                 cancelled_jobs = (
                     0 if dry_run else await self._ingest_jobs.cancel_for_workspace(target_workspace)
@@ -789,7 +789,7 @@ class RAGServiceManager:
                 }
             workspaces = [target_workspace]
         else:
-            workspaces = await self.list_workspaces()
+            workspaces = await self.alist_workspaces()
 
         results: dict[str, Any] = {}
         total_errors = 0
@@ -893,7 +893,7 @@ class RAGServiceManager:
             )
         return self._session_images
 
-    async def get_session_image_data(
+    async def aget_session_image_data(
         self,
         session_id: str | None,
         image_ids: list[str] | None,
@@ -956,7 +956,7 @@ class RAGServiceManager:
             logger.debug("Failed to delete checkpoint session %s", session_id, exc_info=True)
             return 0
 
-    async def save_turn_checkpoint(
+    async def asave_turn_checkpoint(
         self,
         session_id: str,
         query: str,
@@ -1461,12 +1461,12 @@ class RAGServiceManager:
 
     # --- Management ---
 
-    async def list_workspaces(self) -> list[str]:
+    async def alist_workspaces(self) -> list[str]:
         """Discover available workspaces."""
-        records = await self.list_workspace_records()
+        records = await self.alist_workspace_records()
         return [row["workspace"] for row in records]
 
-    async def list_workspace_records(self) -> list[dict[str, Any]]:
+    async def alist_workspace_records(self) -> list[dict[str, Any]]:
         """Return registered workspace records for UI/API adapters."""
         try:
             registry = await self._get_workspace_registry()
@@ -1500,7 +1500,7 @@ class RAGServiceManager:
 
     async def _list_all_workspaces(self) -> list[str]:
         """Internal: discover all workspaces."""
-        return await self.list_workspaces()
+        return await self.alist_workspaces()
 
     async def close(self) -> None:
         """Close all managed RAGService instances."""

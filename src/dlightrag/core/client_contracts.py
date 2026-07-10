@@ -66,8 +66,8 @@ class IngestSpec(ClientContractModel):
     blob_path: str | None = None
     prefix: str | None = None
     bucket: str | None = None
-    region: str | None = None
-    key: str | None = None
+    s3_region: str | None = None
+    s3_key: str | None = None
     url: str | None = None
     urls: list[str] | None = None
     filename: str | None = None
@@ -105,12 +105,12 @@ class IngestSpec(ClientContractModel):
             if not self.bucket:
                 raise ValueError("'bucket' is required for s3")
             if self.documents is not None:
-                if self.key or self.prefix is not None:
-                    raise ValueError("'key'/'prefix' and 'documents' are mutually exclusive")
+                if self.s3_key or self.prefix is not None:
+                    raise ValueError("'s3_key'/'prefix' and 'documents' are mutually exclusive")
                 _require_document_field(self.documents, "key", source_type=self.source_type)
                 return self
-            if self.key and self.prefix is not None:
-                raise ValueError("'key' and 'prefix' are mutually exclusive")
+            if self.s3_key and self.prefix is not None:
+                raise ValueError("'s3_key' and 'prefix' are mutually exclusive")
         elif self.source_type == "url":
             if self.documents is not None:
                 if any(

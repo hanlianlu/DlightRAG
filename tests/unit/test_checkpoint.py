@@ -361,7 +361,7 @@ class TestConcurrentWrites:
 
 
 class TestSaveTurnCheckpointIntegration:
-    """Integration tests for servicemanager.save_turn_checkpoint with PG store."""
+    """Integration tests for servicemanager.asave_turn_checkpoint with PG store."""
 
     async def test_save_turn_checkpoint_calls_store(self) -> None:
         from dlightrag.core.servicemanager import RAGServiceManager
@@ -380,7 +380,7 @@ class TestSaveTurnCheckpointIntegration:
         mock_store.save_turn_pair = AsyncMock(return_value=3)
         manager._checkpoint = mock_store
 
-        await manager.save_turn_checkpoint(
+        await manager.asave_turn_checkpoint(
             session_id="s1",
             query="test query",
             answer="test answer",
@@ -413,7 +413,7 @@ class TestSaveTurnCheckpointIntegration:
         manager._checkpoint = mock_store
 
         # Must not raise
-        await manager.save_turn_checkpoint(
+        await manager.asave_turn_checkpoint(
             session_id="s1",
             query="q",
             answer="a",

@@ -77,8 +77,8 @@ try:
         IngestSpec(
             source_type="s3",
             bucket="my-bucket",
-            region="us-east-1",      # optional; credentials come from AWS env/config/IAM
-            key="docs/q1.pdf",       # or prefix="docs/"
+            s3_region="us-east-1",   # optional; credentials come from AWS env/config/IAM
+            s3_key="docs/q1.pdf",    # or prefix="docs/"
         ),
     )
 
@@ -96,7 +96,7 @@ try:
         "default",
         IngestSpec(source_type="s3", bucket="my-bucket", prefix="docs/"),
     )
-    status = await manager.get_ingest_job(job["job_id"])
+    status = await manager.aget_ingest_job(job["job_id"])
 finally:
     await manager.close()
 ```
@@ -146,10 +146,10 @@ fetched files under the workspace input root and points stored metadata
 | `path` | `string` | local | File or directory path relative to DlightRAG's managed `input_dir/<workspace>` |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
-| `prefix` | `string` | — | Blob/key prefix filter for `azure_blob`/`s3` batches; mutually exclusive with `blob_path`/`key`. Omit (or pass `""`) to ingest the whole container/bucket. |
-| `bucket` | `string` | s3 | S3 bucket name. With neither `key` nor `prefix`, ingests the whole bucket. |
-| `region` | `string` | — | Optional S3 region for this ingest; falls back to `s3_region` or the AWS SDK environment/config defaults |
-| `key` | `string` | — | S3 object key for a single object; mutually exclusive with `prefix` |
+| `prefix` | `string` | — | Blob/key prefix filter for `azure_blob`/`s3` batches; mutually exclusive with `blob_path`/`s3_key`. Omit (or pass `""`) to ingest the whole container/bucket. |
+| `bucket` | `string` | s3 | S3 bucket name. With neither `s3_key` nor `prefix`, ingests the whole bucket. |
+| `s3_region` | `string` | — | Optional S3 region for this ingest; falls back to the `s3_region` config setting or the AWS SDK environment/config defaults |
+| `s3_key` | `string` | — | S3 object key for a single object; mutually exclusive with `prefix` |
 | `url` | `string` | url | Single public or signed HTTPS document URL |
 | `urls` | `list[string]` | url | Multiple public or signed HTTPS document URLs; mutually exclusive with `url` |
 | `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |
@@ -186,7 +186,7 @@ For per-document metadata, pass a manifest instead of prefix discovery:
 MCP `ingest` exposes the same source and metadata arguments as REST `/ingest`,
 passed as tool arguments. Local path arguments are relative to the managed
 `input_dir/<workspace>`. Calls return a background job; call
-`ingest_job_status` with the returned `job_id` to read progress.
+`get_ingest_job` with the returned `job_id` to read progress.
 
 ### Metadata At Call Time
 
@@ -307,7 +307,7 @@ Background ingestion through REST or MCP returns a job first:
 }
 ```
 
-`GET /ingest/jobs/{job_id}` and MCP `ingest_job_status` return the same job row.
+`GET /ingest/jobs/{job_id}` and MCP `get_ingest_job` return the same job row.
 `status` is one of `queued`, `running`, `succeeded`, or `failed`. When the job
 succeeds, `result` contains the same single-file or staged batch response shown
 above. If a synchronous REST/MCP ingest exceeds `ingest_timeout`, the job keeps
@@ -633,7 +633,7 @@ matches `[ref_id-chunk_idx]` markers instead of page sorting.
   "title": "report.pdf",
   "path": "/data/dlightrag_storage/docs/report.pdf",
   "type": "file",
-  "url": "/api/files/docs/report.pdf",
+  "url": "/files/raw/docs/report.pdf",
   "cited_chunk_ids": ["abc123", "def456"],
   "chunks": [
     {
@@ -731,7 +731,7 @@ To trace `[1-2]` back to source material:
 3. Use `chunk_id` to look up the source in `sources` (by matching `id`)
 4. Use `page_idx` on the chunk for the page number
 5. Use `page_idx` and `bbox` when present for page/block localization
-6. Use source `url` or `GET /api/files/{path}` for the original file; use
+6. Use source `url` or `GET /files/raw/{path}` for the original file; use
    `image_url`/`thumbnail_url` for retrieved visual chunks
 
 

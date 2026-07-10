@@ -31,7 +31,7 @@ def _ordered_unique(workspaces: list[str]) -> list[str]:
 
 
 async def _visible_workspace_names(request: Request, manager: Any) -> list[str]:
-    records = [{"workspace": workspace} for workspace in await manager.list_workspaces()]
+    records = [{"workspace": workspace} for workspace in await manager.alist_workspaces()]
     visible = await filter_web_workspace_records(request, AccessAction.WORKSPACE_QUERY, records)
     return [str(row["workspace"]) for row in visible]
 
@@ -131,7 +131,7 @@ async def create_workspace(
     await enforce_web_access(request, AccessAction.WORKSPACE_CREATE, ws)
 
     # Duplicate check
-    existing = await manager.list_workspaces()
+    existing = await manager.alist_workspaces()
     if ws in existing:
         return error_response(f"Workspace '{name}' already exists", status_code=409)
 

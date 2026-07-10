@@ -5,7 +5,7 @@ Requires a running PostgreSQL instance with pgvector + AGE extensions.
 Skipped automatically if PostgreSQL is not available.
 
 Tests:
-- RAGServiceManager.list_workspaces() PG workspace discovery
+- RAGServiceManager.alist_workspaces() PG workspace discovery
 """
 
 from typing import Any
@@ -84,7 +84,7 @@ async def _delete_test_workspaces(registry: Any, *extra_workspaces: str) -> None
 
 
 # ---------------------------------------------------------------------------
-# RAGServiceManager.list_workspaces — PG workspace discovery
+# RAGServiceManager.alist_workspaces — PG workspace discovery
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ class TestPGWorkspaceDiscovery:
             set_config(cfg)
 
             manager = RAGServiceManager(config=cfg)
-            workspaces = await manager.list_workspaces()
+            workspaces = await manager.alist_workspaces()
 
             assert _TEST_WORKSPACE_ALPHA in workspaces
             assert _TEST_WORKSPACE_BETA in workspaces
@@ -152,7 +152,7 @@ class TestPGWorkspaceDiscovery:
             set_config(cfg)
 
             manager = RAGServiceManager(config=cfg)
-            workspaces = await manager.list_workspaces()
+            workspaces = await manager.alist_workspaces()
 
             # Should at least contain the default workspace
             # (may contain more if table has data from other tests)

@@ -258,7 +258,7 @@ DLIGHTRAG_MCP_HOST=127.0.0.1 \
 dlightrag-mcp
 ```
 
-MCP tools include `retrieve`, `answer`, `ingest`, `ingest_job_status`,
+MCP tools include `retrieve`, `answer`, `ingest`, `get_ingest_job`,
 `list_files`, `delete_files`, `list_workspaces`, `create_workspace`, and
 `delete_workspace`.
 
