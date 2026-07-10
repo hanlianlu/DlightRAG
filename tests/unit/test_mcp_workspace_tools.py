@@ -57,6 +57,7 @@ def _tool_json(result):
 def mock_mcp_manager(monkeypatch):
     manager = AsyncMock()
     manager.alist_workspaces = AsyncMock(return_value=["default"])
+    manager.alist_workspace_records = AsyncMock(return_value=[{"workspace": "default"}])
     manager.acreate_workspace = AsyncMock()
     manager.areset = AsyncMock(return_value={"workspaces": {"old_ws": {}}, "total_errors": 0})
     manager.aretrieve = AsyncMock()
@@ -110,10 +111,12 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "referenced_image_ids" in answer_props
     assert answer_props["semantic_highlights"]["default"] is False
     assert "filters" in answer_props
+    assert answer_props["all_workspaces"]["default"] is False
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
     assert "semantic_highlights" not in retrieve_props
     assert "chunk_top_k" in retrieve_props
+    assert retrieve_props["all_workspaces"]["default"] is False
     retrieve_image_block_schema = _query_image_schema(
         retrieve_tool.inputSchema,
         retrieve_props["query_images"],
@@ -123,6 +126,7 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     ingest_tool = next(tool for tool in tools if tool.name == "ingest")
     ingest_props = ingest_tool.inputSchema["properties"]
     assert "title" in ingest_props
+    assert "all_workspaces" not in ingest_props
     assert "author" in ingest_props
     assert "metadata" in ingest_props
     assert "url" in ingest_props
@@ -290,6 +294,77 @@ async def test_mcp_jwt_claims_access_control_denies_unmapped_workspace(
 
     assert "Access denied" in _tool_text(result)
     mock_mcp_manager.aretrieve.assert_not_awaited()
+
+
+async def test_mcp_retrieve_all_workspaces_uses_visible_records(mock_mcp_manager) -> None:
+    mock_mcp_manager.alist_workspace_records.return_value = [
+        {"workspace": "default"},
+        {"workspace": "research_notes"},
+    ]
+    mock_mcp_manager.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
+
+    await mcp_server.mcp_app.call_tool(
+        "retrieve",
+        {"query": "x", "all_workspaces": True},
+    )
+
+    assert mock_mcp_manager.aretrieve.await_args.kwargs["workspaces"] == [
+        "default",
+        "research_notes",
+    ]
+
+
+async def test_mcp_all_workspaces_rejects_empty_authorized_set(
+    mock_mcp_manager,
+    test_config: DlightragConfig,
+) -> None:
+    test_config.access_control = AccessControlConfig(mode="jwt_claims", rules=[])
+
+    with request_scope_context(RequestScope(user_id="alice", auth_mode="jwt")):
+        result = await mcp_server.mcp_app.call_tool(
+            "answer",
+            {"query": "x", "all_workspaces": True},
+        )
+
+    assert "No workspaces" in _tool_text(result)
+    mock_mcp_manager.aanswer.assert_not_awaited()
+
+
+async def test_mcp_all_workspaces_is_relative_to_query_authorization(
+    mock_mcp_manager,
+    test_config: DlightragConfig,
+) -> None:
+    registered = [f"ws_{index:02d}" for index in range(14)]
+    allowed = registered[:10]
+    test_config.access_control = AccessControlConfig(
+        mode="jwt_claims",
+        rules=[
+            AccessControlRuleConfig(
+                claim="groups",
+                value="finance-rag-readers",
+                workspaces=allowed,
+                actions=["workspace.query"],
+            )
+        ],
+    )
+    mock_mcp_manager.alist_workspace_records.return_value = [
+        {"workspace": workspace} for workspace in registered
+    ]
+    mock_mcp_manager.aretrieve.return_value = RetrievalResult(contexts={"chunks": []})
+
+    with request_scope_context(
+        RequestScope(
+            user_id="alice",
+            auth_mode="jwt",
+            claims={"groups": ["finance-rag-readers"]},
+        )
+    ):
+        await mcp_server.mcp_app.call_tool(
+            "retrieve",
+            {"query": "x", "all_workspaces": True},
+        )
+
+    assert mock_mcp_manager.aretrieve.await_args.kwargs["workspaces"] == allowed
 
 
 async def test_mcp_rejects_invalid_metadata_policy(mock_mcp_manager) -> None:

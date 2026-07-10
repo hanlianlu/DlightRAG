@@ -13,17 +13,17 @@ from dlightrag.core.client_contracts import (
     QueryImage,
     SourceType,
 )
+from dlightrag.core.query_workspaces import QueryWorkspaceSelection
 
 
 class MCPInput(ClientContractModel):
     pass
 
 
-class RetrieveInput(MCPInput):
+class RetrieveInput(QueryWorkspaceSelection):
     query: str
     top_k: int | None = None
     chunk_top_k: int | None = None
-    workspaces: list[str] | None = None
     filters: dict[str, Any] | None = None
     query_images: list[QueryImage] = Field(default_factory=list, max_length=3)
     session_id: str | None = None
