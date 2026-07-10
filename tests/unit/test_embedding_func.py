@@ -97,10 +97,11 @@ def test_embedding_func_enables_asymmetric_by_default_for_capable_provider() -> 
 def test_embedding_func_uses_lightrag_symmetric_fallback_for_unsupported_auto() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
-            provider="qwen_openai_compatible",
+            provider="openai_compatible",
             model="qwen3-vl-embedding-2b",
             api_key="sk-test",
             dim=2048,
+            input_modality="multimodal",
             startup_probe=False,
         )
     )
@@ -134,10 +135,11 @@ async def test_embedding_func_can_reuse_service_embedder() -> None:
 def test_embedding_func_rejects_required_asymmetric_for_unsupported_provider() -> None:
     cfg = DlightragConfig(
         embedding=EmbeddingConfig(
-            provider="qwen_openai_compatible",
+            provider="openai_compatible",
             model="qwen3-vl-embedding-2b",
             api_key="sk-test",
             dim=2048,
+            input_modality="multimodal",
             asymmetric="require",
             startup_probe=False,
         )

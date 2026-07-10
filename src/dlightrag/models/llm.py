@@ -274,7 +274,7 @@ def get_embedding_func(config: DlightragConfig, *, embedder: Any | None = None) 
 def get_multimodal_embedder(config: DlightragConfig) -> Any:
     """Build a provider-aware multimodal embedder for text and images."""
     from dlightrag.models.multimodal_embedding import MultimodalEmbedder
-    from dlightrag.models.providers.embed_providers import detect_embed_provider
+    from dlightrag.models.providers.embed_providers import get_embed_provider
 
     cfg = config.embedding
     return MultimodalEmbedder(
@@ -282,7 +282,7 @@ def get_multimodal_embedder(config: DlightragConfig) -> Any:
         api_key=cfg.api_key or "",
         base_url=cfg.base_url or "",
         dim=cfg.dim,
-        provider=detect_embed_provider(cfg.model, provider=cfg.provider, base_url=cfg.base_url),
+        provider=get_embed_provider(cfg.provider),
         asymmetric=cfg.asymmetric,
         batch_size=config.embedding_func_max_async,
         timeout=float(config.embedding_request_timeout),

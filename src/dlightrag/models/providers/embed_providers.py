@@ -3,7 +3,6 @@
 
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from dlightrag.models.embedding_inputs import (
     EmbeddingInput,
@@ -128,14 +127,6 @@ class OpenAICompatibleEmbedProvider(EmbedProvider):
         if output_dimension is not None:
             payload["dimensions"] = output_dimension
         return payload
-
-
-class QwenOpenAICompatibleEmbedProvider(OpenAICompatibleEmbedProvider):
-    """OpenAI-compatible Qwen3-VL embedding servers, including LM Studio."""
-
-    supports_images = True
-    supports_asymmetric = False
-    default_dim = 2048
 
 
 class VoyageEmbedProvider(EmbedProvider):
@@ -314,7 +305,6 @@ class OllamaEmbedProvider(EmbedProvider):
 _EMBED_REGISTRY: dict[str, type[EmbedProvider]] = {
     "voyage": VoyageEmbedProvider,
     "dashscope_qwen": DashScopeQwenEmbedProvider,
-    "qwen_openai_compatible": QwenOpenAICompatibleEmbedProvider,
     "gemini": GeminiEmbedProvider,
     "jina": JinaEmbedProvider,
     "openai_compatible": OpenAICompatibleEmbedProvider,
@@ -322,45 +312,10 @@ _EMBED_REGISTRY: dict[str, type[EmbedProvider]] = {
 }
 
 
-def detect_embed_provider(
-    model: str,
-    provider: str | None = None,
-    *,
-    base_url: str | None = None,
-) -> EmbedProvider:
-    """Auto-detect embed provider: explicit > base_url heuristic > model name."""
-    if provider is not None:
-        cls = _EMBED_REGISTRY.get(provider.lower())
-        if cls is None:
-            available = ", ".join(sorted(_EMBED_REGISTRY))
-            raise ValueError(f"Unknown embed provider {provider!r}. Available: {available}")
-        return cls()
-
-    if base_url:
-        parsed = urlparse(base_url)
-        host = (parsed.hostname or "").lower()
-        port = parsed.port
-        name = model.lower()
-        if port == 11434:
-            return OllamaEmbedProvider()
-        if (
-            host.endswith(".generativelanguage.googleapis.com")
-            or host == "generativelanguage.googleapis.com"
-        ):
-            return GeminiEmbedProvider()
-        if "dashscope" in host or "aliyuncs" in host:
-            return DashScopeQwenEmbedProvider()
-        if "qwen3-vl-embedding" in name:
-            return QwenOpenAICompatibleEmbedProvider()
-
-    name = model.lower()
-    if "voyage" in name:
-        return VoyageEmbedProvider()
-    if "jina" in name:
-        return JinaEmbedProvider()
-    if "gemini" in name:
-        return GeminiEmbedProvider()
-    if "qwen3-vl-embedding" in name:
-        return DashScopeQwenEmbedProvider()
-
-    return OpenAICompatibleEmbedProvider()
+def get_embed_provider(provider: str) -> EmbedProvider:
+    """Instantiate an embedding transport serializer by explicit config name."""
+    cls = _EMBED_REGISTRY.get(provider)
+    if cls is None:
+        available = ", ".join(sorted(_EMBED_REGISTRY))
+        raise ValueError(f"Unknown embedding provider {provider!r}. Available: {available}")
+    return cls()

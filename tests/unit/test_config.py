@@ -139,6 +139,7 @@ class TestEmbeddingConfig:
         assert cfg.model == "voyage-multimodal-3.5"
         assert cfg.dim == 1024
         assert cfg.max_token_size == 8192
+        assert cfg.input_modality == "auto"
         assert cfg.asymmetric == "auto"
         assert cfg.startup_probe is True
 
@@ -155,6 +156,25 @@ class TestEmbeddingConfig:
         assert cfg.max_token_size == 4096
         assert cfg.asymmetric == "require"
         assert cfg.startup_probe is False
+
+    @pytest.mark.parametrize("input_modality", ["auto", "text", "multimodal"])
+    def test_accepts_input_modality(self, input_modality: str) -> None:
+        cfg = EmbeddingConfig(
+            provider="openai_compatible",
+            model="embedding-model",
+            input_modality=cast(Any, input_modality),
+        )
+
+        assert cfg.input_modality == input_modality
+
+    def test_rejects_removed_model_profile_provider(self) -> None:
+        removed_provider = "qwen_" + "openai_compatible"
+
+        with pytest.raises(ValidationError):
+            EmbeddingConfig(
+                provider=cast(Any, removed_provider),
+                model="qwen3-vl-embedding-2b",
+            )
 
     @pytest.mark.parametrize("kwargs", [{"dim": 0}, {"max_token_size": 0}])
     def test_rejects_invalid_numeric_bounds(self, kwargs: dict[str, Any]) -> None:

@@ -11,19 +11,18 @@ from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 from dlightrag.models.providers.embed_providers import (
     GeminiEmbedProvider,
     OllamaEmbedProvider,
-    QwenOpenAICompatibleEmbedProvider,
     VoyageEmbedProvider,
 )
 from dlightrag.utils.images import decode_image_base64
 
 
 def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
-    provider = QwenOpenAICompatibleEmbedProvider()
+    provider = GeminiEmbedProvider()
     embedder = MultimodalEmbedder(
-        model="qwen3-vl-embedding-2b",
-        base_url="http://localhost:1234/v1",
+        model="gemini-embedding-2",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
         api_key="key",
-        dim=2048,
+        dim=1536,
         provider=provider,
         asymmetric="auto",
     )
@@ -35,7 +34,7 @@ def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
     assert embedder.supports_asymmetric is False
     assert "input_type" not in index_payload
     assert "input_type" not in query_payload
-    assert index_payload["input"][0].startswith("data:image/png;base64,")
+    assert index_payload["content"]["parts"][0]["inline_data"]["mime_type"] == "image/png"
 
 
 def test_image_embedder_uses_asymmetric_by_default_for_capable_provider() -> None:
