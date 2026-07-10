@@ -31,6 +31,7 @@ from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.query_images import PreparedQueryImages, prepare_query_images
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
+from dlightrag.core.query_workspaces import resolve_query_workspaces
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
@@ -1119,6 +1120,22 @@ class RAGServiceManager:
         kwargs["chunk_top_k"] = candidate_top_k
         return _AnswerLimits(candidate_top_k=candidate_top_k, context_top_k=context_top_k)
 
+    async def _resolve_manager_query_workspaces(
+        self,
+        *,
+        workspace: str | None,
+        workspaces: list[str] | None,
+        all_workspaces: bool,
+    ) -> list[str]:
+        available = await self.alist_workspaces() if all_workspaces else None
+        return resolve_query_workspaces(
+            default_workspace=self._config.workspace,
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            available_workspaces=available,
+        )
+
     async def _prepare_answer_retrieval(
         self,
         query: str,
@@ -1178,6 +1195,7 @@ class RAGServiceManager:
         *,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        all_workspaces: bool = False,
         plan: QueryPlan | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
@@ -1204,7 +1222,11 @@ class RAGServiceManager:
             kwargs["multimodal_content"] = multimodal_content
         kwargs["top_k"] = requested_top_k or self._config.top_k
         kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
-        ws_list = workspaces or [workspace or self._config.workspace]
+        ws_list = await self._resolve_manager_query_workspaces(
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+        )
         scoped = _scope_for_workspaces(scope, ws_list)
         effective_query = plan.standalone_query if plan is not None else query
         prepared = await prepare_query_images(
@@ -1269,6 +1291,7 @@ class RAGServiceManager:
         conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        all_workspaces: bool = False,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         answer_context_top_k: int | None = None,
@@ -1287,7 +1310,11 @@ class RAGServiceManager:
         from retrieval-time ``multimodal_content`` in ``kwargs``: this list
         only affects answer generation, never the retrieval pipeline.
         """
-        ws_list = workspaces or [workspace or self._config.workspace]
+        ws_list = await self._resolve_manager_query_workspaces(
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+        )
         scoped = _scope_for_workspaces(scope, ws_list)
         kwargs = _drop_none(
             {
@@ -1387,6 +1414,7 @@ class RAGServiceManager:
         conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
+        all_workspaces: bool = False,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         answer_context_top_k: int | None = None,
@@ -1401,7 +1429,11 @@ class RAGServiceManager:
 
         See ``aanswer`` for ``query_images`` semantics.
         """
-        ws_list = workspaces or [workspace or self._config.workspace]
+        ws_list = await self._resolve_manager_query_workspaces(
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+        )
         scoped = _scope_for_workspaces(scope, ws_list)
         kwargs = _drop_none(
             {

@@ -24,6 +24,7 @@ from dlightrag.config import (
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.query_images import prepare_query_images
 from dlightrag.core.query_planner import QueryPlanner
+from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 from dlightrag.core.session_images import SessionImageStore
@@ -83,7 +84,13 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
         assert name in IngestSpec.model_fields
 
     retrieve_params = inspect.signature(RAGServiceManager.aretrieve).parameters
-    for name in ("top_k", "chunk_top_k", "filters", "multimodal_content"):
+    for name in (
+        "all_workspaces",
+        "top_k",
+        "chunk_top_k",
+        "filters",
+        "multimodal_content",
+    ):
         assert name in retrieve_params
 
     answer_params = inspect.signature(RAGServiceManager.aanswer).parameters
@@ -95,8 +102,12 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
         "multimodal_content",
         "session_id",
         "referenced_image_ids",
+        "all_workspaces",
     ):
         assert name in answer_params
+
+    stream_params = inspect.signature(RAGServiceManager.aanswer_stream).parameters
+    assert "all_workspaces" in stream_params
 
     delete_params = inspect.signature(RAGServiceManager.adelete_files).parameters
     assert "dry_run" in delete_params
@@ -425,6 +436,44 @@ class TestRouting:
         manager = RAGServiceManager(config=test_cfg)
         await manager.aretrieve("query", workspaces=["ws_a", "ws_b"])
         mock_fed.assert_awaited_once()
+
+    @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
+    async def test_aretrieve_all_workspaces_expands_registry(
+        self,
+        mock_federated,
+        test_cfg,
+    ) -> None:
+        mock_federated.return_value = RetrievalResult(contexts={"chunks": []})
+        manager = RAGServiceManager(config=test_cfg)
+        manager.alist_workspaces = AsyncMock(return_value=["default", "Research Notes"])
+
+        await manager.aretrieve("query", all_workspaces=True)
+
+        manager.alist_workspaces.assert_awaited_once()
+        assert mock_federated.await_args.args[1] == ["default", "research_notes"]
+
+    @pytest.mark.parametrize("method_name", ["aretrieve", "aanswer", "aanswer_stream"])
+    @pytest.mark.parametrize(
+        "explicit_selection",
+        [
+            {"workspace": "finance"},
+            {"workspaces": ["finance"]},
+        ],
+    )
+    async def test_all_workspaces_conflicts_with_explicit_selection(
+        self,
+        method_name: str,
+        explicit_selection: dict[str, object],
+        test_cfg,
+    ) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+
+        with pytest.raises(ValueError, match="all_workspaces"):
+            await getattr(manager, method_name)(
+                "query",
+                all_workspaces=True,
+                **explicit_selection,
+            )
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aretrieve_default_workspace(self, mock_create, test_cfg) -> None:
@@ -831,6 +880,28 @@ class TestAnswerViaEngine:
         assert result is expected_result
 
     @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
+    async def test_aanswer_all_workspaces_uses_federated_retrieve(
+        self,
+        mock_federated,
+        test_cfg,
+    ) -> None:
+        contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_federated.return_value = RetrievalResult(contexts=contexts)
+        engine = AsyncMock()
+        expected = RetrievalResult(answer="answer", contexts=contexts)
+        engine.generate.return_value = expected
+        manager = RAGServiceManager(config=test_cfg)
+        manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
+        manager._answer_engine = engine
+        manager._query_planner = QueryPlanner(llm_func=None)
+
+        result = await manager.aanswer("query", all_workspaces=True)
+
+        manager.alist_workspaces.assert_awaited_once()
+        assert mock_federated.await_args.args[1] == ["ws_a", "ws_b"]
+        assert result is expected
+
+    @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_stream_multi_workspace(
         self, mock_create, mock_fed_retrieve, test_cfg
@@ -857,6 +928,32 @@ class TestAnswerViaEngine:
             context_top_k=30,
         )
         assert contexts is mock_contexts
+
+    @patch("dlightrag.core.servicemanager.federated_retrieve", new_callable=AsyncMock)
+    async def test_aanswer_stream_all_workspaces_uses_federated_retrieve(
+        self,
+        mock_federated,
+        test_cfg,
+    ) -> None:
+        contexts = {"chunks": [], "entities": [], "relationships": []}
+        mock_federated.return_value = RetrievalResult(contexts=contexts)
+        engine = AsyncMock()
+        answer_stream = AsyncMock()
+        engine.generate_stream.return_value = (contexts, answer_stream)
+        manager = RAGServiceManager(config=test_cfg)
+        manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
+        manager._answer_engine = engine
+        manager._query_planner = QueryPlanner(llm_func=None)
+
+        resolved_contexts, stream = await manager.aanswer_stream(
+            "query",
+            all_workspaces=True,
+        )
+
+        manager.alist_workspaces.assert_awaited_once()
+        assert mock_federated.await_args.args[1] == ["ws_a", "ws_b"]
+        assert resolved_contexts is contexts
+        assert stream is not None
 
     def test_get_answer_engine_lazy_creates(self, test_cfg) -> None:
         """_get_answer_engine() lazily creates an AnswerEngine instance."""
