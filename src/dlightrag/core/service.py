@@ -228,6 +228,7 @@ class RAGService:
         embedder: Any,
         *,
         startup_probe: bool,
+        require_image_support: bool,
     ) -> bool:
         """Return whether DlightRAG direct image vectors are safe to use.
 
@@ -235,6 +236,11 @@ class RAGService:
         image; it does not touch LightRAG storage, PostgreSQL, or local files.
         """
         if not getattr(embedder, "supports_images", False):
+            if require_image_support:
+                raise ValueError(
+                    "embedding.input_modality='multimodal' cannot be honored because "
+                    f"{embedder.__class__.__name__} does not support image inputs"
+                )
             logger.info(
                 "Direct image embedding disabled: %s does not support image inputs",
                 embedder.__class__.__name__,
@@ -244,7 +250,12 @@ class RAGService:
             return True
         try:
             await embedder.probe_image_embedding()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            if require_image_support:
+                raise ValueError(
+                    "embedding.input_modality='multimodal' requires working image embeddings, "
+                    "but the startup probe failed"
+                ) from exc
             logger.warning(
                 "Direct image embedding probe failed; using LightRAG semantic visual path only",
                 exc_info=True,
@@ -456,6 +467,7 @@ class RAGService:
         self._direct_image_embedding_enabled = await self._resolve_direct_image_embedding_enabled(
             multimodal_embedder,
             startup_probe=config.embedding.startup_probe,
+            require_image_support=config.embedding.input_modality == "multimodal",
         )
 
         # Vision probe lives in RAGServiceManager._probe_vision_support()

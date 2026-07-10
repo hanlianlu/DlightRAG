@@ -367,6 +367,9 @@ async def run_rebuild(
                 direct_enabled = await RAGService._resolve_direct_image_embedding_enabled(
                     multimodal_embedder,
                     startup_probe=resolved_config.embedding.startup_probe,
+                    require_image_support=(
+                        resolved_config.embedding.input_modality == "multimodal"
+                    ),
                 )
                 if direct_enabled:
                     stats = await restore_sidecar_image_vectors(

@@ -304,7 +304,10 @@ def _fake_config() -> SimpleNamespace:
         parser_sidecars=SimpleNamespace(
             vlm=SimpleNamespace(min_image_pixel=64),
         ),
-        embedding=SimpleNamespace(model="text-embedding-3-small"),
+        embedding=SimpleNamespace(
+            model="text-embedding-3-small",
+            input_modality="auto",
+        ),
         bm25_enabled=False,
         bm25_profiles=[],
         apply_lightrag_backend_env=lambda force=False: None,
