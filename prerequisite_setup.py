@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.11"
+# requires-python = ">=3.14"
 # dependencies = ["questionary>=2", "rich>=13", "ruamel.yaml>=0.18"]
 # ///
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0

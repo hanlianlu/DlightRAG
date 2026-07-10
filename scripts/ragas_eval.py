@@ -33,6 +33,11 @@ from dotenv import load_dotenv
 from lightrag.evaluation.eval_rag_quality import RAGEvaluator
 from lightrag.utils import logger
 
+
+class EvalError(RuntimeError):
+    """A DlightRAG API call failed while generating an evaluation response."""
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Auto-resolve eval credentials from DlightRAG config
 # ═══════════════════════════════════════════════════════════════════
@@ -241,23 +246,23 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
             }
 
         except httpx.ConnectError as exc:
-            raise Exception(
+            raise EvalError(
                 f"Cannot connect to DlightRAG API at {self.rag_api_url}/answer\n"
                 f"  Make sure DlightRAG is running: docker compose up -d\n"
                 f"  Error: {exc}"
             ) from exc
         except httpx.HTTPStatusError as exc:
-            raise Exception(
+            raise EvalError(
                 f"DlightRAG API error {exc.response.status_code}: {exc.response.text}"
             ) from exc
         except httpx.ReadTimeout as exc:
-            raise Exception(
+            raise EvalError(
                 f"Request timeout waiting for DlightRAG response\n"
                 f"  Question: {question[:100]}...\n"
                 f"  Error: {exc}"
             ) from exc
-        except Exception as exc:
-            raise Exception(f"Error calling DlightRAG API: {type(exc).__name__}: {exc}") from exc
+        except httpx.HTTPError as exc:
+            raise EvalError(f"DlightRAG API request failed: {type(exc).__name__}: {exc}") from exc
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -265,7 +270,7 @@ class DlightRAGAdapterEvaluator(RAGEvaluator):
 # ═══════════════════════════════════════════════════════════════════
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="RAGAS evaluation for DlightRAG",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -353,7 +358,7 @@ async def _run() -> None:
     # Load .env before argparse reads env-backed defaults; resolve project config
     # after argparse so `--help` exits before credential auto-resolution logs.
     load_dotenv(dotenv_path=".env", override=False)
-    args = _build_parser().parse_args()
+    args = build_parser().parse_args()
     if args.api:
         os.environ["DLIGHTRAG_API_URL"] = args.api
     if args.api_key:
