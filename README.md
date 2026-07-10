@@ -218,7 +218,7 @@ async def main() -> None:
             dim=3072,
         ),
     )
-    manager = await RAGServiceManager.create(config)
+    manager = await RAGServiceManager.acreate(config)
     try:
         await manager.aingest(
             workspace,
@@ -227,7 +227,7 @@ async def main() -> None:
         answer = await manager.aanswer("What are the key findings?", workspace=workspace)
         print(answer.answer)
     finally:
-        await manager.close()
+        await manager.aclose()
 
 
 asyncio.run(main())

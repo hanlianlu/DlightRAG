@@ -71,7 +71,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     set_config(cfg)
     install_fake_model_functions(monkeypatch, dim=cfg.embedding.dim)
 
-    service = await RAGService.create(config=cfg, enable_vlm=True)
+    service = await RAGService.acreate(config=cfg, enable_vlm=True)
     doc_path = tmp_path / "pg18-native-smoke.md"
     doc_text = (
         "# PG18 native smoke document\n\n"
@@ -150,5 +150,5 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
     finally:
         if service._initialized:
             await service.areset(keep_files=False)
-        await service.close()
+        await service.aclose()
         await pg_pool.close()

@@ -56,7 +56,7 @@ class BynderSource(AsyncDataSource):
         )
 
 
-manager = await RAGServiceManager.create(DlightragConfig())
+manager = await RAGServiceManager.acreate(DlightragConfig())
 try:
     # Local files or directory
     result = await manager.aingest("default", IngestSpec(source_type="local", path="./docs"))
@@ -98,7 +98,7 @@ try:
     )
     status = await manager.aget_ingest_job(job["job_id"])
 finally:
-    await manager.close()
+    await manager.aclose()
 ```
 
 DlightRAG calls `aiter_documents()` to discover `SourceDocument` descriptors and

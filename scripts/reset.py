@@ -68,7 +68,7 @@ async def _run(
     print(f"  Graph:      {config.graph_storage}")
     print(f"  Workspace:  {config.workspace}")
 
-    manager = await RAGServiceManager.create(config)
+    manager = await RAGServiceManager.acreate(config)
     try:
         target_ws = None if reset_all else (workspace or config.workspace)
         result = await manager.areset(
@@ -78,7 +78,7 @@ async def _run(
         )
         return result
     finally:
-        await manager.close()
+        await manager.aclose()
 
 
 def main() -> int:

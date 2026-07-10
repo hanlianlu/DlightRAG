@@ -290,7 +290,7 @@ class RAGServiceManager:
         return self._config
 
     @classmethod
-    async def create(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
+    async def acreate(cls, config: DlightragConfig | None = None) -> RAGServiceManager:
         """Async factory — creates manager and warms the default workspace."""
         from dlightrag.observability import init_tracing
 
@@ -405,7 +405,7 @@ class RAGServiceManager:
 
             try:
                 ws_config = self._config.model_copy(update={"workspace": workspace})
-                svc = await RAGService.create(
+                svc = await RAGService.acreate(
                     config=ws_config,
                     rerank_supports_vision=self._rerank_supports_vision,
                 )
@@ -822,7 +822,7 @@ class RAGServiceManager:
             # Close and evict from cache even after reset errors.
             if ws in self._services:
                 try:
-                    await self._services[ws].close()
+                    await self._services[ws].aclose()
                 except Exception:
                     logger.warning(
                         "Failed to close service for '%s'",
@@ -1502,7 +1502,7 @@ class RAGServiceManager:
         """Internal: discover all workspaces."""
         return await self.alist_workspaces()
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         """Close all managed RAGService instances."""
         from dlightrag.observability import shutdown_tracing
 
@@ -1525,7 +1525,7 @@ class RAGServiceManager:
 
         for ws, svc in self._services.items():
             try:
-                await svc.close()
+                await svc.aclose()
             except Exception:
                 logger.warning("Failed to close workspace service '%s'", ws, exc_info=True)
         self._services.clear()

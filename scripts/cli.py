@@ -15,7 +15,7 @@ Usage:
     uv run scripts/cli.py ingest --source azure_blob --container c --prefix reports/
 
     # S3 ingestion
-    uv run scripts/cli.py ingest --source s3 --bucket my-bucket --key docs/report.pdf --region us-east-1
+    uv run scripts/cli.py ingest --source s3 --bucket my-bucket --s3-key docs/report.pdf --s3-region us-east-1
     uv run scripts/cli.py ingest --source s3 --bucket my-bucket --prefix docs/
 
     # URL ingestion
@@ -112,7 +112,7 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
         if args.container_name or args.blob_path or args.prefix:
             _die("--container, --blob-path, --prefix are only for azure_blob source")
         if args.bucket or args.s3_key:
-            _die("--bucket, --key are only for s3 source")
+            _die("--bucket, --s3-key are only for s3 source")
     elif source == "azure_blob":
         if args.path:
             _die("positional path is not used with azure_blob. Use --blob-path or --prefix.")
@@ -121,14 +121,14 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
         if args.blob_path and args.prefix:
             _die("--blob-path and --prefix are mutually exclusive")
         if args.bucket or args.s3_key:
-            _die("--bucket, --key are only for s3 source")
+            _die("--bucket, --s3-key are only for s3 source")
     elif source == "s3":
         if args.path:
             _die("positional path is not used with s3")
         if not args.bucket:
             _die("s3 requires --bucket")
         if args.s3_key and args.prefix:
-            _die("--key and --prefix are mutually exclusive for s3")
+            _die("--s3-key and --prefix are mutually exclusive for s3")
         if args.container_name or args.blob_path:
             _die("--container, --blob-path are only for azure_blob source")
     elif source == "url":
@@ -306,7 +306,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         config = config.model_copy(update={"workspace": workspace})
     print(f"Workspace: {workspace}\n")
 
-    service = await RAGService.create(config=config)
+    service = await RAGService.acreate(config=config)
     try:
         result = await service.aingest(source_type=source, **kwargs)
         _print_json(result)
@@ -316,7 +316,7 @@ async def _run_ingest(args: argparse.Namespace) -> None:
         print(f"Ingestion failed: {e}", file=sys.stderr)
         sys.exit(1)
     finally:
-        await service.close()
+        await service.aclose()
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
@@ -550,7 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  %(prog)s ./docs --replace                                # local with replace\n"
             "  %(prog)s --source azure_blob --container my-container    # entire container\n"
             "  %(prog)s --source azure_blob --container c --prefix rpt/ # by prefix\n"
-            "  %(prog)s --source s3 --bucket my-bucket --key doc.pdf    # S3 single object\n"
+            "  %(prog)s --source s3 --bucket my-bucket --s3-key doc.pdf    # S3 single object\n"
             "  %(prog)s --source s3 --bucket my-bucket --prefix docs/   # S3 by prefix\n"
             "  %(prog)s --source url --url https://example.com/doc.pdf  # URL single document"
         ),
@@ -567,8 +567,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--blob-path", dest="blob_path", help="Specific blob (azure_blob)")
     p_ingest.add_argument("--prefix", help="Blob prefix filter (azure_blob/s3)")
     p_ingest.add_argument("--bucket", help="S3 bucket name")
-    p_ingest.add_argument("--region", dest="s3_region", help="S3 region name")
-    p_ingest.add_argument("--key", dest="s3_key", help="S3 object key")
+    p_ingest.add_argument("--s3-region", dest="s3_region", help="S3 region name")
+    p_ingest.add_argument("--s3-key", dest="s3_key", help="S3 object key")
     p_ingest.add_argument("--url", help="Public or signed HTTPS document URL")
     p_ingest.add_argument("--urls", nargs="+", help="Public or signed HTTPS document URLs")
     p_ingest.add_argument("--filename", help="Parser filename for a single URL")
