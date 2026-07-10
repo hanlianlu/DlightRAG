@@ -105,10 +105,8 @@ class OpenAICompatibleEmbedProvider(EmbedProvider):
     """POST /embeddings for OpenAI-compatible embedding servers."""
 
     endpoint = "/embeddings"
-    supports_images = False
+    image_input_capability = "opt_in"
     supports_asymmetric = False
-    default_dim = None
-    known_dims = None
 
     def build_payload(
         self,
@@ -133,10 +131,8 @@ class VoyageEmbedProvider(EmbedProvider):
     """POST /multimodalembeddings for Voyage multimodal 3/3.5."""
 
     endpoint = "/multimodalembeddings"
-    supports_images = True
+    image_input_capability = "native"
     supports_asymmetric = True
-    default_dim = 1024
-    known_dims = frozenset({1024})
 
     def build_payload(
         self,
@@ -162,10 +158,8 @@ class JinaEmbedProvider(EmbedProvider):
     """POST /v1/embeddings for Jina v4 multimodal embeddings."""
 
     endpoint = "/v1/embeddings"
-    supports_images = True
+    image_input_capability = "native"
     supports_asymmetric = True
-    default_dim = 2048
-    known_dims = None
 
     def build_payload(
         self,
@@ -192,11 +186,8 @@ class DashScopeQwenEmbedProvider(EmbedProvider):
     """DashScope Qwen3-VL multimodal embedding endpoint."""
 
     endpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
-    supports_images = True
-    supports_fused_inputs = True
+    image_input_capability = "native"
     supports_asymmetric = False
-    default_dim = 2560
-    known_dims = frozenset({2560, 2048, 1536, 1024, 768, 512, 256})
 
     def build_payload(
         self,
@@ -239,10 +230,8 @@ class GeminiEmbedProvider(EmbedProvider):
     """
 
     endpoint = "/models/{model}:embedContent"
-    supports_images = True
+    image_input_capability = "native"
     supports_asymmetric = False
-    default_dim = 3072
-    known_dims = frozenset({3072, 1536, 768})
 
     def build_payload(
         self,
@@ -281,7 +270,6 @@ class OllamaEmbedProvider(EmbedProvider):
     """POST /api/embed for text-only local Ollama embeddings."""
 
     endpoint = "/api/embed"
-    supports_images = False
     supports_asymmetric = False
 
     def build_payload(
