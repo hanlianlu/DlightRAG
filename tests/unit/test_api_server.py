@@ -447,6 +447,56 @@ class TestJWTAuth:
         mock_manager.aretrieve.assert_awaited_once()
 
     @pytest.mark.usefixtures("_patch_manager")
+    @pytest.mark.parametrize(
+        ("groups", "expected_status"),
+        [
+            (["finance-rag-readers"], 200),
+            (["legal-rag-readers"], 403),
+        ],
+    )
+    async def test_all_workspaces_is_relative_to_query_authorization(
+        self,
+        client: AsyncClient,
+        _api_app: FastAPI,
+        mock_config_no_auth_override: DlightragConfig,
+        mock_manager,
+        groups: list[str],
+        expected_status: int,
+    ) -> None:
+        registered = [f"ws_{index:02d}" for index in range(14)]
+        allowed = registered[:10]
+        mock_manager.alist_workspace_records.return_value = [
+            {"workspace": workspace} for workspace in registered
+        ]
+        mock_config_no_auth_override.access_control = AccessControlConfig(
+            mode="jwt_claims",
+            rules=[
+                AccessControlRuleConfig(
+                    claim="groups",
+                    value="finance-rag-readers",
+                    workspaces=allowed,
+                    actions=["workspace.query"],
+                )
+            ],
+        )
+        _api_app.dependency_overrides[get_current_user] = lambda: UserContext(
+            user_id="alice",
+            auth_mode="jwt",
+            claims={"groups": groups},
+        )
+
+        response = await client.post(
+            "/answer",
+            json={"query": "hello", "stream": False, "all_workspaces": True},
+        )
+
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            assert mock_manager.aanswer.await_args.kwargs["workspaces"] == allowed
+        else:
+            mock_manager.aanswer.assert_not_awaited()
+
+    @pytest.mark.usefixtures("_patch_manager")
     async def test_jwt_expired_token(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
@@ -1035,6 +1085,29 @@ class TestRetrieveEndpoint:
         assert "sources" in body
         assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] is None
 
+    async def test_retrieve_all_workspaces_uses_all_visible_records(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+    ) -> None:
+        mock_manager.alist_workspace_records.return_value = [
+            {"workspace": "default"},
+            {"workspace": "research_notes"},
+        ]
+        app.state.manager = mock_manager
+
+        response = await client.post(
+            "/retrieve",
+            json={"query": "hello", "all_workspaces": True},
+        )
+
+        assert response.status_code == 200
+        assert mock_manager.aretrieve.await_args.kwargs["workspaces"] == [
+            "default",
+            "research_notes",
+        ]
+
     async def test_retrieve_rejects_mode_field(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -1447,6 +1520,35 @@ class TestAnswerStreamMode:
         resp = await client.post("/answer", json={"query": "test", "stream": True})
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
+
+    async def test_stream_all_workspaces_uses_visible_records(
+        self,
+        client: AsyncClient,
+        mock_config: DlightragConfig,
+        mock_manager,
+    ) -> None:
+        async def mock_tokens():
+            yield "answer"
+
+        mock_manager.alist_workspace_records.return_value = [
+            {"workspace": "default"},
+            {"workspace": "research_notes"},
+        ]
+        mock_manager.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
+        app.state.manager = mock_manager
+
+        response = await client.post(
+            "/answer",
+            json={"query": "hello", "stream": True, "all_workspaces": True},
+        )
+
+        assert response.status_code == 200
+        await_args = mock_manager.aanswer_stream.await_args
+        assert await_args is not None
+        assert await_args.kwargs["workspaces"] == [
+            "default",
+            "research_notes",
+        ]
 
     async def test_stream_forwards_explicit_filters(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
