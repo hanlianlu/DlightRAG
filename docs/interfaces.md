@@ -146,10 +146,10 @@ fetched files under the workspace input root and points stored metadata
 | `path` | `string` | local | File or directory path relative to DlightRAG's managed `input_dir/<workspace>` |
 | `container_name` | `string` | azure_blob | Blob container name |
 | `blob_path` | `string` | — | Specific blob (mutually exclusive with `prefix`) |
-| `prefix` | `string` | azure_blob/s3 | Blob/key prefix filter; mutually exclusive with `blob_path`/`key` |
-| `bucket` | `string` | s3 | S3 bucket name |
+| `prefix` | `string` | — | Blob/key prefix filter for `azure_blob`/`s3` batches; mutually exclusive with `blob_path`/`key`. Omit (or pass `""`) to ingest the whole container/bucket. |
+| `bucket` | `string` | s3 | S3 bucket name. With neither `key` nor `prefix`, ingests the whole bucket. |
 | `region` | `string` | — | Optional S3 region for this ingest; falls back to `s3_region` or the AWS SDK environment/config defaults |
-| `key` | `string` | s3 | S3 object key; mutually exclusive with `prefix` |
+| `key` | `string` | — | S3 object key for a single object; mutually exclusive with `prefix` |
 | `url` | `string` | url | Single public or signed HTTPS document URL |
 | `urls` | `list[string]` | url | Multiple public or signed HTTPS document URLs; mutually exclusive with `url` |
 | `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |

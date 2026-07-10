@@ -672,7 +672,7 @@ class TestIngestEndpoint:
         assert resp.status_code == 422
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_s3_requires_bucket_and_key_or_prefix(
+    async def test_s3_requires_bucket(
         self, client: AsyncClient, mock_config: DlightragConfig
     ) -> None:
         resp = await client.post("/ingest", json={"source_type": "s3"})
@@ -795,6 +795,24 @@ class TestIngestEndpoint:
         mock_manager.astart_ingest_job.assert_awaited_once_with(
             "default",
             IngestSpec(source_type="s3", bucket="my-bucket", key="docs/file.pdf"),
+        )
+        mock_manager.aingest.assert_not_awaited()
+
+    async def test_s3_bucket_only_ingests_whole_bucket(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/ingest",
+            json={"source_type": "s3", "bucket": "my-bucket"},
+        )
+
+        assert resp.status_code == 202
+        assert resp.json()["job_id"] == "job-1"
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
+            "default",
+            IngestSpec(source_type="s3", bucket="my-bucket"),
         )
         mock_manager.aingest.assert_not_awaited()
 

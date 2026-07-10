@@ -109,8 +109,6 @@ class IngestSpec(ClientContractModel):
                     raise ValueError("'key'/'prefix' and 'documents' are mutually exclusive")
                 _require_document_field(self.documents, "key", source_type=self.source_type)
                 return self
-            if not self.key and self.prefix is None:
-                raise ValueError("'key' or 'prefix' is required for s3")
             if self.key and self.prefix is not None:
                 raise ValueError("'key' and 'prefix' are mutually exclusive")
         elif self.source_type == "url":
