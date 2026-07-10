@@ -32,7 +32,7 @@ llm:
     provider: openai
     model: google/gemini-3.1-flash-lite
     base_url: https://openrouter.ai/api/v1
-    structured_output: json_object
+    structured_output: json_schema
     temperature: 0.5
     timeout: 120.0
     model_kwargs:
@@ -59,13 +59,18 @@ llm:
       model_kwargs:
         thinking:
           type: disabled
-  # roles:
-  #   query:
-  #     provider: openai
-  #     model: gpt-5.2
-  #   vlm:
-  #     provider: gemini
-  #     model: google/gemini-3.5-flash
+    query:
+      provider: openai
+      model: Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
+      base_url: http://host.docker.internal:11434/v1 # (dockerized app for ollama)
+      structured_output: json_schema
+      temperature: 0.3
+      timeout: 120.0
+      model_kwargs:
+        reasoning_effort: "none"
+  #  vlm:
+  #    provider: gemini
+  #    model: google/gemini-3.5-flash
 
 embedding:
   provider: voyage
