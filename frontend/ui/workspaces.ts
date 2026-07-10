@@ -1,23 +1,10 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {bus, type WorkspaceRecord} from '../events/bus.ts';
+import {readWorkspaceDetail, toWorkspaceRecord, type WorkspaceEventDetail} from '../events/workspace_events.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
-import type {WorkspaceRecord} from '../events/bus.ts';
-
-type WorkspacePayload = {
-    workspace?: string;
-    id?: string;
-    display_name?: string;
-    displayName?: string;
-    embedding_model?: string;
-    embeddingModel?: string;
-    next_workspace?: string;
-    nextWorkspace?: string;
-    value?: WorkspacePayload;
-};
-
-type WorkspaceRecordInput = string | WorkspacePayload;
 
 let popoverEl: HTMLElement | null = null;
 
@@ -25,22 +12,11 @@ export function getWorkspaceRecords(): readonly WorkspaceRecord[] {
     return workspaceStore.records;
 }
 
-function payload(event: Event): WorkspacePayload {
-    const detail = (event as CustomEvent<WorkspacePayload>).detail;
-    return detail?.value || detail || {};
-}
-
-function normalizeRecord(record: WorkspaceRecordInput): WorkspaceRecord | null {
+function normalizeRecord(record: string | WorkspaceEventDetail): WorkspaceRecord | null {
     if (typeof record === 'string') {
         return {workspace: record, displayName: record, embeddingModel: ''};
     }
-    const workspace = record.workspace || record.id;
-    if (!workspace) return null;
-    return {
-        workspace,
-        displayName: record.display_name || record.displayName || workspace,
-        embeddingModel: record.embedding_model || record.embeddingModel || '',
-    };
+    return toWorkspaceRecord(record);
 }
 
 function workspaceName(workspace: string): string {
@@ -57,7 +33,7 @@ export function initWorkspaces(): void {
     if (!selector) return;
 
     try {
-        const records = (JSON.parse(selector.getAttribute('data-all') || '[]') as WorkspaceRecordInput[])
+        const records = (JSON.parse(selector.getAttribute('data-all') || '[]') as (string | WorkspaceEventDetail)[])
             .map(normalizeRecord)
             .filter((record): record is WorkspaceRecord => record !== null);
         let active: string[] = [];
@@ -77,18 +53,15 @@ export function initWorkspaces(): void {
 
 export function toggleWorkspace(workspace: string): void {
     workspaceStore.toggle(workspace);
-    renderWorkspaceSelector();
 }
 
 export function selectWorkspace(workspace: string): void {
     if (!workspace) return;
     workspaceStore.select(workspace);
-    renderWorkspaceSelector();
 }
 
 export function removeWorkspace(workspace: string, nextWorkspace?: string): void {
     workspaceStore.remove(workspace, nextWorkspace || '');
-    renderWorkspaceSelector();
 }
 
 function renderWorkspaceSelector(): void {
@@ -116,7 +89,6 @@ function renderWorkspaceSelector(): void {
 function selectAllWorkspaces(): void {
     if (workspaceStore.records.length === 0) return;
     workspaceStore.selectAll();
-    renderWorkspaceSelector();
     closeWorkspacePopover();
     openWorkspacePopover();
 }
@@ -350,29 +322,30 @@ function setupWorkspaceEvents(): void {
         closeButton.closest('dialog')?.close();
     });
 
+    // Server-push (htmx HX-Trigger) -> store. The ONLY place that knows the
+    // snake_case wire shape: normalize once, then let the store notify the UI.
     document.body.addEventListener('workspaceCreated', (event) => {
-        const detail = payload(event);
-        const workspace = detail.workspace;
-        if (!workspace) return;
-        workspaceStore.add({
-            workspace,
-            displayName: detail.display_name || detail.displayName || workspace,
-            embeddingModel: detail.embedding_model || detail.embeddingModel || '',
-        });
+        const record = toWorkspaceRecord(readWorkspaceDetail(event));
+        if (record) workspaceStore.add(record);
+    });
+    document.body.addEventListener('workspaceDeleted', (event) => {
+        const detail = readWorkspaceDetail(event);
+        if (detail.workspace) workspaceStore.remove(detail.workspace, detail.next_workspace || '');
+    });
+
+    // Store change -> workspace-selector UI (typed bus, camelCase).
+    bus.on('workspaceCreated', ({workspace}) => {
         renderWorkspaceSelector();
         closeWorkspacePopover();
         syncDataAllAttribute();
         showToast(`Workspace ${workspaceName(workspace)} created.`);
     });
-
-    document.body.addEventListener('workspaceDeleted', (event) => {
-        const detail = payload(event);
-        const workspace = detail.workspace;
-        if (!workspace) return;
-        removeWorkspace(workspace, detail.next_workspace || detail.nextWorkspace);
+    bus.on('workspaceDeleted', ({workspace}) => {
+        renderWorkspaceSelector();
         syncDataAllAttribute();
         const dialog = document.getElementById('delete-workspace-dialog') as HTMLDialogElement | null;
         if (dialog && dialog.open) dialog.close();
         showToast(`Workspace ${workspace} deleted.`);
     });
+    bus.on('workspaceToggled', () => renderWorkspaceSelector());
 }

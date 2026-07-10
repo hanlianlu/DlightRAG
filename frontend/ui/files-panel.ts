@@ -1,5 +1,6 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+import {bus} from '../events/bus.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
@@ -7,15 +8,6 @@ import {closestElement, openPanel} from './panel.ts';
 import {type RelativeFile, withRelativePath} from './folder-upload.ts';
 import {showToast} from './toast.ts';
 import {createWorkspace} from './workspaces.ts';
-
-type WorkspaceEventDetail = {
-    workspace?: string;
-    display_name?: string;
-    displayName?: string;
-    next_workspace?: string;
-    nextWorkspace?: string;
-    value?: WorkspaceEventDetail;
-};
 
 type IngestWorkspaceRecord = {
     workspace: string;
@@ -34,11 +26,6 @@ let nextPanelRequestId = 0;
 let ingestPollController: AbortController | null = null;
 let ingestPollTimer: number | null = null;
 let ingestPollWorkspace: string | null = null;
-
-function workspaceEventDetail(event: Event): WorkspaceEventDetail {
-    const detail = (event as CustomEvent<WorkspaceEventDetail>).detail;
-    return detail?.value || detail || {};
-}
 
 function isAbortError(error: unknown): boolean {
     return error instanceof DOMException && error.name === 'AbortError';
@@ -567,20 +554,15 @@ export function setupFilesPanel(): void {
         });
     }
 
-    document.body.addEventListener('workspaceCreated', (event) => {
-        const detail = workspaceEventDetail(event);
-        const workspace = detail.workspace;
-        if (!workspace) return;
+    bus.on('workspaceCreated', ({workspace}) => {
         ingestStore.set(workspace);
         updateIngestPillLabel();
         closeIngestPopover();
         if (isFilesPanelActive()) void refreshFilePanel(workspace);
     });
 
-    document.body.addEventListener('workspaceDeleted', (event) => {
-        const detail = workspaceEventDetail(event);
-        const nextWorkspace = detail.next_workspace || detail.nextWorkspace || workspaceStore.primary;
-        ingestStore.set(nextWorkspace);
+    bus.on('workspaceDeleted', ({nextWorkspace}) => {
+        ingestStore.set(nextWorkspace || workspaceStore.primary);
         updateIngestPillLabel();
         if (isFilesPanelActive()) void refreshFilePanel(ingestStore.workspace);
     });
