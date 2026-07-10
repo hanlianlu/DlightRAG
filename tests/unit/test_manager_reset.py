@@ -56,7 +56,7 @@ def _make_mock_service(workspace: str = "default") -> MagicMock:
             "errors": [],
         }
     )
-    svc.close = AsyncMock()
+    svc.aclose = AsyncMock()
     return svc
 
 
@@ -70,7 +70,7 @@ class TestManagerAresetSingleWorkspace:
             result = await manager.areset(workspace="ws1")
 
         svc.areset.assert_awaited_once_with(keep_files=False, dry_run=False)
-        svc.close.assert_awaited_once()
+        svc.aclose.assert_awaited_once()
         assert "ws1" not in manager._services
         assert "ws1" in result["workspaces"]
         assert result["total_errors"] == 0
@@ -178,7 +178,7 @@ class TestManagerAresetCacheEviction:
             call_order.append("close")
 
         svc.areset = AsyncMock(side_effect=track_areset)
-        svc.close = AsyncMock(side_effect=track_close)
+        svc.aclose = AsyncMock(side_effect=track_close)
 
         with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):
             await manager.areset(workspace="ws1")
@@ -250,7 +250,7 @@ class TestManagerAresetErrorHandling:
     async def test_close_failure_still_evicts(self) -> None:
         manager = _make_manager()
         svc = _make_mock_service()
-        svc.close = AsyncMock(side_effect=RuntimeError("close boom"))
+        svc.aclose = AsyncMock(side_effect=RuntimeError("close boom"))
         manager._services["ws1"] = svc
 
         with patch.object(manager, "_get_service", new_callable=AsyncMock, return_value=svc):

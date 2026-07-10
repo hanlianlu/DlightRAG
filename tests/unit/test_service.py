@@ -159,7 +159,7 @@ class TestRAGServiceClose:
         service._lightrag.finalize_storages = AsyncMock(side_effect=RuntimeError("cleanup failed"))
 
         # Should not raise
-        await service.close()
+        await service.aclose()
 
     async def test_close_shuts_down_lightrag_role_worker_pools(
         self, test_config: DlightragConfig
@@ -183,7 +183,7 @@ class TestRAGServiceClose:
         lightrag.finalize_storages = AsyncMock()
         service._lightrag = lightrag
 
-        await service.close()
+        await service.aclose()
 
         embedding_func.shutdown.assert_awaited_once()
         query_func.shutdown.assert_awaited_once()
@@ -1470,7 +1470,7 @@ class TestRAGServiceLightRAGMainPath:
         service._initialized = True
         service._lightrag = AsyncMock()
 
-        await service.close()
+        await service.aclose()
 
         service._lightrag.finalize_storages.assert_awaited_once()
 

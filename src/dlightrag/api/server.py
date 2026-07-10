@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
-        manager = await RAGServiceManager.create(config=request_config(_app))
+        manager = await RAGServiceManager.acreate(config=request_config(_app))
     except Exception:
         logger.exception("Failed to initialize RAG service manager")
         raise
@@ -39,7 +39,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await manager.close()
+        await manager.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════

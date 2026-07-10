@@ -222,9 +222,9 @@ def test_ingest_kwargs_support_s3_region_and_retention() -> None:
             "s3",
             "--bucket",
             "bucket",
-            "--key",
+            "--s3-key",
             "docs/report.pdf",
-            "--region",
+            "--s3-region",
             "eu-north-1",
             "--retain-source-file",
         ]
@@ -445,7 +445,7 @@ class TestValidateS3:
     """Validation for s3 source."""
 
     def test_valid_s3_with_key(self) -> None:
-        args = _parse_ingest(["--source", "s3", "--bucket", "my-bucket", "--key", "doc.pdf"])
+        args = _parse_ingest(["--source", "s3", "--bucket", "my-bucket", "--s3-key", "doc.pdf"])
         _validate_ingest_args(args)
 
     def test_valid_s3_with_prefix(self) -> None:
@@ -469,7 +469,7 @@ class TestValidateS3:
                 "s3",
                 "--bucket",
                 "b",
-                "--key",
+                "--s3-key",
                 "doc.pdf",
                 "--prefix",
                 "docs/",
@@ -485,7 +485,7 @@ class TestValidateS3:
                 "s3",
                 "--bucket",
                 "b",
-                "--key",
+                "--s3-key",
                 "doc.pdf",
                 "--container",
                 "c",

@@ -143,17 +143,17 @@ class RAGService:
 
     Usage:
         # Production: use async factory method
-        rag = await RAGService.create(config=my_config, enable_vlm=True)
+        rag = await RAGService.acreate(config=my_config, enable_vlm=True)
 
         # With callbacks:
-        rag = await RAGService.create(
+        rag = await RAGService.acreate(
             config=my_config,
             cancel_checker=my_cancel_fn,
         )
     """
 
     @classmethod
-    async def create(
+    async def acreate(
         cls,
         config: DlightragConfig | None = None,
         enable_vlm: bool = True,
@@ -177,7 +177,7 @@ class RAGService:
         cancel_checker: Callable[[], Awaitable[bool]] | None = None,
         rerank_supports_vision: bool | None = None,
     ) -> None:
-        """Store configuration only. Use RAGService.create() for full initialization."""
+        """Store configuration only. Use RAGService.acreate() for full initialization."""
         self.config = config or get_config()
         self.enable_vlm = enable_vlm
         self._initialized: bool = False
@@ -631,7 +631,7 @@ class RAGService:
         """Raise error if not initialized."""
         if not self._initialized:
             raise RuntimeError(
-                "RAGService not initialized. Use 'await RAGService.create()' instead."
+                "RAGService not initialized. Use 'await RAGService.acreate()' instead."
             )
 
     # -- Graph verification ----------------------------------------------------
@@ -706,7 +706,7 @@ class RAGService:
         logger.info("Re-initializing graph storage for '%s'", graph_name)
         await graph_storage.initialize()
 
-    async def close(self) -> None:
+    async def aclose(self) -> None:
         """Clean up storages and worker pools (best-effort)."""
         # Cancel the background warmup task so it cannot run against
         # half-closed resources during shutdown.

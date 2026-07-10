@@ -36,7 +36,7 @@ async def client(tmp_working_dir: Path) -> AsyncIterator[AsyncClient]:
         embedding=_embedding_config(),
     )
     set_config(config)
-    with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
+    with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
         app = create_app(include_web=False)
         async with AsyncClient(
             transport=ASGITransport(app=app),
@@ -202,7 +202,7 @@ class TestFileEndpoint:
             embedding=_embedding_config(),
         )
         set_config(config)
-        with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
+        with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
             app = create_app(include_web=False)
             app.state.access_control = DenySecretWorkspace()
             async with AsyncClient(
@@ -279,7 +279,7 @@ class TestFileEndpointAzureRedirect:
             blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
         )
         set_config(config)
-        with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
+        with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
             app = create_app(include_web=False)
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -305,7 +305,7 @@ class TestFileEndpointS3Redirect:
             embedding=_embedding_config(),
         )
         set_config(config)
-        with patch("dlightrag.api.server.RAGServiceManager.create", new_callable=AsyncMock):
+        with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
             app = create_app(include_web=False)
             async with AsyncClient(
                 transport=ASGITransport(app=app),

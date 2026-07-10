@@ -117,7 +117,7 @@ _manager: RAGServiceManager | None = None
 async def _ensure_manager() -> RAGServiceManager:
     global _manager
     if _manager is None:
-        _manager = await RAGServiceManager.create()
+        _manager = await RAGServiceManager.acreate()
     return _manager
 
 
@@ -575,7 +575,7 @@ async def run_stdio() -> None:
             )
     finally:
         if _manager is not None:
-            await _manager.close()
+            await _manager.aclose()
 
 
 async def run_streamable_http(host: str, port: int) -> None:
@@ -706,7 +706,7 @@ async def run_streamable_http(host: str, port: int) -> None:
         await uv_server.serve()
     finally:
         if _manager is not None:
-            await _manager.close()
+            await _manager.aclose()
 
 
 def main() -> None:
