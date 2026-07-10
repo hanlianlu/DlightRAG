@@ -105,11 +105,6 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
                 )
                 assert args == ("research",)
                 return {"count": 1}
-            if "SELECT EXISTS" in query:
-                assert query == (
-                    'SELECT EXISTS (SELECT 1 FROM public."dlightrag_bad""name") AS has_rows'
-                )
-                return {"has_rows": False}
             raise AssertionError(query)
 
         async def fetchval(self, query: str, *args: object) -> str:
@@ -142,6 +137,63 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
             'DELETE FROM public."dlightrag_bad""name" WHERE workspace = $1',
             ("research",),
         ),
-        ('DROP TABLE public."dlightrag_bad""name"', ()),
     ]
+    assert conn.closed is True
+
+
+async def test_clean_orphan_tables_never_drops_migration_managed_tables(
+    monkeypatch, config
+) -> None:
+    """Reset DELETEs rows but MUST NOT DROP dlightrag_ migration-managed tables.
+
+    Regression: dlightrag_checkpoints/doc_metadata/ingest_jobs are global tables
+    with a workspace column, owned by dlightrag_schema_migrations. Resetting the
+    last workspace empties them; dropping an emptied one orphaned the ledger and
+    left the running app raising UndefinedTableError until the next restart.
+    """
+
+    class Conn:
+        def __init__(self) -> None:
+            self.executed: list[tuple[str, tuple[object, ...]]] = []
+            self.closed = False
+
+        async def fetch(self, query: str) -> list[dict[str, str]]:
+            assert "pg_tables" in query
+            return [{"tablename": "dlightrag_checkpoints"}]
+
+        async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
+            if "information_schema.columns" in query:
+                return {"?column?": 1}
+            if "COUNT(*)" in query:
+                return {"count": 1}
+            # A "SELECT EXISTS ... has_rows" probe would mean the DROP path is back.
+            raise AssertionError(f"unexpected has_rows/DROP probe: {query}")
+
+        async def fetchval(self, query: str, *args: object) -> str:
+            assert query == "SELECT quote_ident($1)"
+            return "dlightrag_checkpoints"
+
+        async def execute(self, query: str, *args: object) -> None:
+            self.executed.append((query, args))
+
+        async def close(self) -> None:
+            self.closed = True
+
+    conn = Conn()
+
+    async def fake_connect(**kwargs):
+        return conn
+
+    import asyncpg
+
+    monkeypatch.setattr(asyncpg, "connect", fake_connect)
+    monkeypatch.setattr("dlightrag.config.get_config", lambda: config)
+
+    cleaned = await _clean_orphan_tables("default", dry_run=False)
+
+    assert cleaned == 1
+    assert conn.executed == [
+        ("DELETE FROM public.dlightrag_checkpoints WHERE workspace = $1", ("default",)),
+    ]
+    assert not any("DROP TABLE" in query for query, _ in conn.executed)
     assert conn.closed is True
