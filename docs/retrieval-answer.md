@@ -43,9 +43,10 @@ multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
 `text_chunks`, BM25, and KG extraction. DlightRAG then overwrites that existing
 chunk's vector with the raw image embedding. It does not create a second
 visual-only chunk, so the same VLM description is not exposed twice as independent
-retrieved evidence. If the embedding provider is text-only, or if the startup
-image probe fails, this overwrite is skipped and the LightRAG semantic visual
-chunk remains untouched.
+retrieved evidence. When `embedding.input_modality` resolves to text, this
+overwrite is skipped and the LightRAG semantic visual chunk remains untouched.
+In auto mode, a failed native image probe produces the same safe downgrade;
+explicit multimodal mode instead treats probe failure as a startup error.
 
 ## Query Pipeline
 
@@ -128,8 +129,8 @@ use pgvector HNSW with iterative scan settings.
 
 Text queries go through LightRAG `mix`, BM25, fused-candidate hydration, and
 reranking. Image-bearing queries add a direct image vector path only when the
-configured embedding provider supports image inputs and the startup probe
-succeeds:
+configured `embedding.input_modality` resolves to multimodal and its startup
+probe succeeds:
 
 ```text
 query + images
@@ -148,10 +149,13 @@ visual similarity search uses the same LightRAG chunk id after DlightRAG
 overwrites its vector with the raw image embedding, preserving sidecar
 provenance and avoiding duplicate VLM text exposure.
 
-With a text-only embedding model, DlightRAG skips both image-vector overwrite
-and query-image vector retrieval. Query images can still be described by the VLM
-for text/BM25/KG retrieval, and document images still follow LightRAG's native
-semantic multimodal path.
+With `embedding.input_modality: text`, DlightRAG skips both image-vector
+overwrite and query-image vector retrieval. Query images can still be described
+by the VLM for text/BM25/KG retrieval, and document images still follow
+LightRAG's native semantic multimodal path. Auto mode may make the same safe
+downgrade after a failed native-provider probe; explicit multimodal mode fails
+startup instead. See [Embedding configuration](configuration.md#embeddings) for
+the provider and modality matrix.
 
 ## Reranking
 
