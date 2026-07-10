@@ -510,6 +510,7 @@ class TestDirectImageEmbeddingCapability:
         enabled = await RAGService._resolve_direct_image_embedding_enabled(
             embedder,
             startup_probe=True,
+            require_image_support=False,
         )
 
         assert enabled is False
@@ -523,10 +524,57 @@ class TestDirectImageEmbeddingCapability:
         enabled = await RAGService._resolve_direct_image_embedding_enabled(
             embedder,
             startup_probe=True,
+            require_image_support=False,
         )
 
         assert enabled is False
         embedder.probe_image_embedding.assert_awaited_once()
+
+    async def test_required_multimodal_rejects_text_only_embedder(self) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = False
+        embedder.probe_image_embedding = AsyncMock()
+
+        with pytest.raises(
+            ValueError,
+            match="input_modality='multimodal'.*does not support image inputs",
+        ):
+            await RAGService._resolve_direct_image_embedding_enabled(
+                embedder,
+                startup_probe=True,
+                require_image_support=True,
+            )
+
+        embedder.probe_image_embedding.assert_not_awaited()
+
+    async def test_required_multimodal_probe_failure_is_fatal(self) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = True
+        embedder.probe_image_embedding = AsyncMock(side_effect=RuntimeError("image rejected"))
+
+        with pytest.raises(
+            ValueError,
+            match="input_modality='multimodal'.*startup probe failed",
+        ):
+            await RAGService._resolve_direct_image_embedding_enabled(
+                embedder,
+                startup_probe=True,
+                require_image_support=True,
+            )
+
+    async def test_disabled_probe_trusts_resolved_multimodal_capability(self) -> None:
+        embedder = MagicMock()
+        embedder.supports_images = True
+        embedder.probe_image_embedding = AsyncMock()
+
+        enabled = await RAGService._resolve_direct_image_embedding_enabled(
+            embedder,
+            startup_probe=False,
+            require_image_support=True,
+        )
+
+        assert enabled is True
+        embedder.probe_image_embedding.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
