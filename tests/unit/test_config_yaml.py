@@ -100,6 +100,11 @@ class TestYamlConfigLoading:
             assert "normalize" not in field_spec
             assert "indexed" not in field_spec
 
+    def test_repo_config_declares_embedding_input_modality(self) -> None:
+        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+
+        assert config["embedding"]["input_modality"] == "auto"
+
 
 class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):

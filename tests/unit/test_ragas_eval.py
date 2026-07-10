@@ -115,6 +115,41 @@ def test_resolve_eval_env_keeps_api_autoresolution_when_eval_keys_are_set(
     assert os.environ["DLIGHTRAG_API_TOKEN"] == "api-token"
 
 
+def test_resolve_eval_env_does_not_reuse_native_ollama_as_openai_embeddings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    query_cfg = SimpleNamespace(api_key=None, model="query-model", base_url=None)
+    fake_config = SimpleNamespace(
+        llm=SimpleNamespace(roles=SimpleNamespace(query=query_cfg), default=query_cfg),
+        embedding=SimpleNamespace(
+            provider="ollama",
+            api_key="ollama-key",
+            base_url="http://127.0.0.1:11434",
+        ),
+        api_host="127.0.0.1",
+        api_port=8100,
+        auth_mode="none",
+        api_auth_token=None,
+    )
+    monkeypatch.setattr(config_module, "DlightragConfig", lambda: fake_config)
+    for key in (
+        "OPENAI_API_KEY",
+        "EVAL_LLM_BINDING_API_KEY",
+        "EVAL_LLM_BINDING_HOST",
+        "EVAL_LLM_MODEL",
+        "EVAL_EMBEDDING_BINDING_API_KEY",
+        "EVAL_EMBEDDING_BINDING_HOST",
+        "DLIGHTRAG_API_URL",
+        "DLIGHTRAG_API_TOKEN",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    _resolve_eval_env()
+
+    assert "EVAL_EMBEDDING_BINDING_API_KEY" not in os.environ
+    assert "EVAL_EMBEDDING_BINDING_HOST" not in os.environ
+
+
 @pytest.mark.asyncio
 async def test_run_defaults_results_dir_to_project_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

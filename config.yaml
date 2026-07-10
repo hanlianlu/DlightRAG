@@ -73,6 +73,7 @@ embedding:
   base_url: https://api.voyageai.com/v1
   dim: 1024
   max_token_size: 8192
+  input_modality: auto
   asymmetric: auto
 
 rerank:

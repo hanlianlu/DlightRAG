@@ -89,19 +89,161 @@ handles images, tables, and equations after parse.
 
 ## Embeddings
 
-The root config keeps the embedding provider/model visible because it defines
-the LightRAG vector schema. DlightRAG prefers unified multimodal embeddings for
-direct image retrieval, but text-only providers are valid. At startup,
-`embedding.startup_probe` checks image-embedding capability with a small
-in-memory image through the provider-specific payload serializer and does not
-write to PostgreSQL, LightRAG storage, or local files. Generic
-`openai_compatible` is treated as text-only because OpenAI-compatible
-embedding APIs do not define a standard image payload. A Qwen3-VL embedding
-model on a non-DashScope OpenAI-compatible endpoint is routed to
-`qwen_openai_compatible`; DashScope-hosted Qwen uses `dashscope_qwen`. If the
-provider is text-only or the probe fails, DlightRAG automatically skips direct
-image vector overwrite and query-image vector retrieval while leaving LightRAG's
-semantic multimodal path enabled.
+Embedding configuration defines the vector space shared by ingestion and
+retrieval. `provider` selects an API protocol; `input_modality` independently
+controls whether DlightRAG may send raw images through that protocol. Provider
+selection is always explicit and is never inferred from a model name, URL, or
+port.
+
+### Provider matrix
+
+`base_url` is the root before the endpoint shown below. DlightRAG appends the
+endpoint itself.
+
+| `provider` | Endpoint appended to `base_url` | Image policy | Asymmetric | Authentication | `dim` behavior |
+|---|---|---|---|---|---|
+| `voyage` | `/multimodalembeddings` | Native | Yes | Bearer token | Sent as `output_dimension`; returned vectors are validated |
+| `dashscope_qwen` | `/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding` | Native | No | Bearer token | Sent as `parameters.dimension`; returned vectors are validated |
+| `gemini` | `/models/{model}:embedContent` | Native | No | `x-goog-api-key` | Sent as `output_dimensionality`; returned vectors are validated |
+| `jina` | `/v1/embeddings` | Native | Yes | Bearer token | Sent as `dimensions`; returned vectors are validated |
+| `openai_compatible` | `/embeddings` | Text by default; explicit image opt-in | No | Optional bearer token | Sent as `dimensions`; returned vectors are validated |
+| `ollama` | `/api/embed` | Text only | No | None | Not sent; returned vectors are still validated |
+
+The supported provider values are exactly the six names above. For example,
+LM Studio is `openai_compatible` because it exposes an OpenAI-style
+`/v1/embeddings` API. Ollama has a native provider because its embedding API is
+`/api/embed`, not `/v1/embeddings`.
+
+### Fields
+
+| Field | Default | Meaning |
+|---|---|---|
+| `provider` | Required | One transport from the matrix above. Unknown values fail configuration loading. |
+| `model` | Required | The exact model identifier expected by the remote or local server. |
+| `api_key` | None | Provider credential. Prefer `DLIGHTRAG_EMBEDDING__API_KEY` in `.env`; omit it for unauthenticated local servers. |
+| `base_url` | OpenAI API root | API root before the appended endpoint. Include `/v1` only when that protocol expects it; configure this explicitly for non-OpenAI transports. |
+| `dim` | `1024` | Expected vector length. It is sent when the protocol supports a dimension parameter and is always checked against every returned vector. |
+| `max_token_size` | `8192` | Maximum input size advertised to LightRAG's embedding pipeline; it does not change the model's real context limit. |
+| `input_modality` | `auto` | Local routing policy: `auto`, `text`, or `multimodal`. It is never included in an upstream request. |
+| `asymmetric` | `auto` | `auto` enables query/document hints when supported; `require` fails for unsupported providers; `disable` forces symmetric embeddings. |
+| `startup_probe` | `true` | When image routing is active, send one in-memory 1x1 image at startup to verify the selected endpoint/model. The probe writes no storage or files. |
+
+DlightRAG does not guess whether an arbitrary model accepts a particular
+dimension. Set `dim` to the model's real output size; a mismatch fails when a
+response is validated.
+
+### Input modality
+
+| Provider capability | `auto` | `text` | `multimodal` |
+|---|---|---|---|
+| Native multimodal (`voyage`, `dashscope_qwen`, `gemini`, `jina`) | Enable direct image embedding and run the startup probe | Disable all raw image embedding locally | Require image embedding; probe failure stops startup |
+| Native text-only (`ollama`) | Text only | Text only | Fail before service initialization |
+| OpenAI-compatible extension (`openai_compatible`) | Conservative text only | Text only | Opt into the existing data-URI image payload; probe failure stops startup |
+
+`text` guarantees the embedding provider receives text only. It disables both
+document image-vector overwrite and query-image vector retrieval. Images,
+tables, and equations may still be described by the VLM; those descriptions
+remain ordinary text in LightRAG's semantic, BM25, and KG paths.
+
+`multimodal` is a capability assertion, not a hint. DlightRAG fails fast when
+the configured adapter cannot serialize images or when the live startup probe
+rejects them. In `auto`, a native multimodal provider may safely downgrade to
+the semantic text path if its live probe fails. `startup_probe: false` skips
+only the live request and trusts the resolved provider/modality combination;
+static mismatches such as `ollama + multimodal` still fail.
+
+### Examples
+
+Voyage native multimodal embeddings:
+
+```yaml
+embedding:
+  provider: voyage
+  model: voyage-multimodal-3.5
+  base_url: https://api.voyageai.com/v1
+  dim: 1024
+  max_token_size: 8192
+  input_modality: auto
+  asymmetric: auto
+  startup_probe: true
+```
+
+Keep the Voyage key in `.env`:
+
+```dotenv
+DLIGHTRAG_EMBEDDING__API_KEY=pa-...
+```
+
+Ollama's native text embedding endpoint:
+
+```yaml
+embedding:
+  provider: ollama
+  model: nomic-embed-text
+  base_url: http://127.0.0.1:11434
+  dim: 768
+  max_token_size: 8192
+  input_modality: auto
+  asymmetric: disable
+```
+
+LM Studio or another OpenAI-compatible text embedding server:
+
+```yaml
+embedding:
+  provider: openai_compatible
+  model: text-embedding-nomic-embed-text-v1.5
+  base_url: http://127.0.0.1:1234/v1
+  dim: 768
+  max_token_size: 8192
+  input_modality: text
+  asymmetric: disable
+```
+
+An OpenAI-compatible endpoint serving a multimodal Qwen3-VL embedding model
+uses the same provider and opts into images explicitly:
+
+```yaml
+embedding:
+  provider: openai_compatible
+  model: qwen3-vl-embedding-2b
+  base_url: http://127.0.0.1:1234/v1
+  dim: 2048
+  max_token_size: 8192
+  input_modality: multimodal
+  asymmetric: disable
+  startup_probe: true
+```
+
+For LM Studio, `model` must match the identifier exposed by the running local
+server. The model itself must implement `/v1/embeddings`; loading a chat-only
+model is not sufficient.
+
+### Docker host access
+
+When DlightRAG runs directly on the host, local services normally use
+`127.0.0.1`. Inside this repository's Compose containers, `127.0.0.1` means the
+container itself. Compose configures the `host.docker.internal` alias for
+host-side services, so use:
+
+```yaml
+# Ollama from Compose
+base_url: http://host.docker.internal:11434
+
+# LM Studio from Compose
+base_url: http://host.docker.internal:1234/v1
+```
+
+Notice that Ollama has no `/v1`, while LM Studio's OpenAI-compatible root does.
+
+### Changing the vector space
+
+Do not mix vectors produced by different models, dimensions, or embedding
+spaces in one workspace. Use a new workspace, or recreate/migrate the vector
+schema as needed and perform a complete offline rebuild. See
+[Operations](operations.md#offline-vector-storage-rebuild) for the rebuild
+procedure and [PostgreSQL](postgresql.md#required-version) for the dimension
+constraint.
 
 ## LLM Providers
 
