@@ -33,8 +33,7 @@ from dlightrag.utils.images import image_data_uri
 logger = logging.getLogger(__name__)
 
 NO_CONTEXT_DISCLAIMER = (
-    "**General knowledge notice:** No relevant information retrieved. "
-    "The answer below is not grounded in your knowledge base."
+    "**General Knowledge Notice:** The answer below is NOT grounded in your knowledge base."
 )
 
 
