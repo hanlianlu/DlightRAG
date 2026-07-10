@@ -348,6 +348,12 @@ result = await manager.aretrieve(query="What are the key findings?")
 result.answer     # None
 result.contexts   # RetrievalContexts: {"chunks": [...], "entities": [...], "relationships": [...]}
 
+# Query every registered workspace from the trusted in-process SDK
+all_contexts = await manager.aretrieve(
+    query="What are the key findings?",
+    all_workspaces=True,
+)
+
 # Answer: contexts + LLM-generated answer
 result = await manager.aanswer(
     query="What are the key findings?",
@@ -373,6 +379,7 @@ async for token in token_iter:
 | `query` | `str` | required | Search query |
 | `workspace` | `str \| None` | config default | Target workspace |
 | `workspaces` | `list[str] \| None` | `None` | Federated search across multiple workspaces |
+| `all_workspaces` | `bool` | `false` | Query every workspace visible to the current caller. For REST/MCP this is the existing `workspace.query`-authorized set; for the in-process SDK it is every registered workspace. Mutually exclusive with a non-empty `workspace`/`workspaces` selection. |
 | `top_k` | `int \| None` | config default | LightRAG KG breadth: entities in local retrieval and relationships in global retrieval. |
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
@@ -395,6 +402,11 @@ validated citations, and structured answer media.
 curl -X POST http://localhost:8100/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query": "key findings"}'
+
+# Retrieve across every workspace authorized for this caller
+curl -X POST http://localhost:8100/retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query": "key findings", "all_workspaces": true}'
 
 # Answer as one JSON response
 curl -X POST http://localhost:8100/answer \
@@ -497,6 +509,14 @@ data: {"type":"done","answer":"The key findings are...","answer_images":[],"answ
 
 REST uses the same fields as the Python manager methods.
 
+`all` is authorization-relative, not deployment-global. If 14 workspaces are
+registered and the current caller may query 10, `all_workspaces: true` queries
+those 10. `None` and `[]` remain omission; omitting both selectors still uses
+the configured default workspace. A caller with no queryable workspaces receives
+an authorization error. Ingest remains single-workspace and does not support
+broadcast ingestion. The strings `"*"` and `"all"` are ordinary workspace names,
+not selector aliases.
+
 Web streaming uses the same answer pipeline but always attempts semantic
 highlights when citation highlighting is enabled. If phrases are found, Web
 emits a `highlights` SSE event with the updated source panel HTML.
@@ -518,6 +538,13 @@ MCP tools return JSON text with `sources` at top level:
 
 Pass `semantic_highlights: true` to the MCP `answer` tool to include
 `highlight_phrases` in cited source chunks when highlight enrichment is enabled.
+
+Pass `all_workspaces: true` to MCP `retrieve` or `answer` to query every
+workspace visible to the current MCP caller:
+
+```json
+{"query": "key findings", "all_workspaces": true}
+```
 
 
 ## Contexts Object
