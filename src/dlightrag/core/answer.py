@@ -33,8 +33,8 @@ from dlightrag.utils.images import image_data_uri
 logger = logging.getLogger(__name__)
 
 NO_CONTEXT_DISCLAIMER = (
-    "**General knowledge notice:** I couldn't find retrieved document context "
-    "for this question, so the answer below is not grounded in your documents."
+    "**General knowledge notice:** No relevant information retrieved. "
+    "The answer below is not grounded in your knowledge base."
 )
 
 
