@@ -16,8 +16,10 @@ logger = logging.getLogger(__name__)
 # Chunk-level: [ref_id-chunk_idx] e.g., [1-2], [abc-3]
 CITATION_PATTERN = re.compile(r"\[(\w+)-(\d+)\]")
 
-# Doc-level: [n] e.g., [1], [12] — must NOT match [1-2]
-DOC_CITATION_PATTERN = re.compile(r"\[(\d+)\](?![\w-])")
+# Doc-level: [n] e.g., [1], [12] — must NOT match [1-2] or [1]abc.
+# Keep the trailing guard ASCII-only so [1]和 remains a valid citation.
+DOC_CITATION_TRAILING_BOUNDARY = r"(?![A-Za-z0-9_-])"
+DOC_CITATION_PATTERN = re.compile(rf"\[(\d+)\]{DOC_CITATION_TRAILING_BOUNDARY}")
 
 
 def extract_citation_keys(answer_text: str) -> list[str]:

@@ -43,6 +43,13 @@ def test_extract_citing_sentences_doc_level():
     assert any("15%" in s for s in result["1"])
 
 
+def test_extract_citing_sentences_doc_level_before_chinese_text():
+    text = "翟东升观点见《货币、权力与人》[1]和《中国为什么有前途》[3]。"
+    result = extract_all_citing_sentences(text)
+    assert "1" in result
+    assert "3" in result
+
+
 def test_extract_citing_sentences_mixed_levels():
     text = "Revenue grew 15% [1-1]. Overall the report [1] is positive."
     result = extract_all_citing_sentences(text)
