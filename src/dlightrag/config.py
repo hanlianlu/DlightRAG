@@ -151,10 +151,10 @@ class EmbeddingConfig(BaseModel):
         "jina",
         "openai_compatible",
         "ollama",
-    ]
-    model: str
+    ] = "voyage"
+    model: str = "voyage-multimodal-3.5"
     api_key: str | None = None
-    base_url: str | None = None
+    base_url: str | None = "https://api.voyageai.com/v1"
     dim: int = Field(default=1024, ge=1)
     max_token_size: int = Field(default=8192, ge=1)
     input_modality: Literal["auto", "text", "multimodal"] = "auto"
@@ -182,11 +182,35 @@ class LLMConfig(BaseModel):
     default: ModelConfig = Field(
         default_factory=lambda: ModelConfig(
             provider="openai",
-            model="gpt-5.4-mini",
+            model="z-ai/glm-5.2",
+            base_url="https://openrouter.ai/api/v1",
+            structured_output="json_schema",
             temperature=0.5,
+            timeout=120.0,
         )
     )
-    roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
+    roles: LLMRolesConfig = Field(
+        default_factory=lambda: LLMRolesConfig(
+            extract=ModelConfig(
+                provider="openai",
+                model="deepseek-v4-flash",
+                base_url="https://api.deepseek.com",
+                structured_output="json_object",
+                temperature=0.0,
+                timeout=120.0,
+                model_kwargs={"thinking": {"type": "disabled"}},
+            ),
+            keyword=ModelConfig(
+                provider="openai",
+                model="deepseek-v4-flash",
+                base_url="https://api.deepseek.com",
+                structured_output="json_object",
+                temperature=0.0,
+                timeout=120.0,
+                model_kwargs={"thinking": {"type": "disabled"}},
+            ),
+        )
+    )
 
 
 class ParserConfig(BaseModel):
@@ -776,7 +800,7 @@ class DlightragConfig(BaseSettings):
 
     # ===== Model config =====
     llm: LLMConfig = Field(default_factory=LLMConfig)
-    embedding: EmbeddingConfig  # required, no default
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     rerank: RerankConfig = Field(default_factory=RerankConfig)
     parser: ParserConfig = Field(default_factory=ParserConfig)
     parser_sidecars: ParserSidecarsConfig = Field(default_factory=ParserSidecarsConfig)

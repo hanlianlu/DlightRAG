@@ -22,6 +22,7 @@ from dlightrag.config import (
     VisualAssetsConfig,
     load_config,
 )
+from dlightrag.models.llm_roles import model_for_role
 
 
 @pytest.fixture(autouse=True)
@@ -134,9 +135,10 @@ class TestModelConfig:
 
 class TestEmbeddingConfig:
     def test_defaults(self):
-        cfg = EmbeddingConfig(provider="voyage", model="voyage-multimodal-3.5")
+        cfg = EmbeddingConfig()
         assert cfg.provider == "voyage"
         assert cfg.model == "voyage-multimodal-3.5"
+        assert cfg.base_url == "https://api.voyageai.com/v1"
         assert cfg.dim == 1024
         assert cfg.max_token_size == 8192
         assert cfg.input_modality == "auto"
@@ -188,6 +190,7 @@ class TestRerankConfig:
         assert cfg.enabled is True
         assert cfg.strategy == "chat_llm_reranker"
         assert cfg.model is None
+        assert cfg.input_modality == "auto"
         assert cfg.score_threshold is None
         assert cfg.max_concurrency == 8
         assert cfg.batch_size == 8
@@ -301,6 +304,38 @@ class TestMetadataConfig:
 
 
 class TestDlightragConfigNested:
+    def test_shipped_model_defaults(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+
+        cfg = DlightragConfig()
+
+        assert cfg.llm.default == ModelConfig(
+            provider="openai",
+            model="z-ai/glm-5.2",
+            base_url="https://openrouter.ai/api/v1",
+            structured_output="json_schema",
+            temperature=0.5,
+            timeout=120.0,
+        )
+        assert cfg.llm.roles.extract == ModelConfig(
+            provider="openai",
+            model="deepseek-v4-flash",
+            base_url="https://api.deepseek.com",
+            structured_output="json_object",
+            temperature=0.0,
+            timeout=120.0,
+            model_kwargs={"thinking": {"type": "disabled"}},
+        )
+        assert cfg.llm.roles.keyword == cfg.llm.roles.extract
+        assert cfg.llm.roles.query is None
+        assert model_for_role(cfg, "query") == cfg.llm.default
+        assert cfg.llm.roles.vlm is None
+        assert model_for_role(cfg, "vlm") == cfg.llm.default
+        assert cfg.embedding == EmbeddingConfig()
+        assert cfg.rerank.strategy == "chat_llm_reranker"
+        assert cfg.rerank.model is None
+        assert cfg.rerank.input_modality == "auto"
+
     def test_api_defaults_to_loopback_for_local_dev(self):
         cfg = DlightragConfig(
             embedding=EmbeddingConfig(
@@ -343,30 +378,16 @@ class TestDlightragConfigNested:
         assert cfg.allow_insecure_no_auth is True
 
     def test_minimal_config(self, tmp_path, monkeypatch):
-        """Only embedding required; llm defaults are nested under llm.default."""
+        """Model defaults are nested and can be overridden by callers."""
         monkeypatch.chdir(tmp_path)
-        cfg = DlightragConfig(
-            embedding=EmbeddingConfig(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                startup_probe=False,
-            ),
-        )
-        assert cfg.llm.default.model == "gpt-5.4-mini"
+        cfg = DlightragConfig()
+        assert cfg.llm.default.model == "z-ai/glm-5.2"
         assert cfg.embedding.model == "voyage-multimodal-3.5"
 
     def test_chat_defaults(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        cfg = DlightragConfig(
-            embedding=EmbeddingConfig(
-                provider="voyage",
-                model="voyage-multimodal-3.5",
-                api_key="sk-test",
-                startup_probe=False,
-            ),
-        )
-        assert cfg.llm.default.model == "gpt-5.4-mini"
+        cfg = DlightragConfig()
+        assert cfg.llm.default.model == "z-ai/glm-5.2"
         assert cfg.llm.default.temperature == 0.5
 
     def test_langfuse_v4_observability_defaults(self, tmp_path, monkeypatch) -> None:

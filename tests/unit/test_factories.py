@@ -1,7 +1,7 @@
 """Tests for model factory functions."""
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -510,7 +510,7 @@ class TestGetRerankFunc:
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
             ),
-            rerank=RerankConfig(input_modality="multimodal"),
+            rerank=RerankConfig(strategy="chat_llm_reranker", input_modality="multimodal"),
             embedding=_embedding_config(),
         )
 
@@ -525,7 +525,9 @@ class TestGetRerankFunc:
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
                 roles=LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
             ),
-            rerank=RerankConfig(provider="openai", model="rerank-model"),
+            rerank=RerankConfig(
+                strategy="chat_llm_reranker", provider="openai", model="rerank-model"
+            ),
             embedding=_embedding_config(),
         )
 
@@ -534,6 +536,24 @@ class TestGetRerankFunc:
         assert result == "rerank-func"
         assert captured["ingest_func"] == "completion:rerank-model"
         assert seen_models == ["rerank-model"]
+
+    def test_provider_reranker_missing_key_fails_fast_without_chat_fallback(self, monkeypatch):
+        from dlightrag.models import llm
+
+        make_completion = MagicMock()
+        monkeypatch.setattr(llm, "_make_completion_func", make_completion)
+        config = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
+            ),
+            rerank=RerankConfig(strategy="voyage_reranker"),
+            embedding=_embedding_config(),
+        )
+
+        with pytest.raises(ValueError, match="voyage_reranker requires api_key"):
+            llm.get_rerank_func(config)
+
+        make_completion.assert_not_called()
 
 
 class TestGetEmbeddingFunc:

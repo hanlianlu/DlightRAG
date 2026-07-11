@@ -30,7 +30,7 @@
 llm:
   default:
     provider: openai
-    model: google/gemini-3.1-flash-lite
+    model: z-ai/glm-5.2
     base_url: https://openrouter.ai/api/v1
     structured_output: json_schema
     temperature: 0.5
@@ -89,10 +89,10 @@ embedding:
 
 rerank:
   enabled: true
-  strategy: voyage_reranker
-  model: rerank-2.5-lite
+  strategy: chat_llm_reranker
   input_modality: auto
-  ## Keep the credential in .env as DLIGHTRAG_RERANK__API_KEY.
+  ## Reuses llm.roles.vlm, llm.roles.query, then llm.default unless provider/model
+  ## are explicitly set here. Provider rerankers need DLIGHTRAG_RERANK__API_KEY.
 
 # ─────────────────────────────────────────────────────────────────
 # Parser and Ingestion
