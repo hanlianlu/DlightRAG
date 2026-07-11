@@ -147,11 +147,15 @@ def write_config_yaml(
     data = yaml.load(path)
     if llm_default is not None:
         _apply_model_block(data["llm"]["default"], llm_default)
-    if llm_roles:
-        roles = data["llm"].setdefault("roles", {})
-        for role, block in llm_roles.items():
-            roles.setdefault(role, {})
-            _apply_model_block(roles[role], block)
+    if llm_roles is not None:
+        if not llm_roles:
+            data["llm"].pop("roles", None)
+        else:
+            roles = data["llm"].setdefault("roles", {})
+            roles.clear()
+            for role, block in llm_roles.items():
+                roles.setdefault(role, {})
+                _apply_model_block(roles[role], block)
     if embedding is not None:
         _apply_model_block(data["embedding"], embedding)
     if rerank is not None:
@@ -470,7 +474,7 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
     write_config_yaml(
         CONFIG_PATH,
         llm_default=llm_block,
-        llm_roles=llm_roles or None,
+        llm_roles=llm_roles,
         embedding=embed_block,
         rerank=rerank_block,
     )
