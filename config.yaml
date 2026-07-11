@@ -91,8 +91,8 @@ rerank:
   enabled: true
   strategy: chat_llm_reranker
   input_modality: auto
-  ## Reuses llm.roles.vlm, llm.roles.query, then llm.default unless provider/model
-  ## are explicitly set here. Provider rerankers need DLIGHTRAG_RERANK__API_KEY.
+  ## Reuses llm.default unless provider/model are explicitly set here. Provider
+  ## rerankers need DLIGHTRAG_RERANK__API_KEY.
 
 # ─────────────────────────────────────────────────────────────────
 # Parser and Ingestion

@@ -167,7 +167,7 @@ list with page/image data already attached.
 
 | Strategy | How it works |
 |---|---|
-| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `llm.roles.vlm`, `llm.roles.query`, then `llm.default`. With `input_modality: auto`, the selected scoring model reuses the startup vision probe: vision-capable models get bounded image payloads plus text; non-vision models get VLM text only. |
+| `chat_llm_reranker` | Batched listwise scoring through the configured rerank model, or `llm.default` when no rerank model is set. With `input_modality: auto`, the selected scoring model reuses the startup vision probe: vision-capable models get bounded image payloads plus text; non-vision models get VLM text only. |
 | `jina_reranker` | Calls Jina `/v1/rerank`. The latest default is `jina-reranker-v3`, so auto mode sends chunk text; `jina-reranker-m0` auto mode sends bounded image documents when available. |
 | `aliyun_reranker` | Calls Alibaba Model Studio rerank. `qwen3-rerank` uses the compatible text payload; `qwen3-vl-rerank` uses the DashScope multimodal payload. `base_url` must point at the matching workspace/region endpoint. |
 | `local_reranker` | Calls a self-hosted `/rerank` endpoint. `input_modality: auto` is text-only; set `input_modality: multimodal` only when the endpoint accepts image document objects. |

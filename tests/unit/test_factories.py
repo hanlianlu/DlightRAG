@@ -141,6 +141,34 @@ class TestMakeCompletionFunc:
             "root": False,
         }
 
+    def test_planner_model_func_uses_default_when_keyword_role_is_unset(self, monkeypatch):
+        from dlightrag.models import llm
+
+        captured: dict[str, Any] = {}
+
+        def fake_make_completion_func(cfg, default_api_key=None, *, root=False):
+            captured["model"] = cfg.model
+            captured["default_api_key"] = default_api_key
+            captured["root"] = root
+            return f"completion:{cfg.model}"
+
+        monkeypatch.setattr(llm, "_make_completion_func", fake_make_completion_func)
+        cfg = DlightragConfig(
+            llm=LLMConfig(
+                default=ModelConfig(provider="openai", model="default-model", api_key="sk-chat"),
+            ),
+            embedding=_embedding_config(),
+        )
+
+        func = llm.get_planner_model_func(cfg)
+
+        assert func == "completion:default-model"
+        assert captured == {
+            "model": "default-model",
+            "default_api_key": "sk-chat",
+            "root": False,
+        }
+
     def test_vlm_model_func_is_direct_not_queue_managed(self):
         from dlightrag.models import llm
 
@@ -420,13 +448,23 @@ class TestGetRerankFunc:
         monkeypatch.setattr("dlightrag.models.rerank.build_rerank_func", fake_build_rerank_func)
         return llm, seen_models, captured
 
-    def test_chat_llm_reranker_prefers_vlm_role_without_override(self, monkeypatch):
+    @pytest.mark.parametrize(
+        "roles",
+        [
+            LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
+            LLMRolesConfig(query=ModelConfig(provider="openai", model="query-model")),
+        ],
+        ids=["vlm-role", "query-role"],
+    )
+    def test_chat_llm_reranker_uses_default_even_when_roles_exist(
+        self, monkeypatch, roles: LLMRolesConfig
+    ):
         llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
 
         config = DlightragConfig(
             llm=LLMConfig(
                 default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
-                roles=LLMRolesConfig(vlm=ModelConfig(provider="openai", model="vlm-model")),
+                roles=roles,
             ),
             rerank=RerankConfig(strategy="chat_llm_reranker"),
             embedding=_embedding_config(),
@@ -435,26 +473,8 @@ class TestGetRerankFunc:
         result = llm.get_rerank_func(config)
 
         assert result == "rerank-func"
-        assert captured["ingest_func"] == "completion:vlm-model"
-        assert seen_models == ["vlm-model"]
-
-    def test_chat_llm_reranker_uses_query_role_when_vlm_role_is_unset(self, monkeypatch):
-        llm, seen_models, captured = self._capture_scoring_model(monkeypatch)
-
-        config = DlightragConfig(
-            llm=LLMConfig(
-                default=ModelConfig(provider="openai", model="chat-model", api_key="sk-chat"),
-                roles=LLMRolesConfig(query=ModelConfig(provider="openai", model="query-model")),
-            ),
-            rerank=RerankConfig(strategy="chat_llm_reranker"),
-            embedding=_embedding_config(),
-        )
-
-        result = llm.get_rerank_func(config)
-
-        assert result == "rerank-func"
-        assert captured["ingest_func"] == "completion:query-model"
-        assert seen_models == ["query-model"]
+        assert captured["ingest_func"] == "completion:chat-model"
+        assert seen_models == ["chat-model"]
 
     def test_chat_llm_reranker_uses_default_when_no_role_override_exists(self, monkeypatch):
         llm, seen_models, captured = self._capture_scoring_model(monkeypatch)

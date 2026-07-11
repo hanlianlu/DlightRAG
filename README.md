@@ -102,6 +102,10 @@ DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=...
 DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=...
 ```
 
+These match the checked-in `config.yaml`, which configures DeepSeek extract and
+keyword roles. If you remove role-specific model blocks, those roles fall back
+to `llm.default` and the corresponding role keys can be omitted.
+
 Normal behavior lives in [config.yaml](config.yaml): model names, parser
 sidecar settings, metadata schema, retrieval breadth, auth mode, Langfuse
 behavior, and deployment endpoints. Deep config reference is in

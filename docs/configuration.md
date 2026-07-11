@@ -468,8 +468,7 @@ Those slot budgets are independent; user images do not evict retrieved page
 previews. Compression budgets are advanced model transport limits:
 
 `chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
-those are omitted, it reuses the configured chat model roles in this order:
-`llm.roles.vlm`, `llm.roles.query`, then `llm.default`.
+those are omitted, it reuses `llm.default`.
 
 Voyage's text reranker is available with `strategy: voyage_reranker`,
 `model: rerank-2.5` or `rerank-2.5-lite`, and `DLIGHTRAG_RERANK__API_KEY`.
