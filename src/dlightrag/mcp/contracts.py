@@ -24,6 +24,7 @@ class RetrieveInput(QueryWorkspaceSelection):
     query: str
     top_k: int | None = None
     chunk_top_k: int | None = None
+    bm25_query: str | None = Field(default=None, max_length=1024)
     filters: dict[str, Any] | None = None
     query_images: list[QueryImage] = Field(default_factory=list, max_length=3)
     session_id: str | None = None

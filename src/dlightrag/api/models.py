@@ -43,6 +43,7 @@ class RetrieveRequest(QueryWorkspaceSelection):
     query: str
     top_k: int | None = None
     chunk_top_k: int | None = None
+    bm25_query: str | None = Field(default=None, max_length=1024)
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
