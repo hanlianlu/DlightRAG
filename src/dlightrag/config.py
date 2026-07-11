@@ -189,28 +189,7 @@ class LLMConfig(BaseModel):
             timeout=120.0,
         )
     )
-    roles: LLMRolesConfig = Field(
-        default_factory=lambda: LLMRolesConfig(
-            extract=ModelConfig(
-                provider="openai",
-                model="deepseek-v4-flash",
-                base_url="https://api.deepseek.com",
-                structured_output="json_object",
-                temperature=0.0,
-                timeout=120.0,
-                model_kwargs={"thinking": {"type": "disabled"}},
-            ),
-            keyword=ModelConfig(
-                provider="openai",
-                model="deepseek-v4-flash",
-                base_url="https://api.deepseek.com",
-                structured_output="json_object",
-                temperature=0.0,
-                timeout=120.0,
-                model_kwargs={"thinking": {"type": "disabled"}},
-            ),
-        )
-    )
+    roles: LLMRolesConfig = Field(default_factory=LLMRolesConfig)
 
 
 class ParserConfig(BaseModel):

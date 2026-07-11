@@ -1565,6 +1565,14 @@ class TestDegradedMode:
         # without a running PostgreSQL — that's expected and non-fatal.
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    async def test_create_eagerly_initializes_query_planner(self, mock_create, test_cfg) -> None:
+        mock_create.return_value = AsyncMock()
+
+        manager = await RAGServiceManager.acreate(config=test_cfg)
+
+        assert manager._query_planner is not None
+
+    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_create_sets_degraded_on_failure(self, mock_create, test_cfg) -> None:
         mock_create.side_effect = RuntimeError("DB down")
         manager = await RAGServiceManager.acreate(config=test_cfg)

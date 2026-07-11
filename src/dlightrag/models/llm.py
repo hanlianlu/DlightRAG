@@ -302,7 +302,7 @@ def get_chat_rerank_scoring_config(config: DlightragConfig) -> ModelConfig:
             temperature=rc.temperature or 0.0,
             model_kwargs=rc.model_kwargs,
         )
-    return config.llm.roles.vlm or config.llm.roles.query or config.llm.default
+    return config.llm.default
 
 
 def get_rerank_func(
@@ -313,9 +313,9 @@ def get_rerank_func(
     """Build multimodal rerank callable from config.
 
     For chat_llm_reranker: uses an independent rerank model if provider/model
-    are set in rerank config. Otherwise it reuses the most capable configured
-    chat role in order: vlm, query, then default. When *supports_vision* is
-    provided, it is the startup probe result for that selected scoring model.
+    are set in rerank config. Otherwise it reuses the default LLM. When
+    *supports_vision* is provided, it is the startup probe result for that
+    selected scoring model.
     """
     from dlightrag.models.rerank import build_rerank_func
 

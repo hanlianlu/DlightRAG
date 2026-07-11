@@ -310,6 +310,9 @@ class RAGServiceManager:
         if default_ws not in all_ws:
             all_ws.insert(0, default_ws)
 
+        # Bind the planner LLM during startup; this does not make a model call.
+        manager._get_query_planner()
+
         # ── Vision probe (once at startup, not per workspace) ──────────
         await manager._probe_vision_support()
 
@@ -873,7 +876,7 @@ class RAGServiceManager:
         return _bounded
 
     def _get_query_planner(self) -> QueryPlanner:
-        """Lazy-create QueryPlanner with schema TTL refresh."""
+        """Return the manager-owned QueryPlanner, creating it when needed."""
         if self._query_planner is None:
             from dlightrag.models.llm import get_planner_model_func
 

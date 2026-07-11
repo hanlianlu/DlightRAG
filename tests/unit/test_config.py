@@ -317,16 +317,10 @@ class TestDlightragConfigNested:
             temperature=0.5,
             timeout=120.0,
         )
-        assert cfg.llm.roles.extract == ModelConfig(
-            provider="openai",
-            model="deepseek-v4-flash",
-            base_url="https://api.deepseek.com",
-            structured_output="json_object",
-            temperature=0.0,
-            timeout=120.0,
-            model_kwargs={"thinking": {"type": "disabled"}},
-        )
-        assert cfg.llm.roles.keyword == cfg.llm.roles.extract
+        assert cfg.llm.roles.extract is None
+        assert model_for_role(cfg, "extract") == cfg.llm.default
+        assert cfg.llm.roles.keyword is None
+        assert model_for_role(cfg, "keyword") == cfg.llm.default
         assert cfg.llm.roles.query is None
         assert model_for_role(cfg, "query") == cfg.llm.default
         assert cfg.llm.roles.vlm is None
