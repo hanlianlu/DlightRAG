@@ -278,25 +278,32 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
         "  roles:\n    extract:\n      provider: openai\n      model: stale-extract\n"
         "    vlm:\n      provider: openai\n      model: stale-vlm\n"
         "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
-        "rerank:\n  strategy: voyage_reranker\n",
+        "rerank:\n  strategy: voyage_reranker\n  model: stale-rerank\n  base_url: https://stale\n",
         encoding="utf-8",
     )
     env = tmp_path / ".env"
+    env.write_text(
+        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=old-extract\n"
+        "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=old-keyword\n"
+        "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=old-query\n"
+        "DLIGHTRAG_LLM__ROLES__VLM__API_KEY=old-vlm\n"
+        "DLIGHTRAG_RERANK__API_KEY=old-rerank\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
     monkeypatch.setattr(wiz, "ENV_PATH", env)
     monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing.env.example")
     prompter = _ScriptedPrompter(
         [
+            "Minimum · one LLM + one embedding",
             "DeepSeek",
             "deepseek-v4-flash",
             "",
             "sk-llm",  # LLM: provider, model, base_url(default), key
-            False,  # advanced roles? no
             "Voyage",
             "voyage-multimodal-3.5",
             "",
             "sk-embed",  # embedding: provider, model, base_url(default), key
-            "Reuse my LLM",  # rerank
         ]
     )
     wiz.run_models_step(prompter)
@@ -304,6 +311,8 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     assert "deepseek-v4-flash" in text
     assert "api.deepseek.com" in text
     assert "chat_llm_reranker" in text
+    assert "stale-rerank" not in text
+    assert "https://stale" not in text
     assert "roles:" not in text
     assert "stale-extract" not in text
     assert "stale-vlm" not in text
@@ -312,6 +321,70 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     assert "DLIGHTRAG_EMBEDDING__API_KEY=sk-embed" in env_text
     assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY" not in env_text
     assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY" not in env_text
+    assert "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY" not in env_text
+    assert "DLIGHTRAG_LLM__ROLES__VLM__API_KEY" not in env_text
+    assert "DLIGHTRAG_RERANK__API_KEY" not in env_text
+
+
+def test_models_step_custom_replaces_roles_and_writes_role_env(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "llm:\n  default:\n    provider: openai\n    model: x\n    base_url: https://x\n"
+        "  roles:\n    vlm:\n      provider: openai\n      model: stale-vlm\n"
+        "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
+        "rerank:\n  strategy: voyage_reranker\n",
+        encoding="utf-8",
+    )
+    env = tmp_path / ".env"
+    env.write_text(
+        "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=old-extract\n"
+        "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=old-keyword\n"
+        "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY=old-query\n"
+        "DLIGHTRAG_LLM__ROLES__VLM__API_KEY=old-vlm\n"
+        "DLIGHTRAG_RERANK__API_KEY=old-rerank\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing.env.example")
+    prompter = _ScriptedPrompter(
+        [
+            "Custom · separate extraction/keyword models",
+            "OpenRouter",
+            "z-ai/glm-5.2",
+            "",
+            "sk-llm",
+            "DeepSeek",
+            "deepseek-v4-flash",
+            "",
+            "sk-extract",
+            "DeepSeek",
+            "deepseek-v4-flash",
+            "",
+            "sk-keyword",
+            "Voyage",
+            "voyage-multimodal-3.5",
+            "",
+            "sk-embed",
+            "Reuse my LLM",
+        ]
+    )
+
+    wiz.run_models_step(prompter)
+
+    text = cfg.read_text(encoding="utf-8")
+    assert "roles:" in text
+    assert "extract:" in text
+    assert "keyword:" in text
+    assert "stale-vlm" not in text
+    env_text = env.read_text(encoding="utf-8")
+    assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY=sk-extract" in env_text
+    assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY=sk-keyword" in env_text
+    assert "old-extract" not in env_text
+    assert "old-keyword" not in env_text
+    assert "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY" not in env_text
+    assert "DLIGHTRAG_LLM__ROLES__VLM__API_KEY" not in env_text
+    assert "DLIGHTRAG_RERANK__API_KEY" not in env_text
 
 
 # --- Plan 2 Task 1: MinerU config helpers ---------------------------------
@@ -415,11 +488,11 @@ def test_models_step_returns_llm_creds(wiz, tmp_path, monkeypatch):
     monkeypatch.setattr(wiz, "ENV_EXAMPLE_PATH", tmp_path / "missing")
     prompter = _ScriptedPrompter(
         [
+            "Minimum · one LLM + one embedding",
             "DeepSeek",
             "deepseek-v4-flash",
             "",
             "sk-llm",
-            False,
             "Voyage",
             "voyage-multimodal-3.5",
             "",
@@ -533,6 +606,54 @@ def _info(wiz):
     return wiz.PlatformInfo(os="linux", arch="x86_64", is_wsl=False)
 
 
+def test_apply_and_validate_restores_config_and_env_on_failure(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    env = tmp_path / ".env"
+    cfg.write_text("old-config\n", encoding="utf-8")
+    env.write_text("OLD_ENV=1\n", encoding="utf-8")
+    config_backup = wiz.backup_file(cfg)
+    env_backup = wiz.backup_file(env)
+    cfg.write_text("new-config\n", encoding="utf-8")
+    env.write_text("NEW_ENV=1\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "validate_config", lambda: (_ for _ in ()).throw(ValueError("bad")))
+
+    assert (
+        wiz._apply_and_validate(
+            _NullConsole(),
+            {"config_backup": config_backup, "env_backup": env_backup, "env_existed": True},
+        )
+        is False
+    )
+
+    assert cfg.read_text(encoding="utf-8") == "old-config\n"
+    assert env.read_text(encoding="utf-8") == "OLD_ENV=1\n"
+
+
+def test_apply_and_validate_removes_new_env_on_failure(wiz, tmp_path, monkeypatch):
+    cfg = tmp_path / "config.yaml"
+    env = tmp_path / ".env"
+    cfg.write_text("old-config\n", encoding="utf-8")
+    config_backup = wiz.backup_file(cfg)
+    cfg.write_text("new-config\n", encoding="utf-8")
+    env.write_text("NEW_ENV=1\n", encoding="utf-8")
+    monkeypatch.setattr(wiz, "CONFIG_PATH", cfg)
+    monkeypatch.setattr(wiz, "ENV_PATH", env)
+    monkeypatch.setattr(wiz, "validate_config", lambda: (_ for _ in ()).throw(ValueError("bad")))
+
+    assert (
+        wiz._apply_and_validate(
+            _NullConsole(),
+            {"config_backup": config_backup, "env_backup": None, "env_existed": False},
+        )
+        is False
+    )
+
+    assert cfg.read_text(encoding="utf-8") == "old-config\n"
+    assert not env.exists()
+
+
 def test_is_configured_true_when_keys_present(wiz, tmp_path):
     env = tmp_path / ".env"
     env.write_text(
@@ -602,6 +723,10 @@ def test_home_start_brings_up_stack(wiz, monkeypatch):
     assert ups == [["docker", "compose", "up", "-d"]]
 
 
+def test_home_choices_prioritize_show_before_start(wiz):
+    assert wiz.HOME_CHOICES == [wiz.MENU_SHOW, wiz.MENU_START, wiz.MENU_CHANGE, wiz.MENU_RESET]
+
+
 def test_home_show_then_start(wiz, monkeypatch):
     shown: list = []
     monkeypatch.setattr(wiz, "read_config_summary", lambda c, e: {"ok": True})
@@ -624,23 +749,25 @@ def test_home_change_then_start(wiz, monkeypatch):
 
 
 def test_home_reset_without_wipe(wiz, monkeypatch):
-    wiped: list = []
+    events: list[str] = []
     monkeypatch.setattr(wiz, "run_first_time_setup", lambda console, p, info, **k: 0)
-    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: wiped.append(True))
-    prompter = _ScriptedPrompter([wiz.MENU_RESET, False])
+    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: events.append("wipe"))
+    monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: events.append("start") or 0)
+    prompter = _ScriptedPrompter([wiz.MENU_RESET, True, False])
     rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
     assert rc == 0
-    assert wiped == []
+    assert events == ["start"]
 
 
 def test_home_reset_with_wipe(wiz, monkeypatch):
-    wiped: list = []
+    events: list[str] = []
     monkeypatch.setattr(wiz, "run_first_time_setup", lambda console, p, info, **k: 0)
-    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: wiped.append(True))
-    prompter = _ScriptedPrompter([wiz.MENU_RESET, True])
+    monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: events.append("wipe"))
+    monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: events.append("start") or 0)
+    prompter = _ScriptedPrompter([wiz.MENU_RESET, True, True])
     rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
     assert rc == 0
-    assert wiped == [True]
+    assert events == ["wipe", "start"]
 
 
 def test_home_reset_declined_returns_to_menu(wiz, monkeypatch):
@@ -648,7 +775,7 @@ def test_home_reset_declined_returns_to_menu(wiz, monkeypatch):
     monkeypatch.setattr(wiz, "_bring_up_stack", lambda console: 0)
     wiped: list = []
     monkeypatch.setattr(wiz, "_wipe_data", lambda console, **k: wiped.append(True))
-    prompter = _ScriptedPrompter([wiz.MENU_RESET, wiz.MENU_START])
+    prompter = _ScriptedPrompter([wiz.MENU_RESET, False, wiz.MENU_START])
     rc = wiz.run_home(_NullConsole(), prompter, _info(wiz))
     assert rc == 0
     assert wiped == []
@@ -703,16 +830,15 @@ def test_change_models_declined_makes_no_change(wiz, monkeypatch):
 
 
 _MODELS_ANSWERS = [
+    "Minimum · one LLM + one embedding",
     "DeepSeek",
     "deepseek-v4-flash",
     "",
     "sk-llm",
-    False,  # no advanced extract/keyword roles
     "Voyage",
     "voyage-multimodal-3.5",
     "",
     "sk-embed",
-    "Reuse my LLM",
 ]
 
 
