@@ -15,6 +15,46 @@ configuration fields live in [configuration.md](configuration.md).
 | MCP Server | Agent tools over stdio or streamable HTTP | Durable ingest jobs |
 | Web UI | Browser upload and chat | Durable ingest jobs behind the Files panel |
 
+### Choosing an interface
+
+Pick by **where the engine runs**, not by language preference:
+
+- **Engine runs as a separate service** (Docker, a shared host, an internal
+  deployment): use the **REST API**, **MCP**, or **Web UI**. Remote callers talk
+  to a running server over HTTP and should not import the `dlightrag` package.
+  This is the common case.
+- **Engine runs inside your own process** (your application *is* the RAG service
+  and owns its PostgreSQL, parser endpoint, and model providers): use the
+  **Python SDK** (`RAGServiceManager`). This is a power-user surface — the REST
+  and MCP servers are themselves built on it.
+
+### Configuration is one-time; the runtime surface is small
+
+Configuring models, providers, credentials, PostgreSQL, and the parser is a
+**one-time setup step**, not something callers repeat per request. Values are
+resolved from (highest precedence first): constructor args › environment
+variables › `.env` › `config.yaml` › defaults (see
+[configuration.md](configuration.md)).
+
+- **Deployment / repo:** edit `config.yaml` (app settings) + `.env` (secrets), or
+  run `uv run prerequisite_setup.py` to generate both.
+- **Programmatic:** build `DlightragConfig(...)` in code and pass overrides
+  directly; no files required.
+
+Once configured, the SDK runtime is a small create-once / call / close lifecycle:
+
+```python
+manager = await RAGServiceManager.acreate(config)  # start: warms the default workspace
+# per request:
+await manager.aingest(...)   # or aretrieve(...) / aanswer(...) / aanswer_stream(...)
+await manager.aclose()       # stop
+```
+
+`DlightragConfig` ships no built-in model stack: `embedding` is required and has
+no default, so a bare `DlightragConfig()` with no `config.yaml`, `.env`, or env
+vars will not start. Supply model and provider values from any configuration
+source above.
+
 ## Ingestion
 
 ### Python SDK
