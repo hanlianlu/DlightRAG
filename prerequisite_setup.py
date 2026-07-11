@@ -85,6 +85,13 @@ RERANK_CHOICES: dict[str, tuple[str, bool]] = {
     "Azure Cohere": ("azure_cohere", True),
 }
 
+LLM_ROLE_ENV_KEYS: dict[str, str] = {
+    "extract": "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY",
+    "keyword": "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY",
+    "query": "DLIGHTRAG_LLM__ROLES__QUERY__API_KEY",
+    "vlm": "DLIGHTRAG_LLM__ROLES__VLM__API_KEY",
+}
+
 
 def _model_block(spec: ProviderSpec, model: str, base_url: str | None) -> dict:
     block: dict = {"provider": spec.provider, "model": model}
@@ -159,6 +166,9 @@ def write_config_yaml(
     if embedding is not None:
         _apply_model_block(data["embedding"], embedding)
     if rerank is not None:
+        for stale_key in ("provider", "model", "base_url", "api_key"):
+            if stale_key not in rerank:
+                data["rerank"].pop(stale_key, None)
         for key, value in rerank.items():
             data["rerank"][key] = value
     if mineru_api_mode is not None:
@@ -166,13 +176,16 @@ def write_config_yaml(
     yaml.dump(data, path)
 
 
-def upsert_env(path: Path, values: dict[str, str]) -> None:
-    """Insert/replace KEY=value lines; preserve all other lines and order."""
+def upsert_env(path: Path, values: dict[str, str], *, remove_keys: tuple[str, ...] = ()) -> None:
+    """Insert/replace KEY=value lines; remove requested active keys."""
     remaining = dict(values)
+    keys_to_remove = set(remove_keys) - set(remaining)
     lines: list[str] = []
     if path.exists():
         for raw in path.read_text(encoding="utf-8").splitlines():
             key = raw.split("=", 1)[0].strip() if "=" in raw else ""
+            if key in keys_to_remove:
+                continue
             if key in remaining:
                 lines.append(f"{key}={remaining.pop(key)}")
             else:
@@ -432,21 +445,24 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         "[dim]Provider = API protocol (openai / anthropic / gemini). Pick your vendor below — "
         "DeepSeek, OpenRouter, Azure, etc. map to the OpenAI-compatible protocol automatically.[/dim]"
     )
+    Console().print(
+        "[dim]Minimum replaces old role-specific LLMs. Custom replaces old roles with "
+        "extract/keyword choices.[/dim]"
+    )
+
+    mode = prompter.select(MODEL_MODE_PROMPT, MODEL_MODE_CHOICES)
 
     name, model, base_url, key = _ask_model(prompter, PROVIDERS_LLM, "LLM")
     llm_block, llm_env = resolve_llm_choice(name, model=model, base_url=base_url)
     env_values[llm_env] = key
 
     llm_roles: dict[str, dict] = {}
-    if prompter.confirm("Use a cheaper model for extraction/keyword? (advanced)", default=False):
-        for role, env_key in (
-            ("extract", "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY"),
-            ("keyword", "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY"),
-        ):
+    if mode == MODEL_MODE_CUSTOM:
+        for role in ("extract", "keyword"):
             rn, rm, rurl, rk = _ask_model(prompter, PROVIDERS_LLM, f"{role} LLM")
             block, _ = resolve_llm_choice(rn, model=rm, base_url=rurl)
             llm_roles[role] = block
-            env_values[env_key] = rk
+            env_values[LLM_ROLE_ENV_KEYS[role]] = rk
 
     ename, emodel, ebase, ekey = _ask_model(prompter, PROVIDERS_EMBED, "Embedding")
     embed_block, embed_env = resolve_embedding_choice(ename, model=emodel, base_url=ebase)
@@ -454,7 +470,9 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         embed_block["dim"] = int(prompter.text("Embedding dimension (dim)", default="1024"))
     env_values[embed_env] = ekey
 
-    rerank_choice = prompter.select("Reranker", list(RERANK_CHOICES))
+    rerank_choice = "Reuse my LLM"
+    if mode == MODEL_MODE_CUSTOM:
+        rerank_choice = prompter.select("Reranker", list(RERANK_CHOICES))
     rerank_block, rerank_env = resolve_rerank_choice(rerank_choice)
     if rerank_env is not None:
         env_values[rerank_env] = prompter.password("Reranker API key")
@@ -466,9 +484,9 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
     # Back up config and any pre-existing .env only now — right before writing —
     # so aborted or declined runs never leave a stray .bak behind.
     config_backup = backup_file(CONFIG_PATH)
-    if ENV_PATH.exists():
-        backup_file(ENV_PATH)
-    elif ENV_EXAMPLE_PATH.exists():
+    env_existed = ENV_PATH.exists()
+    env_backup = backup_file(ENV_PATH) if env_existed else None
+    if not env_existed and ENV_EXAMPLE_PATH.exists():
         ENV_PATH.write_bytes(ENV_EXAMPLE_PATH.read_bytes())
 
     write_config_yaml(
@@ -478,10 +496,19 @@ def run_models_step(prompter: Prompter, *, require_confirm: bool = False) -> dic
         embedding=embed_block,
         rerank=rerank_block,
     )
-    upsert_env(ENV_PATH, env_values)
+    selected_role_keys = {LLM_ROLE_ENV_KEYS[role] for role in llm_roles}
+    stale_role_keys = tuple(
+        key for key in LLM_ROLE_ENV_KEYS.values() if key not in selected_role_keys
+    )
+    remove_env_keys = stale_role_keys
+    if rerank_env is None:
+        remove_env_keys = (*remove_env_keys, "DLIGHTRAG_RERANK__API_KEY")
+    upsert_env(ENV_PATH, env_values, remove_keys=remove_env_keys)
     return {
         "llm": {"api_key": key, "base_url": llm_block.get("base_url"), "model": model},
         "config_backup": config_backup,
+        "env_backup": env_backup,
+        "env_existed": env_existed,
     }
 
 
@@ -497,7 +524,7 @@ MENU_START = "Start DlightRAG · 启动"
 MENU_CHANGE = "Change settings · 修改设置"
 MENU_SHOW = "Show settings · 查看设置"
 MENU_RESET = "Start over · 重新配置"
-HOME_CHOICES = [MENU_START, MENU_CHANGE, MENU_SHOW, MENU_RESET]
+HOME_CHOICES = [MENU_SHOW, MENU_START, MENU_CHANGE, MENU_RESET]
 HOME_PROMPT = "DlightRAG is already set up — what next? · DlightRAG 已配置，接下来做什么？"
 
 # "Change settings" sub-menu (section-level, per the design).
@@ -507,6 +534,11 @@ SEC_ALL = "Everything · 全部"
 SEC_BACK = "← Back · 返回"
 CHANGE_CHOICES = [SEC_MODELS, SEC_MINERU, SEC_ALL, SEC_BACK]
 CHANGE_PROMPT = "What do you want to change? · 你想修改什么？"
+
+MODEL_MODE_MINIMUM = "Minimum · one LLM + one embedding"
+MODEL_MODE_CUSTOM = "Custom · separate extraction/keyword models"
+MODEL_MODE_CHOICES = [MODEL_MODE_MINIMUM, MODEL_MODE_CUSTOM]
+MODEL_MODE_PROMPT = "Model setup mode · 模型配置模式"
 
 MODELS_OVERWRITE_CONFIRM = (
     "Overwrite your current model settings and API keys with these answers? · "
@@ -518,6 +550,9 @@ MINERU_OVERWRITE_CONFIRM = (
 RESET_WIPE_CONFIRM = (
     "Delete ALL documents you've already added (vectors, graph)? This cannot be undone. · "
     "删除所有已导入的文档（向量、图谱）？此操作不可恢复"
+)
+START_OVER_APPLY_CONFIRM = (
+    "Replace model and document-parsing settings from scratch? · 从头替换模型与文档解析设置？"
 )
 
 REQUIRED_ENV_KEYS = (
@@ -712,12 +747,22 @@ def _apply_and_validate(console, result: dict) -> bool:
         backup = result.get("config_backup")
         if backup is not None:
             CONFIG_PATH.write_bytes(backup.read_bytes())
+        env_backup = result.get("env_backup")
+        if env_backup is not None:
+            ENV_PATH.write_bytes(env_backup.read_bytes())
+        elif result.get("env_existed") is False:
+            ENV_PATH.unlink(missing_ok=True)
         console.print(f"[red]Config invalid; restored backup:[/red] {exc}")
         return False
 
 
 def run_first_time_setup(
-    console, prompter: Prompter, info: PlatformInfo, *, require_confirm: bool = False
+    console,
+    prompter: Prompter,
+    info: PlatformInfo,
+    *,
+    require_confirm: bool = False,
+    launch: bool = True,
 ) -> int | None:
     result = run_models_step(prompter, require_confirm=require_confirm)
     if result is None:
@@ -732,7 +777,7 @@ def run_first_time_setup(
         llm_title_aided=result["llm"],
         require_confirm=require_confirm,
     )
-    return _bring_up_stack(console)
+    return _bring_up_stack(console) if launch else 0
 
 
 def run_change_settings(console, prompter: Prompter, info: PlatformInfo) -> None:
@@ -782,13 +827,16 @@ def run_start_over(console, prompter: Prompter, info: PlatformInfo) -> int | Non
         "[bold]Start over[/bold] — re-enter settings; nothing changes until you confirm. · "
         "[bold]重新配置[/bold]：重新输入设置，确认前不会改动"
     )
-    rc = run_first_time_setup(console, prompter, info, require_confirm=True)
+    if not prompter.confirm(START_OVER_APPLY_CONFIRM, default=False):
+        console.print("No changes made. · 未做任何更改")
+        return None
+    rc = run_first_time_setup(console, prompter, info, require_confirm=False, launch=False)
     if rc != 0:  # None (declined the overwrite) or 1 (invalid config)
         return rc
     # Confirm the irreversible data wipe immediately before doing it.
     if prompter.confirm(RESET_WIPE_CONFIRM, default=False):
         _wipe_data(console)
-    return rc
+    return _bring_up_stack(console)
 
 
 def run_home(console, prompter: Prompter, info: PlatformInfo) -> int:

@@ -82,7 +82,7 @@ uv run prerequisite_setup.py
 
 It writes `config.yaml` and `.env` for you (with timestamped backups) and is safe
 to re-run. The wizard does not preserve the checked-in model choices: the minimum
-path writes only `llm.default` plus `embedding`, while the advanced path replaces
+path writes only `llm.default` plus `embedding`, while the custom path replaces
 role-specific LLM blocks with the roles you choose. Prefer the manual steps below
 if you'd rather configure everything by hand.
 
