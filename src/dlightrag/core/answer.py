@@ -532,7 +532,9 @@ class AnswerEngine:
                     meta_parts.append(f"{display_key}: {v}")
             meta_suffix = f" ({', '.join(meta_parts)})" if meta_parts else ""
 
-            header = f"### Document [{ref_id}]: {filename}{meta_suffix}"
+            workspace = indexer.get_doc_workspace(ref_id) if indexer is not None else None
+            workspace_label = f" [workspace: {workspace}]" if workspace else ""
+            header = f"### Document [{ref_id}]{workspace_label}: {filename}{meta_suffix}"
             blocks.append({"type": "text", "text": header})
 
             # Per-chunk: image label + image + text content + dynamic metadata

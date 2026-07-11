@@ -74,3 +74,61 @@ def test_get_max_chunk_idx():
     )
     assert indexer.get_max_chunk_idx("1") == 3
     assert indexer.get_max_chunk_idx("999") == 0
+
+
+def test_reference_list_exposes_workspace_provenance_without_breaking_legacy_contexts():
+    indexer = CitationIndexer()
+    indexer.build_index(
+        [
+            {
+                "chunk_id": "c1",
+                "reference_id": "1",
+                "content": "current",
+                "file_path": "/docs/report.pdf",
+                "_workspace": "personnel",
+            },
+            {
+                "chunk_id": "c2",
+                "reference_id": "2",
+                "content": "legacy",
+                "file_path": "/docs/legacy.pdf",
+            },
+        ]
+    )
+
+    references = indexer.format_reference_list()
+
+    assert indexer.get_doc_workspace("1") == "personnel"
+    assert indexer.get_doc_workspace("2") is None
+    assert "[1] [workspace: personnel] report.pdf" in references
+    assert "[2] legacy.pdf" in references
+
+    indexer.build_index(
+        [
+            {
+                "chunk_id": "c3",
+                "reference_id": "1",
+                "content": "rebuilt",
+                "file_path": "/docs/rebuilt.pdf",
+                "_workspace": "research",
+            }
+        ]
+    )
+
+    assert indexer.get_doc_workspace("1") == "research"
+    assert indexer.get_doc_workspace("2") is None
+    assert "[1] [workspace: research] rebuilt.pdf" in indexer.format_reference_list()
+
+    indexer.build_index(
+        [
+            {
+                "chunk_id": "c4",
+                "reference_id": "1",
+                "content": "rebuilt legacy",
+                "file_path": "/docs/rebuilt-legacy.pdf",
+            }
+        ]
+    )
+
+    assert indexer.get_doc_workspace("1") is None
+    assert "[1] rebuilt-legacy.pdf" in indexer.format_reference_list()
