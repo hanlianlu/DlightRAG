@@ -904,6 +904,7 @@ class TestAnswerViaEngine:
         engine.generate.return_value = expected
         manager = RAGServiceManager(config=test_cfg)
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
         manager._answer_engine = engine
         manager._query_planner = QueryPlanner(llm_func=None)
 
@@ -954,6 +955,7 @@ class TestAnswerViaEngine:
         engine.generate_stream.return_value = (contexts, answer_stream)
         manager = RAGServiceManager(config=test_cfg)
         manager.alist_workspaces = AsyncMock(return_value=["ws_a", "ws_b"])
+        manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
         manager._answer_engine = engine
         manager._query_planner = QueryPlanner(llm_func=None)
 

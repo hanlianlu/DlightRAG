@@ -50,10 +50,9 @@ await manager.aingest(...)   # or aretrieve(...) / aanswer(...) / aanswer_stream
 await manager.aclose()       # stop
 ```
 
-`DlightragConfig` ships no built-in model stack: `embedding` is required and has
-no default, so a bare `DlightragConfig()` with no `config.yaml`, `.env`, or env
-vars will not start. Supply model and provider values from any configuration
-source above.
+`DlightragConfig` ships a curated default model stack, but it still needs the
+matching provider credentials to run. Supply credentials, model choices, and
+provider overrides from any configuration source above.
 
 ## Ingestion
 

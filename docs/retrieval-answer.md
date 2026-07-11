@@ -178,10 +178,15 @@ list with page/image data already attached.
 When `rerank.score_threshold` is set, post-rerank filtering removes chunks below
 that score. The threshold is hard: if every candidate in a workspace scores
 below it, that workspace contributes no reranked chunks to federated round-robin
-merge. When omitted, `chat_llm_reranker` defaults to `0.5`; provider rerankers
-keep all scored candidates before taking `top_k`. If the reranker itself fails,
-DlightRAG treats that as infrastructure degradation and falls back to the
-pre-rerank fused order for that request.
+merge. When omitted, all strategies keep scored candidates before taking
+`top_k`. If the reranker itself fails at request time, DlightRAG treats that as
+infrastructure degradation and falls back to the pre-rerank fused order for that
+request.
+
+Configuration errors fail fast instead of falling back. For example, explicitly
+choosing `voyage_reranker`, `cohere_reranker`, or another provider reranker
+without the required API key prevents service initialization; DlightRAG does not
+silently switch that configuration to `chat_llm_reranker`.
 
 Reranking has an independent image budget because it runs after retrieval
 hydration but before answer-context packing. `chat_llm_reranker` and

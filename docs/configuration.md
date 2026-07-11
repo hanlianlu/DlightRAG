@@ -475,6 +475,9 @@ Voyage's text reranker is available with `strategy: voyage_reranker`,
 `model: rerank-2.5` or `rerank-2.5-lite`, and `DLIGHTRAG_RERANK__API_KEY`.
 Cohere's public text reranker is available with `strategy: cohere_reranker`,
 `model: rerank-v4.0-pro` or `rerank-v4.0-fast`, and the same API key env var.
+When a provider reranker is explicitly selected, missing credentials are a
+configuration error and fail service initialization rather than falling back to
+`chat_llm_reranker`.
 
 `rerank.input_modality` defaults to `auto`. For `chat_llm_reranker`, auto
 reuses the startup vision probe for the selected scoring model: vision-capable
@@ -492,8 +495,7 @@ document objects.
 rerank:
   strategy: chat_llm_reranker
   input_modality: auto
-  # Optional. Omitted defaults to 0.5 for chat_llm_reranker.
-  # Provider rerankers keep all scored candidates before top_k when omitted.
+  # Optional. Omitted keeps all scored candidates before top_k.
   # score_threshold: 0.5
   max_concurrency: 8
   batch_size: 8
