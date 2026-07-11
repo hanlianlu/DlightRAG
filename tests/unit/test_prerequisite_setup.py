@@ -124,6 +124,36 @@ def test_write_config_preserves_comments_and_updates(wiz, tmp_path):
     assert "old-model" not in text
 
 
+def test_write_config_replaces_stale_role_blocks_when_roles_are_explicit(wiz, tmp_path):
+    src = tmp_path / "config.yaml"
+    src.write_text(
+        "llm:\n"
+        "  default:\n    provider: openai\n    model: default\n"
+        "  roles:\n"
+        "    extract:\n      provider: openai\n      model: stale-extract\n"
+        "    vlm:\n      provider: openai\n      model: stale-vlm\n"
+        "embedding:\n  provider: voyage\n  model: embed\n  dim: 1024\n",
+        encoding="utf-8",
+    )
+
+    wiz.write_config_yaml(
+        src,
+        llm_roles={
+            "keyword": {
+                "provider": "openai",
+                "model": "cheap-keyword",
+                "base_url": "https://api.deepseek.com",
+            }
+        },
+    )
+
+    text = src.read_text(encoding="utf-8")
+    assert "keyword:" in text
+    assert "cheap-keyword" in text
+    assert "stale-extract" not in text
+    assert "stale-vlm" not in text
+
+
 # --- Task 4: .env upsert ---------------------------------------------------
 def test_upsert_env_preserves_and_updates(wiz, tmp_path):
     env = tmp_path / ".env"
@@ -245,6 +275,8 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         "llm:\n  default:\n    provider: openai\n    model: x\n    base_url: https://x\n"
+        "  roles:\n    extract:\n      provider: openai\n      model: stale-extract\n"
+        "    vlm:\n      provider: openai\n      model: stale-vlm\n"
         "embedding:\n  provider: voyage\n  model: x\n  dim: 1024\n"
         "rerank:\n  strategy: voyage_reranker\n",
         encoding="utf-8",
@@ -272,9 +304,14 @@ def test_models_step_writes_config_and_env(wiz, tmp_path, monkeypatch):
     assert "deepseek-v4-flash" in text
     assert "api.deepseek.com" in text
     assert "chat_llm_reranker" in text
+    assert "roles:" not in text
+    assert "stale-extract" not in text
+    assert "stale-vlm" not in text
     env_text = env.read_text(encoding="utf-8")
     assert "DLIGHTRAG_LLM__DEFAULT__API_KEY=sk-llm" in env_text
     assert "DLIGHTRAG_EMBEDDING__API_KEY=sk-embed" in env_text
+    assert "DLIGHTRAG_LLM__ROLES__EXTRACT__API_KEY" not in env_text
+    assert "DLIGHTRAG_LLM__ROLES__KEYWORD__API_KEY" not in env_text
 
 
 # --- Plan 2 Task 1: MinerU config helpers ---------------------------------
