@@ -61,13 +61,13 @@ llm:
           type: disabled
     query:
       provider: openai
-      model: Qwen3.5-Uncensored-HauhauCS-Aggressive:9b
-      base_url: http://host.docker.internal:11434/v1 # (dockerized app for ollama)
+      model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
+      base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
       structured_output: json_schema
       temperature: 0.3
       timeout: 120.0
       model_kwargs:
-        reasoning_effort: "none"
+        enable_thinking: false
   #  vlm:
   #    provider: gemini
   #    model: google/gemini-3.5-flash
