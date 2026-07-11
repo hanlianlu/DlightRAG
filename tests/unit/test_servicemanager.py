@@ -1516,7 +1516,19 @@ async def test_vision_probe_result_is_manager_scoped(
     monkeypatch: pytest.MonkeyPatch,
     test_cfg: DlightragConfig,
 ) -> None:
-    test_cfg = test_cfg.model_copy(update={"rerank": RerankConfig(strategy="chat_llm_reranker")})
+    model_kwargs = {"reasoning_effort": "none"}
+    test_cfg = test_cfg.model_copy(
+        update={
+            "llm": LLMConfig(
+                default=ModelConfig(
+                    model="gpt-5.4-mini",
+                    api_key="test",
+                    model_kwargs=model_kwargs,
+                )
+            ),
+            "rerank": RerankConfig(strategy="chat_llm_reranker"),
+        }
+    )
     first = RAGServiceManager(config=test_cfg)
     first._supports_vision = False
     second = RAGServiceManager(config=test_cfg)
@@ -1531,7 +1543,7 @@ async def test_vision_probe_result_is_manager_scoped(
     assert first._supports_vision is False
     assert second._supports_vision is True
     assert second._rerank_supports_vision is True
-    probe.assert_awaited_once()
+    probe.assert_awaited_once_with(provider, model="gpt-5.4-mini", model_kwargs=model_kwargs)
 
 
 class TestDegradedMode:

@@ -589,7 +589,11 @@ class RAGServiceManager:
                 max_retries=cfg.max_retries,
             )
             try:
-                has_vision = await probe_vision_support(provider, model=cfg.model)
+                has_vision = await probe_vision_support(
+                    provider,
+                    model=cfg.model,
+                    model_kwargs=cfg.model_kwargs,
+                )
                 logger.info(
                     "%s vision probe: %s (model=%s, provider=%s)",
                     label,

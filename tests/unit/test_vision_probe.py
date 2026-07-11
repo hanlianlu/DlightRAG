@@ -28,6 +28,33 @@ class TestProbeVisionSupport:
         result = await probe_vision_support(provider, model="test-model")
         assert result is False
 
+    async def test_allows_reasoning_models_room_to_reach_content(self) -> None:
+        provider = AsyncMock()
+
+        async def complete(*args: object, **kwargs: object) -> str:
+            return "ok" if kwargs.get("max_tokens") == 512 else ""
+
+        provider.complete = AsyncMock(side_effect=complete)
+
+        result = await probe_vision_support(provider, model="test-model")
+
+        assert result is True
+        assert provider.complete.call_args.kwargs["max_tokens"] == 512
+
+    async def test_forwards_model_kwargs(self) -> None:
+        provider = AsyncMock()
+        provider.complete = AsyncMock(return_value="ok")
+        model_kwargs = {"reasoning_effort": "none"}
+
+        result = await probe_vision_support(
+            provider,
+            model="test-model",
+            model_kwargs=model_kwargs,
+        )
+
+        assert result is True
+        assert provider.complete.call_args.kwargs["model_kwargs"] == model_kwargs
+
     async def test_sends_one_pixel_image(self) -> None:
         provider = AsyncMock()
         provider.complete = AsyncMock(return_value="ok")
