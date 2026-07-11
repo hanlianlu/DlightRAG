@@ -36,6 +36,8 @@ llm:
     temperature: 0.5
     timeout: 120.0
     model_kwargs:
+      reasoning:
+        enabled: false
       usage:
         include: true
   roles:
