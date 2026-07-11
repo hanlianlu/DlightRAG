@@ -89,10 +89,10 @@ embedding:
 
 rerank:
   enabled: true
-  strategy: chat_llm_reranker
+  strategy: voyage_reranker
+  model: rerank-2.5-lite
   input_modality: auto
-  ## Reuses llm.default unless provider/model are explicitly set here. Provider
-  ## rerankers need DLIGHTRAG_RERANK__API_KEY.
+  ## Keep the credential in .env as DLIGHTRAG_RERANK__API_KEY.
 
 # ─────────────────────────────────────────────────────────────────
 # Parser and Ingestion
