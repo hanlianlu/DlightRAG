@@ -20,7 +20,7 @@ from dlightrag.prompts import (
 )
 from dlightrag.utils.concurrency import bounded_map
 
-from .parser import strip_generated_references_section
+from .parser import DOC_CITATION_TRAILING_BOUNDARY, strip_generated_references_section
 from .schemas import SourceReference
 
 logger = logging.getLogger(__name__)
@@ -52,8 +52,8 @@ class HighlightBatchResponse(BaseModel):
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<=[.!?\u3002\uff01\uff1f])\s+|(?<=[.!?\u3002\uff01\uff1f])(?=\S)"
 )
-# Matches both chunk-level [n-m] and doc-level [n] citations
-_CITATION_RE = re.compile(r"\[\w+-\d+\]|\[\d+\](?![\w-])")
+# Matches both chunk-level [n-m] and doc-level [n] citations.
+_CITATION_RE = re.compile(rf"\[\w+-\d+\]|\[\d+\]{DOC_CITATION_TRAILING_BOUNDARY}")
 
 
 def _strip_json_fences(text: str) -> str:

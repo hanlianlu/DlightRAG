@@ -71,6 +71,12 @@ class TestDocCitationPattern:
     def test_matches_multi_digit(self):
         assert DOC_CITATION_PATTERN.findall("Sources [12] and [3]") == ["12", "3"]
 
+    def test_matches_before_chinese_word_character(self):
+        assert DOC_CITATION_PATTERN.findall("《货币、权力与人》[1]和《中国为什么有前途》[3]") == [
+            "1",
+            "3",
+        ]
+
     def test_no_false_positive_on_chunk_format(self):
         """[1-2] should NOT be matched by doc pattern."""
         assert DOC_CITATION_PATTERN.findall("See [1-2]") == []
@@ -85,6 +91,10 @@ class TestExtractCitationKeysDocLevel:
     def test_extracts_doc_level(self):
         keys = extract_citation_keys("Answer based on [1] and [2].")
         assert keys == ["1", "2"]
+
+    def test_extracts_doc_level_before_chinese_text(self):
+        keys = extract_citation_keys("《货币、权力与人》[1]和《中国为什么有前途》[3]")
+        assert keys == ["1", "3"]
 
     def test_extracts_mixed(self):
         keys = extract_citation_keys("From [1] and specifically [1-2].")
