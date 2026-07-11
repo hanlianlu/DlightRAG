@@ -30,7 +30,7 @@
 llm:
   default:
     provider: openai
-    model: z-ai/glm-5.2
+    model: xiaomi/mimo-v2.5
     base_url: https://openrouter.ai/api/v1
     structured_output: json_schema
     temperature: 0.5
