@@ -59,7 +59,16 @@ llm:
       model_kwargs:
         thinking:
           type: disabled
-    query:
+    # query:
+    #   provider: openai
+    #   model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
+    #   base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
+    #   structured_output: json_schema
+    #   temperature: 0.3
+    #   timeout: 120.0
+    #   model_kwargs:
+    #     enable_thinking: false
+    vlm:
       provider: openai
       model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
       base_url: http://host.docker.internal:8888/v1 # Unsloth Studio on the Docker host
@@ -68,9 +77,6 @@ llm:
       timeout: 120.0
       model_kwargs:
         enable_thinking: false
-  #  vlm:
-  #    provider: gemini
-  #    model: google/gemini-3.5-flash
 
 embedding:
   provider: voyage
