@@ -25,10 +25,19 @@ class CitationIndexer:
         self._chunk_to_ref: dict[str, tuple[str, int]] = {}
         # Per-ref doc metadata: ref_id -> file_name
         self._doc_names: dict[str, str] = {}
+        # Per-ref normalized workspace provenance: ref_id -> workspace ID
+        self._doc_workspaces: dict[str, str] = {}
         # Per-chunk metadata: chunk_id -> {"page_idx": int, ...}
         self._chunk_meta: dict[str, dict[str, Any]] = {}
 
     def build_index(self, contexts: list[dict[str, Any]]) -> None:
+        self._index.clear()
+        self._reverse.clear()
+        self._chunk_to_ref.clear()
+        self._doc_names.clear()
+        self._doc_workspaces.clear()
+        self._chunk_meta.clear()
+
         valid_chunk_ids: set[str] = set()
         for ctx in contexts:
             cid = ctx.get("chunk_id")
@@ -58,6 +67,9 @@ class CitationIndexer:
                 if ref_id not in self._doc_names:
                     fp = ctx.get("file_path", "")
                     self._doc_names[ref_id] = Path(fp).name if fp else f"Source {ref_id}"
+                workspace = str(ctx.get("_workspace") or "").strip()
+                if workspace and ref_id not in self._doc_workspaces:
+                    self._doc_workspaces[ref_id] = workspace
             else:
                 source_id = ctx.get("source_id")
                 if source_id:
@@ -86,6 +98,10 @@ class CitationIndexer:
     def get_max_chunk_idx(self, ref_id: str | int) -> int:
         reverse = self._reverse.get(str(ref_id), {})
         return max(reverse.keys()) if reverse else 0
+
+    def get_doc_workspace(self, ref_id: str | int) -> str | None:
+        """Return the normalized workspace ID recorded for a reference."""
+        return self._doc_workspaces.get(str(ref_id))
 
     def get_citation_tags(self, source_id: str | None) -> list[str]:
         """Return citation tags for a source_id (single or comma-separated chunk_ids).
@@ -172,7 +188,9 @@ class CitationIndexer:
         lines: list[str] = []
         for ref_id in self._reverse:
             name = self._doc_names.get(ref_id, f"Source {ref_id}")
-            lines.append(f"[{ref_id}] {name}")
+            workspace = self.get_doc_workspace(ref_id)
+            workspace_label = f" [workspace: {workspace}]" if workspace else ""
+            lines.append(f"[{ref_id}]{workspace_label} {name}")
             max_idx = max(self._reverse[ref_id])
             for idx in range(1, max_idx + 1):
                 cid = self._reverse[ref_id].get(idx)

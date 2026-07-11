@@ -833,6 +833,42 @@ class TestAnswerEngineHelpers:
 class TestBuildExcerptBlocks:
     """Test _build_excerpt_blocks for document-grouped image interleaving."""
 
+    def test_same_filename_headers_expose_distinct_workspace_provenance(self) -> None:
+        from dlightrag.citations.indexer import CitationIndexer
+
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "a1",
+                    "reference_id": "1",
+                    "file_path": "/report.pdf",
+                    "content": "alpha",
+                    "_workspace": "ws_a",
+                },
+                {
+                    "chunk_id": "b1",
+                    "reference_id": "2",
+                    "file_path": "/report.pdf",
+                    "content": "beta",
+                    "_workspace": "ws_b",
+                },
+            ]
+        }
+        indexer = CitationIndexer()
+        indexer.build_index(list(contexts["chunks"]))
+
+        blocks = AnswerEngine._build_excerpt_blocks(contexts, indexer=indexer)
+        headers = [
+            block["text"]
+            for block in blocks
+            if block.get("type") == "text" and block.get("text", "").startswith("### Document")
+        ]
+
+        assert headers == [
+            "### Document [1] [workspace: ws_a]: report.pdf",
+            "### Document [2] [workspace: ws_b]: report.pdf",
+        ]
+
     def test_groups_chunks_by_document(self) -> None:
         """Chunks from the same document appear under the same header."""
         contexts = _multi_doc_contexts()
