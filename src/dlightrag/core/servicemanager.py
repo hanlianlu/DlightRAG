@@ -1207,6 +1207,7 @@ class RAGServiceManager:
         plan: QueryPlan | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
+        bm25_query: str | None = None,
         filters: MetadataFilter | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
@@ -1226,6 +1227,8 @@ class RAGServiceManager:
         requested_chunk_top_k = _positive_int_or_none(chunk_top_k)
         if filters is not None:
             kwargs["filters"] = filters
+        if bm25_query is not None:
+            kwargs["bm25_query"] = bm25_query
         if multimodal_content:
             kwargs["multimodal_content"] = multimodal_content
         kwargs["top_k"] = requested_top_k or self._config.top_k

@@ -1515,6 +1515,7 @@ class RAGService:
         filters: MetadataFilter | None = None,
         *,
         _plan: Any = None,
+        bm25_query: str | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         """Retrieve structured data without generating answer.
@@ -1542,12 +1543,16 @@ class RAGService:
             filter_source = getattr(_plan, "metadata_filter_source", None)
         effective_filters = self._normalize_metadata_filter(effective_filters)
 
+        effective_bm25_query = (bm25_query or "").strip() or None
+        if effective_bm25_query is None and _plan is not None:
+            effective_bm25_query = getattr(_plan, "bm25_query", None)
+
         kg_result = await self._retrieval_orchestrator.aretrieve(
             query,
             multimodal_content=multimodal_content,
             metadata_filter=effective_filters,
             metadata_filter_source=filter_source,
-            bm25_query=getattr(_plan, "bm25_query", None) if _plan is not None else None,
+            bm25_query=effective_bm25_query,
             top_k=top_k,
             chunk_top_k=chunk_top_k,
             is_reretrieve=is_reretrieve,

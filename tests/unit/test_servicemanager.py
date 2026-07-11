@@ -501,6 +501,16 @@ class TestRouting:
         assert retrieve_kwargs["top_k"] == 9
         assert retrieve_kwargs["chunk_top_k"] == 4
 
+    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    async def test_aretrieve_forwards_bm25_query(self, mock_create, test_cfg) -> None:
+        mock_svc = AsyncMock()
+        mock_svc.aretrieve.return_value = MagicMock()
+        mock_create.return_value = mock_svc
+        manager = RAGServiceManager(config=test_cfg)
+        await manager.aretrieve("query", workspace="ws_a", bm25_query="alpha beta")
+        retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
+        assert retrieve_kwargs["bm25_query"] == "alpha beta"
+
     async def test_query_image_memory_is_request_scoped(self, test_cfg) -> None:
         session_images = SessionImageStore(
             max_images_per_session=3,

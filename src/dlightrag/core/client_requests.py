@@ -28,6 +28,10 @@ def query_kwargs_from_payload(
     if filters is not None:
         kwargs["filters"] = filters
 
+    bm25_query = _get(payload, "bm25_query")
+    if bm25_query:
+        kwargs["bm25_query"] = bm25_query
+
     multimodal_content = _get(payload, "multimodal_content")
     if include_multimodal_content and multimodal_content:
         kwargs["multimodal_content"] = dump_optional_list(multimodal_content)

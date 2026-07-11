@@ -112,10 +112,12 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert answer_props["semantic_highlights"]["default"] is False
     assert "filters" in answer_props
     assert answer_props["all_workspaces"]["default"] is False
+    assert "bm25_query" not in answer_props
     retrieve_tool = next(tool for tool in tools if tool.name == "retrieve")
     retrieve_props = retrieve_tool.inputSchema["properties"]
     assert "semantic_highlights" not in retrieve_props
     assert "chunk_top_k" in retrieve_props
+    assert "bm25_query" in retrieve_props
     assert retrieve_props["all_workspaces"]["default"] is False
     retrieve_image_block_schema = _query_image_schema(
         retrieve_tool.inputSchema,

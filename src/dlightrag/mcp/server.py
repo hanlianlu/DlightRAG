@@ -211,6 +211,16 @@ async def retrieve_tool(
         int | None,
         Field(default=None, description="Vector chunk candidate count override."),
     ] = None,
+    bm25_query: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=1024,
+            description=(
+                "Optional lexical/BM25 query override. When omitted, BM25 uses the main query."
+            ),
+        ),
+    ] = None,
     workspaces: Annotated[
         list[str] | None,
         Field(default=None, description="Workspace names to search. Omit for default."),
