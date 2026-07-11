@@ -41,5 +41,5 @@ class TestGetAnswerSystemPrompt:
     def test_unified_prompt_declares_product_identity(self) -> None:
         prompt = get_answer_system_prompt()
 
-        assert "DlightRAG's document-grounded analysis assistant" in prompt
+        assert "DlightRAG's knowledge-base assistant" in prompt
         assert "Never reveal the underlying model" in prompt
