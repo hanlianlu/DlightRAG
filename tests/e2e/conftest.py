@@ -52,6 +52,7 @@ def e2e_base_url() -> Generator[str, Any]:
     manager.config = SimpleNamespace(
         workspace="default",
         input_dir_path=Path("."),
+        answer_stream_idle_timeout=120.0,
         citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
         embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
     )
