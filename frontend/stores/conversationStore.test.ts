@@ -64,9 +64,38 @@ test('conversation store exposes only server projection mutations', () => {
     'upsertSummary',
     'remove',
     'beginRequest',
+    'beginLiveAnswer',
+    'finishLiveAnswer',
+    'canRenderHistory',
   ] as const) {
     assert.equal(typeof store[mutation], 'function', mutation);
   }
+});
+
+test('late bootstrap history cannot replace a live answer viewport', () => {
+  installStorage();
+  const store = new ConversationStore();
+  store.replaceList([FIRST]);
+  store.select('first');
+  const settledGeneration = store.beginRequest();
+  const settled = {conversation: FIRST, turns: []};
+  assert.equal(store.setHistory(settled, settledGeneration), true);
+
+  store.beginLiveAnswer('first');
+  const lateBootstrapGeneration = store.beginRequest();
+
+  assert.equal(store.canRenderHistory(lateBootstrapGeneration), false);
+  let attachedViewport = 'live-answer';
+  if (store.setHistory(settled, lateBootstrapGeneration)) attachedViewport = 'history';
+  assert.equal(attachedViewport, 'live-answer');
+  assert.deepEqual(store.history, settled);
+
+  store.finishLiveAnswer('first');
+  assert.equal(store.canRenderHistory(lateBootstrapGeneration), false);
+
+  const recoveryGeneration = store.beginRequest();
+  assert.equal(store.canRenderHistory(recoveryGeneration), true);
+  assert.equal(store.setHistory(settled, recoveryGeneration), true);
 });
 
 test('conversation store persists selection and rejects stale history responses', () => {

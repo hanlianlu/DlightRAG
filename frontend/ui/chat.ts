@@ -7,12 +7,13 @@ import {streamSSE} from '../lib/sse.ts';
 import {
     createAnswerRenderer,
     createChatTurn,
-    markAnswerUnsaved,
+    renderAnswerSaveOutcome,
     setAnswerError,
 } from '../lib/chat_renderer.ts';
 import {bus} from '../events/bus.ts';
 import {
     isDefinitiveSaveOutcome,
+    describeConversationSaveOutcome,
     payloadFingerprint,
     pendingSubmissionStore,
 } from '../stores/pendingSubmissionStore.ts';
@@ -38,6 +39,15 @@ export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
 
+    const conversationId = conversationStore.activeConversationId;
+    if (conversationId) conversationStore.beginLiveAnswer(conversationId);
+    let ownsLiveViewport = conversationId !== null;
+    const releaseLiveViewport = (): void => {
+        if (!ownsLiveViewport || !conversationId) return;
+        conversationStore.finishLiveAnswer(conversationId);
+        ownsLiveViewport = false;
+    };
+
     const controller = new AbortController();
     currentQueryController = controller;
     let idleTimer = 0;
@@ -54,7 +64,6 @@ export async function submitQuery(query: string): Promise<void> {
 
     try {
         armIdleTimeout();
-        const conversationId = conversationStore.activeConversationId;
         if (!conversationId) {
             setAnswerError(
                 turn,
@@ -102,6 +111,7 @@ export async function submitQuery(query: string): Promise<void> {
                     if (conversationStore.activeConversationId !== conversationId) return;
                     activeRenderer.handle(eventType, data);
                 });
+                releaseLiveViewport();
                 if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
                     pendingSubmissionStore.clear(conversationId);
                 }
@@ -112,7 +122,13 @@ export async function submitQuery(query: string): Promise<void> {
                     }
                     bus.emit('conversationAnswerSaved', {conversationId});
                 } else if (saveOutcome?.conversation_saved === false) {
-                    markAnswerUnsaved(turn, saveOutcome.conversation_save_reason);
+                    renderAnswerSaveOutcome(
+                        turn,
+                        describeConversationSaveOutcome(saveOutcome),
+                        function() {
+                            bus.emit('conversationSaveCheckRequested', {conversationId});
+                        },
+                    );
                 }
                 return;
             } catch (error) {
@@ -125,6 +141,7 @@ export async function submitQuery(query: string): Promise<void> {
             controller.signal.aborted ? 'Answer stopped.' : 'Connection error. Please try again.',
         );
     } finally {
+        releaseLiveViewport();
         clearTimeout(idleTimer);
         if (currentQueryController === controller) currentQueryController = null;
         queryInFlight = false;

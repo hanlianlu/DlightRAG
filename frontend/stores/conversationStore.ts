@@ -14,6 +14,7 @@ export class ConversationStore extends Store {
   #activeConversationId: string | null = storedActiveConversationId();
   #history: ConversationHistory | null = null;
   #generation = 0;
+  #liveAnswerConversationId: string | null = null;
 
   get conversations(): readonly ConversationSummary[] {
     return this.#conversations;
@@ -45,7 +46,7 @@ export class ConversationStore extends Store {
 
   setHistory(history: ConversationHistory, generation: number): boolean {
     if (
-      generation !== this.#generation
+      !this.canRenderHistory(generation)
       || history.conversation.conversation_id !== this.#activeConversationId
     ) {
       return false;
@@ -86,6 +87,22 @@ export class ConversationStore extends Store {
   beginRequest(): number {
     this.#generation += 1;
     return this.#generation;
+  }
+
+  beginLiveAnswer(conversationId: string): number {
+    this.#liveAnswerConversationId = conversationId;
+    this.#generation += 1;
+    return this.#generation;
+  }
+
+  finishLiveAnswer(conversationId: string): void {
+    if (this.#liveAnswerConversationId !== conversationId) return;
+    this.#liveAnswerConversationId = null;
+    this.#generation += 1;
+  }
+
+  canRenderHistory(generation: number): boolean {
+    return this.#liveAnswerConversationId === null && generation === this.#generation;
   }
 }
 

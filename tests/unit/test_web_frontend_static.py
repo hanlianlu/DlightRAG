@@ -116,6 +116,35 @@ def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:
     assert "selectConversation(conversationId, false, false)" in main
 
 
+def test_live_answer_owns_viewport_against_late_history_render() -> None:
+    chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
+    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+
+    assert chat.index("conversationStore.beginLiveAnswer") < chat.index("createChatTurn(query)")
+    assert "conversationStore.finishLiveAnswer" in chat
+    assert "conversationStore.canRenderHistory(generation)" in main
+    assert "conversationStore.canRenderHistory(bootstrapGeneration)" in main
+    assert "if (conversationStore.setHistory(history, generation))" in main
+
+
+def test_unknown_save_outcome_has_typed_accessible_recovery_action() -> None:
+    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
+    chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
+    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    bus = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
+
+    save_state = (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(encoding="utf-8")
+    assert "Save status is unknown" in save_state
+    assert "Check save status" in save_state
+    assert "document.createElement('button')" in renderer
+    assert "presentation.actionLabel" in renderer
+    assert "addEventListener('click', onRecovery)" in renderer
+    assert "conversationSaveCheckRequested" in bus
+    assert "conversationSaveCheckRequested" in chat
+    assert "conversationSaveCheckRequested" in main
+    assert "void selectConversation(conversationId, true, false)" in main
+
+
 def test_conversation_bootstrap_cannot_block_independent_ui_initializers() -> None:
     main_source = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
     bootstrap = main_source.rindex("void initializeConversations()")

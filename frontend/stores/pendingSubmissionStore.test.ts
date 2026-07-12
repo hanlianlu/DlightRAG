@@ -3,10 +3,13 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
-import {
+import * as saveState from './pendingSubmissionStore.ts';
+
+const {
+  describeConversationSaveOutcome,
   isDefinitiveSaveOutcome,
   PendingSubmissionStore,
-} from './pendingSubmissionStore.ts';
+} = saveState;
 
 test('unchanged retry reuses its key while changed payload invalidates it', () => {
   const ids = ['submission-1', 'submission-2'];
@@ -44,4 +47,63 @@ test('only authoritative or definitive outcomes clear pending submissions', () =
     false,
   );
   assert.equal(isDefinitiveSaveOutcome(null), false);
+});
+
+test('save outcome presentation distinguishes saved, definitive, and unknown states', () => {
+  assert.deepEqual(describeConversationSaveOutcome({conversation_saved: true}), {
+    state: 'saved',
+    message: null,
+    actionLabel: null,
+  });
+  assert.deepEqual(describeConversationSaveOutcome({
+    conversation_saved: false,
+    conversation_save_reason: 'conversation_changed',
+  }), {
+    state: 'not_saved',
+    message: 'This answer was not saved because the conversation changed.',
+    actionLabel: null,
+  });
+  assert.deepEqual(describeConversationSaveOutcome({
+    conversation_saved: false,
+    conversation_save_reason: 'persistence_failed',
+  }), {
+    state: 'not_saved',
+    message: 'This answer was not saved because conversation storage failed.',
+    actionLabel: null,
+  });
+  assert.deepEqual(describeConversationSaveOutcome({
+    conversation_saved: false,
+    conversation_save_reason: 'commit_not_found',
+  }), {
+    state: 'not_saved',
+    message: 'This answer was not saved because no committed turn was found.',
+    actionLabel: null,
+  });
+  assert.deepEqual(describeConversationSaveOutcome({
+    conversation_saved: false,
+    conversation_save_reason: 'commit_outcome_unknown',
+  }), {
+    state: 'unknown',
+    message: 'Save status is unknown. The answer may already be saved; checking history may reconcile it.',
+    actionLabel: 'Check save status',
+  });
+  assert.deepEqual(describeConversationSaveOutcome({
+    conversation_saved: false,
+    conversation_save_reason: 'storage_unavailable',
+  }), {
+    state: 'unknown',
+    message: 'Save status could not be confirmed because conversation storage is unavailable.',
+    actionLabel: 'Check save status',
+  });
+});
+
+test('unknown recovery keeps the same submission key available for replay', () => {
+  const store = new PendingSubmissionStore(() => 'submission-1');
+  const key = store.getOrCreate('conversation-1', 'fingerprint-a');
+
+  assert.equal(isDefinitiveSaveOutcome({
+    conversation_saved: false,
+    conversation_save_reason: 'commit_outcome_unknown',
+  }), false);
+  assert.equal(store.getOrCreate('conversation-1', 'fingerprint-a'), key);
 });

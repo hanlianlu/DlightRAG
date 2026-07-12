@@ -10,6 +10,7 @@ import type {
   ConversationImageReference,
   ConversationSummary,
 } from '../api/conversations.ts';
+import type {ConversationSavePresentation} from '../stores/pendingSubmissionStore.ts';
 
 // SSE HTML payloads are sanitized server-side by nh3 and again here before
 // browser insertion. Keep new HTML sinks behind frontend/lib/safe_html.ts.
@@ -196,14 +197,25 @@ export function renderConversationHistoryError(onRetry: () => void): void {
   state.append(document.createTextNode(' '), retry);
 }
 
-export function markAnswerUnsaved(turn: ChatTurn, reason?: string | null): void {
+export function renderAnswerSaveOutcome(
+  turn: ChatTurn,
+  presentation: ConversationSavePresentation,
+  onRecovery: () => void,
+): void {
+  if (presentation.state === 'saved' || !presentation.message) return;
   const status = document.createElement('div');
-  status.className = chatStyles.textError;
+  if (presentation.state === 'not_saved') status.className = chatStyles.textError;
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
-  status.textContent = reason === 'conversation_changed'
-    ? 'This answer was not saved because the conversation changed. Reload before retrying.'
-    : 'This answer could not be saved. Retry to keep it in conversation history.';
+  status.textContent = presentation.message;
+  if (presentation.actionLabel) {
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.textContent = presentation.actionLabel;
+    action.setAttribute('aria-label', presentation.actionLabel);
+    action.addEventListener('click', onRecovery);
+    status.append(document.createTextNode(' '), action);
+  }
   turn.aiDiv.appendChild(status);
 }
 

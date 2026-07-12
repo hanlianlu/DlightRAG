@@ -5,6 +5,12 @@ export interface ConversationSaveOutcome {
   conversation_save_reason?: string | null;
 }
 
+export interface ConversationSavePresentation {
+  state: 'saved' | 'not_saved' | 'unknown';
+  message: string | null;
+  actionLabel: string | null;
+}
+
 interface PendingSubmission {
   submissionId: string;
   payloadFingerprint: string;
@@ -49,6 +55,49 @@ export function isDefinitiveSaveOutcome(outcome: ConversationSaveOutcome | null)
   if (outcome.conversation_saved === true) return true;
   const reason = outcome.conversation_save_reason;
   return typeof reason === 'string' && DEFINITIVE_NON_COMMIT_REASONS.has(reason);
+}
+
+export function describeConversationSaveOutcome(
+  outcome: ConversationSaveOutcome,
+): ConversationSavePresentation {
+  if (outcome.conversation_saved === true) {
+    return {state: 'saved', message: null, actionLabel: null};
+  }
+
+  const reason = outcome.conversation_save_reason;
+  if (reason === 'conversation_changed') {
+    return {
+      state: 'not_saved',
+      message: 'This answer was not saved because the conversation changed.',
+      actionLabel: null,
+    };
+  }
+  if (reason === 'commit_not_found') {
+    return {
+      state: 'not_saved',
+      message: 'This answer was not saved because no committed turn was found.',
+      actionLabel: null,
+    };
+  }
+  if (reason === 'persistence_failed') {
+    return {
+      state: 'not_saved',
+      message: 'This answer was not saved because conversation storage failed.',
+      actionLabel: null,
+    };
+  }
+  if (reason === 'storage_unavailable') {
+    return {
+      state: 'unknown',
+      message: 'Save status could not be confirmed because conversation storage is unavailable.',
+      actionLabel: 'Check save status',
+    };
+  }
+  return {
+    state: 'unknown',
+    message: 'Save status is unknown. The answer may already be saved; checking history may reconcile it.',
+    actionLabel: 'Check save status',
+  };
 }
 
 export const pendingSubmissionStore = new PendingSubmissionStore();

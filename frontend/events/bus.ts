@@ -18,6 +18,7 @@ export interface DlightragEvents {
   conversationSelected: { conversationId: string | null };
   conversationHistoryChanged: { history: ConversationHistory };
   conversationAnswerSaved: { conversationId: string };
+  conversationSaveCheckRequested: { conversationId: string };
 }
 
 export const bus: Emitter<DlightragEvents> = createNanoEvents<DlightragEvents>();
