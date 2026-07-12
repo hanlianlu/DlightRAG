@@ -797,6 +797,7 @@ class TestAnswerViaEngine:
                         id="1",
                         source_uri="local://ws_a/report.pdf",
                         workspace="ws_a",
+                        document_id="doc-report",
                         download_locator="/docs/report.pdf",
                         chunks=[
                             ChunkSnippet(
@@ -1138,6 +1139,40 @@ class TestDelegation:
             "pipeline_status": {"busy": False, "pending_enqueues": 0, "latest_message": ""},
         }
         store.list_processed_files.assert_awaited_once_with("ws_a")
+        manager._get_service.assert_not_awaited()
+
+    async def test_source_download_does_not_initialize_cold_workspace(self, test_cfg) -> None:
+        from dlightrag.core.source_download import RedirectDownloadTarget
+
+        manager = RAGServiceManager(config=test_cfg)
+        manager._get_service = AsyncMock(  # type: ignore[method-assign]
+            side_effect=AssertionError("source download must not initialize services")
+        )
+        metadata_index = AsyncMock()
+        service = AsyncMock()
+        target = RedirectDownloadTarget(url="https://cdn.example.com/report.pdf")
+        service.prepare.return_value = target
+
+        with (
+            patch(
+                "dlightrag.storage.pg_metadata_index.PGMetadataIndex",
+                return_value=metadata_index,
+            ) as index_type,
+            patch(
+                "dlightrag.core.source_download.SourceDownloadService",
+                return_value=service,
+            ) as service_type,
+        ):
+            result = await manager.aprepare_source_download("Finance-Team", "doc-1")
+
+        assert result is target
+        index_type.assert_called_once_with(workspace="finance_team")
+        service_type.assert_called_once_with(
+            config=test_cfg,
+            metadata_index=metadata_index,
+            workspace="finance_team",
+        )
+        service.prepare.assert_awaited_once_with("doc-1")
         manager._get_service.assert_not_awaited()
 
     async def test_file_panel_snapshot_reads_pipeline_status_for_warm_workspace(

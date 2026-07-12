@@ -11,7 +11,7 @@ from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.citations.source_builder import build_sources
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
-from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.utils import log_safe
 
 logger = logging.getLogger(__name__)
@@ -137,17 +137,29 @@ def _display_file_name(value: Any) -> str:
 def project_source_payloads(
     sources: list[SourceReference],
     *,
-    resolver: SourceUrlResolver | None,
+    resolver: SourceDownloadLinkBuilder | None,
+    downloadable_workspaces: set[str] | None = None,
 ) -> list[SourceReferencePayload]:
     """Convert internal sources into the strict public source contract."""
     projected: list[SourceReferencePayload] = []
     for source in sources:
         safe_source_id = log_safe(source.id)
         download_url = None
-        if resolver is not None:
+        can_download = (
+            downloadable_workspaces is None or source.workspace in downloadable_workspaces
+        )
+        if resolver is not None and can_download:
+            if not source.document_id:
+                logger.info(
+                    "source_download_projection_outcome",
+                    extra={"outcome": "invalid", "source_id": safe_source_id},
+                )
+                raise SourceDownloadInvariantError(
+                    f"Could not project source document for source {safe_source_id}"
+                ) from None
             try:
                 download_url = resolver.resolve(
-                    source.download_locator,
+                    source.document_id,
                     workspace=source.workspace,
                 )
             except Exception:
@@ -163,6 +175,11 @@ def project_source_payloads(
             logger.info(
                 "source_download_projection_outcome",
                 extra={"outcome": "resolved", "source_id": safe_source_id},
+            )
+        elif resolver is not None:
+            logger.info(
+                "source_download_projection_outcome",
+                extra={"outcome": "unauthorized", "source_id": safe_source_id},
             )
         projected.append(
             SourceReferencePayload(
@@ -181,7 +198,8 @@ def project_source_payloads(
 def retrieval_payload(
     result: RetrievalResult,
     *,
-    source_url_resolver: SourceUrlResolver | None = None,
+    source_link_builder: SourceDownloadLinkBuilder | None = None,
+    downloadable_workspaces: set[str] | None = None,
     image_url_prefix: str | None = "/images",
 ) -> dict[str, Any]:
     """Project retrieval results into a client-safe response dictionary."""
@@ -189,7 +207,11 @@ def retrieval_payload(
         result.contexts,
         image_url_prefix=image_url_prefix,
     )
-    source_payloads = project_source_payloads(sources, resolver=source_url_resolver)
+    source_payloads = project_source_payloads(
+        sources,
+        resolver=source_link_builder,
+        downloadable_workspaces=downloadable_workspaces,
+    )
     contexts = project_contexts_for_client(result.contexts, image_url_prefix=image_url_prefix)
     return {
         "answer": result.answer,
@@ -204,13 +226,15 @@ def retrieval_payload(
 def answer_payload(
     result: RetrievalResult,
     *,
-    source_url_resolver: SourceUrlResolver | None = None,
+    source_link_builder: SourceDownloadLinkBuilder | None = None,
+    downloadable_workspaces: set[str] | None = None,
     image_url_prefix: str | None = "/images",
 ) -> dict[str, Any]:
     """Project generated answer results into a client-safe response dictionary."""
     source_payloads = project_source_payloads(
         result.sources,
-        resolver=source_url_resolver,
+        resolver=source_link_builder,
+        downloadable_workspaces=downloadable_workspaces,
     )
     return {
         "answer": result.answer,

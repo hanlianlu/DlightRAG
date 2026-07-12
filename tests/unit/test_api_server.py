@@ -39,6 +39,7 @@ def _finance_source() -> SourceReference:
         title="report.pdf",
         source_uri="s3://bucket/report.pdf",
         workspace="finance",
+        document_id="doc-report",
         download_locator="s3://bucket/report.pdf",
     )
 
@@ -47,6 +48,7 @@ def _finance_source_context() -> dict[str, object]:
     return {
         "chunk_id": "c1",
         "reference_id": "1",
+        "full_doc_id": "doc-report",
         "file_path": "report.pdf",
         "content": "Evidence",
         "_workspace": "finance",
@@ -1147,13 +1149,45 @@ class TestRetrieveEndpoint:
         )
         app.state.manager = mock_manager
 
-        response = await client.post("/retrieve", json={"query": "report"})
+        response = await client.post(
+            "/retrieve",
+            json={"query": "report", "workspaces": ["finance"]},
+        )
 
         assert response.status_code == 200
         source = response.json()["sources"][0]
         assert source["source_uri"] == "s3://bucket/report.pdf"
-        assert source["download_url"] == ("/files/raw/s3://bucket/report.pdf?workspace=finance")
+        assert source["download_url"] == "/files/raw/doc-report?workspace=finance"
         assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
+
+    async def test_retrieve_omits_download_link_without_download_permission(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        class QueryOnlyAccess:
+            async def check(self, user, action, *, workspace=None):
+                return None
+
+            async def filter_workspaces(self, user, action, workspaces):
+                if action == "workspace.download_source":
+                    return []
+                return list(workspaces)
+
+        mock_manager.aretrieve = AsyncMock(
+            return_value=RetrievalResult(contexts={"chunks": [_finance_source_context()]})
+        )
+        app.state.manager = mock_manager
+        app.state.access_control = QueryOnlyAccess()
+
+        try:
+            response = await client.post(
+                "/retrieve",
+                json={"query": "report", "workspaces": ["finance"]},
+            )
+        finally:
+            del app.state.access_control
+
+        assert response.status_code == 200
+        assert response.json()["sources"][0]["download_url"] is None
 
     async def test_retrieve_all_workspaces_uses_all_visible_records(
         self,
@@ -1388,12 +1422,15 @@ class TestAnswerEndpoint:
         )
         app.state.manager = mock_manager
 
-        response = await client.post("/answer", json={"query": "report", "stream": False})
+        response = await client.post(
+            "/answer",
+            json={"query": "report", "stream": False, "workspaces": ["finance"]},
+        )
 
         assert response.status_code == 200
         source = response.json()["sources"][0]
         assert source["source_uri"] == "s3://bucket/report.pdf"
-        assert source["download_url"] == ("/files/raw/s3://bucket/report.pdf?workspace=finance")
+        assert source["download_url"] == "/files/raw/doc-report?workspace=finance"
         assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
 
     async def test_answer_includes_structured_images_and_blocks(
@@ -1420,6 +1457,7 @@ class TestAnswerEndpoint:
                         title="report.pdf",
                         source_uri="s3://bucket/report.pdf",
                         workspace="default",
+                        document_id="doc-report",
                         download_locator="s3://bucket/report.pdf",
                         chunks=[
                             ChunkSnippet(
@@ -1623,7 +1661,10 @@ class TestAnswerStreamMode:
         )
         app.state.manager = mock_manager
 
-        response = await client.post("/answer", json={"query": "report", "stream": True})
+        response = await client.post(
+            "/answer",
+            json={"query": "report", "stream": True, "workspaces": ["finance"]},
+        )
 
         import json as json_mod
 
@@ -1635,7 +1676,7 @@ class TestAnswerStreamMode:
         sources_event = next(event for event in events if event["type"] == "sources")
         source = sources_event["data"][0]
         assert source["source_uri"] == "s3://bucket/report.pdf"
-        assert source["download_url"] == ("/files/raw/s3://bucket/report.pdf?workspace=finance")
+        assert source["download_url"] == "/files/raw/doc-report?workspace=finance"
         assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
 
     async def test_stream_all_workspaces_uses_visible_records(
@@ -1752,6 +1793,7 @@ class TestAnswerStreamMode:
                 {
                     "chunk_id": "fig-1",
                     "reference_id": "1",
+                    "full_doc_id": "doc-report",
                     "file_path": "/private/report.pdf",
                     "content": "Figure evidence",
                     "image_data": "base64-payload",
@@ -1812,6 +1854,7 @@ class TestAnswerStreamMode:
                         {
                             "chunk_id": "c1",
                             "reference_id": "1",
+                            "full_doc_id": "doc-report",
                             "file_path": "/docs/report.pdf",
                             "content": "The report says market growth improved.",
                             "_workspace": "default",
@@ -1869,6 +1912,7 @@ class TestAnswerStreamMode:
                         {
                             "chunk_id": "c1",
                             "reference_id": "1",
+                            "full_doc_id": "doc-report",
                             "file_path": "/docs/report.pdf",
                             "content": "The report says market growth improved.",
                             "_workspace": "default",

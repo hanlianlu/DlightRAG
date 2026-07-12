@@ -16,6 +16,7 @@ def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceRefer
         title="report.pdf",
         source_uri="local://default/report.pdf",
         workspace="default",
+        document_id="doc-report",
         download_locator="/private/report.pdf",
         chunks=chunks,
     )
@@ -25,19 +26,21 @@ def test_project_source_payloads_resolves_and_hides_raw_locator(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from dlightrag.core.client_payloads import project_source_payloads
-    from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+    from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
     source = SourceReference(
         id="1",
         source_uri="s3://bucket/report.pdf",
         workspace="finance",
+        document_id="doc-report",
         download_locator="s3://bucket/report.pdf",
     )
 
     with caplog.at_level(logging.INFO, logger="dlightrag.core.client_payloads"):
-        projected = project_source_payloads([source], resolver=SourceUrlResolver())[0]
+        projected = project_source_payloads([source], resolver=SourceDownloadLinkBuilder())[0]
 
-    assert projected.download_url == "/files/raw/s3://bucket/report.pdf?workspace=finance"
+    assert projected.download_url == "/files/raw/doc-report?workspace=finance"
+    assert source.download_locator not in projected.download_url
     payload = projected.model_dump()
     assert "download_locator" not in payload
     assert "workspace" not in payload
@@ -58,12 +61,13 @@ def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
         SourceDownloadInvariantError,
         project_source_payloads,
     )
-    from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+    from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
     source = SourceReference(
         id="unsafe\nsource",
         source_uri="bynder://asset/1",
         workspace="finance",
+        document_id="",
         download_locator="file://secret-host/private/report.pdf",
     )
 
@@ -71,7 +75,7 @@ def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
         caplog.at_level(logging.INFO, logger="dlightrag.core.client_payloads"),
         pytest.raises(SourceDownloadInvariantError, match=r"unsafe\\nsource"),
     ):
-        project_source_payloads([source], resolver=SourceUrlResolver())
+        project_source_payloads([source], resolver=SourceDownloadLinkBuilder())
 
     record = next(
         record
@@ -83,6 +87,27 @@ def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
     assert source.download_locator not in caplog.text
 
 
+def test_project_source_payloads_omits_link_without_download_permission() -> None:
+    from dlightrag.core.client_payloads import project_source_payloads
+    from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
+
+    source = SourceReference(
+        id="1",
+        source_uri="s3://bucket/report.pdf",
+        workspace="finance",
+        document_id="doc-report",
+        download_locator="s3://bucket/report.pdf",
+    )
+
+    projected = project_source_payloads(
+        [source],
+        resolver=SourceDownloadLinkBuilder(),
+        downloadable_workspaces=set(),
+    )[0]
+
+    assert projected.download_url is None
+
+
 def test_answer_payload_projects_transport_neutral_source_without_download_url() -> None:
     from dlightrag.core.client_payloads import answer_payload
 
@@ -92,6 +117,7 @@ def test_answer_payload_projects_transport_neutral_source_without_download_url()
                 id="1",
                 source_uri="s3://bucket/report.pdf",
                 workspace="finance",
+                document_id="doc-report",
                 download_locator="s3://bucket/report.pdf",
             )
         ]

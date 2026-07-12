@@ -106,7 +106,7 @@ def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> No
     assert not button_start < download_link < button_end
 
 
-def test_source_panel_requires_download_for_every_source() -> None:
+def test_source_panel_requires_download_for_every_authorized_source() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
     from dlightrag.web.deps import templates
 
@@ -114,7 +114,7 @@ def test_source_panel_requires_download_for_every_source() -> None:
         id="1",
         title="notes.md",
         source_uri="local://default/notes.md",
-        download_url="/files/raw/default/notes.md?workspace=default",
+        download_url="/web/files/raw/doc-notes?workspace=default",
         chunks=[],
     )
 
@@ -124,8 +124,25 @@ def test_source_panel_requires_download_for_every_source() -> None:
     )
 
     assert html.count('class="source-dl-icon"') == 1
-    assert 'href="/files/raw/default/notes.md?workspace=default"' in html
-    assert "{% if src." not in source_panel_text
+    assert 'href="/web/files/raw/doc-notes?workspace=default"' in html
+    assert "{% if src.download_url %}" in source_panel_text
+
+
+def test_source_panel_hides_download_without_caller_permission() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.deps import templates
+
+    source = SourceReferencePayload(
+        id="1",
+        title="notes.md",
+        source_uri="local://default/notes.md",
+        download_url=None,
+        chunks=[],
+    )
+
+    html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
+
+    assert 'class="source-dl-icon"' not in html
 
 
 def test_source_templates_use_only_the_public_download_contract() -> None:
@@ -164,7 +181,7 @@ def test_sanitized_source_download_preserves_accessible_name() -> None:
         id="1",
         title="notes.md",
         source_uri="local://default/notes.md",
-        download_url="/files/raw/default/notes.md?workspace=default",
+        download_url="/web/files/raw/doc-notes?workspace=default",
         chunks=[],
     )
 
@@ -181,7 +198,7 @@ def test_source_titles_fall_back_without_legacy_paths() -> None:
     source = SourceReferencePayload(
         id="1",
         source_uri="local://default/notes.md",
-        download_url="/files/raw/default/notes.md?workspace=default",
+        download_url="/web/files/raw/doc-notes?workspace=default",
         chunks=[],
     )
     partials = ROOT / "src/dlightrag/web/templates/partials"
@@ -203,7 +220,7 @@ def test_source_download_aria_allowlist_does_not_allow_unsafe_anchor_attributes(
     from dlightrag.web.safe_html import sanitize_html_fragment
 
     html = sanitize_html_fragment(
-        '<a href="/files/raw/default/notes.md" aria-label="Download source" '
+        '<a href="/web/files/raw/doc-notes" aria-label="Download source" '
         'onclick="alert(1)" style="display:none" target="_blank">Download</a>'
     )
 

@@ -132,7 +132,7 @@ access_control:
     - claim: roles
       value: finance.readers
       workspaces: [finance]
-      actions: [workspace.query, workspace.list_files]
+      actions: [reader]
 ```
 
 | Gotcha | Detail |
@@ -230,9 +230,7 @@ access_control:
     - claim: groups
       value: finance-rag-readers
       workspaces: [finance]
-      actions:
-        - workspace.query
-        - workspace.list_files
+      actions: [reader]
 ```
 
 `jwt_claims` requires `auth_mode: jwt` and at least one rule. Claim matching
@@ -260,10 +258,11 @@ Actions enforced by REST, Web, and MCP include:
 ### Source download boundary
 
 Public source payloads expose stable `source_uri` provenance and, on HTTP
-surfaces, an adapter-projected `download_url`. They never expose the stored
-`download_locator` or a server-local path. `/files/raw` rechecks
-`workspace.download_source` against the source's actual workspace before it
-streams retained bytes or redirects to Azure, S3, or queryless public HTTPS.
+surfaces, an adapter-projected `download_url` containing only a document ID and
+workspace. They never expose the stored `download_locator` or a server-local
+path. REST `/files/raw` and Web `/web/files/raw` independently recheck
+`workspace.download_source` against the source's actual workspace before they
+stream retained bytes or redirect to Azure, S3, or queryless public HTTPS.
 
 Signed/query-bearing HTTPS URLs are fetch credentials, not durable locators. A
 caller must retain the bytes or provide a separate queryless durable

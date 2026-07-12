@@ -32,7 +32,7 @@ from dlightrag.core.retrieval.metadata_fields import (
     normalize_user_metadata,
 )
 from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
-from dlightrag.sourcing.source_contract import local_source_uri
+from dlightrag.sourcing.source_contract import local_source_uri, safe_source_filename
 from dlightrag.utils import log_safe
 
 logger = logging.getLogger(__name__)
@@ -267,6 +267,7 @@ class UnifiedIngestionEngine:
             )
 
         results_by_index: dict[int, dict[str, Any]] = {}
+        errors: list[str] = []
         to_enqueue: list[_PendingDocumentIngest] = []
 
         async with AsyncExitStack() as stack:
@@ -309,16 +310,23 @@ class UnifiedIngestionEngine:
                 await self._lightrag.apipeline_process_enqueue_documents()
 
                 for entry in to_enqueue:
-                    results_by_index[entry.index] = await self._finalize_ingested_document(
-                        doc_id=entry.doc_id,
-                        metadata_record=entry.metadata_record,
-                        parse_engine=entry.parse_engine,
-                        process_options=entry.process_options,
-                    )
+                    try:
+                        results_by_index[entry.index] = await self._finalize_ingested_document(
+                            doc_id=entry.doc_id,
+                            metadata_record=entry.metadata_record,
+                            parse_engine=entry.parse_engine,
+                            process_options=entry.process_options,
+                        )
+                    except Exception:  # noqa: BLE001
+                        filename = safe_source_filename(
+                            str(entry.metadata_record.get("filename") or entry.parser_path.name)
+                        )
+                        logger.warning("Document finalization failed for %s", filename)
+                        errors.append(f"{filename}: document processing failed")
 
         return {
             "processed": len(results_by_index),
-            "errors": [],
+            "errors": errors,
             "results": [results_by_index[index] for index in sorted(results_by_index)],
         }
 

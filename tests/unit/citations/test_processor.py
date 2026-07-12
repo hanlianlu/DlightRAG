@@ -25,6 +25,7 @@ def _source(
         type=source_type,
         source_uri=f"local://default/{file_path.rsplit('/', 1)[-1]}",
         workspace="default",
+        document_id=f"doc-{source_id}",
         download_locator=file_path,
     )
 
@@ -35,6 +36,7 @@ def _make_contexts():
         {
             "chunk_id": "c1",
             "reference_id": "1",
+            "full_doc_id": "doc-1",
             "file_path": "/docs/report.pdf",
             "content": "Market growth reached 15% this year.",
             "_workspace": "default",
@@ -43,6 +45,7 @@ def _make_contexts():
         {
             "chunk_id": "c2",
             "reference_id": "1",
+            "full_doc_id": "doc-1",
             "file_path": "/docs/report.pdf",
             "content": "Revenue exceeded expectations.",
             "_workspace": "default",
@@ -51,6 +54,7 @@ def _make_contexts():
         {
             "chunk_id": "c3",
             "reference_id": "2",
+            "full_doc_id": "doc-2",
             "file_path": "/docs/analysis.xlsx",
             "content": "Technical indicators show positive trend.",
             "_workspace": "default",
@@ -158,6 +162,7 @@ def test_source_catalog_metadata_is_preserved():
             type="pdf",
             source_uri="bynder://asset/1",
             workspace="resolved",
+            document_id="doc-catalog",
             download_locator="s3://bucket/doc.pdf",
         )
     ]

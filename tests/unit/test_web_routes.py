@@ -131,6 +131,24 @@ class TestWebAuth:
         assert resp.status_code == 303
         assert resp.headers["location"].startswith("/web/login")
 
+    async def test_source_download_login_redirect_preserves_workspace(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        from urllib.parse import parse_qs, urlsplit
+
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+
+        async with _web_client_for(test_config, mock_manager) as client:
+            response = await client.get(
+                "/web/files/raw/doc-report",
+                params={"workspace": "finance"},
+            )
+
+        assert response.status_code == 303
+        query = parse_qs(urlsplit(response.headers["location"]).query)
+        assert query["next"] == ["/web/files/raw/doc-report?workspace=finance"]
+
     async def test_simple_invalid_bearer_rejected(
         self, test_config: DlightragConfig, mock_manager
     ) -> None:
@@ -161,6 +179,41 @@ class TestWebAuth:
         assert login.status_code == 303
         assert "dlightrag_web_auth=" in login.headers["set-cookie"]
         assert resp.status_code == 200
+
+    async def test_simple_login_cookie_downloads_source_without_bearer(
+        self, test_config: DlightragConfig, mock_manager
+    ) -> None:
+        from dlightrag.core.source_download import LocalDownloadTarget
+
+        test_config.auth_mode = "simple"
+        test_config.api_auth_token = "secret-token"
+        source = test_config.input_dir_path / "default" / "notes.md"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("downloadable notes", encoding="utf-8")
+        mock_manager.aprepare_source_download.return_value = LocalDownloadTarget(
+            path=source.resolve(),
+            media_type="text/markdown",
+            filename="notes.md",
+        )
+
+        async with _web_client_for(test_config, mock_manager) as c:
+            await c.post(
+                "/web/login",
+                data={"token": "secret-token", "next": "/web/"},
+            )
+            response = await c.get(
+                "/web/files/raw/doc-notes",
+                params={"workspace": "default"},
+            )
+            rest_response = await c.get(
+                "/files/raw/doc-notes",
+                params={"workspace": "default"},
+            )
+
+        assert response.status_code == 200
+        assert response.content == b"downloadable notes"
+        assert rest_response.status_code == 401
+        mock_manager.aprepare_source_download.assert_awaited_once_with("default", "doc-notes")
 
     async def test_login_redirect_rejects_external_next(
         self, test_config: DlightragConfig, mock_manager
@@ -392,7 +445,7 @@ class TestWebAnswer:
             highlights_called = True
             assert llm_func is keyword_llm
             assert isinstance(sources[0], SourceReferencePayload)
-            assert sources[0].download_url == "/files/raw/s3://bucket/report.pdf?workspace=default"
+            assert sources[0].download_url == "/web/files/raw/doc-report?workspace=default"
             sources[0].chunks[0].highlight_phrases = ["Evidence"]
             return sources
 
@@ -412,6 +465,7 @@ class TestWebAnswer:
                                 {
                                     "chunk_id": "c1",
                                     "reference_id": "1",
+                                    "full_doc_id": "doc-report",
                                     "content": "Evidence in cited chunk.",
                                     "file_path": "/docs/report.pdf",
                                     "_workspace": "default",
@@ -446,6 +500,61 @@ class TestWebAnswer:
         assert "event: highlights" in resp.text
         assert keyword_called is True
         assert highlights_called is True
+
+    async def test_query_only_user_does_not_receive_download_affordance(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        from dlightrag.access_control import AccessAction, AccessDeniedError
+
+        class QueryOnlyAccess:
+            async def check(self, user, action, *, workspace=None):
+                if action != AccessAction.WORKSPACE_QUERY:
+                    raise AccessDeniedError("denied")
+
+            async def filter_workspaces(self, user, action, workspaces):
+                if action == AccessAction.WORKSPACE_QUERY:
+                    return list(workspaces)
+                return []
+
+        async def mock_tokens():
+            yield "Evidence [1-1]."
+
+        manager = SimpleNamespace(
+            config=test_config,
+            aanswer_stream=AsyncMock(
+                return_value=(
+                    {
+                        "chunks": [
+                            {
+                                "chunk_id": "c1",
+                                "reference_id": "1",
+                                "full_doc_id": "doc-report",
+                                "content": "Evidence",
+                                "file_path": "report.pdf",
+                                "_workspace": "default",
+                                "metadata": {
+                                    "source_uri": "local://default/report.pdf",
+                                    "source_download_locator": "/private/report.pdf",
+                                },
+                            }
+                        ]
+                    },
+                    mock_tokens(),
+                )
+            ),
+        )
+        web_app.state.manager = manager
+        web_app.state.access_control = QueryOnlyAccess()
+
+        response = await client.post("/web/answer", json={"query": "hello"})
+
+        assert response.status_code == 200
+        assert "event: done" in response.text
+        assert "source-dl-icon" not in response.text
+        assert "/web/files/raw" not in response.text
 
 
 class TestWebSSEBoundary:
@@ -489,6 +598,7 @@ class TestWebSSEBoundary:
                                 {
                                     "chunk_id": "c1",
                                     "reference_id": "1",
+                                    "full_doc_id": "doc-report",
                                     "content": "Evidence in cited chunk.",
                                     "file_path": "/docs/report.pdf",
                                     "image_url": "javascript:alert(1)",
@@ -518,7 +628,7 @@ class TestWebSSEBoundary:
         assert "onerror" not in resp.text.lower()
         assert "<script" not in resp.text.lower()
 
-    async def test_source_download_projection_failure_uses_structured_answer_error(
+    async def test_missing_source_document_id_uses_structured_answer_error(
         self,
         client: AsyncClient,
         test_config: DlightragConfig,
@@ -1019,6 +1129,7 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
             {
                 "chunk_id": "c1",
                 "reference_id": "1",
+                "full_doc_id": "doc-report",
                 "file_path": "report.pdf",
                 "content": "Evidence",
                 "_workspace": "finance",
@@ -1048,7 +1159,7 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
     assert len(payload.sources) == 1
     source = payload.sources[0]
     assert isinstance(source, SourceReferencePayload)
-    expected_url = "/files/raw/s3://bucket/report.pdf?workspace=finance"
+    expected_url = "/web/files/raw/doc-report?workspace=finance"
     assert source.download_url == expected_url
     assert payload.done.html.count(f'href="{expected_url}"') == 1
     assert safe_source_panel(sources=payload.sources).count(f'href="{expected_url}"') == 1
@@ -1068,15 +1179,21 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
         calls.append("images")
         return []
 
-    def capture_projection(sources, *, resolver):  # noqa: ANN001, ANN202
+    def capture_projection(  # noqa: ANN001, ANN202
+        sources,
+        *,
+        resolver,
+        downloadable_workspaces=None,
+    ):
         assert isinstance(sources[0], SourceReference)
+        assert downloadable_workspaces is None
         calls.append("projection")
         return [
             SourceReferencePayload(
                 id=sources[0].id,
                 title=sources[0].title,
                 source_uri=sources[0].source_uri,
-                download_url="/files/raw/default/report.pdf?workspace=default",
+                download_url="/web/files/raw/doc-report?workspace=default",
                 chunks=sources[0].chunks,
             )
         ]
@@ -1088,6 +1205,7 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
             {
                 "chunk_id": "c1",
                 "reference_id": "1",
+                "full_doc_id": "doc-report",
                 "file_path": "report.pdf",
                 "content": "Evidence",
                 "_workspace": "default",

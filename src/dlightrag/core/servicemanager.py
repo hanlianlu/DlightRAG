@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
     from dlightrag.core.query_images import QueryImageEnhancer
     from dlightrag.core.session_images import SessionImageStore
+    from dlightrag.core.source_download import SourceDownloadTarget
     from dlightrag.storage.checkpoint_pg import PGCheckpointStore
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
@@ -696,6 +697,24 @@ class RAGServiceManager:
             "files": files,
             "pipeline_status": pipeline_status,
         }
+
+    async def aprepare_source_download(
+        self,
+        workspace: str,
+        document_id: str,
+    ) -> SourceDownloadTarget:
+        """Prepare a source download without warming a workspace model service."""
+        from dlightrag.core.source_download import SourceDownloadService
+        from dlightrag.storage.pg_metadata_index import PGMetadataIndex
+
+        workspace_id = normalize_workspace(workspace)
+        index = PGMetadataIndex(workspace=workspace_id)
+        service = SourceDownloadService(
+            config=self._config,
+            metadata_index=index,
+            workspace=workspace_id,
+        )
+        return await service.prepare(document_id)
 
     async def alist_ingested_files(self, workspace: str) -> list[dict[str, Any]]:
         """List ingested files in a specific workspace."""

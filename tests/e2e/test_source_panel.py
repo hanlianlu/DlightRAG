@@ -53,7 +53,7 @@ def _inject_answer_with_sources(page) -> None:
                     <span class="source-doc-badge">1</span>
                     <span class="source-doc-count">1</span>
                   </button>
-                  <a href="/files/raw/default/report.pdf?workspace=default"
+                  <a href="/web/files/raw/doc-report?workspace=default"
                      class="source-dl-icon"
                      title="Download source"
                      aria-label="Download source"
@@ -107,9 +107,7 @@ def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
 
     assert download.count() == 1
     assert header.locator(":scope > .source-doc-toggle").count() == 1
-    assert download.get_attribute("href").endswith(
-        "/files/raw/default/report.pdf?workspace=default"
-    )
+    assert download.get_attribute("href").endswith("/web/files/raw/doc-report?workspace=default")
     assert download.get_attribute("aria-label") == "Download source"
     assert download.get_attribute("download") == ""
     download.focus()

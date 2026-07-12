@@ -86,6 +86,16 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
             ),
         )
     )
+    migrations.append(
+        Migration(
+            "index_workspace_download_locator",
+            "Index exact source download ownership lookups",
+            (
+                "CREATE INDEX IF NOT EXISTS idx_dm_workspace_download_locator "
+                "ON dlightrag_doc_metadata (workspace, download_locator)",
+            ),
+        )
+    )
     for f in METADATA_FIELDS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
         if idx_clause is None:
@@ -408,6 +418,20 @@ class PGMetadataIndex:
                 "SELECT doc_id FROM dlightrag_doc_metadata WHERE workspace=$1 AND file_path=$2",
                 self._workspace,
                 file_path,
+            )
+
+        rows = await self._run(_operation)
+        return [r["doc_id"] for r in rows]
+
+    async def find_by_download_locator(self, download_locator: str) -> list[str]:
+        """Find doc_ids owning one exact download locator in this workspace."""
+
+        async def _operation(conn: Any) -> list[Any]:
+            return await conn.fetch(
+                "SELECT doc_id FROM dlightrag_doc_metadata "
+                "WHERE workspace=$1 AND download_locator=$2",
+                self._workspace,
+                download_locator,
             )
 
         rows = await self._run(_operation)

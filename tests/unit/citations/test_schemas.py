@@ -3,13 +3,17 @@ from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 
 
 def test_source_reference_and_public_payload_have_distinct_contracts() -> None:
-    assert {"source_uri", "workspace", "download_locator"} <= set(SourceReference.model_fields)
+    assert {"source_uri", "workspace", "document_id", "download_locator"} <= set(
+        SourceReference.model_fields
+    )
     assert {"path", "url", "download_url"}.isdisjoint(SourceReference.model_fields)
 
     payload_type = getattr(schemas, "SourceReferencePayload", None)
     assert payload_type is not None
     assert {"source_uri", "download_url"} <= set(payload_type.model_fields)
-    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(payload_type.model_fields)
+    assert {"workspace", "document_id", "download_locator", "path", "url"}.isdisjoint(
+        payload_type.model_fields
+    )
 
 
 def test_chunk_snippet_minimal():
@@ -43,6 +47,7 @@ def test_source_reference_minimal():
         id="1",
         source_uri="local://default/report.pdf",
         workspace="default",
+        document_id="doc-report",
         download_locator="/docs/report.pdf",
     )
     assert sr.id == "1"
@@ -58,6 +63,7 @@ def test_source_reference_with_chunks():
         type="pdf",
         source_uri="local://default/report.pdf",
         workspace="default",
+        document_id="doc-report",
         download_locator="/docs/report.pdf",
         chunks=[chunk],
         cited_chunk_ids=["c1"],

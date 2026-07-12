@@ -1,5 +1,5 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Tests for file-serving endpoint — covers each dispatch branch + security."""
+"""Tests for the REST-owned source download adapter."""
 
 import logging
 from collections.abc import AsyncIterator
@@ -12,7 +12,13 @@ from httpx import ASGITransport, AsyncClient
 from dlightrag.access_control import AccessDeniedError
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig, EmbeddingConfig, LLMConfig, ModelConfig, set_config
-from dlightrag.sourcing.aws_s3 import S3CredentialsUnavailable
+from dlightrag.core.source_download import (
+    LocalDownloadTarget,
+    RedirectDownloadTarget,
+    SourceDownloadInvalidError,
+    SourceDownloadNotFoundError,
+    SourceDownloadUnavailableError,
+)
 
 
 def _embedding_config() -> EmbeddingConfig:
@@ -30,357 +36,160 @@ def tmp_working_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
-async def client(tmp_working_dir: Path) -> AsyncIterator[AsyncClient]:
+async def route_client(
+    tmp_working_dir: Path,
+) -> AsyncIterator[tuple[AsyncClient, AsyncMock]]:
     config = DlightragConfig(  # type: ignore[call-arg]
         working_dir=str(tmp_working_dir),
         llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
         embedding=_embedding_config(),
     )
     set_config(config)
-    with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
+    manager = AsyncMock()
+    with patch(
+        "dlightrag.api.server.RAGServiceManager.acreate",
+        new_callable=AsyncMock,
+        return_value=manager,
+    ):
         app = create_app(include_web=False)
+        app.state.manager = manager
         async with AsyncClient(
             transport=ASGITransport(app=app),
             base_url="http://test",
             follow_redirects=False,
-        ) as c:
-            yield c
+        ) as client:
+            yield client, manager
 
 
-class TestFileEndpoint:
-    async def test_local_markdown_download_is_attachment(
-        self,
-        client: AsyncClient,
-        tmp_working_dir: Path,
-    ) -> None:
-        source = tmp_working_dir / "inputs" / "default" / "notes.md"
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("# Notes", encoding="utf-8")
+async def test_local_markdown_download_is_attachment(
+    route_client: tuple[AsyncClient, AsyncMock],
+    tmp_working_dir: Path,
+) -> None:
+    client, manager = route_client
+    source = tmp_working_dir / "inputs" / "default" / "notes.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# Notes", encoding="utf-8")
+    manager.aprepare_source_download.return_value = LocalDownloadTarget(
+        path=source.resolve(),
+        media_type="text/markdown",
+        filename="notes.md",
+    )
 
-        response = await client.get("/files/raw/default/notes.md")
+    response = await client.get(
+        "/files/raw/doc-notes",
+        params={"workspace": "default"},
+    )
 
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/markdown")
-        assert 'attachment; filename="notes.md"' in response.headers["content-disposition"]
+    assert response.status_code == 200
+    assert response.content == b"# Notes"
+    assert response.headers["content-type"].startswith("text/markdown")
+    assert 'attachment; filename="notes.md"' in response.headers["content-disposition"]
+    manager.aprepare_source_download.assert_awaited_once_with("default", "doc-notes")
 
-    async def test_streams_canonical_input_file(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        """Primary path: files under input_dir/<workspace>/ stream directly."""
-        canonical = tmp_working_dir / "inputs" / "default" / "docs" / "canonical.pdf"
-        canonical.parent.mkdir(parents=True)
-        canonical.write_bytes(b"%PDF-1.4 canonical input content")
 
-        resp = await client.get("/files/raw/default/docs/canonical.pdf")
-        assert resp.status_code == 200
-        assert b"%PDF-1.4 canonical input content" in resp.content
-        assert resp.headers["content-type"] == "application/pdf"
+async def test_document_download_normalizes_workspace(
+    route_client: tuple[AsyncClient, AsyncMock],
+) -> None:
+    client, manager = route_client
+    manager.aprepare_source_download.side_effect = SourceDownloadNotFoundError("Source not found")
 
-    async def test_streams_nested_upload_batch_file(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        """Bare basename resolves a file staged under __uploads__/<batch>/ (2 levels deep)."""
-        staged = (
-            tmp_working_dir
-            / "inputs"
-            / "default"
-            / "__uploads__"
-            / "b1a2c3d4"
-            / "PyCaret 3.0 cheat_sheet.pdf"
-        )
-        staged.parent.mkdir(parents=True)
-        staged.write_bytes(b"%PDF-1.4 nested upload content")
+    response = await client.get(
+        "/files/raw/doc-report",
+        params={"workspace": "Finance-Team"},
+    )
 
-        resp = await client.get("/files/raw/default/PyCaret%203.0%20cheat_sheet.pdf")
+    assert response.status_code == 404
+    manager.aprepare_source_download.assert_awaited_once_with("finance_team", "doc-report")
 
-        assert resp.status_code == 200
-        assert b"%PDF-1.4 nested upload content" in resp.content
-        assert "attachment" in resp.headers.get("content-disposition", "")
-        # Starlette RFC 5987-encodes non-ASCII / spaced filenames (filename*=).
-        assert "PyCaret%203.0%20cheat_sheet.pdf" in resp.headers.get("content-disposition", "")
 
-    async def test_streams_retained_remote_source_file(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        """Retained remote sources live under __remote_sources__/<type>/ (2 levels deep)."""
-        staged = (
-            tmp_working_dir
-            / "inputs"
-            / "default"
-            / "__remote_sources__"
-            / "s3"
-            / "report__a1b2c3d4e5f6.pdf"
-        )
-        staged.parent.mkdir(parents=True)
-        staged.write_bytes(b"%PDF-1.4 retained remote content")
+async def test_remote_download_redirects_to_prepared_target(
+    route_client: tuple[AsyncClient, AsyncMock],
+) -> None:
+    client, manager = route_client
+    manager.aprepare_source_download.return_value = RedirectDownloadTarget(
+        url="https://cdn.example.com/report.pdf?signature=ephemeral"
+    )
 
-        resp = await client.get("/files/raw/default/report__a1b2c3d4e5f6.pdf")
+    response = await client.get(
+        "/files/raw/doc-report",
+        params={"workspace": "finance"},
+    )
 
-        assert resp.status_code == 200
-        assert b"%PDF-1.4 retained remote content" in resp.content
+    assert response.status_code == 302
+    assert response.headers["location"] == (
+        "https://cdn.example.com/report.pdf?signature=ephemeral"
+    )
 
-    async def test_streams_deeply_nested_folder_upload(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        """Folder uploads nested more than one level deep are still resolvable by basename."""
-        staged = tmp_working_dir / "inputs" / "default" / "topic" / "sub" / "deep.pdf"
-        staged.parent.mkdir(parents=True)
-        staged.write_bytes(b"%PDF-1.4 deep folder content")
 
-        resp = await client.get("/files/raw/default/deep.pdf")
+@pytest.mark.parametrize(
+    ("error", "status_code"),
+    [
+        (SourceDownloadInvalidError("Source download metadata is invalid"), 400),
+        (SourceDownloadNotFoundError("Source not found"), 404),
+        (SourceDownloadUnavailableError("S3 credentials not configured"), 503),
+    ],
+)
+async def test_source_download_maps_core_errors(
+    route_client: tuple[AsyncClient, AsyncMock],
+    error: Exception,
+    status_code: int,
+) -> None:
+    client, manager = route_client
+    manager.aprepare_source_download.side_effect = error
 
-        assert resp.status_code == 200
-        assert b"%PDF-1.4 deep folder content" in resp.content
+    response = await client.get("/files/raw/doc-report")
 
-    async def test_does_not_stream_from_working_dir(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        """Local file serving is scoped to input_dir, not working_dir."""
-        docs = tmp_working_dir / "docs"
-        docs.mkdir(parents=True)
-        (docs / "report.pdf").write_bytes(b"%PDF-1.4 test content")
+    assert response.status_code == status_code
+    assert response.json()["detail"] == str(error)
 
-        resp = await client.get("/files/raw/docs/report.pdf")
-        assert resp.status_code == 404
 
-    async def test_rejects_path_traversal(self, client: AsyncClient) -> None:
-        """Security critical: URL-encoded .. must not escape input_dir."""
-        resp = await client.get("/files/raw/%2e%2e/%2e%2e/%2e%2e/etc/passwd")
-        assert resp.status_code == 403
+async def test_download_authorization_precedes_metadata_lookup(
+    tmp_working_dir: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class DenyFinanceWorkspace:
+        async def check(self, user, action, *, workspace=None):
+            if workspace == "finance":
+                raise AccessDeniedError("denied")
 
-    async def test_rejects_symlink_escape(self, client: AsyncClient, tmp_working_dir: Path) -> None:
-        """Resolved local paths must stay inside the authorized workspace."""
-        workspace_dir = tmp_working_dir / "inputs" / "default"
-        workspace_dir.mkdir(parents=True)
-        outside_dir = tmp_working_dir / "outside"
-        outside_dir.mkdir()
-        direct_secret = outside_dir / "direct-secret.pdf"
-        direct_secret.write_bytes(b"direct secret")
-        canonical_secret = outside_dir / "canonical-secret.pdf"
-        canonical_secret.write_bytes(b"canonical secret")
+        async def filter_workspaces(self, user, action, workspaces):
+            return [workspace for workspace in workspaces if workspace != "finance"]
 
-        try:
-            (workspace_dir / "direct.pdf").symlink_to(direct_secret)
-            (workspace_dir / "linked").symlink_to(outside_dir, target_is_directory=True)
-        except (NotImplementedError, OSError) as exc:
-            pytest.skip(f"symlink creation unavailable: {exc}")
-
-        direct_resp = await client.get("/files/raw/default/direct.pdf")
-        canonical_resp = await client.get("/files/raw/canonical-secret.pdf")
-
-        assert direct_resp.status_code == 404
-        assert canonical_resp.status_code == 404
-        assert b"direct secret" not in direct_resp.content
-        assert b"canonical secret" not in canonical_resp.content
-
-    async def test_canonicalizes_workspace_query_for_bare_filename(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        canonical = tmp_working_dir / "inputs" / "test_ws" / "report.pdf"
-        canonical.parent.mkdir(parents=True)
-        canonical.write_bytes(b"%PDF-1.4 workspace query")
-
-        resp = await client.get("/files/raw/report.pdf", params={"workspace": "test-ws"})
-
-        assert resp.status_code == 200
-        assert b"%PDF-1.4 workspace query" in resp.content
-
-    async def test_rejects_conflicting_path_and_query_workspaces(
-        self, client: AsyncClient, tmp_working_dir: Path
-    ) -> None:
-        secret = tmp_working_dir / "inputs" / "secret_ws" / "report.pdf"
-        secret.parent.mkdir(parents=True)
-        secret.write_bytes(b"secret workspace content")
-
-        resp = await client.get("/files/raw/secret_ws/report.pdf", params={"workspace": "default"})
-
-        assert resp.status_code == 403
-        assert b"secret workspace content" not in resp.content
-
-    async def test_embedded_workspace_controls_download_authorization(
-        self, tmp_working_dir: Path
-    ) -> None:
-        secret = tmp_working_dir / "inputs" / "secret_ws" / "report.pdf"
-        secret.parent.mkdir(parents=True)
-        secret.write_bytes(b"secret workspace content")
-
-        class DenySecretWorkspace:
-            async def check(self, user, action, *, workspace=None):
-                if workspace == "secret_ws":
-                    raise AccessDeniedError("denied")
-
-            async def filter_workspaces(self, user, action, workspaces):
-                return [workspace for workspace in workspaces if workspace != "secret_ws"]
-
-        config = DlightragConfig(  # type: ignore[call-arg]
-            working_dir=str(tmp_working_dir),
-            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-            embedding=_embedding_config(),
-        )
-        set_config(config)
-        with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
-            app = create_app(include_web=False)
-            app.state.access_control = DenySecretWorkspace()
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                follow_redirects=False,
-            ) as c:
-                resp = await c.get("/files/raw/secret_ws/report.pdf")
-
-        assert resp.status_code == 403
-        assert b"secret workspace content" not in resp.content
-
-    async def test_remote_source_download_enforces_and_logs_its_workspace(
-        self,
-        tmp_working_dir: Path,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        class DenyFinanceWorkspace:
-            async def check(self, user, action, *, workspace=None):
-                if workspace == "finance":
-                    raise AccessDeniedError("denied")
-
-            async def filter_workspaces(self, user, action, workspaces):
-                return [workspace for workspace in workspaces if workspace != "finance"]
-
-        config = DlightragConfig(  # type: ignore[call-arg]
-            working_dir=str(tmp_working_dir),
-            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-            embedding=_embedding_config(),
-        )
-        set_config(config)
-        with (
-            patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock),
-            caplog.at_level(logging.INFO, logger="dlightrag.api.routes.files"),
-        ):
-            app = create_app(include_web=False)
-            app.state.access_control = DenyFinanceWorkspace()
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                follow_redirects=False,
-            ) as client:
-                response = await client.get(
-                    "/files/raw/s3://bucket/report.pdf",
-                    params={"workspace": "finance"},
-                )
-
-        assert response.status_code == 403
-        assert response.json()["detail"] == "denied"
-        records = [
-            record
-            for record in caplog.records
-            if record.message == "source_download_projection_outcome"
-        ]
-        assert len(records) == 1
-        assert getattr(records[0], "outcome", None) == "unauthorized"
-        assert getattr(records[0], "workspace", None) == "finance"
-        assert "s3://bucket/report.pdf" not in caplog.text
-
-    async def test_rejects_windows_absolute_path(self, client: AsyncClient) -> None:
-        resp = await client.get(r"/files/raw/C:\Users\me\secret.pdf")
-        assert resp.status_code == 403
-
-    async def test_rejects_windows_path_traversal(self, client: AsyncClient) -> None:
-        resp = await client.get("/files/raw/default%5C..%5Csecret_ws%5Creport.pdf")
-        assert resp.status_code == 403
-
-    async def test_azure_503_when_unconfigured(self, client: AsyncClient) -> None:
-        """Azure request without connection_string → 503, not 500."""
-        resp = await client.get("/files/raw/azure://container/blob.pdf")
-        assert resp.status_code == 503
-
-    async def test_s3_503_when_unconfigured(self, client: AsyncClient) -> None:
-        """S3 request without usable AWS credentials -> 503, not 500."""
-        with patch(
-            "dlightrag.api.routes.files.generate_s3_presigned_url",
+    config = DlightragConfig(  # type: ignore[call-arg]
+        working_dir=str(tmp_working_dir),
+        llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
+        embedding=_embedding_config(),
+    )
+    set_config(config)
+    manager = AsyncMock()
+    with (
+        patch(
+            "dlightrag.api.server.RAGServiceManager.acreate",
             new_callable=AsyncMock,
-        ) as mock_presign:
-            mock_presign.side_effect = S3CredentialsUnavailable("missing credentials")
+            return_value=manager,
+        ),
+        caplog.at_level(logging.INFO, logger="dlightrag.api.routes.files"),
+    ):
+        app = create_app(include_web=False)
+        app.state.manager = manager
+        app.state.access_control = DenyFinanceWorkspace()
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(
+                "/files/raw/doc-payroll",
+                params={"workspace": "finance"},
+            )
 
-            resp = await client.get("/files/raw/s3://my-bucket/key.pdf")
-
-        assert resp.status_code == 503
-
-    async def test_https_source_redirects_to_original_url(self, client: AsyncClient) -> None:
-        resp = await client.get("/files/raw/https://api.bynder.com/docs/getting-started")
-
-        assert resp.status_code == 302
-        assert resp.headers["location"] == "https://api.bynder.com/docs/getting-started"
-
-    async def test_https_source_redirect_preserves_encoded_query(self, client: AsyncClient) -> None:
-        resp = await client.get(
-            "/files/raw/https://cdn.example.com/report.pdf%3Fsig%3Dx%26download%3D1"
-        )
-
-        assert resp.status_code == 302
-        assert resp.headers["location"] == "https://cdn.example.com/report.pdf?sig=x&download=1"
-
-    async def test_https_source_rejects_unsafe_target(self, client: AsyncClient) -> None:
-        """Credentialed / localhost / private targets are refused, not redirected."""
-        for bad in (
-            "https://localhost/secret",
-            "https://127.0.0.1/secret",
-            "https://user:pass@example.com/x",
-        ):
-            resp = await client.get(f"/files/raw/{bad}", follow_redirects=False)
-            assert resp.status_code == 400, bad
-
-
-class TestFileEndpointAzureRedirect:
-    @patch(
-        "dlightrag.api.routes.files.generate_azure_sas_url",
-        return_value="https://acct.blob.core.windows.net/c/b?sig=x",
+    assert response.status_code == 403
+    manager.aprepare_source_download.assert_not_awaited()
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "source_download_projection_outcome"
     )
-    async def test_azure_302_redirect(self, mock_sas, tmp_working_dir: Path) -> None:
-        """Azure blobs get 302 redirect to SAS URL — no data proxied."""
-        config = DlightragConfig(  # type: ignore[call-arg]
-            working_dir=str(tmp_working_dir),
-            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-            embedding=_embedding_config(),
-            blob_connection_string="DefaultEndpointsProtocol=https;AccountName=acct;AccountKey=dGVzdA==;EndpointSuffix=core.windows.net",
-        )
-        set_config(config)
-        with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
-            app = create_app(include_web=False)
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                follow_redirects=False,
-            ) as c:
-                resp = await c.get("/files/raw/azure://mycontainer/doc.pdf")
-                assert resp.status_code == 302
-                assert "blob.core.windows.net" in resp.headers["location"]
-
-
-class TestFileEndpointS3Redirect:
-    @patch(
-        "dlightrag.api.routes.files.generate_s3_presigned_url",
-        new_callable=AsyncMock,
-    )
-    async def test_s3_302_redirect(self, mock_presign, tmp_working_dir: Path) -> None:
-        """S3 objects get 302 redirect to presigned URL — no data proxied."""
-        mock_presign.return_value = "https://my-bucket.s3.amazonaws.com/docs/report.pdf?sig=x"
-        config = DlightragConfig(  # type: ignore[call-arg]
-            working_dir=str(tmp_working_dir),
-            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
-            embedding=_embedding_config(),
-        )
-        set_config(config)
-        with patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock):
-            app = create_app(include_web=False)
-            async with AsyncClient(
-                transport=ASGITransport(app=app),
-                base_url="http://test",
-                follow_redirects=False,
-            ) as c:
-                resp = await c.get("/files/raw/s3://my-bucket/docs/report.pdf")
-
-        assert resp.status_code == 302
-        assert resp.headers["location"].startswith("https://my-bucket.s3.amazonaws.com/")
-        mock_presign.assert_awaited_once_with(
-            raw_path="s3://my-bucket/docs/report.pdf",
-            expiry_seconds=3600,
-            region=None,
-        )
+    assert getattr(record, "outcome", None) == "unauthorized"
+    assert getattr(record, "workspace", None) == "finance"
+    assert "doc-payroll" not in caplog.text

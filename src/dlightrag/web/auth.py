@@ -39,6 +39,12 @@ def _login_url(next_path: str) -> str:
     return f"/web/login?next={quote(_safe_next_path(next_path), safe='')}"
 
 
+def _request_next_path(request: Request) -> str:
+    path = str(request.url.path)
+    query = str(request.url.query)
+    return f"{path}?{query}" if query else path
+
+
 def _bearer_from_header(request: Request) -> str | None:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -87,7 +93,7 @@ def _clear_auth_cookie(response: Response) -> None:
 
 def _browser_missing_auth_response(request: Request) -> Response:
     if request.method.upper() == "GET":
-        return RedirectResponse(_login_url(str(request.url.path)), status_code=303)
+        return RedirectResponse(_login_url(_request_next_path(request)), status_code=303)
     return PlainTextResponse("Authentication required", status_code=401)
 
 
@@ -118,7 +124,9 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             raw_token, source = _token_from_request(request)
             if not raw_token:
                 if source == "cookie" and request.method.upper() == "GET":
-                    response = RedirectResponse(_login_url(path), status_code=303)
+                    response = RedirectResponse(
+                        _login_url(_request_next_path(request)), status_code=303
+                    )
                     _clear_auth_cookie(response)
                     return response
                 return _browser_missing_auth_response(request)
@@ -129,7 +137,9 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
             )
         except HTTPException as exc:
             if source == "cookie" and request.method.upper() == "GET":
-                response = RedirectResponse(_login_url(path), status_code=303)
+                response = RedirectResponse(
+                    _login_url(_request_next_path(request)), status_code=303
+                )
                 _clear_auth_cookie(response)
                 return response
             return PlainTextResponse(str(exc.detail), status_code=exc.status_code)

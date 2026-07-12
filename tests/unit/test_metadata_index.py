@@ -81,6 +81,11 @@ class TestMetadataSQL:
 
         assert "ON dlightrag_doc_metadata (creation_date)" in sql
 
+    def test_download_locator_has_workspace_scoped_exact_index(self) -> None:
+        sql = _index_sql()
+
+        assert "ON dlightrag_doc_metadata (workspace, download_locator)" in sql
+
     def test_upsert_sql_has_lightrag_operational_fields(self):
         assert "ingest_strategy" in _UPSERT
         assert "parse_engine" in _UPSERT
@@ -188,6 +193,30 @@ async def test_metadata_index_finds_by_exact_file_path() -> None:
     assert await idx.find_by_file_path("/inputs/default/a/report.pdf") == ["doc-1"]
     assert "file_path=$2" in seen["query"]
     assert seen["args"] == ("default", "/inputs/default/a/report.pdf")
+
+
+async def test_metadata_index_finds_by_exact_download_locator() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="finance")
+    seen: dict[str, Any] = {}
+
+    class Conn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+            seen["query"] = query
+            seen["args"] = args
+            return [{"doc_id": "doc-1"}, {"doc_id": "doc-2"}]
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    assert await idx.find_by_download_locator("s3://bucket/team/report.pdf") == [
+        "doc-1",
+        "doc-2",
+    ]
+    assert "download_locator=$2" in seen["query"]
+    assert "LOWER" not in seen["query"]
+    assert seen["args"] == ("finance", "s3://bucket/team/report.pdf")
 
 
 async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:

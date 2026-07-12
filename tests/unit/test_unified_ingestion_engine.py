@@ -486,6 +486,54 @@ async def test_batch_pending_metadata_is_persisted_before_parser_enqueue_failure
     ]
 
 
+async def test_batch_finalization_aggregates_failed_and_processed_documents(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    first.write_bytes(b"%PDF-1.4 first")
+    second.write_bytes(b"%PDF-1.4 second")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {
+            "status": DocStatus.FAILED,
+            "chunks_list": [],
+            "error_msg": "private parser detail",
+        },
+        {
+            "status": DocStatus.PROCESSED,
+            "chunks_list": ["chunk-second"],
+            "content_hash": "sha256:second",
+        },
+    ]
+
+    result = await engine.aingest_files(
+        [
+            PreparedIngestFile(
+                parser_path=first,
+                source_uri="bynder://asset/1",
+                download_locator="https://cdn.example.com/assets/1.pdf",
+                display_filename="first.pdf",
+            ),
+            PreparedIngestFile(
+                parser_path=second,
+                source_uri="bynder://asset/2",
+                download_locator="https://cdn.example.com/assets/2.pdf",
+                display_filename="second.pdf",
+            ),
+        ]
+    )
+
+    assert result["processed"] == 1
+    assert result["errors"] == ["first.pdf: document processing failed"]
+    assert len(result["results"]) == 1
+    assert result["results"][0]["chunks"] == ["chunk-second"]
+    assert deps["stores"].get_doc_status.await_count == 4
+    assert deps["metadata_index"].upsert.await_count == 3
+
+
 async def test_document_ingest_delegates_non_sidecar_parser_route(tmp_path: Path) -> None:
     """LightRAG routing is the ingestability boundary.
 
