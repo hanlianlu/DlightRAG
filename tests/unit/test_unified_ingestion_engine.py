@@ -122,6 +122,28 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert deps["metadata_index"].upsert.await_count == 2
 
 
+async def test_document_ingest_persists_lightrag_archived_source_locator(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "inputs" / "default" / "report.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"%PDF-1.4")
+    archived = source.parent / "__parsed__" / source.name
+    engine, deps = _make_engine()
+
+    async def archive_source() -> None:
+        archived.parent.mkdir()
+        source.replace(archived)
+
+    deps["lightrag"].apipeline_process_enqueue_documents.side_effect = archive_source
+
+    await engine.aingest_file(source, replace=False)
+
+    _, saved = deps["metadata_index"].upsert.await_args.args
+    assert saved["download_locator"] == str(archived.resolve())
+    assert saved["file_path"] == str(archived.resolve())
+
+
 async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Path) -> None:
     source = tmp_path / "report.pdf"
     source.write_bytes(b"%PDF-1.4")
