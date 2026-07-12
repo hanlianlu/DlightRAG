@@ -40,6 +40,7 @@ export async function submitQuery(query: string): Promise<void> {
 
     const turn = createChatTurn(query);
     const imageData = getPendingImageData();
+    const submissionId = crypto.randomUUID();
 
     try {
         armIdleTimeout();
@@ -53,28 +54,37 @@ export async function submitQuery(query: string): Promise<void> {
             return;
         }
         clearImages();
-        const response = await fetch('/web/answer', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            signal: controller.signal,
-            body: JSON.stringify({
-                query: query,
-                images: imageData,
-                workspaces: workspaceStore.active,
-                conversation_id: conversationId,
-            }),
+        const requestBody = JSON.stringify({
+            query: query,
+            images: imageData,
+            workspaces: workspaceStore.active,
+            conversation_id: conversationId,
+            submission_id: submissionId,
         });
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            try {
+                const response = await fetch('/web/answer', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    signal: controller.signal,
+                    body: requestBody,
+                });
 
-        if (!response.ok) {
-            setAnswerError(turn, 'Service error. Please try again.');
-            return;
+                if (!response.ok) {
+                    setAnswerError(turn, 'Service error. Please try again.');
+                    return;
+                }
+
+                const activeRenderer = createAnswerRenderer(turn);
+                await streamSSE(response, function(eventType, data) {
+                    armIdleTimeout();
+                    activeRenderer.handle(eventType, data);
+                });
+                return;
+            } catch (error) {
+                if (controller.signal.aborted || attempt === 1) throw error;
+            }
         }
-
-        const activeRenderer = createAnswerRenderer(turn);
-        await streamSSE(response, function(eventType, data) {
-            armIdleTimeout();
-            activeRenderer.handle(eventType, data);
-        });
     } catch (_) {
         setAnswerError(
             turn,

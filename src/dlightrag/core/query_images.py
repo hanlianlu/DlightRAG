@@ -17,7 +17,7 @@ class QueryImageEnhancement:
     """Result of query-image semantic enhancement."""
 
     query: str
-    descriptions: list[str] = field(default_factory=list)
+    descriptions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -26,6 +26,7 @@ class PreparedQueryImages:
     answer_images: list[dict[str, Any]]
     multimodal_content: list[dict[str, Any]]
     descriptions: list[str]
+    descriptions_by_ordinal: dict[str, str]
 
 
 def images_to_multimodal_content(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -69,7 +70,7 @@ class QueryImageEnhancer:
             return QueryImageEnhancement(query=query)
         vlm_func = self._vlm_func
 
-        async def _describe(item: tuple[int, dict[str, Any]]) -> str | None:
+        async def _describe(item: tuple[int, dict[str, Any]]) -> tuple[str, str] | None:
             idx, image = item
             block = image_url_block(image)
             if block is None:
@@ -98,7 +99,7 @@ class QueryImageEnhancer:
                 logger.warning("Query image description failed", exc_info=True)
                 return None
             if isinstance(response, str) and response.strip():
-                return f"Image {idx}: {response.strip()}"
+                return str(idx), f"Image {idx}: {response.strip()}"
             return None
 
         items = list(enumerate(images[: self._max_images], start=1))
@@ -108,11 +109,15 @@ class QueryImageEnhancer:
             max_concurrent=max(1, min(self._max_images, len(items))),
             task_name="query-image-description",
         )
-        descriptions = [item for item in results if isinstance(item, str) and item.strip()]
+        descriptions: dict[str, str] = {}
+        for item in results:
+            if isinstance(item, tuple):
+                key, text = item
+                descriptions[key] = text
 
         if not descriptions:
             return QueryImageEnhancement(query=query)
-        visual_context = "\n".join(descriptions)
+        visual_context = "\n".join(descriptions.values())
         return QueryImageEnhancement(
             query=f"{query}\n\nVisual context from user-supplied images:\n{visual_context}",
             descriptions=descriptions,
@@ -132,7 +137,8 @@ async def prepare_query_images(
         query=enhanced.query,
         answer_images=current_images,
         multimodal_content=images_to_multimodal_content(current_images),
-        descriptions=enhanced.descriptions,
+        descriptions=list(enhanced.descriptions.values()),
+        descriptions_by_ordinal=enhanced.descriptions,
     )
 
 

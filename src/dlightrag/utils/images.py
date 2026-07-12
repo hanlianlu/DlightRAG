@@ -47,6 +47,7 @@ EMBED_IMAGE_MAX_BYTES = 14 * 1024 * 1024
 EMBED_IMAGE_QUALITY = 90
 EMBED_IMAGE_MIN_QUALITY = 70
 EMBED_IMAGE_MIN_PX = 256
+WEB_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +67,7 @@ class ValidatedWebImage:
 
 
 def validate_web_images(
-    values: list[str], *, max_images: int, max_bytes: int = 10 * 1024 * 1024
+    values: list[str], *, max_images: int, max_bytes: int = WEB_IMAGE_MAX_BYTES
 ) -> tuple[ValidatedWebImage, ...]:
     """Strictly validate uploads once and return their durable canonical form."""
     if len(values) > max_images:
@@ -74,6 +75,9 @@ def validate_web_images(
     validated: list[ValidatedWebImage] = []
     for ordinal, value in enumerate(values, start=1):
         _declared_mime, payload = split_data_uri(value)
+        decoded_size = _strict_base64_decoded_size(payload)
+        if decoded_size is not None and decoded_size > max_bytes:
+            raise ValueError(f"current image {ordinal} exceeds the {max_bytes}-byte limit")
         try:
             raw = base64.b64decode(payload, validate=True)
         except (binascii.Error, ValueError) as exc:
@@ -81,7 +85,7 @@ def validate_web_images(
         if not raw:
             raise ValueError(f"current image {ordinal} is empty")
         if len(raw) > max_bytes:
-            raise ValueError(f"current image {ordinal} exceeds the 10 MiB limit")
+            raise ValueError(f"current image {ordinal} exceeds the {max_bytes}-byte limit")
         try:
             with Image.open(io.BytesIO(raw)) as image:
                 image.verify()
@@ -103,6 +107,17 @@ def validate_web_images(
             )
         )
     return tuple(validated)
+
+
+def _strict_base64_decoded_size(payload: str) -> int | None:
+    """Return decoded size from canonical padding without allocating decoded bytes."""
+    if not payload or len(payload) % 4:
+        return None
+    padding = len(payload) - len(payload.rstrip("="))
+    misplaced_padding = "=" in payload[:-padding] if padding else "=" in payload
+    if padding > 2 or misplaced_padding:
+        return None
+    return (len(payload) // 4 * 3) - padding
 
 
 def split_data_uri(value: str) -> tuple[str | None, str]:
@@ -411,6 +426,7 @@ def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:
 
 __all__ = [
     "ValidatedWebImage",
+    "WEB_IMAGE_MAX_BYTES",
     "bounded_embedding_image_data_uri",
     "bounded_image_data_uri",
     "decode_image_base64",

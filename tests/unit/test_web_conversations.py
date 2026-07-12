@@ -583,12 +583,13 @@ async def test_commit_answer_maps_validated_images_and_revision(
 
     result = await service_under_test.commit_answer(
         prepared,
+        submission_id="00000000-0000-4000-8000-000000000098",
         user_text="Question",
         assistant_text="Answer",
         answer_sources={"sources": [], "answer_images": []},
         queried_workspaces=["default"],
         images=(image,),
-        image_descriptions=["diagram"],
+        image_descriptions={"1": "diagram"},
     )
 
     assert result.reason == "conversation_changed"
@@ -597,6 +598,96 @@ async def test_commit_answer_maps_validated_images_and_revision(
     assert call["principal_id"] == "principal-hash"
     assert call["images"][0].image_bytes == b"png"
     assert call["images"][0].vlm_description == "diagram"
+
+
+async def test_commit_answer_maps_sparse_descriptions_by_stable_ordinal(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.storage.web_conversations import CommitTurnResult
+    from dlightrag.utils.images import ValidatedWebImage
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.commit_turn.return_value = CommitTurnResult(
+        saved=True, reason=None, summary=None, turn_id="turn"
+    )
+    prepared = PreparedWebConversation(
+        principal_id="principal",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=1,
+        text_history=(),
+    )
+    images = tuple(
+        ValidatedWebImage(
+            image_id=f"00000000-0000-0000-0000-00000000002{ordinal}",
+            ordinal=ordinal,
+            mime_type="image/png",
+            image_bytes=b"png",
+            data_uri="data:image/png;base64,cG5n",
+            content_sha256=f"digest-{ordinal}",
+        )
+        for ordinal in (1, 2)
+    )
+
+    await service_under_test.commit_answer(
+        prepared,
+        submission_id="00000000-0000-4000-8000-000000000099",
+        user_text="Question",
+        assistant_text="Answer",
+        answer_sources={},
+        queried_workspaces=["default"],
+        images=images,
+        image_descriptions={"2": "Image 2: second"},
+    )
+
+    pending = conversation_store.commit_turn.await_args.kwargs["images"]
+    assert [image.vlm_description for image in pending] == [None, "Image 2: second"]
+
+
+async def test_commit_answer_reconciles_lost_commit_acknowledgement(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.storage.web_conversations import CommitTurnResult
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    committed = CommitTurnResult(
+        saved=True,
+        reason=None,
+        summary=None,
+        turn_id="turn",
+        current_image_ids=("stored-image",),
+        assistant_text="Stored answer",
+        answer_sources={"sources": []},
+        replayed=True,
+    )
+    conversation_store.commit_turn.side_effect = ConnectionError("ack lost")
+    conversation_store.find_committed_turn.return_value = committed
+    prepared = PreparedWebConversation(
+        principal_id="principal",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=1,
+        text_history=(),
+    )
+
+    result = await service_under_test.commit_answer(
+        prepared,
+        submission_id="00000000-0000-4000-8000-000000000099",
+        user_text="Question",
+        assistant_text="Answer",
+        answer_sources={},
+        queried_workspaces=["default"],
+        images=(),
+        image_descriptions={},
+    )
+
+    assert result == committed
+    conversation_store.find_committed_turn.assert_awaited_once_with(
+        "principal",
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-4000-8000-000000000099",
+        ttl_days=30,
+    )
 
 
 async def test_initialize_applies_schema_then_global_prune(

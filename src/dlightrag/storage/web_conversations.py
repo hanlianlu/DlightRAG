@@ -3,7 +3,7 @@
 
 import datetime
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS web_conversation_turns (
     principal_id TEXT NOT NULL,
     conversation_id UUID NOT NULL,
     turn_number INTEGER NOT NULL,
+    submission_id UUID NOT NULL,
     user_text TEXT NOT NULL,
     assistant_text TEXT NOT NULL,
     answer_sources JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -80,6 +81,17 @@ WEB_CONVERSATION_MIGRATIONS = (
             _CREATE_TURNS,
             _CREATE_IMAGES,
             *_CREATE_INDEXES,
+        ),
+    ),
+    Migration(
+        "0002_web_conversation_submission_id",
+        "Add scoped idempotency keys for Web answer submissions",
+        (
+            "ALTER TABLE web_conversation_turns ADD COLUMN IF NOT EXISTS submission_id UUID",
+            "UPDATE web_conversation_turns SET submission_id = turn_id WHERE submission_id IS NULL",
+            "ALTER TABLE web_conversation_turns ALTER COLUMN submission_id SET NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_web_conversation_turns_submission "
+            "ON web_conversation_turns (principal_id, conversation_id, submission_id)",
         ),
     ),
 )
@@ -149,6 +161,7 @@ WITH recent_turns AS (
     SELECT
         t.turn_id,
         t.turn_number,
+        t.submission_id,
         t.user_text,
         t.assistant_text,
         t.answer_sources,
@@ -168,6 +181,7 @@ WITH recent_turns AS (
 SELECT
     recent_turns.turn_id::text AS turn_id,
     recent_turns.turn_number,
+    recent_turns.submission_id,
     recent_turns.user_text,
     recent_turns.assistant_text,
     recent_turns.answer_sources,
@@ -194,6 +208,7 @@ LEFT JOIN web_conversation_images AS i
 GROUP BY
     recent_turns.turn_id,
     recent_turns.turn_number,
+    recent_turns.submission_id,
     recent_turns.user_text,
     recent_turns.assistant_text,
     recent_turns.answer_sources,
@@ -235,6 +250,7 @@ INSERT INTO web_conversation_turns (
     principal_id,
     conversation_id,
     turn_number,
+    submission_id,
     user_text,
     assistant_text,
     answer_sources,
@@ -250,12 +266,56 @@ VALUES (
         WHERE principal_id = $2
           AND conversation_id = $3::text::uuid
     ),
-    $4,
+    $4::text::uuid,
     $5,
-    $6::jsonb,
-    $7::jsonb
+    $6,
+    $7::jsonb,
+    $8::jsonb
 )
 RETURNING turn_id::text AS turn_id, turn_number
+"""
+
+_GET_COMMITTED_TURN = """
+SELECT
+    c.conversation_id::text AS conversation_id,
+    c.title,
+    c.content_revision,
+    c.created_at,
+    c.updated_at,
+    t.turn_id::text AS turn_id,
+    t.assistant_text,
+    t.answer_sources,
+    COALESCE(
+        jsonb_agg(
+            jsonb_build_object(
+                'image_id', i.image_id::text,
+                'ordinal', i.ordinal,
+                'vlm_description', i.vlm_description
+            ) ORDER BY i.ordinal
+        ) FILTER (WHERE i.image_id IS NOT NULL),
+        '[]'::jsonb
+    ) AS images
+FROM web_conversation_turns AS t
+JOIN web_conversations AS c
+  ON c.principal_id = t.principal_id
+ AND c.conversation_id = t.conversation_id
+LEFT JOIN web_conversation_images AS i
+  ON i.principal_id = t.principal_id
+ AND i.conversation_id = t.conversation_id
+ AND i.turn_id = t.turn_id
+WHERE t.principal_id = $1
+  AND t.conversation_id = $2::text::uuid
+  AND t.submission_id = $3::text::uuid
+  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
+GROUP BY
+    c.conversation_id,
+    c.title,
+    c.content_revision,
+    c.created_at,
+    c.updated_at,
+    t.turn_id,
+    t.assistant_text,
+    t.answer_sources
 """
 
 _INSERT_IMAGE = """
@@ -329,6 +389,11 @@ class CommitTurnResult:
     reason: str | None
     summary: dict[str, Any] | None
     turn_id: str | None
+    current_image_ids: tuple[str, ...] = ()
+    assistant_text: str | None = None
+    answer_sources: dict[str, Any] | None = None
+    image_descriptions: dict[str, str] = field(default_factory=dict)
+    replayed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -353,6 +418,33 @@ def _history_row(row: Any) -> dict[str, Any]:
     for key in ("answer_sources", "queried_workspaces", "images"):
         result[key] = _json_value(result[key])
     return result
+
+
+def _committed_result(row: Any, *, replayed: bool) -> CommitTurnResult:
+    value = _row_dict(row)
+    images = _json_value(value.get("images", []))
+    answer_sources = _json_value(value.get("answer_sources", {}))
+    summary = {
+        key: value[key]
+        for key in ("conversation_id", "title", "content_revision", "created_at", "updated_at")
+        if key in value
+    }
+    descriptions = {
+        str(image["ordinal"]): str(image["vlm_description"])
+        for image in images
+        if image.get("vlm_description")
+    }
+    return CommitTurnResult(
+        saved=True,
+        reason=None,
+        summary=summary,
+        turn_id=str(value["turn_id"]),
+        current_image_ids=tuple(str(image["image_id"]) for image in images),
+        assistant_text=str(value["assistant_text"]),
+        answer_sources=answer_sources,
+        image_descriptions=descriptions,
+        replayed=replayed,
+    )
 
 
 class PGWebConversationStore:
@@ -547,11 +639,35 @@ class PGWebConversationStore:
 
         return await self._run_read(_operation)
 
+    async def find_committed_turn(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        submission_id: str,
+        *,
+        ttl_days: int,
+    ) -> CommitTurnResult | None:
+        """Return the authoritative completed turn for one scoped submission key."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> CommitTurnResult | None:
+            row = await conn.fetchrow(
+                _GET_COMMITTED_TURN,
+                principal_id,
+                conversation_id,
+                submission_id,
+                ttl_days,
+            )
+            return _committed_result(row, replayed=True) if row is not None else None
+
+        return await self._run_read(_operation)
+
     async def commit_turn(
         self,
         *,
         principal_id: str,
         conversation_id: str,
+        submission_id: str,
         expected_revision: int,
         user_text: str,
         assistant_text: str,
@@ -559,6 +675,7 @@ class PGWebConversationStore:
         queried_workspaces: list[str],
         images: list[PendingConversationImage],
         max_turns: int,
+        ttl_days: int,
     ) -> CommitTurnResult:
         """Atomically append one turn when the captured revision still matches."""
         await self._ensure_initialized()
@@ -566,6 +683,15 @@ class PGWebConversationStore:
 
         async def _operation(conn: Any) -> CommitTurnResult:
             async with conn.transaction():
+                committed_row = await conn.fetchrow(
+                    _GET_COMMITTED_TURN,
+                    principal_id,
+                    conversation_id,
+                    submission_id,
+                    ttl_days,
+                )
+                if committed_row is not None:
+                    return _committed_result(committed_row, replayed=True)
                 summary_row = await conn.fetchrow(
                     _GUARDED_UPDATE,
                     principal_id,
@@ -574,6 +700,15 @@ class PGWebConversationStore:
                     auto_title,
                 )
                 if summary_row is None:
+                    committed_row = await conn.fetchrow(
+                        _GET_COMMITTED_TURN,
+                        principal_id,
+                        conversation_id,
+                        submission_id,
+                        ttl_days,
+                    )
+                    if committed_row is not None:
+                        return _committed_result(committed_row, replayed=True)
                     return CommitTurnResult(False, "conversation_changed", None, None)
 
                 turn_id = str(uuid4())
@@ -582,6 +717,7 @@ class PGWebConversationStore:
                     turn_id,
                     principal_id,
                     conversation_id,
+                    submission_id,
                     user_text,
                     assistant_text,
                     json.dumps(answer_sources),
@@ -618,6 +754,14 @@ class PGWebConversationStore:
                     reason=None,
                     summary=_row_dict(summary_row),
                     turn_id=authoritative_turn_id,
+                    current_image_ids=tuple(image.image_id for image in images),
+                    assistant_text=assistant_text,
+                    answer_sources=answer_sources,
+                    image_descriptions={
+                        str(image.ordinal): image.vlm_description
+                        for image in images
+                        if image.vlm_description is not None
+                    },
                 )
 
         return await self._run_write(_operation)

@@ -13,6 +13,7 @@ class WebAnswerRequest(ClientContractModel):
     images: list[str] = Field(default_factory=list)
     workspaces: list[str] | None = None
     conversation_id: UUID
+    submission_id: UUID
 
 
 __all__ = ["WebAnswerRequest"]

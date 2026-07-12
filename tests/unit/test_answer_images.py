@@ -4,6 +4,7 @@
 import base64
 import io
 
+import pytest
 from PIL import Image
 
 from dlightrag.core.answer_images import AnswerImageBudget
@@ -12,11 +13,53 @@ from dlightrag.utils.images import (
     bounded_image_data_uri,
     decode_image_base64,
     flatten_image_to_rgb,
+    validate_web_images,
 )
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
+
+
+def _padded_png(size: int) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (1, 1), "white").save(buffer, format="PNG")
+    raw = buffer.getvalue()
+    assert len(raw) <= size
+    return raw + (b"\0" * (size - len(raw)))
+
+
+def test_web_image_accepts_exact_decoded_byte_limit() -> None:
+    raw = _padded_png(200)
+
+    (image,) = validate_web_images([base64.b64encode(raw).decode()], max_images=1, max_bytes=200)
+
+    assert image.image_bytes == raw
+
+
+def test_web_image_rejects_over_limit_before_base64_decode(monkeypatch) -> None:
+    raw = _padded_png(201)
+
+    def unexpected_decode(_value, **_kwargs):
+        raise AssertionError("oversize input was decoded")
+
+    monkeypatch.setattr(base64, "b64decode", unexpected_decode)
+
+    with pytest.raises(ValueError, match="exceeds"):
+        validate_web_images([base64.b64encode(raw).decode()], max_images=1, max_bytes=200)
+
+
+def test_web_image_rejects_invalid_base64() -> None:
+    with pytest.raises(ValueError, match="base64"):
+        validate_web_images(["%%%not-base64%%%"], max_images=1)
+
+
+def test_web_image_uses_detected_mime_not_declared_mime() -> None:
+    payload = base64.b64encode(_padded_png(200)).decode()
+    (image,) = validate_web_images([f"data:image/jpeg;base64,{payload}"], max_images=1)
+
+    assert image.mime_type == "image/png"
+    assert image.data_uri.startswith("data:image/png;base64,")
 
 
 def test_answer_image_budget_bounds_base64_images() -> None:

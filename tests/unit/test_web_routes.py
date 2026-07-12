@@ -16,9 +16,11 @@ from PIL import Image
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.conversations import PreparedWebConversation
 
 CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
+SUBMISSION_ID = "22222222-2222-4222-8222-222222222222"
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -66,9 +68,10 @@ def mock_manager():
 
 
 @pytest.fixture
-def web_app(mock_manager):
+def web_app(mock_manager, test_config: DlightragConfig):
     """Create the FastAPI app with web routes enabled and manager set."""
     application = create_app(include_web=True)
+    mock_manager.config = test_config
     application.state.manager = mock_manager
     conversation_service = AsyncMock()
     conversation_service.prepare_answer = AsyncMock(
@@ -77,6 +80,14 @@ def web_app(mock_manager):
             conversation_id=CONVERSATION_ID,
             content_revision=0,
             text_history=({"role": "user", "content": "Earlier"},),
+        )
+    )
+    conversation_service.commit_answer = AsyncMock(
+        return_value=CommitTurnResult(
+            saved=True,
+            reason=None,
+            summary=None,
+            turn_id="00000000-0000-0000-0000-000000000010",
         )
     )
     application.state.web_conversation_service = conversation_service
@@ -411,7 +422,11 @@ class TestWebAnswer:
 
         resp = await client.post(
             "/web/answer",
-            json={"query": "hello", "conversation_id": CONVERSATION_ID},
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
         )
 
         assert resp.status_code == 200
@@ -437,6 +452,7 @@ class TestWebAnswer:
             json={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
                 "session_id": "session-1",
             },
         )
@@ -518,7 +534,12 @@ class TestWebAnswer:
         )
 
         resp = await client.post(
-            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
         )
 
         assert resp.status_code == 200
@@ -575,7 +596,12 @@ class TestWebAnswer:
         web_app.state.access_control = QueryOnlyAccess()
 
         response = await client.post(
-            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
         )
 
         assert response.status_code == 200
@@ -602,7 +628,7 @@ class TestWebSSEBoundary:
             "html": "<b>x</b>",
             "answer": "x",
             "current_image_ids": [],
-            "image_descriptions": [],
+            "image_descriptions": {},
             "answer_images": [],
             "answer_blocks": [],
             "conversation_saved": False,
@@ -648,7 +674,12 @@ class TestWebSSEBoundary:
         web_app.state.manager = PublicOnlyManager()
 
         resp = await client.post(
-            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
         )
 
         assert resp.status_code == 200
@@ -695,7 +726,12 @@ class TestWebSSEBoundary:
         web_app.state.manager = PublicOnlyManager()
 
         response = await client.post(
-            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
         )
 
         assert response.status_code == 200
@@ -736,6 +772,7 @@ class TestWebAnswerAdapter:
             json={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
                 "images": [image_b64],
                 "workspaces": ["default", "test_ws"],
             },
@@ -767,6 +804,7 @@ class TestWebAnswerAdapter:
             json={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
                 "conversation_history": [{"role": "human", "content": "previous"}],
             },
         )
@@ -779,7 +817,12 @@ class TestWebAnswerAdapter:
         web_app.state.web_conversation_service.prepare_answer.return_value = None
 
         response = await client.post(
-            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
         )
 
         assert response.status_code == 404
@@ -795,11 +838,115 @@ class TestWebAnswerAdapter:
             json={
                 "query": "hello",
                 "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
                 "images": [base64.b64encode(b"not an image").decode()],
             },
         )
 
         assert response.status_code == 422
+
+    async def test_answer_requires_browser_submission_id(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+
+        response = await client.post(
+            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+        )
+
+        assert response.status_code == 422
+
+    async def test_answer_rejects_configured_image_count_before_model(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        test_config.query_images.max_current_images = 1
+        web_app.state.manager.config = test_config
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
+        image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
+
+        response = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+                "images": [image_b64, image_b64],
+            },
+        )
+
+        assert response.status_code == 422
+        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
+
+    async def test_answer_rejects_body_over_route_limit_before_json_materialization(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        test_config.query_images.max_current_images = 0
+        web_app.state.manager.config = test_config
+
+        response = await client.post(
+            "/web/answer",
+            content=b"{" + (b"x" * 70_000) + b"}",
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 413
+        web_app.state.web_conversation_service.prepare_answer.assert_not_awaited()
+
+    async def test_answer_rejects_invalid_base64_before_model(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+
+        response = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+                "images": ["%%%"],
+            },
+        )
+
+        assert response.status_code == 422
+        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
+
+    async def test_same_submission_replay_returns_stored_answer_before_model(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+        web_app.state.web_conversation_service.prepare_answer.return_value = (
+            PreparedWebConversation(
+                principal_id="a" * 64,
+                conversation_id=CONVERSATION_ID,
+                content_revision=1,
+                text_history=(),
+                committed_submission=CommitTurnResult(
+                    saved=True,
+                    reason=None,
+                    summary=None,
+                    turn_id="turn",
+                    current_image_ids=("stored-image",),
+                    assistant_text="Stored answer",
+                    answer_sources={"sources": [], "answer_images": []},
+                    replayed=True,
+                ),
+            )
+        )
+
+        response = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+            },
+        )
+
+        assert response.status_code == 200
+        assert "Stored answer" in response.text
+        assert "stored-image" in response.text
+        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1211,7 +1358,7 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
     payload = await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
-        image_descriptions=[],
+        image_descriptions={},
         manager=manager,
         cfg=cfg,
         workspace="default",
@@ -1283,7 +1430,7 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
     await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
-        image_descriptions=[],
+        image_descriptions={},
         manager=manager,
         cfg=cfg,
         workspace="default",
