@@ -1359,7 +1359,10 @@ SourceDownloadLinkBuilder(
 
 Do not call or import the REST route. Update security examples to recommend
 `actions: [reader]`, which already includes source download, instead of showing
-a reader role that grants only query/list actions.
+a reader role that grants only query/list actions. Filter the resolved source
+workspaces once for `workspace.download_source`: authorized rows render their
+link, while intentional query-only roles receive no false download affordance;
+both download endpoints still recheck authorization.
 
 - [ ] **Step 6: Verify both adapters and commit**
 

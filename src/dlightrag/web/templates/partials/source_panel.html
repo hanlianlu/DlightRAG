@@ -7,6 +7,7 @@
       <span class="source-doc-badge">{{ src.id | reference_label }}</span>
       <span class="source-doc-count">{{ src.chunks|length }}</span>
     </button>
+    {% if src.download_url %}
     <a href="{{ src.download_url }}"
        class="source-dl-icon"
        title="Download source"
@@ -19,6 +20,7 @@
         <line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
     </a>
+    {% endif %}
   </div>
   <div class="source-doc-chunks">
     {% for chunk in src.chunks %}

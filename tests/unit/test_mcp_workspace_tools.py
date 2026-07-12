@@ -711,6 +711,7 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
                     title="report.pdf",
                     source_uri="local://default/report.pdf",
                     workspace="default",
+                    document_id="doc-report",
                     download_locator="/private/report.pdf",
                 )
             ],

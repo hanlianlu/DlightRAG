@@ -308,10 +308,12 @@ signed token is never persisted as an implicit locator. A non-retained custom
 materialization. DlightRAG never silently retains bytes to rescue an invalid
 request.
 
-`GET /files/raw/{file_path}` is the authenticated projection used to serve a
-retained local file or redirect through a supported provider locator. Azure
-uses `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential
-chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+REST `GET /files/raw/{document_id}` and Web
+`GET /web/files/raw/{document_id}` are separate authenticated projections. Each
+resolves the exact workspace metadata row server-side, then serves a retained
+local file or redirects through a supported provider locator. Azure uses
+`DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential chain
+(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
 `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only, does not
 follow redirects to private hosts, and caps each download with

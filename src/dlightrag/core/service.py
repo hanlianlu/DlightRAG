@@ -934,6 +934,19 @@ class RAGService:
                     f"replace cleanup failed for {identifier}: {'; '.join(map(str, errors))}"
                 )
 
+    async def _purge_existing_download_locator(self, download_locator: str) -> None:
+        """Delete only documents owning one exact locator in this workspace."""
+        lightrag = self.lightrag
+        if lightrag is None or self._metadata_index is None:
+            return
+
+        doc_ids = await self._metadata_index.find_by_download_locator(download_locator)
+        for doc_id in doc_ids:
+            result = await lightrag.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+            if _normalized_operation_status(result) != "success":
+                raise RuntimeError("remote replace cleanup failed")
+            await self._metadata_index.delete(doc_id)
+
     async def _aingest_local_file(
         self,
         file_path: Path,
@@ -1310,17 +1323,16 @@ class RAGService:
                     for document, prepared_item in zip(
                         prepared_documents, prepared_items, strict=True
                     ):
-                        await self._purge_existing_for_replace(
-                            file_path=prepared_item.parser_path,
-                            stored_file_path=prepared_item.download_locator,
-                        )
+                        await self._purge_existing_download_locator(prepared_item.download_locator)
                         if not retain_source_files:
-                            await self._purge_existing_for_replace(
-                                file_path=retained_remote_source_path(
-                                    input_root=self._workspace_input_root(),
-                                    source_type=source_type,
-                                    source_uri=prepared_item.source_uri,
-                                    key=document.display_filename or document.key,
+                            await self._purge_existing_download_locator(
+                                str(
+                                    retained_remote_source_path(
+                                        input_root=self._workspace_input_root(),
+                                        source_type=source_type,
+                                        source_uri=prepared_item.source_uri,
+                                        key=document.display_filename or document.key,
+                                    )
                                 )
                             )
 
@@ -2080,11 +2092,28 @@ class RAGService:
                     continue
                 if doc_id not in replacement_doc_ids:
                     if lr is None:
+                        await self._rollback_retry_replacements(
+                            replacement_doc_ids, original_doc_id=doc_id
+                        )
                         raise RuntimeError("old LightRAG document cleanup unavailable")
-                    deletion_result = await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                    try:
+                        deletion_result = await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                    except Exception:
+                        await self._rollback_retry_replacements(
+                            replacement_doc_ids, original_doc_id=doc_id
+                        )
+                        raise
                     if _normalized_operation_status(deletion_result) != "success":
+                        await self._rollback_retry_replacements(
+                            replacement_doc_ids, original_doc_id=doc_id
+                        )
                         raise RuntimeError("old LightRAG document cleanup failed")
-                    await self._metadata_index.delete(doc_id)
+                    try:
+                        await self._metadata_index.delete(doc_id)
+                    except Exception:
+                        logger.warning(
+                            "Old retry metadata cleanup incomplete for doc_id=%s", doc_id
+                        )
                 succeeded.append(
                     {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
                 )
@@ -2122,6 +2151,38 @@ class RAGService:
                 if isinstance(nested_doc_id, str) and nested_doc_id:
                     doc_ids.add(nested_doc_id)
         return doc_ids
+
+    async def _rollback_retry_replacements(
+        self,
+        replacement_doc_ids: set[str],
+        *,
+        original_doc_id: str,
+    ) -> None:
+        """Best-effort compensation when the original FAILED row still exists."""
+        lr = self.lightrag
+        if lr is None or self._metadata_index is None:
+            return
+        for replacement_doc_id in sorted(replacement_doc_ids - {original_doc_id}):
+            try:
+                result = await lr.adelete_by_doc_id(replacement_doc_id, delete_llm_cache=True)
+            except Exception:
+                logger.warning(
+                    "Retry replacement rollback failed for doc_id=%s", replacement_doc_id
+                )
+                continue
+            if _normalized_operation_status(result) != "success":
+                logger.warning(
+                    "Retry replacement rollback was not acknowledged for doc_id=%s",
+                    replacement_doc_id,
+                )
+                continue
+            try:
+                await self._metadata_index.delete(replacement_doc_id)
+            except Exception:
+                logger.warning(
+                    "Retry replacement metadata rollback failed for doc_id=%s",
+                    replacement_doc_id,
+                )
 
     @staticmethod
     def _validate_retry_source_contract(

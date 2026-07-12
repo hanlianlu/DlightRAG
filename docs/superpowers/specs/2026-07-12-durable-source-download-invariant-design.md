@@ -141,7 +141,7 @@ The internal `SourceReference` carries:
 ```python
 source_uri: str
 workspace: str
-document_id: str
+document_id: str | None
 download_locator: str
 ```
 
@@ -161,11 +161,12 @@ project a principal-authorized `/files/raw/...` URL without leaking raw local
 paths or provider locators. `download_url` remains absent in a transport-neutral
 SDK/MCP payload but is required at the Web rendering boundary.
 
-The internal source workspace and stable LightRAG document ID are retained
-alongside the locator and excluded from public serialization. HTTP adapters put
-only the document ID and workspace into `download_url`; they look up the locator
-server-side. Public chunk `file_path` remains display-only and is reduced to a
-basename; it is never a source/download locator.
+The internal source workspace and available LightRAG document ID are retained
+alongside the locator and excluded from public serialization. Transport-neutral
+SDK/MCP sources do not require an HTTP document ID. HTTP projection requires it,
+puts only the document ID and workspace into `download_url`, and looks up the
+locator server-side. Public chunk `file_path` remains display-only and is
+reduced to a basename; it is never a source/download locator.
 
 ## 6. Ingest validation
 

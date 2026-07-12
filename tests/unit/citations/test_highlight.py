@@ -19,6 +19,7 @@ def _report_source(chunks: list[ChunkSnippet]) -> SourceReference:
         title="report.pdf",
         source_uri="local://default/report.pdf",
         workspace="default",
+        document_id="doc-report",
         download_locator="/docs/report.pdf",
         chunks=chunks,
     )

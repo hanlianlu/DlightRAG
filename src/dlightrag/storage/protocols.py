@@ -39,6 +39,9 @@ class MetadataIndexProtocol(Protocol):
     async def find_by_file_path(self, file_path: str) -> list[str]:
         raise NotImplementedError
 
+    async def find_by_download_locator(self, download_locator: str) -> list[str]:
+        raise NotImplementedError
+
     async def get_field_schema(self) -> dict[str, Any]:
         raise NotImplementedError
 

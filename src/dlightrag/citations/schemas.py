@@ -28,6 +28,7 @@ class SourceReference(BaseModel):
     type: str | None = None
     source_uri: str
     workspace: str = Field(exclude=True, repr=False)
+    document_id: str | None = Field(default=None, exclude=True, repr=False)
     download_locator: str = Field(exclude=True, repr=False)
     cited_chunk_ids: list[str] | None = None
     chunks: list[ChunkSnippet] | None = None

@@ -23,6 +23,9 @@ from dlightrag.sourcing.source_contract import (
             "https://cdn.example.com/docs/Q2%20report.pdf",
             "https://cdn.example.com/docs/Q2%20report.pdf",
         ),
+        ("HTTPS://cdn.example.com/docs/report.pdf", "https://cdn.example.com/docs/report.pdf"),
+        ("S3://bucket/docs/report.pdf", "s3://bucket/docs/report.pdf"),
+        ("AZURE://container/docs/report.pdf", "azure://container/docs/report.pdf"),
     ],
 )
 def test_validate_download_uri_accepts_durable_supported_locators(

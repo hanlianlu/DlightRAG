@@ -13,7 +13,7 @@ from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_toke
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_payloads import project_source_payloads
-from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.scope import RequestScope
 from dlightrag.observability import trace_observation
 from dlightrag.utils import log_safe
@@ -94,6 +94,7 @@ async def _build_answer_done_payload(
     scope: RequestScope | None,
     cfg: Any,
     workspace: str,
+    downloadable_workspaces: set[str] | None = None,
 ) -> _AnswerPayload:
     """Build the done-event payload from retrieval contexts and LLM output."""
     session_cards = await _session_image_cards(
@@ -103,10 +104,7 @@ async def _build_answer_done_payload(
         image_descriptions=image_descriptions,
         scope=scope,
     )
-    resolver = SourceUrlResolver(
-        input_dir=str(cfg.input_dir_path),
-        workspace=workspace or manager.config.workspace,
-    )
+    resolver = SourceDownloadLinkBuilder(base_url="/web/files/raw")
     finalized = finalize_answer(
         clean_answer,
         contexts,
@@ -117,7 +115,11 @@ async def _build_answer_done_payload(
         finalized.sources,
         contexts={"chunks": finalized.flat_contexts},
     )
-    source_payloads = project_source_payloads(finalized.sources, resolver=resolver)
+    source_payloads = project_source_payloads(
+        finalized.sources,
+        resolver=resolver,
+        downloadable_workspaces=downloadable_workspaces,
+    )
     answer_images = session_cards + cited_images
     answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
 
@@ -206,6 +208,7 @@ async def stream_answer_events(
     query_images: list[dict[str, Any]],
     session_id: str,
     scope: RequestScope | None = None,
+    downloadable_workspaces: set[str] | None = None,
 ) -> AsyncIterator[str]:
     """Yield browser SSE events for one answer request, under a request-root span."""
     ws_list = workspaces or [workspace or manager.config.workspace]
@@ -228,6 +231,7 @@ async def stream_answer_events(
             query_images=query_images,
             session_id=session_id,
             scope=scope,
+            downloadable_workspaces=downloadable_workspaces,
         ):
             yield event
 
@@ -243,6 +247,7 @@ async def _emit_answer_events(
     query_images: list[dict[str, Any]],
     session_id: str,
     scope: RequestScope | None = None,
+    downloadable_workspaces: set[str] | None = None,
 ) -> AsyncIterator[str]:
     """Emit the SSE event sequence for one answer request."""
     full_answer = ""
@@ -304,6 +309,7 @@ async def _emit_answer_events(
             scope=scope,
             cfg=cfg,
             workspace=effective_workspace,
+            downloadable_workspaces=downloadable_workspaces,
         )
 
         # ── Save checkpoint (before done event, so checkpoint_saved is accurate) ──

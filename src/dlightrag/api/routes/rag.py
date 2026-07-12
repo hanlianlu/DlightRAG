@@ -55,11 +55,12 @@ from dlightrag.core.ingestion.uploads import (
     safe_upload_basename,
     write_upload_stream,
 )
-from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.observability import trace_observation
 
 from .deps import (
     enforce_access,
+    filter_workspace_records,
     get_manager,
     request_scope,
     resolve_authorized_query_workspaces,
@@ -68,6 +69,20 @@ from .deps import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _downloadable_workspaces(
+    request: Request,
+    user: UserContext,
+    workspaces: list[str],
+) -> set[str]:
+    records = await filter_workspace_records(
+        request,
+        user,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        [{"workspace": workspace} for workspace in workspaces],
+    )
+    return {str(record["workspace"]) for record in records}
 
 
 def _job_response(job: dict[str, Any]) -> JSONResponse:
@@ -141,6 +156,11 @@ async def retrieve(
         workspaces=body.workspaces,
         all_workspaces=body.all_workspaces,
     )
+    downloadable_workspaces = await _downloadable_workspaces(
+        request,
+        user,
+        resolved_workspaces,
+    )
     scope = request_scope(user, resolved_workspaces)
 
     result = await manager.aretrieve(
@@ -151,8 +171,12 @@ async def retrieve(
         scope=scope,
         **kwargs,
     )
-    resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
-    return retrieval_payload(result, source_url_resolver=resolver)
+    link_builder = SourceDownloadLinkBuilder()
+    return retrieval_payload(
+        result,
+        source_link_builder=link_builder,
+        downloadable_workspaces=downloadable_workspaces,
+    )
 
 
 @router.post("/answer", response_model=AnswerResponse)
@@ -168,6 +192,11 @@ async def answer(
         workspaces=body.workspaces,
         all_workspaces=body.all_workspaces,
     )
+    downloadable_workspaces = await _downloadable_workspaces(
+        request,
+        user,
+        resolved_workspaces,
+    )
     scope = request_scope(user, resolved_workspaces)
 
     if not body.stream:
@@ -182,8 +211,12 @@ async def answer(
             scope=scope,
             **kwargs,
         )
-        resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
-        return answer_payload(result, source_url_resolver=resolver)
+        link_builder = SourceDownloadLinkBuilder()
+        return answer_payload(
+            result,
+            source_link_builder=link_builder,
+            downloadable_workspaces=downloadable_workspaces,
+        )
 
     async def event_generator() -> AsyncIterator[str]:
         token_iter: AsyncIterator[str] | None = None
@@ -218,7 +251,7 @@ async def answer(
 
                 full_answer = "".join(answer_parts)
                 clean_answer = getattr(token_iter, "answer", None) or full_answer
-                _resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
+                _link_builder = SourceDownloadLinkBuilder()
                 finalized = finalize_answer(
                     clean_answer,
                     contexts,
@@ -232,7 +265,8 @@ async def answer(
 
                 source_payloads = project_source_payloads(
                     finalized.sources,
-                    resolver=_resolver,
+                    resolver=_link_builder,
+                    downloadable_workspaces=downloadable_workspaces,
                 )
                 yield sse_data_event(AnswerSourcesStreamEvent(data=source_payloads))
                 trace = getattr(token_iter, "trace", None)

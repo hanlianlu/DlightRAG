@@ -12,7 +12,7 @@ from dlightrag.core.retrieval.protocols import (
     RetrievalContexts,
     RetrievalResult,
 )
-from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 
 
 def canonicalize_reference_ids(
@@ -132,6 +132,6 @@ __all__ = [
     "RetrievalBackend",
     "RetrievalContexts",
     "RetrievalResult",
-    "SourceUrlResolver",
+    "SourceDownloadLinkBuilder",
     "canonicalize_reference_ids",
 ]

@@ -82,9 +82,10 @@ def validate_download_uri(value: str) -> str:
     try:
         _validate_uri_lexical_form(candidate)
         parsed = urlsplit(candidate)
+        canonical = parsed._replace(scheme=parsed.scheme.lower()).geturl()
         port = parsed.port
         if parsed.scheme in {"s3", "azure"}:
-            parse_remote_uri(candidate)
+            parse_remote_uri(canonical)
             decoded_path = PurePosixPath(unquote(parsed.path))
             if (
                 not parsed.netloc
@@ -98,18 +99,18 @@ def validate_download_uri(value: str) -> str:
                 or "\\" in unquote(parsed.path)
             ):
                 raise ValueError
-            return candidate
+            return canonical
         if parsed.scheme == "https":
             from dlightrag.sourcing.url import validate_public_https_url
 
-            validate_public_https_url(candidate)
+            validate_public_https_url(canonical)
             if (
                 parsed.username is not None
                 or parsed.password is not None
                 or _has_query_or_fragment_delimiter(candidate)
             ):
                 raise ValueError
-            return candidate
+            return canonical
     except ValueError as exc:
         raise ValueError(
             "durable download_uri must be a well-formed s3://, azure://, "

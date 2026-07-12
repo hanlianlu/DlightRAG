@@ -6,8 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from dlightrag.access_control import AccessAction
 from dlightrag.app_state import request_config
@@ -18,6 +18,14 @@ from dlightrag.core.ingestion.uploads import (
     safe_upload_destination,
     upload_batch_dir,
     write_upload_stream,
+)
+from dlightrag.core.source_download import (
+    LocalDownloadTarget,
+    RedirectDownloadTarget,
+    SourceDownloadInvalidError,
+    SourceDownloadNotFoundError,
+    SourceDownloadTarget,
+    SourceDownloadUnavailableError,
 )
 from dlightrag.utils import log_safe
 from dlightrag.web.deps import (
@@ -32,6 +40,58 @@ from dlightrag.web.deps import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/files/raw/{document_id:path}", response_model=None)
+async def download_source(
+    document_id: str,
+    request: Request,
+    workspace: str | None = Query(default=None),
+) -> FileResponse | RedirectResponse:
+    """Download one source document through the Web session boundary."""
+    from dlightrag.utils import normalize_workspace
+
+    safe_workspace = normalize_workspace(workspace or request_config(request).workspace)
+    try:
+        await enforce_web_access(
+            request,
+            AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+            safe_workspace,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            logger.info(
+                "source_download_projection_outcome",
+                extra={"outcome": "unauthorized", "workspace": safe_workspace},
+            )
+        raise
+
+    try:
+        target = await get_manager(request).aprepare_source_download(
+            safe_workspace,
+            document_id,
+        )
+    except SourceDownloadInvalidError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except SourceDownloadNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except SourceDownloadUnavailableError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return _source_download_response(target)
+
+
+def _source_download_response(
+    target: SourceDownloadTarget,
+) -> FileResponse | RedirectResponse:
+    if isinstance(target, LocalDownloadTarget):
+        return FileResponse(
+            target.path,
+            media_type=target.media_type,
+            filename=target.filename,
+        )
+    if isinstance(target, RedirectDownloadTarget):
+        return RedirectResponse(url=target.url, status_code=302)
+    raise TypeError("Unsupported source download target")
 
 
 def _resolve_workspace(requested: str | None, cookie_workspace: str) -> str:

@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from dlightrag.access_control import AccessAction
 from dlightrag.core.client_contracts import dump_optional_list
-from dlightrag.utils import log_safe
+from dlightrag.utils import log_safe, normalize_workspace
 from dlightrag.utils.images import decode_image_base64, image_url_block
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.deps import (
@@ -181,9 +181,18 @@ async def answer_stream(
     # Extract workspaces (multi-select from frontend).
     workspaces = body.workspaces
     session_id = body.session_id
-    for ws in workspaces or [workspace]:
+    target_workspaces = workspaces or [workspace]
+    for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
-    scope = get_request_scope(request, workspaces or [workspace])
+    downloadable_records = await filter_web_workspace_records(
+        request,
+        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+        [{"workspace": ws} for ws in target_workspaces],
+    )
+    downloadable_workspaces = {
+        normalize_workspace(str(record["workspace"])) for record in downloadable_records
+    }
+    scope = get_request_scope(request, target_workspaces)
 
     manager = get_manager(request)
     cfg = manager.config
@@ -199,6 +208,7 @@ async def answer_stream(
             query_images=clean_images,
             session_id=session_id,
             scope=scope,
+            downloadable_workspaces=downloadable_workspaces,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

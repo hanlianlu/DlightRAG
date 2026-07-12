@@ -564,7 +564,7 @@ data: {"type":"token","content":"The key findings"}
 
 data: {"type":"token","content":" are..."}
 
-data: {"type":"sources","data":[{"id":"1","title":"report.pdf","source_uri":"local://default/report.pdf","download_url":"/files/raw/default/report.pdf?workspace=default","chunks":[...]}]}
+data: {"type":"sources","data":[{"id":"1","title":"report.pdf","source_uri":"local://default/report.pdf","download_url":"/files/raw/doc-a1b2c3?workspace=default","chunks":[...]}]}
 
 data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
 
@@ -721,9 +721,12 @@ Sources are document-level groupings derived from chunks via `build_sources()`.
 They appear in REST/MCP responses and drive the Web UI's source panel. Cited
 answer paths use the same citation indexer as answer validation, so chunk order
 matches `[ref_id-chunk_idx]` markers instead of page sorting. `source_uri` is
-stable provenance. HTTP adapters project the internal locator to an authorized
-`download_url`; raw storage locators and workspace-routing fields are never
-public. Transport-neutral SDK/MCP payloads leave `download_url` null.
+stable provenance. HTTP adapters project the internal document ID and source
+workspace to an authorized `download_url`, then look up the locator server-side;
+raw storage locators and workspace-routing fields are never public.
+REST links use `/files/raw/{document_id}`; Web links use the Web-session-owned
+`/web/files/raw/{document_id}`. Transport-neutral SDK/MCP payloads leave
+`download_url` null.
 
 ```json
 {
@@ -731,7 +734,7 @@ public. Transport-neutral SDK/MCP payloads leave `download_url` null.
   "title": "report.pdf",
   "type": "file",
   "source_uri": "local://default/docs/report.pdf",
-  "download_url": "/files/raw/default/docs/report.pdf?workspace=default",
+  "download_url": "/files/raw/doc-a1b2c3?workspace=default",
   "cited_chunk_ids": ["abc123", "def456"],
   "chunks": [
     {

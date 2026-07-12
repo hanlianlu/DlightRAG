@@ -100,6 +100,9 @@ def build_sources_from_chunks(
         workspace = catalog.workspace if catalog else first.get("_workspace") or default_workspace
         if not isinstance(workspace, str) or not workspace.strip():
             raise SourceBuildInvariantError(f"Source {log_safe(ref_id)} is missing workspace")
+        document_id = catalog.document_id if catalog else first.get("full_doc_id")
+        if not isinstance(document_id, str) or not document_id.strip():
+            document_id = None
         file_path = first.get("file_path", "")
 
         def _citation_order(chunk: dict[str, Any], ref_id: str = ref_id) -> int:
@@ -152,6 +155,7 @@ def build_sources_from_chunks(
                 type=(catalog.type if catalog else None) or metadata.get("file_type"),
                 source_uri=catalog.source_uri if catalog else source_uri,
                 workspace=workspace,
+                document_id=document_id,
                 download_locator=catalog.download_locator if catalog else download_locator,
                 cited_chunk_ids=cited_chunk_ids,
                 chunks=snippets,
