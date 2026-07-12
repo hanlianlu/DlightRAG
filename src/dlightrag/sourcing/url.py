@@ -16,6 +16,7 @@ import httpx
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import (
     implicit_https_download_uri,
+    safe_source_filename,
     validate_download_uri,
     validate_source_uri,
 )
@@ -142,8 +143,8 @@ class URLDataSource(AsyncDataSource):
                         extra={
                             "outcome": "ephemeral",
                             "locator_kind": "https",
-                            "source_filename": (
-                                document.display_filename or PurePosixPath(key).name or "document"
+                            "source_filename": safe_source_filename(
+                                document.display_filename or key
                             ),
                         },
                     )

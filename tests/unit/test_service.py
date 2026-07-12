@@ -1231,6 +1231,46 @@ class TestRAGServiceLightRAGMainPath:
         assert "token=secret" not in caplog.text
         assert signed_url not in caplog.text
 
+    async def test_source_uri_callback_failure_is_sanitized_before_bounded_map(
+        self,
+        test_config: DlightragConfig,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        materialized = False
+        secret = "resolver_token=secret"
+
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(key="asset/report.pdf")
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                nonlocal materialized
+                materialized = True
+
+        def source_uri_for_key(_key: str) -> str:
+            raise RuntimeError(f"resolver failed: https://fetch.example.com/?{secret}")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            result = await service.aingest_source(
+                BynderSource(),
+                source_type="bynder",
+                source_uri_for_key=source_uri_for_key,
+                retain_source_file=False,
+            )
+
+        assert result["errors"] == ["report.pdf: source_uri resolution failed"]
+        assert materialized is False
+        assert secret not in caplog.text
+        assert all(
+            secret not in str(value) for record in caplog.records for value in vars(record).values()
+        )
+
     async def test_remote_replace_purges_by_download_locator(
         self, test_config: DlightragConfig
     ) -> None:

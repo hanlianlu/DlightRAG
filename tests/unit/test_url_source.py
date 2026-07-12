@@ -122,10 +122,11 @@ async def test_url_data_source_separates_fetch_identity_and_download_uri() -> No
 async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_url(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    hostile_filename = "https://files.example.com/report.pdf?display_token=secret"
     with caplog.at_level(logging.INFO, logger="dlightrag.sourcing.url"):
         source = URLDataSource(
             urls=["https://fetch.example.com/download?sig=secret"],
-            filename="asset.pdf",
+            filename=hostile_filename,
             client=_Client(),
         )
 
@@ -138,8 +139,10 @@ async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_ur
     outcome_fields = vars(outcome)
     assert outcome_fields["outcome"] == "ephemeral"
     assert outcome_fields["locator_kind"] == "https"
-    assert outcome_fields["source_filename"] == "asset.pdf"
+    assert outcome_fields["source_filename"] == "report.pdf"
     assert "sig=secret" not in caplog.text
+    assert "display_token=secret" not in caplog.text
+    assert all("display_token=secret" not in str(value) for value in outcome_fields.values())
 
 
 async def test_url_data_source_derives_download_uri_from_queryless_fetch_url() -> None:
