@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -308,11 +309,24 @@ async def test_store_unavailability_returns_retryable_503(
     }
 
 
-async def test_programmer_errors_are_not_mislabeled_as_store_unavailability() -> None:
+@pytest.mark.parametrize(
+    "shutdown_error",
+    (
+        pytest.param(
+            asyncpg.exceptions.AdminShutdownError("administrative shutdown"),
+            id="admin-shutdown",
+        ),
+        pytest.param(
+            asyncpg.exceptions.CrashShutdownError("crash shutdown"),
+            id="crash-shutdown",
+        ),
+    ),
+)
+async def test_postgres_shutdown_returns_retryable_503(shutdown_error: Exception) -> None:
     from dlightrag.web.conversations import WebConversationService
 
     store = AsyncMock()
-    store.list_conversations.side_effect = ValueError("broken projection")
+    store.list_conversations.side_effect = shutdown_error
     application = create_app(include_web=True)
     application.state.web_conversation_service = WebConversationService(
         store=store,
@@ -321,7 +335,44 @@ async def test_programmer_errors_are_not_mislabeled_as_store_unavailability() ->
     )
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        with pytest.raises(ValueError, match="broken projection"):
+        response = await client.get("/web/conversations")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Web conversation storage is unavailable",
+        "error_type": "unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    "store_error",
+    (
+        pytest.param(
+            asyncpg.exceptions.UniqueViolationError("duplicate key"),
+            id="unique-violation",
+        ),
+        pytest.param(asyncpg.exceptions.CheckViolationError("check failed"), id="constraint"),
+        pytest.param(asyncpg.exceptions.DataError("invalid data"), id="data"),
+        pytest.param(ValueError("broken projection"), id="value"),
+        pytest.param(RuntimeError("broken adapter"), id="programmer"),
+    ),
+)
+async def test_data_and_programmer_errors_are_not_mislabeled_as_store_unavailability(
+    store_error: Exception,
+) -> None:
+    from dlightrag.web.conversations import WebConversationService
+
+    store = AsyncMock()
+    store.list_conversations.side_effect = store_error
+    application = create_app(include_web=True)
+    application.state.web_conversation_service = WebConversationService(
+        store=store,
+        max_turns=100,
+        ttl_days=30,
+    )
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with pytest.raises(type(store_error), match=str(store_error)):
             await client.get("/web/conversations")
 
 
