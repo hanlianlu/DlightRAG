@@ -123,6 +123,9 @@ def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None
     assert "data-max-upload-bytes" in (
         ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html"
     ).read_text(encoding="utf-8")
+    assert "imageAdmission.clear()" in images
+    assert images.count("URL.revokeObjectURL") >= 2
+    assert "imageAdmission.admit(file)" in images
 
 
 def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:

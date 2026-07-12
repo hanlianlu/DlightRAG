@@ -5,7 +5,7 @@ import {uploadFilesToWorkspace} from './files-panel.ts';
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 import type {ConversationImageReference} from '../api/conversations.ts';
-import {acceptsImageUpload, getImageAdmissionPolicy} from './image_policy.ts';
+import {getImageAdmissionPolicy, ImageReadAdmissionController} from './image_policy.ts';
 
 const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
 const pendingImages: PendingImage[] = [];
@@ -15,6 +15,16 @@ interface PendingImage {
     dataUrl: string;
     objectUrl: string;
 }
+
+const imageAdmission = new ImageReadAdmissionController({
+    getPolicy: getImageAdmissionPolicy,
+    getCommittedCount: function() { return pendingImages.length; },
+    onReady: function(file, dataUrl) {
+        const objectUrl = URL.createObjectURL(file);
+        pendingImages.push({file, dataUrl, objectUrl});
+        renderThumbnails();
+    },
+});
 
 type LightboxElement = HTMLDivElement & {
     __lightboxPrev?: HTMLButtonElement;
@@ -27,18 +37,7 @@ function eventElement(event: Event): Element | null {
 }
 
 export function addImage(file: File): void {
-    const policy = getImageAdmissionPolicy();
-    if (!policy || !acceptsImageUpload(file, pendingImages.length, policy)) return;
-
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        const dataUrl = typeof e.target?.result === 'string' ? e.target.result : '';
-        if (!dataUrl) return;
-        const objectUrl = URL.createObjectURL(file);
-        pendingImages.push({file, dataUrl, objectUrl});
-        renderThumbnails();
-    };
-    reader.readAsDataURL(file);
+    imageAdmission.admit(file);
 }
 
 export function getPendingImageData(): string[] {
@@ -140,6 +139,7 @@ function renderStoredMessageImages(
 }
 
 export function clearImages(): void {
+    imageAdmission.clear();
     pendingImages.forEach(function(img) { URL.revokeObjectURL(img.objectUrl); });
     pendingImages.length = 0;
     renderThumbnails();

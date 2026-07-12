@@ -6,8 +6,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from dlightrag.core.answer_images import AnswerImageBudget
 from dlightrag.utils.concurrency import bounded_map
-from dlightrag.utils.image_budget import ImagePayloadBudget
 from dlightrag.utils.images import image_url_block
 
 logger = logging.getLogger(__name__)
@@ -88,8 +88,7 @@ class QueryImageEnhancer:
             block = image_url_block(image)
             if block is None:
                 return None
-            image_url = block["image_url"]
-            budget = ImagePayloadBudget(
+            budget = AnswerImageBudget(
                 max_images=1,
                 max_total_bytes=self._max_total_bytes,
                 max_bytes_per_image=self._max_bytes_per_image,
@@ -98,15 +97,9 @@ class QueryImageEnhancer:
                 quality=self._quality,
                 min_quality=self._min_quality,
             )
-            bounded = budget.add_base64(
-                image_url["url"],
-                label=f"query_image_{idx}",
-            )
-            if bounded is None:
+            bounded_block = budget.add_user_image(block, label=f"query_image_{idx}")
+            if bounded_block is None:
                 return None
-            bounded_uri, _byte_count = bounded
-            bounded_image_url = {**image_url, "url": bounded_uri}
-            bounded_block = {"type": "image_url", "image_url": bounded_image_url}
             try:
                 response = await vlm_func(
                     messages=[
