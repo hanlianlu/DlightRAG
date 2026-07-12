@@ -69,6 +69,11 @@ def safe_source_filename(value: str | None) -> str:
     safe_name = "".join(
         character if character.isalnum() or character in "._-" else "_" for character in basename
     )
+    if len(safe_name) <= 128:
+        return safe_name or "document"
+    suffix = PurePosixPath(safe_name).suffix
+    if suffix and len(suffix) < 128:
+        return f"{safe_name[: 128 - len(suffix)]}{suffix}"
     return safe_name[:128] or "document"
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from dlightrag.sourcing.base import SourceDocument
+from dlightrag.sourcing.source_contract import safe_source_filename
 from dlightrag.sourcing.uri import parse_remote_uri
 from dlightrag.sourcing.url import URLDataSource
 
@@ -60,6 +61,13 @@ class _Client:
 
     async def aclose(self) -> None:
         self.closed = True
+
+
+def test_safe_source_filename_preserves_extension_when_bounded() -> None:
+    result = safe_source_filename(f"{'a' * 200}.pdf")
+
+    assert result == f"{'a' * 124}.pdf"
+    assert len(result) == 128
 
 
 async def test_url_data_source_maps_extensionless_url_to_html_filename(tmp_path: Path) -> None:
