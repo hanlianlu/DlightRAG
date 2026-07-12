@@ -149,6 +149,8 @@ def extract_system_metadata(
     *,
     ingest_strategy: str,
     display_filename: str | None = None,
+    source_uri: str,
+    download_locator: str,
 ) -> dict[str, Any]:
     """Build system metadata that DlightRAG owns."""
     raw_path = str(path)
@@ -163,6 +165,8 @@ def extract_system_metadata(
         "filename": file_name.name,
         "filename_stem": file_name.stem,
         "file_path": raw_path,
+        "source_uri": source_uri,
+        "download_locator": download_locator,
         "file_extension": file_name.suffix.lower().lstrip("."),
         "ingest_strategy": ingest_strategy,
     }
@@ -194,6 +198,8 @@ METADATA_FIELDS: tuple[MetadataFieldDef, ...] = (
         filter_hint="Exact match on the file name without extension (e.g. 'report').",
     ),
     MetadataFieldDef("file_path", "TEXT"),
+    MetadataFieldDef("source_uri", "TEXT"),
+    MetadataFieldDef("download_locator", "TEXT"),
     MetadataFieldDef(
         "file_extension",
         "VARCHAR(32)",

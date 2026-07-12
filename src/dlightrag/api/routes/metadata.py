@@ -13,6 +13,8 @@ from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
 
+_INTERNAL_METADATA_FIELDS = frozenset({"workspace", "doc_id", "file_path", "download_locator"})
+
 
 @router.get("/metadata/{doc_id}", response_model=MetadataResponse)
 async def get_metadata(
@@ -28,7 +30,10 @@ async def get_metadata(
     data = await manager.aget_metadata(ws, doc_id)
     if not data:
         raise HTTPException(status_code=404, detail=f"Document {doc_id} not found")
-    return {"doc_id": doc_id, "metadata": data}
+    public_metadata = {
+        key: value for key, value in data.items() if key not in _INTERNAL_METADATA_FIELDS
+    }
+    return {"doc_id": doc_id, "metadata": public_metadata}
 
 
 @router.post("/metadata/{doc_id}", response_model=MetadataUpdateResponse)

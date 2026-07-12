@@ -70,6 +70,22 @@ def _build_schema_migrations() -> tuple[Migration, ...]:
                 ),
             )
         )
+    migrations.append(
+        Migration(
+            "backfill_source_download_contract",
+            "Backfill source identity and download locator from existing file_path",
+            (
+                "UPDATE dlightrag_doc_metadata "
+                "SET source_uri = COALESCE(source_uri, CASE "
+                "WHEN file_path LIKE 's3://%' OR file_path LIKE 'azure://%' "
+                "OR file_path LIKE 'https://%' THEN file_path "
+                "ELSE 'local://legacy/' || md5(workspace || ':' || doc_id) || '/' || "
+                "regexp_replace(COALESCE(filename, 'source'), '[^A-Za-z0-9._-]', '_', 'g') END), "
+                "download_locator = COALESCE(download_locator, file_path) "
+                "WHERE source_uri IS NULL OR download_locator IS NULL",
+            ),
+        )
+    )
     for f in METADATA_FIELDS:
         idx_clause = _index_clause(f.field_id, f.pg_type, f.index_type)
         if idx_clause is None:
@@ -326,7 +342,16 @@ class PGMetadataIndex:
         logger.info("PGMetadataIndex cleared for workspace %s: %s", self._workspace, result)
 
     # Internal columns excluded from schema hints — not user-filterable
-    _INTERNAL_COLS = frozenset({"workspace", "doc_id", "ingested_at"})
+    _INTERNAL_COLS = frozenset(
+        {
+            "workspace",
+            "doc_id",
+            "ingested_at",
+            "file_path",
+            "source_uri",
+            "download_locator",
+        }
+    )
 
     async def get_field_schema(self) -> dict[str, Any]:
         """Read table structure dynamically.
