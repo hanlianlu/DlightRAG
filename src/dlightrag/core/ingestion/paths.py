@@ -144,6 +144,14 @@ def retained_remote_source_path(
     )
 
 
+def lightrag_archived_source_path(source_path: Path) -> Path:
+    """Return LightRAG's deterministic post-parse location for a source file."""
+    path = Path(source_path)
+    if path.parent.name == PARSED_DIR_NAME:
+        return path
+    return path.parent / PARSED_DIR_NAME / path.name
+
+
 def _is_ingestable_child(
     item: Path,
     *,

@@ -64,6 +64,33 @@ async def test_missing_contained_local_file_is_not_found(test_config) -> None:
         await _service(test_config, metadata_index).prepare("doc-missing-file")
 
 
+async def test_local_download_repairs_known_lightrag_archive_transition(test_config) -> None:
+    original = test_config.input_dir_path / "default" / "notes.md"
+    archived = original.parent / "__parsed__" / original.name
+    archived.parent.mkdir(parents=True, exist_ok=True)
+    archived.write_text("notes", encoding="utf-8")
+    metadata_index = AsyncMock()
+    metadata_index.get.return_value = {
+        "download_locator": str(original),
+        "file_path": str(original),
+    }
+
+    target = await _service(test_config, metadata_index).prepare("doc-notes")
+
+    assert target == LocalDownloadTarget(
+        path=archived.resolve(),
+        media_type="text/markdown",
+        filename="notes.md",
+    )
+    metadata_index.upsert.assert_awaited_once_with(
+        "doc-notes",
+        {
+            "download_locator": str(archived.resolve()),
+            "file_path": str(archived.resolve()),
+        },
+    )
+
+
 async def test_missing_document_is_not_found(test_config) -> None:
     metadata_index = AsyncMock()
     metadata_index.get.return_value = None

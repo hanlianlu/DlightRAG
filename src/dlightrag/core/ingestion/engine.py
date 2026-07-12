@@ -25,6 +25,7 @@ from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 
 from dlightrag.core.ingestion.lightrag_sidecar import collect_lightrag_drawing_assets
+from dlightrag.core.ingestion.paths import lightrag_archived_source_path
 from dlightrag.core.retrieval.metadata_fields import (
     MetadataFieldRegistry,
     MetadataIngestPolicy,
@@ -450,7 +451,8 @@ class UnifiedIngestionEngine:
         full_doc = await self._stores.get_full_doc(doc_id)
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
         lightrag_record = self._lightrag_metadata(full_doc, doc_status)
-        await self._metadata_index.upsert(doc_id, {**metadata_record, **lightrag_record})
+        finalized_metadata = _with_finalized_local_download_locator(metadata_record)
+        await self._metadata_index.upsert(doc_id, {**finalized_metadata, **lightrag_record})
 
         await self._overwrite_sidecar_image_vectors(
             doc_id=doc_id,
@@ -644,6 +646,27 @@ def _prepare_ingest_item(
         source_uri=_raw_path_source_uri(parser_path, workspace=workspace),
         download_locator=str(parser_path.resolve()),
     )
+
+
+def _with_finalized_local_download_locator(
+    metadata_record: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Persist the exact source location after LightRAG archives parser input."""
+    finalized = dict(metadata_record)
+    locator = finalized.get("download_locator")
+    if not isinstance(locator, str) or "://" in locator:
+        return finalized
+
+    source_path = Path(locator)
+    archived_path = lightrag_archived_source_path(source_path)
+    if source_path.is_file() or not archived_path.is_file():
+        return finalized
+
+    resolved = str(archived_path.resolve())
+    finalized["download_locator"] = resolved
+    if finalized.get("file_path") == locator:
+        finalized["file_path"] = resolved
+    return finalized
 
 
 def _raw_path_source_uri(path: Path, *, workspace: str) -> str:

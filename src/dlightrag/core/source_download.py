@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dlightrag.config import DlightragConfig
+from dlightrag.core.ingestion.paths import lightrag_archived_source_path
 from dlightrag.sourcing.aws_s3 import (
     S3CredentialsUnavailable,
     S3PresignError,
@@ -84,10 +85,14 @@ class SourceDownloadService:
             raise SourceDownloadInvalidError("Source download metadata is invalid")
 
         if "://" not in locator:
-            return self._prepare_local(locator)
+            return await self._prepare_local(document_id, locator)
         return await self._prepare_remote(locator)
 
-    def _prepare_local(self, locator: str) -> LocalDownloadTarget:
+    async def _prepare_local(
+        self,
+        document_id: str,
+        locator: str,
+    ) -> LocalDownloadTarget:
         path = Path(locator)
         if not path.is_absolute():
             raise SourceDownloadInvalidError("Source download metadata is invalid")
@@ -99,7 +104,19 @@ class SourceDownloadService:
         except OSError, RuntimeError, ValueError:
             raise SourceDownloadInvalidError("Source download metadata is invalid") from None
         if not resolved.is_file():
-            raise SourceDownloadNotFoundError("Source not found")
+            archived = lightrag_archived_source_path(resolved).resolve(strict=False)
+            try:
+                archived.relative_to(workspace_root)
+            except ValueError:
+                raise SourceDownloadInvalidError("Source download metadata is invalid") from None
+            if not archived.is_file():
+                raise SourceDownloadNotFoundError("Source not found")
+            resolved = archived
+            repaired = str(resolved)
+            await self._metadata_index.upsert(
+                document_id,
+                {"download_locator": repaired, "file_path": repaired},
+            )
 
         media_type, _ = mimetypes.guess_type(str(resolved))
         return LocalDownloadTarget(
