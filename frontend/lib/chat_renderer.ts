@@ -22,18 +22,21 @@ type SSEData = string;
 interface DonePayload {
   html?: string;
   answer?: string;
+  conversation_saved?: boolean;
+  conversation_save_reason?: string | null;
 }
 
 interface ProgressPayload {
   phase: string;
 }
 
-type PhaseLabel = 'planning' | 'searching' | 'generating';
+type PhaseLabel = 'planning' | 'searching' | 'generating' | 'saving';
 
 const PHASE_LABELS: Record<PhaseLabel, string> = {
   planning: 'Analyzing query...',
   searching: 'Searching knowledge base...',
   generating: 'Generating answer...',
+  saving: 'Saving conversation...',
 };
 
 // ── helpers ───────────────────────────────────────────────────────────
@@ -121,6 +124,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
   let firstToken = true;
   let fullAnswer = '';
   let failed = false;
+  let saveOutcome: DonePayload | null = null;
 
   function handleToken(data: SSEData): void {
     const text = parseData(data);
@@ -149,6 +153,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
     const html = typeof payload === 'string' ? payload : (payload as DonePayload).html;
     if (typeof payload !== 'string') {
       fullAnswer = (payload as DonePayload).answer || fullAnswer;
+      saveOutcome = payload as DonePayload;
     }
 
     const fragment = llmFragmentFromSanitizedHtml(html || '');
@@ -213,6 +218,9 @@ export function createAnswerRenderer(turn: ChatTurn) {
     },
     get failed(): boolean {
       return failed;
+    },
+    get saveOutcome(): DonePayload | null {
+      return saveOutcome;
     },
   };
 }

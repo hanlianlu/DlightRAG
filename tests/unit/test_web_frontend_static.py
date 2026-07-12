@@ -29,12 +29,21 @@ def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
     assert "conversation_history" not in chat_source
     assert "session_id" not in chat_source
     assert "submission_id" in chat_source
-    assert "crypto.randomUUID()" in chat_source
-    submission_key = chat_source.index("const submissionId = crypto.randomUUID()")
+    assert "crypto.randomUUID()" in (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(
+        encoding="utf-8"
+    )
+    submission_key = chat_source.index("pendingSubmissionStore.getOrCreate")
     retry_loop = chat_source.index("for (let attempt = 0; attempt < 2")
     request_body = chat_source.index("const requestBody = JSON.stringify")
     assert submission_key < request_body < retry_loop
     assert "body: requestBody" in chat_source[retry_loop:]
+    assert "pendingSubmissionStore.getOrCreate" in chat_source
+    assert "pendingSubmissionStore.clear" in chat_source
+    pending_source = (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(encoding="utf-8")
+    assert "commit_outcome_unknown" not in pending_source
+    assert "DEFINITIVE_NON_COMMIT_REASONS" in pending_source
+    assert "payloadFingerprint" in chat_source
+    assert (FRONTEND / "stores" / "pendingSubmissionStore.test.ts").exists()
     assert not (FRONTEND / "stores" / "sessionStore.ts").exists()
     assert not (FRONTEND_UI / "clearHistory.ts").exists()
 

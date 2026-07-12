@@ -146,6 +146,27 @@ async def test_reads_keep_retrying_pool_path(monkeypatch) -> None:
     assert production_pool.single_attempt_calls == 0
 
 
+async def test_commit_reconciliation_lookup_uses_single_attempt_pool_path(monkeypatch) -> None:
+    conn = FakeConnection()
+    production_pool = FakeProductionPool(conn)
+    monkeypatch.setattr("dlightrag.storage.pool.pg_pool", production_pool)
+    store = PGWebConversationStore()
+    store._initialized = True
+
+    assert (
+        await store.find_committed_turn_once(
+            "p1",
+            "c1",
+            "00000000-0000-4000-8000-000000000001",
+            ttl_days=30,
+        )
+        is None
+    )
+
+    assert production_pool.single_attempt_calls == 1
+    assert production_pool.retrying_calls == 0
+
+
 async def test_list_prunes_expired_rows_before_selecting() -> None:
     conn = FakeConnection()
     conn.fetch_result = []
