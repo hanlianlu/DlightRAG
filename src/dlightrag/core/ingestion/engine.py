@@ -123,6 +123,7 @@ class UnifiedIngestionEngine:
         *,
         source_uri: str | None = None,
         download_locator: str | None = None,
+        display_filename: str | None = None,
         replace: bool = False,
         title: str | None = None,
         author: str | None = None,
@@ -150,6 +151,7 @@ class UnifiedIngestionEngine:
                     doc_id,
                     source_uri=resolved_source_uri,
                     download_locator=resolved_download_locator,
+                    display_filename=display_filename,
                     title=title,
                     author=author,
                     metadata=metadata,
@@ -161,6 +163,7 @@ class UnifiedIngestionEngine:
             file_path,
             source_uri=resolved_source_uri,
             download_locator=resolved_download_locator,
+            display_filename=display_filename,
             title=title,
             author=author,
             metadata=metadata,
@@ -179,6 +182,7 @@ class UnifiedIngestionEngine:
         *,
         source_uri: str,
         download_locator: str,
+        display_filename: str | None,
         title: str | None,
         author: str | None,
         metadata: Mapping[str, Any] | None,
@@ -197,6 +201,7 @@ class UnifiedIngestionEngine:
             Path(file_path),
             source_uri=source_uri,
             download_locator=download_locator,
+            display_filename=display_filename,
             title=title,
             author=author,
             metadata=metadata,
@@ -426,6 +431,14 @@ class UnifiedIngestionEngine:
         process_options: str,
     ) -> dict[str, Any]:
         doc_status = await self._stores.get_doc_status(doc_id)
+        raw_status = (doc_status or {}).get("status")
+        normalized_status = str(getattr(raw_status, "value", raw_status) or "").lower()
+        if normalized_status != "processed":
+            error_summary = (doc_status or {}).get("error_msg") or (doc_status or {}).get(
+                "content_summary"
+            )
+            raise RuntimeError(str(error_summary or "LightRAG document processing failed"))
+
         full_doc = await self._stores.get_full_doc(doc_id)
         light_chunks = list((doc_status or {}).get("chunks_list") or [])
         lightrag_record = self._lightrag_metadata(full_doc, doc_status)
