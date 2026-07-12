@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="app">
+<div class="app"
+     id="app"
+     data-max-current-images="{{ query_image_max_current_images }}"
+     data-max-upload-bytes="{{ query_image_max_upload_bytes }}">
     <header class="topbar">
         <div class="workspace-selector"
              id="workspace-selector"

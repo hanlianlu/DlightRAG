@@ -47,7 +47,6 @@ EMBED_IMAGE_MAX_BYTES = 14 * 1024 * 1024
 EMBED_IMAGE_QUALITY = 90
 EMBED_IMAGE_MIN_QUALITY = 70
 EMBED_IMAGE_MIN_PX = 256
-WEB_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +66,7 @@ class ValidatedWebImage:
 
 
 def validate_web_images(
-    values: list[str], *, max_images: int, max_bytes: int = WEB_IMAGE_MAX_BYTES
+    values: list[str], *, max_images: int, max_bytes: int
 ) -> tuple[ValidatedWebImage, ...]:
     """Strictly validate uploads once and return their durable canonical form."""
     if len(values) > max_images:
@@ -426,7 +425,6 @@ def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:
 
 __all__ = [
     "ValidatedWebImage",
-    "WEB_IMAGE_MAX_BYTES",
     "bounded_embedding_image_data_uri",
     "bounded_image_data_uri",
     "decode_image_base64",

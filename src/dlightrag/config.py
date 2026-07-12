@@ -506,6 +506,11 @@ class QueryImagesConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_current_images: int = Field(default=3, ge=0)
+    max_upload_bytes: int = Field(
+        default=15 * 1024 * 1024,
+        ge=1,
+        description="Maximum durable bytes accepted for each current Web image.",
+    )
     max_described_images: int = Field(default=3, ge=0)
 
 

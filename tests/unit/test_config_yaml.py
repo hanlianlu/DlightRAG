@@ -105,6 +105,15 @@ class TestYamlConfigLoading:
 
         assert config["embedding"]["input_modality"] == "auto"
 
+    def test_repo_config_documents_web_query_image_admission_policy(self) -> None:
+        config = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
+
+        assert config["query_images"]["max_current_images"] == 3
+        assert config["query_images"]["max_upload_bytes"] == 15 * 1024 * 1024
+
+        documentation = (ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
+        assert "max_upload_bytes: 15728640" in documentation
+
 
 class TestConfigSources:
     def test_works_without_yaml(self, tmp_path, monkeypatch):

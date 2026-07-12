@@ -868,9 +868,16 @@ class RAGServiceManager:
             from dlightrag.models.llm import get_vlm_model_func
 
             cfg = self._config.query_images
+            transport = self._config.answer
             self._query_image_enhancer = QueryImageEnhancer(
                 vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
                 max_images=cfg.max_described_images,
+                max_total_bytes=transport.image_max_total_bytes,
+                max_bytes_per_image=transport.image_max_bytes,
+                max_px=transport.image_max_px,
+                min_px=transport.image_min_px,
+                quality=transport.image_quality,
+                min_quality=transport.image_min_quality,
             )
         return self._query_image_enhancer
 

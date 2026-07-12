@@ -540,6 +540,8 @@ store:
 
 ```yaml
 query_images:
+  max_current_images: 3
+  max_upload_bytes: 15728640
   max_described_images: 3
 
 visual_assets:

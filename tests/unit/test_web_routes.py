@@ -384,6 +384,19 @@ class TestWebIndex:
         assert resp.status_code == 200
         assert 'data-primary="test_ws"' in resp.text
 
+    async def test_index_projects_configured_query_image_policy(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        test_config.query_images.max_current_images = 4
+        test_config.query_images.max_upload_bytes = 12_345
+        web_app.state.manager.config = test_config
+
+        resp = await client.get("/web/")
+
+        assert resp.status_code == 200
+        assert 'data-max-current-images="4"' in resp.text
+        assert 'data-max-upload-bytes="12345"' in resp.text
+
     def test_web_markup_keeps_behavior_in_static_js(self) -> None:
         web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"
         checked = list((web_root / "templates").rglob("*.html")) + [web_root / "deps.py"]
@@ -892,6 +905,69 @@ class TestWebAnswerAdapter:
 
         assert response.status_code == 413
         web_app.state.web_conversation_service.prepare_answer.assert_not_awaited()
+
+    async def test_answer_body_limit_uses_configured_image_count_and_bytes(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        test_config.query_images.max_current_images = 1
+        test_config.query_images.max_upload_bytes = 3
+        web_app.state.manager.config = test_config
+        exact_limit = (64 * 1024) + 4
+
+        exact = await client.post(
+            "/web/answer",
+            content=b"x" * exact_limit,
+            headers={"Content-Type": "application/json"},
+        )
+        over = await client.post(
+            "/web/answer",
+            content=b"x" * (exact_limit + 1),
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert exact.status_code == 422
+        assert over.status_code == 413
+
+    async def test_answer_image_validation_uses_configured_exact_byte_limit(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app, monkeypatch
+    ) -> None:
+        async def fake_stream_answer_events(**_kwargs):
+            yield "event: done\ndata: {}\n\n"
+
+        monkeypatch.setattr(
+            "dlightrag.web.routes.chat.stream_answer_events",
+            fake_stream_answer_events,
+            raising=False,
+        )
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
+        raw = image_buffer.getvalue()
+        payload = base64.b64encode(raw).decode()
+        test_config.query_images.max_upload_bytes = len(raw)
+        web_app.state.manager.config = test_config
+
+        exact = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": SUBMISSION_ID,
+                "images": [payload],
+            },
+        )
+        test_config.query_images.max_upload_bytes = len(raw) - 1
+        over = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "submission_id": "33333333-3333-4333-8333-333333333333",
+                "images": [payload],
+            },
+        )
+
+        assert exact.status_code == 200
+        assert over.status_code == 422
 
     async def test_answer_rejects_invalid_base64_before_model(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
