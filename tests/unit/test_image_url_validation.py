@@ -1,6 +1,8 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for image URL validation (SSRF guard)."""
 
+import pytest
+
 from dlightrag.core.answer_images import (
     AnswerImageBudget,
     _is_unsafe_host,
@@ -21,17 +23,37 @@ class TestIsUnsafeHost:
         assert _is_unsafe_host("172.16.0.1") is True
         assert _is_unsafe_host("192.168.1.1") is True
 
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "127.1",
+            "10.1",
+            "0177.0.0.1",
+            "0x7f.1",
+        ],
+    )
+    def test_legacy_private_and_loopback_ipv4_forms(self, host: str) -> None:
+        assert _is_unsafe_host(host) is True
+
     def test_link_local(self) -> None:
         assert _is_unsafe_host("169.254.1.1") is True
 
     def test_public_ip_is_safe(self) -> None:
         assert _is_unsafe_host("8.8.8.8") is False
         assert _is_unsafe_host("1.1.1.1") is False
+        assert _is_unsafe_host("8.8") is False
+        assert _is_unsafe_host("010.010.010.010") is False
+        assert _is_unsafe_host("0x08080808") is False
+        assert _is_unsafe_host("134744072") is False
 
     def test_hostname_is_safe(self) -> None:
         """Non-IP hostnames pass — DNS resolution is the provider's job."""
         assert _is_unsafe_host("example.com") is False
         assert _is_unsafe_host("api.openai.com") is False
+
+    @pytest.mark.parametrize("host", ["999.1", "0xgg.1", "1.2.3.4.5", "08.0.0.1"])
+    def test_malformed_numeric_hosts_are_not_parsed_as_addresses(self, host: str) -> None:
+        assert _is_unsafe_host(host) is False
 
     def test_trailing_dot_bypass(self) -> None:
         """Trailing dot (DNS FQDN marker) must not bypass IP check."""
@@ -45,9 +67,19 @@ class TestIsUnsafeHost:
         assert _is_unsafe_host("0.0.0.0") is True
         assert _is_unsafe_host("::") is True
 
+    def test_private_and_link_local_v6(self) -> None:
+        assert _is_unsafe_host("fc00::1") is True
+        assert _is_unsafe_host("fd12:3456:789a::1") is True
+        assert _is_unsafe_host("fe80::1") is True
+
     def test_hex_ip_representation(self) -> None:
         """Non-standard hex IP (e.g. 0x7f000001 = 127.0.0.1) — reject."""
         assert _is_unsafe_host("0x7f000001") is True
+
+    def test_verified_octal_loopback_representation(self) -> None:
+        """0177 is octal 127; 0127 is octal 87 and is not loopback."""
+        assert _is_unsafe_host("0177.0.0.1") is True
+        assert _is_unsafe_host("0127.0.0.1") is False
 
     def test_integer_ip_representation(self) -> None:
         """DWORD integer IP (e.g. 2130706433 = 127.0.0.1) — reject."""

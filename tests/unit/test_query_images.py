@@ -172,6 +172,11 @@ async def test_query_image_https_url_is_validated_and_passed_to_vlm() -> None:
         "https://127.0.0.1/chart.png",
         "https://[::1]/chart.png",
         "https://0x7f000001/chart.png",
+        "https://2130706433/chart.png",
+        "https://127.1/chart.png",
+        "https://10.1/chart.png",
+        "https://0177.0.0.1/chart.png",
+        "https://0x7f.1/chart.png",
     ],
 )
 async def test_query_image_unsafe_urls_are_not_sent_to_vlm(url: str) -> None:
@@ -186,3 +191,18 @@ async def test_query_image_unsafe_urls_are_not_sent_to_vlm(url: str) -> None:
     assert result.query == "query"
     assert result.descriptions == {}
     vlm.assert_not_awaited()
+
+
+@pytest.mark.parametrize("host", ["8.8.8.8", "8.8", "010.010.010.010", "example.test"])
+async def test_query_image_safe_https_hosts_still_reach_vlm(host: str) -> None:
+    vlm = AsyncMock(return_value="safe remote image")
+    enhancer = _enhancer(vlm, max_images=1)
+    url = f"https://{host}/chart.png"
+
+    result = await enhancer.enhance(
+        "query",
+        [{"type": "image_url", "image_url": {"url": url}}],
+    )
+
+    assert result.descriptions == {"1": "Image 1: safe remote image"}
+    vlm.assert_awaited_once()
