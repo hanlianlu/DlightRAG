@@ -274,9 +274,21 @@ must be logged/traced. It is not converted into a source row without Download.
 
 ## 10. Authorization
 
-`/files/raw` remains the enforcement point for
-`workspace.download_source`. The default reader/editor/admin presets already
-include that action.
+REST and Web use sibling download adapters with separate authentication
+boundaries:
+
+- `/files/raw` accepts the REST Bearer identity;
+- `/web/files/raw` accepts the identity established by `WebAuthMiddleware` from
+  the Web session cookie or a Web Bearer request.
+
+Neither adapter calls or imports the other route. Both delegate locator
+validation, exact workspace ownership, local containment, and remote signing to
+one transport-neutral core download service, then map its local-file or redirect
+target into their own HTTP response. The Web cookie remains scoped to `/web`;
+the REST adapter never accepts it.
+
+Both adapters enforce `workspace.download_source`. The default
+reader/editor/admin presets already include that action.
 
 Download URLs for federated results must encode the source's actual workspace;
 they must not rely on Search-in scope, Files-in target, or configured default.
@@ -371,6 +383,9 @@ Keep:
 - REST retrieve, REST streaming answer, REST non-stream answer, and Web done
   projection resolve downloads from the same locator.
 - Federated sources encode their actual workspace.
+- Web source links use `/web/files/raw`; REST source links use `/files/raw`.
+- A Web session cookie downloads through the Web adapter without a REST Bearer
+  header, while the REST adapter remains Bearer-only.
 - Web rendering fails loudly on an unresolved source locator.
 - Every rendered source row contains one keyboard-reachable Download link,
   including Markdown.

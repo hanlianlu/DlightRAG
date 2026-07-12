@@ -1249,6 +1249,140 @@ git commit -m "Document durable source download behavior"
 
 ---
 
+### Task 8: Separate Web and REST Source Download Adapters
+
+**Files:**
+- Create: `src/dlightrag/core/source_download.py`
+- Create: `tests/unit/test_source_download.py`
+- Modify: `src/dlightrag/api/routes/files.py`
+- Modify: `src/dlightrag/web/routes/files.py`
+- Modify: `src/dlightrag/web/answer_events.py`
+- Modify: `tests/unit/test_file_routes.py`
+- Modify: `tests/unit/test_web_routes.py`
+- Modify: `docs/security.md`
+
+**Interfaces:**
+- Consumes: `RAGServiceManager.ahas_download_locator(workspace, download_locator)` and the existing S3/Azure signer utilities.
+- Produces: `SourceDownloadService.resolve_request(file_path, workspace)`, `SourceDownloadService.prepare(request)`, `LocalDownloadTarget`, `RedirectDownloadTarget`, REST `GET /files/raw/{file_path:path}`, and Web `GET /web/files/raw/{file_path:path}`.
+
+- [ ] **Step 1: Keep the Web-authentication regression red**
+
+Add a simple-login test that writes `inputs/default/notes.md`, logs in through
+`/web/login`, and requests `/web/files/raw/default/notes.md` without an
+`Authorization` header. Assert `200`, the exact bytes, and exact locator
+membership. Also assert the REST route still returns `401` when only the Web
+cookie is available.
+
+Run:
+
+```bash
+uv run pytest tests/unit/test_web_routes.py::TestWebAuth::test_simple_login_cookie_downloads_source_without_bearer -q
+```
+
+Expected before implementation: `404` because the Web-owned endpoint does not
+exist.
+
+- [ ] **Step 2: Extract a transport-neutral download core**
+
+Define these public core contracts without importing FastAPI or Starlette:
+
+```python
+@dataclass(frozen=True, slots=True)
+class LocalDownloadTarget:
+    path: Path
+    media_type: str
+    filename: str
+
+@dataclass(frozen=True, slots=True)
+class RedirectDownloadTarget:
+    url: str
+```
+
+The exact method interfaces are
+`SourceDownloadService.resolve_request(file_path: str, workspace: str | None) -> LocalDownloadRequest | RemoteDownloadRequest`
+and
+`SourceDownloadService.prepare(request: LocalDownloadRequest | RemoteDownloadRequest) -> LocalDownloadTarget | RedirectDownloadTarget`.
+
+`resolve_request` determines the actual workspace and safe local relative path
+without signing or returning bytes. Each endpoint authorizes that workspace.
+`prepare` then canonicalizes remote locators, verifies exact
+`(workspace, download_locator)` membership without warming a model service,
+resolves contained local files, and creates local or redirect targets. Express
+denied scope, invalid locator, missing source, and unavailable signer as core
+exceptions with no HTTP dependency.
+
+- [ ] **Step 3: Add focused core tests**
+
+Cover exact local resolution, traversal/conflicting-workspace rejection,
+canonical S3/Azure/HTTPS locators, missing locator membership, and signer
+unavailability in `tests/unit/test_source_download.py`.
+
+Run:
+
+```bash
+uv run pytest tests/unit/test_source_download.py -q
+```
+
+Expected: all tests pass and no test constructs a FastAPI request.
+
+- [ ] **Step 4: Keep the REST adapter Bearer-owned**
+
+Reduce `src/dlightrag/api/routes/files.py` to REST authentication,
+`workspace.download_source` enforcement, core exception-to-HTTP mapping, and
+target-to-`FileResponse`/`RedirectResponse` mapping. Do not accept the Web cookie
+and do not import any Web module.
+
+Run:
+
+```bash
+uv run pytest tests/unit/test_file_routes.py -q
+```
+
+Expected: all existing REST status, attachment, workspace, and signing tests
+pass.
+
+- [ ] **Step 5: Add the Web-owned adapter and projection**
+
+Add `GET /files/raw/{file_path:path}` to the Web router (mounted beneath
+`/web`). Read `request.state.user_context`, enforce Web access, call the shared
+core service, and map its target locally. Set the Web answer resolver to:
+
+```python
+SourceUrlResolver(
+    input_dir=str(cfg.input_dir_path),
+    workspace=workspace or manager.config.workspace,
+    base_url="/web/files/raw",
+)
+```
+
+Do not call or import the REST route. Update security examples to recommend
+`actions: [reader]`, which already includes source download, instead of showing
+a reader role that grants only query/list actions.
+
+- [ ] **Step 6: Verify both adapters and commit**
+
+Run:
+
+```bash
+uv run pytest tests/unit/test_source_download.py tests/unit/test_file_routes.py tests/unit/test_web_routes.py tests/unit/test_web_frontend_static.py -q
+uv run ruff check src/ tests/
+uv run ruff format --check src/ tests/
+uv run pyright
+uv run lint-imports
+```
+
+Expected: all commands exit `0`; Web links use `/web/files/raw`, REST links use
+`/files/raw`, and neither route imports the other.
+
+Commit:
+
+```bash
+git add src/dlightrag/core/source_download.py src/dlightrag/api/routes/files.py src/dlightrag/web/routes/files.py src/dlightrag/web/answer_events.py tests/unit/test_source_download.py tests/unit/test_file_routes.py tests/unit/test_web_routes.py docs/security.md
+git commit -m "Separate Web and REST source downloads"
+```
+
+---
+
 ## Final Review Checklist
 
 - [ ] Signed/query-bearing HTTPS with `retain_source_file=false` and no explicit durable locator is rejected before bytes are materialized.
@@ -1262,7 +1396,8 @@ git commit -m "Document durable source download behavior"
 - [ ] No public source payload leaks `download_locator` or internal local paths.
 - [ ] Public chunk `file_path` is display-only basename and `/metadata`/field-schema projections expose no internal locator.
 - [ ] REST retrieve, REST streaming answer, REST non-stream answer, and Web project the same source contract; SDK/MCP remain transport-neutral.
-- [ ] Federated download URLs encode the source's actual workspace and `/files/raw` enforces `workspace.download_source` against it.
+- [ ] Federated download URLs encode the source's actual workspace; the REST and Web sibling adapters independently enforce `workspace.download_source` against it.
+- [ ] Web source links use `/web/files/raw` and work with the Web session cookie; REST source links remain `/files/raw` and Bearer-only.
 - [ ] Structured `source_download_locator_outcome` and `source_download_projection_outcome` logs contain no URI, query string, credentials, or signed tokens.
 - [ ] Every authorized Web source row, including `.md`, has one accessible Download link.
 - [ ] No deprecated aliases, silent fallbacks, or no-download UI states remain.
