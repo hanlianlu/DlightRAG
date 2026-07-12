@@ -6,6 +6,7 @@ import base64
 import io
 from unittest.mock import AsyncMock
 
+import pytest
 from PIL import Image
 
 from dlightrag.core.query_images import QueryImageEnhancer
@@ -145,3 +146,43 @@ async def test_query_image_compression_skip_preserves_sparse_ordinal_and_sibling
 
     assert result.descriptions == {"2": "Image 2: small image"}
     vlm.assert_awaited_once()
+
+
+async def test_query_image_https_url_is_validated_and_passed_to_vlm() -> None:
+    vlm = AsyncMock(return_value="remote chart")
+    enhancer = _enhancer(vlm, max_images=1)
+    image = {
+        "type": "image_url",
+        "image_url": {"url": "https://example.test/chart.png", "detail": "high"},
+    }
+
+    result = await enhancer.enhance("query", [image])
+
+    assert result.descriptions == {"1": "Image 1: remote chart"}
+    await_args = vlm.await_args
+    assert await_args is not None
+    assert await_args.kwargs["messages"][0]["content"][0] == image
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.test/chart.png",
+        "file:///tmp/chart.png",
+        "https://127.0.0.1/chart.png",
+        "https://[::1]/chart.png",
+        "https://0x7f000001/chart.png",
+    ],
+)
+async def test_query_image_unsafe_urls_are_not_sent_to_vlm(url: str) -> None:
+    vlm = AsyncMock(return_value="must not be used")
+    enhancer = _enhancer(vlm, max_images=1)
+
+    result = await enhancer.enhance(
+        "query",
+        [{"type": "image_url", "image_url": {"url": url}}],
+    )
+
+    assert result.query == "query"
+    assert result.descriptions == {}
+    vlm.assert_not_awaited()
