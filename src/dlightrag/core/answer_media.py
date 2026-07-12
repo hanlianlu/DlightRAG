@@ -6,11 +6,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from dlightrag.citations.parser import CITATION_PATTERN, DOC_CITATION_PATTERN
+from dlightrag.citations.schemas import SourceReference
 from dlightrag.core.retrieval.protocols import RetrievalContexts
 
 
 def answer_images_from_sources(
-    sources: list[Any],
+    sources: list[SourceReference],
     *,
     contexts: RetrievalContexts | None = None,
 ) -> list[dict[str, Any]]:
@@ -19,19 +20,19 @@ def answer_images_from_sources(
     seen: set[str] = set()
     images: list[dict[str, Any]] = []
     for source in sources:
-        source_id = str(getattr(source, "id", "") or "")
-        label = getattr(source, "title", None) or getattr(source, "path", None) or source_id
-        for chunk in getattr(source, "chunks", None) or []:
-            chunk_id = str(getattr(chunk, "chunk_id", "") or "")
+        source_id = source.id
+        label = source.title or source_id
+        for chunk in source.chunks or []:
+            chunk_id = chunk.chunk_id
             if not chunk_id or chunk_id in seen or sent.get(chunk_id) is False:
                 continue
-            url = _public_render_url(getattr(chunk, "image_url", None))
-            thumbnail_url = _public_render_url(getattr(chunk, "thumbnail_url", None)) or url
+            url = _public_render_url(chunk.image_url)
+            thumbnail_url = _public_render_url(chunk.thumbnail_url) or url
             if not url and not thumbnail_url:
                 continue
             url = url or thumbnail_url
             thumbnail_url = thumbnail_url or url
-            chunk_idx = getattr(chunk, "chunk_idx", None)
+            chunk_idx = chunk.chunk_idx
             source_ref = f"{source_id}-{chunk_idx}" if chunk_idx else source_id
             images.append(
                 {

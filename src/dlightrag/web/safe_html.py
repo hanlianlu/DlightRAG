@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 import nh3
 
+from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.web.deps import render_partial
 from dlightrag.web.markdown import render_markdown
 
@@ -160,7 +161,7 @@ def safe_answer_preview(markdown_text: str) -> str:
 def safe_answer_done(
     *,
     answer: str,
-    sources: list[Any],
+    sources: list[SourceReferencePayload],
     answer_images: list[dict[str, Any]],
 ) -> str:
     """Render and sanitize the final answer partial."""
@@ -173,7 +174,7 @@ def safe_answer_done(
     return sanitize_html_fragment(html)
 
 
-def safe_source_panel(*, sources: list[Any]) -> str:
+def safe_source_panel(*, sources: list[SourceReferencePayload]) -> str:
     """Render and sanitize the source panel fragment."""
     return sanitize_html_fragment(render_partial("partials/source_panel.html", sources=sources))
 

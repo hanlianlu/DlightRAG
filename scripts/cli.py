@@ -561,7 +561,11 @@ def build_parser() -> argparse.ArgumentParser:
             "  %(prog)s --source azure_blob --container c --prefix rpt/ # by prefix\n"
             "  %(prog)s --source s3 --bucket my-bucket --s3-key doc.pdf    # S3 single object\n"
             "  %(prog)s --source s3 --bucket my-bucket --prefix docs/   # S3 by prefix\n"
-            "  %(prog)s --source url --url https://example.com/doc.pdf  # URL single document"
+            "  %(prog)s --source url --url https://example.com/doc.pdf  # URL single document\n"
+            "  %(prog)s --source url --urls https://example.com/a.pdf https://example.com/b.pdf\n"
+            "  %(prog)s --source url --url 'https://fetch.example.com/doc?sig=...' --retain-source-file\n"
+            "  %(prog)s --source url --url 'https://fetch.example.com/doc?sig=...' "
+            "--download-uri https://cdn.example.com/doc.pdf"
         ),
     )
     p_ingest.add_argument("path", nargs="?", default=None, help="Path to file or directory (local)")
@@ -593,20 +597,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument(
         "--download-uri",
         dest="download_uri",
-        help="Durable download URI for a single URL",
+        help="Queryless durable download URI for a single URL (required for signed URLs unless retained)",
     )
     p_ingest.add_argument(
         "--download-uris",
         nargs="+",
         dest="download_uris",
-        help="Durable download URIs for URL batches",
+        help="Queryless durable download URIs for URL batches",
     )
     p_ingest.add_argument(
         "--retain-source-file",
         action="store_true",
         default=None,
         dest="retain_source_file",
-        help="Keep fetched remote source files in the workspace input root",
+        help="Retain fetched bytes for later download (including signed URL fetches)",
     )
     p_ingest.add_argument("--replace", action="store_true", help="Replace existing documents")
     p_ingest.add_argument("--workspace", default=None, help="Target workspace")

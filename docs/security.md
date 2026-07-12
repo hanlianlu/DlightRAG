@@ -257,6 +257,24 @@ Actions enforced by REST, Web, and MCP include:
 | `workspace.reset` | Reset workspace |
 | `job.read` | Read ingest job status |
 
+### Source download boundary
+
+Public source payloads expose stable `source_uri` provenance and, on HTTP
+surfaces, an adapter-projected `download_url`. They never expose the stored
+`download_locator` or a server-local path. `/files/raw` rechecks
+`workspace.download_source` against the source's actual workspace before it
+streams retained bytes or redirects to Azure, S3, or queryless public HTTPS.
+
+Signed/query-bearing HTTPS URLs are fetch credentials, not durable locators. A
+caller must retain the bytes or provide a separate queryless durable
+`download_uri`. DlightRAG never promotes the signed query into `source_uri`,
+`download_locator`, public source payloads, or source-contract logs.
+
+Durable ingest jobs do retain the caller's complete fetch input in their request
+record so a worker can recover the job. Treat the ingest-job database as secret
+storage, restrict access, and keep job pruning enabled; this recovery record is
+not a public source/download field.
+
 **Action presets.** `actions` is a list, and each entry may be an exact action,
 a `workspace.*` prefix, `*`, or one of the built-in presets below. A caller is
 allowed when any entry matches, so presets and exact actions can be combined
@@ -292,4 +310,3 @@ non-loopback `mcp_host` and enable auth -- an unauthenticated non-loopback MCP
 would let any client call ingest/delete. The Host/Origin DNS-rebinding allowlist
 needs no tuning: it applies only under `auth_mode: none` and auto-disables once
 auth is on.
-

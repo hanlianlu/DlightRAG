@@ -3,10 +3,11 @@
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from dlightrag.citations.highlight import extract_highlights_for_sources
-from dlightrag.citations.schemas import SourceReference
+from dlightrag.citations.schemas import HighlightSource
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
@@ -14,12 +15,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-async def enrich_semantic_highlights(
-    sources: list[SourceReference],
+async def enrich_semantic_highlights[SourceT: HighlightSource](
+    sources: list[SourceT],
     *,
     answer_text: str | None,
     config: DlightragConfig,
-) -> list[SourceReference]:
+) -> list[SourceT]:
     """Return sources with optional semantic highlight phrases."""
     highlight_cfg = config.citations.highlights
     text_chunk_count = _text_chunk_count(sources)
@@ -60,11 +61,11 @@ async def enrich_semantic_highlights(
     return sources
 
 
-def _text_chunk_count(sources: list[SourceReference]) -> int:
+def _text_chunk_count(sources: Sequence[HighlightSource]) -> int:
     return sum(1 for source in sources if source.chunks for chunk in source.chunks if chunk.content)
 
 
-def _highlight_output(sources: list[SourceReference]) -> dict[str, int]:
+def _highlight_output(sources: Sequence[HighlightSource]) -> dict[str, int]:
     highlighted_source_count = 0
     highlighted_chunk_count = 0
     for source in sources:

@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
 from dlightrag.citations import finalize_answer
+from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
@@ -78,7 +79,7 @@ async def _session_image_cards(
 @dataclasses.dataclass(frozen=True, slots=True)
 class _AnswerPayload:
     done: AnswerDoneEvent
-    sources: list[Any]
+    sources: list[SourceReferencePayload]
     flat_contexts: list[dict[str, Any]]
 
 
@@ -144,7 +145,7 @@ async def _save_checkpoint(
     query_images: list[dict[str, Any]],
     current_image_ids: list[str],
     contexts: dict[str, Any],
-    sources: list[Any],
+    sources: list[SourceReferencePayload],
     workspace: str,
     scope: RequestScope | None,
 ) -> bool:

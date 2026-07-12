@@ -3,6 +3,7 @@
 
 import os
 import ssl
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -582,6 +583,25 @@ def test_metadata_and_remote_source_defaults() -> None:
     assert cfg.metadata.default_ingest_policy == "validate"
     assert cfg.metadata.allow_ad_hoc_json is True
     assert cfg.retain_remote_source_files is False
+
+
+def test_remote_source_configuration_documents_fail_closed_downloads() -> None:
+    configuration = (Path(__file__).resolve().parents[2] / "docs/configuration.md").read_text(
+        encoding="utf-8"
+    )
+
+    for required in (
+        "`source_uri` identifies",
+        "download_uri",
+        "queryless",
+        "retain_source_file=true",
+        "rejected before",
+        "never silently retains",
+    ):
+        assert required in configuration
+
+    assert "Retrieved sources point back to" not in configuration
+    assert "stored metadata `file_path` points" not in configuration
 
 
 def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:

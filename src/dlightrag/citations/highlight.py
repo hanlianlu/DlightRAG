@@ -21,7 +21,7 @@ from dlightrag.prompts import (
 from dlightrag.utils.concurrency import bounded_map
 
 from .parser import DOC_CITATION_TRAILING_BOUNDARY, strip_generated_references_section
-from .schemas import SourceReference
+from .schemas import HighlightSource
 
 logger = logging.getLogger(__name__)
 
@@ -246,8 +246,8 @@ class HighlightExtractor:
         ]
 
 
-async def extract_highlights_for_sources(
-    sources: list[SourceReference],
+async def extract_highlights_for_sources[SourceT: HighlightSource](
+    sources: list[SourceT],
     answer_text: str,
     llm_func: Callable[..., Awaitable[str]],
     *,
@@ -255,7 +255,7 @@ async def extract_highlights_for_sources(
     batch_size: int = _DEFAULT_HIGHLIGHT_BATCH_SIZE,
     max_input_chars: int = _MAX_INPUT_CHARS,
     cache_size: int = 500,
-) -> list[SourceReference]:
+) -> list[SourceT]:
     """Extract highlights for all sources in parallel."""
     started = time.monotonic()
     extractor = HighlightExtractor(

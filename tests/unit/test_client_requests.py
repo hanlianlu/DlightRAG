@@ -1,15 +1,51 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for transport-neutral client request projection."""
 
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
+from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
     ingest_spec_from_payload,
     query_kwargs_from_payload,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_public_source_contract_has_no_legacy_or_internal_names() -> None:
+    internal_fields = set(SourceReference.model_fields)
+    public_fields = set(SourceReferencePayload.model_fields)
+
+    assert {"path", "url", "download_url"}.isdisjoint(internal_fields)
+    assert {"workspace", "download_locator", "source_uri"} <= internal_fields
+    assert {"path", "url", "workspace", "download_locator"}.isdisjoint(public_fields)
+    assert {"source_uri", "download_url"} <= public_fields
+
+
+def test_interfaces_document_the_complete_source_download_contract() -> None:
+    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
+    sources = interfaces.split("## Sources", 1)[1].split("## References", 1)[0]
+
+    for required in (
+        "SourceDocument.download_uri",
+        "download_uri_for_key",
+        '"download_uri": "https://cdn.example.com/assets/asset-1.pdf"',
+        '"download_uris": [',
+        '"retain_source_file": true',
+        '"source_uri": "bynder://asset/asset-1"',
+        '"download_url": "/files/raw/',
+    ):
+        assert required in interfaces
+
+    assert '"source_uri":' in sources
+    assert '"download_url":' in sources
+    assert '"path":' not in sources
+    assert '"url":' not in sources
 
 
 def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:

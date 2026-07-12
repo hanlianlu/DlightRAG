@@ -78,6 +78,7 @@ class BynderSource(AsyncDataSource):
             yield SourceDocument(
                 key=key,
                 source_uri=f"bynder://assets/{asset['id']}",
+                download_uri=f"https://cdn.example.com/assets/{asset['id']}.pdf",
                 display_filename=asset["filename"],
                 title=asset.get("title"),
                 metadata={
@@ -144,6 +145,13 @@ DlightRAG calls `aiter_documents()` to discover `SourceDocument` descriptors and
 `amaterialize_document(document, destination)` to write each document into parser
 staging without loading the whole object into memory. Ingest-call `metadata` is
 the batch default; `SourceDocument.metadata` overlays it for that document.
+`SourceDocument.source_uri` is stable identity. For a non-retained connector,
+`SourceDocument.download_uri` is the durable original-byte locator. A connector
+that keeps this mapping outside its descriptors may omit the field and pass a
+`download_uri_for_key` callback to `aingest_source()` instead. Per-document
+`SourceDocument.download_uri` takes precedence over that callback. If retention
+is disabled and neither is available, that document is rejected before
+`amaterialize_document()` runs; DlightRAG never silently retains it.
 
 ### REST API
 
@@ -156,9 +164,20 @@ curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
   -d '{"source_type": "url", "url": "https://api.bynder.com/docs/getting-started", "filename": "getting-started.html"}'
 
+# Queryless URL batch.
 curl -X POST http://localhost:8100/ingest \
   -H "Content-Type: application/json" \
-  -d '{"source_type": "url", "url": "https://cdn.example.com/download?id=asset-1&signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1"}'
+  -d '{"source_type": "url", "urls": ["https://cdn.example.com/a.pdf", "https://cdn.example.com/b.pdf"], "download_uris": ["https://cdn.example.com/a.pdf", "https://cdn.example.com/b.pdf"]}'
+
+# Signed fetch retained by DlightRAG.
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "url", "url": "https://fetch.example.com/download?signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1", "retain_source_file": true}'
+
+# Signed fetch with a separate queryless durable locator.
+curl -X POST http://localhost:8100/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"source_type": "url", "url": "https://fetch.example.com/download?signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1", "download_uri": "https://cdn.example.com/assets/asset-1.pdf"}'
 ```
 
 All ingest operations are represented internally as jobs. REST and MCP ingest
@@ -169,15 +188,14 @@ URLs; authenticated SaaS APIs should fetch through a caller-owned SDK
 from the standard AWS credential chain (environment, shared config, or IAM
 role); ingest payloads do not carry access keys.
 
-For URL ingest, `url`/`urls` are fetch endpoints. Persisted provenance defaults
-to the same URL without query or fragment so signed tokens are not stored.
-Pass `source_uri` for one URL or `source_uris` for a URL batch when the durable
-source identity is a SaaS asset id, CMS URI, or another stable reference.
-
-Remote source files are transient by default. Enabling retention with
-`retain_remote_source_files` in config or per-call `retain_source_file` keeps
-fetched files under the workspace input root and points stored metadata
-`file_path` at that retained local file.
+For URL ingest, `url`/`urls` are fetch endpoints. `source_uri`/`source_uris` are
+stable identities and never act as download addresses. `download_uri` or
+`download_uris` supplies a supported durable locator for the original bytes.
+Queryless public HTTPS fetch URLs can be used implicitly; query- or
+fragment-bearing signed URLs cannot. Signed fetches therefore require either
+`retain_source_file=true` or a separate queryless locator. Invalid documents
+are rejected before fetch/materialization, and DlightRAG never silently changes
+the requested retention policy.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -194,8 +212,10 @@ fetched files under the workspace input root and points stored metadata
 | `filename` | `string` | — | Parser filename for a single URL, useful when the URL path has no extension |
 | `source_uri` | `string` | — | Stable stored source URI for a single URL, independent of the signed fetch URL |
 | `source_uris` | `list[string]` | — | Stable stored source URIs for URL batches; must match `urls` length |
-| `documents` | `list[object]` | — | Explicit document manifest. Local documents use `path`, S3/Azure use `key`, URL documents use `url`; per-document metadata overlays request metadata. |
-| `retain_source_file` | `boolean` | — | Per-call remote source retention override. `true` keeps fetched remote files under the workspace input root; `false` keeps them transient even if config defaults to retention. |
+| `download_uri` | `string` | — | Durable S3, Azure, or queryless public HTTPS locator for one URL; independent of the fetch endpoint |
+| `download_uris` | `list[string]` | — | Durable locators for a URL batch; must match `urls` length |
+| `documents` | `list[object]` | — | Explicit document manifest. Local documents use `path`, S3/Azure use `key`, URL documents use `url` and may set `source_uri`/`download_uri`; per-document metadata overlays request metadata. |
+| `retain_source_file` | `boolean` | — | Per-call remote source retention override. `true` keeps fetched bytes as the download source; `false` requires a durable remote locator. |
 | `replace` | `boolean` | — | Replace existing documents by cascade-purging the prior LightRAG record before enqueueing the new ingest |
 | `workspace` | `string` | — | Target workspace (default: `default`) |
 | `title` | `string` | — | User-declared document title stored in metadata |
@@ -225,7 +245,11 @@ For per-document metadata, pass a manifest instead of prefix discovery:
 MCP `ingest` exposes the same source and metadata arguments as REST `/ingest`,
 passed as tool arguments. Local path arguments are relative to the managed
 `input_dir/<workspace>`. Calls return a background job; call
-`get_ingest_job` with the returned `job_id` to read progress.
+`get_ingest_job` with the returned `job_id` to read progress. For URL sources,
+the tool description distinguishes fetch `url`/`urls`, stable
+`source_uri`/`source_uris`, and durable `download_uri`/`download_uris`; a signed
+fetch must use retention or a separate queryless locator under the same
+fail-closed contract as REST.
 
 ### Metadata At Call Time
 
@@ -537,7 +561,7 @@ data: {"type":"token","content":"The key findings"}
 
 data: {"type":"token","content":" are..."}
 
-data: {"type":"sources","data":[{"id":"1","title":"report.pdf","path":"/data/report.pdf","chunks":[...]}]}
+data: {"type":"sources","data":[{"id":"1","title":"report.pdf","source_uri":"local://default/report.pdf","download_url":"/files/raw/default/report.pdf?workspace=default","chunks":[...]}]}
 
 data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
 
@@ -621,7 +645,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 {
   "chunk_id": "abc123",
   "reference_id": "1",
-  "file_path": "/data/report.pdf",
+  "file_path": "report.pdf",
   "content": "Page text content...",
   "page_idx": 2,
   "bbox": {"x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.6},
@@ -636,7 +660,7 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 |---|---|---|---|
 | `chunk_id` | string | yes | Unique chunk identifier |
 | `reference_id` | string | yes | Document-level ID (groups chunks from the same file) |
-| `file_path` | string | yes | Source file path |
+| `file_path` | string | yes | Display-only source basename; never use it as provenance or a download locator |
 | `content` | string | yes | Chunk text content |
 | `page_idx` | int \| null | no | **1-based** page number |
 | `bbox` | object \| null | no | Visual block bounding box when LightRAG/MinerU sidecar provenance provides one |
@@ -691,15 +715,18 @@ from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, 
 Sources are document-level groupings derived from chunks via `build_sources()`.
 They appear in REST/MCP responses and drive the Web UI's source panel. Cited
 answer paths use the same citation indexer as answer validation, so chunk order
-matches `[ref_id-chunk_idx]` markers instead of page sorting.
+matches `[ref_id-chunk_idx]` markers instead of page sorting. `source_uri` is
+stable provenance. HTTP adapters project the internal locator to an authorized
+`download_url`; raw storage locators and workspace-routing fields are never
+public. Transport-neutral SDK/MCP payloads leave `download_url` null.
 
 ```json
 {
   "id": "1",
   "title": "report.pdf",
-  "path": "/data/dlightrag_storage/docs/report.pdf",
   "type": "file",
-  "url": "/files/raw/docs/report.pdf",
+  "source_uri": "local://default/docs/report.pdf",
+  "download_url": "/files/raw/default/docs/report.pdf?workspace=default",
   "cited_chunk_ids": ["abc123", "def456"],
   "chunks": [
     {
@@ -728,9 +755,9 @@ matches `[ref_id-chunk_idx]` markers instead of page sorting.
 |---|---|---|
 | `id` | string | Reference ID (matches `reference_id` in chunks) |
 | `title` | string \| null | Document title (filename or metadata) |
-| `path` | string | Source file path |
 | `type` | string \| null | File type |
-| `url` | string \| null | Resolved download URL (via SourceUrlResolver) |
+| `source_uri` | string | Stable source identity; may use a connector-specific scheme |
+| `download_url` | string \| null | Authorized HTTP download route; null on transport-neutral SDK/MCP payloads and required by Web rendering |
 | `cited_chunk_ids` | list \| null | Cited chunk IDs for answer responses; null when returning all retrieved sources |
 | `chunks` | list | Chunk snippets in citation-index order |
 
@@ -754,7 +781,8 @@ The `answer` response includes a `references` array containing document-level
 references cited in the answer. DlightRAG derives this from validated inline
 citations, not from provider-specific structured output or generated
 `### References` tails. The richer `sources` array is the same cited subset
-with paths, chunks, pages, images, and optional highlights.
+with identity, authorized downloads, chunks, pages, images, and optional
+highlights.
 
 ```json
 {

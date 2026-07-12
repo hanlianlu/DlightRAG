@@ -290,6 +290,25 @@ def test_ingest_kwargs_support_url_download_uris() -> None:
     }
 
 
+def test_ingest_help_explains_signed_url_download_choices(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["ingest", "--help"])
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out.lower()
+
+    assert "queryless durable download uri" in help_text
+    assert "signed url" in help_text
+    assert "retain" in help_text
+    assert "--source url --urls https://example.com/a.pdf https://example.com/b.pdf" in help_text
+    assert (
+        "--source url --url 'https://fetch.example.com/doc?sig=...' --retain-source-file"
+        in help_text
+    )
+    assert "--download-uri https://cdn.example.com/doc.pdf" in help_text
+
+
 @pytest.mark.parametrize(
     "args",
     [
