@@ -618,9 +618,11 @@ request_timeout: 300
 ```
 
 `max_upload_bytes` applies to REST multipart ingest; `max_upload_size_mb`
-applies to Web uploads. `ingest_timeout` limits how long synchronous
-SDK/REST/MCP ingest calls wait. When it expires, the ingest job keeps running
-and callers receive/read the job status instead of cancelling the ingest.
+applies to Web uploads. `ingest_timeout` limits how long the SDK convenience
+method `RAGServiceManager.aingest()` waits for its durable job. When it expires,
+the job keeps running and the method returns its current row instead of
+cancelling it. REST, Web, and MCP start jobs immediately and are not governed by
+this wait setting.
 
 Ingest job state is stored in `dlightrag_ingest_jobs`. DlightRAG keeps this as
 operational state rather than user-facing configuration: recent queued/running

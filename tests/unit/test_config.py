@@ -602,6 +602,8 @@ def test_remote_source_configuration_documents_fail_closed_downloads() -> None:
 
     assert "Retrieved sources point back to" not in configuration
     assert "stored metadata `file_path` points" not in configuration
+    assert "`RAGServiceManager.aingest()`" in configuration
+    assert "synchronous SDK/REST/MCP ingest calls" not in configuration
 
 
 def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:

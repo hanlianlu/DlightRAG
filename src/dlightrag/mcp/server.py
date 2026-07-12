@@ -425,7 +425,9 @@ async def delete_workspace_tool(
     name="ingest",
     description=(
         "Start a durable ingest job for local, URL, Azure Blob, or S3 documents into "
-        "a workspace. Response includes job_id, status, and workspace."
+        "a workspace. URL fetch endpoints, stable source identity, and durable download "
+        "locators are separate; signed fetches require retention or a queryless locator. "
+        "Response includes job_id, status, and workspace."
     ),
 )
 async def ingest_tool(
@@ -460,11 +462,23 @@ async def ingest_tool(
     ] = None,
     url: Annotated[
         str | None,
-        Field(default=None, description="Public HTTPS document URL."),
+        Field(
+            default=None,
+            description=(
+                "Public or signed HTTPS fetch URL. A signed/query-bearing URL requires "
+                "retention or a separate queryless download_uri."
+            ),
+        ),
     ] = None,
     urls: Annotated[
         list[str] | None,
-        Field(default=None, description="Public HTTPS document URLs."),
+        Field(
+            default=None,
+            description=(
+                "Public or signed HTTPS fetch URLs. Signed/query-bearing entries require "
+                "retention or matching queryless download_uris."
+            ),
+        ),
     ] = None,
     filename: Annotated[
         str | None,
@@ -472,19 +486,34 @@ async def ingest_tool(
     ] = None,
     source_uri: Annotated[
         str | None,
-        Field(default=None, description="Stable source URI stored for a single URL."),
+        Field(
+            default=None,
+            description="Stable provenance identity for one URL; not a download address.",
+        ),
     ] = None,
     source_uris: Annotated[
         list[str] | None,
-        Field(default=None, description="Stable source URIs stored for URL batches."),
+        Field(
+            default=None,
+            description="Stable provenance identities for a URL batch; not download addresses.",
+        ),
     ] = None,
     download_uri: Annotated[
         str | None,
-        Field(default=None, description="Durable download URI for a single URL."),
+        Field(
+            default=None,
+            description=(
+                "Durable S3, Azure, or credential-free queryless public HTTPS locator "
+                "for one fetched URL."
+            ),
+        ),
     ] = None,
     download_uris: Annotated[
         list[str] | None,
-        Field(default=None, description="Durable download URIs for URL batches."),
+        Field(
+            default=None,
+            description=("Durable S3, Azure, or queryless public HTTPS locators for a URL batch."),
+        ),
     ] = None,
     documents: Annotated[
         list[dict[str, Any]] | None,
@@ -522,7 +551,13 @@ async def ingest_tool(
     ] = None,
     retain_source_file: Annotated[
         bool | None,
-        Field(default=None, description="Override remote source file retention for this ingest."),
+        Field(
+            default=None,
+            description=(
+                "Keep fetched bytes as the download source. Signed URL fetches require this "
+                "unless a separate queryless durable locator is supplied."
+            ),
+        ),
     ] = None,
 ) -> dict[str, Any]:
     args = IngestInput.model_validate(locals())

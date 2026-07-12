@@ -30,6 +30,9 @@ def test_public_source_contract_has_no_legacy_or_internal_names() -> None:
 def test_interfaces_document_the_complete_source_download_contract() -> None:
     interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
     sources = interfaces.split("## Sources", 1)[1].split("## References", 1)[0]
+    citation_resolution = interfaces.split("### Resolving a citation", 1)[1].split(
+        "## Multimodal Queries", 1
+    )[0]
 
     for required in (
         "SourceDocument.download_uri",
@@ -46,6 +49,19 @@ def test_interfaces_document_the_complete_source_download_contract() -> None:
     assert '"download_url":' in sources
     assert '"path":' not in sources
     assert '"url":' not in sources
+    assert "`download_url`" in citation_resolution
+    assert "source `url`" not in citation_resolution
+    assert "/files/raw/{path}" not in citation_resolution
+
+
+def test_interfaces_document_real_ingest_transport_semantics() -> None:
+    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
+
+    assert "REST returns `202 Accepted`" in interfaces
+    assert "MCP `ingest` returns the same job object as a tool result" in interfaces
+    assert "`RAGServiceManager.aingest()`" in interfaces
+    assert "REST/MCP ingest exceeds `ingest_timeout`" not in interfaces
+    assert "REST uses the same fields as the Python manager methods" not in interfaces
 
 
 def test_ingest_spec_from_payload_preserves_s3_manifest_fields() -> None:
