@@ -357,7 +357,7 @@ class PGWebConversationStore:
         self._pool = pool
         self._initialized = False
 
-    async def _run(self, operation):
+    async def _run_read(self, operation):
         if self._pool is not None:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
@@ -365,6 +365,15 @@ class PGWebConversationStore:
         from dlightrag.storage.pool import pg_pool
 
         return await pg_pool.run(operation)
+
+    async def _run_write(self, operation):
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                return await operation(conn)
+
+        from dlightrag.storage.pool import pg_pool
+
+        return await pg_pool.run_once(operation)
 
     async def initialize(self) -> None:
         """Create the Web conversation schema and remove legacy checkpoints."""
@@ -378,7 +387,7 @@ class PGWebConversationStore:
                 migrations=WEB_CONVERSATION_MIGRATIONS,
             )
 
-        await self._run(_operation)
+        await self._run_write(_operation)
         self._initialized = True
 
     async def _ensure_initialized(self) -> None:
@@ -396,7 +405,7 @@ class PGWebConversationStore:
                 raise RuntimeError("conversation insert returned no row")
             return _row_dict(row)
 
-        return await self._run(_operation)
+        return await self._run_write(_operation)
 
     async def list_conversations(
         self,
@@ -407,13 +416,15 @@ class PGWebConversationStore:
         """Prune and list one principal's unexpired conversations."""
         await self._ensure_initialized()
 
-        async def _operation(conn: Any) -> list[dict[str, Any]]:
-            async with conn.transaction():
-                await conn.execute(_PRUNE_PRINCIPAL, principal_id, ttl_days)
-                rows = await conn.fetch(_LIST_CONVERSATIONS, principal_id, ttl_days)
+        async def _prune(conn: Any) -> None:
+            await conn.execute(_PRUNE_PRINCIPAL, principal_id, ttl_days)
+
+        async def _select(conn: Any) -> list[dict[str, Any]]:
+            rows = await conn.fetch(_LIST_CONVERSATIONS, principal_id, ttl_days)
             return [_row_dict(row) for row in rows]
 
-        return await self._run(_operation)
+        await self._run_write(_prune)
+        return await self._run_read(_select)
 
     async def rename_conversation(
         self,
@@ -439,7 +450,7 @@ class PGWebConversationStore:
             )
             return _row_dict(row) if row is not None else None
 
-        return await self._run(_operation)
+        return await self._run_write(_operation)
 
     async def delete_conversation(
         self,
@@ -460,7 +471,7 @@ class PGWebConversationStore:
             )
             return row is not None
 
-        return await self._run(_operation)
+        return await self._run_write(_operation)
 
     async def snapshot(
         self,
@@ -474,30 +485,31 @@ class PGWebConversationStore:
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> ConversationSnapshot | None:
-            row = await conn.fetchrow(
-                _GET_CONVERSATION,
-                principal_id,
-                conversation_id,
-                ttl_days,
-            )
-            if row is None:
-                return None
-            history_rows = await conn.fetch(
-                _GET_HISTORY,
-                principal_id,
-                conversation_id,
-                ttl_days,
-                max_turns,
-            )
-            return ConversationSnapshot(
-                principal_id=str(row["principal_id"]),
-                conversation_id=str(row["conversation_id"]),
-                content_revision=int(row["content_revision"]),
-                title=row["title"],
-                history=tuple(_history_row(history_row) for history_row in history_rows),
-            )
+            async with conn.transaction(isolation="repeatable_read", readonly=True):
+                row = await conn.fetchrow(
+                    _GET_CONVERSATION,
+                    principal_id,
+                    conversation_id,
+                    ttl_days,
+                )
+                if row is None:
+                    return None
+                history_rows = await conn.fetch(
+                    _GET_HISTORY,
+                    principal_id,
+                    conversation_id,
+                    ttl_days,
+                    max_turns,
+                )
+                return ConversationSnapshot(
+                    principal_id=str(row["principal_id"]),
+                    conversation_id=str(row["conversation_id"]),
+                    content_revision=int(row["content_revision"]),
+                    title=row["title"],
+                    history=tuple(_history_row(history_row) for history_row in history_rows),
+                )
 
-        return await self._run(_operation)
+        return await self._run_read(_operation)
 
     async def get_image(
         self,
@@ -526,7 +538,7 @@ class PGWebConversationStore:
                 image_bytes=bytes(row["image_bytes"]),
             )
 
-        return await self._run(_operation)
+        return await self._run_read(_operation)
 
     async def commit_turn(
         self,
@@ -601,7 +613,7 @@ class PGWebConversationStore:
                     turn_id=authoritative_turn_id,
                 )
 
-        return await self._run(_operation)
+        return await self._run_write(_operation)
 
     async def prune_expired(self, *, ttl_days: int) -> int:
         """Delete expired Web conversations across principals at startup."""
@@ -611,7 +623,7 @@ class PGWebConversationStore:
             row = await conn.fetchrow(_PRUNE_EXPIRED, ttl_days)
             return int(row["count"]) if row is not None else 0
 
-        return await self._run(_operation)
+        return await self._run_write(_operation)
 
 
 __all__ = [

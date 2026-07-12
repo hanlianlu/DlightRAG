@@ -27,6 +27,7 @@ class FakeTransaction:
 class FakeConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.transactions: list[dict[str, Any]] = []
         self.fetch_result: list[dict[str, Any]] = []
         self.fetchrow_result: dict[str, Any] | None = None
         self.fetchrow_results: list[dict[str, Any] | None] = []
@@ -45,7 +46,8 @@ class FakeConnection:
             return self.fetchrow_results.pop(0)
         return self.fetchrow_result
 
-    def transaction(self) -> FakeTransaction:
+    def transaction(self, **kwargs: Any) -> FakeTransaction:
+        self.transactions.append(kwargs)
         return FakeTransaction()
 
 
@@ -68,10 +70,77 @@ class FakePool:
         return FakeAcquire(self.connection)
 
 
+class FakeProductionPool:
+    def __init__(self, connection: FakeConnection) -> None:
+        self.connection = connection
+        self.retrying_calls = 0
+        self.single_attempt_calls = 0
+
+    async def run(self, operation):  # noqa: ANN001, ANN202
+        self.retrying_calls += 1
+        return await operation(self.connection)
+
+    async def run_once(self, operation):  # noqa: ANN001, ANN202
+        self.single_attempt_calls += 1
+        return await operation(self.connection)
+
+
 def make_store(connection: FakeConnection) -> PGWebConversationStore:
     store = PGWebConversationStore(pool=FakePool(connection))
     store._initialized = True
     return store
+
+
+async def test_outcome_sensitive_mutations_use_single_attempt_pool_path(monkeypatch) -> None:
+    conn = FakeConnection()
+    production_pool = FakeProductionPool(conn)
+    monkeypatch.setattr("dlightrag.storage.pool.pg_pool", production_pool)
+    store = PGWebConversationStore()
+    store._initialized = True
+
+    conn.fetchrow_result = {"conversation_id": "c1"}
+    await store.create_conversation("p1")
+
+    conn.fetchrow_result = {"conversation_id": "c1", "title": "Renamed"}
+    await store.rename_conversation("p1", "c1", title="Renamed", ttl_days=30)
+
+    conn.fetchrow_result = {"deleted": 1}
+    assert await store.delete_conversation("p1", "c1", ttl_days=30) is True
+
+    conn.fetchrow_results = [
+        {"conversation_id": "c1", "title": "Renamed", "content_revision": 1},
+        {"turn_id": "t1", "turn_number": 1},
+    ]
+    await store.commit_turn(
+        principal_id="p1",
+        conversation_id="c1",
+        expected_revision=0,
+        user_text="Question",
+        assistant_text="Answer",
+        answer_sources={},
+        queried_workspaces=[],
+        images=[],
+        max_turns=100,
+    )
+
+    conn.fetchrow_result = {"count": 2}
+    assert await store.prune_expired(ttl_days=30) == 2
+
+    assert production_pool.single_attempt_calls == 5
+    assert production_pool.retrying_calls == 0
+
+
+async def test_reads_keep_retrying_pool_path(monkeypatch) -> None:
+    conn = FakeConnection()
+    production_pool = FakeProductionPool(conn)
+    monkeypatch.setattr("dlightrag.storage.pool.pg_pool", production_pool)
+    store = PGWebConversationStore()
+    store._initialized = True
+
+    assert await store.snapshot("p1", "c1", ttl_days=30) is None
+
+    assert production_pool.retrying_calls == 1
+    assert production_pool.single_attempt_calls == 0
 
 
 async def test_list_prunes_expired_rows_before_selecting() -> None:
@@ -101,6 +170,24 @@ async def test_same_conversation_id_is_scoped_by_principal() -> None:
     assert "conversation_id = $2" in query
     assert "updated_at >= NOW()" in query
     assert args[:2] == ("principal-a", "same-id")
+
+
+async def test_snapshot_reads_revision_and_history_from_one_database_snapshot() -> None:
+    conn = FakeConnection()
+    conn.fetchrow_result = {
+        "principal_id": "p1",
+        "conversation_id": "c1",
+        "content_revision": 4,
+        "title": "Conversation",
+    }
+    store = make_store(conn)
+
+    snapshot = await store.snapshot("p1", "c1", ttl_days=30)
+
+    assert snapshot is not None
+    assert snapshot.content_revision == 4
+    assert snapshot.history == ()
+    assert conn.transactions == [{"isolation": "repeatable_read", "readonly": True}]
 
 
 async def test_commit_turn_is_revision_guarded_and_trims_old_turns() -> None:
