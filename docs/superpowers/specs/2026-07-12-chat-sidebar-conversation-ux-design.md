@@ -1,20 +1,23 @@
 # DlightRAG Chat Sidebar 与多会话导航 UX 设计
 
 **日期**：2026-07-12
-**状态**：方向已获用户确认，等待书面 spec review
+**状态**：方向与分阶段交付 A 已获用户确认，等待本修订版书面 spec review
 **依赖**：[Web-only 多模态会话与 Answer 图片编排](2026-07-12-durable-scoped-multimodal-conversations-design.md)
 **范围**：Web 左侧 Chat Sidebar、conversation lifecycle UX、响应式布局
 
 ## 1. 决策摘要
 
 - Web 增加独立左侧 Chat Sidebar，提供多 conversation 导航。
-- New Chat、conversation list、Rename、Clear messages 和 Delete 都位于左侧栏。
+- New Chat、conversation list、Rename 和 Delete 位于左侧栏；不提供 Clear messages。
+- Primary action 的可见文案固定为 sentence case `New chat`。
 - 现有 topbar Clear 按钮删除。
 - 现有右侧 Files/Sources panel 保留，不能复用为聊天列表。
 - 桌面端左侧栏默认展开并可折叠；窄屏使用 overlay drawer。
 - 服务端 conversation list/history 是事实源；前端只保存 active conversation ID 和纯 UI 状态。
 - conversation_id 由服务端创建，所有 lifecycle 操作保持 principal scoped。
-- 本版不增加搜索、pin、folders、sharing、archive 或 LLM title generation。
+- Sidebar 不重复展示 DlightRAG 品牌；视觉原则是 simplicity with elegance，所有顶区共享
+  一条经过光学校正的基线，不增加装饰性分割线。
+- 本版不增加 conversation search、pin、folders、sharing、archive 或 LLM title generation。
 
 ## 2. 为什么单独成篇
 
@@ -47,8 +50,8 @@ Chat Sidebar 必须新增独立的左侧 layout state，不能把现有通用 pa
 ┌──────────────────┬────────────────────────────┬──────────────────┐
 │ Chat Sidebar     │ Topbar / Chat / Composer   │ Files / Sources  │
 │                  │                            │ optional panel   │
-│ DlightRAG   [<]  │ Workspace             Files│                  │
-│ [+ New chat]     │                            │                  │
+│ New chat     [<] │ Search in: All workspaces │ Files in: default│
+│                  │                            │                  │
 │                  │ messages                   │ source details   │
 │ Current chat  ···│                            │ or files         │
 │ Earlier chat  ···│                            │                  │
@@ -58,8 +61,8 @@ Chat Sidebar 必须新增独立的左侧 layout state，不能把现有通用 pa
 
 左侧栏区域：
 
-1. Header：品牌和 collapse/close 控件。
-2. Primary action：New Chat。
+1. Top row：New Chat primary action 和 collapse/close 控件；不重复品牌。
+2. New Chat、中央 Search in 和右侧 Files in 共享同一 top baseline。
 3. Scroll region：按 updated_at 降序的 conversation list。
 4. 每行：title、active state、actions menu。
 
@@ -78,7 +81,6 @@ Title 使用单行省略，不把完整首条 query 撑高为多行。
 Actions menu：
 
 - Rename
-- Clear messages
 - Delete
 
 菜单必须是 button/menu 交互，不使用仅 hover 可见且无法键盘操作的 div。
@@ -91,6 +93,7 @@ Actions menu：
 ### 6.1 Initial load
 
 1. 请求当前 principal 的 conversation list。
+   服务端不会返回 `updated_at` 已超过 30 天 TTL 的 conversation。
 2. 若 localStorage active ID 仍在列表中，选择它。
 3. 否则选择最近更新的 conversation。
 4. 若列表为空，创建一个空 conversation 并选择。
@@ -139,18 +142,7 @@ conversation。
 
 Title 长度由服务端 contract 校验；前端不能成为唯一防线。
 
-### 6.5 Clear messages
-
-- 显示确认 dialog，明确会删除该 conversation 的 messages 和 attached images。
-- 成功后保留 conversation_id。
-- 清空 message viewport。
-- title 恢复 “New chat”。
-- conversation row 保留并更新排序。
-- 关闭并清空 SOURCES；保持 FILES 不变。
-
-Clear 不删除 ingest data、workspace files、RAG sources 或其他 conversations。
-
-### 6.6 Delete
+### 6.5 Delete
 
 - 显示 destructive confirm dialog。
 - 成功后从列表移除 conversation。
@@ -170,7 +162,6 @@ Clear 不删除 ingest data、workspace files、RAG sources 或其他 conversati
 - 第一个成功 turn 保存时，如果 title 为空，服务端使用第一条 user query
   生成 whitespace 合并后的单行标题，最多 120 个 Unicode 字符。
 - 用户 Rename 后，后续 turn 不自动覆盖。
-- Clear messages 将 title 重置为空。
 
 Title 只用于 navigation，不进入 retrieval、resolver 或 answer prompt。
 
@@ -185,6 +176,8 @@ Title 只用于 navigation，不进入 retrieval、resolver 或 answer prompt。
 - 宽度使用 --layout-chat-sidebar-width: clamp(260px, 22vw, 288px)。
 - 中央区域使用 --layout-chat-min-width: 520px。
 - topbar、chat-area 和 composer 使用同一 margin-left。
+- Sidebar New Chat、中央 `Search in: …` 和右 panel 的 `Files in: …` 使用同一高度、
+  line-height 和 optical top inset；不能只让 CSS box 对齐而文字视觉基线不齐。
 - 展开/折叠动画共享同一 duration/easing token。
 - 折叠状态保存在 localStorage，属于设备 UI preference。
 
@@ -266,10 +259,9 @@ Sidebar 使用 Web-only lifecycle routes：
 - Create conversation。
 - Read selected history。
 - Rename conversation。
-- Clear conversation messages。
 - Delete conversation。
 
-Create/Rename/Clear 成功后，以服务端返回 summary 为准更新列表；不根据客户端
+Create/Rename 成功后，以服务端返回 summary 为准更新列表；不根据客户端
 猜测 updated_at 或最终 title。Delete 返回 204，成功后按已知 conversation_id
 移除 row。
 
@@ -288,7 +280,7 @@ Failure 行为：
   防止保存目标和可见目标分离；UI 提示先 Stop response。
 - Stop 触发浏览器 abort；服务端取消 answer/upstream 并跳过 persistence。
 - 只有当前 stream promise 完成 cancellation cleanup 后，才允许 New、Select、
-  Clear 或 Delete。
+  Delete。
 - Rename 不改变内容 revision，可以在 streaming 时使用。
 - 仅打开/关闭 sidebar 不 abort、重建或转移当前 stream。
 - done event 若返回 conversation_saved=false、reason=conversation_changed，
@@ -314,7 +306,28 @@ Failure 行为：
 - Active conversation 使用低对比 surface + 清晰文本，不增加高饱和背景。
 - New Chat 是 sidebar 内唯一持续可见的 primary action。
 - Destructive Delete 只在 menu/dialog 使用 danger color。
-- 不在本功能中重做 message bubbles、composer、workspace selector 或 source cards。
+- Sidebar 不显示额外 DlightRAG 品牌、`Chats` 标题或说明性 header；conversation rows
+  本身已经表达内容类型。
+- 顶区不增加贯穿页面的装饰性 divider；层级由 spacing、type scale 和 surface 建立。
+- 不重做 message bubbles；workspace、Files、Sources 和 composer 只做本规格明确列出的精修。
+
+### 14.1 Search、Files、Sources 与 composer 精修
+
+- `Search in: …` 位于中央 topbar，选择结果跨多个问题和多个 Chat 保持；默认是当前
+  principal 可查询的全部 workspaces，而不是 `default`。
+- Chat Sidebar 只管理 conversation lifecycle；Search scope 不进入 Sidebar。
+- `Files in: …` 独立表示右侧文件管理的单 workspace target。既然 panel 已显示
+  `Files in: …`，内部不再重复 `FILES` header。
+- Files 上传区收敛高度与视觉重量。点击上传区选择 files；folder upload 仅保留为
+  低强调 `Choose folder` 文本 action，不并排放两个居中主按钮。
+- File row 保持纯 filename 信息层级，不增加 checkbox；Delete 只在 hover、focus-within
+  或键盘 focus 时出现。
+- SOURCES 继续绑定当前 answer。Source row 在存在 download URL 时提供低强调下载 action；
+  不把 locator/path 暴露给浏览器。
+- Composer 保留成熟的图片上传、thumbnail、paste/drag-drop 和 send 交互。加号使用靠近
+  composer 内边缘的 optical inset，不能漂在内容区中央。
+- Send 只有 query text trim 后非空才点亮；仅有 attachment 时保持 disabled。
+- 这些调整复用现有 Utopia/token/CSS-module 体系，不引入新的 design-system dependency。
 
 ## 15. Loading、empty 与 error states
 
@@ -329,7 +342,7 @@ Failure 行为：
 
 删除：
 
-- topbar Clear button 和对应独立 setup module。
+- topbar Clear button 和对应独立 setup module；不在 Sidebar 提供替代 Clear。
 - frontend sessionStore 的浏览器生成 session ID。
 - conversationStore.historyWindow 作为 answer request payload。
 - Web answer body 中 conversation_history。
@@ -337,7 +350,6 @@ Failure 行为：
 替换：
 
 - session_id localStorage key -> active conversation_id key。
-- Clear History topbar action -> sidebar Clear messages。
 - checkpoint restore -> selected conversation history load。
 
 不保留旧 localStorage alias。开发期首次加载没有 active ID 时按 Initial load
@@ -347,10 +359,12 @@ Failure 行为：
 
 Sidebar UX 不改变：
 
-- REST/MCP/Python 公共 contract。
+- Sidebar 组件不额外定义 REST/MCP/Python contract；公共无状态 breaking change 只由配套
+  multimodal conversation spec 第 7、16 节定义和验收。
 - retrieval 和 answer RAG 语义。
-- workspace selector 和 workspace access control。
-- Files/Sources panel 内容与 routes。
+- workspace access control 与 principal 可访问 workspace 集合；selector 的布局、copy、
+  persistence 和默认 all-workspaces 行为按 14.1 调整。
+- Files/Sources 的现有 routes、数据语义和 mutation 行为；14.1 只调整其布局与视觉呈现。
 - source gallery/lightbox。
 - composer image capability gate。
 - citation rendering 和 streaming event schema，除增加 request-local
@@ -366,7 +380,6 @@ Sidebar UX 不改变：
 - New Chat 创建 server-owned ID 并保留 workspace selection。
 - Select 正确恢复 history、citations、references 和 gallery，不发生 stale response overwrite。
 - Rename 成功、取消、失败回滚。
-- Clear 保留 ID，删除 turns/images 并重置 title。
 - Delete active 后选择 fallback；空列表时创建新 conversation。
 - 最后一条 Delete 后 Create 失败显示真实 empty + retry。
 
@@ -379,17 +392,23 @@ Sidebar UX 不改变：
 ### 18.3 Layout
 
 - Desktop sidebar 展开/折叠后 topbar、messages、composer 对齐。
+- `New chat`、`Search in: …` 与 `Files in: …` 文字基线在 desktop shell 精确对齐。
+- Sidebar 无重复品牌/Chats header，topbar 无装饰性横向 divider。
 - 左 sidebar 与右 panel 同开时无覆盖。
 - Tablet/mobile drawer 不改变 chat 内容宽度。
 - Mobile 两个 drawer 互斥。
 - FILES active upload/delete 时 Chat drawer 不会导致 mutation 被 panel close 取消。
 - Right panel resize 不影响 left sidebar width。
 - Right panel resize 始终保留中央最小可用宽度。
-- New/Select/Clear/active Delete 保留 FILES，但关闭并清空 SOURCES。
+- New/Select/active Delete 保留 FILES，但关闭并清空 SOURCES。
+- Files panel 不重复 `FILES` header；上传区 compact，zone click 选择 files，
+  `Choose folder` 为低强调 action。
+- File rows 无 checkbox，hover/focus Delete 可用鼠标和键盘访问。
+- Composer 加号使用 optical inset；空白 query 即使有 attachment 也不能启用 Send。
 
 ### 18.4 Streaming
 
-- Active stream 时 New/Select/Clear/Delete 禁用，并提示先 Stop。
+- Active stream 时 New/Select/Delete 禁用，并提示先 Stop。
 - Stop 必须等待 cancellation cleanup，partial answer 不保存。
 - Sidebar toggle 不重建 composer 或 stream。
 - 有未发送 draft 时 New/Select 要求确认。
@@ -422,7 +441,7 @@ Sidebar UX 不改变：
 1. 使用 conversation lifecycle contract tests 锁定服务端行为。
 2. 添加 frontend conversation list/active/history store。
 3. 新增 sidebar shell 和 desktop layout。
-4. 实现 Create/Select/Rename/Clear/Delete。
+4. 实现 Create/Select/Rename/Delete。
 5. 绑定 stream conversation correlation 与 stale-response protection。
 6. 实现 overlay/mobile/focus behavior。
 7. 删除 topbar Clear、sessionStore 和 client history payload。
