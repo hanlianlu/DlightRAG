@@ -39,6 +39,8 @@ POSTGRES_UNAVAILABLE_EXCEPTIONS = (
     OSError,
     asyncpg.exceptions.TooManyConnectionsError,
     asyncpg.exceptions.CannotConnectNowError,
+    asyncpg.exceptions.AdminShutdownError,
+    asyncpg.exceptions.CrashShutdownError,
     asyncpg.exceptions.PostgresConnectionError,
     asyncpg.exceptions.ConnectionDoesNotExistError,
     asyncpg.exceptions.ConnectionFailureError,
