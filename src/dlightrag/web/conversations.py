@@ -2,11 +2,13 @@
 """Principal-scoped service adapter for durable Web conversations."""
 
 import logging
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     ConversationSnapshot,
     PGWebConversationStore,
@@ -22,6 +24,13 @@ from dlightrag.web.principal import principal_id_from_user
 from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
+
+
+class WebConversationUnavailableError(RuntimeError):
+    """Raised when durable Web conversation storage cannot be reached."""
+
+    detail = "Web conversation storage is unavailable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,14 +65,16 @@ class WebConversationService:
 
     async def create(self, user: UserContext | None) -> ConversationSummary:
         principal_id = principal_id_from_user(user)
-        row = await self._store.create_conversation(principal_id)
+        row = await self._store_call(self._store.create_conversation(principal_id))
         return _conversation_summary(row)
 
     async def list(self, user: UserContext | None) -> list[ConversationSummary]:
         principal_id = principal_id_from_user(user)
-        rows = await self._store.list_conversations(
-            principal_id,
-            ttl_days=self._ttl_days,
+        rows = await self._store_call(
+            self._store.list_conversations(
+                principal_id,
+                ttl_days=self._ttl_days,
+            )
         )
         return [_conversation_summary(row) for row in rows]
 
@@ -77,11 +88,8 @@ class WebConversationService:
         if snapshot is None:
             return None
 
-        summary = await self._summary(principal_id, conversation_id)
-        if summary is None:
-            return None
         return ConversationHistory(
-            conversation=summary,
+            conversation=_snapshot_summary(snapshot),
             turns=[_conversation_turn(conversation_id, row) for row in snapshot.history],
         )
 
@@ -92,11 +100,13 @@ class WebConversationService:
         title: str,
     ) -> ConversationSummary | None:
         principal_id = principal_id_from_user(user)
-        row = await self._store.rename_conversation(
-            principal_id,
-            conversation_id,
-            title=title,
-            ttl_days=self._ttl_days,
+        row = await self._store_call(
+            self._store.rename_conversation(
+                principal_id,
+                conversation_id,
+                title=title,
+                ttl_days=self._ttl_days,
+            )
         )
         return _conversation_summary(row) if row is not None else None
 
@@ -106,10 +116,12 @@ class WebConversationService:
         conversation_id: str,
     ) -> bool:
         principal_id = principal_id_from_user(user)
-        return await self._store.delete_conversation(
-            principal_id,
-            conversation_id,
-            ttl_days=self._ttl_days,
+        return await self._store_call(
+            self._store.delete_conversation(
+                principal_id,
+                conversation_id,
+                ttl_days=self._ttl_days,
+            )
         )
 
     async def prepare_answer(
@@ -143,11 +155,13 @@ class WebConversationService:
         image_id: str,
     ) -> StoredConversationImage | None:
         principal_id = principal_id_from_user(user)
-        return await self._store.get_image(
-            principal_id,
-            conversation_id,
-            image_id,
-            ttl_days=self._ttl_days,
+        return await self._store_call(
+            self._store.get_image(
+                principal_id,
+                conversation_id,
+                image_id,
+                ttl_days=self._ttl_days,
+            )
         )
 
     async def _snapshot(
@@ -155,26 +169,20 @@ class WebConversationService:
         principal_id: str,
         conversation_id: str,
     ) -> ConversationSnapshot | None:
-        return await self._store.snapshot(
-            principal_id,
-            conversation_id,
-            ttl_days=self._ttl_days,
-            max_turns=self._max_turns,
+        return await self._store_call(
+            self._store.snapshot(
+                principal_id,
+                conversation_id,
+                ttl_days=self._ttl_days,
+                max_turns=self._max_turns,
+            )
         )
 
-    async def _summary(
-        self,
-        principal_id: str,
-        conversation_id: str,
-    ) -> ConversationSummary | None:
-        rows = await self._store.list_conversations(
-            principal_id,
-            ttl_days=self._ttl_days,
-        )
-        for row in rows:
-            if str(row["conversation_id"]) == conversation_id:
-                return _conversation_summary(row)
-        return None
+    async def _store_call(self, operation: Awaitable[T]) -> T:
+        try:
+            return await operation
+        except POSTGRES_UNAVAILABLE_EXCEPTIONS as exc:
+            raise WebConversationUnavailableError from exc
 
 
 def _conversation_summary(row: dict[str, Any]) -> ConversationSummary:
@@ -183,6 +191,15 @@ def _conversation_summary(row: dict[str, Any]) -> ConversationSummary:
         title=row.get("title"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+    )
+
+
+def _snapshot_summary(snapshot: ConversationSnapshot) -> ConversationSummary:
+    return ConversationSummary(
+        conversation_id=snapshot.conversation_id,
+        title=snapshot.title,
+        created_at=snapshot.created_at,
+        updated_at=snapshot.updated_at,
     )
 
 
@@ -245,4 +262,8 @@ def _image_reference(
     )
 
 
-__all__ = ["PreparedWebConversation", "WebConversationService"]
+__all__ = [
+    "PreparedWebConversation",
+    "WebConversationService",
+    "WebConversationUnavailableError",
+]

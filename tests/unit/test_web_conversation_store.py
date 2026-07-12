@@ -173,12 +173,17 @@ async def test_same_conversation_id_is_scoped_by_principal() -> None:
 
 
 async def test_snapshot_reads_revision_and_history_from_one_database_snapshot() -> None:
+    import datetime
+
+    now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
     conn = FakeConnection()
     conn.fetchrow_result = {
         "principal_id": "p1",
         "conversation_id": "c1",
         "content_revision": 4,
         "title": "Conversation",
+        "created_at": now,
+        "updated_at": now,
     }
     store = make_store(conn)
 
@@ -186,8 +191,13 @@ async def test_snapshot_reads_revision_and_history_from_one_database_snapshot() 
 
     assert snapshot is not None
     assert snapshot.content_revision == 4
+    assert snapshot.created_at == now
+    assert snapshot.updated_at == now
     assert snapshot.history == ()
     assert conn.transactions == [{"isolation": "repeatable_read", "readonly": True}]
+    metadata_query, _ = conn.calls[0]
+    assert "created_at" in metadata_query
+    assert "updated_at" in metadata_query
 
 
 async def test_commit_turn_is_revision_guarded_and_trims_old_turns() -> None:
@@ -319,7 +329,10 @@ async def test_get_image_is_scoped_and_ttl_guarded() -> None:
 
 
 def test_records_are_frozen_and_schema_is_exact() -> None:
-    snapshot = ConversationSnapshot("p1", "c1", 0, None, ())
+    import datetime
+
+    now = datetime.datetime(2026, 7, 12, tzinfo=datetime.UTC)
+    snapshot = ConversationSnapshot("p1", "c1", 0, None, now, now, ())
     with pytest.raises(FrozenInstanceError):
         snapshot.title = "changed"  # type: ignore[misc]
 

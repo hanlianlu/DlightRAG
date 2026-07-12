@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """PostgreSQL persistence for principal-scoped Web conversations."""
 
+import datetime
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -134,7 +135,9 @@ SELECT
     principal_id,
     conversation_id::text AS conversation_id,
     content_revision,
-    title
+    title,
+    created_at,
+    updated_at
 FROM web_conversations
 WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
@@ -305,6 +308,8 @@ class ConversationSnapshot:
     conversation_id: str
     content_revision: int
     title: str | None
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
     history: tuple[dict[str, Any], ...]
 
 
@@ -506,6 +511,8 @@ class PGWebConversationStore:
                     conversation_id=str(row["conversation_id"]),
                     content_revision=int(row["content_revision"]),
                     title=row["title"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
                     history=tuple(_history_row(history_row) for history_row in history_rows),
                 )
 
