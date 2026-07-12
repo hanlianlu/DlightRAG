@@ -650,6 +650,7 @@ def test_multimodal_retrieval_defaults() -> None:
     assert cfg.web_conversations.max_turns == 100
     assert cfg.web_conversations.ttl_days == 30
     assert cfg.query_images.max_current_images == 3
+    assert cfg.query_images.max_upload_bytes == 15 * 1024 * 1024
     assert cfg.query_images.max_described_images == 3
     assert "checkpoint_session_ttl_days" not in type(cfg).model_fields
     assert "session_max_images" not in type(cfg.query_images).model_fields
@@ -1207,6 +1208,7 @@ def test_stalled_doc_timeout_allows_disable_but_rejects_too_small_values() -> No
         {"parser_sidecars": {"vlm": {"surrounding_leading_max_tokens": -1}}},
         {"parser_sidecars": {"mineru": {"max_polls": 0}}},
         {"query_images": {"max_current_images": -1}},
+        {"query_images": {"max_upload_bytes": 0}},
         {"query_images": {"max_described_images": -1}},
         {"visual_assets": {"thumb_max_px": 0}},
     ],

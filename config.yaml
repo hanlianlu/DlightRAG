@@ -191,6 +191,7 @@ answer:
 
 query_images:
   max_current_images: 3
+  max_upload_bytes: 15728640  # 15 MiB per durable current Web image.
   max_described_images: 3
 
 web_conversations:

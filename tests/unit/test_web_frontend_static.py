@@ -109,6 +109,22 @@ def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
     assert "Retry image" in images
 
 
+def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None:
+    images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
+    policy = (FRONTEND_UI / "image_policy.ts").read_text(encoding="utf-8")
+
+    assert "MAX_IMAGES" not in images
+    assert "MAX_IMAGE_SIZE" not in images
+    assert "10 * 1024 * 1024" not in images
+    assert "10 * 1024 * 1024" not in policy
+    assert "data-max-current-images" in (
+        ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html"
+    ).read_text(encoding="utf-8")
+    assert "data-max-upload-bytes" in (
+        ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html"
+    ).read_text(encoding="utf-8")
+
+
 def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:
     main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
 

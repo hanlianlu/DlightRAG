@@ -51,12 +51,16 @@ def test_web_image_rejects_over_limit_before_base64_decode(monkeypatch) -> None:
 
 def test_web_image_rejects_invalid_base64() -> None:
     with pytest.raises(ValueError, match="base64"):
-        validate_web_images(["%%%not-base64%%%"], max_images=1)
+        validate_web_images(["%%%not-base64%%%"], max_images=1, max_bytes=15 * 1024 * 1024)
 
 
 def test_web_image_uses_detected_mime_not_declared_mime() -> None:
     payload = base64.b64encode(_padded_png(200)).decode()
-    (image,) = validate_web_images([f"data:image/jpeg;base64,{payload}"], max_images=1)
+    (image,) = validate_web_images(
+        [f"data:image/jpeg;base64,{payload}"],
+        max_images=1,
+        max_bytes=15 * 1024 * 1024,
+    )
 
     assert image.mime_type == "image/png"
     assert image.data_uri.startswith("data:image/png;base64,")

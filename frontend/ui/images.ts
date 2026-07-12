@@ -5,9 +5,8 @@ import {uploadFilesToWorkspace} from './files-panel.ts';
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 import type {ConversationImageReference} from '../api/conversations.ts';
+import {acceptsImageUpload, getImageAdmissionPolicy} from './image_policy.ts';
 
-const MAX_IMAGES = 3;
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
 const pendingImages: PendingImage[] = [];
 
@@ -28,9 +27,8 @@ function eventElement(event: Event): Element | null {
 }
 
 export function addImage(file: File): void {
-    if (pendingImages.length >= MAX_IMAGES) return;
-    if (!file.type.startsWith('image/')) return;
-    if (file.size > MAX_IMAGE_SIZE) return;
+    const policy = getImageAdmissionPolicy();
+    if (!policy || !acceptsImageUpload(file, pendingImages.length, policy)) return;
 
     const reader = new FileReader();
     reader.onload = function(e) {

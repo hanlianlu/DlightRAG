@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from dlightrag.utils.concurrency import bounded_map
+from dlightrag.utils.image_budget import ImagePayloadBudget
 from dlightrag.utils.images import image_url_block
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,21 @@ class QueryImageEnhancer:
         *,
         vlm_func: Callable[..., Any] | None,
         max_images: int = 3,
+        max_total_bytes: int,
+        max_bytes_per_image: int,
+        max_px: int,
+        min_px: int,
+        quality: int,
+        min_quality: int,
     ) -> None:
         self._vlm_func = vlm_func
         self._max_images = max(0, int(max_images))
+        self._max_total_bytes = max(1, int(max_total_bytes))
+        self._max_bytes_per_image = max(1, int(max_bytes_per_image))
+        self._max_px = max(1, int(max_px))
+        self._min_px = max(1, int(min_px))
+        self._quality = max(1, int(quality))
+        self._min_quality = max(1, int(min_quality))
 
     async def aclose(self) -> None:
         """Release VLM worker resources owned by this enhancer."""
@@ -75,13 +88,32 @@ class QueryImageEnhancer:
             block = image_url_block(image)
             if block is None:
                 return None
+            image_url = block["image_url"]
+            budget = ImagePayloadBudget(
+                max_images=1,
+                max_total_bytes=self._max_total_bytes,
+                max_bytes_per_image=self._max_bytes_per_image,
+                max_px=self._max_px,
+                min_px=self._min_px,
+                quality=self._quality,
+                min_quality=self._min_quality,
+            )
+            bounded = budget.add_base64(
+                image_url["url"],
+                label=f"query_image_{idx}",
+            )
+            if bounded is None:
+                return None
+            bounded_uri, _byte_count = bounded
+            bounded_image_url = {**image_url, "url": bounded_uri}
+            bounded_block = {"type": "image_url", "image_url": bounded_image_url}
             try:
                 response = await vlm_func(
                     messages=[
                         {
                             "role": "user",
                             "content": [
-                                block,
+                                bounded_block,
                                 {
                                     "type": "text",
                                     "text": (

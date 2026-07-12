@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from dlightrag.access_control import AccessAction
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.utils import normalize_workspace
-from dlightrag.utils.images import WEB_IMAGE_MAX_BYTES, validate_web_images
+from dlightrag.utils.images import validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
@@ -30,8 +30,10 @@ router = APIRouter()
 _WEB_ANSWER_JSON_OVERHEAD_BYTES = 64 * 1024
 
 
-async def _read_limited_answer_body(request: Request, *, max_images: int) -> bytes:
-    encoded_image_bytes = ((WEB_IMAGE_MAX_BYTES + 2) // 3) * 4
+async def _read_limited_answer_body(
+    request: Request, *, max_images: int, max_upload_bytes: int
+) -> bytes:
+    encoded_image_bytes = ((max_upload_bytes + 2) // 3) * 4
     max_body_bytes = _WEB_ANSWER_JSON_OVERHEAD_BYTES + max(0, max_images) * encoded_image_bytes
     content_length = request.headers.get("content-length")
     if content_length is not None:
@@ -91,6 +93,8 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "workspaces": workspaces,
             "primary_workspace": primary,
             "active_workspaces": active,
+            "query_image_max_current_images": manager.config.query_images.max_current_images,
+            "query_image_max_upload_bytes": manager.config.query_images.max_upload_bytes,
         },
     )
 
@@ -108,6 +112,7 @@ async def answer_stream(
         raw_body = await _read_limited_answer_body(
             request,
             max_images=cfg.query_images.max_current_images,
+            max_upload_bytes=cfg.query_images.max_upload_bytes,
         )
         body = WebAnswerRequest.model_validate_json(raw_body)
     except ValidationError as exc:
@@ -144,6 +149,7 @@ async def answer_stream(
         validated_images = validate_web_images(
             body.images,
             max_images=cfg.query_images.max_current_images,
+            max_bytes=cfg.query_images.max_upload_bytes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
