@@ -491,14 +491,22 @@ class AnswerConfig(BaseModel):
     )
 
 
-class QueryImagesConfig(BaseModel):
-    """Query-time image memory and semantic enhancement controls."""
+class WebConversationsConfig(BaseModel):
+    """Durable Web conversation retention controls."""
 
     model_config = ConfigDict(extra="forbid")
 
+    max_turns: int = Field(default=100, ge=1)
+    ttl_days: int = Field(default=30, ge=1)
+
+
+class QueryImagesConfig(BaseModel):
+    """Current-request image validation and semantic enhancement controls."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_current_images: int = Field(default=3, ge=0)
     max_described_images: int = Field(default=3, ge=0)
-    session_max_images: int = Field(default=50, ge=1)
-    session_max_sessions: int = Field(default=100, ge=1)
 
 
 class VisualAssetsConfig(BaseModel):
@@ -787,6 +795,7 @@ class DlightragConfig(BaseSettings):
     metadata: MetadataConfig = Field(default_factory=MetadataConfig)
     citations: CitationsConfig = Field(default_factory=CitationsConfig)
     answer: AnswerConfig = Field(default_factory=AnswerConfig)
+    web_conversations: WebConversationsConfig = Field(default_factory=WebConversationsConfig)
     query_images: QueryImagesConfig = Field(default_factory=QueryImagesConfig)
     visual_assets: VisualAssetsConfig = Field(default_factory=VisualAssetsConfig)
     access_control: AccessControlConfig = Field(default_factory=AccessControlConfig)
@@ -1096,17 +1105,6 @@ class DlightragConfig(BaseSettings):
             "Set to 0 to disable stalled-document recovery."
         ),
     )
-    checkpoint_session_ttl_days: int = Field(
-        default=30,
-        ge=1,
-        description=(
-            "Delete checkpoint sessions and their referenced web session image memory "
-            "older than this many days at startup. Session data grows unboundedly "
-            "without this — conversation history, retrieval provenance, citation anchors, "
-            "and checkpoint-restorable images accumulate per session indefinitely."
-        ),
-    )
-
     # ===== Observability =====
     langfuse_public_key: str | None = Field(default=None)
     langfuse_secret_key: str | None = Field(default=None)
@@ -1232,10 +1230,6 @@ class DlightragConfig(BaseSettings):
     @property
     def input_dir_path(self) -> Path:
         return self.working_dir_path / "inputs"
-
-    @property
-    def checkpoint_session_ttl_seconds(self) -> int:
-        return int(self.checkpoint_session_ttl_days) * 24 * 60 * 60
 
     @property
     def mcp_dns_rebinding_protection(self) -> bool:

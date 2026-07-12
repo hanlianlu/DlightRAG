@@ -189,6 +189,14 @@ answer:
   context_top_k: 30
   max_images: 6
 
+query_images:
+  max_current_images: 3
+  max_described_images: 3
+
+web_conversations:
+  max_turns: 100
+  ttl_days: 30
+
 # ─────────────────────────────────────────────────────────────────
 # Security and Observability
 # ─────────────────────────────────────────────────────────────────
