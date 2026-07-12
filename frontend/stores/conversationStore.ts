@@ -1,80 +1,91 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-const ACTIVE_CONVERSATION_KEY = 'dlightrag.active_conversation_id';
+import type {ConversationHistory, ConversationSummary} from '../api/conversations.ts';
+import {Store} from './base.ts';
 
-interface ConversationSummary {
-  conversation_id: string;
+const ACTIVE_KEY = 'dlightrag.active_conversation_id';
+
+function storedActiveConversationId(): string | null {
+  return typeof window === 'undefined' ? null : window.localStorage.getItem(ACTIVE_KEY);
 }
 
-export type ConversationStatus = 'idle' | 'loading' | 'ready' | 'unavailable';
+export class ConversationStore extends Store {
+  #conversations: ConversationSummary[] = [];
+  #activeConversationId: string | null = storedActiveConversationId();
+  #history: ConversationHistory | null = null;
+  #generation = 0;
 
-export class ConversationStore {
-  #activeConversationId: string | null = null;
-  #initializing: Promise<string | null> | null = null;
-  #status: ConversationStatus = 'idle';
-  #errorMessage: string | null = null;
+  get conversations(): readonly ConversationSummary[] {
+    return this.#conversations;
+  }
 
   get activeConversationId(): string | null {
     return this.#activeConversationId;
   }
 
-  get status(): ConversationStatus {
-    return this.#status;
+  get history(): ConversationHistory | null {
+    return this.#history;
   }
 
-  get errorMessage(): string | null {
-    return this.#errorMessage;
+  get generation(): number {
+    return this.#generation;
   }
 
-  async initialize(): Promise<string | null> {
-    return this.ensureActive();
+  replaceList(conversations: ConversationSummary[]): void {
+    this.#conversations = [...conversations];
+    this.emit('conversationListChanged', {conversations: this.#conversations});
   }
 
-  async ensureActive(): Promise<string | null> {
-    if (this.#activeConversationId) return this.#activeConversationId;
-    if (this.#initializing) return this.#initializing;
-    this.#status = 'loading';
-    this.#errorMessage = null;
-    this.#initializing = this.#tryLoadOrCreateActive();
-    try {
-      return await this.#initializing;
-    } finally {
-      this.#initializing = null;
-    }
-  }
-
-  async #tryLoadOrCreateActive(): Promise<string | null> {
-    try {
-      const conversationId = await this.#loadOrCreateActive();
-      this.#status = 'ready';
-      return conversationId;
-    } catch {
-      this.#status = 'unavailable';
-      this.#errorMessage = 'Conversation service is unavailable. Please try again.';
-      return null;
-    }
-  }
-
-  async #loadOrCreateActive(): Promise<string> {
-    const response = await fetch('/web/conversations');
-    if (!response.ok) throw new Error('Failed to load conversations');
-    const conversations = await response.json() as ConversationSummary[];
-    const stored = window.localStorage.getItem(ACTIVE_CONVERSATION_KEY);
-    const selected = conversations.find((item) => item.conversation_id === stored)
-      || conversations[0];
-    if (selected) return this.#select(selected.conversation_id);
-
-    const created = await fetch('/web/conversations', { method: 'POST' });
-    if (!created.ok) throw new Error('Failed to create conversation');
-    const summary = await created.json() as ConversationSummary;
-    return this.#select(summary.conversation_id);
-  }
-
-  #select(conversationId: string): string {
+  select(conversationId: string): void {
+    if (this.#activeConversationId !== conversationId) this.#history = null;
     this.#activeConversationId = conversationId;
-    this.#errorMessage = null;
-    window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, conversationId);
-    return conversationId;
+    window.localStorage.setItem(ACTIVE_KEY, conversationId);
+    this.emit('conversationSelected', {conversationId});
+  }
+
+  setHistory(history: ConversationHistory, generation: number): boolean {
+    if (
+      generation !== this.#generation
+      || history.conversation.conversation_id !== this.#activeConversationId
+    ) {
+      return false;
+    }
+    this.#history = history;
+    this.upsertSummary(history.conversation);
+    this.emit('conversationHistoryChanged', {history});
+    return true;
+  }
+
+  upsertSummary(summary: ConversationSummary): void {
+    const next = this.#conversations.filter(
+      (conversation) => conversation.conversation_id !== summary.conversation_id,
+    );
+    next.push(summary);
+    next.sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+    this.#conversations = next;
+    this.emit('conversationListChanged', {conversations: this.#conversations});
+  }
+
+  remove(conversationId: string): boolean {
+    const next = this.#conversations.filter(
+      (conversation) => conversation.conversation_id !== conversationId,
+    );
+    if (next.length === this.#conversations.length) return false;
+    this.#conversations = next;
+    if (this.#activeConversationId === conversationId) {
+      this.#activeConversationId = null;
+      this.#history = null;
+      this.#generation += 1;
+      window.localStorage.removeItem(ACTIVE_KEY);
+      this.emit('conversationSelected', {conversationId: null});
+    }
+    this.emit('conversationListChanged', {conversations: this.#conversations});
+    return true;
+  }
+
+  beginRequest(): number {
+    this.#generation += 1;
+    return this.#generation;
   }
 }
 

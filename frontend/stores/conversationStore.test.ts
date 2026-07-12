@@ -5,74 +5,103 @@ import { afterEach, test } from 'node:test';
 
 import { ConversationStore } from './conversationStore.ts';
 
-const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
 
-function installStorage(): void {
-  const values = new Map<string, string>();
+function installStorage(initial: Record<string, string> = {}): Map<string, string> {
+  const values = new Map(Object.entries(initial));
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: {
       localStorage: {
         getItem: (key: string) => values.get(key) ?? null,
         setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
       },
     },
   });
+  return values;
 }
 
 afterEach(() => {
-  globalThis.fetch = originalFetch;
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
     value: originalWindow,
   });
 });
 
-test('conversation bootstrap exposes 503 and recovers on retry', async () => {
-  installStorage();
-  let attempts = 0;
-  globalThis.fetch = async () => {
-    attempts += 1;
-    if (attempts === 1) return new Response('unavailable', { status: 503 });
-    return Response.json([{ conversation_id: 'server-conversation' }]);
-  };
+const FIRST = {
+  conversation_id: 'first',
+  title: 'First',
+  created_at: '2026-07-13T08:00:00Z',
+  updated_at: '2026-07-13T10:00:00Z',
+};
+
+const SECOND = {
+  conversation_id: 'second',
+  title: null,
+  created_at: '2026-07-13T09:00:00Z',
+  updated_at: '2026-07-13T11:00:00Z',
+};
+
+test('conversation store restores only the active server id from local storage', () => {
+  installStorage({'dlightrag.active_conversation_id': 'stored'});
+
   const store = new ConversationStore();
 
-  assert.equal(await store.initialize(), null);
-  assert.equal(store.status, 'unavailable');
-  assert.ok(store.errorMessage);
-  assert.match(store.errorMessage, /unavailable/i);
-
-  assert.equal(await store.ensureActive(), 'server-conversation');
-  assert.equal(store.status, 'ready');
-  assert.equal(store.errorMessage, null);
+  assert.equal(store.activeConversationId, 'stored');
+  assert.deepEqual(store.conversations, []);
+  assert.equal(store.history, null);
 });
 
-test('conversation bootstrap contains network failures without inventing an id', async () => {
+test('conversation store exposes only server projection mutations', () => {
   installStorage();
-  globalThis.fetch = async () => {
-    throw new TypeError('network down');
-  };
   const store = new ConversationStore();
 
-  assert.equal(await store.initialize(), null);
-  assert.equal(store.activeConversationId, null);
-  assert.equal(store.status, 'unavailable');
+  for (const mutation of [
+    'replaceList',
+    'select',
+    'setHistory',
+    'upsertSummary',
+    'remove',
+    'beginRequest',
+  ] as const) {
+    assert.equal(typeof store[mutation], 'function', mutation);
+  }
 });
 
-test('conversation bootstrap exposes server create failure without inventing an id', async () => {
-  installStorage();
-  let calls = 0;
-  globalThis.fetch = async () => {
-    calls += 1;
-    if (calls === 1) return Response.json([]);
-    return new Response('unavailable', { status: 503 });
-  };
+test('conversation store persists selection and rejects stale history responses', () => {
+  const storage = installStorage();
   const store = new ConversationStore();
+  store.replaceList([FIRST, SECOND]);
+  store.select('first');
+  const firstGeneration = store.beginRequest();
+  store.select('second');
+  const secondGeneration = store.beginRequest();
 
-  assert.equal(await store.initialize(), null);
-  assert.equal(calls, 2);
+  const stale = {conversation: FIRST, turns: []};
+  const current = {conversation: SECOND, turns: []};
+
+  assert.equal(storage.get('dlightrag.active_conversation_id'), 'second');
+  assert.equal(store.setHistory(stale, firstGeneration), false);
+  assert.equal(store.history, null);
+  assert.equal(store.setHistory(current, secondGeneration), true);
+  assert.deepEqual(store.history, current);
+});
+
+test('conversation store upserts authoritative summaries and removes projections', () => {
+  const storage = installStorage();
+  const store = new ConversationStore();
+  store.replaceList([FIRST]);
+  store.select('first');
+
+  store.upsertSummary({...FIRST, title: 'Renamed', updated_at: '2026-07-13T12:00:00Z'});
+  store.upsertSummary(SECOND);
+
+  assert.deepEqual(store.conversations.map((item) => item.conversation_id), ['first', 'second']);
+  assert.equal(store.conversations[0].title, 'Renamed');
+  assert.equal(store.remove('first'), true);
   assert.equal(store.activeConversationId, null);
-  assert.equal(store.status, 'unavailable');
+  assert.equal(store.history, null);
+  assert.equal(storage.has('dlightrag.active_conversation_id'), false);
+  assert.equal(store.remove('missing'), false);
 });
