@@ -100,4 +100,10 @@ export function describeConversationSaveOutcome(
   };
 }
 
+export function shouldKeepLiveConversation<T extends ConversationSaveOutcome>(
+  outcome: T | null,
+): outcome is T & {conversation_saved: true} {
+  return outcome?.conversation_saved === true;
+}
+
 export const pendingSubmissionStore = new PendingSubmissionStore();

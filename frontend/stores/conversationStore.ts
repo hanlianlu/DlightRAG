@@ -15,6 +15,8 @@ export class ConversationStore extends Store {
   #history: ConversationHistory | null = null;
   #generation = 0;
   #liveAnswerConversationId: string | null = null;
+  #pendingSelectionId: string | null = null;
+  #answerReady = this.#activeConversationId !== null;
 
   get conversations(): readonly ConversationSummary[] {
     return this.#conversations;
@@ -32,16 +34,31 @@ export class ConversationStore extends Store {
     return this.#generation;
   }
 
+  get answerConversationId(): string | null {
+    return this.#answerReady ? this.#activeConversationId : null;
+  }
+
   replaceList(conversations: ConversationSummary[]): void {
     this.#conversations = [...conversations];
     this.emit('conversationListChanged', {conversations: this.#conversations});
   }
 
-  select(conversationId: string): void {
-    if (this.#activeConversationId !== conversationId) this.#history = null;
+  select(conversationId: string): boolean {
+    if (
+      this.#liveAnswerConversationId !== null
+      && this.#liveAnswerConversationId !== conversationId
+    ) {
+      this.#pendingSelectionId = conversationId;
+      return false;
+    }
+    if (this.#activeConversationId !== conversationId) {
+      this.#history = null;
+      this.#answerReady = false;
+    }
     this.#activeConversationId = conversationId;
     window.localStorage.setItem(ACTIVE_KEY, conversationId);
     this.emit('conversationSelected', {conversationId});
+    return true;
   }
 
   setHistory(history: ConversationHistory, generation: number): boolean {
@@ -52,6 +69,7 @@ export class ConversationStore extends Store {
       return false;
     }
     this.#history = history;
+    this.#answerReady = true;
     this.upsertSummary(history.conversation);
     this.emit('conversationHistoryChanged', {history});
     return true;
@@ -77,9 +95,11 @@ export class ConversationStore extends Store {
       this.#activeConversationId = null;
       this.#history = null;
       this.#generation += 1;
+      this.#answerReady = false;
       window.localStorage.removeItem(ACTIVE_KEY);
       this.emit('conversationSelected', {conversationId: null});
     }
+    if (this.#pendingSelectionId === conversationId) this.#pendingSelectionId = null;
     this.emit('conversationListChanged', {conversations: this.#conversations});
     return true;
   }
@@ -95,10 +115,13 @@ export class ConversationStore extends Store {
     return this.#generation;
   }
 
-  finishLiveAnswer(conversationId: string): void {
-    if (this.#liveAnswerConversationId !== conversationId) return;
+  finishLiveAnswer(conversationId: string, discardPendingSelection = false): string | null {
+    if (this.#liveAnswerConversationId !== conversationId) return null;
     this.#liveAnswerConversationId = null;
     this.#generation += 1;
+    const pendingSelectionId = this.#pendingSelectionId;
+    this.#pendingSelectionId = null;
+    return discardPendingSelection ? null : pendingSelectionId;
   }
 
   canRenderHistory(generation: number): boolean {

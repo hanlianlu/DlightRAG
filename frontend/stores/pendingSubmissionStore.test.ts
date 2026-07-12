@@ -107,3 +107,20 @@ test('unknown recovery keeps the same submission key available for replay', () =
   }), false);
   assert.equal(store.getOrCreate('conversation-1', 'fingerprint-a'), key);
 });
+
+test('only authoritative save keeps live A instead of releasing fallback B', () => {
+  const keepLive = Reflect.get(saveState, 'shouldKeepLiveConversation') as unknown;
+  assert.equal(typeof keepLive, 'function');
+  if (typeof keepLive !== 'function') return;
+
+  assert.equal(keepLive({conversation_saved: true}), true);
+  assert.equal(keepLive(null), false);
+  assert.equal(keepLive({
+    conversation_saved: false,
+    conversation_save_reason: 'commit_outcome_unknown',
+  }), false);
+  assert.equal(keepLive({
+    conversation_saved: false,
+    conversation_save_reason: 'conversation_changed',
+  }), false);
+});
