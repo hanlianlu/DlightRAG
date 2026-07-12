@@ -16,8 +16,13 @@ from dlightrag.sourcing.source_contract import (
     ("value", "expected"),
     [
         ("s3://bucket/docs/report.pdf", "s3://bucket/docs/report.pdf"),
+        ("s3://bucket/docs/Q2%20report.pdf", "s3://bucket/docs/Q2%20report.pdf"),
         ("azure://container/docs/report.pdf", "azure://container/docs/report.pdf"),
         ("https://cdn.example.com/docs/report.pdf", "https://cdn.example.com/docs/report.pdf"),
+        (
+            "https://cdn.example.com/docs/Q2%20report.pdf",
+            "https://cdn.example.com/docs/Q2%20report.pdf",
+        ),
     ],
 )
 def test_validate_download_uri_accepts_durable_supported_locators(
@@ -69,6 +74,27 @@ def test_validate_download_uri_rejects_non_durable_or_unsupported_locators(
     ],
 )
 def test_validate_download_uri_rejects_malformed_uri_syntax(value: str) -> None:
+    with pytest.raises(ValueError, match="durable download_uri"):
+        validate_download_uri(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/report%ZZ.pdf",
+        "s3://bucket/report%.pdf",
+        "azure://container/report%2.pdf",
+        r"https://example.com/report\file.pdf",
+        "https://example.com/report<draft>.pdf",
+        'https://example.com/report"draft.pdf',
+        "https://example.com/report{draft}.pdf",
+        "s3://bucket/report|draft.pdf",
+        "s3://bucket/report^draft.pdf",
+        "azure://container/report`draft.pdf",
+        "https://example.com/résumé.pdf",
+    ],
+)
+def test_validate_download_uri_rejects_invalid_lexical_form(value: str) -> None:
     with pytest.raises(ValueError, match="durable download_uri"):
         validate_download_uri(value)
 

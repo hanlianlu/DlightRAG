@@ -2,7 +2,7 @@
 """Source identity and durable download locator policies."""
 
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from unicodedata import category
+from string import ascii_letters, digits, hexdigits
 from urllib.parse import quote, unquote, urlsplit
 
 from dlightrag.sourcing.uri import parse_remote_uri
@@ -11,6 +11,24 @@ from dlightrag.utils import normalize_workspace
 
 class SourceDownloadContractError(ValueError):
     """A safe client-visible source/download invariant failure."""
+
+
+_URI_LITERAL_CHARACTERS = frozenset(ascii_letters + digits + "-._~:/?#[]@!$&'()*+,;=")
+
+
+def _validate_uri_lexical_form(value: str) -> None:
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "%":
+            escape = value[index + 1 : index + 3]
+            if len(escape) != 2 or any(digit not in hexdigits for digit in escape):
+                raise ValueError
+            index += 3
+            continue
+        if character not in _URI_LITERAL_CHARACTERS:
+            raise ValueError
+        index += 1
 
 
 def _has_query_or_fragment_delimiter(value: str) -> bool:
@@ -43,8 +61,7 @@ def local_source_uri(workspace: str, relative_path: str | Path) -> str:
 def validate_download_uri(value: str) -> str:
     candidate = value
     try:
-        if any(character.isspace() or category(character) == "Cc" for character in candidate):
-            raise ValueError
+        _validate_uri_lexical_form(candidate)
         parsed = urlsplit(candidate)
         port = parsed.port
         if parsed.scheme in {"s3", "azure"}:
