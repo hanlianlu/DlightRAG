@@ -37,6 +37,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         raise
     _app.state.manager = manager
     try:
+        conversation_service = getattr(_app.state, "web_conversation_service", None)
+        if conversation_service is not None:
+            await conversation_service.initialize()
         yield
     finally:
         await manager.aclose()
@@ -113,11 +116,18 @@ def create_app(*, include_web: bool = True) -> FastAPI:
 
     # -- Web frontend --
     if include_web:
+        from dlightrag.storage.web_conversations import PGWebConversationStore
         from dlightrag.web.auth import WebAuthMiddleware
+        from dlightrag.web.conversations import WebConversationService
         from dlightrag.web.deps import _TEMPLATE_DIR
         from dlightrag.web.routes import router as web_router
         from dlightrag.web.static_files import NoCacheStaticFiles
 
+        application.state.web_conversation_service = WebConversationService(
+            store=PGWebConversationStore(),
+            max_turns=cfg.web_conversations.max_turns,
+            ttl_days=cfg.web_conversations.ttl_days,
+        )
         application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
         application.include_router(web_router)
         _static_dir = _TEMPLATE_DIR.parent / "static"
