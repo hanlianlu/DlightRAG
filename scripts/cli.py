@@ -106,6 +106,8 @@ def _die(msg: str) -> None:
 
 def _validate_ingest_args(args: argparse.Namespace) -> None:
     source = args.source_type
+    if source != "url" and (args.download_uri is not None or args.download_uris is not None):
+        _die("--download-uri and --download-uris are only for url source")
     if source == "local":
         if not args.path:
             _die("local source requires a path. Usage: ingest <path> [--replace]")
@@ -146,6 +148,13 @@ def _validate_ingest_args(args: argparse.Namespace) -> None:
             _die("--source-uri and --source-uris are mutually exclusive")
         if args.source_uris and len(args.source_uris) != len(args.urls or []):
             _die("--source-uris must match the number of --urls values")
+        url_count = int(args.url is not None) + len(args.urls or [])
+        if args.download_uri is not None and args.download_uris is not None:
+            _die("--download-uri and --download-uris are mutually exclusive")
+        if args.download_uri is not None and url_count != 1:
+            _die("--download-uri can only be used with a single URL")
+        if args.download_uris is not None and len(args.download_uris) != url_count:
+            _die("--download-uris must match the number of URL values")
 
 
 def _metadata_filter_payload(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -580,6 +589,17 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         dest="source_uris",
         help="Stable source URIs for URL batches",
+    )
+    p_ingest.add_argument(
+        "--download-uri",
+        dest="download_uri",
+        help="Durable download URI for a single URL",
+    )
+    p_ingest.add_argument(
+        "--download-uris",
+        nargs="+",
+        dest="download_uris",
+        help="Durable download URIs for URL batches",
     )
     p_ingest.add_argument(
         "--retain-source-file",

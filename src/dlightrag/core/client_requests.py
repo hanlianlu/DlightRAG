@@ -89,10 +89,16 @@ def ingest_kwargs_from_payload(payload: Any) -> dict[str, Any]:
             kwargs["filename"] = filename
         source_uri = _get(payload, "source_uri")
         source_uris = _get(payload, "source_uris")
+        download_uri = _get(payload, "download_uri")
+        download_uris = _get(payload, "download_uris")
         if source_uri:
             kwargs["source_uri"] = source_uri
         if source_uris is not None:
             kwargs["source_uris"] = source_uris
+        if download_uri is not None:
+            kwargs["download_uri"] = download_uri
+        if download_uris is not None:
+            kwargs["download_uris"] = download_uris
 
     for name in (
         "replace",

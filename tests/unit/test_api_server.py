@@ -918,6 +918,35 @@ class TestIngestEndpoint:
         )
         mock_manager.aingest.assert_not_awaited()
 
+    async def test_url_ingest_accepts_download_uri(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        app.state.manager = mock_manager
+
+        resp = await client.post(
+            "/ingest",
+            json={
+                "source_type": "url",
+                "url": "https://fetch.example.com/download?id=asset-1&signature=secret",
+                "filename": "asset.pdf",
+                "source_uri": "bynder://asset/asset-1",
+                "download_uri": "https://cdn.example.com/assets/asset-1.pdf",
+            },
+        )
+
+        assert resp.status_code == 202
+        mock_manager.astart_ingest_job.assert_awaited_once_with(
+            "default",
+            IngestSpec(
+                source_type="url",
+                url="https://fetch.example.com/download?id=asset-1&signature=secret",
+                filename="asset.pdf",
+                source_uri="bynder://asset/asset-1",
+                download_uri="https://cdn.example.com/assets/asset-1.pdf",
+            ),
+        )
+        mock_manager.aingest.assert_not_awaited()
+
     async def test_blob_upload_stages_file_for_local_ingest(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -1868,6 +1897,11 @@ class TestAPIContracts:
         schemas = spec["components"]["schemas"]
         assert "RetrievalResponse" in schemas
         assert "AnswerResponse" in schemas
+        ingest_properties = schemas["IngestRequest"]["properties"]
+        assert "download_uri" in ingest_properties
+        assert "download_uris" in ingest_properties
+        assert "download_url" not in ingest_properties
+        assert "download_urls" not in ingest_properties
         assert (
             spec["paths"]["/retrieve"]["post"]["responses"]["200"]["content"]["application/json"][
                 "schema"

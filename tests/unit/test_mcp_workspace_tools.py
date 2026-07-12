@@ -137,6 +137,10 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "filename" in ingest_props
     assert "source_uri" in ingest_props
     assert "source_uris" in ingest_props
+    assert "download_uri" in ingest_props
+    assert "download_uris" in ingest_props
+    assert "download_url" not in ingest_props
+    assert "download_urls" not in ingest_props
     assert "documents" in ingest_props
     assert "retain_source_file" in ingest_props
     delete_files_tool = next(tool for tool in tools if tool.name == "delete_files")
@@ -550,6 +554,50 @@ async def test_mcp_url_ingest_accepts_stable_source_uri(mock_mcp_manager) -> Non
             url="https://cdn.example.com/download?id=asset-1&signature=secret",
             filename="asset.pdf",
             source_uri="bynder://asset/asset-1",
+        ),
+    )
+    mock_mcp_manager.aingest.assert_not_awaited()
+
+
+async def test_mcp_url_ingest_accepts_download_uris(mock_mcp_manager) -> None:
+    mock_mcp_manager.astart_ingest_job = AsyncMock(
+        return_value={
+            "job_id": "job-1",
+            "workspace": "default",
+            "source_type": "url",
+            "status": "queued",
+        }
+    )
+
+    result = await mcp_server.mcp_app.call_tool(
+        "ingest",
+        {
+            "source_type": "url",
+            "urls": [
+                "https://fetch.example.com/download?id=a&signature=secret",
+                "https://fetch.example.com/download?id=b&signature=secret",
+            ],
+            "download_uris": [
+                "https://cdn.example.com/a.pdf",
+                "https://cdn.example.com/b.pdf",
+            ],
+            "workspace": "default",
+        },
+    )
+
+    assert _tool_json(result)["job_id"] == "job-1"
+    mock_mcp_manager.astart_ingest_job.assert_awaited_once_with(
+        "default",
+        IngestSpec(
+            source_type="url",
+            urls=[
+                "https://fetch.example.com/download?id=a&signature=secret",
+                "https://fetch.example.com/download?id=b&signature=secret",
+            ],
+            download_uris=[
+                "https://cdn.example.com/a.pdf",
+                "https://cdn.example.com/b.pdf",
+            ],
         ),
     )
     mock_mcp_manager.aingest.assert_not_awaited()

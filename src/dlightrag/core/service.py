@@ -55,6 +55,7 @@ def _source_document_from_manifest(document: IngestDocument, *, key: str) -> Sou
     return SourceDocument(
         key=key,
         source_uri=document.source_uri,
+        download_uri=document.download_uri,
         display_filename=document.filename,
         title=document.title,
         author=document.author,
@@ -1326,6 +1327,10 @@ class RAGService:
             source_kwargs["source_uri"] = kwargs["source_uri"]
         if kwargs.get("source_uris") is not None:
             source_kwargs["source_uris"] = kwargs["source_uris"]
+        if kwargs.get("download_uri") is not None:
+            source_kwargs["download_uri"] = kwargs["download_uri"]
+        if kwargs.get("download_uris") is not None:
+            source_kwargs["download_uris"] = kwargs["download_uris"]
         source = URLDataSource(
             **source_kwargs,
             max_download_bytes=self.config.url_ingest_max_bytes,
