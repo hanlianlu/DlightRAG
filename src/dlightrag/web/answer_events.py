@@ -112,11 +112,11 @@ async def _build_answer_done_payload(
         image_url_prefix="/web/images",
         default_workspace=workspace or manager.config.workspace,
     )
-    source_payloads = project_source_payloads(finalized.sources, resolver=resolver)
     cited_images = answer_images_from_sources(
         finalized.sources,
         contexts={"chunks": finalized.flat_contexts},
     )
+    source_payloads = project_source_payloads(finalized.sources, resolver=resolver)
     answer_images = session_cards + cited_images
     answer_blocks = answer_blocks_from_markdown(finalized.answer, cited_images)
 
@@ -132,7 +132,7 @@ async def _build_answer_done_payload(
         answer_images=answer_images,
         answer_blocks=answer_blocks,
     )
-    return _AnswerPayload(done, finalized.sources, finalized.flat_contexts)
+    return _AnswerPayload(done, source_payloads, finalized.flat_contexts)
 
 
 async def _save_checkpoint(
@@ -338,12 +338,7 @@ async def _emit_answer_events(
             for chunk in source.chunks
         )
         if has_highlights:
-            resolver = SourceUrlResolver(input_dir=str(cfg.input_dir_path))
-            highlighted_payloads = project_source_payloads(
-                highlighted_sources,
-                resolver=resolver,
-            )
-            yield sse_event("highlights", safe_source_panel(sources=highlighted_payloads))
+            yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
 
     except Exception:
         logger.exception("Answer streaming failed")

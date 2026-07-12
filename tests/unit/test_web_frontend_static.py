@@ -105,6 +105,85 @@ def test_source_panel_does_not_nest_download_links_inside_toggle_buttons() -> No
     assert not button_start < download_link < button_end
 
 
+def test_source_panel_requires_download_for_every_source() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.deps import templates
+
+    source = SourceReferencePayload(
+        id="1",
+        title="notes.md",
+        source_uri="local://default/notes.md",
+        download_url="/files/raw/default/notes.md?workspace=default",
+        chunks=[],
+    )
+
+    html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
+    source_panel_text = (ROOT / "src/dlightrag/web/templates/partials/source_panel.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert html.count('class="source-dl-icon"') == 1
+    assert 'href="/files/raw/default/notes.md?workspace=default"' in html
+    assert "{% if src." not in source_panel_text
+
+
+def test_sanitized_source_download_preserves_accessible_name() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.safe_html import safe_source_panel
+
+    source = SourceReferencePayload(
+        id="1",
+        title="notes.md",
+        source_uri="local://default/notes.md",
+        download_url="/files/raw/default/notes.md?workspace=default",
+        chunks=[],
+    )
+
+    html = safe_source_panel(sources=[source])
+
+    assert 'aria-label="Download source"' in html
+    assert 'download=""' in html or " download" in html
+
+
+def test_source_titles_fall_back_without_legacy_paths() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.deps import templates
+
+    source = SourceReferencePayload(
+        id="1",
+        source_uri="local://default/notes.md",
+        download_url="/files/raw/default/notes.md?workspace=default",
+        chunks=[],
+    )
+    partials = ROOT / "src/dlightrag/web/templates/partials"
+
+    answer_html = templates.env.get_template("partials/answer_done.html").render(
+        answer="Answer [1].",
+        sources=[source],
+        answer_images=[],
+    )
+    source_html = templates.env.get_template("partials/source_panel.html").render(sources=[source])
+
+    assert '<span class="answer-ref-title">Source</span>' in answer_html
+    assert '<span class="source-doc-title">Source</span>' in source_html
+    assert "src.path" not in (partials / "answer_done.html").read_text(encoding="utf-8")
+    assert "src.path" not in (partials / "source_panel.html").read_text(encoding="utf-8")
+
+
+def test_source_download_aria_allowlist_does_not_allow_unsafe_anchor_attributes() -> None:
+    from dlightrag.web.safe_html import sanitize_html_fragment
+
+    html = sanitize_html_fragment(
+        '<a href="/files/raw/default/notes.md" aria-label="Download source" '
+        'onclick="alert(1)" style="display:none" target="_blank">Download</a>'
+    )
+
+    assert 'aria-label="Download source"' in html
+    assert "onclick" not in html
+    assert "style=" not in html
+    assert "target=" not in html
+
+
 def test_panel_action_icons_are_accessible_svg_buttons() -> None:
     file_list = (ROOT / "src/dlightrag/web/templates/partials/file_list.html").read_text(
         encoding="utf-8"
@@ -137,6 +216,8 @@ def test_files_panel_requests_are_controller_owned() -> None:
     assert 'hx-delete="/web/files"' not in file_list
     assert 'data-action="delete-file"' in file_list
     assert "data-file-path=" in file_list
+    assert "source-dl-icon" not in file_list
+    assert " download" not in file_list
 
     assert 'id="ingest-progress"' in progress
     assert "hx-get" not in progress

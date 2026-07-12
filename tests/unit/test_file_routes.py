@@ -48,6 +48,21 @@ async def client(tmp_working_dir: Path) -> AsyncIterator[AsyncClient]:
 
 
 class TestFileEndpoint:
+    async def test_local_markdown_download_is_attachment(
+        self,
+        client: AsyncClient,
+        tmp_working_dir: Path,
+    ) -> None:
+        source = tmp_working_dir / "inputs" / "default" / "notes.md"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("# Notes", encoding="utf-8")
+
+        response = await client.get("/files/raw/default/notes.md")
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/markdown")
+        assert 'attachment; filename="notes.md"' in response.headers["content-disposition"]
+
     async def test_streams_canonical_input_file(
         self, client: AsyncClient, tmp_working_dir: Path
     ) -> None:

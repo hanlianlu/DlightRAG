@@ -19,7 +19,7 @@
        role="button"
        tabindex="0">
     <span class="answer-ref-id">{{ src.id | reference_label }}</span>
-    <span class="answer-ref-title">{{ src.title or src.path or 'Untitled' }}</span>
+    <span class="answer-ref-title">{{ src.title or "Source" }}</span>
   </div>
   {% endfor %}
 </div>

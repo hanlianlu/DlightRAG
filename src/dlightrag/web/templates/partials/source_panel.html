@@ -3,12 +3,15 @@
   <div class="source-doc-header">
     <button class="source-doc-toggle" type="button" data-action="toggle-doc">
       <span class="collapse-icon">▶</span>
-      <span class="source-doc-title">{{ src.title or src.path }}</span>
+      <span class="source-doc-title">{{ src.title or "Source" }}</span>
       <span class="source-doc-badge">{{ src.id | reference_label }}</span>
       <span class="source-doc-count">{{ src.chunks|length }}</span>
     </button>
-    {% if src.url %}
-    <a href="{{ src.url }}" class="source-dl-icon" title="Download source" aria-label="Download source" download>
+    <a href="{{ src.download_url }}"
+       class="source-dl-icon"
+       title="Download source"
+       aria-label="Download source"
+       download>
       <svg class="source-dl-icon-svg" viewBox="0 0 24 24" fill="none"
            stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -16,7 +19,6 @@
         <line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
     </a>
-    {% endif %}
   </div>
   <div class="source-doc-chunks">
     {% for chunk in src.chunks %}
