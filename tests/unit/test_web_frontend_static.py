@@ -125,6 +125,11 @@ def test_live_answer_owns_viewport_against_late_history_render() -> None:
     assert "conversationStore.canRenderHistory(generation)" in main
     assert "conversationStore.canRenderHistory(bootstrapGeneration)" in main
     assert "if (conversationStore.setHistory(history, generation))" in main
+    assert "if (!conversationStore.select(conversationId)) return;" in main
+    assert "conversationDeferredSelectionReady" in chat
+    assert "conversationDeferredSelectionReady" in main
+    assert "shouldKeepLiveConversation(saveOutcome)" in chat
+    assert "const conversationId = conversationStore.answerConversationId" in chat
 
 
 def test_unknown_save_outcome_has_typed_accessible_recovery_action() -> None:

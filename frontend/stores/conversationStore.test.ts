@@ -72,7 +72,7 @@ test('conversation store exposes only server projection mutations', () => {
   }
 });
 
-test('late bootstrap history cannot replace a live answer viewport', () => {
+test('stale A failure defers bootstrap fallback B until live cleanup', () => {
   installStorage();
   const store = new ConversationStore();
   store.replaceList([FIRST]);
@@ -83,19 +83,83 @@ test('late bootstrap history cannot replace a live answer viewport', () => {
 
   store.beginLiveAnswer('first');
   const lateBootstrapGeneration = store.beginRequest();
+  assert.equal(store.select('second'), false);
 
   assert.equal(store.canRenderHistory(lateBootstrapGeneration), false);
   let attachedViewport = 'live-answer';
   if (store.setHistory(settled, lateBootstrapGeneration)) attachedViewport = 'history';
   assert.equal(attachedViewport, 'live-answer');
   assert.deepEqual(store.history, settled);
+  assert.equal(store.activeConversationId, 'first');
 
-  store.finishLiveAnswer('first');
+  assert.equal(store.finishLiveAnswer('first'), 'second');
+  assert.equal(store.activeConversationId, 'first');
   assert.equal(store.canRenderHistory(lateBootstrapGeneration), false);
 
   const recoveryGeneration = store.beginRequest();
+  assert.equal(store.select('second'), true);
   assert.equal(store.canRenderHistory(recoveryGeneration), true);
-  assert.equal(store.setHistory(settled, recoveryGeneration), true);
+  assert.equal(store.answerConversationId, null);
+  const fallback = {conversation: SECOND, turns: []};
+  assert.equal(store.setHistory(fallback, recoveryGeneration), true);
+  assert.equal(store.activeConversationId, 'second');
+  assert.equal(store.answerConversationId, 'second');
+  assert.deepEqual(store.history, fallback);
+});
+
+test('saved live A discards fallback B and refreshes A', () => {
+  installStorage();
+  const store = new ConversationStore();
+  store.replaceList([FIRST, SECOND]);
+  store.select('first');
+  store.beginLiveAnswer('first');
+
+  store.beginRequest();
+  assert.equal(store.select('second'), false);
+  assert.equal(store.activeConversationId, 'first');
+  assert.equal(store.finishLiveAnswer('first', true), null);
+
+  const savedGeneration = store.beginRequest();
+  assert.equal(store.select('first'), true);
+  const saved = {
+    conversation: {...FIRST, updated_at: '2026-07-13T13:00:00Z'},
+    turns: [],
+  };
+  assert.equal(store.setHistory(saved, savedGeneration), true);
+  assert.equal(store.activeConversationId, 'first');
+  assert.equal(store.answerConversationId, 'first');
+  assert.deepEqual(store.history, saved);
+});
+
+test('ordinary conversation switching blocks answers until history is visible', () => {
+  installStorage();
+  const store = new ConversationStore();
+  store.replaceList([FIRST, SECOND]);
+  store.select('first');
+
+  const generation = store.beginRequest();
+  assert.equal(store.select('second'), true);
+  assert.equal(store.activeConversationId, 'second');
+  assert.equal(store.answerConversationId, null);
+
+  const history = {conversation: SECOND, turns: []};
+  assert.equal(store.setHistory(history, generation), true);
+  assert.equal(store.answerConversationId, 'second');
+});
+
+test('same-conversation history remains a stale render during live ownership', () => {
+  installStorage();
+  const store = new ConversationStore();
+  store.replaceList([FIRST]);
+  store.select('first');
+  store.beginLiveAnswer('first');
+
+  const generation = store.beginRequest();
+  assert.equal(store.select('first'), true);
+  assert.equal(store.canRenderHistory(generation), false);
+  assert.equal(store.finishLiveAnswer('first'), null);
+  assert.equal(store.setHistory({conversation: FIRST, turns: []}, generation), false);
+  assert.equal(store.activeConversationId, 'first');
 });
 
 test('conversation store persists selection and rejects stale history responses', () => {

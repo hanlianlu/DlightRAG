@@ -16,6 +16,7 @@ import {
     describeConversationSaveOutcome,
     payloadFingerprint,
     pendingSubmissionStore,
+    shouldKeepLiveConversation,
 } from '../stores/pendingSubmissionStore.ts';
 
 let queryInFlight = false;
@@ -39,13 +40,19 @@ export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
 
-    const conversationId = conversationStore.activeConversationId;
+    const conversationId = conversationStore.answerConversationId;
     if (conversationId) conversationStore.beginLiveAnswer(conversationId);
     let ownsLiveViewport = conversationId !== null;
-    const releaseLiveViewport = (): void => {
+    const releaseLiveViewport = (discardPendingSelection = false): void => {
         if (!ownsLiveViewport || !conversationId) return;
-        conversationStore.finishLiveAnswer(conversationId);
+        const deferredSelection = conversationStore.finishLiveAnswer(
+            conversationId,
+            discardPendingSelection,
+        );
         ownsLiveViewport = false;
+        if (deferredSelection) {
+            bus.emit('conversationDeferredSelectionReady', {conversationId: deferredSelection});
+        }
     };
 
     const controller = new AbortController();
@@ -111,12 +118,12 @@ export async function submitQuery(query: string): Promise<void> {
                     if (conversationStore.activeConversationId !== conversationId) return;
                     activeRenderer.handle(eventType, data);
                 });
-                releaseLiveViewport();
                 if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
                     pendingSubmissionStore.clear(conversationId);
                 }
                 const saveOutcome = activeRenderer.saveOutcome;
-                if (saveOutcome?.conversation_saved === true) {
+                if (shouldKeepLiveConversation(saveOutcome)) {
+                    releaseLiveViewport(true);
                     if (saveOutcome.conversation) {
                         conversationStore.upsertSummary(saveOutcome.conversation);
                     }
@@ -130,6 +137,7 @@ export async function submitQuery(query: string): Promise<void> {
                         },
                     );
                 }
+                releaseLiveViewport();
                 return;
             } catch (error) {
                 if (controller.signal.aborted || attempt === 1) throw error;

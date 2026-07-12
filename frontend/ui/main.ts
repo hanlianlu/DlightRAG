@@ -38,10 +38,10 @@ export async function selectConversation(
     clearSources = true,
 ): Promise<void> {
     historyController?.abort();
+    const generation = conversationStore.beginRequest();
+    if (!conversationStore.select(conversationId)) return;
     const controller = new AbortController();
     historyController = controller;
-    const generation = conversationStore.beginRequest();
-    conversationStore.select(conversationId);
     if (clearSources) clearConversationSources();
     if (showLoading && conversationStore.canRenderHistory(generation)) {
         renderConversationHistoryLoading();
@@ -127,6 +127,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     bus.on('conversationSaveCheckRequested', function({conversationId}) {
         if (conversationStore.activeConversationId !== conversationId) return;
         void selectConversation(conversationId, true, false);
+    });
+    bus.on('conversationDeferredSelectionReady', function({conversationId}) {
+        void selectConversation(conversationId, true, true);
     });
     void initializeConversations();
 
