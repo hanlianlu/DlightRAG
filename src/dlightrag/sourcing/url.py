@@ -13,6 +13,11 @@ from urllib.parse import unquote, urljoin, urlparse
 import httpx
 
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.sourcing.source_contract import (
+    implicit_https_download_uri,
+    validate_download_uri,
+    validate_source_uri,
+)
 
 _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -34,13 +39,23 @@ class URLDataSource(AsyncDataSource):
         filename: str | None = None,
         source_uri: str | None = None,
         source_uris: Sequence[str] | None = None,
+        download_uri: str | None = None,
+        download_uris: Sequence[str] | None = None,
         client: Any | None = None,
         timeout: float = 120.0,
         max_download_bytes: int = 100 * 1024 * 1024,
         allow_private_hosts: Sequence[str] | None = None,
     ) -> None:
         if documents is not None and any(
-            value is not None for value in (urls, filename, source_uri, source_uris)
+            value is not None
+            for value in (
+                urls,
+                filename,
+                source_uri,
+                source_uris,
+                download_uri,
+                download_uris,
+            )
         ):
             raise ValueError("'documents' is mutually exclusive with URL shortcut fields")
         if documents is None and not urls:
@@ -54,6 +69,12 @@ class URLDataSource(AsyncDataSource):
             raise ValueError("'source_uri' and 'source_uris' are mutually exclusive")
         if source_uris is not None and len(source_uris) != len(url_list):
             raise ValueError("'source_uris' must match the number of urls")
+        if download_uri is not None and download_uris is not None:
+            raise ValueError("'download_uri' and 'download_uris' are mutually exclusive")
+        if download_uri is not None and len(url_list) != 1:
+            raise ValueError("'download_uri' can only be used with a single url")
+        if download_uris is not None and len(download_uris) != len(url_list):
+            raise ValueError("'download_uris' must match the number of urls")
 
         self._client = client
         self._owns_client = client is None
@@ -62,6 +83,7 @@ class URLDataSource(AsyncDataSource):
         self._allow_private_hosts = _normalize_host_patterns(allow_private_hosts or ())
         self._url_by_key: dict[str, str] = {}
         self._source_uri_by_key: dict[str, str] = {}
+        self._download_uri_by_key: dict[str, str | None] = {}
         self._document_by_key: dict[str, SourceDocument] = {}
 
         if documents is not None:
@@ -94,11 +116,28 @@ class URLDataSource(AsyncDataSource):
             key = _dedupe_key(key, self._url_by_key)
             self._url_by_key[key] = url
             stable_source_uri = document.source_uri or _default_source_uri_from_url(url)
-            stable_source_uri = _validate_source_uri(stable_source_uri)
+            stable_source_uri = validate_source_uri(stable_source_uri)
             self._source_uri_by_key[key] = stable_source_uri
+            if document.download_uri is not None:
+                explicit_download_uri = document.download_uri
+            elif download_uri is not None:
+                explicit_download_uri = download_uri
+            elif download_uris is not None:
+                explicit_download_uri = download_uris[index]
+            else:
+                explicit_download_uri = None
+            if explicit_download_uri is not None:
+                resolved_download_uri = validate_download_uri(explicit_download_uri)
+            else:
+                try:
+                    resolved_download_uri = implicit_https_download_uri(url)
+                except ValueError:
+                    resolved_download_uri = None
+            self._download_uri_by_key[key] = resolved_download_uri
             self._document_by_key[key] = SourceDocument(
                 key=key,
                 source_uri=stable_source_uri,
+                download_uri=resolved_download_uri,
                 display_filename=document.display_filename,
                 title=document.title,
                 author=document.author,
@@ -150,6 +189,9 @@ class URLDataSource(AsyncDataSource):
             return self._source_uri_by_key[key]
         except KeyError as exc:
             raise KeyError(f"unknown URL document id: {key}") from exc
+
+    def download_uri_for_key(self, key: str) -> str | None:
+        return self._download_uri_by_key[key]
 
     async def aclose(self) -> None:
         if not self._owns_client or self._client is None:
@@ -260,12 +302,6 @@ def _host_allowed_private(host: str, patterns: frozenset[str]) -> bool:
 def _default_source_uri_from_url(url: str) -> str:
     parsed = urlparse(url)
     return parsed._replace(query="", fragment="").geturl()
-
-
-def _validate_source_uri(value: str) -> str:
-    if not value or "\0" in value:
-        raise ValueError("source_uri is invalid")
-    return value
 
 
 def _document_key_from_url(

@@ -51,6 +51,7 @@ class IngestDocument(ClientContractModel):
     url: str | None = None
     filename: str | None = None
     source_uri: str | None = None
+    download_uri: str | None = None
     title: str | None = None
     author: str | None = None
     metadata: dict[str, Any] | None = None
@@ -73,6 +74,8 @@ class IngestSpec(ClientContractModel):
     filename: str | None = None
     source_uri: str | None = None
     source_uris: list[str] | None = None
+    download_uri: str | None = None
+    download_uris: list[str] | None = None
     documents: list[IngestDocument] | None = None
     retain_source_file: bool | None = None
     replace: bool | None = None
@@ -83,6 +86,7 @@ class IngestSpec(ClientContractModel):
 
     @model_validator(mode="after")
     def _validate_source_fields(self) -> IngestSpec:
+        self._validate_download_fields()
         if self.source_type == "local":
             if self.documents is not None:
                 if self.path:
@@ -142,6 +146,32 @@ class IngestSpec(ClientContractModel):
             if self.source_uris is not None and len(self.source_uris) != url_count:
                 raise ValueError("'source_uris' must match the number of urls")
         return self
+
+    def _validate_download_fields(self) -> None:
+        top_level_present = self.download_uri is not None or self.download_uris is not None
+        document_values = [
+            document.download_uri
+            for document in self.documents or []
+            if document.download_uri is not None
+        ]
+        if self.source_type != "url":
+            if top_level_present or document_values:
+                raise ValueError("download_uri fields are only valid for URL ingestion")
+            return
+        if self.documents is not None:
+            if top_level_present:
+                raise ValueError(
+                    "'download_uri'/'download_uris' and 'documents' are mutually exclusive"
+                )
+            return
+
+        url_count = int(self.url is not None) + len(self.urls or [])
+        if self.download_uri is not None and self.download_uris is not None:
+            raise ValueError("'download_uri' and 'download_uris' are mutually exclusive")
+        if self.download_uri is not None and url_count != 1:
+            raise ValueError("'download_uri' can only be used with a single url")
+        if self.download_uris is not None and len(self.download_uris) != url_count:
+            raise ValueError("'download_uris' must match the number of urls")
 
 
 class IngestPayload(IngestSpec):

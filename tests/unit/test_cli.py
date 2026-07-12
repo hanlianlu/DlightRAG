@@ -261,6 +261,74 @@ def test_ingest_kwargs_support_url_source() -> None:
     }
 
 
+def test_ingest_kwargs_support_url_download_uris() -> None:
+    args = _parse_ingest(
+        [
+            "--source",
+            "url",
+            "--urls",
+            "https://fetch.example.com/a.pdf",
+            "https://fetch.example.com/b.pdf",
+            "--download-uris",
+            "https://cdn.example.com/a.pdf",
+            "https://cdn.example.com/b.pdf",
+        ]
+    )
+
+    _validate_ingest_args(args)
+
+    assert _build_ingest_kwargs(args) == {
+        "urls": [
+            "https://fetch.example.com/a.pdf",
+            "https://fetch.example.com/b.pdf",
+        ],
+        "download_uris": [
+            "https://cdn.example.com/a.pdf",
+            "https://cdn.example.com/b.pdf",
+        ],
+        "replace": False,
+    }
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        [
+            "--source",
+            "url",
+            "--urls",
+            "https://fetch.example.com/a.pdf",
+            "https://fetch.example.com/b.pdf",
+            "--download-uri",
+            "https://cdn.example.com/a.pdf",
+        ],
+        [
+            "--source",
+            "url",
+            "--urls",
+            "https://fetch.example.com/a.pdf",
+            "https://fetch.example.com/b.pdf",
+            "--download-uris",
+            "https://cdn.example.com/a.pdf",
+        ],
+        [
+            "--source",
+            "url",
+            "--url",
+            "https://fetch.example.com/a.pdf",
+            "--download-uri",
+            "https://cdn.example.com/a.pdf",
+            "--download-uris",
+            "https://cdn.example.com/a.pdf",
+        ],
+        ["./docs/report.pdf", "--download-uri", "https://cdn.example.com/a.pdf"],
+    ],
+)
+def test_ingest_rejects_invalid_download_uri_argument_shapes(args: list[str]) -> None:
+    with pytest.raises(SystemExit):
+        _validate_ingest_args(_parse_ingest(args))
+
+
 def test_json_object_arg_rejects_non_object_json() -> None:
     parser = build_parser()
 

@@ -478,6 +478,14 @@ async def ingest_tool(
         list[str] | None,
         Field(default=None, description="Stable source URIs stored for URL batches."),
     ] = None,
+    download_uri: Annotated[
+        str | None,
+        Field(default=None, description="Durable download URI for a single URL."),
+    ] = None,
+    download_uris: Annotated[
+        list[str] | None,
+        Field(default=None, description="Durable download URIs for URL batches."),
+    ] = None,
     documents: Annotated[
         list[dict[str, Any]] | None,
         Field(

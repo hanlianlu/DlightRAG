@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from dlightrag.sourcing.base import SourceDocument
 from dlightrag.sourcing.uri import parse_remote_uri
 from dlightrag.sourcing.url import URLDataSource
 
@@ -99,6 +100,82 @@ async def test_url_data_source_accepts_explicit_stable_source_uri() -> None:
     )
 
     assert source.source_uri_for_key("asset.pdf") == "bynder://asset/asset-1"
+
+
+async def test_url_data_source_separates_fetch_identity_and_download_uri() -> None:
+    source = URLDataSource(
+        urls=["https://fetch.example.com/download?sig=secret"],
+        filename="asset.pdf",
+        source_uri="bynder://asset/1",
+        download_uri="https://cdn.example.com/assets/1.pdf",
+        client=_Client(),
+    )
+
+    document = (await source.alist_documents())[0]
+
+    assert document.source_uri == "bynder://asset/1"
+    assert document.download_uri == "https://cdn.example.com/assets/1.pdf"
+    assert source.download_uri_for_key("asset.pdf") == ("https://cdn.example.com/assets/1.pdf")
+
+
+async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_url() -> None:
+    source = URLDataSource(
+        urls=["https://fetch.example.com/download?sig=secret"],
+        filename="asset.pdf",
+        client=_Client(),
+    )
+
+    document = (await source.alist_documents())[0]
+
+    assert document.download_uri is None
+
+
+async def test_url_data_source_derives_download_uri_from_queryless_fetch_url() -> None:
+    source = URLDataSource(
+        urls=["https://fetch.example.com/assets/1.pdf"],
+        client=_Client(),
+    )
+
+    document = (await source.alist_documents())[0]
+
+    assert document.download_uri == "https://fetch.example.com/assets/1.pdf"
+    assert source.download_uri_for_key("1.pdf") == "https://fetch.example.com/assets/1.pdf"
+
+
+async def test_url_data_source_uses_source_document_download_uri() -> None:
+    source = URLDataSource(
+        documents=[
+            SourceDocument(
+                key="https://fetch.example.com/download?sig=secret",
+                source_uri="bynder://asset/1",
+                download_uri="https://cdn.example.com/assets/1.pdf",
+                display_filename="asset.pdf",
+            )
+        ],
+        client=_Client(),
+    )
+
+    document = (await source.alist_documents())[0]
+
+    assert document.download_uri == "https://cdn.example.com/assets/1.pdf"
+
+
+def test_url_data_source_download_uri_cardinality_is_strict() -> None:
+    with pytest.raises(ValueError, match="download_uris"):
+        URLDataSource(
+            urls=["https://fetch.example.com/a.pdf", "https://fetch.example.com/b.pdf"],
+            download_uris=["https://cdn.example.com/a.pdf"],
+            client=_Client(),
+        )
+
+
+def test_url_data_source_rejects_non_durable_explicit_download_uri() -> None:
+    with pytest.raises(ValueError, match="durable download_uri"):
+        URLDataSource(
+            urls=["https://fetch.example.com/download?sig=secret"],
+            download_uri="https://cdn.example.com/download?sig=secret",
+            client=_Client(),
+        )
 
 
 async def test_url_data_source_revalidates_final_response_url(tmp_path: Path) -> None:
@@ -207,6 +284,18 @@ def test_url_data_source_allows_allowlisted_private_hostname(
     )
 
     assert source.source_uri_for_key("report.pdf") == "https://docs.corp.example/report.pdf"
+
+
+async def test_url_data_source_keeps_allowlisted_private_fetch_url_out_of_download_uri() -> None:
+    source = URLDataSource(
+        urls=["https://10.0.0.1/report.pdf"],
+        allow_private_hosts=["10.*"],
+        client=_Client(),
+    )
+
+    document = (await source.alist_documents())[0]
+
+    assert document.download_uri is None
 
 
 def test_parse_remote_uri_treats_https_as_url_source() -> None:
