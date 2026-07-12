@@ -89,7 +89,7 @@ _ALLOWED_ATTRS: dict[str, set[str]] = {
         "y1",
         "y2",
     },
-    "a": {"download", "href", "title"},
+    "a": {"aria-label", "download", "href", "title"},
     "button": {"type"},
     "col": {"span"},
     "colgroup": {"span"},

@@ -386,9 +386,13 @@ class TestWebAnswer:
             return keyword_llm
 
         async def fake_extract_highlights_for_sources(*, sources, answer_text, llm_func, **kwargs):
+            from dlightrag.citations.schemas import SourceReferencePayload
+
             nonlocal highlights_called
             highlights_called = True
             assert llm_func is keyword_llm
+            assert isinstance(sources[0], SourceReferencePayload)
+            assert sources[0].download_url == "/files/raw/s3://bucket/report.pdf?workspace=default"
             sources[0].chunks[0].highlight_phrases = ["Evidence"]
             return sources
 
@@ -513,6 +517,49 @@ class TestWebSSEBoundary:
         assert "javascript:" not in resp.text
         assert "onerror" not in resp.text.lower()
         assert "<script" not in resp.text.lower()
+
+    async def test_source_download_projection_failure_uses_structured_answer_error(
+        self,
+        client: AsyncClient,
+        test_config: DlightragConfig,
+        web_app,
+    ) -> None:
+        async def mock_tokens():
+            yield "Answer [1-1]."
+
+        class PublicOnlyManager:
+            def __init__(self) -> None:
+                self.config = test_config
+                self.aanswer_stream = AsyncMock(
+                    return_value=(
+                        {
+                            "chunks": [
+                                {
+                                    "chunk_id": "c1",
+                                    "reference_id": "1",
+                                    "content": "Evidence in cited chunk.",
+                                    "file_path": "report.pdf",
+                                    "_workspace": "default",
+                                    "metadata": {
+                                        "source_uri": "bynder://asset/1",
+                                        "source_download_locator": "file://private/report.pdf",
+                                    },
+                                }
+                            ]
+                        },
+                        mock_tokens(),
+                    )
+                )
+
+        web_app.state.manager = PublicOnlyManager()
+
+        response = await client.post("/web/answer", json={"query": "hello"})
+
+        assert response.status_code == 200
+        assert "event: error" in response.text
+        assert "Service error. Please try again." in response.text
+        assert "event: done" not in response.text
+        assert "file://private/report.pdf" not in response.text
 
 
 class TestWebAnswerAdapter:
@@ -961,19 +1008,12 @@ class TestSourcePanelTemplate:
 
 
 async def test_web_answer_done_builder_projects_http_source_payloads(
-    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
     from dlightrag.web import answer_events
+    from dlightrag.web.safe_html import safe_source_panel
 
-    captured_sources: list[object] = []
-
-    def capture_done(*, answer, sources, answer_images):  # noqa: ANN001, ANN202
-        captured_sources.extend(sources)
-        return "<div>done</div>"
-
-    monkeypatch.setattr(answer_events, "safe_answer_done", capture_done)
     contexts = {
         "chunks": [
             {
@@ -993,6 +1033,74 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
     manager = SimpleNamespace(config=SimpleNamespace(workspace="default"))
     cfg = SimpleNamespace(input_dir_path=tmp_path / "inputs")
 
+    payload = await answer_events._build_answer_done_payload(
+        clean_answer="Answer [1-1].",
+        contexts=contexts,
+        current_image_ids=[],
+        image_descriptions=[],
+        manager=manager,
+        session_id="session-1",
+        scope=None,
+        cfg=cfg,
+        workspace="default",
+    )
+
+    assert len(payload.sources) == 1
+    source = payload.sources[0]
+    assert isinstance(source, SourceReferencePayload)
+    expected_url = "/files/raw/s3://bucket/report.pdf?workspace=finance"
+    assert source.download_url == expected_url
+    assert payload.done.html.count(f'href="{expected_url}"') == 1
+    assert safe_source_panel(sources=payload.sources).count(f'href="{expected_url}"') == 1
+
+
+async def test_web_answer_done_builder_extracts_images_before_public_projection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
+    from dlightrag.web import answer_events
+
+    calls: list[str] = []
+
+    def capture_images(sources, *, contexts):  # noqa: ANN001, ANN202
+        assert isinstance(sources[0], SourceReference)
+        calls.append("images")
+        return []
+
+    def capture_projection(sources, *, resolver):  # noqa: ANN001, ANN202
+        assert isinstance(sources[0], SourceReference)
+        calls.append("projection")
+        return [
+            SourceReferencePayload(
+                id=sources[0].id,
+                title=sources[0].title,
+                source_uri=sources[0].source_uri,
+                download_url="/files/raw/default/report.pdf?workspace=default",
+                chunks=sources[0].chunks,
+            )
+        ]
+
+    monkeypatch.setattr(answer_events, "answer_images_from_sources", capture_images)
+    monkeypatch.setattr(answer_events, "project_source_payloads", capture_projection)
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "c1",
+                "reference_id": "1",
+                "file_path": "report.pdf",
+                "content": "Evidence",
+                "_workspace": "default",
+                "metadata": {
+                    "source_uri": "local://default/report.pdf",
+                    "source_download_locator": "report.pdf",
+                },
+            }
+        ]
+    }
+    manager = SimpleNamespace(config=SimpleNamespace(workspace="default"))
+    cfg = SimpleNamespace(input_dir_path=tmp_path / "inputs")
+
     await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
@@ -1005,7 +1113,4 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
         workspace="default",
     )
 
-    assert len(captured_sources) == 1
-    source = captured_sources[0]
-    assert isinstance(source, SourceReferencePayload)
-    assert source.download_url == "/files/raw/s3://bucket/report.pdf?workspace=finance"
+    assert calls == ["images", "projection"]

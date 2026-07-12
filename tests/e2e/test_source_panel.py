@@ -53,6 +53,19 @@ def _inject_answer_with_sources(page) -> None:
                     <span class="source-doc-badge">1</span>
                     <span class="source-doc-count">1</span>
                   </button>
+                  <a href="/files/raw/default/report.pdf?workspace=default"
+                     class="source-dl-icon"
+                     title="Download source"
+                     aria-label="Download source"
+                     download>
+                    <svg class="source-dl-icon-svg" viewBox="0 0 24 24" fill="none"
+                         stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                         stroke-linejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                      <polyline points="7 10 12 15 17 10"/>
+                      <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                  </a>
                 </div>
                 <div class="source-doc-chunks" hidden>
                   <div class="source-chunk" data-ref="1" data-chunk="1">
@@ -80,3 +93,24 @@ def test_reference_item_keyboard_opens_source_panel(page):
     assert page.locator("#panel-title").text_content() == "SOURCES"
     assert page.locator("#panel-content .source-chunk-content").text_content() == "Evidence text"
     assert "Wrong decoy" not in page.locator("#panel-content").text_content()
+
+
+@pytest.mark.e2e
+def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
+    page.goto("/web/")
+    page.wait_for_selector(".composer-input", timeout=10000)
+    _inject_answer_with_sources(page)
+    page.locator(".answer-ref-item").press("Enter")
+
+    header = page.locator('#panel-content .source-doc[data-ref="1"] .source-doc-header')
+    download = header.locator(":scope > .source-dl-icon")
+
+    assert download.count() == 1
+    assert header.locator(":scope > .source-doc-toggle").count() == 1
+    assert download.get_attribute("href").endswith(
+        "/files/raw/default/report.pdf?workspace=default"
+    )
+    assert download.get_attribute("aria-label") == "Download source"
+    assert download.get_attribute("download") == ""
+    download.focus()
+    assert download.evaluate("element => element === document.activeElement") is True
