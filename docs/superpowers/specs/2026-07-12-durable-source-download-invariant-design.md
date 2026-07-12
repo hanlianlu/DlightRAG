@@ -84,12 +84,20 @@ download_uri: str | None
 `download_uri` is an explicit durable remote locator and is restricted to the
 server-supported download schemes.
 
+Local sources use a stable workspace-relative identity of the form
+`local://<workspace>/<relative-path>`. Absolute staged/input paths are never
+used as public provenance identities.
+
 `aingest_source()` also accepts an optional `download_uri_for_key` callback for
 connectors that stream lightweight document descriptors rather than populating
 each `SourceDocument.download_uri`.
 
 The per-document value wins over the callback. There is no alias from
 `source_uri` to `download_uri` for custom connectors.
+
+The public manager SDK mirrors the callback unchanged. Replace cleanup looks
+up the prior record by `download_locator`, not by provenance `source_uri`, so a
+custom identity backed by a different HTTPS/S3/Azure locator replaces cleanly.
 
 ### 5.2 PreparedIngestFile
 
@@ -111,20 +119,33 @@ source_uri TEXT
 download_locator TEXT
 ```
 
-`file_path` remains because LightRAG and existing delete/retry workflows use it;
-new product code must not infer provenance or download semantics from it.
+`file_path` remains for LightRAG parser status and the PostgreSQL legacy
+delete/lookup contract; new product code must not infer provenance or download
+semantics from it.
 
-The schema migration backfills both new columns from `file_path` for existing
-rows. New ingests always write the explicit values. Retrieval enrichment reads
-the new columns only; it does not keep a runtime fallback to `file_path`.
+The schema migration backfills `download_locator` from `file_path` for existing
+rows. Remote `source_uri` values are also backfilled from supported remote
+`file_path` values; legacy local rows receive a non-path-leaking synthetic
+`local://legacy/...` identity. New ingests always write explicit values.
+Retrieval enrichment reads the new columns only; it does not keep a runtime
+fallback to `file_path`.
 
 Existing rows whose backfilled locator uses an unsupported scheme are invalid
 and must be re-ingested. The Web projection surfaces an invariant error instead
 of hiding Download.
 
-### 5.4 SourceReference
+### 5.4 Internal and public source models
 
-The public source fields become:
+The internal `SourceReference` carries:
+
+```python
+source_uri: str
+workspace: str
+download_locator: str
+```
+
+Adapters convert it to a distinct `SourceReferencePayload`; its public fields
+are:
 
 ```python
 source_uri: str
@@ -133,11 +154,15 @@ download_url: str | None
 
 Remove the ambiguous `path` and `url` fields without deprecated aliases.
 
-The domain object retains an excluded internal `download_locator` so HTTP
-adapters can project a principal-authorized `/files/raw/...` URL without leaking
-raw local paths or provider locators. `download_url` may remain absent in a
-transport-neutral in-process result, but it is required at the Web rendering
-boundary.
+This separation prevents a framework from revalidating a serialized internal
+model after its required excluded fields have been removed. HTTP adapters
+project a principal-authorized `/files/raw/...` URL without leaking raw local
+paths or provider locators. `download_url` remains absent in a transport-neutral
+SDK/MCP payload but is required at the Web rendering boundary.
+
+The internal source workspace is retained alongside the locator and excluded
+from public serialization. Public chunk `file_path` remains display-only and is
+reduced to a basename; it is never a source/download locator.
 
 ## 6. Ingest validation
 
@@ -259,6 +284,18 @@ they must not rely on Search-in scope, Files-in target, or configured default.
 Authorization denial is distinct from a missing locator. The ingestion record
 remains valid even when a particular principal cannot download it.
 
+Metadata APIs and LLM field-schema hints exclude `download_locator`, legacy
+`file_path`, and other internal routing fields. `source_uri` remains the single
+public provenance field.
+
+## 10.1 Failed-document retry
+
+System source/download metadata is written before LightRAG parser execution so
+a failed document retains a retry contract. Retry reads `source_uri` and
+`download_locator` from that metadata and dispatches the locator while
+preserving provenance. It never interprets LightRAG `doc_status.file_path`,
+which is only the parser input path, as source identity or download policy.
+
 ## 11. Observability
 
 Add structured outcomes without high-cardinality URI labels:
@@ -287,7 +324,7 @@ Delete:
 
 Keep:
 
-- LightRAG-facing `file_path` storage and delete/retry behavior;
+- LightRAG-facing parser `file_path` storage and user-visible retry behavior;
 - local containment checks;
 - S3/Azure signed redirect generation;
 - HTTPS redirect safety validation;
@@ -324,6 +361,10 @@ Keep:
 - Fresh metadata stores distinct source identity and download locator.
 - Existing rows are backfilled once by an idempotent migration.
 - Retrieval enrichment uses the new columns and never parser basename fallback.
+- Local source identity and public chunk file names reveal no absolute server path.
+- Failed-document retry uses stored source/download metadata even when the
+  LightRAG parser path was ephemeral and has already been deleted.
+- Metadata responses and LLM field-schema hints reveal no download locator.
 
 ### Projection and UI
 
@@ -340,5 +381,6 @@ Keep:
 
 - Source citation filtering, accordion behavior, semantic highlights, images,
   MathJax, gallery/lightbox, and answer streaming remain unchanged.
-- File deletion and retry continue using LightRAG-compatible `file_path`.
+- File deletion remains LightRAG-compatible, and user-visible failed-document
+  retry continues through the dedicated source/download metadata contract.
 - No raw local download locator appears in public JSON.
