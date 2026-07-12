@@ -37,6 +37,7 @@ from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
 from dlightrag.sourcing.source_contract import (
     SourceDownloadContractError,
     local_source_uri,
+    safe_source_filename,
     validate_download_uri,
     validate_source_uri,
 )
@@ -116,12 +117,7 @@ class _RemoteDownloadFailure:
 
 
 def _safe_remote_source_id(document: SourceDocument) -> str:
-    raw_name = document.display_filename or document.key
-    basename = Path(raw_name.split("?", 1)[0].split("#", 1)[0].replace("\\", "/")).name
-    safe_name = "".join(
-        character if character.isalnum() or character in "._-" else "_" for character in basename
-    )
-    return safe_name[:128] or "document"
+    return safe_source_filename(document.display_filename or document.key)
 
 
 def _download_locator_kind(locator: str | None, *, retained: bool = False) -> str:
@@ -1169,8 +1165,12 @@ class RAGService:
                     source_uri = validate_source_uri(
                         document.source_uri or source_uri_for_key(document.key)
                     )
+                except asyncio.CancelledError:
+                    raise
                 except TypeError, ValueError:
                     return _RemoteDownloadFailure(f"{safe_source_id}: source_uri is invalid")
+                except Exception:  # noqa: BLE001
+                    return _RemoteDownloadFailure(f"{safe_source_id}: source_uri resolution failed")
 
                 try:
                     download_uri = document.download_uri

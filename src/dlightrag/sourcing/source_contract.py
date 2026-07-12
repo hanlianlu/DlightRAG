@@ -58,6 +58,20 @@ def local_source_uri(workspace: str, relative_path: str | Path) -> str:
     return f"local://{quote(safe_workspace, safe='')}/{quote(path.as_posix(), safe='/')}"
 
 
+def safe_source_filename(value: str | None) -> str:
+    """Return a bounded basename safe for client errors and structured logs."""
+    candidate = (value or "document").replace("\\", "/")
+    try:
+        path = unquote(urlsplit(candidate).path)
+    except ValueError:
+        path = candidate.split("?", 1)[0].split("#", 1)[0]
+    basename = PurePosixPath(path).name
+    safe_name = "".join(
+        character if character.isalnum() or character in "._-" else "_" for character in basename
+    )
+    return safe_name[:128] or "document"
+
+
 def validate_download_uri(value: str) -> str:
     candidate = value
     try:
