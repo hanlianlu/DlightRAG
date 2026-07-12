@@ -141,6 +141,7 @@ The internal `SourceReference` carries:
 ```python
 source_uri: str
 workspace: str
+document_id: str
 download_locator: str
 ```
 
@@ -160,9 +161,11 @@ project a principal-authorized `/files/raw/...` URL without leaking raw local
 paths or provider locators. `download_url` remains absent in a transport-neutral
 SDK/MCP payload but is required at the Web rendering boundary.
 
-The internal source workspace is retained alongside the locator and excluded
-from public serialization. Public chunk `file_path` remains display-only and is
-reduced to a basename; it is never a source/download locator.
+The internal source workspace and stable LightRAG document ID are retained
+alongside the locator and excluded from public serialization. HTTP adapters put
+only the document ID and workspace into `download_url`; they look up the locator
+server-side. Public chunk `file_path` remains display-only and is reduced to a
+basename; it is never a source/download locator.
 
 ## 6. Ingest validation
 
@@ -282,10 +285,12 @@ boundaries:
   the Web session cookie or a Web Bearer request.
 
 Neither adapter calls or imports the other route. Both delegate locator
-validation, exact workspace ownership, local containment, and remote signing to
-one transport-neutral core download service, then map its local-file or redirect
-target into their own HTTP response. The Web cookie remains scoped to `/web`;
-the REST adapter never accepts it.
+lookup, validation, local containment, and remote signing to one
+transport-neutral core download service, then map its local-file or redirect
+target into their own HTTP response. Download URLs contain a document ID, never
+the stored locator; the core looks up the exact `(workspace, document_id)`
+metadata row before using its internal locator. The Web cookie remains scoped
+to `/web`; the REST adapter never accepts it.
 
 Both adapters enforce `workspace.download_source`. The default
 reader/editor/admin presets already include that action.
@@ -377,6 +382,8 @@ Keep:
 - Failed-document retry uses stored source/download metadata even when the
   LightRAG parser path was ephemeral and has already been deleted.
 - Metadata responses and LLM field-schema hints reveal no download locator.
+- HTTP download URLs contain the stable document ID and source workspace, never
+  a local path or remote locator.
 
 ### Projection and UI
 

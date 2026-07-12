@@ -1253,25 +1253,33 @@ git commit -m "Document durable source download behavior"
 
 **Files:**
 - Create: `src/dlightrag/core/source_download.py`
+- Create: `src/dlightrag/core/retrieval/source_links.py`
 - Create: `tests/unit/test_source_download.py`
+- Create: `tests/unit/test_source_links.py`
+- Delete: `src/dlightrag/core/retrieval/source_url_resolver.py`
+- Delete: `tests/unit/test_source_url_resolver.py`
 - Modify: `src/dlightrag/api/routes/files.py`
 - Modify: `src/dlightrag/web/routes/files.py`
 - Modify: `src/dlightrag/web/answer_events.py`
+- Modify: `src/dlightrag/citations/schemas.py`
+- Modify: `src/dlightrag/citations/source_builder.py`
+- Modify: `src/dlightrag/core/client_payloads.py`
+- Modify: `src/dlightrag/core/servicemanager.py`
 - Modify: `tests/unit/test_file_routes.py`
 - Modify: `tests/unit/test_web_routes.py`
 - Modify: `docs/security.md`
 
 **Interfaces:**
-- Consumes: `RAGServiceManager.ahas_download_locator(workspace, download_locator)` and the existing S3/Azure signer utilities.
-- Produces: `SourceDownloadService.resolve_request(file_path, workspace)`, `SourceDownloadService.prepare(request)`, `LocalDownloadTarget`, `RedirectDownloadTarget`, REST `GET /files/raw/{file_path:path}`, and Web `GET /web/files/raw/{file_path:path}`.
+- Consumes: `MetadataIndexProtocol.get(document_id)`, the stored internal `download_locator`, and the existing S3/Azure signer utilities.
+- Produces: `RAGServiceManager.aprepare_source_download(workspace, document_id)`, `LocalDownloadTarget`, `RedirectDownloadTarget`, `SourceDownloadLinkBuilder.resolve(document_id, workspace=...)`, REST `GET /files/raw/{document_id}`, and Web `GET /web/files/raw/{document_id}`.
 
 - [ ] **Step 1: Keep the Web-authentication regression red**
 
 Add a simple-login test that writes `inputs/default/notes.md`, logs in through
-`/web/login`, and requests `/web/files/raw/default/notes.md` without an
+`/web/login`, and requests `/web/files/raw/doc-notes?workspace=default` without an
 `Authorization` header. Assert `200`, the exact bytes, and exact locator
-membership. Also assert the REST route still returns `401` when only the Web
-cookie is available.
+metadata lookup. Also assert the REST route still returns `401` when only the
+Web cookie is available.
 
 Run:
 
@@ -1298,24 +1306,19 @@ class RedirectDownloadTarget:
     url: str
 ```
 
-The exact method interfaces are
-`SourceDownloadService.resolve_request(file_path: str, workspace: str | None) -> LocalDownloadRequest | RemoteDownloadRequest`
-and
-`SourceDownloadService.prepare(request: LocalDownloadRequest | RemoteDownloadRequest) -> LocalDownloadTarget | RedirectDownloadTarget`.
-
-`resolve_request` determines the actual workspace and safe local relative path
-without signing or returning bytes. Each endpoint authorizes that workspace.
-`prepare` then canonicalizes remote locators, verifies exact
-`(workspace, download_locator)` membership without warming a model service,
-resolves contained local files, and creates local or redirect targets. Express
-denied scope, invalid locator, missing source, and unavailable signer as core
-exceptions with no HTTP dependency.
+The exact manager interface is
+`RAGServiceManager.aprepare_source_download(workspace: str, document_id: str) -> LocalDownloadTarget | RedirectDownloadTarget`.
+It cold-reads the exact metadata row without warming a model service. The core
+then validates the row's internal locator, resolves contained local files, or
+creates a signed/public redirect target. Express invalid metadata, missing
+source, and unavailable signer as core exceptions with no HTTP dependency.
 
 - [ ] **Step 3: Add focused core tests**
 
-Cover exact local resolution, traversal/conflicting-workspace rejection,
-canonical S3/Azure/HTTPS locators, missing locator membership, and signer
-unavailability in `tests/unit/test_source_download.py`.
+Cover exact local containment, cross-workspace document lookup, canonical
+S3/Azure/HTTPS locators, missing metadata, and signer unavailability in
+`tests/unit/test_source_download.py`. Cover document-ID/workspace URL encoding
+in `tests/unit/test_source_links.py`; no link may contain `download_locator`.
 
 Run:
 
@@ -1327,10 +1330,11 @@ Expected: all tests pass and no test constructs a FastAPI request.
 
 - [ ] **Step 4: Keep the REST adapter Bearer-owned**
 
-Reduce `src/dlightrag/api/routes/files.py` to REST authentication,
+Reduce `src/dlightrag/api/routes/files.py` to a document-ID route, REST authentication,
 `workspace.download_source` enforcement, core exception-to-HTTP mapping, and
 target-to-`FileResponse`/`RedirectResponse` mapping. Do not accept the Web cookie
-and do not import any Web module.
+and do not import any Web module. Delete caller-supplied local path resolution,
+basename scanning, and remote-locator dispatch from the route.
 
 Run:
 
@@ -1343,14 +1347,12 @@ pass.
 
 - [ ] **Step 5: Add the Web-owned adapter and projection**
 
-Add `GET /files/raw/{file_path:path}` to the Web router (mounted beneath
+Add `GET /files/raw/{document_id}` to the Web router (mounted beneath
 `/web`). Read `request.state.user_context`, enforce Web access, call the shared
 core service, and map its target locally. Set the Web answer resolver to:
 
 ```python
-SourceUrlResolver(
-    input_dir=str(cfg.input_dir_path),
-    workspace=workspace or manager.config.workspace,
+SourceDownloadLinkBuilder(
     base_url="/web/files/raw",
 )
 ```
@@ -1377,7 +1379,7 @@ Expected: all commands exit `0`; Web links use `/web/files/raw`, REST links use
 Commit:
 
 ```bash
-git add src/dlightrag/core/source_download.py src/dlightrag/api/routes/files.py src/dlightrag/web/routes/files.py src/dlightrag/web/answer_events.py tests/unit/test_source_download.py tests/unit/test_file_routes.py tests/unit/test_web_routes.py docs/security.md
+git add src/dlightrag/core/source_download.py src/dlightrag/core/retrieval/source_links.py src/dlightrag/api/routes/files.py src/dlightrag/web/routes/files.py src/dlightrag/web/answer_events.py src/dlightrag/citations/schemas.py src/dlightrag/citations/source_builder.py src/dlightrag/core/client_payloads.py src/dlightrag/core/servicemanager.py tests/unit/test_source_download.py tests/unit/test_source_links.py tests/unit/test_file_routes.py tests/unit/test_web_routes.py docs/security.md
 git commit -m "Separate Web and REST source downloads"
 ```
 
