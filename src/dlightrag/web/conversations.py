@@ -10,10 +10,13 @@ from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
+    CommitTurnResult,
     ConversationSnapshot,
+    PendingConversationImage,
     PGWebConversationStore,
     StoredConversationImage,
 )
+from dlightrag.utils.images import ValidatedWebImage
 from dlightrag.web.conversation_models import (
     ConversationHistory,
     ConversationImageReference,
@@ -161,6 +164,52 @@ class WebConversationService:
                 conversation_id,
                 image_id,
                 ttl_days=self._ttl_days,
+            )
+        )
+
+    async def commit_answer(
+        self,
+        prepared: PreparedWebConversation,
+        *,
+        user_text: str,
+        assistant_text: str,
+        answer_sources: dict[str, Any],
+        queried_workspaces: list[str],
+        images: tuple[ValidatedWebImage, ...],
+        image_descriptions: list[str] | dict[str, str],
+    ) -> CommitTurnResult:
+        """Atomically append a completed answer against its captured revision."""
+
+        def description_for(image: ValidatedWebImage) -> str | None:
+            if isinstance(image_descriptions, list):
+                index = image.ordinal - 1
+                return image_descriptions[index] if index < len(image_descriptions) else None
+            return image_descriptions.get(image.image_id) or image_descriptions.get(
+                str(image.ordinal)
+            )
+
+        pending = [
+            PendingConversationImage(
+                image_id=image.image_id,
+                ordinal=image.ordinal,
+                mime_type=image.mime_type,
+                image_bytes=image.image_bytes,
+                content_sha256=image.content_sha256,
+                vlm_description=description_for(image),
+            )
+            for image in images
+        ]
+        return await self._store_call(
+            self._store.commit_turn(
+                principal_id=prepared.principal_id,
+                conversation_id=prepared.conversation_id,
+                expected_revision=prepared.content_revision,
+                user_text=user_text,
+                assistant_text=assistant_text,
+                answer_sources=answer_sources,
+                queried_workspaces=queried_workspaces,
+                images=pending,
+                max_turns=self._max_turns,
             )
         )
 

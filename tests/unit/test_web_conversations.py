@@ -555,6 +555,50 @@ async def test_prepare_answer_uses_one_snapshot_and_text_only_messages(
     )
 
 
+async def test_commit_answer_maps_validated_images_and_revision(
+    service_under_test,
+    conversation_store: AsyncMock,
+) -> None:
+    from dlightrag.storage.web_conversations import CommitTurnResult
+    from dlightrag.utils.images import ValidatedWebImage
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    conversation_store.commit_turn.return_value = CommitTurnResult(
+        saved=False, reason="conversation_changed", summary=None, turn_id=None
+    )
+    prepared = PreparedWebConversation(
+        principal_id="principal-hash",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=7,
+        text_history=(),
+    )
+    image = ValidatedWebImage(
+        image_id="00000000-0000-0000-0000-000000000020",
+        ordinal=1,
+        mime_type="image/png",
+        image_bytes=b"png",
+        data_uri="data:image/png;base64,cG5n",
+        content_sha256="digest",
+    )
+
+    result = await service_under_test.commit_answer(
+        prepared,
+        user_text="Question",
+        assistant_text="Answer",
+        answer_sources={"sources": [], "answer_images": []},
+        queried_workspaces=["default"],
+        images=(image,),
+        image_descriptions=["diagram"],
+    )
+
+    assert result.reason == "conversation_changed"
+    call = conversation_store.commit_turn.await_args.kwargs
+    assert call["expected_revision"] == 7
+    assert call["principal_id"] == "principal-hash"
+    assert call["images"][0].image_bytes == b"png"
+    assert call["images"][0].vlm_description == "diagram"
+
+
 async def test_initialize_applies_schema_then_global_prune(
     service_under_test,
     conversation_store: AsyncMock,

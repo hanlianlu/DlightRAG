@@ -2,7 +2,6 @@
 """Web routes for chat interface and answer generation."""
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -11,7 +10,7 @@ from pydantic import ValidationError
 from dlightrag.access_control import AccessAction
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.utils import normalize_workspace
-from dlightrag.utils.images import decode_image_base64, image_url_block
+from dlightrag.utils.images import validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
@@ -100,22 +99,6 @@ async def answer_stream(
     if prepared_conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    # Extract browser uploads as modern image_url blocks. The manager handles
-    # answer budgeting, semantic VLM enhancement, and direct visual retrieval.
-    clean_images: list[dict[str, Any]] = []
-    if body.images:
-        for image_payload in body.images:
-            try:
-                img_bytes, _ = decode_image_base64(image_payload)
-                if len(img_bytes) > 10 * 1024 * 1024:  # 10MB server-side limit
-                    logger.warning("Skipping oversized image (%d bytes)", len(img_bytes))
-                    continue
-                block = image_url_block(image_payload)
-                if block is not None:
-                    clean_images.append(block)
-            except Exception:
-                logger.warning("Failed to decode uploaded image", exc_info=True)
-
     # Extract workspaces (multi-select from frontend).
     workspaces = body.workspaces
     target_workspaces = workspaces or [workspace]
@@ -133,11 +116,18 @@ async def answer_stream(
 
     manager = get_manager(request)
     cfg = manager.config
+    try:
+        validated_images = validate_web_images(
+            body.images,
+            max_images=cfg.query_images.max_current_images,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     turn = PreparedAnswerTurn(
         current_query=query,
         retrieval_query=query,
         text_history=prepared_conversation.text_history,
-        materialized_query_images=tuple(clean_images),
+        materialized_query_images=tuple(image.model_block for image in validated_images),
     )
 
     return StreamingResponse(
@@ -149,6 +139,9 @@ async def answer_stream(
             workspace=workspace,
             scope=scope,
             downloadable_workspaces=downloadable_workspaces,
+            conversation_service=conversation_service,
+            prepared_conversation=prepared_conversation,
+            validated_images=validated_images,
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

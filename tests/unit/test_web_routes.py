@@ -3,6 +3,7 @@
 
 import base64
 import datetime
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from unittest.mock import AsyncMock
 import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
@@ -589,7 +591,9 @@ class TestWebSSEBoundary:
         from dlightrag.web.events import AnswerDoneEvent
         from dlightrag.web.sse import sse_event
 
-        event = sse_event("done", AnswerDoneEvent(html="<b>x</b>", answer="x"))
+        event = sse_event(
+            "done", AnswerDoneEvent(html="<b>x</b>", answer="x", conversation_saved=False)
+        )
 
         assert event.startswith("event: done\n")
         assert event.endswith("\n\n")
@@ -597,9 +601,11 @@ class TestWebSSEBoundary:
         assert json.loads(data_line.removeprefix("data: ")) == {
             "html": "<b>x</b>",
             "answer": "x",
+            "current_image_ids": [],
             "image_descriptions": [],
             "answer_images": [],
             "answer_blocks": [],
+            "conversation_saved": False,
         }
 
     async def test_answer_done_html_strips_unsafe_urls(
@@ -721,7 +727,9 @@ class TestWebAnswerAdapter:
             raising=False,
         )
         web_app.state.manager.config = test_config
-        image_b64 = base64.b64encode(b"tiny-image").decode()
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (1, 1), "white").save(image_buffer, format="PNG")
+        image_b64 = base64.b64encode(image_buffer.getvalue()).decode()
 
         resp = await client.post(
             "/web/answer",
@@ -764,6 +772,34 @@ class TestWebAnswerAdapter:
         )
 
         assert resp.status_code == 422
+
+    async def test_answer_requires_owned_conversation_before_model_call(
+        self, client: AsyncClient, web_app
+    ) -> None:
+        web_app.state.web_conversation_service.prepare_answer.return_value = None
+
+        response = await client.post(
+            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+        )
+
+        assert response.status_code == 404
+        web_app.state.manager._aanswer_stream_prepared.assert_not_awaited()
+
+    async def test_invalid_image_is_rejected_instead_of_skipped(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+
+        response = await client.post(
+            "/web/answer",
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "images": [base64.b64encode(b"not an image").decode()],
+            },
+        )
+
+        assert response.status_code == 422
 
 
 # ---------------------------------------------------------------------------

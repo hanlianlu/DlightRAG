@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from dlightrag.core.client_contracts import ClientContractModel
+from dlightrag.web.conversation_models import ConversationSummary
 
 
 class AnswerMetaEvent(ClientContractModel):
@@ -19,9 +20,13 @@ class AnswerProgressEvent(ClientContractModel):
 class AnswerDoneEvent(ClientContractModel):
     html: str
     answer: str
+    current_image_ids: list[str] = Field(default_factory=list)
     image_descriptions: list[str] | dict[str, str] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
+    conversation_saved: bool
+    conversation_save_reason: str | None = None
+    conversation: ConversationSummary | None = None
 
 
 class AnswerTraceEvent(ClientContractModel):
