@@ -180,9 +180,10 @@ curl -X POST http://localhost:8100/ingest \
   -d '{"source_type": "url", "url": "https://fetch.example.com/download?signature=secret", "filename": "asset.pdf", "source_uri": "bynder://asset/asset-1", "download_uri": "https://cdn.example.com/assets/asset-1.pdf"}'
 ```
 
-All ingest operations are represented internally as jobs. REST and MCP ingest
-return `202 Accepted`; poll `GET /ingest/jobs/{job_id}` for progress and final
-result. `source_type="url"` is intentionally limited to public or signed HTTPS
+All ingest operations are represented internally as jobs. REST returns `202 Accepted`
+with the job object; MCP `ingest` returns the same job object as a tool result.
+Poll `GET /ingest/jobs/{job_id}` or call MCP `get_ingest_job` for progress and
+the final result. `source_type="url"` is intentionally limited to public or signed HTTPS
 URLs; authenticated SaaS APIs should fetch through a caller-owned SDK
 `AsyncDataSource` connector and use `aingest_source()`. S3 credentials are read
 from the standard AWS credential chain (environment, shared config, or IAM
@@ -373,12 +374,14 @@ Background ingestion through REST or MCP returns a job first:
 `GET /ingest/jobs/{job_id}` and MCP `get_ingest_job` return the same job row.
 `status` is one of `queued`, `running`, `succeeded`, or `failed`. When the job
 succeeds, `result` contains the same single-file or staged batch response shown
-above. If a synchronous REST/MCP ingest exceeds `ingest_timeout`, the job keeps
-running and the transport returns the same `202` job shape instead of cancelling
-the ingest. On service startup, recent `queued`/`running` rows are recovered
-automatically. Remote prefix jobs resume from `current_window`, so completed
-source windows are not downloaded again; already processed documents are still
-deduplicated by LightRAG's document status and DlightRAG's content-hash guard.
+above. REST, Web, and MCP start the job immediately and do not wait on
+`ingest_timeout`. The SDK convenience method `RAGServiceManager.aingest()` starts
+the same durable job, waits up to `ingest_timeout`, and returns either the
+completed result or the still-running job row without cancelling it. On service
+startup, recent `queued`/`running` rows are recovered automatically. Remote
+prefix jobs resume from `current_window`, so completed source windows are not
+downloaded again; already processed documents are still deduplicated by
+LightRAG's document status and DlightRAG's content-hash guard.
 
 
 ## Retrieval And Answer
@@ -570,7 +573,9 @@ data: {"type":"image_meta","current_image_ids":["img_0"],"image_descriptions":["
 data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
 ```
 
-REST uses the same fields as the Python manager methods.
+REST uses the same answer and context shapes, while its HTTP adapter projects
+each source's authorized `download_url`. Transport-neutral manager/MCP payloads
+keep `download_url` null.
 
 `all` is authorization-relative, not deployment-global. If 14 workspaces are
 registered and the current caller may query 10, `all_workspaces: true` queries
@@ -825,7 +830,7 @@ To trace `[1-2]` back to source material:
 3. Use `chunk_id` to look up the source in `sources` (by matching `id`)
 4. Use `page_idx` on the chunk for the page number
 5. Use `page_idx` and `bbox` when present for page/block localization
-6. Use source `url` or `GET /files/raw/{path}` for the original file; use
+6. Use the source's `download_url` for the original file; use
    `image_url`/`thumbnail_url` for retrieved visual chunks
 
 

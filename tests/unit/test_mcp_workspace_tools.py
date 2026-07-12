@@ -143,6 +143,11 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "download_urls" not in ingest_props
     assert "documents" in ingest_props
     assert "retain_source_file" in ingest_props
+    assert "fetch" in ingest_props["url"]["description"].lower()
+    assert "signed" in ingest_props["url"]["description"].lower()
+    assert "identity" in ingest_props["source_uri"]["description"].lower()
+    assert "queryless" in ingest_props["download_uri"]["description"].lower()
+    assert "signed" in ingest_props["retain_source_file"]["description"].lower()
     delete_files_tool = next(tool for tool in tools if tool.name == "delete_files")
     assert "dry_run" in delete_files_tool.inputSchema["properties"]
     assert _metadata_policy_enum(ingest_tool.inputSchema, ingest_props["metadata_policy"]) == [
