@@ -144,12 +144,12 @@ async def test_clean_orphan_tables_quotes_public_table_identifiers(monkeypatch, 
 async def test_clean_orphan_tables_never_drops_migration_managed_tables(
     monkeypatch, config
 ) -> None:
-    """Reset DELETEs rows but MUST NOT DROP dlightrag_ migration-managed tables.
+    """Reset DELETEs workspace rows but never drops migration-managed tables.
 
-    Regression: dlightrag_checkpoints/doc_metadata/ingest_jobs are global tables
-    with a workspace column, owned by dlightrag_schema_migrations. Resetting the
-    last workspace empties them; dropping an emptied one orphaned the ledger and
-    left the running app raising UndefinedTableError until the next restart.
+    Regression: doc_metadata/ingest_jobs are global tables with a workspace
+    column, owned by dlightrag_schema_migrations. Resetting the last workspace
+    empties them; dropping an emptied one orphaned the ledger and left the running
+    app raising UndefinedTableError until the next restart.
     """
 
     class Conn:
@@ -159,7 +159,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
 
         async def fetch(self, query: str) -> list[dict[str, str]]:
             assert "pg_tables" in query
-            return [{"tablename": "dlightrag_checkpoints"}]
+            return [{"tablename": "dlightrag_ingest_jobs"}]
 
         async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
             if "information_schema.columns" in query:
@@ -171,7 +171,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
 
         async def fetchval(self, query: str, *args: object) -> str:
             assert query == "SELECT quote_ident($1)"
-            return "dlightrag_checkpoints"
+            return "dlightrag_ingest_jobs"
 
         async def execute(self, query: str, *args: object) -> None:
             self.executed.append((query, args))
@@ -193,7 +193,7 @@ async def test_clean_orphan_tables_never_drops_migration_managed_tables(
 
     assert cleaned == 1
     assert conn.executed == [
-        ("DELETE FROM public.dlightrag_checkpoints WHERE workspace = $1", ("default",)),
+        ("DELETE FROM public.dlightrag_ingest_jobs WHERE workspace = $1", ("default",)),
     ]
     assert not any("DROP TABLE" in query for query, _ in conn.executed)
     assert conn.closed is True
