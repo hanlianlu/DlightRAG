@@ -16,6 +16,7 @@ class SourceDocument:
 
     key: str
     source_uri: str | None = None
+    download_uri: str | None = None
     display_filename: str | None = None
     title: str | None = None
     author: str | None = None
