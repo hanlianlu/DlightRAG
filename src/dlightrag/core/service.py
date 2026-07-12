@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import random
+import shutil
 import uuid
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -130,6 +131,22 @@ def _retry_display_filename(value: object) -> str:
     if filename in {".", ".."}:
         raise ValueError("source filename is invalid")
     return filename
+
+
+def _retry_parser_filename(display_filename: str) -> str:
+    path = Path(display_filename)
+    suffix = path.suffix
+    stem = path.stem or "document"
+    marker = f"__retry_{uuid.uuid4().hex}"
+    max_stem_length = max(1, 96 - len(marker))
+    return f"{stem[:max_stem_length]}{marker}{suffix}"
+
+
+def _normalized_operation_status(result: object) -> str:
+    raw_status = (
+        result.get("status") if isinstance(result, Mapping) else getattr(result, "status", None)
+    )
+    return str(getattr(raw_status, "value", raw_status) or "").strip().lower()
 
 
 def _download_locator_kind(locator: str | None, *, retained: bool = False) -> str:
@@ -1100,8 +1117,9 @@ class RAGService:
         download_locator: str,
         batch_root: Path,
         retain_source_file: bool,
+        parser_filename_override: str | None = None,
     ) -> PreparedIngestFile:
-        key = document.display_filename or document.key
+        key = parser_filename_override or document.display_filename or document.key
         if retain_source_file:
             parser_path = Path(download_locator)
         else:
@@ -1139,6 +1157,7 @@ class RAGService:
         progress_callback: RemoteIngestProgressCallback | None = None,
         resume_from_window: int = 0,
         retain_source_file: bool | None = None,
+        parser_filename_override: str | None = None,
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
         from dlightrag.utils.concurrency import bounded_map
@@ -1241,6 +1260,7 @@ class RAGService:
                         download_locator=download_locator,
                         batch_root=current_batch_root,
                         retain_source_file=retain_source_files,
+                        parser_filename_override=parser_filename_override,
                     )
                 except SourceDownloadContractError as exc:
                     return _RemoteDownloadFailure(str(exc))
@@ -1374,6 +1394,7 @@ class RAGService:
         retain_source_file: bool | None = None,
         _progress_callback: RemoteIngestProgressCallback | None = None,
         _resume_from_window: int = 0,
+        _parser_filename_override: str | None = None,
     ) -> dict[str, Any]:
         """Ingest documents from a caller-provided async data source.
 
@@ -1412,6 +1433,7 @@ class RAGService:
                 progress_callback=_progress_callback,
                 resume_from_window=_resume_from_window,
                 retain_source_file=retain_source_file,
+                parser_filename_override=_parser_filename_override,
             )
         finally:
             if close is not None:
@@ -1445,6 +1467,7 @@ class RAGService:
                 retain_source_file=kwargs.get("retain_source_file"),
                 _progress_callback=kwargs.get("_progress_callback"),
                 _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
+                _parser_filename_override=kwargs.get("_parser_filename_override"),
             )
             if len(documents) == 1:
                 return self._single_file_result(result)
@@ -1486,6 +1509,7 @@ class RAGService:
             retain_source_file=kwargs.get("retain_source_file"),
             _progress_callback=kwargs.get("_progress_callback"),
             _resume_from_window=int(kwargs.get("_resume_from_window") or 0),
+            _parser_filename_override=kwargs.get("_parser_filename_override"),
         )
         if len(urls) == 1:
             return self._single_file_result(result)
@@ -1517,6 +1541,7 @@ class RAGService:
             "retain_source_file": kwargs.get("retain_source_file"),
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
+            "_parser_filename_override": kwargs.get("_parser_filename_override"),
         }
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
@@ -1565,6 +1590,7 @@ class RAGService:
             "retain_source_file": kwargs.get("retain_source_file"),
             "_progress_callback": kwargs.get("_progress_callback"),
             "_resume_from_window": int(kwargs.get("_resume_from_window") or 0),
+            "_parser_filename_override": kwargs.get("_parser_filename_override"),
         }
         documents = _ingest_documents(kwargs.get("documents"))
         if documents is not None:
@@ -2053,15 +2079,11 @@ class RAGService:
                     still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
                 if doc_id not in replacement_doc_ids:
-                    if lr is not None:
-                        deletion_result = await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-                        deletion_status = (
-                            deletion_result.get("status")
-                            if isinstance(deletion_result, Mapping)
-                            else getattr(deletion_result, "status", None)
-                        )
-                        if deletion_status in {"fail", "not_allowed"}:
-                            raise RuntimeError("old LightRAG document cleanup failed")
+                    if lr is None:
+                        raise RuntimeError("old LightRAG document cleanup unavailable")
+                    deletion_result = await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                    if _normalized_operation_status(deletion_result) != "success":
+                        raise RuntimeError("old LightRAG document cleanup failed")
                     await self._metadata_index.delete(doc_id)
                 succeeded.append(
                     {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
@@ -2130,16 +2152,14 @@ class RAGService:
         """Materialize one validated locator while preserving source provenance."""
         source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
         stable_source_uri = validate_source_uri(source_uri)
+        parser_filename = _retry_parser_filename(display_filename)
 
         if source_type == "local":
-            if self._ingestion_engine is None:
-                raise RuntimeError("Ingestion engine not initialized")
-            return await self._ingestion_engine.aingest_file(
-                Path(download_locator),
+            return await self._aingest_local_retry_locator(
                 source_uri=stable_source_uri,
                 download_locator=download_locator,
                 display_filename=display_filename,
-                replace=False,
+                parser_filename=parser_filename,
             )
 
         if source_type == "url":
@@ -2154,6 +2174,7 @@ class RAGService:
                 documents=[document],
                 replace=False,
                 retain_source_file=False,
+                _parser_filename_override=parser_filename,
             )
 
         if source_type == "s3":
@@ -2168,6 +2189,7 @@ class RAGService:
                 documents=[document],
                 replace=False,
                 retain_source_file=False,
+                _parser_filename_override=parser_filename,
             )
 
         document = IngestDocument(
@@ -2181,7 +2203,45 @@ class RAGService:
             documents=[document],
             replace=False,
             retain_source_file=False,
+            _parser_filename_override=parser_filename,
         )
+
+    async def _aingest_local_retry_locator(
+        self,
+        *,
+        source_uri: str,
+        download_locator: str,
+        display_filename: str,
+        parser_filename: str,
+    ) -> dict[str, Any]:
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
+
+        input_root = self._workspace_input_root()
+        batch_root = remote_ingest_batch_root(
+            input_root=input_root,
+            source_type="retry",
+            batch_id=uuid.uuid4().hex,
+        )
+        parser_path = remote_parser_input_path(
+            batch_root=batch_root,
+            source_uri=source_uri,
+            key=parser_filename,
+        )
+        item = PreparedIngestFile(
+            parser_path=parser_path,
+            source_uri=source_uri,
+            download_locator=download_locator,
+            display_filename=display_filename,
+        )
+        parser_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            await asyncio.to_thread(shutil.copy2, Path(download_locator), parser_path)
+            result = await self._ingestion_engine.aingest_files([item], replace=False)
+            return self._single_file_result(result)
+        finally:
+            await asyncio.to_thread(_remove_remote_parser_sources, [item])
+            await asyncio.to_thread(_remove_empty_parents, batch_root, input_root)
 
     async def adelete_files(
         self,
