@@ -43,14 +43,16 @@ export async function selectConversation(
     const generation = conversationStore.beginRequest();
     conversationStore.select(conversationId);
     if (clearSources) clearConversationSources();
-    if (showLoading) renderConversationHistoryLoading();
+    if (showLoading && conversationStore.canRenderHistory(generation)) {
+        renderConversationHistoryLoading();
+    }
 
     try {
         const history = await getConversationHistory(conversationId, controller.signal);
         if (conversationStore.setHistory(history, generation)) renderConversationHistory(history);
     } catch (error) {
         if (isAbortError(error) || generation !== conversationStore.generation) return;
-        if (showLoading) {
+        if (showLoading && conversationStore.canRenderHistory(generation)) {
             renderConversationHistoryError(function() {
                 void selectConversation(conversationId);
             });
@@ -64,6 +66,7 @@ export async function initializeConversations(): Promise<void> {
     bootstrapController?.abort();
     const controller = new AbortController();
     bootstrapController = controller;
+    const bootstrapGeneration = conversationStore.beginRequest();
     try {
         const conversations = await listConversations(controller.signal);
         conversationStore.replaceList(conversations);
@@ -77,7 +80,7 @@ export async function initializeConversations(): Promise<void> {
         }
         await selectConversation(selected.conversation_id);
     } catch (error) {
-        if (isAbortError(error)) return;
+        if (isAbortError(error) || !conversationStore.canRenderHistory(bootstrapGeneration)) return;
         renderConversationHistoryError(function() { void initializeConversations(); });
     } finally {
         if (bootstrapController === controller) bootstrapController = null;
@@ -120,6 +123,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     bus.on('conversationAnswerSaved', function({conversationId}) {
         if (conversationStore.activeConversationId !== conversationId) return;
         void selectConversation(conversationId, false, false);
+    });
+    bus.on('conversationSaveCheckRequested', function({conversationId}) {
+        if (conversationStore.activeConversationId !== conversationId) return;
+        void selectConversation(conversationId, true, false);
     });
     void initializeConversations();
 
