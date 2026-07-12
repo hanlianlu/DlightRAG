@@ -4,7 +4,6 @@
 from dataclasses import dataclass, field
 
 from dlightrag.core.retrieval.protocols import ContextRow, RetrievalContexts
-from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 
 from .indexer import CitationIndexer
 from .processor import CitationProcessor
@@ -36,17 +35,13 @@ def finalize_answer(
     answer_text: str,
     contexts: RetrievalContexts,
     *,
-    source_contexts: RetrievalContexts | None = None,
-    source_url_resolver: SourceUrlResolver | None = None,
     image_url_prefix: str | None = "/images",
     default_workspace: str | None = None,
 ) -> FinalizedAnswer:
     """Clean citation markers and return only cited sources.
 
-    ``contexts`` are used to validate citation markers. ``source_contexts``
-    may be a sanitized projection of those contexts, letting transports strip
-    private fields while keeping citation validation anchored to the original
-    retrieval payload.
+    Raw ``contexts`` are used both to validate citation markers and construct
+    internal sources. Transport adapters project separate public payloads.
     """
     flat_contexts = flatten_context_chunks(contexts)
     indexer: CitationIndexer | None = None
@@ -54,8 +49,7 @@ def finalize_answer(
         indexer = CitationIndexer()
         indexer.build_index(flat_contexts)
     all_sources = build_sources(
-        source_contexts or contexts,
-        source_url_resolver=source_url_resolver,
+        contexts,
         image_url_prefix=image_url_prefix,
         default_workspace=default_workspace,
         indexer=indexer,

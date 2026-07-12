@@ -1,9 +1,134 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for transport-neutral client payload helpers."""
 
+import logging
+
+import pytest
+
 from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.models.schemas import Reference
+
+
+def _internal_source(*, chunks: list[ChunkSnippet] | None = None) -> SourceReference:
+    return SourceReference(
+        id="1",
+        title="report.pdf",
+        source_uri="local://default/report.pdf",
+        workspace="default",
+        download_locator="/private/report.pdf",
+        chunks=chunks,
+    )
+
+
+def test_project_source_payloads_resolves_and_hides_raw_locator(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.core.client_payloads import project_source_payloads
+    from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+
+    source = SourceReference(
+        id="1",
+        source_uri="s3://bucket/report.pdf",
+        workspace="finance",
+        download_locator="s3://bucket/report.pdf",
+    )
+
+    with caplog.at_level(logging.INFO, logger="dlightrag.core.client_payloads"):
+        projected = project_source_payloads([source], resolver=SourceUrlResolver())[0]
+
+    assert projected.download_url == "/files/raw/s3://bucket/report.pdf?workspace=finance"
+    payload = projected.model_dump()
+    assert "download_locator" not in payload
+    assert "workspace" not in payload
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "source_download_projection_outcome"
+    )
+    assert getattr(record, "outcome", None) == "resolved"
+    assert getattr(record, "source_id", None) == "1"
+    assert source.download_locator not in caplog.text
+
+
+def test_project_source_payloads_rejects_invalid_locator_without_logging_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from dlightrag.core.client_payloads import (
+        SourceDownloadInvariantError,
+        project_source_payloads,
+    )
+    from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+
+    source = SourceReference(
+        id="unsafe\nsource",
+        source_uri="bynder://asset/1",
+        workspace="finance",
+        download_locator="file://secret-host/private/report.pdf",
+    )
+
+    with (
+        caplog.at_level(logging.INFO, logger="dlightrag.core.client_payloads"),
+        pytest.raises(SourceDownloadInvariantError, match=r"unsafe\\nsource"),
+    ):
+        project_source_payloads([source], resolver=SourceUrlResolver())
+
+    record = next(
+        record
+        for record in caplog.records
+        if record.message == "source_download_projection_outcome"
+    )
+    assert getattr(record, "outcome", None) == "invalid"
+    assert getattr(record, "source_id", None) == r"unsafe\nsource"
+    assert source.download_locator not in caplog.text
+
+
+def test_answer_payload_projects_transport_neutral_source_without_download_url() -> None:
+    from dlightrag.core.client_payloads import answer_payload
+
+    result = RetrievalResult(
+        sources=[
+            SourceReference(
+                id="1",
+                source_uri="s3://bucket/report.pdf",
+                workspace="finance",
+                download_locator="s3://bucket/report.pdf",
+            )
+        ]
+    )
+
+    source = answer_payload(result)["sources"][0]
+
+    assert source["source_uri"] == "s3://bucket/report.pdf"
+    assert source["download_url"] is None
+    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
+
+
+def test_public_context_projection_strips_internal_source_metadata() -> None:
+    from dlightrag.core.client_payloads import project_contexts_for_client
+
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "c1",
+                "reference_id": "r1",
+                "file_path": "/srv/dlightrag/inputs/finance/report.pdf",
+                "content": "text",
+                "metadata": {
+                    "source_uri": "bynder://asset/1",
+                    "source_download_locator": "https://cdn.example.com/assets/1.pdf",
+                    "category": "research",
+                },
+            }
+        ],
+        "entities": [],
+        "relationships": [],
+    }
+
+    projected = project_contexts_for_client(contexts)
+
+    assert projected["chunks"][0]["metadata"] == {"category": "research"}
+    assert projected["chunks"][0]["file_path"] == "report.pdf"
 
 
 def test_project_contexts_for_client_strips_inline_images_and_adds_image_urls() -> None:
@@ -119,7 +244,7 @@ def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
             ],
         },
         references=[Reference(id="1", title="report.pdf")],
-        sources=[SourceReference(id="1", title="report.pdf", path="/private/report.pdf")],
+        sources=[_internal_source()],
         trace={"phase": "answer"},
         image_descriptions=["chart"],
         current_image_ids=["c1"],
@@ -146,10 +271,7 @@ def test_answer_helpers_derive_visual_images_and_blocks() -> None:
     )
 
     sources = [
-        SourceReference(
-            id="1",
-            title="report.pdf",
-            path="/private/report.pdf",
+        _internal_source(
             chunks=[
                 ChunkSnippet(
                     chunk_id="fig-1",
@@ -158,7 +280,7 @@ def test_answer_helpers_derive_visual_images_and_blocks() -> None:
                     image_url="/images/default/fig-1?size=full",
                     thumbnail_url="/images/default/fig-1?size=thumb",
                 )
-            ],
+            ]
         )
     ]
 

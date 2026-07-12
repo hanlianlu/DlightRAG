@@ -700,7 +700,15 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
                 ]
             },
             references=[Reference(id="1", title="report.pdf")],
-            sources=[SourceReference(id="1", title="report.pdf", path="/private/report.pdf")],
+            sources=[
+                SourceReference(
+                    id="1",
+                    title="report.pdf",
+                    source_uri="local://default/report.pdf",
+                    workspace="default",
+                    download_locator="/private/report.pdf",
+                )
+            ],
         )
     )
 
@@ -730,6 +738,9 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert body["contexts"]["chunks"][0]["image_url"] == "/images/default/c1?size=full"
     assert "image_data" not in body["contexts"]["chunks"][0]
     assert body["sources"][0]["id"] == "1"
+    assert body["sources"][0]["source_uri"] == "local://default/report.pdf"
+    assert body["sources"][0]["download_url"] is None
+    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(body["sources"][0])
 
     call_kwargs = mock_mcp_manager.aanswer.call_args.kwargs
     assert call_kwargs["workspaces"] == ["default"]

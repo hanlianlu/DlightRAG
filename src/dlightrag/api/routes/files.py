@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """File operations API routes."""
 
+import logging
 import mimetypes
 import os
 from pathlib import Path, PureWindowsPath
@@ -30,6 +31,7 @@ from dlightrag.utils import normalize_workspace
 from .deps import enforce_access, get_manager, resolve_workspace
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # Upper bound on directory entries scanned when locating a source file by its
 # canonical basename. Keeps a single download request cheap on large workspaces.
@@ -111,10 +113,9 @@ async def serve_file(
     """
     config = request_config(request)
     if file_path.startswith(("azure://", "s3://", "https://")):
-        await enforce_access(
+        await _enforce_source_download_access(
             request,
             user,
-            AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
             workspace=resolve_workspace(workspace, request),
         )
 
@@ -169,10 +170,9 @@ async def serve_file(
         workspace,
         default_workspace=config.workspace,
     )
-    await enforce_access(
+    await _enforce_source_download_access(
         request,
         user,
-        AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
         workspace=safe_workspace,
     )
 
@@ -184,6 +184,28 @@ async def serve_file(
     if resolved is None:
         raise HTTPException(404, "File not found")
     return _file_response(resolved)
+
+
+async def _enforce_source_download_access(
+    request: Request,
+    user: object,
+    *,
+    workspace: str,
+) -> None:
+    try:
+        await enforce_access(
+            request,
+            user,
+            AccessAction.WORKSPACE_DOWNLOAD_SOURCE,
+            workspace=workspace,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 403:
+            logger.info(
+                "source_download_projection_outcome",
+                extra={"outcome": "unauthorized", "workspace": workspace},
+            )
+        raise
 
 
 def _resolve_local_file_scope(

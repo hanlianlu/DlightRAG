@@ -58,23 +58,32 @@ class SourceUrlResolver:
         self._workspace = workspace
         self._base_url = base_url.rstrip("/")
 
-    def resolve(self, raw_path: str) -> str | None:
+    def resolve(self, raw_path: str, *, workspace: str | None = None) -> str | None:
         """Convert a servable stored path to a /files/raw/ URL."""
+        effective_workspace = workspace if workspace is not None else self._workspace
         if raw_path.startswith(("azure://", "s3://")):
-            return f"{self._base_url}/{quote(raw_path, safe='/:')}"
+            resolved = f"{self._base_url}/{quote(raw_path, safe='/:')}"
+            return self._with_workspace(resolved, effective_workspace)
         if raw_path.startswith("https://"):
-            return f"{self._base_url}/{quote(raw_path, safe='/:')}"
+            resolved = f"{self._base_url}/{quote(raw_path, safe='/:')}"
+            return self._with_workspace(resolved, effective_workspace)
         if "://" in raw_path:
             return None
 
-        relative = self.resolve_relative(raw_path)
+        relative = self.resolve_relative(raw_path, workspace=effective_workspace)
         if not relative:
             return None
         # Percent-encode path segments (spaces, unicode, reserved chars) while
         # keeping "/" as the separator so the resulting href is a valid URL.
-        return f"{self._base_url}/{quote(relative, safe='/')}"
+        resolved = f"{self._base_url}/{quote(relative, safe='/')}"
+        return self._with_workspace(resolved, effective_workspace)
 
-    def resolve_relative(self, raw_path: str) -> str | None:
+    def resolve_relative(
+        self,
+        raw_path: str,
+        *,
+        workspace: str | None = None,
+    ) -> str | None:
         """Extract an endpoint-relative source path.
 
         Example: "/data/rag_storage/inputs/ws-a/doc.pdf" with
@@ -99,20 +108,26 @@ class SourceUrlResolver:
             parts = windows_path.parts
             if ".." in parts:
                 return None
-            if self._workspace and len(parts) == 1:
-                return f"{self._workspace}/{parts[0]}"
+            if workspace and len(parts) == 1:
+                return f"{workspace}/{parts[0]}"
             return Path(*parts).as_posix()
 
         # Bare filename (no directory separators) — LightRAG canonicalizes
         # file_path to just the basename.  Prepend workspace so the
         # serve-file endpoint can locate it under input_dir/<workspace>/.
-        if self._workspace and "/" not in raw_path and "\\" not in raw_path:
-            return f"{self._workspace}/{raw_path}"
+        if workspace and "/" not in raw_path and "\\" not in raw_path:
+            return f"{workspace}/{raw_path}"
 
         relative = Path(raw_path)
         if ".." in relative.parts or relative.is_absolute():
             return None
         return relative.as_posix()
+
+    @staticmethod
+    def _with_workspace(url: str, workspace: str | None) -> str:
+        if not workspace:
+            return url
+        return f"{url}?workspace={quote(workspace, safe='')}"
 
 
 __all__ = ["SourceUrlResolver"]

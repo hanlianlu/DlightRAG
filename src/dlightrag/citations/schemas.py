@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChunkSnippet(BaseModel):
@@ -21,13 +21,28 @@ class ChunkSnippet(BaseModel):
 
 
 class SourceReference(BaseModel):
-    """Document-level source reference with cited chunks."""
+    """Internal document source with durable download-routing metadata."""
 
     id: str
     title: str | None = None
-    path: str
     type: str | None = None
-    url: str | None = None
+    source_uri: str
+    workspace: str = Field(exclude=True, repr=False)
+    download_locator: str = Field(exclude=True, repr=False)
+    cited_chunk_ids: list[str] | None = None
+    chunks: list[ChunkSnippet] | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class SourceReferencePayload(BaseModel):
+    """Public source payload with an adapter-projected download URL."""
+
+    id: str
+    title: str | None = None
+    type: str | None = None
+    source_uri: str
+    download_url: str | None = None
     cited_chunk_ids: list[str] | None = None
     chunks: list[ChunkSnippet] | None = None
 

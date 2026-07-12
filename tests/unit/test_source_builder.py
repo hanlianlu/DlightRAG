@@ -1,9 +1,16 @@
 """Tests for build_sources() shared utility."""
 
-from typing import Any, cast
+import inspect
+from typing import Any
+
+import pytest
 
 from dlightrag.citations.schemas import SourceReference
-from dlightrag.citations.source_builder import build_sources, build_sources_from_chunks
+from dlightrag.citations.source_builder import (
+    SourceBuildInvariantError,
+    build_sources,
+    build_sources_from_chunks,
+)
 
 
 def _chunk(
@@ -14,6 +21,7 @@ def _chunk(
     image_data: str | None = None,
     page_idx: int | None = None,
 ) -> dict[str, Any]:
+    file_name = file_path.rsplit("/", 1)[-1]
     return {
         "chunk_id": chunk_id,
         "reference_id": reference_id,
@@ -21,7 +29,12 @@ def _chunk(
         "content": content,
         "image_data": image_data,
         "page_idx": page_idx,
-        "metadata": {"file_name": file_path.rsplit("/", 1)[-1]},
+        "metadata": {
+            "file_name": file_name,
+            "source_uri": f"local://default/{file_name}",
+            "source_download_locator": file_path,
+        },
+        "_workspace": "default",
     }
 
 
@@ -31,6 +44,21 @@ def _chunks(source: SourceReference):
 
 
 class TestBuildSources:
+    def test_uses_dedicated_source_metadata_contract(self) -> None:
+        chunk = _chunk("c1", "ref-1", file_path="parser-name.pdf")
+        chunk["metadata"] = {
+            "source_uri": "bynder://asset/1",
+            "source_download_locator": "https://cdn.example.com/assets/1.pdf",
+            "source_file_name": "report.pdf",
+        }
+        chunk["_workspace"] = "finance"
+
+        source = build_sources({"chunks": [chunk]})[0]
+
+        assert source.source_uri == "bynder://asset/1"
+        assert source.workspace == "finance"
+        assert source.download_locator == "https://cdn.example.com/assets/1.pdf"
+
     def test_groups_by_reference_id(self) -> None:
         contexts = {
             "chunks": [
@@ -67,7 +95,7 @@ class TestBuildSources:
         sources = build_sources(contexts)
 
         assert sources[0].title == "report.pdf"
-        assert sources[0].path == "/long/path/report.pdf"
+        assert sources[0].source_uri == "local://default/report.pdf"
 
     def test_projects_image_urls_without_exposing_image_data(self) -> None:
         chunk = _chunk("c1", "ref-1", image_data="base64data", page_idx=1)
@@ -147,10 +175,11 @@ class TestBuildSources:
         catalog = [
             SourceReference(
                 id="ref-1",
-                path="/resolved/report.pdf",
                 title="Resolved Report",
                 type="pdf",
-                url="/files/report.pdf",
+                source_uri="bynder://asset/report",
+                workspace="resolved",
+                download_locator="s3://bucket/resolved/report.pdf",
             )
         ]
 
@@ -162,53 +191,52 @@ class TestBuildSources:
 
         assert len(sources) == 1
         assert sources[0].title == "Resolved Report"
-        assert sources[0].path == "/resolved/report.pdf"
         assert sources[0].type == "pdf"
-        assert sources[0].url == "/files/report.pdf"
+        assert sources[0].source_uri == "bynder://asset/report"
+        assert sources[0].workspace == "resolved"
+        assert sources[0].download_locator == "s3://bucket/resolved/report.pdf"
         assert sources[0].cited_chunk_ids == ["c2"]
         assert [c.chunk_id for c in _chunks(sources[0])] == ["c2"]
 
-    def test_with_source_url_resolver(self) -> None:
-        contexts = {"chunks": [_chunk("c1", "ref-1", file_path="/data/report.pdf")]}
+    def test_build_sources_has_no_http_resolver_parameter(self) -> None:
+        assert "source_url_resolver" not in inspect.signature(build_sources).parameters
 
-        class FakeResolver:
-            def resolve(self, path: str) -> str:
-                return f"https://cdn.example.com/{path}"
-
-        sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
-
-        assert sources[0].url == "https://cdn.example.com//data/report.pdf"
-
-    def test_prefers_enriched_source_path_for_url_and_title(self) -> None:
-        """Non-retained remote: chunk file_path is a parser basename, but the
-        enriched metadata carries the real source URI + display name."""
+    def test_prefers_dedicated_source_metadata_for_identity_and_title(self) -> None:
         chunk = _chunk("c1", "ref-1", file_path="report__a1b2c3d4e5f6.pdf")
         chunk["metadata"] = {
-            "source_file_path": "s3://my-bucket/reports/report.pdf",
+            "source_uri": "bynder://asset/1",
+            "source_download_locator": "s3://my-bucket/reports/report.pdf",
             "source_file_name": "report.pdf",
         }
-        contexts = {"chunks": [chunk]}
-
-        class FakeResolver:
-            def resolve(self, path: str) -> str:
-                return f"/files/raw/{path}"
-
-        sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
+        sources = build_sources({"chunks": [chunk]})
 
         assert sources[0].title == "report.pdf"
-        assert sources[0].url == "/files/raw/s3://my-bucket/reports/report.pdf"
+        assert sources[0].source_uri == "bynder://asset/1"
+        assert sources[0].download_locator == "s3://my-bucket/reports/report.pdf"
 
-    def test_falls_back_to_chunk_path_without_enrichment(self) -> None:
-        """When no enriched source path exists, the chunk file_path drives the URL."""
-        contexts = {"chunks": [_chunk("c1", "ref-1", file_path="default/report.pdf")]}
+    def test_rejects_missing_dedicated_source_metadata(self) -> None:
+        chunk = _chunk("c1", "ref-1")
+        chunk["metadata"].pop("source_download_locator")
 
-        class FakeResolver:
-            def resolve(self, path: str) -> str:
-                return f"/files/raw/{path}"
+        with pytest.raises(SourceBuildInvariantError, match="Source ref-1 is missing"):
+            build_sources({"chunks": [chunk]})
 
-        sources = build_sources(contexts, source_url_resolver=cast(Any, FakeResolver()))
+    def test_invariant_error_uses_safe_source_id(self) -> None:
+        chunk = _chunk("c1", "unsafe\nref")
+        chunk["metadata"].pop("source_download_locator")
 
-        assert sources[0].url == "/files/raw/default/report.pdf"
+        with pytest.raises(SourceBuildInvariantError) as exc_info:
+            build_sources({"chunks": [chunk]})
+
+        assert "unsafe\\nref" in str(exc_info.value)
+        assert "unsafe\nref" not in str(exc_info.value)
+
+    def test_rejects_missing_workspace(self) -> None:
+        chunk = _chunk("c1", "ref-1")
+        chunk.pop("_workspace")
+
+        with pytest.raises(SourceBuildInvariantError, match="Source ref-1 is missing workspace"):
+            build_sources({"chunks": [chunk]})
 
     def test_skips_chunks_without_reference_id(self) -> None:
         contexts = {

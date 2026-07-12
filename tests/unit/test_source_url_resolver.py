@@ -30,6 +30,13 @@ class TestResolve:
         resolver = SourceUrlResolver()
         assert resolver.resolve("s3://my-bucket/doc.pdf") == "/files/raw/s3://my-bucket/doc.pdf"
 
+    def test_per_call_workspace_overrides_default_and_is_encoded(self) -> None:
+        resolver = SourceUrlResolver(workspace="default")
+
+        assert resolver.resolve("s3://bucket/report.pdf", workspace="finance team") == (
+            "/files/raw/s3://bucket/report.pdf?workspace=finance%20team"
+        )
+
     def test_remote_source_query_fragment_and_space_are_encoded(self) -> None:
         resolver = SourceUrlResolver()
         assert resolver.resolve("s3://my-bucket/docs/report final.pdf?version=1#page=2") == (
@@ -133,13 +140,13 @@ class TestInputDir:
         """Workspace is baked into the relative path under input_dir."""
         resolver = SourceUrlResolver(input_dir="/data/input", workspace="ws-a")
         result = resolver.resolve("/data/input/ws-a/subdir/doc.pdf")
-        assert result == "/files/raw/ws-a/subdir/doc.pdf"
+        assert result == "/files/raw/ws-a/subdir/doc.pdf?workspace=ws-a"
 
     def test_resolve_workspace_bare_filename(self) -> None:
         """LightRAG basename-only file paths are scoped by workspace."""
         resolver = SourceUrlResolver(input_dir="/data/input", workspace="ws-a")
         result = resolver.resolve("report.pdf")
-        assert result == "/files/raw/ws-a/report.pdf"
+        assert result == "/files/raw/ws-a/report.pdf?workspace=ws-a"
 
     def test_input_dir_prefix_lookalike_is_not_treated_as_child(self) -> None:
         """Only real descendants of input_dir are stripped to endpoint-relative paths."""
