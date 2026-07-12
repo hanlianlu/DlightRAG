@@ -320,3 +320,147 @@ async def test_storage_failure_records_unsaved_and_exposes_no_image_ids(
         "conversation_saved": False,
         "conversation_save_reason": "storage_unavailable",
     }
+
+
+async def test_cancellation_during_commit_does_not_cancel_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _record_observations(monkeypatch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    commit_cancelled = False
+
+    async def commit_answer(*_args, **_kwargs):
+        nonlocal commit_cancelled
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            commit_cancelled = True
+            raise
+        return CommitTurnResult(True, None, None, "turn")
+
+    service = AsyncMock()
+    service.commit_answer.side_effect = commit_answer
+    consume = asyncio.create_task(_collect(service=service))
+    await started.wait()
+
+    consume.cancel()
+    await asyncio.sleep(0)
+    assert commit_cancelled is False
+    assert consume.done() is False
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await consume
+    updates = captured["updates"]
+    assert isinstance(updates, list)
+    assert updates[-1]["metadata"] == {
+        "conversation_saved": True,
+        "conversation_save_reason": None,
+    }
+
+
+async def test_cancelled_client_records_unknown_post_commit_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _record_observations(monkeypatch)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def commit_answer(*_args, **_kwargs):
+        started.set()
+        await release.wait()
+        return CommitTurnResult(False, "commit_outcome_unknown", None, None)
+
+    service = AsyncMock()
+    service.commit_answer.side_effect = commit_answer
+    consume = asyncio.create_task(_collect(service=service))
+    await started.wait()
+    consume.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await consume
+    updates = captured["updates"]
+    assert isinstance(updates, list)
+    assert updates[-1]["metadata"] == {
+        "conversation_saved": False,
+        "conversation_save_reason": "commit_outcome_unknown",
+    }
+
+
+async def test_saving_heartbeat_keeps_persistence_wait_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.web.answer_events._PERSISTENCE_HEARTBEAT_SECONDS", 0.001)
+    service = AsyncMock()
+
+    async def commit_answer(*_args, **_kwargs):
+        await asyncio.sleep(0.005)
+        return CommitTurnResult(True, None, None, "turn")
+
+    service.commit_answer.side_effect = commit_answer
+
+    events = await _collect(service=service)
+
+    assert any('"phase": "saving"' in event for event in events)
+
+
+async def test_generator_close_after_saving_heartbeat_finishes_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.web.answer_events._PERSISTENCE_HEARTBEAT_SECONDS", 0.001)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+    commit_cancelled = False
+
+    async def commit_answer(*_args, **_kwargs):
+        nonlocal commit_cancelled
+        started.set()
+        try:
+            await release.wait()
+        except asyncio.CancelledError:
+            commit_cancelled = True
+            raise
+        finished.set()
+        return CommitTurnResult(True, None, None, "turn")
+
+    service = AsyncMock()
+    service.commit_answer.side_effect = commit_answer
+    manager = SimpleNamespace(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+    stream = stream_answer_events(
+        manager=manager,
+        cfg=SimpleNamespace(citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))),
+        turn=PreparedAnswerTurn(current_query="hello", retrieval_query="hello"),
+        workspaces=["default"],
+        workspace="default",
+        conversation_service=service,
+        prepared_conversation=prepared,
+        validated_images=(),
+        submission_id="22222222-2222-4222-8222-222222222222",
+    )
+
+    while True:
+        event = await anext(stream)
+        if '"phase": "saving"' in event:
+            break
+    await started.wait()
+    close_task = asyncio.create_task(stream.aclose())
+    await asyncio.sleep(0)
+
+    assert close_task.done() is False
+    assert commit_cancelled is False
+    release.set()
+    await close_task
+    assert finished.is_set()

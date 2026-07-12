@@ -14,7 +14,7 @@ class AnswerMetaEvent(ClientContractModel):
 
 
 class AnswerProgressEvent(ClientContractModel):
-    phase: Literal["planning", "generating"]
+    phase: Literal["planning", "generating", "saving"]
 
 
 class AnswerDoneEvent(ClientContractModel):

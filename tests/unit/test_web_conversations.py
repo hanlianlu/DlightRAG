@@ -555,6 +555,24 @@ async def test_prepare_answer_uses_one_snapshot_and_text_only_messages(
     )
 
 
+async def test_prepare_answer_submission_replay_lookup_is_bounded_one_shot(
+    service_under_test,
+    conversation_store: AsyncMock,
+    jwt_user: UserContext,
+) -> None:
+    conversation_store.find_committed_turn_once.return_value = None
+
+    prepared = await service_under_test.prepare_answer(
+        jwt_user,
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-4000-8000-000000000099",
+    )
+
+    assert prepared is not None
+    conversation_store.find_committed_turn_once.assert_awaited_once()
+    conversation_store.find_committed_turn.assert_not_awaited()
+
+
 async def test_commit_answer_maps_validated_images_and_revision(
     service_under_test,
     conversation_store: AsyncMock,
@@ -662,7 +680,7 @@ async def test_commit_answer_reconciles_lost_commit_acknowledgement(
         replayed=True,
     )
     conversation_store.commit_turn.side_effect = ConnectionError("ack lost")
-    conversation_store.find_committed_turn.return_value = committed
+    conversation_store.find_committed_turn_once.return_value = committed
     prepared = PreparedWebConversation(
         principal_id="principal",
         conversation_id="00000000-0000-0000-0000-000000000001",
@@ -682,12 +700,54 @@ async def test_commit_answer_reconciles_lost_commit_acknowledgement(
     )
 
     assert result == committed
-    conversation_store.find_committed_turn.assert_awaited_once_with(
+    conversation_store.find_committed_turn_once.assert_awaited_once_with(
         "principal",
         "00000000-0000-0000-0000-000000000001",
         "00000000-0000-4000-8000-000000000099",
         ttl_days=30,
     )
+    conversation_store.find_committed_turn.assert_not_awaited()
+
+
+async def test_commit_answer_returns_unknown_after_bounded_reconciliation_timeout(
+    service_under_test,
+    conversation_store: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from dlightrag.web.conversations import PreparedWebConversation
+
+    monkeypatch.setattr("dlightrag.web.conversations._COMMIT_ATTEMPT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("dlightrag.web.conversations._RECONCILE_ATTEMPT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("dlightrag.web.conversations._RECONCILE_ATTEMPTS", 1)
+    conversation_store.commit_turn.side_effect = ConnectionError("ack lost")
+    conversation_store.find_committed_turn_once.side_effect = asyncio.TimeoutError
+    prepared = PreparedWebConversation(
+        principal_id="principal",
+        conversation_id="00000000-0000-0000-0000-000000000001",
+        content_revision=1,
+        text_history=(),
+    )
+
+    result = await asyncio.wait_for(
+        service_under_test.commit_answer(
+            prepared,
+            submission_id="00000000-0000-4000-8000-000000000099",
+            user_text="Question",
+            assistant_text="Answer",
+            answer_sources={},
+            queried_workspaces=["default"],
+            images=(),
+            image_descriptions={},
+        ),
+        timeout=0.1,
+    )
+
+    assert result.saved is False
+    assert result.reason == "commit_outcome_unknown"
+    assert result.current_image_ids == ()
+    conversation_store.find_committed_turn.assert_not_awaited()
 
 
 async def test_initialize_applies_schema_then_global_prune(

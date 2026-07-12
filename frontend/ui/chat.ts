@@ -5,6 +5,11 @@ import {conversationStore} from '../stores/conversationStore.ts';
 import {clearImages, getPendingImageData} from './images.ts';
 import {streamSSE} from '../lib/sse.ts';
 import {createAnswerRenderer, createChatTurn, setAnswerError} from '../lib/chat_renderer.ts';
+import {
+    isDefinitiveSaveOutcome,
+    payloadFingerprint,
+    pendingSubmissionStore,
+} from '../stores/pendingSubmissionStore.ts';
 
 let queryInFlight = false;
 let currentQueryController: AbortController | null = null;
@@ -40,7 +45,6 @@ export async function submitQuery(query: string): Promise<void> {
 
     const turn = createChatTurn(query);
     const imageData = getPendingImageData();
-    const submissionId = crypto.randomUUID();
 
     try {
         armIdleTimeout();
@@ -53,11 +57,18 @@ export async function submitQuery(query: string): Promise<void> {
             );
             return;
         }
+        const activeWorkspaces = [...workspaceStore.active];
+        const fingerprint = await payloadFingerprint({
+            query,
+            images: imageData,
+            workspaces: activeWorkspaces,
+        });
+        const submissionId = pendingSubmissionStore.getOrCreate(conversationId, fingerprint);
         clearImages();
         const requestBody = JSON.stringify({
             query: query,
             images: imageData,
-            workspaces: workspaceStore.active,
+            workspaces: activeWorkspaces,
             conversation_id: conversationId,
             submission_id: submissionId,
         });
@@ -71,6 +82,7 @@ export async function submitQuery(query: string): Promise<void> {
                 });
 
                 if (!response.ok) {
+                    if (response.status < 500) pendingSubmissionStore.clear(conversationId);
                     setAnswerError(turn, 'Service error. Please try again.');
                     return;
                 }
@@ -80,6 +92,9 @@ export async function submitQuery(query: string): Promise<void> {
                     armIdleTimeout();
                     activeRenderer.handle(eventType, data);
                 });
+                if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
+                    pendingSubmissionStore.clear(conversationId);
+                }
                 return;
             } catch (error) {
                 if (controller.signal.aborted || attempt === 1) throw error;

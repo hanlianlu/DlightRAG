@@ -472,6 +472,16 @@ class PGWebConversationStore:
 
         return await pg_pool.run_once(operation)
 
+    async def _run_read_once(self, operation):
+        """Run an outcome-reconciliation read once without the default retry budget."""
+        if self._pool is not None:
+            async with self._pool.acquire() as conn:
+                return await operation(conn)
+
+        from dlightrag.storage.pool import pg_pool
+
+        return await pg_pool.run_once(operation)
+
     async def initialize(self) -> None:
         """Create the Web conversation schema and remove legacy checkpoints."""
         if self._initialized:
@@ -661,6 +671,29 @@ class PGWebConversationStore:
             return _committed_result(row, replayed=True) if row is not None else None
 
         return await self._run_read(_operation)
+
+    async def find_committed_turn_once(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        submission_id: str,
+        *,
+        ttl_days: int,
+    ) -> CommitTurnResult | None:
+        """Perform one bounded-protocol lookup without storage-layer retries."""
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> CommitTurnResult | None:
+            row = await conn.fetchrow(
+                _GET_COMMITTED_TURN,
+                principal_id,
+                conversation_id,
+                submission_id,
+                ttl_days,
+            )
+            return _committed_result(row, replayed=True) if row is not None else None
+
+        return await self._run_read_once(_operation)
 
     async def commit_turn(
         self,

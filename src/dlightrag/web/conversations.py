@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Principal-scoped service adapter for durable Web conversations."""
 
+import asyncio
 import logging
 from collections.abc import Awaitable
 from dataclasses import dataclass
@@ -30,6 +31,14 @@ from dlightrag.web.safe_html import safe_answer_done
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+_COMMIT_ATTEMPT_TIMEOUT_SECONDS = 45.0
+_RECONCILE_ATTEMPT_TIMEOUT_SECONDS = 10.0
+_RECONCILE_ATTEMPTS = 2
+_RECONCILE_BACKOFF_SECONDS = 0.25
+_AMBIGUOUS_COMMIT_EXCEPTIONS = (
+    *POSTGRES_UNAVAILABLE_EXCEPTIONS,
+    asyncpg.exceptions.InterfaceError,
+)
 
 
 class WebConversationUnavailableError(RuntimeError):
@@ -150,14 +159,16 @@ class WebConversationService:
             )
         committed_submission = None
         if submission_id is not None:
-            committed_submission = await self._store_call(
-                self._store.find_committed_turn(
-                    principal_id,
-                    conversation_id,
-                    submission_id,
-                    ttl_days=self._ttl_days,
-                )
-            )
+            try:
+                async with asyncio.timeout(_RECONCILE_ATTEMPT_TIMEOUT_SECONDS):
+                    committed_submission = await self._store.find_committed_turn_once(
+                        principal_id,
+                        conversation_id,
+                        submission_id,
+                        ttl_days=self._ttl_days,
+                    )
+            except _AMBIGUOUS_COMMIT_EXCEPTIONS as exc:
+                raise WebConversationUnavailableError from exc
         return PreparedWebConversation(
             principal_id=principal_id,
             conversation_id=snapshot.conversation_id,
@@ -213,32 +224,46 @@ class WebConversationService:
             for image in images
         ]
         try:
-            return await self._store.commit_turn(
-                principal_id=prepared.principal_id,
-                conversation_id=prepared.conversation_id,
-                submission_id=submission_id,
-                expected_revision=prepared.content_revision,
-                user_text=user_text,
-                assistant_text=assistant_text,
-                answer_sources=answer_sources,
-                queried_workspaces=queried_workspaces,
-                images=pending,
-                max_turns=self._max_turns,
-                ttl_days=self._ttl_days,
-            )
-        except (*POSTGRES_UNAVAILABLE_EXCEPTIONS, asyncpg.exceptions.InterfaceError) as exc:
-            try:
-                committed = await self._store.find_committed_turn(
-                    prepared.principal_id,
-                    prepared.conversation_id,
-                    submission_id,
+            async with asyncio.timeout(_COMMIT_ATTEMPT_TIMEOUT_SECONDS):
+                return await self._store.commit_turn(
+                    principal_id=prepared.principal_id,
+                    conversation_id=prepared.conversation_id,
+                    submission_id=submission_id,
+                    expected_revision=prepared.content_revision,
+                    user_text=user_text,
+                    assistant_text=assistant_text,
+                    answer_sources=answer_sources,
+                    queried_workspaces=queried_workspaces,
+                    images=pending,
+                    max_turns=self._max_turns,
                     ttl_days=self._ttl_days,
                 )
-            except POSTGRES_UNAVAILABLE_EXCEPTIONS as reconcile_exc:
-                raise WebConversationUnavailableError from reconcile_exc
+        except _AMBIGUOUS_COMMIT_EXCEPTIONS:
+            return await self._reconcile_commit(prepared, submission_id)
+
+    async def _reconcile_commit(
+        self,
+        prepared: PreparedWebConversation,
+        submission_id: str,
+    ) -> CommitTurnResult:
+        """Resolve an ambiguous mutation through a short, one-shot lookup budget."""
+        for attempt in range(_RECONCILE_ATTEMPTS):
+            try:
+                async with asyncio.timeout(_RECONCILE_ATTEMPT_TIMEOUT_SECONDS):
+                    committed = await self._store.find_committed_turn_once(
+                        prepared.principal_id,
+                        prepared.conversation_id,
+                        submission_id,
+                        ttl_days=self._ttl_days,
+                    )
+            except _AMBIGUOUS_COMMIT_EXCEPTIONS:
+                if attempt + 1 < _RECONCILE_ATTEMPTS:
+                    await asyncio.sleep(_RECONCILE_BACKOFF_SECONDS)
+                continue
             if committed is not None:
                 return committed
-            raise WebConversationUnavailableError from exc
+            return CommitTurnResult(False, "commit_not_found", None, None)
+        return CommitTurnResult(False, "commit_outcome_unknown", None, None)
 
     async def _snapshot(
         self,

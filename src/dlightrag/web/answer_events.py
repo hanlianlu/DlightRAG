@@ -6,7 +6,7 @@ import dataclasses
 import hashlib
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any
 
 from dlightrag.citations import finalize_answer
@@ -39,6 +39,7 @@ from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_
 from dlightrag.web.sse import sse_event
 
 logger = logging.getLogger(__name__)
+_PERSISTENCE_HEARTBEAT_SECONDS = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +63,21 @@ def _conversation_summary(value: dict[str, Any] | None) -> ConversationSummary |
         created_at=value["created_at"],
         updated_at=value["updated_at"],
     )
+
+
+async def _finish_persistence_task(
+    task: asyncio.Task[CommitTurnResult],
+) -> CommitTurnResult:
+    """Await a bounded persistence task despite caller cancellation."""
+    while True:
+        if task.cancelled():
+            return CommitTurnResult(False, "commit_outcome_unknown", None, None)
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                return CommitTurnResult(False, "commit_outcome_unknown", None, None)
+            continue
 
 
 def _done_from_committed_turn(commit: CommitTurnResult) -> AnswerDoneEvent:
@@ -153,7 +169,7 @@ async def stream_answer_events(
     prepared_conversation: PreparedWebConversation,
     validated_images: tuple[ValidatedWebImage, ...],
     submission_id: str,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str]:
     """Yield browser SSE events for one answer request, under a request-root span."""
     ws_list = workspaces or [workspace or manager.config.workspace]
     metadata = {
@@ -181,7 +197,7 @@ async def stream_answer_events(
             )
             yield sse_event("done", done)
             return
-        async for event in _emit_answer_events(
+        emitter = _emit_answer_events(
             manager=manager,
             cfg=cfg,
             turn=turn,
@@ -194,8 +210,12 @@ async def stream_answer_events(
             validated_images=validated_images,
             observation=observation,
             submission_id=submission_id,
-        ):
-            yield event
+        )
+        try:
+            async for event in emitter:
+                yield event
+        finally:
+            await emitter.aclose()
 
 
 async def _emit_answer_events(
@@ -212,12 +232,14 @@ async def _emit_answer_events(
     validated_images: tuple[ValidatedWebImage, ...],
     observation: Any = None,
     submission_id: str,
-) -> AsyncIterator[str]:
+) -> AsyncGenerator[str]:
     """Emit the SSE event sequence for one answer request."""
     full_answer = ""
     token_iter: AsyncIterator[str] | str | None = None
     conversation_saved = False
     save_reason: str | None = "answer_incomplete"
+    persistence_started = False
+    commit_task: asyncio.Task[CommitTurnResult] | None = None
     try:
         history_kept = len(turn.text_history)
         yield sse_event("meta", AnswerMetaEvent(history_kept=history_kept))
@@ -274,17 +296,34 @@ async def _emit_answer_events(
             "sources": [source.model_dump(mode="json") for source in payload.sources],
             "answer_images": payload.done.answer_images,
         }
+        cancellation_pending = False
         try:
-            commit = await conversation_service.commit_answer(
-                prepared_conversation,
-                submission_id=submission_id,
-                user_text=turn.current_query,
-                assistant_text=payload.done.answer,
-                answer_sources=answer_sources,
-                queried_workspaces=ws_list,
-                images=validated_images,
-                image_descriptions=image_descriptions,
+            persistence_started = True
+            commit_task = asyncio.create_task(
+                conversation_service.commit_answer(
+                    prepared_conversation,
+                    submission_id=submission_id,
+                    user_text=turn.current_query,
+                    assistant_text=payload.done.answer,
+                    answer_sources=answer_sources,
+                    queried_workspaces=ws_list,
+                    images=validated_images,
+                    image_descriptions=image_descriptions,
+                )
             )
+            while True:
+                try:
+                    commit = await asyncio.wait_for(
+                        asyncio.shield(commit_task),
+                        timeout=_PERSISTENCE_HEARTBEAT_SECONDS,
+                    )
+                    break
+                except TimeoutError:
+                    yield sse_event("progress", AnswerProgressEvent(phase="saving"))
+                except asyncio.CancelledError:
+                    cancellation_pending = True
+                    commit = await _finish_persistence_task(commit_task)
+                    break
             if commit.saved and commit.replayed:
                 done = _done_from_committed_turn(commit)
             else:
@@ -320,6 +359,9 @@ async def _emit_answer_events(
             )
             save_reason = "persistence_failed"
 
+        if cancellation_pending:
+            raise asyncio.CancelledError
+
         yield sse_event("done", done)
 
         # ── Post-done enrichment (trace, highlights) ───────────────
@@ -342,7 +384,16 @@ async def _emit_answer_events(
             yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
 
     except asyncio.CancelledError, GeneratorExit:
-        if not conversation_saved:
+        if persistence_started and commit_task is not None:
+            try:
+                commit = await _finish_persistence_task(commit_task)
+                conversation_saved = commit.saved
+                save_reason = commit.reason
+            except WebConversationUnavailableError:
+                save_reason = "storage_unavailable"
+            except Exception:
+                save_reason = "persistence_failed"
+        elif not conversation_saved:
             save_reason = "cancelled"
         raise
     except Exception:
