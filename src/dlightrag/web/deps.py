@@ -269,6 +269,11 @@ def get_manager(request: Request):
     return request.app.state.manager
 
 
+def get_web_conversation_service(request: Request) -> Any:
+    """Return the one app-scoped Web conversation service."""
+    return request.app.state.web_conversation_service
+
+
 def get_request_scope(
     request: Request,
     workspaces: list[str] | tuple[str, ...] | None = None,

@@ -81,6 +81,26 @@ async def client(web_app):
         yield c
 
 
+async def test_web_lifespan_initializes_one_app_scoped_conversation_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+    manager = AsyncMock()
+    conversation_service = AsyncMock()
+    application = create_app(include_web=True)
+    installed_service = application.state.web_conversation_service
+    application.state.web_conversation_service = conversation_service
+    monkeypatch.setattr(RAGServiceManager, "acreate", AsyncMock(return_value=manager))
+
+    async with application.router.lifespan_context(application):
+        conversation_service.initialize.assert_awaited_once_with()
+        assert application.state.web_conversation_service is conversation_service
+
+    assert installed_service is not conversation_service
+    manager.aclose.assert_awaited_once_with()
+
+
 async def test_web_static_assets_are_not_browser_persistent(client):
     resp = await client.get("/static/generated/js/main.js")
 
