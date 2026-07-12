@@ -1,6 +1,6 @@
 """Citation data models — ported from sandbox_agent, framework-agnostic."""
 
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -47,3 +47,10 @@ class SourceReferencePayload(BaseModel):
     chunks: list[ChunkSnippet] | None = None
 
     model_config = {"extra": "forbid"}
+
+
+class HighlightSource(Protocol):
+    """Structural source contract used by semantic highlight enrichment."""
+
+    id: str
+    chunks: list[ChunkSnippet] | None

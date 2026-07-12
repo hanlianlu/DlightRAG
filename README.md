@@ -284,10 +284,14 @@ contract. Web and REST uploads are staged under DlightRAG's managed
 root as retained local sources. Upload batch staging under `__uploads__/` is
 cleaned by the durable ingest job after the handoff.
 
-**Source retention.** Remote source files are transient by default for S3,
-Azure Blob, URL, and SDK connectors. Set `retain_remote_source_files: true`, or
-pass `retain_source_file: true` on one ingest call, when fetched files should be
-kept under the workspace input root.
+**Source downloads.** Every successful ingest remains downloadable, whether or
+not DlightRAG retains a local copy. `source_uri` is stable provenance;
+`download_uri` is the durable S3, Azure, or queryless public HTTPS locator used
+when `retain_source_file` is false. Signed HTTPS fetch URLs need either a
+separate durable locator or retention. A non-retained custom SDK connector must
+provide `SourceDocument.download_uri` (or `download_uri_for_key`). DlightRAG
+rejects a document before materialization when this contract cannot be met; it
+never silently changes the caller's retention choice.
 
 **Runtime storage.** Docker Compose stores `working_dir` in the
 `dlightrag_data` named volume mounted at `/app/dlightrag_storage`; the host

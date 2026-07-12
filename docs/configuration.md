@@ -288,25 +288,38 @@ lower-confidence `json_object` mode; use `auto` or `json_schema`.
 
 ## Remote Source URLs
 
-By default, Azure Blob, S3, and URL source files are not copied into DlightRAG
-storage. Retrieved sources point back to `azure://...`, `s3://...`, URL
-provenance, or a caller-supplied stable URI such as `bynder://asset/...`.
-Set `retain_remote_source_files: true` to keep fetched remote files under the
-workspace input root by default, or pass `retain_source_file` on one SDK/REST/MCP
-ingest call to override that default. When retention is enabled, stored metadata
-`file_path` points at the retained workspace-local file, not the remote URI.
-`GET /files/raw/{file_path}` redirects only when the stored source is a direct
-provider/source URL. Azure uses `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the
-standard AWS credential chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`AWS_SESSION_TOKEN`, `AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS
-config).
+`source_uri` identifies the source; `download_uri` tells DlightRAG how to
+retrieve the original bytes when no local copy is retained. The two values are
+independent: connector-specific identities such as `bynder://asset/...` are
+valid provenance but are not download locations.
+
+By default, Azure Blob, S3, URL, and SDK connector files are not copied into
+DlightRAG storage. A non-retained document therefore needs a durable S3, Azure,
+or queryless public HTTPS `download_uri`. Set
+`retain_remote_source_files: true` to keep fetched files under the workspace
+input root by default, or pass `retain_source_file=true` on one SDK/REST/MCP
+ingest call. Retained sources use that local copy for download instead.
+
+Query- or fragment-bearing signed HTTPS fetch URLs are ephemeral. Use
+`retain_source_file=true` or provide a separate queryless `download_uri`; the
+signed token is never persisted as an implicit locator. A non-retained custom
+`AsyncDataSource` must set `SourceDocument.download_uri` or provide
+`download_uri_for_key`. Invalid or missing locators are rejected before parser
+materialization. DlightRAG never silently retains bytes to rescue an invalid
+request.
+
+`GET /files/raw/{file_path}` is the authenticated projection used to serve a
+retained local file or redirect through a supported provider locator. Azure
+uses `DLIGHTRAG_BLOB_CONNECTION_STRING`. S3 uses the standard AWS credential
+chain (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+`AWS_REGION`/`AWS_DEFAULT_REGION`, IAM role, or shared AWS config).
 REST/MCP `source_type="url"` accepts public or signed HTTPS URLs only, does not
 follow redirects to private hosts, and caps each download with
 `url_ingest_max_bytes`. SaaS APIs that require auth headers should be wrapped by
 an SDK `AsyncDataSource` connector and ingested with
-`RAGServiceManager.aingest_source()`. URL ingest stores fetch URLs without query
-or fragment by default; pass `source_uri` or `source_uris` when a stable source
-identity should be persisted instead.
+`RAGServiceManager.aingest_source()`. `source_uri`/`source_uris` set stable
+identity; they do not substitute for the durable locator required by a
+non-retained signed fetch.
 Set `url_ingest_private_host_allowlist` only for trusted enterprise hosts that
 must be fetched by REST/MCP URL ingest. Entries are host/IP patterns such as
 `docs.corp.example`, `*.corp.example`, or `10.0.0.5`.

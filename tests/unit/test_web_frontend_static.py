@@ -7,6 +7,7 @@ avoid pinning exact visual token values or module decomposition details.
 
 import re
 from pathlib import Path
+from typing import get_type_hints
 
 ROOT = Path(__file__).resolve().parents[2]
 FRONTEND = ROOT / "frontend"
@@ -125,6 +126,34 @@ def test_source_panel_requires_download_for_every_source() -> None:
     assert html.count('class="source-dl-icon"') == 1
     assert 'href="/files/raw/default/notes.md?workspace=default"' in html
     assert "{% if src." not in source_panel_text
+
+
+def test_source_templates_use_only_the_public_download_contract() -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web.answer_events import _AnswerPayload, _save_checkpoint
+    from dlightrag.web.safe_html import safe_answer_done, safe_source_panel
+
+    partials = ROOT / "src/dlightrag/web/templates/partials"
+    template_text = "\n".join(
+        (partials / name).read_text(encoding="utf-8")
+        for name in ("source_panel.html", "answer_done.html")
+    )
+
+    assert "src.url" not in template_text
+    assert "src.path" not in template_text
+    assert "src.download_url" in template_text
+    assert get_type_hints(_AnswerPayload)["sources"] == list[SourceReferencePayload]
+    assert get_type_hints(_save_checkpoint)["sources"] == list[SourceReferencePayload]
+    assert get_type_hints(safe_answer_done)["sources"] == list[SourceReferencePayload]
+    assert get_type_hints(safe_source_panel)["sources"] == list[SourceReferencePayload]
+
+
+def test_active_source_code_has_no_removed_path_fallbacks() -> None:
+    engine = (ROOT / "src/dlightrag/core/ingestion/engine.py").read_text(encoding="utf-8")
+    answer_media = (ROOT / "src/dlightrag/core/answer_media.py").read_text(encoding="utf-8")
+
+    assert "metadata_path" not in engine
+    assert 'getattr(source, "path"' not in answer_media
 
 
 def test_sanitized_source_download_preserves_accessible_name() -> None:

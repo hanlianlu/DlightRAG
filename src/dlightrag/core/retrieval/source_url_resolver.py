@@ -1,7 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""URL projection for retrieval source/media paths.
+"""HTTP projection for internal source download locators.
 
-Normalizes raw storage paths (local, azure://, s3://, https://) into
+Projects local, azure://, s3://, and https:// download locators into authenticated
 /files/raw/{path} URLs. The file-serving endpoint handles dispatch:
 local → stream, azure → 302 redirect to SAS URL,
 s3 → 302 redirect to presigned URL, https → 302 redirect to source URL.
@@ -12,14 +12,15 @@ from urllib.parse import quote
 
 
 class SourceUrlResolver:
-    """Normalize raw storage paths into unified /files/raw/ URLs.
+    """Project internal download locators into unified /files/raw/ URLs.
 
     All paths — local, azure://, s3://, https:// — are mapped to the
     file-serving endpoint. The endpoint handles source-type dispatch
     internally (local → stream, remote sources → 302 redirect).
 
     This keeps the front-end completely decoupled from storage backends.
-    The front-end only ever sees one URL format: /files/raw/{path}.
+    Raw locators stay inside the adapter boundary. The front-end only sees the
+    projected /files/raw/{path} URL.
 
     Args:
         input_dir: Input file storage directory. Paths under this
@@ -59,7 +60,7 @@ class SourceUrlResolver:
         self._base_url = base_url.rstrip("/")
 
     def resolve(self, raw_path: str, *, workspace: str | None = None) -> str | None:
-        """Convert a servable stored path to a /files/raw/ URL."""
+        """Project a validated internal download locator to a client URL."""
         effective_workspace = workspace if workspace is not None else self._workspace
         if raw_path.startswith(("azure://", "s3://")):
             resolved = f"{self._base_url}/{quote(raw_path, safe='/:')}"
@@ -84,7 +85,7 @@ class SourceUrlResolver:
         *,
         workspace: str | None = None,
     ) -> str | None:
-        """Extract an endpoint-relative source path.
+        """Extract an endpoint-relative path from a local download locator.
 
         Example: "/data/rag_storage/inputs/ws-a/doc.pdf" with
         input_dir="/data/rag_storage/inputs" → "ws-a/doc.pdf"

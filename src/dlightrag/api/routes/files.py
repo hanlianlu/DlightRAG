@@ -89,8 +89,7 @@ async def retry_failed_files(
     workspace: str | None = Query(default=None),
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Re-ingest all FAILED documents (replace=True). Source type is derived
-    from each doc's stored file_path scheme (azure://, s3://, https://, otherwise local)."""
+    """Re-ingest FAILED documents from stored source/download metadata."""
     manager = get_manager(request)
     ws = resolve_workspace(workspace, request)
     await enforce_access(request, user, AccessAction.WORKSPACE_INGEST, workspace=ws)
