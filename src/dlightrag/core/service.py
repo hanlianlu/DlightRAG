@@ -1816,6 +1816,8 @@ class RAGService:
                 "workspace",
                 "doc_id",
                 "file_path",
+                "source_uri",
+                "download_locator",
                 "file_extension",
                 "filename",
                 "filename_stem",
@@ -1858,16 +1860,12 @@ class RAGService:
             fetched_meta = {
                 k: v for k, v in meta.items() if k not in _SKIP and v is not None and v != ""
             }
-            # Surface the document's canonical source location and display name
-            # under dedicated keys. The LightRAG chunk ``file_path`` is a
-            # canonicalized parser basename, which is wrong for download when the
-            # real source lives elsewhere -- a non-retained remote object
-            # (``s3://``/``azure://``/``https://`` URI), a retained remote copy,
-            # or a nested folder upload. Source/citation building prefers these
-            # so the "Download source" link resolves in every situation.
-            source_path = meta.get("file_path")
-            if isinstance(source_path, str) and source_path:
-                fetched_meta["source_file_path"] = source_path
+            source_uri = meta.get("source_uri")
+            download_locator = meta.get("download_locator")
+            if isinstance(source_uri, str) and source_uri:
+                fetched_meta["source_uri"] = source_uri
+            if isinstance(download_locator, str) and download_locator:
+                fetched_meta["source_download_locator"] = download_locator
             display_name = meta.get("filename")
             if isinstance(display_name, str) and display_name:
                 fetched_meta["source_file_name"] = display_name
@@ -1888,7 +1886,10 @@ class RAGService:
     async def aget_metadata(self, doc_id: str) -> dict[str, Any]:
         """Get document metadata by ID."""
         result = await self._metadata_index.get(doc_id)  # type: ignore[union-attr]
-        return result if result else {}
+        if not result:
+            return {}
+        internal_fields = frozenset({"workspace", "doc_id", "file_path", "download_locator"})
+        return {key: value for key, value in result.items() if key not in internal_fields}
 
     async def aupdate_metadata(
         self,
@@ -1984,20 +1985,7 @@ class RAGService:
         ]
 
     async def aretry_failed_docs(self) -> dict[str, Any]:
-        """Re-ingest every FAILED document with ``replace=True``.
-
-        Each doc's stored ``file_path`` is parsed via
-        :func:`dlightrag.sourcing.uri.parse_remote_uri` to dispatch the right
-        ``aingest()`` source type.
-
-        To make this endpoint actually drain the FAILED list, we explicitly
-        call ``adelete_by_doc_id`` before re-ingest. That drops the FAILED
-        doc_status row and any partial chunks/entities it may have left
-        behind.
-
-        Returns a summary dict with counts and per-doc outcomes.
-        """
-        from dlightrag.sourcing.uri import parse_remote_uri
+        """Re-ingest every FAILED document from its durable metadata contract."""
 
         failed = await self.alist_failed_docs()
         if not failed:
@@ -2009,15 +1997,30 @@ class RAGService:
 
         for entry in failed:
             doc_id = entry["doc_id"]
-            file_path = entry["file_path"]
-            if not file_path:
-                still_failed.append({"doc_id": doc_id, "reason": "no file_path on doc_status"})
+            if self._metadata_index is None:
+                still_failed.append({"doc_id": doc_id, "reason": "source metadata unavailable"})
                 continue
 
             try:
-                source_type, ingest_kwargs = parse_remote_uri(file_path)
-            except ValueError as exc:
-                still_failed.append({"doc_id": doc_id, "file_path": file_path, "reason": str(exc)})
+                metadata = await self._metadata_index.get(doc_id)
+            except Exception:
+                logger.warning("Failed to load retry metadata for doc_id=%s", doc_id, exc_info=True)
+                still_failed.append({"doc_id": doc_id, "reason": "source metadata unavailable"})
+                continue
+
+            source_uri = metadata.get("source_uri") if metadata else None
+            download_locator = metadata.get("download_locator") if metadata else None
+            if not isinstance(source_uri, str) or not source_uri:
+                still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                continue
+            if not isinstance(download_locator, str) or not download_locator:
+                still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                continue
+
+            try:
+                self._validate_retry_source_contract(source_uri, download_locator)
+            except OSError, TypeError, ValueError:
+                still_failed.append({"doc_id": doc_id, "reason": "source metadata invalid"})
                 continue
 
             # Drop the FAILED doc_status row before re-ingesting so the next
@@ -2032,13 +2035,23 @@ class RAGService:
                     )
 
             try:
-                result = await self.aingest(source_type, replace=True, **ingest_kwargs)
-                succeeded.append({"doc_id": doc_id, "file_path": file_path, "result": result})
-            except Exception as exc:
-                logger.warning(
-                    "Retry failed for doc_id=%s file_path=%s: %s", doc_id, file_path, exc
+                result = await self._aingest_download_locator(source_uri, download_locator)
+                processed = result.get("processed")
+                if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
+                    still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
+                    continue
+                succeeded.append(
+                    {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
                 )
-                still_failed.append({"doc_id": doc_id, "file_path": file_path, "reason": str(exc)})
+            except Exception as exc:
+                logger.warning("Retry failed for doc_id=%s: %s", doc_id, exc)
+                still_failed.append(
+                    {
+                        "doc_id": doc_id,
+                        "file_path": entry.get("file_path", ""),
+                        "reason": str(exc),
+                    }
+                )
 
         return {
             "retried": len(failed),
@@ -2047,6 +2060,77 @@ class RAGService:
             "succeeded_docs": succeeded,
             "failed_docs": still_failed,
         }
+
+    @staticmethod
+    def _validate_retry_source_contract(
+        source_uri: str,
+        download_locator: str,
+    ) -> tuple[SourceType, dict[str, Any]]:
+        from dlightrag.sourcing.uri import parse_remote_uri
+
+        stable_source_uri = validate_source_uri(source_uri)
+        if not download_locator or "\x00" in download_locator:
+            raise ValueError("download locator is invalid")
+        source_type, parts = parse_remote_uri(download_locator)
+        if source_type == "local":
+            if not Path(download_locator).is_file():
+                raise FileNotFoundError("download locator is unavailable")
+        else:
+            validate_download_uri(download_locator)
+        if not stable_source_uri:
+            raise ValueError("source identity is invalid")
+        return source_type, parts
+
+    async def _aingest_download_locator(
+        self,
+        source_uri: str,
+        download_locator: str,
+    ) -> dict[str, Any]:
+        """Materialize one validated locator while preserving source provenance."""
+        source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
+        stable_source_uri = validate_source_uri(source_uri)
+
+        if source_type == "local":
+            if self._ingestion_engine is None:
+                raise RuntimeError("Ingestion engine not initialized")
+            return await self._ingestion_engine.aingest_file(
+                Path(download_locator),
+                source_uri=stable_source_uri,
+                download_locator=download_locator,
+                replace=False,
+            )
+
+        if source_type == "url":
+            document = IngestDocument(
+                url=download_locator,
+                source_uri=stable_source_uri,
+                download_uri=download_locator,
+            )
+            return await self.aingest(
+                "url",
+                documents=[document],
+                replace=False,
+                retain_source_file=False,
+            )
+
+        if source_type == "s3":
+            document = IngestDocument(key=str(parts["key"]), source_uri=stable_source_uri)
+            return await self.aingest(
+                "s3",
+                bucket=str(parts["bucket"]),
+                documents=[document],
+                replace=False,
+                retain_source_file=False,
+            )
+
+        document = IngestDocument(key=str(parts["blob_path"]), source_uri=stable_source_uri)
+        return await self.aingest(
+            "azure_blob",
+            container_name=str(parts["container_name"]),
+            documents=[document],
+            replace=False,
+            retain_source_file=False,
+        )
 
     async def adelete_files(
         self,

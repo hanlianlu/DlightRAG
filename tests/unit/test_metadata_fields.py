@@ -4,7 +4,9 @@
 import pytest
 
 from dlightrag.core.retrieval.metadata_fields import (
+    METADATA_FIELDS,
     MetadataFieldRegistry,
+    extract_system_metadata,
     normalize_user_metadata,
 )
 from dlightrag.core.retrieval.models import MetadataFilter
@@ -89,6 +91,25 @@ class TestMetadataFields:
 
         ids = [f.field_id for f in METADATA_FIELDS]
         assert len(ids) == len(set(ids))
+
+
+def test_metadata_registry_has_source_identity_and_download_locator() -> None:
+    ids = {field.field_id for field in METADATA_FIELDS}
+
+    assert {"source_uri", "download_locator"} <= ids
+
+
+def test_extract_system_metadata_stores_distinct_source_and_download_fields() -> None:
+    metadata = extract_system_metadata(
+        "https://cdn.example.com/assets/1.pdf",
+        ingest_strategy="mineru",
+        display_filename="report.pdf",
+        source_uri="bynder://asset/1",
+        download_locator="https://cdn.example.com/assets/1.pdf",
+    )
+
+    assert metadata["source_uri"] == "bynder://asset/1"
+    assert metadata["download_locator"] == "https://cdn.example.com/assets/1.pdf"
 
 
 class TestDerivedFunctions:

@@ -1877,11 +1877,9 @@ class TestRAGServiceLightRAGMainPath:
         service._metadata_index.find_by_file_path.assert_not_awaited()
         service._metadata_index.find_by_filename.assert_not_awaited()
 
-    async def test_metadata_enrichment_surfaces_canonical_source_path(
+    async def test_metadata_enrichment_surfaces_distinct_source_contract(
         self, test_config: DlightragConfig
     ) -> None:
-        """Non-retained remote docs surface their real source URI + display name
-        so the download link resolves to the remote object, not a parser basename."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = RAGService(config=test_config)
@@ -1890,7 +1888,9 @@ class TestRAGServiceLightRAGMainPath:
             return_value={
                 "doc-remote": {
                     "filename": "report.pdf",
-                    "file_path": "s3://my-bucket/reports/report.pdf",
+                    "file_path": "/deleted/__remote_ingest__/report.pdf",
+                    "source_uri": "bynder://asset/1",
+                    "download_locator": "https://cdn.example.com/assets/1.pdf",
                 }
             }
         )
@@ -1909,8 +1909,255 @@ class TestRAGServiceLightRAGMainPath:
         await service._enrich_chunks_with_metadata(result)
 
         meta = result.contexts["chunks"][0]["metadata"]
-        assert meta["source_file_path"] == "s3://my-bucket/reports/report.pdf"
-        assert meta["source_file_name"] == "report.pdf"
+        assert meta == {
+            "source_uri": "bynder://asset/1",
+            "source_download_locator": "https://cdn.example.com/assets/1.pdf",
+            "source_file_name": "report.pdf",
+        }
+        assert "source_file_path" not in meta
+        assert "download_locator" not in meta
+
+    async def test_get_metadata_hides_internal_paths_and_locator(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service._metadata_index = AsyncMock()
+        service._metadata_index.get.return_value = {
+            "workspace": "finance",
+            "doc_id": "doc-1",
+            "filename": "report.pdf",
+            "file_path": "/srv/dlightrag/inputs/finance/report.pdf",
+            "source_uri": "bynder://asset/1",
+            "download_locator": "https://cdn.example.com/assets/1.pdf",
+        }
+
+        result = await service.aget_metadata("doc-1")
+
+        assert result == {
+            "filename": "report.pdf",
+            "source_uri": "bynder://asset/1",
+        }
+
+    async def test_retry_failed_doc_uses_metadata_locator_not_deleted_parser_path(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        deleted_parser_path = "/srv/dlightrag/inputs/finance/__remote_ingest__/url/batch/report.pdf"
+        events: list[str] = []
+        service.alist_failed_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "doc-failed",
+                    "file_path": deleted_parser_path,
+                    "error": "parser failed",
+                }
+            ]
+        )
+        service._metadata_index = AsyncMock()
+
+        async def get_metadata(doc_id: str) -> dict[str, str]:
+            assert doc_id == "doc-failed"
+            events.append("metadata")
+            return {
+                "source_uri": "bynder://asset/1",
+                "download_locator": "https://cdn.example.com/assets/1.pdf",
+            }
+
+        service._metadata_index.get = AsyncMock(side_effect=get_metadata)
+        service._lightrag = MagicMock()
+
+        async def delete_failed(doc_id: str, *, delete_llm_cache: bool) -> None:
+            assert doc_id == "doc-failed"
+            assert delete_llm_cache is True
+            assert events == ["metadata"]
+            events.append("delete")
+
+        service._lightrag.adelete_by_doc_id = AsyncMock(side_effect=delete_failed)
+
+        async def retry_locator(source_uri: str, download_locator: str) -> dict[str, str]:
+            assert events == ["metadata", "delete"]
+            assert source_uri == "bynder://asset/1"
+            assert download_locator == "https://cdn.example.com/assets/1.pdf"
+            assert deleted_parser_path not in (source_uri, download_locator)
+            events.append("ingest")
+            return {"status": "success"}
+
+        service._aingest_download_locator = AsyncMock(side_effect=retry_locator)  # type: ignore[attr-defined]
+        service.aingest = AsyncMock(side_effect=AssertionError("must not parse doc_status path"))
+
+        result = await service.aretry_failed_docs()
+
+        assert events == ["metadata", "delete", "ingest"]
+        assert result["retried"] == 1
+        assert result["succeeded"] == 1
+        assert result["failed"] == 0
+
+    @pytest.mark.parametrize(
+        "metadata",
+        [
+            None,
+            {"download_locator": "https://cdn.example.com/assets/1.pdf"},
+            {"source_uri": "bynder://asset/1"},
+        ],
+    )
+    async def test_retry_failed_doc_requires_complete_metadata_contract(
+        self,
+        test_config: DlightragConfig,
+        metadata: dict[str, str] | None,
+    ) -> None:
+        service = RAGService(config=test_config)
+        service.alist_failed_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "doc-failed",
+                    "file_path": "https://legacy.example.com/report.pdf",
+                    "error": "parser failed",
+                }
+            ]
+        )
+        service._metadata_index = AsyncMock()
+        service._metadata_index.get.return_value = metadata
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._aingest_download_locator = AsyncMock()  # type: ignore[attr-defined]
+        service.aingest = AsyncMock()
+
+        result = await service.aretry_failed_docs()
+
+        assert result["failed"] == 1
+        service._lightrag.adelete_by_doc_id.assert_not_awaited()
+        service._aingest_download_locator.assert_not_awaited()  # type: ignore[attr-defined]
+        service.aingest.assert_not_awaited()
+
+    async def test_retry_failed_doc_rejects_non_raising_ingest_failure(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service.alist_failed_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "doc-failed",
+                    "file_path": "/deleted/__remote_ingest__/report.pdf",
+                    "error": "parser failed",
+                }
+            ]
+        )
+        service._metadata_index = AsyncMock()
+        service._metadata_index.get.return_value = {
+            "source_uri": "bynder://asset/1",
+            "download_locator": "https://cdn.example.com/assets/1.pdf",
+        }
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
+            return_value={
+                "processed": 0,
+                "errors": ["report.pdf: remote materialization failed"],
+                "results": [],
+            }
+        )
+
+        result = await service.aretry_failed_docs()
+
+        assert result["retried"] == 1
+        assert result["succeeded"] == 0
+        assert result["failed"] == 1
+        assert result["failed_docs"] == [
+            {"doc_id": "doc-failed", "reason": "retry ingestion failed"}
+        ]
+
+    @pytest.mark.parametrize(
+        ("download_locator", "source_type", "source_kwargs", "document_field"),
+        [
+            (
+                "https://cdn.example.com/assets/1.pdf",
+                "url",
+                {},
+                ("url", "https://cdn.example.com/assets/1.pdf"),
+            ),
+            (
+                "s3://documents/assets/1.pdf",
+                "s3",
+                {"bucket": "documents"},
+                ("key", "assets/1.pdf"),
+            ),
+            (
+                "azure://documents/assets/1.pdf",
+                "azure_blob",
+                {"container_name": "documents"},
+                ("key", "assets/1.pdf"),
+            ),
+        ],
+    )
+    async def test_download_locator_dispatch_preserves_remote_source_identity(
+        self,
+        test_config: DlightragConfig,
+        download_locator: str,
+        source_type: str,
+        source_kwargs: dict[str, str],
+        document_field: tuple[str, str],
+    ) -> None:
+        from dlightrag.core.client_contracts import IngestDocument
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service.aingest = AsyncMock(return_value={"status": "success"})
+
+        result = await service._aingest_download_locator(  # type: ignore[attr-defined]
+            "bynder://asset/1",
+            download_locator,
+        )
+
+        assert result == {"status": "success"}
+        call = service.aingest.await_args
+        assert call is not None
+        assert call.args == (source_type,)
+        assert call.kwargs["replace"] is False
+        for key, value in source_kwargs.items():
+            assert call.kwargs[key] == value
+        assert len(call.kwargs["documents"]) == 1
+        document = call.kwargs["documents"][0]
+        assert isinstance(document, IngestDocument)
+        assert document.source_uri == "bynder://asset/1"
+        assert getattr(document, document_field[0]) == document_field[1]
+        if source_type == "url":
+            assert document.download_uri == download_locator
+
+    async def test_download_locator_dispatch_preserves_local_source_identity(
+        self, test_config: DlightragConfig, tmp_path: Path
+    ) -> None:
+        source = tmp_path / "report.pdf"
+        source.write_bytes(b"%PDF-1.4")
+        service = RAGService(config=test_config)
+        service._ingestion_engine = AsyncMock()
+        service._ingestion_engine.aingest_file.return_value = {"status": "success"}
+
+        result = await service._aingest_download_locator(  # type: ignore[attr-defined]
+            "local://legacy/abcdef/report.pdf",
+            str(source),
+        )
+
+        assert result == {"status": "success"}
+        service._ingestion_engine.aingest_file.assert_awaited_once_with(
+            source,
+            source_uri="local://legacy/abcdef/report.pdf",
+            download_locator=str(source),
+            replace=False,
+        )
+
+    async def test_download_locator_dispatch_rejects_invalid_remote_locator(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service.aingest = AsyncMock()
+
+        with pytest.raises(ValueError, match="durable download_uri"):
+            await service._aingest_download_locator(  # type: ignore[attr-defined]
+                "bynder://asset/1",
+                "https://cdn.example.com/assets/1.pdf?token=secret",
+            )
+
+        service.aingest.assert_not_awaited()
 
     async def test_close_lightrag_main_cleanup(self, test_config: DlightragConfig) -> None:
         """close() finalizes LightRAG storages."""

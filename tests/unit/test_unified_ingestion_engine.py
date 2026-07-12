@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
@@ -113,7 +114,7 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["parse_engine"] == "mineru"
     assert kwargs["process_options"] == "iteP"
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
-    deps["metadata_index"].upsert.assert_awaited_once()
+    assert deps["metadata_index"].upsert.await_count == 2
 
 
 async def test_document_ingest_preserves_lightrag_parser_engine_params(
@@ -195,7 +196,7 @@ async def test_batch_document_ingest_uses_lightrag_staged_pipeline(tmp_path: Pat
     assert kwargs["parse_engine"] == ["native", "mineru"]
     assert kwargs["process_options"] == ["iteP", "iteP"]
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
-    assert deps["metadata_index"].upsert.await_count == 2
+    assert deps["metadata_index"].upsert.await_count == 4
 
 
 async def test_batch_document_ingest_preserves_per_file_chunk_params(
@@ -277,6 +278,8 @@ async def test_prepared_batch_uses_explicit_download_locator(tmp_path: Path) -> 
     assert kwargs["file_paths"] == [str(parser_source)]
     _, saved = deps["metadata_index"].upsert.await_args.args
     assert saved["file_path"] == "s3://bucket/team-a/report.pdf"
+    assert saved["source_uri"] == "s3://bucket/team-a/report.pdf"
+    assert saved["download_locator"] == "s3://bucket/team-a/report.pdf"
     assert saved["filename"] == "report.pdf"
     assert saved["filename_stem"] == "report"
     assert saved["file_extension"] == "pdf"
@@ -360,8 +363,99 @@ async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) ->
         prefix="doc-",
     )
     assert result["doc_id"] == expected_doc_id
-    deps["metadata_index"].upsert.assert_awaited_once()
-    assert deps["metadata_index"].upsert.await_args.args[0] == expected_doc_id
+    assert deps["metadata_index"].upsert.await_count == 2
+    assert all(
+        call.args[0] == expected_doc_id for call in deps["metadata_index"].upsert.await_args_list
+    )
+
+
+async def test_pending_metadata_is_persisted_before_parser_enqueue_failure(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = None
+    persisted: list[dict] = []
+
+    async def save_metadata(_doc_id: str, metadata: dict) -> None:
+        persisted.append(metadata)
+
+    async def fail_enqueue(**_kwargs) -> None:
+        assert persisted
+        raise RuntimeError("parser enqueue failed")
+
+    deps["metadata_index"].upsert = AsyncMock(side_effect=save_metadata)
+    deps["lightrag"].apipeline_enqueue_documents = AsyncMock(side_effect=fail_enqueue)
+
+    with pytest.raises(RuntimeError, match="parser enqueue failed"):
+        await engine.aingest_file(
+            source,
+            source_uri="bynder://asset/1",
+            download_locator="https://cdn.example.com/assets/1.pdf",
+        )
+
+    assert persisted == [
+        {
+            "filename": "1.pdf",
+            "filename_stem": "1",
+            "file_path": "https://cdn.example.com/assets/1.pdf",
+            "source_uri": "bynder://asset/1",
+            "download_locator": "https://cdn.example.com/assets/1.pdf",
+            "file_extension": "pdf",
+            "ingest_strategy": "lightrag_sidecar_unified",
+            "user_metadata": {},
+            "metadata_filterable": {},
+            "metadata_json": {},
+        }
+    ]
+
+
+async def test_batch_pending_metadata_is_persisted_before_parser_enqueue_failure(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.pdf"
+    second = tmp_path / "second.pdf"
+    first.write_bytes(b"%PDF-1.4 first")
+    second.write_bytes(b"%PDF-1.4 second")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [None, None]
+    persisted: list[tuple[str, dict]] = []
+
+    async def save_metadata(doc_id: str, metadata: dict) -> None:
+        persisted.append((doc_id, metadata))
+
+    async def fail_enqueue(**_kwargs) -> None:
+        assert len(persisted) == 2
+        raise RuntimeError("batch parser enqueue failed")
+
+    deps["metadata_index"].upsert = AsyncMock(side_effect=save_metadata)
+    deps["lightrag"].apipeline_enqueue_documents = AsyncMock(side_effect=fail_enqueue)
+
+    with pytest.raises(RuntimeError, match="batch parser enqueue failed"):
+        await engine.aingest_files(
+            [
+                PreparedIngestFile(
+                    parser_path=first,
+                    source_uri="bynder://asset/1",
+                    download_locator="https://cdn.example.com/assets/1.pdf",
+                ),
+                PreparedIngestFile(
+                    parser_path=second,
+                    source_uri="bynder://asset/2",
+                    download_locator="s3://documents/assets/2.pdf",
+                ),
+            ]
+        )
+
+    assert [metadata["source_uri"] for _, metadata in persisted] == [
+        "bynder://asset/1",
+        "bynder://asset/2",
+    ]
+    assert [metadata["download_locator"] for _, metadata in persisted] == [
+        "https://cdn.example.com/assets/1.pdf",
+        "s3://documents/assets/2.pdf",
+    ]
 
 
 async def test_document_ingest_delegates_non_sidecar_parser_route(tmp_path: Path) -> None:

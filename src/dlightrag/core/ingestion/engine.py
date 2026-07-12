@@ -291,6 +291,8 @@ class UnifiedIngestionEngine:
 
             if to_enqueue:
                 chunk_options = self._batch_chunk_options(to_enqueue)
+                for entry in to_enqueue:
+                    await self._metadata_index.upsert(entry.doc_id, entry.metadata_record)
                 await self._lightrag.apipeline_enqueue_documents(
                     input=[""] * len(to_enqueue),
                     file_paths=[str(entry.parser_path) for entry in to_enqueue],
@@ -342,6 +344,8 @@ class UnifiedIngestionEngine:
             download_locator,
             ingest_strategy="lightrag_sidecar_unified",
             display_filename=display_filename,
+            source_uri=source_uri,
+            download_locator=download_locator,
         )
         if title is not None:
             system_metadata["doc_title"] = title
@@ -393,6 +397,7 @@ class UnifiedIngestionEngine:
                 await self._cleanup_partial_doc(doc_id)
 
             parse_engine, process_options, chunk_options = self._parser_directives_for(file_path)
+            await self._metadata_index.upsert(doc_id, metadata_record)
             await self._lightrag.apipeline_enqueue_documents(
                 input="",
                 file_paths=[str(file_path)],

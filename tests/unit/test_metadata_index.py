@@ -140,6 +140,18 @@ class TestMetadataSQL:
             if field.index_type is not None:
                 assert f"index_{field.field_id}" in versions
 
+    def test_metadata_migrations_backfill_new_source_columns(self) -> None:
+        migrations = list(_SCHEMA_MIGRATIONS)
+        versions = [migration.version for migration in migrations]
+        backfill_index = versions.index("backfill_source_download_contract")
+
+        assert versions.index("column_source_uri") < backfill_index
+        assert versions.index("column_download_locator") < backfill_index
+        statement = "\n".join(migrations[backfill_index].statements)
+        assert "source_uri = COALESCE(source_uri, CASE" in statement
+        assert "download_locator = COALESCE(download_locator, file_path)" in statement
+        assert "WHERE source_uri IS NULL OR download_locator IS NULL" in statement
+
 
 async def test_metadata_index_initializes_schema_with_migrations() -> None:
     conn = _Conn()
@@ -202,3 +214,33 @@ async def test_metadata_index_get_many_fetches_doc_ids_in_one_query() -> None:
     }
     assert "doc_id = ANY($2::text[])" in seen["query"]
     assert seen["args"] == ("default", ["doc-1", "doc-2"])
+
+
+async def test_metadata_field_schema_hides_internal_source_columns() -> None:
+    idx = pg_metadata_index.PGMetadataIndex(workspace="default")
+
+    class Conn:
+        async def fetch(self, query: str, *args: Any) -> list[dict[str, str]]:
+            if "information_schema.columns" in query:
+                return [
+                    {"column_name": "workspace", "data_type": "character varying"},
+                    {"column_name": "doc_id", "data_type": "character varying"},
+                    {"column_name": "file_path", "data_type": "text"},
+                    {"column_name": "source_uri", "data_type": "text"},
+                    {"column_name": "download_locator", "data_type": "text"},
+                    {"column_name": "filename", "data_type": "character varying"},
+                ]
+            assert args == ("default",)
+            return [{"k": "department"}]
+
+    async def run(operation):  # noqa: ANN001, ANN202
+        return await operation(Conn())
+
+    idx._run = run  # type: ignore[method-assign]
+
+    schema = await idx.get_field_schema()
+
+    assert schema == {
+        "columns": [{"name": "filename", "type": "character varying"}],
+        "custom_keys": ["department"],
+    }
