@@ -50,12 +50,64 @@ def test_validate_download_uri_rejects_non_durable_or_unsupported_locators(
         validate_download_uri(value)
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com:not-a-port/report.pdf",
+        "https://example.com:70000/report.pdf",
+        "https://example.com/report file.pdf",
+        " https://example.com/report.pdf",
+        "https://example.com/report.pdf\n",
+        "https://example.com/report\x7f.pdf",
+        "s3://:443/report.pdf",
+        "s3://bucket:/report.pdf",
+        "s3://bucket:443/report.pdf",
+        "s3://user%3Asecret%40bucket/report.pdf",
+        "azure://@container/report.pdf",
+        "azure://container name/report.pdf",
+        "azure://container%20name/report.pdf",
+    ],
+)
+def test_validate_download_uri_rejects_malformed_uri_syntax(value: str) -> None:
+    with pytest.raises(ValueError, match="durable download_uri"):
+        validate_download_uri(value)
+
+
 def test_implicit_https_download_uri_never_persists_query_or_fragment() -> None:
     assert implicit_https_download_uri("https://example.com/report.pdf") == (
         "https://example.com/report.pdf"
     )
     assert implicit_https_download_uri("https://example.com/report.pdf?sig=secret") is None
     assert implicit_https_download_uri("https://example.com/report.pdf#page=2") is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/report.pdf?",
+        "https://example.com/report.pdf#",
+        "s3://bucket/report.pdf?",
+        "azure://container/report.pdf#",
+    ],
+)
+def test_validate_download_uri_rejects_empty_query_or_fragment_delimiters(
+    value: str,
+) -> None:
+    with pytest.raises(ValueError, match="durable download_uri"):
+        validate_download_uri(value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://example.com/report.pdf?",
+        "https://example.com/report.pdf#",
+    ],
+)
+def test_implicit_https_download_uri_rejects_empty_query_or_fragment_delimiters(
+    value: str,
+) -> None:
+    assert implicit_https_download_uri(value) is None
 
 
 @pytest.mark.parametrize("value", ["", "\x00", "cms://asset/\x00secret"])
@@ -72,3 +124,15 @@ def test_local_source_uri_is_workspace_relative_and_path_safe() -> None:
     assert local_source_uri("research", Path("reports/Q2 results.md")) == (
         "local://research/reports/Q2%20results.md"
     )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        r"C:\Users\alice\secret.pdf",
+        r"\\server\share\secret.pdf",
+    ],
+)
+def test_local_source_uri_rejects_windows_absolute_paths(value: str) -> None:
+    with pytest.raises(ValueError, match="local source identity is invalid"):
+        local_source_uri("research", value)
