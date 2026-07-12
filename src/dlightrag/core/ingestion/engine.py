@@ -32,6 +32,7 @@ from dlightrag.core.retrieval.metadata_fields import (
     normalize_user_metadata,
 )
 from dlightrag.core.sidecar_provenance import sidecar_dir_from_location
+from dlightrag.sourcing.source_contract import local_source_uri
 from dlightrag.utils import log_safe
 
 logger = logging.getLogger(__name__)
@@ -39,16 +40,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class PreparedIngestFile:
-    """Prepared parser input plus the source metadata DlightRAG should store.
+    """Prepared parser input with explicit provenance and download identity.
 
     ``parser_path`` must be a local file because LightRAG pending-parse
-    ingestion requires local parser input. ``metadata_path`` is the source of
-    truth exposed back to retrieval clients; for remote sources this remains
-    the original ``s3://``, ``azure://``, or ``https://`` URI.
+    ingestion requires local parser input. ``source_uri`` is stable provenance;
+    ``download_locator`` is the durable location used to reacquire the bytes.
     """
 
     parser_path: Path
-    metadata_path: str | None = None
+    source_uri: str
+    download_locator: str
     display_filename: str | None = None
     title: str | None = None
     author: str | None = None
@@ -120,6 +121,8 @@ class UnifiedIngestionEngine:
         self,
         path: str | Path,
         *,
+        source_uri: str | None = None,
+        download_locator: str | None = None,
         replace: bool = False,
         title: str | None = None,
         author: str | None = None,
@@ -128,6 +131,10 @@ class UnifiedIngestionEngine:
     ) -> dict[str, Any]:
         """Ingest a local file through the unified path."""
         file_path = Path(path)
+        resolved_source_uri = source_uri or _raw_path_source_uri(
+            file_path, workspace=self._workspace
+        )
+        resolved_download_locator = download_locator or str(file_path.resolve())
         doc_id = _canonical_file_doc_id(file_path)
 
         # Idempotency: skip re-ingest if file content hasn't changed.
@@ -141,6 +148,8 @@ class UnifiedIngestionEngine:
                 return await self._maybe_update_metadata(
                     file_path,
                     doc_id,
+                    source_uri=resolved_source_uri,
+                    download_locator=resolved_download_locator,
                     title=title,
                     author=author,
                     metadata=metadata,
@@ -150,6 +159,8 @@ class UnifiedIngestionEngine:
 
         metadata_record = self._prepare_metadata_record(
             file_path,
+            source_uri=resolved_source_uri,
+            download_locator=resolved_download_locator,
             title=title,
             author=author,
             metadata=metadata,
@@ -166,6 +177,8 @@ class UnifiedIngestionEngine:
         file_path: str | Path,
         doc_id: str,
         *,
+        source_uri: str,
+        download_locator: str,
         title: str | None,
         author: str | None,
         metadata: Mapping[str, Any] | None,
@@ -182,6 +195,8 @@ class UnifiedIngestionEngine:
             }
         metadata_record = self._prepare_metadata_record(
             Path(file_path),
+            source_uri=source_uri,
+            download_locator=download_locator,
             title=title,
             author=author,
             metadata=metadata,
@@ -216,7 +231,9 @@ class UnifiedIngestionEngine:
             return {"processed": 0, "errors": [], "results": []}
 
         entries: list[_PendingDocumentIngest] = []
-        for index, item in enumerate(_prepare_ingest_item(path) for path in paths):
+        for index, item in enumerate(
+            _prepare_ingest_item(path, workspace=self._workspace) for path in paths
+        ):
             parser_path = item.parser_path
             parse_engine, process_options, chunk_options = self._parser_directives_for(parser_path)
             entries.append(
@@ -226,7 +243,8 @@ class UnifiedIngestionEngine:
                     doc_id=_canonical_file_doc_id(parser_path),
                     metadata_record=self._prepare_metadata_record(
                         parser_path,
-                        metadata_path=item.metadata_path,
+                        source_uri=item.source_uri,
+                        download_locator=item.download_locator,
                         display_filename=item.display_filename,
                         title=item.title if item.title is not None else title,
                         author=item.author if item.author is not None else author,
@@ -301,7 +319,8 @@ class UnifiedIngestionEngine:
         self,
         file_path: Path,
         *,
-        metadata_path: str | None = None,
+        source_uri: str,
+        download_locator: str,
         display_filename: str | None = None,
         title: str | None,
         author: str | None,
@@ -320,7 +339,7 @@ class UnifiedIngestionEngine:
             allow_ad_hoc_json=self._allow_ad_hoc_metadata,
         )
         system_metadata = extract_system_metadata(
-            metadata_path or file_path,
+            download_locator,
             ingest_strategy="lightrag_sidecar_unified",
             display_filename=display_filename,
         )
@@ -588,10 +607,22 @@ def _file_sha256(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def _prepare_ingest_item(path: str | Path | PreparedIngestFile) -> PreparedIngestFile:
+def _prepare_ingest_item(
+    path: str | Path | PreparedIngestFile, *, workspace: str
+) -> PreparedIngestFile:
     if isinstance(path, PreparedIngestFile):
         return path
-    return PreparedIngestFile(parser_path=Path(path))
+    parser_path = Path(path)
+    return PreparedIngestFile(
+        parser_path=parser_path,
+        source_uri=_raw_path_source_uri(parser_path, workspace=workspace),
+        download_locator=str(parser_path.resolve()),
+    )
+
+
+def _raw_path_source_uri(path: Path, *, workspace: str) -> str:
+    digest = hashlib.sha256(str(path.resolve()).encode("utf-8")).hexdigest()
+    return local_source_uri(workspace, Path(digest) / path.name)
 
 
 def _overlay_metadata(

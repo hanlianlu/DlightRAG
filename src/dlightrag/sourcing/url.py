@@ -4,6 +4,7 @@
 import fnmatch
 import inspect
 import ipaddress
+import logging
 import socket
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path, PurePosixPath
@@ -21,6 +22,8 @@ from dlightrag.sourcing.source_contract import (
 
 _MAX_REDIRECTS = 5
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+logger = logging.getLogger(__name__)
 
 
 class URLDataSource(AsyncDataSource):
@@ -133,6 +136,17 @@ class URLDataSource(AsyncDataSource):
                     resolved_download_uri = implicit_https_download_uri(url)
                 except ValueError:
                     resolved_download_uri = None
+                if resolved_download_uri is None and ("?" in url or "#" in url):
+                    logger.info(
+                        "source_download_locator_outcome",
+                        extra={
+                            "outcome": "ephemeral",
+                            "locator_kind": "https",
+                            "source_filename": (
+                                document.display_filename or PurePosixPath(key).name or "document"
+                            ),
+                        },
+                    )
             self._download_uri_by_key[key] = resolved_download_uri
             self._document_by_key[key] = SourceDocument(
                 key=key,

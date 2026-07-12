@@ -1085,6 +1085,7 @@ class TestDelegation:
         mock_svc.aingest_source.return_value = {"processed": 1}
         mock_create.return_value = mock_svc
         manager = RAGServiceManager(config=test_cfg)
+        download_uri_for_key = lambda key: f"https://cdn.example.com/{key}"  # noqa: E731
 
         result = await manager.aingest_source(
             "ws_a",
@@ -1092,6 +1093,7 @@ class TestDelegation:
             source_type="bynder",
             documents=[SourceDocument(key="asset.pdf")],
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
+            download_uri_for_key=download_uri_for_key,
             retain_source_file=True,
         )
 
@@ -1100,6 +1102,10 @@ class TestDelegation:
         assert mock_svc.aingest_source.await_args.kwargs["documents"] == [
             SourceDocument(key="asset.pdf")
         ]
+        assert (
+            mock_svc.aingest_source.await_args.kwargs["download_uri_for_key"]
+            is download_uri_for_key
+        )
         assert mock_svc.aingest_source.await_args.kwargs["retain_source_file"] is True
         assert manager._ingest_jobs._tasks == {}
 

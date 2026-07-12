@@ -3,13 +3,17 @@
 
 import hashlib
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
 
-from dlightrag.core.ingestion.engine import PreparedIngestFile, UnifiedIngestionEngine
+from dlightrag.core.ingestion.engine import (
+    PreparedIngestFile,
+    UnifiedIngestionEngine,
+    _prepare_ingest_item,
+)
 from dlightrag.core.retrieval.metadata_fields import MetadataFieldRegistry
 
 
@@ -241,7 +245,7 @@ async def test_batch_document_ingest_preserves_per_file_chunk_params(
     ]
 
 
-async def test_prepared_batch_preserves_remote_metadata_path(tmp_path: Path) -> None:
+async def test_prepared_batch_uses_explicit_download_locator(tmp_path: Path) -> None:
     parser_source = tmp_path / "report__s3_abcd1234.pdf"
     parser_source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
@@ -260,7 +264,8 @@ async def test_prepared_batch_preserves_remote_metadata_path(tmp_path: Path) -> 
         [
             PreparedIngestFile(
                 parser_path=parser_source,
-                metadata_path="s3://bucket/team-a/report.pdf",
+                source_uri="s3://bucket/team-a/report.pdf",
+                download_locator="s3://bucket/team-a/report.pdf",
                 display_filename="report.pdf",
             )
         ],
@@ -275,6 +280,72 @@ async def test_prepared_batch_preserves_remote_metadata_path(tmp_path: Path) -> 
     assert saved["filename"] == "report.pdf"
     assert saved["filename_stem"] == "report"
     assert saved["file_extension"] == "pdf"
+
+
+def test_raw_path_preparation_uses_collision_safe_local_identity(tmp_path: Path) -> None:
+    first = tmp_path / "team-a" / "report.pdf"
+    second = tmp_path / "team-b" / "report.pdf"
+    first.parent.mkdir()
+    second.parent.mkdir()
+
+    first_item = _prepare_ingest_item(first, workspace="Finance Team")
+    second_item = _prepare_ingest_item(second, workspace="Finance Team")
+
+    assert first_item.source_uri.startswith("local://finance_team/")
+    assert second_item.source_uri.startswith("local://finance_team/")
+    assert first_item.source_uri.endswith("/report.pdf")
+    assert second_item.source_uri.endswith("/report.pdf")
+    assert first_item.source_uri != second_item.source_uri
+    assert str(tmp_path) not in first_item.source_uri
+    assert str(tmp_path) not in second_item.source_uri
+    assert first_item.download_locator == str(first)
+    assert second_item.download_locator == str(second)
+
+
+async def test_single_file_forwards_explicit_source_contract_to_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, _deps = _make_engine()
+    prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
+    monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
+
+    await engine.aingest_file(
+        source,
+        source_uri="local://default/docs/sample.pdf",
+        download_locator=str(source),
+    )
+
+    assert prepare_metadata.call_args.kwargs["source_uri"] == ("local://default/docs/sample.pdf")
+    assert prepare_metadata.call_args.kwargs["download_locator"] == str(source)
+
+
+async def test_metadata_only_update_forwards_explicit_source_contract(
+    tmp_path: Path, monkeypatch
+) -> None:
+    content = b"%PDF-1.4"
+    source = tmp_path / "sample.pdf"
+    source.write_bytes(content)
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.return_value = {
+        "chunks_list": ["chunk-a"],
+        "content_hash": _sha256(content),
+        "status": "processed",
+    }
+    prepare_metadata = MagicMock(wraps=engine._prepare_metadata_record)
+    monkeypatch.setattr(engine, "_prepare_metadata_record", prepare_metadata)
+
+    result = await engine.aingest_file(
+        source,
+        source_uri="local://default/docs/sample.pdf",
+        download_locator=str(source),
+        title="Updated title",
+    )
+
+    assert result["source_kind"] == "metadata_updated"
+    assert prepare_metadata.call_args.kwargs["source_uri"] == ("local://default/docs/sample.pdf")
+    assert prepare_metadata.call_args.kwargs["download_locator"] == str(source)
 
 
 async def test_document_ingest_uses_lightrag_canonical_doc_id(tmp_path: Path) -> None:
@@ -370,6 +441,8 @@ async def test_prepared_file_metadata_overlays_batch_metadata(tmp_path: Path) ->
         [
             PreparedIngestFile(
                 parser_path=source,
+                source_uri="local://default/asset.pdf",
+                download_locator=str(source),
                 metadata={"department": " Legal ", "asset_id": "A-123"},
             )
         ],

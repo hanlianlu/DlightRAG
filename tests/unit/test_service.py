@@ -655,7 +655,8 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["doc_id"] == "d1"
         item = seen_items[0]
-        assert item.metadata_path == "azure://test-container/docs/report.pdf"
+        assert item.source_uri == "azure://test-container/docs/report.pdf"
+        assert item.download_locator == "azure://test-container/docs/report.pdf"
         assert item.display_filename == "report.pdf"
         assert item.parser_path.suffix == ".pdf"
         assert "report" in item.parser_path.name
@@ -703,7 +704,11 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_file.assert_not_awaited()
         service._ingestion_engine.aingest_files.assert_awaited_once()
         assert result["processed"] == 2
-        assert [item.metadata_path for item in seen_items] == [
+        assert [item.source_uri for item in seen_items] == [
+            "azure://c/team-a/report.pdf",
+            "azure://c/team-b/report.pdf",
+        ]
+        assert [item.download_locator for item in seen_items] == [
             "azure://c/team-a/report.pdf",
             "azure://c/team-b/report.pdf",
         ]
@@ -734,7 +739,10 @@ class TestRAGServiceLightRAGMainPath:
 
         with patch("dlightrag.sourcing.aws_s3.S3DataSource", return_value=mock_source):
             result = await service.aingest(
-                source_type="s3", bucket="my-bucket", s3_key="docs/report.pdf"
+                source_type="s3",
+                bucket="my-bucket",
+                s3_key="docs/report.pdf",
+                replace=True,
             )
 
         service._ingestion_engine.aingest_file.assert_not_awaited()
@@ -875,23 +883,23 @@ class TestRAGServiceLightRAGMainPath:
         )
 
         assert result["processed"] == 1
-        assert result["errors"] == ["s3://my-bucket/docs/b.pdf: download failed"]
+        assert result["errors"] == ["b.pdf: remote materialization failed"]
         assert len(progress_events) == 1
         progress = progress_events[0]
         assert progress.total_delta == 2
         assert progress.processed_delta == 1
         assert progress.failed_delta == 1
-        assert progress.errors == ("s3://my-bucket/docs/b.pdf: download failed",)
+        assert progress.errors == ("b.pdf: remote materialization failed",)
 
     @pytest.mark.parametrize(
         ("source_type", "source_uri"),
         [
             ("s3", "s3://my-bucket/docs/report.pdf"),
             ("azure_blob", "azure://my-container/docs/report.pdf"),
-            ("url", "https://example.com/docs/report.pdf"),
+            ("url", "https://example.com/docs/report.pdf?token=secret"),
         ],
     )
-    async def test_remote_source_retention_keeps_workspace_file_and_metadata_path(
+    async def test_remote_source_retention_keeps_workspace_file_and_explicit_contract(
         self,
         test_config: DlightragConfig,
         source_type: str,
@@ -929,7 +937,9 @@ class TestRAGServiceLightRAGMainPath:
         item = seen_items[0]
         assert item.parser_path.exists()
         assert item.parser_path.read_bytes() == b"%PDF-retained"
-        assert item.metadata_path == str(item.parser_path)
+        assert item.source_uri == source_uri
+        assert item.download_locator == str(item.parser_path)
+        assert item.source_uri != item.download_locator
         assert item.parser_path.is_relative_to(
             test_config.input_dir_path / test_config.workspace / "__remote_sources__" / source_type
         )
@@ -965,12 +975,14 @@ class TestRAGServiceLightRAGMainPath:
             RemoteSource(),
             source_type="s3",
             source_uri_for_key=lambda _key: "s3://my-bucket/docs/report.pdf",
+            download_uri_for_key=lambda _key: "s3://my-bucket/docs/report.pdf",
             retain_source_file=False,
         )
 
         assert result["processed"] == 1
         item = seen_items[0]
-        assert item.metadata_path == "s3://my-bucket/docs/report.pdf"
+        assert item.source_uri == "s3://my-bucket/docs/report.pdf"
+        assert item.download_locator == "s3://my-bucket/docs/report.pdf"
         assert not item.parser_path.exists()
 
     async def test_aingest_source_accepts_sdk_async_data_source(
@@ -1019,6 +1031,7 @@ class TestRAGServiceLightRAGMainPath:
             source_type="bynder",
             prefix="approved/",
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
+            download_uri_for_key=lambda key: f"https://cdn.example.com/assets/{Path(key).name}",
             title="Approved asset",
             metadata={"collection": "marketing"},
         )
@@ -1026,9 +1039,233 @@ class TestRAGServiceLightRAGMainPath:
         assert result["processed"] == 1
         assert source.loaded == ["asset-123/report.pdf"]
         assert source.closed is True
-        assert seen_items[0].metadata_path == "bynder://assets/asset-123/report.pdf"
+        assert seen_items[0].source_uri == "bynder://assets/asset-123/report.pdf"
+        assert seen_items[0].download_locator == ("https://cdn.example.com/assets/report.pdf")
         assert seen_items[0].display_filename == "report.pdf"
         assert seen_items[0].parser_path.suffix == ".pdf"
+
+    async def test_custom_non_retained_source_without_download_uri_fails_before_materialize(
+        self, test_config: DlightragConfig
+    ) -> None:
+        materialized = False
+
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(key="asset/report.pdf", source_uri="bynder://asset/1")
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                nonlocal materialized
+                materialized = True
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": []}
+        )
+
+        result = await service.aingest_source(
+            BynderSource(),
+            source_type="bynder",
+            retain_source_file=False,
+        )
+
+        assert result["processed"] == 0
+        assert result["errors"] == [
+            "retain_source_file=false requires a durable download_uri for source report.pdf; "
+            "provide download_uri/download_uri_for_key or enable retain_source_file"
+        ]
+        assert materialized is False
+
+    async def test_signed_url_requires_retention_or_explicit_download_uri(
+        self, test_config: DlightragConfig
+    ) -> None:
+        class SignedUrlSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(
+                    key="report.pdf",
+                    source_uri="https://fetch.example.com/report.pdf?token=secret",
+                )
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                raise AssertionError("materialization must not run")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": []}
+        )
+
+        result = await service.aingest_source(
+            SignedUrlSource(),
+            source_type="url",
+            retain_source_file=False,
+        )
+
+        assert result["processed"] == 0
+        assert "durable download_uri" in result["errors"][0]
+        assert "token=secret" not in result["errors"][0]
+
+    async def test_custom_non_retained_source_accepts_separate_download_uri(
+        self, test_config: DlightragConfig
+    ) -> None:
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(
+                    key="asset/report.pdf",
+                    source_uri="bynder://asset/1",
+                    download_uri="https://cdn.example.com/assets/1.pdf",
+                )
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"%PDF-fake")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": []}
+        )
+
+        result = await service.aingest_source(
+            BynderSource(),
+            source_type="bynder",
+            download_uri_for_key=lambda _key: "s3://fallback/report.pdf",
+            retain_source_file=False,
+        )
+
+        assert result["processed"] == 1
+        await_args = service._ingestion_engine.aingest_files.await_args
+        assert await_args is not None
+        prepared = await_args.args[0][0]
+        assert prepared.source_uri == "bynder://asset/1"
+        assert prepared.download_locator == "https://cdn.example.com/assets/1.pdf"
+
+    async def test_invalid_download_uri_fails_before_materialize_and_logs_safely(
+        self,
+        test_config: DlightragConfig,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        materialized = False
+
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(
+                    key="asset/report.pdf",
+                    source_uri="bynder://asset/1",
+                    download_uri="https://cdn.example.com/assets/1.pdf?token=secret",
+                )
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                nonlocal materialized
+                materialized = True
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+
+        with caplog.at_level(logging.INFO, logger="dlightrag.core.service"):
+            result = await service.aingest_source(
+                BynderSource(),
+                source_type="bynder",
+                retain_source_file=False,
+            )
+
+        assert result["processed"] == 0
+        assert result["errors"] == [
+            "invalid durable download_uri for source report.pdf; "
+            "provide a supported durable URI or enable retain_source_file"
+        ]
+        assert materialized is False
+        outcome = next(
+            record
+            for record in caplog.records
+            if record.message == "source_download_locator_outcome"
+        )
+        outcome_fields = vars(outcome)
+        assert outcome_fields["outcome"] == "unsupported"
+        assert outcome_fields["locator_kind"] == "https"
+        assert outcome_fields["source_filename"] == "report.pdf"
+        assert "token=secret" not in caplog.text
+
+    async def test_materialization_failure_does_not_expose_remote_exception(
+        self,
+        test_config: DlightragConfig,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        signed_url = "https://fetch.example.com/report.pdf?token=secret"
+
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(
+                    key=signed_url,
+                    source_uri="bynder://asset/1",
+                    download_uri="https://cdn.example.com/assets/1.pdf",
+                )
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                raise ValueError(f"download failed from {signed_url}")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+
+        with caplog.at_level(logging.WARNING):
+            result = await service.aingest_source(
+                BynderSource(), source_type="bynder", retain_source_file=False
+            )
+
+        assert result["errors"] == ["report.pdf: remote materialization failed"]
+        assert "token=secret" not in caplog.text
+        assert signed_url not in caplog.text
+
+    async def test_remote_replace_purges_by_download_locator(
+        self, test_config: DlightragConfig
+    ) -> None:
+        class BynderSource(AsyncDataSource):
+            async def aiter_documents(self, prefix: str | None = None):
+                yield SourceDocument(
+                    key="asset/report.pdf",
+                    source_uri="bynder://asset/1",
+                    download_uri="https://cdn.example.com/assets/1.pdf",
+                )
+
+            async def amaterialize_document(
+                self, document: SourceDocument, destination: Path
+            ) -> None:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(b"%PDF-fake")
+
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service._ingestion_engine.aingest_files = AsyncMock(
+            return_value={"processed": 1, "errors": [], "results": []}
+        )
+        service._purge_existing_for_replace = AsyncMock()  # type: ignore[method-assign]
+
+        await service.aingest_source(
+            BynderSource(),
+            source_type="bynder",
+            replace=True,
+            retain_source_file=False,
+        )
+
+        first_cleanup = service._purge_existing_for_replace.await_args_list[0]
+        assert first_cleanup.kwargs["stored_file_path"] == ("https://cdn.example.com/assets/1.pdf")
+        assert first_cleanup.kwargs["stored_file_path"] != "bynder://asset/1"
 
     async def test_aingest_source_accepts_per_document_metadata(
         self, test_config: DlightragConfig
@@ -1041,6 +1278,7 @@ class TestRAGServiceLightRAGMainPath:
                 yield SourceDocument(
                     key="asset-123/report.pdf",
                     source_uri="bynder://assets/asset-123",
+                    download_uri="https://cdn.example.com/assets/asset-123.pdf",
                     display_filename="report.pdf",
                     title="Asset report",
                     metadata={"department": "Legal", "asset_id": "asset-123"},
@@ -1073,7 +1311,8 @@ class TestRAGServiceLightRAGMainPath:
         )
 
         assert result["processed"] == 1
-        assert seen_items[0].metadata_path == "bynder://assets/asset-123"
+        assert seen_items[0].source_uri == "bynder://assets/asset-123"
+        assert seen_items[0].download_locator == ("https://cdn.example.com/assets/asset-123.pdf")
         assert seen_items[0].display_filename == "report.pdf"
         assert seen_items[0].title == "Asset report"
         assert seen_items[0].metadata == {"department": "Legal", "asset_id": "asset-123"}
@@ -1104,6 +1343,8 @@ class TestRAGServiceLightRAGMainPath:
 
         assert result["processed"] == 1
         assert seen_items[0].parser_path == source
+        assert seen_items[0].source_uri == f"local://{test_config.workspace}/docs/report.pdf"
+        assert seen_items[0].download_locator == str(source)
         assert seen_items[0].metadata == {"asset_id": "local-a"}
 
     async def test_aingest_source_accepts_sync_close(self, test_config: DlightragConfig) -> None:
@@ -1136,6 +1377,7 @@ class TestRAGServiceLightRAGMainPath:
             source,
             source_type="bynder",
             source_uri_for_key=lambda key: f"bynder://assets/{key}",
+            download_uri_for_key=lambda _key: "https://cdn.example.com/assets/report.pdf",
         )
 
         assert result["processed"] == 1
@@ -1169,6 +1411,7 @@ class TestRAGServiceLightRAGMainPath:
             side_effect=lambda _document, destination: destination.write_bytes(b"<html></html>")
         )
         mock_source.source_uri_for_key = lambda key: "https://api.bynder.com/docs/getting-started"
+        mock_source.download_uri_for_key = lambda key: "https://api.bynder.com/docs/getting-started"
         mock_source.aclose = AsyncMock()
 
         with patch("dlightrag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
@@ -1188,9 +1431,69 @@ class TestRAGServiceLightRAGMainPath:
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
         call_items = await_args.args[0]
-        assert call_items[0].metadata_path == "https://api.bynder.com/docs/getting-started"
+        assert call_items[0].source_uri == "https://api.bynder.com/docs/getting-started"
+        assert call_items[0].download_locator == ("https://api.bynder.com/docs/getting-started")
         assert call_items[0].display_filename == "getting-started.html"
         mock_source.aclose.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("request_fields", "constructor_fields"),
+        [
+            (
+                {
+                    "url": "https://fetch.example.com/report.pdf?token=secret",
+                    "download_uri": "https://cdn.example.com/report.pdf",
+                },
+                {"download_uri": "https://cdn.example.com/report.pdf"},
+            ),
+            (
+                {
+                    "urls": [
+                        "https://fetch.example.com/a.pdf?token=one",
+                        "https://fetch.example.com/b.pdf?token=two",
+                    ],
+                    "download_uris": [
+                        "https://cdn.example.com/a.pdf",
+                        "https://cdn.example.com/b.pdf",
+                    ],
+                },
+                {
+                    "download_uris": [
+                        "https://cdn.example.com/a.pdf",
+                        "https://cdn.example.com/b.pdf",
+                    ]
+                },
+            ),
+        ],
+    )
+    async def test_aingest_url_forwards_download_shortcuts_and_callbacks(
+        self,
+        test_config: DlightragConfig,
+        request_fields: dict[str, object],
+        constructor_fields: dict[str, object],
+    ) -> None:
+        service = RAGService(config=test_config)
+        service._initialized = True
+        service._ingestion_engine = MagicMock()
+        service.aingest_source = AsyncMock(  # type: ignore[method-assign]
+            return_value={"processed": 1, "errors": [], "results": []}
+        )
+        mock_source = MagicMock()
+        mock_source.source_uri_for_key = MagicMock()
+        mock_source.download_uri_for_key = MagicMock()
+
+        with patch("dlightrag.sourcing.url.URLDataSource", return_value=mock_source) as cls:
+            await service.aingest(source_type="url", **request_fields)
+
+        constructor_call = cls.call_args
+        assert constructor_call is not None
+        for field, value in constructor_fields.items():
+            assert constructor_call.kwargs[field] == value
+        delegated_call = service.aingest_source.await_args
+        assert delegated_call is not None
+        delegated = delegated_call.kwargs
+        assert delegated["source_uri_for_key"] is mock_source.source_uri_for_key
+        assert delegated["download_uri_for_key"] is mock_source.download_uri_for_key
 
     async def test_aingest_unified_blob_batch_failure_leaves_no_temp_dirs(
         self, test_config: DlightragConfig
@@ -1242,6 +1545,12 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_file.assert_awaited_once()
         staged = test_config.input_dir_path / test_config.workspace / "f.pdf"
         assert service._ingestion_engine.aingest_file.call_args.args[0] == staged
+        assert service._ingestion_engine.aingest_file.call_args.kwargs["source_uri"] == (
+            f"local://{test_config.workspace}/f.pdf"
+        )
+        assert service._ingestion_engine.aingest_file.call_args.kwargs["download_locator"] == str(
+            staged
+        )
         assert staged.read_bytes() == b"%PDF-fake"
         assert result["doc_id"] == "d1"
         assert result["page_count"] == 3
@@ -1270,7 +1579,10 @@ class TestRAGServiceLightRAGMainPath:
             side_effect=lambda paths, **kwargs: {
                 "processed": len(paths),
                 "errors": [],
-                "results": [{"doc_id": path.name, "file_path": str(path)} for path in paths],
+                "results": [
+                    {"doc_id": item.parser_path.name, "file_path": str(item.parser_path)}
+                    for item in paths
+                ],
             }
         )
 
@@ -1283,10 +1595,21 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
-        assert list(await_args.args[0]) == [
+        items = list(await_args.args[0])
+        assert [item.parser_path for item in items] == [
             staged_root / "a.docx",
             staged_root / "b.pdf",
             staged_root / "nested" / "c.pptx",
+        ]
+        assert [item.source_uri for item in items] == [
+            f"local://{test_config.workspace}/a.docx",
+            f"local://{test_config.workspace}/b.pdf",
+            f"local://{test_config.workspace}/nested/c.pptx",
+        ]
+        assert [item.download_locator for item in items] == [
+            str(staged_root / "a.docx"),
+            str(staged_root / "b.pdf"),
+            str(staged_root / "nested" / "c.pptx"),
         ]
         assert (staged_root / "a.docx").read_bytes() == b"fake"
         assert (staged_root / "b.pdf").read_bytes() == b"fake"
@@ -1348,7 +1671,10 @@ class TestRAGServiceLightRAGMainPath:
         service._ingestion_engine.aingest_files.assert_awaited_once()
         await_args = service._ingestion_engine.aingest_files.await_args
         assert await_args is not None
-        assert list(await_args.args[0]) == [staged_root / "uploaded.pdf"]
+        item = await_args.args[0][0]
+        assert item.parser_path == staged_root / "uploaded.pdf"
+        assert item.source_uri == f"local://{test_config.workspace}/uploaded.pdf"
+        assert item.download_locator == str(staged_root / "uploaded.pdf")
         assert (staged_root / "uploaded.pdf").read_bytes() == b"%PDF-fake"
 
     async def test_aingest_replace_purges_existing_doc_before_ingest(
