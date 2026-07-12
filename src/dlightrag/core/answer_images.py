@@ -18,9 +18,8 @@ logger = logging.getLogger(__name__)
 # - data: → decoded, resized, re-encoded through the byte budget
 # - https: → provider's server fetches; only blocked when the host is an
 #   IP literal in a private / loopback / link-local range
-# - dlightrag-image:// → internal checkpoint references, no fetch
 # Everything else (http://, file://, ftp://, custom:) is rejected.
-_ALLOWED_SCHEMES = frozenset({"data", "https", "dlightrag-image"})
+_ALLOWED_SCHEMES = frozenset({"data", "https"})
 
 
 # Non-standard IP representations that ``ipaddress`` rejects but some
@@ -60,17 +59,13 @@ def _is_unsafe_host(host: str | None) -> bool:
 def _validate_image_url(text: str, *, label: str) -> str | None:
     """Return *text* if it is safe to pass to a model provider, else None.
 
-    Whitelist approach: only ``data:``, ``https:``, and
-    ``dlightrag-image://`` are permitted.  For ``https:`` URLs whose
-    host is an IP literal we additionally reject private / loopback /
-    link-local addresses (SSRF guard).
+    Whitelist approach: only ``data:`` and ``https:`` are permitted. For
+    ``https:`` URLs whose host is an IP literal we additionally reject private,
+    loopback, and link-local addresses (SSRF guard).
     """
     # Fast path — no parse needed for these
     if text.startswith("data:"):
         return text
-    if text.startswith("dlightrag-image://"):
-        return text
-
     colon = text.find(":")
     if colon < 0:
         logger.warning(
@@ -147,9 +142,8 @@ class AnswerImageBudget:
         ``data:`` URIs and bare base64 strings are decoded, resized, and
         re-encoded through the byte budget.  ``https:`` URLs are passed
         through (the provider's server fetches them) — private / loopback /
-        link-local IP literals are rejected.  ``dlightrag-image://``
-        references are passed through without fetching.  All other URI
-        schemes (including ``http:``) are rejected.
+        link-local IP literals are rejected. All other URI schemes (including
+        ``http:``) are rejected.
         """
         if self.count >= self.max_images:
             return None
@@ -160,11 +154,6 @@ class AnswerImageBudget:
         # data: URIs → base64 budget pipeline (resize + compress)
         if text.startswith("data:"):
             return self.add_base64(text, label=label)
-        # dlightrag-image:// → internal reference, pass through
-        if text.startswith("dlightrag-image://"):
-            self.count += 1
-            return {"type": "image_url", "image_url": {"url": text}}
-
         # Only validate strings that look like URLs (have a scheme://).
         # Bare base64, raw bytes, or unrecognized formats fall through
         # to the byte-budget pipeline.
@@ -221,11 +210,6 @@ class AnswerImageBudget:
             bounded_image_url["url"] = bounded_url
             bounded_block["image_url"] = bounded_image_url
             return bounded_block
-
-        # dlightrag-image:// → pass through
-        if text.startswith("dlightrag-image://"):
-            self.count += 1
-            return block
 
         # All other schemes → validate through whitelist gate
         safe = _validate_image_url(text, label=label)

@@ -1548,7 +1548,7 @@ class TestAnswerEndpoint:
         assert resp.status_code == 200
         assert mock_manager.aanswer.call_args.kwargs["semantic_highlights"] is True
 
-    async def test_answer_forwards_typed_history_and_query_image_blocks(
+    async def test_answer_rejects_conversation_history_and_accepts_query_image_blocks(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
         app.state.manager = mock_manager
@@ -1566,7 +1566,7 @@ class TestAnswerEndpoint:
         ]
         query_images = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
 
-        resp = await client.post(
+        rejected = await client.post(
             "/answer",
             json={
                 "query": "What is shown?",
@@ -1576,9 +1576,21 @@ class TestAnswerEndpoint:
             },
         )
 
+        assert rejected.status_code == 422
+        mock_manager.aanswer.assert_not_awaited()
+
+        resp = await client.post(
+            "/answer",
+            json={
+                "query": "What is shown?",
+                "stream": False,
+                "query_images": query_images,
+            },
+        )
+
         assert resp.status_code == 200
         call_kwargs = mock_manager.aanswer.call_args.kwargs
-        assert call_kwargs["conversation_history"] == history
+        assert "conversation_history" not in call_kwargs
         assert call_kwargs["query_images"] == query_images
 
     async def test_answer_service_unavailable_503(

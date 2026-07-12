@@ -23,7 +23,7 @@ Clients
   -> LightRAG main
        parser routing, staged ingest, chunks, doc status, KG, vectors
   -> DlightRAG PostgreSQL stores
-       metadata index, BM25 indexes, workspace/job/checkpoint metadata
+       metadata index, BM25 indexes, workspace/job/Web conversation metadata
 ```
 
 LightRAG remains the core RAG engine. It owns parser routing, staged ingest,

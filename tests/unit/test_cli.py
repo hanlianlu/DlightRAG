@@ -69,10 +69,6 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             '{"department":"finance"}',
             "--query-image",
             "data:image/png;base64,abc",
-            "--session-id",
-            "session-1",
-            "--referenced-image-id",
-            "img_1",
         ]
     )
 
@@ -86,8 +82,6 @@ def test_query_payload_supports_current_retrieval_options() -> None:
             "custom": {"department": "finance"},
         },
         "query_images": [_image_block("data:image/png;base64,abc")],
-        "session_id": "session-1",
-        "referenced_image_ids": ["img_1"],
     }
 
 
@@ -116,26 +110,18 @@ def test_answer_payload_supports_current_answer_options() -> None:
     }
 
 
-def test_chat_payload_preserves_history_and_current_answer_options() -> None:
+def test_chat_payload_is_stateless_and_preserves_current_answer_options() -> None:
     args = _parse_chat(
         [
             "--answer-context-top-k",
             "3",
-            "--session-id",
-            "session-1",
-            "--referenced-image-id",
-            "img_1",
         ]
     )
-    history = [{"role": "user", "content": "Previous"}]
 
-    assert _build_answer_payload(args, query="Follow up", conversation_history=history) == {
+    assert _build_answer_payload(args, query="Follow up") == {
         "query": "Follow up",
         "stream": False,
         "answer_context_top_k": 3,
-        "conversation_history": history,
-        "session_id": "session-1",
-        "referenced_image_ids": ["img_1"],
     }
 
 

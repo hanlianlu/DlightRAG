@@ -2,6 +2,7 @@
 """Tests for RAGServiceManager: workspace pool, routing, health tracking."""
 
 import asyncio
+import importlib
 import inspect
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -23,11 +24,9 @@ from dlightrag.config import (
 )
 from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.query_images import prepare_query_images
-from dlightrag.core.query_planner import QueryPlanner
+from dlightrag.core.query_planner import QueryPlanner, QueryPlannerStructuredResponse
 from dlightrag.core.retrieval.protocols import RetrievalResult
-from dlightrag.core.scope import RequestScope
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
-from dlightrag.core.session_images import SessionImageStore
 from dlightrag.sourcing.base import SourceDocument
 
 
@@ -93,6 +92,12 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
     ):
         assert name in retrieve_params
 
+    for method_name in ("aretrieve", "aanswer", "aanswer_stream"):
+        parameters = inspect.signature(getattr(RAGServiceManager, method_name)).parameters
+        assert "conversation_history" not in parameters
+        assert "session_id" not in parameters
+        assert "referenced_image_ids" not in parameters
+
     answer_params = inspect.signature(RAGServiceManager.aanswer).parameters
     for name in (
         "top_k",
@@ -100,8 +105,6 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
         "answer_context_top_k",
         "filters",
         "multimodal_content",
-        "session_id",
-        "referenced_image_ids",
         "all_workspaces",
     ):
         assert name in answer_params
@@ -111,6 +114,31 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
 
     delete_params = inspect.signature(RAGServiceManager.adelete_files).parameters
     assert "dry_run" in delete_params
+
+
+def test_query_planner_has_no_historical_image_protocol() -> None:
+    assert "referenced_image_ids" not in QueryPlannerStructuredResponse.model_fields
+
+
+async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
+    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    turn = answer_turn.PreparedAnswerTurn(
+        current_query="Follow up",
+        retrieval_query="Standalone follow up",
+        text_history=({"role": "user", "content": "Earlier"},),
+        materialized_query_images=(),
+    )
+    manager = RAGServiceManager(config=test_cfg)
+    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        side_effect=RuntimeError("stop after prepared handoff")
+    )
+
+    with pytest.raises(RuntimeError, match="stop after prepared handoff"):
+        await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    await_args = manager._plan_and_retrieve.await_args
+    assert await_args is not None
+    assert await_args.kwargs["conversation_history"] == [{"role": "user", "content": "Earlier"}]
 
 
 @pytest.fixture()
@@ -511,42 +539,22 @@ class TestRouting:
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["bm25_query"] == "alpha beta"
 
-    async def test_query_image_memory_is_request_scoped(self, test_cfg) -> None:
-        session_images = SessionImageStore(
-            max_images_per_session=3,
-            max_sessions=10,
-            ttl_seconds=test_cfg.checkpoint_session_ttl_seconds,
-        )
+    async def test_query_images_are_current_request_only(self, test_cfg) -> None:
         enhancer = AsyncMock()
         enhancer.enhance = AsyncMock(
             side_effect=lambda query, images: MagicMock(query=query, descriptions=[])
         )
-        alice_scope = RequestScope(user_id="alice", auth_mode="jwt").for_workspaces(["reports"])
-        bob_scope = RequestScope(user_id="bob", auth_mode="jwt").for_workspaces(["reports"])
+        current = [_image_block()]
 
-        first = await prepare_query_images(
+        prepared = await prepare_query_images(
             "query",
-            query_images=[_image_block()],
-            session_id="same-session",
-            referenced_image_ids=None,
-            store_current=True,
-            session_images=session_images,
+            query_images=current,
             enhancer=enhancer,
-            scope=alice_scope,
-        )
-        second = await prepare_query_images(
-            "query",
-            query_images=[],
-            session_id="same-session",
-            referenced_image_ids=first.current_image_ids,
-            store_current=False,
-            session_images=session_images,
-            enhancer=enhancer,
-            scope=bob_scope,
         )
 
-        assert first.current_image_ids == ["img_0"]
-        assert second.answer_images == []
+        assert prepared.answer_images == current
+        assert prepared.current_image_ids == []
+        enhancer.enhance.assert_awaited_once_with("query", current)
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:
@@ -583,7 +591,7 @@ class TestAnswerViaEngine:
         async def llm_func(*, messages, **kwargs) -> str:
             return (
                 '{"standalone_query":"rewritten query","bm25_query":"rewritten query",'
-                '"referenced_image_ids":[],"filters":{},'
+                '"filters":{},'
                 '"filter_confidence":"low","filter_evidence":[]}'
             )
 
@@ -611,7 +619,6 @@ class TestAnswerViaEngine:
                         "output": {
                             "standalone_query": "rewritten query",
                             "has_metadata_filter": False,
-                            "referenced_image_count": 0,
                         }
                     }
                 ],
@@ -1605,7 +1612,6 @@ class TestDegradedMode:
         for name in (
             "_start_ingest_job_recovery",
             "_recover_stalled_docs",
-            "_prune_checkpoint_sessions",
             "_probe_vision_support",
         ):
             monkeypatch.setattr(RAGServiceManager, name, AsyncMock())

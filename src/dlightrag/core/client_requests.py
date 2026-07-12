@@ -40,14 +40,6 @@ def query_kwargs_from_payload(
     if query_images:
         kwargs["query_images"] = dump_optional_list(query_images)
 
-    session_id = _get(payload, "session_id")
-    if session_id:
-        kwargs["session_id"] = session_id
-
-    referenced_image_ids = _get(payload, "referenced_image_ids")
-    if referenced_image_ids:
-        kwargs["referenced_image_ids"] = referenced_image_ids
-
     return kwargs
 
 

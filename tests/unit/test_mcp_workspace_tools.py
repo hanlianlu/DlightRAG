@@ -95,20 +95,15 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     answer_props = answer_tool.inputSchema["properties"]
     assert "args" not in answer_props
     assert "query" in answer_props
-    assert "conversation_history" in answer_props
+    assert "conversation_history" not in answer_props
     assert "query_images" in answer_props
     image_block_schema = _query_image_schema(answer_tool.inputSchema, answer_props["query_images"])
     assert image_block_schema["type"] == "object"
     assert image_block_schema["properties"]["type"]["const"] == "image_url"
     assert set(image_block_schema["required"]) == {"type", "image_url"}
-    history_items = _resolve_ref(
-        answer_tool.inputSchema,
-        answer_props["conversation_history"]["anyOf"][0]["items"],
-    )
-    assert history_items["properties"]["role"]["enum"] == ["system", "user", "assistant"]
     assert "chunk_top_k" in answer_props
-    assert "session_id" in answer_props
-    assert "referenced_image_ids" in answer_props
+    assert "session_id" not in answer_props
+    assert "referenced_image_ids" not in answer_props
     assert answer_props["semantic_highlights"]["default"] is False
     assert "filters" in answer_props
     assert answer_props["all_workspaces"]["default"] is False
@@ -118,6 +113,8 @@ async def test_mcp_lists_workspace_lifecycle_tools() -> None:
     assert "semantic_highlights" not in retrieve_props
     assert "chunk_top_k" in retrieve_props
     assert "bm25_query" in retrieve_props
+    assert "session_id" not in retrieve_props
+    assert "referenced_image_ids" not in retrieve_props
     assert retrieve_props["all_workspaces"]["default"] is False
     retrieve_image_block_schema = _query_image_schema(
         retrieve_tool.inputSchema,
@@ -726,14 +723,9 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
             "top_k": 8,
             "chunk_top_k": 12,
             "answer_context_top_k": 4,
-            "conversation_history": [
-                {"role": "user", "content": [{"type": "text", "text": "Previous"}]}
-            ],
             "query_images": [
                 {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
             ],
-            "session_id": "session-1",
-            "referenced_image_ids": ["img_1"],
             "filters": {"doc_title": "Manual"},
             "semantic_highlights": True,
         },
@@ -753,14 +745,12 @@ async def test_mcp_answer_forwards_manager_answer_capabilities_and_sanitizes_con
     assert call_kwargs["top_k"] == 8
     assert call_kwargs["chunk_top_k"] == 12
     assert call_kwargs["answer_context_top_k"] == 4
-    assert call_kwargs["conversation_history"] == [
-        {"role": "user", "content": [{"type": "text", "text": "Previous"}]}
-    ]
     assert call_kwargs["query_images"] == [
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
     ]
-    assert call_kwargs["session_id"] == "session-1"
-    assert call_kwargs["referenced_image_ids"] == ["img_1"]
+    assert "conversation_history" not in call_kwargs
+    assert "session_id" not in call_kwargs
+    assert "referenced_image_ids" not in call_kwargs
     assert call_kwargs["filters"].doc_title == "Manual"
     assert call_kwargs["semantic_highlights"] is True
 

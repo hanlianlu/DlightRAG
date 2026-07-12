@@ -20,10 +20,8 @@ import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
 from dlightrag.core.client_contracts import (
-    ConversationMessage,
     MetadataPolicy,
     SourceType,
-    dump_optional_list,
 )
 from dlightrag.core.client_payloads import (
     answer_payload,
@@ -63,10 +61,6 @@ QueryImagesParam = Annotated[
         max_length=3,
         description="User-attached image URLs or data URI blocks (max 3)",
     ),
-]
-ReferencedImageIdsParam = Annotated[
-    list[str],
-    Field(description="Previously stored image ids to include in the query."),
 ]
 
 
@@ -237,11 +231,6 @@ async def retrieve_tool(
         Field(default=None, description="Metadata filters for structured queries."),
     ] = None,
     query_images: QueryImagesParam = Field(default_factory=list),
-    session_id: Annotated[
-        str | None,
-        Field(default=None, description="Session id for image memory."),
-    ] = None,
-    referenced_image_ids: ReferencedImageIdsParam = Field(default_factory=list),
 ) -> dict[str, Any]:
     args = RetrieveInput.model_validate(locals())
     manager = await _ensure_manager()
@@ -298,16 +287,7 @@ async def answer_tool(
         dict[str, Any] | None,
         Field(default=None, description="Metadata filters for structured queries."),
     ] = None,
-    conversation_history: Annotated[
-        list[ConversationMessage] | None,
-        Field(default=None, description="Prior conversation turns as role/content objects."),
-    ] = None,
     query_images: QueryImagesParam = Field(default_factory=list),
-    session_id: Annotated[
-        str | None,
-        Field(default=None, description="Session id for image memory."),
-    ] = None,
-    referenced_image_ids: ReferencedImageIdsParam = Field(default_factory=list),
     semantic_highlights: Annotated[
         bool,
         Field(default=False, description="Include semantic highlight phrases in cited sources."),
@@ -323,7 +303,6 @@ async def answer_tool(
     scope = current_request_scope().for_workspaces(resolved_workspaces)
     result = await manager.aanswer(
         args.query,
-        conversation_history=dump_optional_list(args.conversation_history),
         workspaces=resolved_workspaces,
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,

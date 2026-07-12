@@ -10,11 +10,6 @@ from typing import Any
 from dlightrag.utils import normalize_workspace
 
 
-def _clean_part(value: str) -> str:
-    """Keep scoped keys unambiguous without changing their human-readable shape."""
-    return value.replace("\\", "\\\\").replace(":", "\\:")
-
-
 def _workspace_tuple(workspaces: Iterable[str] | None) -> tuple[str, ...]:
     seen: set[str] = set()
     result: list[str] = []
@@ -30,9 +25,8 @@ def _workspace_tuple(workspaces: Iterable[str] | None) -> tuple[str, ...]:
 class RequestScope:
     """Identity and workspace scope for one external request.
 
-    This is intentionally not an authorization model. It only gives internal
-    mutable request state, such as session images and checkpoints, a stable
-    namespace across REST, Web, and MCP adapters.
+    This is intentionally not an authorization model. It carries authenticated
+    identity and authorized workspace context across REST, Web, and MCP adapters.
     """
 
     user_id: str = "anonymous"
@@ -60,19 +54,6 @@ class RequestScope:
             auth_mode=self.auth_mode,
             workspaces=_workspace_tuple(workspaces),
             claims=dict(self.claims),
-        )
-
-    def session_key(self, session_id: str | None) -> str | None:
-        if not session_id:
-            return None
-        workspace_part = ",".join(self.workspaces) if self.workspaces else "*"
-        return ":".join(
-            (
-                _clean_part(self.auth_mode),
-                _clean_part(self.user_id),
-                _clean_part(workspace_part),
-                _clean_part(session_id),
-            )
         )
 
 

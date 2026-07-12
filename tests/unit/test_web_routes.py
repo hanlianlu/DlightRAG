@@ -14,6 +14,9 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from dlightrag.web.conversations import PreparedWebConversation
+
+CONVERSATION_ID = "11111111-1111-4111-8111-111111111111"
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -65,6 +68,16 @@ def web_app(mock_manager):
     """Create the FastAPI app with web routes enabled and manager set."""
     application = create_app(include_web=True)
     application.state.manager = mock_manager
+    conversation_service = AsyncMock()
+    conversation_service.prepare_answer = AsyncMock(
+        return_value=PreparedWebConversation(
+            principal_id="principal",
+            conversation_id=CONVERSATION_ID,
+            content_revision=0,
+            text_history=({"role": "user", "content": "Earlier"},),
+        )
+    )
+    application.state.web_conversation_service = conversation_service
     return application
 
 
@@ -375,7 +388,7 @@ class TestWebIndex:
 class TestWebAnswer:
     """Tests for POST /web/answer."""
 
-    async def test_answer_stream_uses_public_manager_methods(
+    async def test_answer_stream_uses_private_prepared_manager_boundary(
         self,
         client: AsyncClient,
         test_config: DlightragConfig,
@@ -384,61 +397,49 @@ class TestWebAnswer:
         async def mock_tokens():
             yield "Answer"
 
-        class PublicOnlyManager:
+        class PreparedManager:
             def __init__(self) -> None:
                 self.config = test_config
-                self.aanswer_stream = AsyncMock(return_value=({"chunks": []}, mock_tokens()))
+                self._aanswer_stream_prepared = AsyncMock(
+                    return_value=({"chunks": []}, mock_tokens())
+                )
 
-        manager = PublicOnlyManager()
+        manager = PreparedManager()
         web_app.state.manager = manager
 
-        resp = await client.post("/web/answer", json={"query": "hello"})
+        resp = await client.post(
+            "/web/answer",
+            json={"query": "hello", "conversation_id": CONVERSATION_ID},
+        )
 
         assert resp.status_code == 200
         assert "event: done" in resp.text
         assert '"answer": "Answer"' in resp.text
         assert "Service error" not in resp.text
-        manager.aanswer_stream.assert_awaited_once()
+        manager._aanswer_stream_prepared.assert_awaited_once()
+        await_args = manager._aanswer_stream_prepared.await_args
+        assert await_args is not None
+        turn = await_args.args[0]
+        assert turn.current_query == "hello"
+        assert turn.retrieval_query == "hello"
+        assert turn.text_history == ({"role": "user", "content": "Earlier"},)
 
-    async def test_answer_stream_reads_session_images_through_public_manager_api(
+    async def test_answer_rejects_legacy_conversation_fields(
         self,
         client: AsyncClient,
         test_config: DlightragConfig,
         web_app,
     ) -> None:
-        class TokenStream:
-            answer = "Answer"
-            current_image_ids = ["img_0"]
-            image_descriptions = ["Uploaded diagram"]
-
-            def __aiter__(self):
-                return self
-
-            async def __anext__(self):
-                raise StopAsyncIteration
-
-        class PublicOnlyManager:
-            def __init__(self) -> None:
-                self.config = test_config
-                self.aanswer_stream = AsyncMock(return_value=({"chunks": []}, TokenStream()))
-                self.aget_session_image_data = AsyncMock(return_value=["data:image/png;base64,abc"])
-
-        manager = PublicOnlyManager()
-        web_app.state.manager = manager
-
         resp = await client.post(
             "/web/answer",
-            json={"query": "hello", "session_id": "session-1"},
+            json={
+                "query": "hello",
+                "conversation_id": CONVERSATION_ID,
+                "session_id": "session-1",
+            },
         )
 
-        assert resp.status_code == 200
-        assert "event: done" in resp.text
-        assert "Uploaded diagram" in resp.text
-        manager.aget_session_image_data.assert_awaited_once()
-        args = manager.aget_session_image_data.await_args
-        assert args is not None
-        assert args.args == ("session-1", ["img_0"])
-        assert args.kwargs["scope"].session_key("session-1")
+        assert resp.status_code == 422
 
     async def test_highlights_use_keyword_llm_role(
         self,
@@ -478,7 +479,7 @@ class TestWebAnswer:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
-                self.aanswer_stream = AsyncMock(
+                self._aanswer_stream_prepared = AsyncMock(
                     return_value=(
                         {
                             "chunks": [
@@ -514,7 +515,9 @@ class TestWebAnswer:
             fake_extract_highlights_for_sources,
         )
 
-        resp = await client.post("/web/answer", json={"query": "hello"})
+        resp = await client.post(
+            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+        )
 
         assert resp.status_code == 200
         assert "event: highlights" in resp.text
@@ -544,7 +547,7 @@ class TestWebAnswer:
 
         manager = SimpleNamespace(
             config=test_config,
-            aanswer_stream=AsyncMock(
+            _aanswer_stream_prepared=AsyncMock(
                 return_value=(
                     {
                         "chunks": [
@@ -569,7 +572,9 @@ class TestWebAnswer:
         web_app.state.manager = manager
         web_app.state.access_control = QueryOnlyAccess()
 
-        response = await client.post("/web/answer", json={"query": "hello"})
+        response = await client.post(
+            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+        )
 
         assert response.status_code == 200
         assert "event: done" in response.text
@@ -596,7 +601,6 @@ class TestWebSSEBoundary:
             "image_descriptions": [],
             "answer_images": [],
             "answer_blocks": [],
-            "checkpoint_saved": True,
         }
 
     async def test_answer_done_html_strips_unsafe_urls(
@@ -611,7 +615,7 @@ class TestWebSSEBoundary:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
-                self.aanswer_stream = AsyncMock(
+                self._aanswer_stream_prepared = AsyncMock(
                     return_value=(
                         {
                             "chunks": [
@@ -638,7 +642,9 @@ class TestWebSSEBoundary:
 
         web_app.state.manager = PublicOnlyManager()
 
-        resp = await client.post("/web/answer", json={"query": "hello"})
+        resp = await client.post(
+            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+        )
 
         assert resp.status_code == 200
         assert "event: done" in resp.text
@@ -660,7 +666,7 @@ class TestWebSSEBoundary:
         class PublicOnlyManager:
             def __init__(self) -> None:
                 self.config = test_config
-                self.aanswer_stream = AsyncMock(
+                self._aanswer_stream_prepared = AsyncMock(
                     return_value=(
                         {
                             "chunks": [
@@ -683,7 +689,9 @@ class TestWebSSEBoundary:
 
         web_app.state.manager = PublicOnlyManager()
 
-        response = await client.post("/web/answer", json={"query": "hello"})
+        response = await client.post(
+            "/web/answer", json={"query": "hello", "conversation_id": CONVERSATION_ID}
+        )
 
         assert response.status_code == 200
         assert "event: error" in response.text
@@ -720,24 +728,24 @@ class TestWebAnswerAdapter:
             "/web/answer",
             json={
                 "query": "hello",
+                "conversation_id": CONVERSATION_ID,
                 "images": [image_b64],
                 "workspaces": ["default", "test_ws"],
-                "conversation_history": [{"role": "user", "content": "previous"}],
-                "session_id": "session-1",
             },
         )
 
         assert resp.status_code == 200
         assert captured["manager"] is web_app.state.manager
         assert captured["cfg"] is test_config
-        assert captured["query"] == "hello"
-        assert captured["query_images"] == [
+        assert captured["turn"].current_query == "hello"
+        assert captured["turn"].text_history == ({"role": "user", "content": "Earlier"},)
+        assert list(captured["turn"].materialized_query_images) == [
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_b64}"}}
         ]
         assert captured["workspaces"] == ["default", "test_ws"]
         assert captured["workspace"] == "default"
-        assert captured["session_id"] == "session-1"
-        assert captured["conversation_history"] == [{"role": "user", "content": "previous"}]
+        assert "session_id" not in captured
+        assert "conversation_history" not in captured
 
     async def test_answer_route_rejects_untyped_history_messages(
         self,
@@ -751,6 +759,7 @@ class TestWebAnswerAdapter:
             "/web/answer",
             json={
                 "query": "hello",
+                "conversation_id": CONVERSATION_ID,
                 "conversation_history": [{"role": "human", "content": "previous"}],
             },
         )
@@ -1167,11 +1176,8 @@ async def test_web_answer_done_builder_projects_http_source_payloads(
     payload = await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
-        current_image_ids=[],
         image_descriptions=[],
         manager=manager,
-        session_id="session-1",
-        scope=None,
         cfg=cfg,
         workspace="default",
     )
@@ -1242,11 +1248,8 @@ async def test_web_answer_done_builder_extracts_images_before_public_projection(
     await answer_events._build_answer_done_payload(
         clean_answer="Answer [1-1].",
         contexts=contexts,
-        current_image_ids=[],
         image_descriptions=[],
         manager=manager,
-        session_id="session-1",
-        scope=None,
         cfg=cfg,
         workspace="default",
     )

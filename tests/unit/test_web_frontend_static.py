@@ -22,6 +22,16 @@ def _css_rule(path: Path, selector: str) -> str:
     return match.group("body")
 
 
+def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
+    chat_source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
+
+    assert "conversation_id" in chat_source
+    assert "conversation_history" not in chat_source
+    assert "session_id" not in chat_source
+    assert not (FRONTEND / "stores" / "sessionStore.ts").exists()
+    assert not (FRONTEND_UI / "clearHistory.ts").exists()
+
+
 def test_composer_enter_shortcut_respects_ime_composition() -> None:
     chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 
@@ -147,7 +157,7 @@ def test_source_panel_hides_download_without_caller_permission() -> None:
 
 def test_source_templates_use_only_the_public_download_contract() -> None:
     from dlightrag.citations.schemas import SourceReferencePayload
-    from dlightrag.web.answer_events import _AnswerPayload, _save_checkpoint
+    from dlightrag.web.answer_events import _AnswerPayload
     from dlightrag.web.safe_html import safe_answer_done, safe_source_panel
 
     partials = ROOT / "src/dlightrag/web/templates/partials"
@@ -160,7 +170,6 @@ def test_source_templates_use_only_the_public_download_contract() -> None:
     assert "src.path" not in template_text
     assert "src.download_url" in template_text
     assert get_type_hints(_AnswerPayload)["sources"] == list[SourceReferencePayload]
-    assert get_type_hints(_save_checkpoint)["sources"] == list[SourceReferencePayload]
     assert get_type_hints(safe_answer_done)["sources"] == list[SourceReferencePayload]
     assert get_type_hints(safe_source_panel)["sources"] == list[SourceReferencePayload]
 

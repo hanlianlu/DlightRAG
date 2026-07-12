@@ -34,11 +34,6 @@ type ContentBlock = Annotated[
 type QueryImage = ImageURLContentBlock
 
 
-class ConversationMessage(ClientContractModel):
-    role: Literal["system", "user", "assistant"]
-    content: str | list[ContentBlock]
-
-
 type SourceType = Literal["local", "azure_blob", "s3", "url"]
 type MetadataPolicy = Literal["validate", "reject_unknown", "store_only"]
 
@@ -220,7 +215,6 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 __all__ = [
     "ClientContractModel",
     "ContentBlock",
-    "ConversationMessage",
     "ImageURL",
     "ImageURLContentBlock",
     "IngestDocument",

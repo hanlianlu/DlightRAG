@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from dlightrag.api.models import AnswerRequest, RetrieveRequest
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.client_requests import (
@@ -13,8 +14,35 @@ from dlightrag.core.client_requests import (
     ingest_spec_from_payload,
     query_kwargs_from_payload,
 )
+from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_public_requests_reject_conversation_fields() -> None:
+    for model in (RetrieveRequest, AnswerRequest, RetrieveInput, AnswerInput):
+        fields = set(model.model_fields)
+        assert "conversation_history" not in fields
+        assert "session_id" not in fields
+        assert "referenced_image_ids" not in fields
+
+        for field in ("conversation_history", "session_id", "referenced_image_ids"):
+            with pytest.raises(ValidationError):
+                model.model_validate(
+                    {"query": "standalone", field: [] if field != "session_id" else "s"}
+                )
+
+
+def test_query_kwargs_never_projects_conversation_state() -> None:
+    kwargs = query_kwargs_from_payload(
+        {
+            "conversation_history": [{"role": "user", "content": "Earlier"}],
+            "session_id": "session-1",
+            "referenced_image_ids": ["img_1"],
+        }
+    )
+
+    assert kwargs == {}
 
 
 def test_public_source_contract_has_no_legacy_or_internal_names() -> None:

@@ -64,8 +64,7 @@ def e2e_base_url() -> Generator[str, Any]:
     async def _mock_answer_stream(*__: Any, **___: Any) -> Any:
         return ({}, _token_stream())
 
-    manager.aanswer_stream.side_effect = _mock_answer_stream
-    manager.aget_checkpoint_history.return_value = []
+    manager._aanswer_stream_prepared.side_effect = _mock_answer_stream
     manager.alist_workspaces.return_value = MOCK_WORKSPACE_LIST
     manager.alist_workspace_records.return_value = MOCK_WORKSPACES
     manager.alist_ingested_files.return_value = []

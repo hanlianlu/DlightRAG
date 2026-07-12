@@ -205,10 +205,6 @@ def _apply_query_options(
 
     if getattr(args, "query_images", None):
         payload["query_images"] = _query_image_blocks(args.query_images)
-    if getattr(args, "session_id", None):
-        payload["session_id"] = args.session_id
-    if getattr(args, "referenced_image_ids", None):
-        payload["referenced_image_ids"] = args.referenced_image_ids
 
     if include_answer_limits:
         if getattr(args, "answer_context_top_k", None) is not None:
@@ -225,11 +221,8 @@ def _build_answer_payload(
     args: argparse.Namespace,
     *,
     query: str,
-    conversation_history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {"query": query, "stream": False}
-    if conversation_history:
-        payload["conversation_history"] = conversation_history
     return _apply_query_options(payload, args, include_answer_limits=True)
 
 
@@ -378,11 +371,10 @@ def cmd_answer(args: argparse.Namespace) -> None:
 
 def cmd_chat(args: argparse.Namespace) -> None:
     url = f"{_get_api_url()}/answer"
-    history: list[dict[str, str]] = []
 
     ws_info = f", workspaces={','.join(args.workspaces)}" if args.workspaces else ""
     print(f"dlightrag chat (API={_get_api_url()}{ws_info})")
-    print("Type your question, or: /clear to reset history, /quit to exit\n")
+    print("Type your question, or /quit to exit. Each request is stateless.\n")
 
     while True:
         try:
@@ -396,20 +388,9 @@ def cmd_chat(args: argparse.Namespace) -> None:
         if question in ("/quit", "/exit", "/q"):
             print("Bye!")
             break
-        if question == "/clear":
-            history.clear()
-            print("-- history cleared --\n")
-            continue
-
-        conversation_history = None
-        if history:
-            conversation_history = [
-                {"role": m["role"], "content": m["content"]} for m in history[-20:]
-            ]
         payload = _build_answer_payload(
             args,
             query=question,
-            conversation_history=conversation_history,
         )
 
         try:
@@ -423,7 +404,6 @@ def cmd_chat(args: argparse.Namespace) -> None:
             continue
 
         data = resp.json()
-        answer_text = data.get("answer") or "(no answer)"
         rendered_answer = _render_answer_for_terminal(data)
 
         print(f"\nAssistant: {rendered_answer}")
@@ -434,9 +414,6 @@ def cmd_chat(args: argparse.Namespace) -> None:
             if titles:
                 print(f"  Sources: {', '.join(sorted(titles))}")
         print()
-
-        history.append({"role": "user", "content": question})
-        history.append({"role": "assistant", "content": answer_text})
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -510,14 +487,6 @@ def _add_retrieval_options(
         default=None,
         dest="query_images",
         help="User-attached image URL or data URI; repeat up to 3 times",
-    )
-    parser.add_argument("--session-id", default=None, help="Session id for image memory")
-    parser.add_argument(
-        "--referenced-image-id",
-        action="append",
-        default=None,
-        dest="referenced_image_ids",
-        help="Previously returned image id to include; repeat as needed",
     )
     if include_answer_limits:
         parser.add_argument(

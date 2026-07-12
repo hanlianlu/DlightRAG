@@ -29,10 +29,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         import('./workspaces.ts'),
     ]);
 
-    // Restore conversation history from checkpoint before rendering UI,
-    // so refreshed pages keep their multi-turn context.
+    // Select or create the server-owned conversation before answer submission.
     const {conversationStore} = await import('../stores/conversationStore.ts');
-    await conversationStore.restoreFromCheckpoint();
+    await conversationStore.initialize();
 
     initWorkspaces();
     setupPanel();
@@ -44,8 +43,4 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupQueryForm();
     setupMathRendering();
 
-    // Clear-history button — must run after conversationStore.restoreFromCheckpoint()
-    // so the button shows immediately when history was restored.
-    const {setupClearHistory} = await import('./clearHistory.ts');
-    setupClearHistory();
 });
