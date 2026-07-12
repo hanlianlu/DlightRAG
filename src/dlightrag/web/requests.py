@@ -10,7 +10,7 @@ from dlightrag.core.client_contracts import ClientContractModel
 
 class WebAnswerRequest(ClientContractModel):
     query: str = ""
-    images: list[str] = Field(default_factory=list, max_length=3)
+    images: list[str] = Field(default_factory=list)
     workspaces: list[str] | None = None
     conversation_id: UUID
 

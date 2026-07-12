@@ -2,6 +2,7 @@
 """Browser-facing answer stream presenter for the web UI."""
 
 import dataclasses
+import hashlib
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -18,6 +19,13 @@ from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.scope import RequestScope
 from dlightrag.observability import trace_observation
 from dlightrag.utils import log_safe
+from dlightrag.utils.images import ValidatedWebImage
+from dlightrag.web.conversation_models import ConversationSummary
+from dlightrag.web.conversations import (
+    PreparedWebConversation,
+    WebConversationService,
+    WebConversationUnavailableError,
+)
 from dlightrag.web.events import (
     AnswerDoneEvent,
     AnswerErrorEvent,
@@ -83,6 +91,7 @@ async def _build_answer_done_payload(
         image_descriptions=image_descriptions,
         answer_images=answer_images,
         answer_blocks=answer_blocks,
+        conversation_saved=False,
     )
     return _AnswerPayload(done, source_payloads, finalized.flat_contexts)
 
@@ -101,18 +110,26 @@ async def stream_answer_events(
     workspace: str,
     scope: RequestScope | None = None,
     downloadable_workspaces: set[str] | None = None,
+    conversation_service: WebConversationService,
+    prepared_conversation: PreparedWebConversation,
+    validated_images: tuple[ValidatedWebImage, ...],
 ) -> AsyncIterator[str]:
     """Yield browser SSE events for one answer request, under a request-root span."""
     ws_list = workspaces or [workspace or manager.config.workspace]
+    metadata = {
+        "workspaces": ws_list,
+        "principal_hash": prepared_conversation.principal_id,
+        "conversation_hash": hashlib.sha256(
+            prepared_conversation.conversation_id.encode("utf-8")
+        ).hexdigest(),
+        "history_turns_loaded": len(turn.text_history) // 2,
+        "current_image_count": len(validated_images),
+    }
     async with trace_observation(
         "answer_stream_pipeline",
         as_type="chain",
-        input={"query": turn.current_query},
-        metadata={
-            "workspaces": ws_list,
-            "history_turns": len(turn.text_history),
-        },
-    ):
+        metadata=metadata,
+    ) as observation:
         async for event in _emit_answer_events(
             manager=manager,
             cfg=cfg,
@@ -121,6 +138,10 @@ async def stream_answer_events(
             workspace=workspace,
             scope=scope,
             downloadable_workspaces=downloadable_workspaces,
+            conversation_service=conversation_service,
+            prepared_conversation=prepared_conversation,
+            validated_images=validated_images,
+            observation=observation,
         ):
             yield event
 
@@ -134,6 +155,10 @@ async def _emit_answer_events(
     workspace: str,
     scope: RequestScope | None = None,
     downloadable_workspaces: set[str] | None = None,
+    conversation_service: WebConversationService,
+    prepared_conversation: PreparedWebConversation,
+    validated_images: tuple[ValidatedWebImage, ...],
+    observation: Any = None,
 ) -> AsyncIterator[str]:
     """Emit the SSE event sequence for one answer request."""
     full_answer = ""
@@ -190,8 +215,60 @@ async def _emit_answer_events(
             workspace=effective_workspace,
             downloadable_workspaces=downloadable_workspaces,
         )
+        answer_sources = {
+            "sources": [source.model_dump(mode="json") for source in payload.sources],
+            "answer_images": payload.done.answer_images,
+        }
+        try:
+            commit = await conversation_service.commit_answer(
+                prepared_conversation,
+                user_text=turn.current_query,
+                assistant_text=payload.done.answer,
+                answer_sources=answer_sources,
+                queried_workspaces=ws_list,
+                images=validated_images,
+                image_descriptions=image_descriptions,
+            )
+            summary = (
+                ConversationSummary.model_validate(commit.summary)
+                if commit.summary is not None
+                else None
+            )
+            done = payload.done.model_copy(
+                update={
+                    "current_image_ids": [image.image_id for image in validated_images],
+                    "conversation_saved": commit.saved,
+                    "conversation_save_reason": commit.reason,
+                    "conversation": summary,
+                }
+            )
+        except WebConversationUnavailableError:
+            logger.exception("Conversation storage unavailable after answer completion")
+            done = payload.done.model_copy(
+                update={
+                    "current_image_ids": [image.image_id for image in validated_images],
+                    "conversation_saved": False,
+                    "conversation_save_reason": "storage_unavailable",
+                }
+            )
+        except Exception:
+            logger.exception("Conversation persistence failed after answer completion")
+            done = payload.done.model_copy(
+                update={
+                    "current_image_ids": [image.image_id for image in validated_images],
+                    "conversation_saved": False,
+                    "conversation_save_reason": "persistence_failed",
+                }
+            )
+        if observation is not None:
+            observation.update(
+                metadata={
+                    "conversation_saved": done.conversation_saved,
+                    "conversation_save_reason": done.conversation_save_reason,
+                }
+            )
 
-        yield sse_event("done", payload.done)
+        yield sse_event("done", done)
 
         # ── Post-done enrichment (trace, highlights) ───────────────
         trace = getattr(token_iter, "trace", None)
@@ -200,7 +277,7 @@ async def _emit_answer_events(
 
         highlighted_sources = await enrich_semantic_highlights(
             payload.sources,
-            answer_text=payload.done.answer,
+            answer_text=done.answer,
             config=cfg,
         )
         has_highlights = any(

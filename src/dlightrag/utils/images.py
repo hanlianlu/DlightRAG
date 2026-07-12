@@ -2,11 +2,15 @@
 """Image helpers for model payloads and visual asset serving."""
 
 import base64
+import binascii
+import hashlib
 import io
 import logging
 import mimetypes
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from PIL import Image
 
@@ -43,6 +47,62 @@ EMBED_IMAGE_MAX_BYTES = 14 * 1024 * 1024
 EMBED_IMAGE_QUALITY = 90
 EMBED_IMAGE_MIN_QUALITY = 70
 EMBED_IMAGE_MIN_PX = 256
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedWebImage:
+    """One canonical browser upload, safe for model use and persistence."""
+
+    image_id: str
+    ordinal: int
+    mime_type: str
+    image_bytes: bytes
+    data_uri: str
+    content_sha256: str
+
+    @property
+    def model_block(self) -> dict[str, Any]:
+        return {"type": "image_url", "image_url": {"url": self.data_uri}}
+
+
+def validate_web_images(
+    values: list[str], *, max_images: int, max_bytes: int = 10 * 1024 * 1024
+) -> tuple[ValidatedWebImage, ...]:
+    """Strictly validate uploads once and return their durable canonical form."""
+    if len(values) > max_images:
+        raise ValueError(f"at most {max_images} current images are allowed")
+    validated: list[ValidatedWebImage] = []
+    for ordinal, value in enumerate(values, start=1):
+        _declared_mime, payload = split_data_uri(value)
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise ValueError(f"current image {ordinal} is not valid base64") from exc
+        if not raw:
+            raise ValueError(f"current image {ordinal} is empty")
+        if len(raw) > max_bytes:
+            raise ValueError(f"current image {ordinal} exceeds the 10 MiB limit")
+        try:
+            with Image.open(io.BytesIO(raw)) as image:
+                image.verify()
+            with Image.open(io.BytesIO(raw)) as image:
+                mime_type = _PILLOW_TO_MIME.get(image.format or "")
+        except Exception as exc:
+            raise ValueError(f"current image {ordinal} is not a valid image") from exc
+        if mime_type is None:
+            raise ValueError(f"current image {ordinal} has an unsupported image format")
+        encoded = base64.b64encode(raw).decode("ascii")
+        validated.append(
+            ValidatedWebImage(
+                image_id=str(uuid4()),
+                ordinal=ordinal,
+                mime_type=mime_type,
+                image_bytes=raw,
+                data_uri=f"data:{mime_type};base64,{encoded}",
+                content_sha256=hashlib.sha256(raw).hexdigest(),
+            )
+        )
+    return tuple(validated)
 
 
 def split_data_uri(value: str) -> tuple[str | None, str]:
@@ -350,6 +410,7 @@ def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:
 
 
 __all__ = [
+    "ValidatedWebImage",
     "bounded_embedding_image_data_uri",
     "bounded_image_data_uri",
     "decode_image_base64",
@@ -361,4 +422,5 @@ __all__ = [
     "image_url_block",
     "split_data_uri",
     "thumbnail_bytes",
+    "validate_web_images",
 ]
