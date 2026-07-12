@@ -144,6 +144,22 @@ class PGPool:
 
         raise RuntimeError("unreachable PostgreSQL retry state")
 
+    async def run_once(
+        self,
+        operation: Callable[[Any], Awaitable[T]],
+    ) -> T:
+        """Execute an operation once without replaying ambiguous outcomes.
+
+        Use this for outcome-sensitive mutations whose transaction may have
+        committed before a connection error reaches the client.
+        """
+        from dlightrag.config import get_config
+
+        config = get_config()
+        pool = await self.get()
+        async with pool.acquire(timeout=config.postgres_acquire_timeout) as conn:
+            return await operation(conn)
+
     async def close(
         self,
         *,

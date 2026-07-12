@@ -306,6 +306,47 @@ class TestPGPoolGet:
         the_pool.close.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_run_once_does_not_replay_operation_after_transient_error(self) -> None:
+        """Outcome-sensitive writes get one attempt even for transient errors."""
+        from dlightrag.storage.pool import PGPool
+
+        the_pool = MagicMock()
+        connection = object()
+        the_pool.acquire.return_value.__aenter__.return_value = connection
+        pool = PGPool()
+
+        mock_config = MagicMock()
+        mock_config.postgres_statement_cache_size = None
+        mock_config.postgres_command_timeout = None
+        mock_config.postgres_acquire_timeout = 12.5
+        mock_config.postgres_server_settings_dict.return_value = {}
+        mock_config.pg_connection_kwargs.return_value = {"host": "h", "port": 5432}
+
+        calls = 0
+
+        async def operation(conn):  # noqa: ANN001, ANN202
+            nonlocal calls
+            calls += 1
+            assert conn is connection
+            raise asyncpg.exceptions.ConnectionDoesNotExistError("commit outcome unknown")
+
+        with (
+            patch(
+                "dlightrag.storage.pool.asyncpg.create_pool",
+                new=AsyncMock(return_value=the_pool),
+            ),
+            patch("dlightrag.config.get_config", return_value=mock_config),
+            pytest.raises(
+                asyncpg.exceptions.ConnectionDoesNotExistError,
+                match="commit outcome unknown",
+            ),
+        ):
+            await pool.run_once(operation)
+
+        assert calls == 1
+        the_pool.acquire.assert_called_once_with(timeout=12.5)
+
+    @pytest.mark.asyncio
     async def test_get_applies_command_timeout(self) -> None:
         """A configured command_timeout is forwarded to asyncpg.create_pool."""
         from dlightrag.storage.pool import PGPool
