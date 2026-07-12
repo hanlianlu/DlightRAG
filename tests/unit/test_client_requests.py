@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from dlightrag.api.models import AnswerRequest, RetrieveRequest
+from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.client_requests import (
@@ -31,6 +31,10 @@ def test_public_requests_reject_conversation_fields() -> None:
                 model.model_validate(
                     {"query": "standalone", field: [] if field != "session_id" else "s"}
                 )
+
+
+def test_public_retrieval_response_has_no_session_image_ids() -> None:
+    assert "current_image_ids" not in RetrievalResponse.model_fields
 
 
 def test_query_kwargs_never_projects_conversation_state() -> None:

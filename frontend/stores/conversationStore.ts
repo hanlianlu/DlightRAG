@@ -1,33 +1,57 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import { Store } from './base';
-
 const ACTIVE_CONVERSATION_KEY = 'dlightrag.active_conversation_id';
 
 interface ConversationSummary {
   conversation_id: string;
 }
 
-class ConversationStore extends Store {
+export type ConversationStatus = 'idle' | 'loading' | 'ready' | 'unavailable';
+
+export class ConversationStore {
   #activeConversationId: string | null = null;
-  #initializing: Promise<string> | null = null;
+  #initializing: Promise<string | null> | null = null;
+  #status: ConversationStatus = 'idle';
+  #errorMessage: string | null = null;
 
   get activeConversationId(): string | null {
     return this.#activeConversationId;
   }
 
-  async initialize(): Promise<string> {
+  get status(): ConversationStatus {
+    return this.#status;
+  }
+
+  get errorMessage(): string | null {
+    return this.#errorMessage;
+  }
+
+  async initialize(): Promise<string | null> {
     return this.ensureActive();
   }
 
-  async ensureActive(): Promise<string> {
+  async ensureActive(): Promise<string | null> {
     if (this.#activeConversationId) return this.#activeConversationId;
     if (this.#initializing) return this.#initializing;
-    this.#initializing = this.#loadOrCreateActive();
+    this.#status = 'loading';
+    this.#errorMessage = null;
+    this.#initializing = this.#tryLoadOrCreateActive();
     try {
       return await this.#initializing;
     } finally {
       this.#initializing = null;
+    }
+  }
+
+  async #tryLoadOrCreateActive(): Promise<string | null> {
+    try {
+      const conversationId = await this.#loadOrCreateActive();
+      this.#status = 'ready';
+      return conversationId;
+    } catch {
+      this.#status = 'unavailable';
+      this.#errorMessage = 'Conversation service is unavailable. Please try again.';
+      return null;
     }
   }
 
@@ -48,6 +72,7 @@ class ConversationStore extends Store {
 
   #select(conversationId: string): string {
     this.#activeConversationId = conversationId;
+    this.#errorMessage = null;
     window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, conversationId);
     return conversationId;
   }

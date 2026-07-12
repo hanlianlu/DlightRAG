@@ -269,12 +269,10 @@ async def answer(
                 trace = getattr(token_iter, "trace", None)
                 if isinstance(trace, dict) and trace:
                     yield sse_data_event(AnswerTraceStreamEvent(data=trace))
-                image_ids = getattr(token_iter, "current_image_ids", None)
                 image_descriptions = getattr(token_iter, "image_descriptions", None)
-                if image_ids or image_descriptions:
+                if image_descriptions:
                     yield sse_data_event(
                         AnswerImageMetaStreamEvent(
-                            current_image_ids=image_ids or [],
                             image_descriptions=image_descriptions or [],
                         )
                     )

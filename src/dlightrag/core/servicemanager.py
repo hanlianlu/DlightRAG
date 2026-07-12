@@ -99,14 +99,6 @@ class _ScopedAnswerStream:
         self._inner.trace = value  # type: ignore[attr-defined]
 
     @property
-    def current_image_ids(self) -> Any:
-        return getattr(self._inner, "current_image_ids", None)
-
-    @current_image_ids.setter
-    def current_image_ids(self, value: Any) -> None:
-        self._inner.current_image_ids = value  # type: ignore[attr-defined]
-
-    @property
     def image_descriptions(self) -> Any:
         return getattr(self._inner, "image_descriptions", None)
 
@@ -1137,7 +1129,6 @@ class RAGServiceManager:
                             effective_query, ws_list, self._get_service, **kwargs
                         )
                     result.image_descriptions = prepared.descriptions
-                    result.current_image_ids = prepared.current_image_ids
                     result.trace["query_image_description_count"] = len(prepared.descriptions)
                     trace.update(
                         output={
@@ -1241,7 +1232,6 @@ class RAGServiceManager:
                         generation_trace.update(output=_answer_output(result))
                     result.trace.update(retrieval.trace)
                     result.image_descriptions = prepared.descriptions
-                    result.current_image_ids = prepared.current_image_ids
                     if semantic_highlights:
                         from dlightrag.core.answer_highlights import enrich_semantic_highlights
 
@@ -1362,7 +1352,6 @@ class RAGServiceManager:
                 )
                 if stream is not None:
                     stream_meta = cast(Any, stream)
-                    stream_meta.current_image_ids = prepared.current_image_ids
                     stream_meta.image_descriptions = prepared.descriptions
                     answer_trace = getattr(stream_meta, "trace", None)
                     stream_meta.trace = (

@@ -29,10 +29,6 @@ document.addEventListener('DOMContentLoaded', async function() {
         import('./workspaces.ts'),
     ]);
 
-    // Select or create the server-owned conversation before answer submission.
-    const {conversationStore} = await import('../stores/conversationStore.ts');
-    await conversationStore.initialize();
-
     initWorkspaces();
     setupPanel();
     setupSourcePanel();
@@ -42,5 +38,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     setupImageInputs();
     setupQueryForm();
     setupMathRendering();
+
+    // Conversation storage is independent of workspace/file/source controls.
+    // Bootstrap in the background; submitQuery retries if it is unavailable.
+    const {conversationStore} = await import('../stores/conversationStore.ts');
+    void conversationStore.initialize();
 
 });

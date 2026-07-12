@@ -32,7 +32,6 @@ class AnswerTraceStreamEvent(ClientContractModel):
 
 class AnswerImageMetaStreamEvent(ClientContractModel):
     type: Literal["image_meta"] = "image_meta"
-    current_image_ids: list[str] = Field(default_factory=list)
     image_descriptions: list[str] | dict[str, str] = Field(default_factory=list)
 
 

@@ -26,7 +26,6 @@ class PreparedQueryImages:
     answer_images: list[dict[str, Any]]
     multimodal_content: list[dict[str, Any]]
     descriptions: list[str]
-    current_image_ids: list[str]
 
 
 def images_to_multimodal_content(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -134,7 +133,6 @@ async def prepare_query_images(
         answer_images=current_images,
         multimodal_content=images_to_multimodal_content(current_images),
         descriptions=enhanced.descriptions,
-        current_image_ids=[],
     )
 
 

@@ -19,7 +19,6 @@ class AnswerProgressEvent(ClientContractModel):
 class AnswerDoneEvent(ClientContractModel):
     html: str
     answer: str
-    current_image_ids: list[str] = Field(default_factory=list)
     image_descriptions: list[str] | dict[str, str] = Field(default_factory=list)
     answer_images: list[dict[str, Any]] = Field(default_factory=list)
     answer_blocks: list[dict[str, Any]] = Field(default_factory=list)
@@ -29,11 +28,6 @@ class AnswerTraceEvent(ClientContractModel):
     trace: dict[str, Any]
 
 
-class AnswerImageMetaEvent(ClientContractModel):
-    current_image_ids: list[str] = Field(default_factory=list)
-    image_descriptions: list[str] | dict[str, str] = Field(default_factory=list)
-
-
 class AnswerErrorEvent(ClientContractModel):
     message: str
 
@@ -41,7 +35,6 @@ class AnswerErrorEvent(ClientContractModel):
 __all__ = [
     "AnswerDoneEvent",
     "AnswerErrorEvent",
-    "AnswerImageMetaEvent",
     "AnswerMetaEvent",
     "AnswerProgressEvent",
     "AnswerTraceEvent",

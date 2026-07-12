@@ -219,7 +219,6 @@ def retrieval_payload(
         "sources": [source.model_dump() for source in source_payloads],
         "trace": result.trace,
         "image_descriptions": result.image_descriptions,
-        "current_image_ids": result.current_image_ids,
     }
 
 
@@ -248,7 +247,6 @@ def answer_payload(
         "answer_blocks": result.answer_blocks,
         "trace": result.trace,
         "image_descriptions": result.image_descriptions,
-        "current_image_ids": result.current_image_ids,
     }
 
 

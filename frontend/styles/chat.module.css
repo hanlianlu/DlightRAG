@@ -1,7 +1,7 @@
 /* DlightRAG Web Frontend — Immersive Chat Design
  *
  * chat.module.css — CSS Module for JS-generated chat DOM: messages,
- * thumbnails, streaming indicator, context divider, composer plus.
+ * thumbnails, streaming indicator, and composer plus.
  */
 
 /* === Messages === */
@@ -57,24 +57,6 @@
   min-width: 0;
   overflow-wrap: anywhere;
   overflow-x: auto;
-}
-
-/* === Context Window Indicator === */
-
-.outOfContext {
-  opacity: 0.4;
-  transition: opacity 0.3s ease;
-}
-
-.contextDivider {
-  text-align: center;
-  font-size: var(--font-size-caption);
-  color: var(--color-text-subtle);
-  padding: var(--space-tight) 0;
-  margin: var(--space-component) 0;
-  border-top: 1px dashed var(--color-text-subtle);
-  letter-spacing: 0;
-  opacity: 0.7;
 }
 
 /* === Streaming Indicator === */

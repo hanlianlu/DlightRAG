@@ -273,7 +273,6 @@ def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
         sources=[_internal_source()],
         trace={"phase": "answer"},
         image_descriptions=["chart"],
-        current_image_ids=["c1"],
     )
 
     payload = answer_payload(result)
@@ -287,7 +286,7 @@ def test_answer_payload_uses_public_contexts_and_existing_sources() -> None:
     assert payload["answer_blocks"] == []
     assert payload["trace"] == {"phase": "answer"}
     assert payload["image_descriptions"] == ["chart"]
-    assert payload["current_image_ids"] == ["c1"]
+    assert "current_image_ids" not in payload
 
 
 def test_answer_helpers_derive_visual_images_and_blocks() -> None:

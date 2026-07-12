@@ -40,11 +40,19 @@ export async function submitQuery(query: string): Promise<void> {
 
     const turn = createChatTurn(query);
     const imageData = getPendingImageData();
-    clearImages();
 
     try {
         armIdleTimeout();
         const conversationId = await conversationStore.ensureActive();
+        if (!conversationId) {
+            setAnswerError(
+                turn,
+                conversationStore.errorMessage
+                    || 'Conversation service is unavailable. Please try again.',
+            );
+            return;
+        }
+        clearImages();
         const response = await fetch('/web/answer', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},

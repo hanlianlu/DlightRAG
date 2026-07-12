@@ -32,6 +32,48 @@ def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
     assert not (FRONTEND_UI / "clearHistory.ts").exists()
 
 
+def test_conversation_bootstrap_cannot_block_independent_ui_initializers() -> None:
+    main_source = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    bootstrap = main_source.index("void conversationStore.initialize()")
+
+    for initializer in (
+        "initWorkspaces();",
+        "setupPanel();",
+        "setupSourcePanel();",
+        "setupFilesPanel();",
+        "setupPanelResize();",
+        "setupHtmxInteractions();",
+        "setupImageInputs();",
+        "setupQueryForm();",
+    ):
+        assert main_source.index(initializer) < bootstrap
+
+
+def test_answer_submission_fails_locally_without_active_conversation() -> None:
+    chat_source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
+    unavailable_guard = chat_source.index("if (!conversationId)")
+    answer_fetch = chat_source.index("fetch('/web/answer'")
+
+    assert unavailable_guard < answer_fetch
+    guard_body = chat_source[unavailable_guard:answer_fetch]
+    assert "conversationStore.errorMessage" in guard_body
+    assert "setAnswerError(" in guard_body
+    assert "return;" in guard_body
+
+
+def test_dead_history_and_image_id_frontend_surfaces_are_removed() -> None:
+    bus_source = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
+    chat_css = (FRONTEND_STYLES / "chat.module.css").read_text(encoding="utf-8")
+    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
+
+    for legacy_event in ("chatExchangeComplete", "chatHistoryRestored", "chatHistoryCleared"):
+        assert legacy_event not in bus_source
+    assert ".outOfContext" not in chat_css
+    assert ".contextDivider" not in chat_css
+    assert "current_image_ids" not in renderer
+    assert "imageIds" not in renderer
+
+
 def test_composer_enter_shortcut_respects_ime_composition() -> None:
     chat_js = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
 

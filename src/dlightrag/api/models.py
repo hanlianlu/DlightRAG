@@ -106,7 +106,6 @@ class RetrievalResponse(ClientContractModel):
     sources: list[SourceReferencePayload] = Field(default_factory=list)
     trace: dict[str, Any] = Field(default_factory=dict)
     image_descriptions: list[str] = Field(default_factory=list)
-    current_image_ids: list[str] = Field(default_factory=list)
 
 
 class AnswerResponse(RetrievalResponse):

@@ -22,7 +22,6 @@ type SSEData = string;
 interface DonePayload {
   html?: string;
   answer?: string;
-  current_image_ids?: string[];
 }
 
 interface ProgressPayload {
@@ -121,7 +120,6 @@ export function setAnswerError(turn: ChatTurn, message: unknown): void {
 export function createAnswerRenderer(turn: ChatTurn) {
   let firstToken = true;
   let fullAnswer = '';
-  let imageIds: string[] = [];
   let failed = false;
 
   function handleToken(data: SSEData): void {
@@ -151,7 +149,6 @@ export function createAnswerRenderer(turn: ChatTurn) {
     const html = typeof payload === 'string' ? payload : (payload as DonePayload).html;
     if (typeof payload !== 'string') {
       fullAnswer = (payload as DonePayload).answer || fullAnswer;
-      imageIds = (payload as DonePayload).current_image_ids || [];
     }
 
     const fragment = llmFragmentFromSanitizedHtml(html || '');
@@ -213,9 +210,6 @@ export function createAnswerRenderer(turn: ChatTurn) {
     },
     get answer(): string {
       return fullAnswer;
-    },
-    get imageIds(): string[] {
-      return imageIds;
     },
     get failed(): boolean {
       return failed;
