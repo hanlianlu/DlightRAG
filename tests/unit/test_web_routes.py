@@ -5,6 +5,7 @@ import base64
 import datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import jwt
@@ -409,6 +410,11 @@ class TestWebAnswer:
                                     "reference_id": "1",
                                     "content": "Evidence in cited chunk.",
                                     "file_path": "/docs/report.pdf",
+                                    "_workspace": "default",
+                                    "metadata": {
+                                        "source_uri": "s3://bucket/report.pdf",
+                                        "source_download_locator": "s3://bucket/report.pdf",
+                                    },
                                 }
                             ]
                         },
@@ -484,6 +490,11 @@ class TestWebSSEBoundary:
                                     "image_url": "javascript:alert(1)",
                                     "thumbnail_url": "javascript:alert(2)",
                                     "_answer_image_sent": True,
+                                    "_workspace": "default",
+                                    "metadata": {
+                                        "source_uri": "s3://bucket/report.pdf",
+                                        "source_download_locator": "s3://bucket/report.pdf",
+                                    },
                                 }
                             ]
                         },
@@ -947,3 +958,54 @@ class TestSourcePanelTemplate:
 
         assert "p.0" in html
         assert "#1" not in html
+
+
+async def test_web_answer_done_builder_projects_http_source_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from dlightrag.citations.schemas import SourceReferencePayload
+    from dlightrag.web import answer_events
+
+    captured_sources: list[object] = []
+
+    def capture_done(*, answer, sources, answer_images):  # noqa: ANN001, ANN202
+        captured_sources.extend(sources)
+        return "<div>done</div>"
+
+    monkeypatch.setattr(answer_events, "safe_answer_done", capture_done)
+    contexts = {
+        "chunks": [
+            {
+                "chunk_id": "c1",
+                "reference_id": "1",
+                "file_path": "report.pdf",
+                "content": "Evidence",
+                "_workspace": "finance",
+                "metadata": {
+                    "source_uri": "s3://bucket/report.pdf",
+                    "source_download_locator": "s3://bucket/report.pdf",
+                    "source_file_name": "report.pdf",
+                },
+            }
+        ]
+    }
+    manager = SimpleNamespace(config=SimpleNamespace(workspace="default"))
+    cfg = SimpleNamespace(input_dir_path=tmp_path / "inputs")
+
+    await answer_events._build_answer_done_payload(
+        clean_answer="Answer [1-1].",
+        contexts=contexts,
+        current_image_ids=[],
+        image_descriptions=[],
+        manager=manager,
+        session_id="session-1",
+        scope=None,
+        cfg=cfg,
+        workspace="default",
+    )
+
+    assert len(captured_sources) == 1
+    source = captured_sources[0]
+    assert isinstance(source, SourceReferencePayload)
+    assert source.download_url == "/files/raw/s3://bucket/report.pdf?workspace=finance"

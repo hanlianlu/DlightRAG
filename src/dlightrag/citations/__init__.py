@@ -5,7 +5,7 @@ from .highlight import HighlightExtractor, extract_highlights_for_sources
 from .indexer import CitationIndexer, build_citation_index
 from .parser import extract_citation_keys, extract_cited_chunks
 from .processor import CitationProcessor, CitationResult
-from .schemas import ChunkSnippet, SourceReference
+from .schemas import ChunkSnippet, SourceReference, SourceReferencePayload
 from .source_builder import build_sources, build_sources_from_chunks
 
 __all__ = [
@@ -16,6 +16,7 @@ __all__ = [
     "FinalizedAnswer",
     "HighlightExtractor",
     "SourceReference",
+    "SourceReferencePayload",
     "build_citation_index",
     "build_sources",
     "build_sources_from_chunks",

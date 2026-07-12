@@ -3,7 +3,7 @@
 
 
 class TestFinalizeAnswer:
-    def test_cleans_answer_and_projects_cited_sources_with_public_source_contexts(self) -> None:
+    def test_cleans_answer_and_builds_cited_sources_from_raw_contexts(self) -> None:
         from dlightrag.citations.finalization import finalize_answer
 
         full_contexts = {
@@ -15,31 +15,18 @@ class TestFinalizeAnswer:
                     "content": "Evidence in the cited chunk.",
                     "image_data": "base64-image",
                     "_workspace": "default",
+                    "metadata": {
+                        "source_uri": "local://default/report.pdf",
+                        "source_download_locator": "/private/report.pdf",
+                    },
                 }
             ],
             "entities": [],
             "relationships": [],
         }
-        public_contexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "file_path": "/private/report.pdf",
-                    "content": "Evidence in the cited chunk.",
-                    "image_url": "/images/default/c1?size=full",
-                    "thumbnail_url": "/images/default/c1?size=thumb",
-                    "_workspace": "default",
-                }
-            ],
-            "entities": [],
-            "relationships": [],
-        }
-
         result = finalize_answer(
             "Answer cites valid [1-1] and invalid [9-1].\n\nReferences\n[9] made up",
             full_contexts,
-            source_contexts=public_contexts,
         )
 
         assert result.answer == "Answer cites valid [1-1] and invalid ."
@@ -82,6 +69,11 @@ class TestFinalizeAnswer:
                         "reference_id": "1",
                         "file_path": "/docs/report.pdf",
                         "content": "Evidence.",
+                        "_workspace": "default",
+                        "metadata": {
+                            "source_uri": "local://default/report.pdf",
+                            "source_download_locator": "/docs/report.pdf",
+                        },
                     }
                 ]
             },

@@ -170,7 +170,7 @@ class AnswerEngine:
         )
         from dlightrag.models.schemas import Reference
 
-        references = [Reference(id=s.id, title=s.title or s.path) for s in finalized.sources]
+        references = [Reference(id=s.id, title=s.title or "Source") for s in finalized.sources]
         answer_images = answer_images_from_sources(finalized.sources, contexts=prepared.contexts)
 
         return RetrievalResult(

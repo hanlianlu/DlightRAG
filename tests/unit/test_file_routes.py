@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for file-serving endpoint — covers each dispatch branch + security."""
 
+import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -214,6 +215,53 @@ class TestFileEndpoint:
 
         assert resp.status_code == 403
         assert b"secret workspace content" not in resp.content
+
+    async def test_remote_source_download_enforces_and_logs_its_workspace(
+        self,
+        tmp_working_dir: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        class DenyFinanceWorkspace:
+            async def check(self, user, action, *, workspace=None):
+                if workspace == "finance":
+                    raise AccessDeniedError("denied")
+
+            async def filter_workspaces(self, user, action, workspaces):
+                return [workspace for workspace in workspaces if workspace != "finance"]
+
+        config = DlightragConfig(  # type: ignore[call-arg]
+            working_dir=str(tmp_working_dir),
+            llm=LLMConfig(default=ModelConfig(model="gpt-5.4-mini", api_key="test")),
+            embedding=_embedding_config(),
+        )
+        set_config(config)
+        with (
+            patch("dlightrag.api.server.RAGServiceManager.acreate", new_callable=AsyncMock),
+            caplog.at_level(logging.INFO, logger="dlightrag.api.routes.files"),
+        ):
+            app = create_app(include_web=False)
+            app.state.access_control = DenyFinanceWorkspace()
+            async with AsyncClient(
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                follow_redirects=False,
+            ) as client:
+                response = await client.get(
+                    "/files/raw/s3://bucket/report.pdf",
+                    params={"workspace": "finance"},
+                )
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "denied"
+        records = [
+            record
+            for record in caplog.records
+            if record.message == "source_download_projection_outcome"
+        ]
+        assert len(records) == 1
+        assert getattr(records[0], "outcome", None) == "unauthorized"
+        assert getattr(records[0], "workspace", None) == "finance"
+        assert "s3://bucket/report.pdf" not in caplog.text
 
     async def test_rejects_windows_absolute_path(self, client: AsyncClient) -> None:
         resp = await client.get(r"/files/raw/C:\Users\me\secret.pdf")

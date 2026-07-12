@@ -13,6 +13,17 @@ from dlightrag.citations.highlight import (
 from dlightrag.citations.schemas import ChunkSnippet, SourceReference
 
 
+def _report_source(chunks: list[ChunkSnippet]) -> SourceReference:
+    return SourceReference(
+        id="1",
+        title="report.pdf",
+        source_uri="local://default/report.pdf",
+        workspace="default",
+        download_locator="/docs/report.pdf",
+        chunks=chunks,
+    )
+
+
 def test_extract_citing_sentences_basic():
     text = "Market grew fast. Growth was 15% [1-1]. Tech improved too [2-1]."
     result = extract_all_citing_sentences(text)
@@ -111,20 +122,17 @@ class TestHighlightExtractor:
     async def test_doc_level_citation_triggers_highlights(self, mock_llm):
         """Doc-level [n] citations should trigger highlights for all chunks of that source."""
         from dlightrag.citations.highlight import extract_highlights_for_sources
-        from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+        from dlightrag.citations.schemas import ChunkSnippet
 
         sources = [
-            SourceReference(
-                id="1",
-                path="/docs/report.pdf",
-                title="report.pdf",
-                chunks=[
+            _report_source(
+                [
                     ChunkSnippet(
                         chunk_id="c1",
                         chunk_idx=1,
                         content="Reports show market growth reached 15% in 2025.",
                     ),
-                ],
+                ]
             ),
         ]
         answer_text = "The market growth was impressive [1]."
@@ -141,20 +149,17 @@ class TestHighlightExtractor:
         caplog: pytest.LogCaptureFixture,
     ):
         from dlightrag.citations.highlight import extract_highlights_for_sources
-        from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+        from dlightrag.citations.schemas import ChunkSnippet
 
         sources = [
-            SourceReference(
-                id="1",
-                path="/docs/report.pdf",
-                title="report.pdf",
-                chunks=[
+            _report_source(
+                [
                     ChunkSnippet(
                         chunk_id="c1",
                         chunk_idx=1,
                         content="Reports show market growth reached 15% in 2025.",
                     ),
-                ],
+                ]
             ),
         ]
         answer_text = "The market growth was impressive [1]."
@@ -215,9 +220,7 @@ class TestHighlightExtractor:
             )
             for i in range(9)
         ]
-        sources = [
-            SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
-        ]
+        sources = [_report_source(chunks)]
         answer_text = " ".join(f"Chunk {i} is supported [1-{i}]." for i in range(1, 10))
 
         highlighted = await extract_highlights_for_sources(
@@ -270,9 +273,7 @@ class TestHighlightExtractor:
             )
             for i in range(16)
         ]
-        sources = [
-            SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
-        ]
+        sources = [_report_source(chunks)]
         answer_text = " ".join(f"Chunk {i} is supported [1-{i}]." for i in range(1, 17))
 
         await extract_highlights_for_sources(
@@ -306,9 +307,7 @@ class TestHighlightExtractor:
             ChunkSnippet(chunk_id=f"c{i}", chunk_idx=i + 1, content=f"Content hit for chunk {i}.")
             for i in range(10)
         ]
-        sources = [
-            SourceReference(id="1", path="/docs/report.pdf", title="report.pdf", chunks=chunks)
-        ]
+        sources = [_report_source(chunks)]
         answer_text = "The report supports the answer [1]."
 
         highlighted = await extract_highlights_for_sources(

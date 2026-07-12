@@ -33,6 +33,31 @@ _ANON = UserContext(user_id="anonymous", auth_mode="none")
 app: FastAPI
 
 
+def _finance_source() -> SourceReference:
+    return SourceReference(
+        id="1",
+        title="report.pdf",
+        source_uri="s3://bucket/report.pdf",
+        workspace="finance",
+        download_locator="s3://bucket/report.pdf",
+    )
+
+
+def _finance_source_context() -> dict[str, object]:
+    return {
+        "chunk_id": "c1",
+        "reference_id": "1",
+        "file_path": "report.pdf",
+        "content": "Evidence",
+        "_workspace": "finance",
+        "metadata": {
+            "source_uri": "s3://bucket/report.pdf",
+            "source_download_locator": "s3://bucket/report.pdf",
+            "source_file_name": "report.pdf",
+        },
+    }
+
+
 @pytest.fixture
 def _api_app(test_config: DlightragConfig) -> Iterator[FastAPI]:
     """Create the API app after test_config has installed the singleton."""
@@ -1114,6 +1139,22 @@ class TestRetrieveEndpoint:
         assert "sources" in body
         assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] is None
 
+    async def test_retrieve_projects_source_workspace_without_internal_fields(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.aretrieve = AsyncMock(
+            return_value=RetrievalResult(contexts={"chunks": [_finance_source_context()]})
+        )
+        app.state.manager = mock_manager
+
+        response = await client.post("/retrieve", json={"query": "report"})
+
+        assert response.status_code == 200
+        source = response.json()["sources"][0]
+        assert source["source_uri"] == "s3://bucket/report.pdf"
+        assert source["download_url"] == ("/files/raw/s3://bucket/report.pdf?workspace=finance")
+        assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
+
     async def test_retrieve_all_workspaces_uses_all_visible_records(
         self,
         client: AsyncClient,
@@ -1336,6 +1377,25 @@ class TestAnswerEndpoint:
         assert "sources" in body
         assert body["answer"] == "The answer is 42"
 
+    async def test_non_stream_answer_projects_source_workspace_without_internal_fields(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        mock_manager.aanswer = AsyncMock(
+            return_value=RetrievalResult(
+                answer="Answer [1-1].",
+                sources=[_finance_source()],
+            )
+        )
+        app.state.manager = mock_manager
+
+        response = await client.post("/answer", json={"query": "report", "stream": False})
+
+        assert response.status_code == 200
+        source = response.json()["sources"][0]
+        assert source["source_uri"] == "s3://bucket/report.pdf"
+        assert source["download_url"] == ("/files/raw/s3://bucket/report.pdf?workspace=finance")
+        assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
+
     async def test_answer_includes_structured_images_and_blocks(
         self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
     ) -> None:
@@ -1358,7 +1418,9 @@ class TestAnswerEndpoint:
                     SourceReference(
                         id="1",
                         title="report.pdf",
-                        path="/private/report.pdf",
+                        source_uri="s3://bucket/report.pdf",
+                        workspace="default",
+                        download_locator="s3://bucket/report.pdf",
                         chunks=[
                             ChunkSnippet(
                                 chunk_id="fig-1",
@@ -1550,6 +1612,32 @@ class TestAnswerStreamMode:
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
 
+    async def test_stream_sources_event_projects_source_workspace(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        async def mock_tokens():
+            yield "Answer [1-1]."
+
+        mock_manager.aanswer_stream = AsyncMock(
+            return_value=({"chunks": [_finance_source_context()]}, mock_tokens())
+        )
+        app.state.manager = mock_manager
+
+        response = await client.post("/answer", json={"query": "report", "stream": True})
+
+        import json as json_mod
+
+        events = [
+            json_mod.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        sources_event = next(event for event in events if event["type"] == "sources")
+        source = sources_event["data"][0]
+        assert source["source_uri"] == "s3://bucket/report.pdf"
+        assert source["download_url"] == ("/files/raw/s3://bucket/report.pdf?workspace=finance")
+        assert {"workspace", "download_locator", "path", "url"}.isdisjoint(source)
+
     async def test_stream_all_workspaces_uses_visible_records(
         self,
         client: AsyncClient,
@@ -1668,6 +1756,10 @@ class TestAnswerStreamMode:
                     "content": "Figure evidence",
                     "image_data": "base64-payload",
                     "_workspace": "default",
+                    "metadata": {
+                        "source_uri": "s3://bucket/report.pdf",
+                        "source_download_locator": "s3://bucket/report.pdf",
+                    },
                 }
             ]
         }
@@ -1722,6 +1814,11 @@ class TestAnswerStreamMode:
                             "reference_id": "1",
                             "file_path": "/docs/report.pdf",
                             "content": "The report says market growth improved.",
+                            "_workspace": "default",
+                            "metadata": {
+                                "source_uri": "s3://bucket/report.pdf",
+                                "source_download_locator": "s3://bucket/report.pdf",
+                            },
                         }
                     ]
                 },
@@ -1774,6 +1871,11 @@ class TestAnswerStreamMode:
                             "reference_id": "1",
                             "file_path": "/docs/report.pdf",
                             "content": "The report says market growth improved.",
+                            "_workspace": "default",
+                            "metadata": {
+                                "source_uri": "s3://bucket/report.pdf",
+                                "source_download_locator": "s3://bucket/report.pdf",
+                            },
                         }
                     ]
                 },
@@ -1870,11 +1972,18 @@ class TestAPIContracts:
         import json
 
         from dlightrag.api.events import AnswerSourcesStreamEvent, sse_data_event
-        from dlightrag.citations.schemas import SourceReference
+        from dlightrag.citations.schemas import SourceReferencePayload
 
         frame = sse_data_event(
             AnswerSourcesStreamEvent(
-                data=[SourceReference(id="1", title="report.pdf", path="/docs/report.pdf")]
+                data=[
+                    SourceReferencePayload(
+                        id="1",
+                        title="report.pdf",
+                        source_uri="local://default/report.pdf",
+                        download_url="/files/raw/report.pdf?workspace=default",
+                    )
+                ]
             )
         )
 
@@ -1882,7 +1991,14 @@ class TestAPIContracts:
         payload = json.loads(frame.removeprefix("data: ").strip())
         assert payload == {
             "type": "sources",
-            "data": [{"id": "1", "title": "report.pdf", "path": "/docs/report.pdf"}],
+            "data": [
+                {
+                    "id": "1",
+                    "title": "report.pdf",
+                    "source_uri": "local://default/report.pdf",
+                    "download_url": "/files/raw/report.pdf?workspace=default",
+                }
+            ],
         }
 
     async def test_openapi_exposes_pydantic_response_models(

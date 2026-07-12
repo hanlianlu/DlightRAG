@@ -11,6 +11,7 @@ from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
+from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
 from dlightrag.core.scope import RequestScope
 from dlightrag.observability import trace_observation
@@ -108,10 +109,10 @@ async def _build_answer_done_payload(
     finalized = finalize_answer(
         clean_answer,
         contexts,
-        source_url_resolver=resolver,
         image_url_prefix="/web/images",
         default_workspace=workspace or manager.config.workspace,
     )
+    source_payloads = project_source_payloads(finalized.sources, resolver=resolver)
     cited_images = answer_images_from_sources(
         finalized.sources,
         contexts={"chunks": finalized.flat_contexts},
@@ -122,7 +123,7 @@ async def _build_answer_done_payload(
     done = AnswerDoneEvent(
         html=safe_answer_done(
             answer=finalized.answer,
-            sources=finalized.sources,
+            sources=source_payloads,
             answer_images=answer_images,
         ),
         answer=finalized.answer,
@@ -337,7 +338,12 @@ async def _emit_answer_events(
             for chunk in source.chunks
         )
         if has_highlights:
-            yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
+            resolver = SourceUrlResolver(input_dir=str(cfg.input_dir_path))
+            highlighted_payloads = project_source_payloads(
+                highlighted_sources,
+                resolver=resolver,
+            )
+            yield sse_event("highlights", safe_source_panel(sources=highlighted_payloads))
 
     except Exception:
         logger.exception("Answer streaming failed")

@@ -41,6 +41,7 @@ from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
 from dlightrag.core.client_payloads import (
     answer_payload,
     project_contexts_for_client,
+    project_source_payloads,
     retrieval_payload,
 )
 from dlightrag.core.client_requests import (
@@ -181,7 +182,8 @@ async def answer(
             scope=scope,
             **kwargs,
         )
-        return answer_payload(result)
+        resolver = SourceUrlResolver(input_dir=str(manager.config.input_dir_path))
+        return answer_payload(result, source_url_resolver=resolver)
 
     async def event_generator() -> AsyncIterator[str]:
         token_iter: AsyncIterator[str] | None = None
@@ -220,8 +222,6 @@ async def answer(
                 finalized = finalize_answer(
                     clean_answer,
                     contexts,
-                    source_contexts=public_contexts,
-                    source_url_resolver=_resolver,
                 )
                 if body.semantic_highlights:
                     finalized.sources = await enrich_semantic_highlights(
@@ -230,7 +230,11 @@ async def answer(
                         config=manager.config,
                     )
 
-                yield sse_data_event(AnswerSourcesStreamEvent(data=finalized.sources))
+                source_payloads = project_source_payloads(
+                    finalized.sources,
+                    resolver=_resolver,
+                )
+                yield sse_data_event(AnswerSourcesStreamEvent(data=source_payloads))
                 trace = getattr(token_iter, "trace", None)
                 if isinstance(trace, dict) and trace:
                     yield sse_data_event(AnswerTraceStreamEvent(data=trace))

@@ -17,6 +17,15 @@ def _image_block(payload: str = _PNG_B64) -> dict:
     return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}}
 
 
+def _source_metadata(file_path: str, **extra: object) -> dict[str, object]:
+    file_name = file_path.rsplit("/", 1)[-1]
+    return {
+        "source_uri": f"local://default/{file_name}",
+        "source_download_locator": file_path,
+        **extra,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -32,6 +41,8 @@ def _text_contexts() -> RetrievalContexts:
                 "file_path": "/docs/report.pdf",
                 "content": "Revenue grew 15%.",
                 "page_idx": 3,
+                "_workspace": "default",
+                "metadata": _source_metadata("/docs/report.pdf"),
             },
         ],
         "entities": [
@@ -58,6 +69,7 @@ def _image_contexts() -> RetrievalContexts:
                 "page_idx": 1,
                 "image_data": _PNG_B64,
                 "_workspace": "default",
+                "metadata": _source_metadata("/docs/chart.pdf"),
             },
         ],
         "entities": [],
@@ -76,7 +88,11 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "content": "Revenue data.",
                 "page_idx": 3,
                 "image_data": _PNG_B64,
-                "metadata": {"doc_title": "2025 Annual Report"},
+                "_workspace": "default",
+                "metadata": _source_metadata(
+                    "/docs/report.pdf",
+                    doc_title="2025 Annual Report",
+                ),
             },
             {
                 "chunk_id": "c2",
@@ -85,6 +101,8 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "content": "Expenses data.",
                 "page_idx": 7,
                 "image_data": _PNG_B64,
+                "_workspace": "default",
+                "metadata": _source_metadata("/docs/report.pdf"),
             },
             {
                 "chunk_id": "c3",
@@ -92,6 +110,8 @@ def _multi_doc_contexts() -> RetrievalContexts:
                 "file_path": "/docs/other.pdf",
                 "content": "Other info.",
                 "page_idx": 1,
+                "_workspace": "default",
+                "metadata": _source_metadata("/docs/other.pdf"),
             },
         ],
         "entities": [],
@@ -220,6 +240,8 @@ class TestAnswerEngineGenerate:
                     "file_path": "/docs/chart.pdf",
                     "content": "",
                     "image_data": _PNG_B64,
+                    "_workspace": "default",
+                    "metadata": _source_metadata("/docs/chart.pdf"),
                 }
             ],
             "entities": [],
@@ -266,6 +288,8 @@ class TestAnswerEngineGenerate:
                     "file_path": "/docs/figures.pdf",
                     "content": "",
                     "image_data": _PNG_B64,
+                    "_workspace": "default",
+                    "metadata": _source_metadata("/docs/figures.pdf"),
                 },
                 *_text_contexts()["chunks"],
             ],
@@ -317,12 +341,16 @@ class TestAnswerEngineGenerate:
                     "reference_id": "1",
                     "file_path": "/docs/a.pdf",
                     "content": "First candidate.",
+                    "_workspace": "default",
+                    "metadata": _source_metadata("/docs/a.pdf"),
                 },
                 {
                     "chunk_id": "c2",
                     "reference_id": "2",
                     "file_path": "/docs/b.pdf",
                     "content": "Second candidate.",
+                    "_workspace": "default",
+                    "metadata": _source_metadata("/docs/b.pdf"),
                 },
             ],
             "entities": [],

@@ -4,25 +4,25 @@ Groups chunks by reference_id into SourceReference objects with ChunkSnippets.
 Called by both web routes and API server after retrieval.
 """
 
-import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from dlightrag.core.retrieval.protocols import RetrievalContexts
-from dlightrag.core.retrieval.source_url_resolver import SourceUrlResolver
+from dlightrag.utils import log_safe
 
 from .indexer import CitationIndexer
 from .schemas import ChunkSnippet, SourceReference
 from .utils import filter_content_for_display
 
-logger = logging.getLogger(__name__)
+
+class SourceBuildInvariantError(RuntimeError):
+    """Raised when retrieval contexts cannot form a durable source reference."""
 
 
 def build_sources(
     contexts: RetrievalContexts,
-    source_url_resolver: SourceUrlResolver | None = None,
     *,
     indexer: CitationIndexer | None = None,
     image_url_prefix: str | None = "/images",
@@ -32,15 +32,12 @@ def build_sources(
 
     Args:
         contexts: Retrieval contexts dict with "chunks" key.
-        source_url_resolver: Optional resolver with .resolve(path) -> url method.
-
     Returns:
         List of SourceReference, ordered by first chunk appearance.
         Chunks within each source follow citation-index order.
     """
     return build_sources_from_chunks(
         contexts.get("chunks", []),
-        source_url_resolver=source_url_resolver,
         indexer=indexer,
         image_url_prefix=image_url_prefix,
         default_workspace=default_workspace,
@@ -50,7 +47,6 @@ def build_sources(
 def build_sources_from_chunks(
     chunks: list[dict[str, Any]],
     *,
-    source_url_resolver: SourceUrlResolver | None = None,
     indexer: CitationIndexer | None = None,
     cited_chunks: dict[str, list[str]] | None = None,
     source_catalog: list[SourceReference] | None = None,
@@ -93,14 +89,18 @@ def build_sources_from_chunks(
         if not group:
             continue
         first = group[0]
-        metadata = first.get("metadata", {})
+        metadata = first.get("metadata") or {}
         catalog = catalog_by_id.get(ref_id)
-        file_path = catalog.path if catalog else first.get("file_path", "")
-        # The chunk file_path is a canonicalized parser basename; the enrichment
-        # step surfaces the document's real source location (local staged path,
-        # retained remote copy, or remote s3:///azure:///https:// URI) which is
-        # what the download URL must resolve against.
-        source_path = metadata.get("source_file_path") or file_path
+        source_uri = _required_source_metadata(metadata, "source_uri", ref_id=ref_id)
+        download_locator = _required_source_metadata(
+            metadata,
+            "source_download_locator",
+            ref_id=ref_id,
+        )
+        workspace = catalog.workspace if catalog else first.get("_workspace") or default_workspace
+        if not isinstance(workspace, str) or not workspace.strip():
+            raise SourceBuildInvariantError(f"Source {log_safe(ref_id)} is missing workspace")
+        file_path = first.get("file_path", "")
 
         def _citation_order(chunk: dict[str, Any], ref_id: str = ref_id) -> int:
             chunk_idx = chunk.get("chunk_idx")
@@ -137,13 +137,6 @@ def build_sources_from_chunks(
                 )
             )
 
-        url = catalog.url if catalog else None
-        if url is None and source_url_resolver and source_path:
-            try:
-                url = source_url_resolver.resolve(source_path)
-            except Exception:
-                logger.debug("Could not resolve source URL for %s", source_path, exc_info=True)
-
         cited_chunk_ids = None
         if cited_chunks is not None:
             present = {c.get("chunk_id") for c in ordered_chunks}
@@ -156,15 +149,23 @@ def build_sources_from_chunks(
                 or metadata.get("source_file_name")
                 or metadata.get("file_name")
                 or (Path(file_path).name if file_path else None),
-                path=file_path,
                 type=(catalog.type if catalog else None) or metadata.get("file_type"),
-                url=url,
+                source_uri=catalog.source_uri if catalog else source_uri,
+                workspace=workspace,
+                download_locator=catalog.download_locator if catalog else download_locator,
                 cited_chunk_ids=cited_chunk_ids,
                 chunks=snippets,
             )
         )
 
     return sources
+
+
+def _required_source_metadata(metadata: Any, key: str, *, ref_id: str) -> str:
+    value = metadata.get(key) if isinstance(metadata, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        raise SourceBuildInvariantError(f"Source {log_safe(ref_id)} is missing {key}")
+    return value
 
 
 def _chunk_image_urls(

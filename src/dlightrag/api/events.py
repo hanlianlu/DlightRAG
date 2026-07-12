@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from dlightrag.citations.schemas import SourceReference
+from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.client_contracts import ClientContractModel, model_dump_json_safe
 
 
@@ -22,7 +22,7 @@ class AnswerTokenStreamEvent(ClientContractModel):
 
 class AnswerSourcesStreamEvent(ClientContractModel):
     type: Literal["sources"] = "sources"
-    data: list[SourceReference] = Field(default_factory=list)
+    data: list[SourceReferencePayload] = Field(default_factory=list)
 
 
 class AnswerTraceStreamEvent(ClientContractModel):

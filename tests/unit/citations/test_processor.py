@@ -3,34 +3,66 @@ from dlightrag.citations.processor import CitationProcessor, CitationResult
 from dlightrag.citations.schemas import SourceReference
 
 
+def _metadata(file_name: str, file_path: str, **extra):
+    return {
+        "file_name": file_name,
+        "source_uri": f"local://default/{file_name}",
+        "source_download_locator": file_path,
+        **extra,
+    }
+
+
+def _source(
+    source_id: str,
+    file_path: str,
+    *,
+    title: str,
+    source_type: str | None = None,
+) -> SourceReference:
+    return SourceReference(
+        id=source_id,
+        title=title,
+        type=source_type,
+        source_uri=f"local://default/{file_path.rsplit('/', 1)[-1]}",
+        workspace="default",
+        download_locator=file_path,
+    )
+
+
 def _make_contexts():
     """Contexts simulating DlightRAG RetrievalResult.contexts flattened."""
     return [
         {
             "chunk_id": "c1",
             "reference_id": "1",
+            "file_path": "/docs/report.pdf",
             "content": "Market growth reached 15% this year.",
-            "metadata": {"file_name": "report.pdf", "page_idx": 3},
+            "_workspace": "default",
+            "metadata": _metadata("report.pdf", "/docs/report.pdf", page_idx=3),
         },
         {
             "chunk_id": "c2",
             "reference_id": "1",
+            "file_path": "/docs/report.pdf",
             "content": "Revenue exceeded expectations.",
-            "metadata": {"file_name": "report.pdf", "page_idx": 5},
+            "_workspace": "default",
+            "metadata": _metadata("report.pdf", "/docs/report.pdf", page_idx=5),
         },
         {
             "chunk_id": "c3",
             "reference_id": "2",
+            "file_path": "/docs/analysis.xlsx",
             "content": "Technical indicators show positive trend.",
-            "metadata": {"file_name": "analysis.xlsx", "page_idx": 1},
+            "_workspace": "default",
+            "metadata": _metadata("analysis.xlsx", "/docs/analysis.xlsx", page_idx=1),
         },
     ]
 
 
 def _make_sources():
     return [
-        SourceReference(id="1", path="/docs/report.pdf", title="Report", type="pdf"),
-        SourceReference(id="2", path="/docs/analysis.xlsx", title="Analysis", type="xlsx"),
+        _source("1", "/docs/report.pdf", title="Report", source_type="pdf"),
+        _source("2", "/docs/analysis.xlsx", title="Analysis", source_type="xlsx"),
     ]
 
 
@@ -95,10 +127,10 @@ def test_image_only_chunk_is_citable():
             "file_path": "/data/chart.pdf",
             "page_idx": 4,
             "_workspace": "default",
-            "metadata": {"file_name": "chart.pdf"},
+            "metadata": _metadata("chart.pdf", "/data/chart.pdf"),
         }
     ]
-    sources = [SourceReference(id="1", path="/data/chart.pdf", title="chart.pdf")]
+    sources = [_source("1", "/data/chart.pdf", title="chart.pdf")]
 
     proc = CitationProcessor(contexts=contexts, available_sources=sources)
     result = proc.process("The chart shows the trend [1-1].")
@@ -115,16 +147,18 @@ def test_source_catalog_metadata_is_preserved():
             "reference_id": "1",
             "content": "Evidence.",
             "file_path": "/raw/doc.pdf",
-            "metadata": {"file_name": "raw.pdf", "file_type": "raw"},
+            "_workspace": "raw",
+            "metadata": _metadata("raw.pdf", "/raw/doc.pdf", file_type="raw"),
         }
     ]
     sources = [
         SourceReference(
             id="1",
-            path="/resolved/doc.pdf",
             title="Catalog title",
             type="pdf",
-            url="/files/doc.pdf",
+            source_uri="bynder://asset/1",
+            workspace="resolved",
+            download_locator="s3://bucket/doc.pdf",
         )
     ]
 
@@ -132,9 +166,10 @@ def test_source_catalog_metadata_is_preserved():
     result = proc.process("Evidence [1-1].")
 
     assert result.sources[0].title == "Catalog title"
-    assert result.sources[0].path == "/resolved/doc.pdf"
     assert result.sources[0].type == "pdf"
-    assert result.sources[0].url == "/files/doc.pdf"
+    assert result.sources[0].source_uri == "bynder://asset/1"
+    assert result.sources[0].workspace == "resolved"
+    assert result.sources[0].download_locator == "s3://bucket/doc.pdf"
 
 
 class TestCitationProcessorFlatPageIdx:
@@ -148,6 +183,8 @@ class TestCitationProcessorFlatPageIdx:
                 "content": "Page one content",
                 "file_path": "/data/doc.pdf",
                 "page_idx": 1,
+                "_workspace": "default",
+                "metadata": _metadata("doc.pdf", "/data/doc.pdf"),
             },
             {
                 "chunk_id": "c2",
@@ -155,10 +192,12 @@ class TestCitationProcessorFlatPageIdx:
                 "content": "Page two content",
                 "file_path": "/data/doc.pdf",
                 "page_idx": 2,
+                "_workspace": "default",
+                "metadata": _metadata("doc.pdf", "/data/doc.pdf"),
             },
         ]
         sources = [
-            SourceReference(id="1", path="/data/doc.pdf", title="doc.pdf"),
+            _source("1", "/data/doc.pdf", title="doc.pdf"),
         ]
 
         processor = CitationProcessor(contexts=contexts, available_sources=sources)

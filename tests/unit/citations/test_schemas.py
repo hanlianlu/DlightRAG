@@ -1,4 +1,15 @@
+import dlightrag.citations.schemas as schemas
 from dlightrag.citations.schemas import ChunkSnippet, SourceReference
+
+
+def test_source_reference_and_public_payload_have_distinct_contracts() -> None:
+    assert {"source_uri", "workspace", "download_locator"} <= set(SourceReference.model_fields)
+    assert {"path", "url", "download_url"}.isdisjoint(SourceReference.model_fields)
+
+    payload_type = getattr(schemas, "SourceReferencePayload", None)
+    assert payload_type is not None
+    assert {"source_uri", "download_url"} <= set(payload_type.model_fields)
+    assert {"workspace", "download_locator", "path", "url"}.isdisjoint(payload_type.model_fields)
 
 
 def test_chunk_snippet_minimal():
@@ -28,7 +39,12 @@ def test_chunk_snippet_full():
 
 
 def test_source_reference_minimal():
-    sr = SourceReference(id="1", path="/docs/report.pdf")
+    sr = SourceReference(
+        id="1",
+        source_uri="local://default/report.pdf",
+        workspace="default",
+        download_locator="/docs/report.pdf",
+    )
     assert sr.id == "1"
     assert sr.title is None
     assert sr.chunks is None
@@ -38,9 +54,11 @@ def test_source_reference_with_chunks():
     chunk = ChunkSnippet(chunk_id="c1", chunk_idx=1, content="text")
     sr = SourceReference(
         id="1",
-        path="/docs/report.pdf",
         title="Report",
         type="pdf",
+        source_uri="local://default/report.pdf",
+        workspace="default",
+        download_locator="/docs/report.pdf",
         chunks=[chunk],
         cited_chunk_ids=["c1"],
     )

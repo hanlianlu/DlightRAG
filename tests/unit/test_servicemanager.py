@@ -795,7 +795,9 @@ class TestAnswerViaEngine:
                 sources=[
                     SourceReference(
                         id="1",
-                        path="/docs/report.pdf",
+                        source_uri="local://ws_a/report.pdf",
+                        workspace="ws_a",
+                        download_locator="/docs/report.pdf",
                         chunks=[
                             ChunkSnippet(
                                 chunk_id="c1",
