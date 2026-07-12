@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from lightrag.base import DocStatus
 from lightrag.utils import compute_mdhash_id
 from lightrag.utils_pipeline import normalize_document_file_path
 from PIL import Image
@@ -26,7 +27,11 @@ def _make_engine(**overrides):
     lightrag = AsyncMock()
     lightrag.apipeline_enqueue_documents.return_value = "track-1"
     stores = AsyncMock()
-    stores.get_doc_status.return_value = {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc"}
+    stores.get_doc_status.return_value = {
+        "status": "processed",
+        "chunks_list": ["chunk-a"],
+        "content_hash": "sha256:abc",
+    }
     stores.get_full_doc.return_value = {
         "parse_engine": "mineru",
         "process_options": "iteP",
@@ -115,6 +120,29 @@ async def test_document_ingest_resolves_lightrag_parser_rules(tmp_path: Path) ->
     assert kwargs["process_options"] == "iteP"
     deps["lightrag"].apipeline_process_enqueue_documents.assert_awaited_once()
     assert deps["metadata_index"].upsert.await_count == 2
+
+
+async def test_document_ingest_raises_when_pipeline_finishes_failed(tmp_path: Path) -> None:
+    source = tmp_path / "report.pdf"
+    source.write_bytes(b"%PDF-1.4")
+    engine, deps = _make_engine()
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {
+            "status": DocStatus.FAILED,
+            "chunks_list": [],
+            "content_hash": None,
+            "content_summary": "PDF parser failed on page 3",
+            "error_msg": None,
+        },
+    ]
+
+    with pytest.raises(RuntimeError, match="PDF parser failed on page 3"):
+        await engine.aingest_file(source, replace=False)
+
+    assert deps["metadata_index"].upsert.await_count == 1
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
 async def test_document_ingest_preserves_lightrag_parser_engine_params(
@@ -591,11 +619,16 @@ async def test_document_ingest_cleans_up_partial_before_reingest(tmp_path: Path)
     events: list[str] = []
 
     # Simulate a partial record from an interrupted ingest.
-    deps["stores"].get_doc_status.return_value = {
+    partial_status = {
         "chunks_list": ["old-chunk-1"],
         "content_hash": "sha256:deadbeef",
         "status": "analyzing",
     }
+    deps["stores"].get_doc_status.side_effect = [
+        partial_status,
+        partial_status,
+        {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc", "status": "processed"},
+    ]
 
     async def get_full_doc(doc_id_arg: str) -> dict | None:
         assert doc_id_arg == doc_id
@@ -661,7 +694,11 @@ async def test_document_ingest_first_time_no_cleanup(tmp_path: Path) -> None:
     source = tmp_path / "sample[mineru-iteP].pdf"
     source.write_bytes(b"%PDF-1.4")
     engine, deps = _make_engine()
-    deps["stores"].get_doc_status.return_value = None
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {"chunks_list": ["chunk-a"], "content_hash": "sha256:abc", "status": "processed"},
+    ]
 
     result = await engine.aingest_file(source, replace=False)
 
@@ -920,11 +957,16 @@ async def test_reingest_proceeds_when_not_processed(tmp_path: Path) -> None:
     engine, deps = _make_engine()
 
     current_hash = _file_sha256_static(source)
-    deps["stores"].get_doc_status.return_value = {
+    failed_status = {
         "chunks_list": [],
         "content_hash": current_hash,
         "status": "failed",
     }
+    deps["stores"].get_doc_status.side_effect = [
+        failed_status,
+        failed_status,
+        {"chunks_list": ["chunk-a"], "content_hash": current_hash, "status": "processed"},
+    ]
 
     result = await engine.aingest_file(source, replace=False)
 

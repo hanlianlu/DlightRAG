@@ -120,6 +120,18 @@ def _safe_remote_source_id(document: SourceDocument) -> str:
     return safe_source_filename(document.display_filename or document.key)
 
 
+def _retry_display_filename(value: object) -> str:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError("source filename is invalid")
+    raw_basename = value.replace("\\", "/").rsplit("/", 1)[-1]
+    if not raw_basename or raw_basename in {".", ".."}:
+        raise ValueError("source filename is invalid")
+    filename = safe_source_filename(value)
+    if filename in {".", ".."}:
+        raise ValueError("source filename is invalid")
+    return filename
+
+
 def _download_locator_kind(locator: str | None, *, retained: bool = False) -> str:
     if retained:
         return "local"
@@ -1089,7 +1101,7 @@ class RAGService:
         batch_root: Path,
         retain_source_file: bool,
     ) -> PreparedIngestFile:
-        key = document.key
+        key = document.display_filename or document.key
         if retain_source_file:
             parser_path = Path(download_locator)
         else:
@@ -1183,7 +1195,7 @@ class RAGService:
                                 input_root=self._workspace_input_root(),
                                 source_type=source_type,
                                 source_uri=source_uri,
-                                key=document.key,
+                                key=document.display_filename or document.key,
                             )
                         )
                         _log_download_locator_outcome(
@@ -1288,7 +1300,7 @@ class RAGService:
                                     input_root=self._workspace_input_root(),
                                     source_type=source_type,
                                     source_uri=prepared_item.source_uri,
-                                    key=document.key,
+                                    key=document.display_filename or document.key,
                                 )
                             )
 
@@ -2004,54 +2016,63 @@ class RAGService:
             try:
                 metadata = await self._metadata_index.get(doc_id)
             except Exception:
-                logger.warning("Failed to load retry metadata for doc_id=%s", doc_id, exc_info=True)
+                logger.warning("Failed to load retry metadata for doc_id=%s", doc_id)
                 still_failed.append({"doc_id": doc_id, "reason": "source metadata unavailable"})
                 continue
 
             source_uri = metadata.get("source_uri") if metadata else None
             download_locator = metadata.get("download_locator") if metadata else None
+            stored_filename = metadata.get("filename") if metadata else None
             if not isinstance(source_uri, str) or not source_uri:
                 still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
                 continue
             if not isinstance(download_locator, str) or not download_locator:
                 still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
                 continue
+            if not isinstance(stored_filename, str) or not stored_filename:
+                still_failed.append({"doc_id": doc_id, "reason": "source metadata incomplete"})
+                continue
 
             try:
+                display_filename = _retry_display_filename(stored_filename)
                 self._validate_retry_source_contract(source_uri, download_locator)
             except OSError, TypeError, ValueError:
                 still_failed.append({"doc_id": doc_id, "reason": "source metadata invalid"})
                 continue
 
-            # Drop the FAILED doc_status row before re-ingesting so the next
-            # alist_failed_docs() call no longer returns this doc_id.
-            # Best-effort: a missing doc_id is a no-op upstream.
-            if lr is not None:
-                try:
-                    await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
-                except Exception as exc:
-                    logger.warning(
-                        "Pre-retry adelete_by_doc_id failed for doc_id=%s: %s", doc_id, exc
-                    )
-
             try:
-                result = await self._aingest_download_locator(source_uri, download_locator)
+                result = await self._aingest_download_locator(
+                    source_uri, download_locator, display_filename
+                )
                 processed = result.get("processed")
                 if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
                     still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
-                if doc_id not in self._retry_result_doc_ids(result):
+                replacement_doc_ids = self._retry_result_doc_ids(result)
+                if not replacement_doc_ids:
+                    still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
+                    continue
+                if doc_id not in replacement_doc_ids:
+                    if lr is not None:
+                        deletion_result = await lr.adelete_by_doc_id(doc_id, delete_llm_cache=True)
+                        deletion_status = (
+                            deletion_result.get("status")
+                            if isinstance(deletion_result, Mapping)
+                            else getattr(deletion_result, "status", None)
+                        )
+                        if deletion_status in {"fail", "not_allowed"}:
+                            raise RuntimeError("old LightRAG document cleanup failed")
                     await self._metadata_index.delete(doc_id)
                 succeeded.append(
                     {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
                 )
-            except Exception as exc:
-                logger.warning("Retry failed for doc_id=%s: %s", doc_id, exc)
+            except Exception:
+                logger.warning("Retry failed for doc_id=%s", doc_id)
                 still_failed.append(
                     {
                         "doc_id": doc_id,
                         "file_path": entry.get("file_path", ""),
-                        "reason": str(exc),
+                        "reason": "retry ingestion failed",
                     }
                 )
 
@@ -2104,6 +2125,7 @@ class RAGService:
         self,
         source_uri: str,
         download_locator: str,
+        display_filename: str,
     ) -> dict[str, Any]:
         """Materialize one validated locator while preserving source provenance."""
         source_type, parts = self._validate_retry_source_contract(source_uri, download_locator)
@@ -2116,12 +2138,14 @@ class RAGService:
                 Path(download_locator),
                 source_uri=stable_source_uri,
                 download_locator=download_locator,
+                display_filename=display_filename,
                 replace=False,
             )
 
         if source_type == "url":
             document = IngestDocument(
                 url=download_locator,
+                filename=display_filename,
                 source_uri=stable_source_uri,
                 download_uri=download_locator,
             )
@@ -2133,7 +2157,11 @@ class RAGService:
             )
 
         if source_type == "s3":
-            document = IngestDocument(key=str(parts["key"]), source_uri=stable_source_uri)
+            document = IngestDocument(
+                key=str(parts["key"]),
+                filename=display_filename,
+                source_uri=stable_source_uri,
+            )
             return await self.aingest(
                 "s3",
                 bucket=str(parts["bucket"]),
@@ -2142,7 +2170,11 @@ class RAGService:
                 retain_source_file=False,
             )
 
-        document = IngestDocument(key=str(parts["blob_path"]), source_uri=stable_source_uri)
+        document = IngestDocument(
+            key=str(parts["blob_path"]),
+            filename=display_filename,
+            source_uri=stable_source_uri,
+        )
         return await self.aingest(
             "azure_blob",
             container_name=str(parts["container_name"]),
