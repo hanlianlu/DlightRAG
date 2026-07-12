@@ -4,7 +4,7 @@
 import base64
 import binascii
 from collections.abc import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
@@ -19,6 +19,7 @@ from dlightrag.web.deps import templates
 WEB_AUTH_COOKIE = "dlightrag_web_auth"
 _PUBLIC_WEB_PATHS = {"/web/login", "/web/logout"}
 _WEB_COOKIE_PATH = "/web"
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 router = APIRouter()
 
@@ -43,6 +44,50 @@ def _request_next_path(request: Request) -> str:
     path = str(request.url.path)
     query = str(request.url.query)
     return f"{path}?{query}" if query else path
+
+
+def _origin_tuple(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return parsed.scheme, parsed.hostname.lower(), port
+
+
+def _request_origin(request: Request) -> tuple[str, str, int] | None:
+    try:
+        hostname = request.url.hostname
+        if hostname is None or request.url.scheme not in {"http", "https"}:
+            return None
+        port = request.url.port or (443 if request.url.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return request.url.scheme, hostname.lower(), port
+
+
+def _is_cookie_conversation_mutation(request: Request, source: str | None) -> bool:
+    path = request.url.path
+    return (
+        source == "cookie"
+        and request.method.upper() in _UNSAFE_METHODS
+        and (path == "/web/conversations" or path.startswith("/web/conversations/"))
+    )
+
+
+def _has_exact_same_origin(request: Request) -> bool:
+    origin = request.headers.get("Origin")
+    return origin is not None and _origin_tuple(origin) == _request_origin(request)
 
 
 def _bearer_from_header(request: Request) -> str | None:
@@ -143,6 +188,11 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                 _clear_auth_cookie(response)
                 return response
             return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
+
+        if _is_cookie_conversation_mutation(request, source) and not _has_exact_same_origin(
+            request
+        ):
+            return PlainTextResponse("Cross-origin request rejected", status_code=403)
 
         return await call_next(request)
 

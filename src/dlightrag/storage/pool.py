@@ -32,6 +32,18 @@ _DEFAULT_RETRY_BACKOFF_MAX = 30.0
 
 T = TypeVar("T")
 
+POSTGRES_UNAVAILABLE_EXCEPTIONS = (
+    asyncio.TimeoutError,
+    TimeoutError,
+    ConnectionError,
+    OSError,
+    asyncpg.exceptions.TooManyConnectionsError,
+    asyncpg.exceptions.CannotConnectNowError,
+    asyncpg.exceptions.PostgresConnectionError,
+    asyncpg.exceptions.ConnectionDoesNotExistError,
+    asyncpg.exceptions.ConnectionFailureError,
+)
+
 
 class PGPool:
     """Lazy-created asyncpg pool for DlightRAG domain stores."""
@@ -40,16 +52,8 @@ class PGPool:
         self._pool: asyncpg.Pool | None = None
         self._lock: asyncio.Lock | None = None
         self._transient_exceptions = (
-            asyncio.TimeoutError,
-            TimeoutError,
-            ConnectionError,
-            OSError,
+            *POSTGRES_UNAVAILABLE_EXCEPTIONS,
             asyncpg.exceptions.InterfaceError,
-            asyncpg.exceptions.TooManyConnectionsError,
-            asyncpg.exceptions.CannotConnectNowError,
-            asyncpg.exceptions.PostgresConnectionError,
-            asyncpg.exceptions.ConnectionDoesNotExistError,
-            asyncpg.exceptions.ConnectionFailureError,
         )
 
     def _get_lock(self) -> asyncio.Lock:

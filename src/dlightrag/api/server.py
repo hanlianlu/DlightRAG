@@ -118,7 +118,10 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     if include_web:
         from dlightrag.storage.web_conversations import PGWebConversationStore
         from dlightrag.web.auth import WebAuthMiddleware
-        from dlightrag.web.conversations import WebConversationService
+        from dlightrag.web.conversations import (
+            WebConversationService,
+            WebConversationUnavailableError,
+        )
         from dlightrag.web.deps import _TEMPLATE_DIR
         from dlightrag.web.routes import router as web_router
         from dlightrag.web.static_files import NoCacheStaticFiles
@@ -128,6 +131,15 @@ def create_app(*, include_web: bool = True) -> FastAPI:
             max_turns=cfg.web_conversations.max_turns,
             ttl_days=cfg.web_conversations.ttl_days,
         )
+
+        @application.exception_handler(WebConversationUnavailableError)
+        async def web_conversation_unavailable_handler(
+            request: Request,  # noqa: ARG001
+            exc: WebConversationUnavailableError,
+        ) -> JSONResponse:
+            body = ErrorDetail(detail=exc.detail, error_type="unavailable")
+            return JSONResponse(status_code=503, content=body.model_dump())
+
         application.add_middleware(WebAuthMiddleware, config_getter=lambda cfg=cfg: cfg)
         application.include_router(web_router)
         _static_dir = _TEMPLATE_DIR.parent / "static"

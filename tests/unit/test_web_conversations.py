@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient
 
 from dlightrag.api.auth import UserContext
 from dlightrag.api.server import create_app
+from dlightrag.config import DlightragConfig
 from dlightrag.storage.web_conversations import ConversationSnapshot
 
 
@@ -46,6 +47,29 @@ async def conversation_client(conversation_service: AsyncMock):
     application.state.web_conversation_service = conversation_service
     transport = ASGITransport(app=application)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+
+
+@pytest.fixture
+async def cookie_conversation_client(
+    test_config: DlightragConfig,
+    conversation_service: AsyncMock,
+):
+    test_config.auth_mode = "simple"
+    test_config.api_auth_token = "secret-token"
+    application = create_app(include_web=True)
+    application.state.web_conversation_service = conversation_service
+    transport = ASGITransport(app=application)
+    async with AsyncClient(
+        transport=transport,
+        base_url="https://app.example.com",
+        follow_redirects=False,
+    ) as client:
+        login = await client.post(
+            "/web/login",
+            data={"token": "secret-token", "next": "/web/"},
+        )
+        assert login.status_code == 303
         yield client
 
 
@@ -161,6 +185,146 @@ async def test_scoped_image_of_other_principal_is_404(
     assert response.status_code == 404
 
 
+_COOKIE_MUTATIONS = (
+    pytest.param("POST", "/web/conversations", None, "create", 201, id="create"),
+    pytest.param(
+        "PATCH",
+        "/web/conversations/00000000-0000-0000-0000-000000000001",
+        {"title": "Renamed chat"},
+        "rename",
+        200,
+        id="rename",
+    ),
+    pytest.param(
+        "DELETE",
+        "/web/conversations/00000000-0000-0000-0000-000000000001",
+        None,
+        "delete",
+        204,
+        id="delete",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_method", "status_code"), _COOKIE_MUTATIONS
+)
+async def test_cookie_lifecycle_mutations_accept_exact_same_origin(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+    service_method: str,
+    status_code: int,
+) -> None:
+    response = await cookie_conversation_client.request(
+        method,
+        path,
+        json=body,
+        headers={"Origin": "https://app.example.com"},
+    )
+
+    assert response.status_code == status_code
+    getattr(conversation_service, service_method).assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body", "service_method", "_status_code"), _COOKIE_MUTATIONS
+)
+async def test_cookie_lifecycle_mutations_reject_sibling_origin_before_service(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+    service_method: str,
+    _status_code: int,
+) -> None:
+    response = await cookie_conversation_client.request(
+        method,
+        path,
+        json=body,
+        headers={"Origin": "https://evil.example.com"},
+    )
+
+    assert response.status_code == 403
+    getattr(conversation_service, service_method).assert_not_awaited()
+
+
+async def test_cookie_lifecycle_mutation_rejects_missing_origin(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    response = await cookie_conversation_client.post("/web/conversations")
+
+    assert response.status_code == 403
+    conversation_service.create.assert_not_awaited()
+
+
+async def test_bearer_lifecycle_mutation_does_not_require_browser_origin(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    response = await cookie_conversation_client.post(
+        "/web/conversations",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert response.status_code == 201
+    conversation_service.create.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "store_method"),
+    (
+        pytest.param("GET", "/web/conversations", "list_conversations", id="read"),
+        pytest.param("POST", "/web/conversations", "create_conversation", id="mutation"),
+    ),
+)
+async def test_store_unavailability_returns_retryable_503(
+    method: str,
+    path: str,
+    store_method: str,
+) -> None:
+    from dlightrag.web.conversations import WebConversationService
+
+    store = AsyncMock()
+    getattr(store, store_method).side_effect = ConnectionError("database unavailable")
+    application = create_app(include_web=True)
+    application.state.web_conversation_service = WebConversationService(
+        store=store,
+        max_turns=100,
+        ttl_days=30,
+    )
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.request(method, path)
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Web conversation storage is unavailable",
+        "error_type": "unavailable",
+    }
+
+
+async def test_programmer_errors_are_not_mislabeled_as_store_unavailability() -> None:
+    from dlightrag.web.conversations import WebConversationService
+
+    store = AsyncMock()
+    store.list_conversations.side_effect = ValueError("broken projection")
+    application = create_app(include_web=True)
+    application.state.web_conversation_service = WebConversationService(
+        store=store,
+        max_turns=100,
+        ttl_days=30,
+    )
+    transport = ASGITransport(app=application)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with pytest.raises(ValueError, match="broken projection"):
+            await client.get("/web/conversations")
+
+
 def test_browser_contracts_forbid_extra_fields_and_normalize_titles() -> None:
     from pydantic import ValidationError
 
@@ -191,6 +355,8 @@ def _conversation_snapshot() -> ConversationSnapshot:
         conversation_id="00000000-0000-0000-0000-000000000001",
         content_revision=7,
         title="Quarterly review",
+        created_at=now,
+        updated_at=now,
         history=(
             {
                 "turn_id": "00000000-0000-0000-0000-000000000010",
@@ -289,6 +455,7 @@ async def test_service_derives_principal_for_each_lifecycle_operation(
 
 async def test_history_projects_safe_images_sources_and_rendered_answer(
     service_under_test,
+    conversation_store: AsyncMock,
     jwt_user: UserContext,
 ) -> None:
     history = await service_under_test.history(
@@ -310,6 +477,7 @@ async def test_history_projects_safe_images_sources_and_rendered_answer(
     assert "citation-badge" in turn.answer_html
     assert "image_bytes" not in turn.model_dump_json()
     assert "principal_id" not in turn.model_dump_json()
+    conversation_store.list_conversations.assert_not_awaited()
 
 
 async def test_prepare_answer_uses_one_snapshot_and_text_only_messages(
