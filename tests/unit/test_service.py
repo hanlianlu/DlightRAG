@@ -2065,6 +2065,72 @@ class TestRAGServiceLightRAGMainPath:
         assert result["failed_docs"] == [
             {"doc_id": "doc-failed", "reason": "retry ingestion failed"}
         ]
+        service._metadata_index.delete.assert_not_awaited()
+
+    async def test_retry_failed_doc_deletes_old_metadata_for_new_batch_doc_id(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service.alist_failed_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "doc-old",
+                    "file_path": "/deleted/__remote_ingest__/report.pdf",
+                    "error": "parser failed",
+                }
+            ]
+        )
+        service._metadata_index = AsyncMock()
+        service._metadata_index.get.return_value = {
+            "source_uri": "bynder://asset/1",
+            "download_locator": "s3://documents/assets/1.pdf",
+        }
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
+            return_value={
+                "processed": 1,
+                "errors": [],
+                "results": [{"doc_id": "doc-new", "source_kind": "document"}],
+            }
+        )
+
+        result = await service.aretry_failed_docs()
+
+        assert result["succeeded"] == 1
+        service._metadata_index.delete.assert_awaited_once_with("doc-old")
+
+    async def test_retry_failed_doc_keeps_old_metadata_for_same_single_doc_id(
+        self, test_config: DlightragConfig
+    ) -> None:
+        service = RAGService(config=test_config)
+        service.alist_failed_docs = AsyncMock(
+            return_value=[
+                {
+                    "doc_id": "doc-same",
+                    "file_path": "/inputs/default/report.pdf",
+                    "error": "parser failed",
+                }
+            ]
+        )
+        service._metadata_index = AsyncMock()
+        service._metadata_index.get.return_value = {
+            "source_uri": "local://default/report.pdf",
+            "download_locator": "/inputs/default/report.pdf",
+        }
+        service._lightrag = MagicMock()
+        service._lightrag.adelete_by_doc_id = AsyncMock()
+        service._validate_retry_source_contract = MagicMock(  # type: ignore[method-assign]
+            return_value=("local", {"path": "/inputs/default/report.pdf"})
+        )
+        service._aingest_download_locator = AsyncMock(  # type: ignore[attr-defined]
+            return_value={"doc_id": "doc-same", "source_kind": "document"}
+        )
+
+        result = await service.aretry_failed_docs()
+
+        assert result["succeeded"] == 1
+        service._metadata_index.delete.assert_not_awaited()
 
     @pytest.mark.parametrize(
         ("download_locator", "source_type", "source_kwargs", "document_field"),

@@ -2040,6 +2040,8 @@ class RAGService:
                 if result.get("errors") or (isinstance(processed, int | float) and processed < 1):
                     still_failed.append({"doc_id": doc_id, "reason": "retry ingestion failed"})
                     continue
+                if doc_id not in self._retry_result_doc_ids(result):
+                    await self._metadata_index.delete(doc_id)
                 succeeded.append(
                     {"doc_id": doc_id, "file_path": entry.get("file_path", ""), "result": result}
                 )
@@ -2060,6 +2062,23 @@ class RAGService:
             "succeeded_docs": succeeded,
             "failed_docs": still_failed,
         }
+
+    @staticmethod
+    def _retry_result_doc_ids(result: Mapping[str, Any]) -> set[str]:
+        doc_ids: set[str] = set()
+        direct_doc_id = result.get("doc_id")
+        if isinstance(direct_doc_id, str) and direct_doc_id:
+            doc_ids.add(direct_doc_id)
+
+        nested_results = result.get("results")
+        if isinstance(nested_results, list):
+            for item in nested_results:
+                if not isinstance(item, Mapping):
+                    continue
+                nested_doc_id = item.get("doc_id")
+                if isinstance(nested_doc_id, str) and nested_doc_id:
+                    doc_ids.add(nested_doc_id)
+        return doc_ids
 
     @staticmethod
     def _validate_retry_source_contract(
