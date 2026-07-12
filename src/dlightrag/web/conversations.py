@@ -6,6 +6,8 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
+import asyncpg
+
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
@@ -42,6 +44,7 @@ class PreparedWebConversation:
     conversation_id: str
     content_revision: int
     text_history: tuple[dict[str, Any], ...]
+    committed_submission: CommitTurnResult | None = None
 
 
 class WebConversationService:
@@ -131,6 +134,7 @@ class WebConversationService:
         self,
         user: UserContext | None,
         conversation_id: str,
+        submission_id: str | None = None,
     ) -> PreparedWebConversation | None:
         principal_id = principal_id_from_user(user)
         snapshot = await self._snapshot(principal_id, conversation_id)
@@ -144,11 +148,22 @@ class WebConversationService:
                     {"role": "assistant", "content": str(turn["assistant_text"])},
                 )
             )
+        committed_submission = None
+        if submission_id is not None:
+            committed_submission = await self._store_call(
+                self._store.find_committed_turn(
+                    principal_id,
+                    conversation_id,
+                    submission_id,
+                    ttl_days=self._ttl_days,
+                )
+            )
         return PreparedWebConversation(
             principal_id=principal_id,
             conversation_id=snapshot.conversation_id,
             content_revision=snapshot.content_revision,
             text_history=tuple(text_history),
+            committed_submission=committed_submission,
         )
 
     async def image(
@@ -171,19 +186,17 @@ class WebConversationService:
         self,
         prepared: PreparedWebConversation,
         *,
+        submission_id: str,
         user_text: str,
         assistant_text: str,
         answer_sources: dict[str, Any],
         queried_workspaces: list[str],
         images: tuple[ValidatedWebImage, ...],
-        image_descriptions: list[str] | dict[str, str],
+        image_descriptions: dict[str, str],
     ) -> CommitTurnResult:
         """Atomically append a completed answer against its captured revision."""
 
         def description_for(image: ValidatedWebImage) -> str | None:
-            if isinstance(image_descriptions, list):
-                index = image.ordinal - 1
-                return image_descriptions[index] if index < len(image_descriptions) else None
             return image_descriptions.get(image.image_id) or image_descriptions.get(
                 str(image.ordinal)
             )
@@ -199,10 +212,11 @@ class WebConversationService:
             )
             for image in images
         ]
-        return await self._store_call(
-            self._store.commit_turn(
+        try:
+            return await self._store.commit_turn(
                 principal_id=prepared.principal_id,
                 conversation_id=prepared.conversation_id,
+                submission_id=submission_id,
                 expected_revision=prepared.content_revision,
                 user_text=user_text,
                 assistant_text=assistant_text,
@@ -210,8 +224,21 @@ class WebConversationService:
                 queried_workspaces=queried_workspaces,
                 images=pending,
                 max_turns=self._max_turns,
+                ttl_days=self._ttl_days,
             )
-        )
+        except (*POSTGRES_UNAVAILABLE_EXCEPTIONS, asyncpg.exceptions.InterfaceError) as exc:
+            try:
+                committed = await self._store.find_committed_turn(
+                    prepared.principal_id,
+                    prepared.conversation_id,
+                    submission_id,
+                    ttl_days=self._ttl_days,
+                )
+            except POSTGRES_UNAVAILABLE_EXCEPTIONS as reconcile_exc:
+                raise WebConversationUnavailableError from reconcile_exc
+            if committed is not None:
+                return committed
+            raise WebConversationUnavailableError from exc
 
     async def _snapshot(
         self,

@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from dlightrag.access_control import AccessAction
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.utils import normalize_workspace
-from dlightrag.utils.images import validate_web_images
+from dlightrag.utils.images import WEB_IMAGE_MAX_BYTES, validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
@@ -27,6 +27,25 @@ from dlightrag.web.requests import WebAnswerRequest
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+_WEB_ANSWER_JSON_OVERHEAD_BYTES = 64 * 1024
+
+
+async def _read_limited_answer_body(request: Request, *, max_images: int) -> bytes:
+    encoded_image_bytes = ((WEB_IMAGE_MAX_BYTES + 2) // 3) * 4
+    max_body_bytes = _WEB_ANSWER_JSON_OVERHEAD_BYTES + max(0, max_images) * encoded_image_bytes
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > max_body_bytes:
+                raise HTTPException(status_code=413, detail="Web answer request body is too large")
+        except ValueError:
+            pass
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > max_body_bytes:
+            raise HTTPException(status_code=413, detail="Web answer request body is too large")
+        body.extend(chunk)
+    return bytes(body)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -83,8 +102,14 @@ async def answer_stream(
     conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ):
     """Stream answer via SSE, then swap in enriched citations."""
+    manager = get_manager(request)
+    cfg = manager.config
     try:
-        body = WebAnswerRequest.model_validate_json(await request.body())
+        raw_body = await _read_limited_answer_body(
+            request,
+            max_images=cfg.query_images.max_current_images,
+        )
+        body = WebAnswerRequest.model_validate_json(raw_body)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
@@ -95,6 +120,7 @@ async def answer_stream(
     prepared_conversation = await conversation_service.prepare_answer(
         getattr(request.state, "user_context", None),
         str(body.conversation_id),
+        str(body.submission_id),
     )
     if prepared_conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
@@ -114,8 +140,6 @@ async def answer_stream(
     }
     scope = get_request_scope(request, target_workspaces)
 
-    manager = get_manager(request)
-    cfg = manager.config
     try:
         validated_images = validate_web_images(
             body.images,
@@ -142,6 +166,7 @@ async def answer_stream(
             conversation_service=conversation_service,
             prepared_conversation=prepared_conversation,
             validated_images=validated_images,
+            submission_id=str(body.submission_id),
         ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},

@@ -542,7 +542,7 @@ class TestRouting:
     async def test_query_images_are_current_request_only(self, test_cfg) -> None:
         enhancer = AsyncMock()
         enhancer.enhance = AsyncMock(
-            side_effect=lambda query, images: MagicMock(query=query, descriptions=[])
+            side_effect=lambda query, images: MagicMock(query=query, descriptions={})
         )
         current = [_image_block()]
 

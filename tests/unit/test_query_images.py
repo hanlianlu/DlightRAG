@@ -23,7 +23,7 @@ async def test_query_image_enhancer_appends_descriptions() -> None:
 
     assert result.query.startswith("find similar pages")
     assert "Visual context from user-supplied images" in result.query
-    assert result.descriptions == ["Image 1: a line chart about revenue"]
+    assert result.descriptions == {"1": "Image 1: a line chart about revenue"}
     vlm.assert_awaited_once()
     await_args = vlm.await_args
     assert await_args is not None
@@ -38,7 +38,7 @@ async def test_query_image_enhancer_is_best_effort() -> None:
     result = await enhancer.enhance("plain query", [_image_block()])
 
     assert result.query == "plain query"
-    assert result.descriptions == []
+    assert result.descriptions == {}
 
 
 async def test_query_image_enhancer_without_vlm_returns_original_query() -> None:
@@ -48,7 +48,7 @@ async def test_query_image_enhancer_without_vlm_returns_original_query() -> None
     result = await enhancer.enhance("plain query", [_image_block()])
 
     assert result.query == "plain query"
-    assert result.descriptions == []
+    assert result.descriptions == {}
     vlm.assert_not_called()
 
 
@@ -70,3 +70,12 @@ async def test_query_image_enhancer_describes_images_concurrently() -> None:
 
     assert len(result.descriptions) == 3
     assert peak > 1
+
+
+async def test_query_image_descriptions_keep_sparse_ordinals() -> None:
+    vlm = AsyncMock(side_effect=[RuntimeError("first failed"), "second image"])
+    enhancer = QueryImageEnhancer(vlm_func=vlm, max_images=2)
+
+    result = await enhancer.enhance("query", [_image_block(), _image_block()])
+
+    assert result.descriptions == {"2": "Image 2: second image"}

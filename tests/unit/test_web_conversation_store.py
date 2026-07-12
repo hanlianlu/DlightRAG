@@ -108,6 +108,7 @@ async def test_outcome_sensitive_mutations_use_single_attempt_pool_path(monkeypa
     assert await store.delete_conversation("p1", "c1", ttl_days=30) is True
 
     conn.fetchrow_results = [
+        None,
         {"conversation_id": "c1", "title": "Renamed", "content_revision": 1},
         {"turn_id": "t1", "turn_number": 1},
     ]
@@ -121,6 +122,8 @@ async def test_outcome_sensitive_mutations_use_single_attempt_pool_path(monkeypa
         queried_workspaces=[],
         images=[],
         max_turns=100,
+        submission_id="00000000-0000-4000-8000-000000000001",
+        ttl_days=30,
     )
 
     conn.fetchrow_result = {"count": 2}
@@ -203,6 +206,7 @@ async def test_snapshot_reads_revision_and_history_from_one_database_snapshot() 
 async def test_commit_turn_is_revision_guarded_and_trims_old_turns() -> None:
     conn = FakeConnection()
     conn.fetchrow_results = [
+        None,
         {"conversation_id": "c1", "title": "First", "content_revision": 2},
         {"turn_id": "t1", "turn_number": 101},
     ]
@@ -218,6 +222,8 @@ async def test_commit_turn_is_revision_guarded_and_trims_old_turns() -> None:
         queried_workspaces=["default"],
         images=[],
         max_turns=100,
+        submission_id="00000000-0000-4000-8000-000000000001",
+        ttl_days=30,
     )
 
     assert result == CommitTurnResult(
@@ -225,6 +231,8 @@ async def test_commit_turn_is_revision_guarded_and_trims_old_turns() -> None:
         reason=None,
         summary={"conversation_id": "c1", "title": "First", "content_revision": 2},
         turn_id="t1",
+        assistant_text="Answer",
+        answer_sources={"sources": [], "answer_images": []},
     )
     statements = "\n".join(query for query, _ in conn.calls)
     assert "content_revision = $3" in statements
@@ -250,11 +258,13 @@ async def test_commit_turn_stops_when_revision_changed() -> None:
         queried_workspaces=[],
         images=[],
         max_turns=100,
+        submission_id="00000000-0000-4000-8000-000000000002",
+        ttl_days=30,
     )
 
     assert result == CommitTurnResult(False, "conversation_changed", None, None)
-    assert len(conn.calls) == 1
-    query, args = conn.calls[0]
+    assert len(conn.calls) == 3
+    query, args = conn.calls[1]
     assert "principal_id = $1" in query
     assert "conversation_id = $2" in query
     assert "content_revision = $3" in query
@@ -264,6 +274,7 @@ async def test_commit_turn_stops_when_revision_changed() -> None:
 async def test_commit_turn_inserts_scoped_image_bytes() -> None:
     conn = FakeConnection()
     conn.fetchrow_results = [
+        None,
         {"conversation_id": "c1", "title": "Question", "content_revision": 1},
         {"turn_id": "t1", "turn_number": 1},
     ]
@@ -287,6 +298,8 @@ async def test_commit_turn_inserts_scoped_image_bytes() -> None:
         queried_workspaces=["research"],
         images=[image],
         max_turns=100,
+        submission_id="00000000-0000-4000-8000-000000000003",
+        ttl_days=30,
     )
 
     assert result.saved is True
@@ -344,6 +357,44 @@ def test_records_are_frozen_and_schema_is_exact() -> None:
     assert "FOREIGN KEY (principal_id, conversation_id, turn_id)" in sql
     assert "ON DELETE CASCADE" in sql
     assert "BYTEA" in sql
+    assert "submission_id UUID NOT NULL" in sql
+    assert "principal_id, conversation_id, submission_id" in sql
+
+
+async def test_same_submission_replay_returns_authoritative_turn_without_insert() -> None:
+    conn = FakeConnection()
+    conn.fetchrow_result = {
+        "conversation_id": "c1",
+        "title": "Question",
+        "content_revision": 1,
+        "created_at": "created",
+        "updated_at": "updated",
+        "turn_id": "t1",
+        "assistant_text": "Stored answer",
+        "answer_sources": {"sources": []},
+        "images": [{"image_id": "i1", "ordinal": 1, "vlm_description": "chart"}],
+    }
+    store = make_store(conn)
+
+    result = await store.commit_turn(
+        principal_id="p1",
+        conversation_id="c1",
+        submission_id="00000000-0000-4000-8000-000000000001",
+        expected_revision=99,
+        user_text="Question",
+        assistant_text="Different retry answer",
+        answer_sources={},
+        queried_workspaces=[],
+        images=[],
+        max_turns=100,
+        ttl_days=30,
+    )
+
+    assert result.saved is True
+    assert result.replayed is True
+    assert result.assistant_text == "Stored answer"
+    assert result.current_image_ids == ("i1",)
+    assert not any("INSERT INTO web_conversation_turns" in query for query, _args in conn.calls)
 
 
 def test_migrations_drop_only_legacy_conversation_storage() -> None:

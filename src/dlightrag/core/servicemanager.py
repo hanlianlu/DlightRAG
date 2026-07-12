@@ -1352,7 +1352,7 @@ class RAGServiceManager:
                 )
                 if stream is not None:
                     stream_meta = cast(Any, stream)
-                    stream_meta.image_descriptions = prepared.descriptions
+                    stream_meta.image_descriptions = prepared.descriptions_by_ordinal
                     answer_trace = getattr(stream_meta, "trace", None)
                     stream_meta.trace = (
                         {
