@@ -34,6 +34,12 @@ from dlightrag.core.ingestion.paths import (
 )
 from dlightrag.core.retrieval.metadata_fields import MetadataIngestPolicy
 from dlightrag.sourcing.base import AsyncDataSource, SourceDocument
+from dlightrag.sourcing.source_contract import (
+    SourceDownloadContractError,
+    local_source_uri,
+    validate_download_uri,
+    validate_source_uri,
+)
 from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
 
@@ -100,6 +106,44 @@ class RemoteIngestWindowProgress:
     processed_delta: int
     failed_delta: int
     errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _RemoteDownloadFailure:
+    """Sanitized per-document failure returned without exposing source exceptions."""
+
+    error: str
+
+
+def _safe_remote_source_id(document: SourceDocument) -> str:
+    raw_name = document.display_filename or document.key
+    basename = Path(raw_name.split("?", 1)[0].split("#", 1)[0].replace("\\", "/")).name
+    safe_name = "".join(
+        character if character.isalnum() or character in "._-" else "_" for character in basename
+    )
+    return safe_name[:128] or "document"
+
+
+def _download_locator_kind(locator: str | None, *, retained: bool = False) -> str:
+    if retained:
+        return "local"
+    if locator is None:
+        return "none"
+    for scheme in ("s3", "azure", "https"):
+        if locator.startswith(f"{scheme}://"):
+            return scheme
+    return "unsupported"
+
+
+def _log_download_locator_outcome(*, outcome: str, locator_kind: str, source_filename: str) -> None:
+    logger.info(
+        "source_download_locator_outcome",
+        extra={
+            "outcome": outcome,
+            "locator_kind": locator_kind,
+            "source_filename": source_filename,
+        },
+    )
 
 
 def _configured_process_count() -> int:
@@ -897,8 +941,14 @@ class RAGService:
             file_path=file_path,
             relative_to=source_root,
         )
+        source_uri = local_source_uri(
+            self.config.workspace,
+            file_path.relative_to(self._workspace_input_root()),
+        )
         result = await self._ingestion_engine.aingest_file(
             file_path,
+            source_uri=source_uri,
+            download_locator=str(file_path),
             replace=replace,
             title=title,
             author=author,
@@ -943,8 +993,19 @@ class RAGService:
             )
             for file_path in file_paths
         ]
+        prepared_items = [
+            PreparedIngestFile(
+                parser_path=staged,
+                source_uri=local_source_uri(
+                    self.config.workspace,
+                    staged.relative_to(self._workspace_input_root()),
+                ),
+                download_locator=str(staged),
+            )
+            for staged in staged_paths
+        ]
         result = await self._ingestion_engine.aingest_files(
-            staged_paths,
+            prepared_items,
             replace=replace,
             title=title,
             author=author,
@@ -989,6 +1050,11 @@ class RAGService:
             prepared_items.append(
                 PreparedIngestFile(
                     parser_path=staged,
+                    source_uri=local_source_uri(
+                        self.config.workspace,
+                        staged.relative_to(self._workspace_input_root()),
+                    ),
+                    download_locator=str(staged),
                     display_filename=document.filename,
                     title=document.title,
                     author=document.author,
@@ -1022,32 +1088,26 @@ class RAGService:
         *,
         source: AsyncDataSource,
         document: SourceDocument,
-        source_type: str,
         source_uri: str,
+        download_locator: str,
         batch_root: Path,
         retain_source_file: bool,
     ) -> PreparedIngestFile:
         key = document.key
         if retain_source_file:
-            parser_path = retained_remote_source_path(
-                input_root=self._workspace_input_root(),
-                source_type=source_type,
-                source_uri=source_uri,
-                key=key,
-            )
-            metadata_path = str(parser_path)
+            parser_path = Path(download_locator)
         else:
             parser_path = remote_parser_input_path(
                 batch_root=batch_root,
                 source_uri=source_uri,
                 key=key,
             )
-            metadata_path = source_uri
         parser_path.parent.mkdir(parents=True, exist_ok=True)
         await source.amaterialize_document(document, parser_path)
         return PreparedIngestFile(
             parser_path=parser_path,
-            metadata_path=metadata_path,
+            source_uri=source_uri,
+            download_locator=download_locator,
             display_filename=document.display_filename or Path(key).name,
             title=document.title,
             author=document.author,
@@ -1062,6 +1122,7 @@ class RAGService:
         source_type: str,
         documents: Iterable[SourceDocument] | AsyncIterable[SourceDocument],
         source_uri_for_key: Callable[[str], str],
+        download_uri_for_key: Callable[[str], str | None] | None,
         replace: bool,
         title: str | None = None,
         author: str | None = None,
@@ -1095,47 +1156,108 @@ class RAGService:
                 source_type=source_type,
                 batch_id=f"{batch_index:04d}-{uuid.uuid4().hex}",
             )
-            source_uris = [
-                document.source_uri or source_uri_for_key(document.key) for document in window
-            ]
             prepared_items: list[PreparedIngestFile] = []
             window_errors: list[str] = []
 
             async def _download(
-                item: tuple[SourceDocument, str],
+                document: SourceDocument,
                 *,
                 current_batch_root: Path = batch_root,
-            ) -> PreparedIngestFile:
-                document, source_uri = item
-                return await self._download_remote_to_prepared_item(
-                    source=source,
-                    document=document,
-                    source_type=source_type,
-                    source_uri=source_uri,
-                    batch_root=current_batch_root,
-                    retain_source_file=retain_source_files,
-                )
+            ) -> PreparedIngestFile | _RemoteDownloadFailure:
+                safe_source_id = _safe_remote_source_id(document)
+                try:
+                    source_uri = validate_source_uri(
+                        document.source_uri or source_uri_for_key(document.key)
+                    )
+                except TypeError, ValueError:
+                    return _RemoteDownloadFailure(f"{safe_source_id}: source_uri is invalid")
+
+                try:
+                    download_uri = document.download_uri
+                    if download_uri is None and download_uri_for_key is not None:
+                        download_uri = download_uri_for_key(document.key)
+
+                    if retain_source_files:
+                        download_locator = str(
+                            retained_remote_source_path(
+                                input_root=self._workspace_input_root(),
+                                source_type=source_type,
+                                source_uri=source_uri,
+                                key=document.key,
+                            )
+                        )
+                        _log_download_locator_outcome(
+                            outcome="accepted",
+                            locator_kind=_download_locator_kind(None, retained=True),
+                            source_filename=safe_source_id,
+                        )
+                    else:
+                        if download_uri is None:
+                            _log_download_locator_outcome(
+                                outcome="missing",
+                                locator_kind=_download_locator_kind(None),
+                                source_filename=safe_source_id,
+                            )
+                            raise SourceDownloadContractError(
+                                "retain_source_file=false requires a durable download_uri "
+                                f"for source {safe_source_id}; "
+                                "provide download_uri/download_uri_for_key or enable "
+                                "retain_source_file"
+                            )
+                        try:
+                            download_locator = validate_download_uri(download_uri)
+                        except ValueError:
+                            _log_download_locator_outcome(
+                                outcome="unsupported",
+                                locator_kind=_download_locator_kind(download_uri),
+                                source_filename=safe_source_id,
+                            )
+                            raise SourceDownloadContractError(
+                                f"invalid durable download_uri for source {safe_source_id}; "
+                                "provide a supported durable URI or enable retain_source_file"
+                            ) from None
+                        _log_download_locator_outcome(
+                            outcome="accepted",
+                            locator_kind=_download_locator_kind(download_locator),
+                            source_filename=safe_source_id,
+                        )
+
+                    return await self._download_remote_to_prepared_item(
+                        source=source,
+                        document=document,
+                        source_uri=source_uri,
+                        download_locator=download_locator,
+                        batch_root=current_batch_root,
+                        retain_source_file=retain_source_files,
+                    )
+                except SourceDownloadContractError as exc:
+                    return _RemoteDownloadFailure(str(exc))
+                except Exception:  # noqa: BLE001
+                    return _RemoteDownloadFailure(
+                        f"{safe_source_id}: remote materialization failed"
+                    )
 
             try:
                 download_results = await bounded_map(
-                    list(zip(window, source_uris, strict=True)),
+                    window,
                     _download,
                     max_concurrent=_REMOTE_DOWNLOAD_CONCURRENCY,
                     task_name=f"{source_type}-download",
                 )
 
-                prepared_source_uris: list[str] = []
                 prepared_documents: list[SourceDocument] = []
-                for document, source_uri, downloaded in zip(
-                    window, source_uris, download_results, strict=True
-                ):
+                for document, downloaded in zip(window, download_results, strict=True):
+                    if isinstance(downloaded, _RemoteDownloadFailure):
+                        error = downloaded.error
+                        errors.append(error)
+                        window_errors.append(error)
+                        continue
                     if isinstance(downloaded, Exception):
-                        error = f"{source_uri}: {downloaded}"
+                        error = f"{_safe_remote_source_id(document)}: remote materialization failed"
                         errors.append(error)
                         window_errors.append(error)
                         continue
                     prepared_items.append(downloaded)
-                    prepared_source_uris.append(source_uri)
                     prepared_documents.append(document)
 
                 if not prepared_items:
@@ -1153,19 +1275,19 @@ class RAGService:
                     continue
 
                 if replace:
-                    for document, prepared_item, source_uri in zip(
-                        prepared_documents, prepared_items, prepared_source_uris, strict=True
+                    for document, prepared_item in zip(
+                        prepared_documents, prepared_items, strict=True
                     ):
                         await self._purge_existing_for_replace(
                             file_path=prepared_item.parser_path,
-                            stored_file_path=source_uri,
+                            stored_file_path=prepared_item.download_locator,
                         )
                         if not retain_source_files:
                             await self._purge_existing_for_replace(
                                 file_path=retained_remote_source_path(
                                     input_root=self._workspace_input_root(),
                                     source_type=source_type,
-                                    source_uri=source_uri,
+                                    source_uri=prepared_item.source_uri,
                                     key=document.key,
                                 )
                             )
@@ -1231,6 +1353,7 @@ class RAGService:
         documents: Iterable[SourceDocument] | AsyncIterable[SourceDocument] | None = None,
         prefix: str | None = None,
         source_uri_for_key: Callable[[str], str] | None = None,
+        download_uri_for_key: Callable[[str], str | None] | None = None,
         replace: bool | None = None,
         title: str | None = None,
         author: str | None = None,
@@ -1268,6 +1391,7 @@ class RAGService:
                 source_type=source_type,
                 documents=resolved_documents,
                 source_uri_for_key=uri_for_key,
+                download_uri_for_key=download_uri_for_key,
                 replace=self._resolve_replace(replace),
                 title=title,
                 author=author,
@@ -1300,6 +1424,7 @@ class RAGService:
                 source,
                 source_type="url",
                 source_uri_for_key=source.source_uri_for_key,
+                download_uri_for_key=source.download_uri_for_key,
                 replace=replace,
                 title=kwargs.get("title"),
                 author=kwargs.get("author"),
@@ -1340,6 +1465,7 @@ class RAGService:
             source,
             source_type="url",
             source_uri_for_key=source.source_uri_for_key,
+            download_uri_for_key=source.download_uri_for_key,
             replace=replace,
             title=kwargs.get("title"),
             author=kwargs.get("author"),
@@ -1366,9 +1492,11 @@ class RAGService:
                 container_name=container_name,
             )
 
+        locator_for_key = lambda key: f"azure://{container_name}/{key}"  # noqa: E731
         common_kwargs = {
             "source_type": "azure_blob",
-            "source_uri_for_key": lambda key: f"azure://{container_name}/{key}",
+            "source_uri_for_key": locator_for_key,
+            "download_uri_for_key": locator_for_key,
             "replace": replace,
             "title": kwargs.get("title"),
             "author": kwargs.get("author"),
@@ -1412,9 +1540,11 @@ class RAGService:
                 bucket=str(bucket), region=kwargs.get("s3_region") or self.config.s3_region
             )
 
+        locator_for_key = lambda key: f"s3://{bucket}/{key}"  # noqa: E731
         common_kwargs = {
             "source_type": "s3",
-            "source_uri_for_key": lambda key: f"s3://{bucket}/{key}",
+            "source_uri_for_key": locator_for_key,
+            "download_uri_for_key": locator_for_key,
             "replace": replace,
             "title": kwargs.get("title"),
             "author": kwargs.get("author"),
@@ -1463,7 +1593,7 @@ class RAGService:
                 url: url or urls, optional filename, replace
         """
         self._ensure_initialized()
-        replace = self._resolve_replace(kwargs.get("replace"))
+        replace = self._resolve_replace(kwargs.pop("replace", None))
 
         if self._ingestion_engine is not None and source_type == "local":
             documents = _ingest_documents(kwargs.get("documents"))

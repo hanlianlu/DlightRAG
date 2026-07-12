@@ -1,6 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Tests for URL-backed ingestion sources."""
 
+import logging
 import socket
 from pathlib import Path
 
@@ -118,16 +119,27 @@ async def test_url_data_source_separates_fetch_identity_and_download_uri() -> No
     assert source.download_uri_for_key("asset.pdf") == ("https://cdn.example.com/assets/1.pdf")
 
 
-async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_url() -> None:
-    source = URLDataSource(
-        urls=["https://fetch.example.com/download?sig=secret"],
-        filename="asset.pdf",
-        client=_Client(),
-    )
+async def test_url_data_source_does_not_derive_download_uri_from_signed_fetch_url(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO, logger="dlightrag.sourcing.url"):
+        source = URLDataSource(
+            urls=["https://fetch.example.com/download?sig=secret"],
+            filename="asset.pdf",
+            client=_Client(),
+        )
 
     document = (await source.alist_documents())[0]
 
     assert document.download_uri is None
+    outcome = next(
+        record for record in caplog.records if record.message == "source_download_locator_outcome"
+    )
+    outcome_fields = vars(outcome)
+    assert outcome_fields["outcome"] == "ephemeral"
+    assert outcome_fields["locator_kind"] == "https"
+    assert outcome_fields["source_filename"] == "asset.pdf"
+    assert "sig=secret" not in caplog.text
 
 
 async def test_url_data_source_derives_download_uri_from_queryless_fetch_url() -> None:
