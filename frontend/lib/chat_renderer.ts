@@ -1,6 +1,5 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
-import {conversationStore} from '../stores/conversationStore.ts';
 import {renderMessageImages} from '../ui/images.ts';
 import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
@@ -24,10 +23,6 @@ interface DonePayload {
   html?: string;
   answer?: string;
   current_image_ids?: string[];
-}
-
-interface MetaPayload {
-  history_kept?: number;
 }
 
 interface ProgressPayload {
@@ -57,42 +52,6 @@ function fixExternalLinks(container: ParentNode): void {
       a.setAttribute('rel', 'noopener noreferrer');
     }
   });
-}
-
-function markOutOfContext(historyKept: number): void {
-  const chatMessages = document.getElementById('chat-messages');
-  if (!chatMessages) return;
-  const outOfContextCount = conversationStore.historyWindow.length - historyKept;
-  if (outOfContextCount <= 0) {
-    chatMessages.querySelectorAll('.' + chatStyles.outOfContext).forEach(function (el) {
-      el.classList.remove(chatStyles.outOfContext);
-    });
-    const old = chatMessages.querySelector('.' + chatStyles.contextDivider);
-    if (old) old.remove();
-    return;
-  }
-
-  let msgIndex = 0;
-  let dividerInsertBefore: Element | null = null;
-  Array.from(chatMessages.children).forEach(function (node) {
-    if (node.classList.contains(chatStyles.contextDivider)) return;
-    if (msgIndex < outOfContextCount) {
-      node.classList.add(chatStyles.outOfContext);
-    } else {
-      node.classList.remove(chatStyles.outOfContext);
-      if (dividerInsertBefore === null) dividerInsertBefore = node;
-    }
-    msgIndex++;
-  });
-
-  const existing = chatMessages.querySelector('.' + chatStyles.contextDivider);
-  if (existing) existing.remove();
-  if (dividerInsertBefore) {
-    const divider = document.createElement('div');
-    divider.className = chatStyles.contextDivider;
-    divider.textContent = 'Above messages are outside AI memory';
-    chatMessages.insertBefore(divider, dividerInsertBefore);
-  }
 }
 
 function scrollToBottom(turn: ChatTurn): void {
@@ -229,11 +188,6 @@ export function createAnswerRenderer(turn: ChatTurn) {
     }
   }
 
-  function handleMeta(data: SSEData): void {
-    const meta = parseData(data) as MetaPayload;
-    if (typeof meta.history_kept === 'number') markOutOfContext(meta.history_kept);
-  }
-
   function handleProgress(data: SSEData): void {
     const info = parseData(data) as ProgressPayload;
     const label: string = PHASE_LABELS[info.phase as PhaseLabel] || info.phase;
@@ -251,7 +205,6 @@ export function createAnswerRenderer(turn: ChatTurn) {
       else if (eventType === 'preview') handlePreview(data);
       else if (eventType === 'done') handleDone(data);
       else if (eventType === 'highlights') handleHighlights(data);
-      else if (eventType === 'meta') handleMeta(data);
       else if (eventType === 'progress') handleProgress(data);
       else if (eventType === 'error') {
         failed = true;

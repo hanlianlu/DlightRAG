@@ -7,7 +7,6 @@ from pydantic import Field
 
 from dlightrag.core.client_contracts import (
     ClientContractModel,
-    ConversationMessage,
     IngestPayload,
     MetadataPolicy,
     QueryImage,
@@ -27,14 +26,11 @@ class RetrieveInput(QueryWorkspaceSelection):
     bm25_query: str | None = Field(default=None, max_length=1024)
     filters: dict[str, Any] | None = None
     query_images: list[QueryImage] = Field(default_factory=list, max_length=3)
-    session_id: str | None = None
-    referenced_image_ids: list[str] = Field(default_factory=list)
 
 
 class AnswerInput(RetrieveInput):
     chunk_top_k: int | None = None
     answer_context_top_k: int | None = None
-    conversation_history: list[ConversationMessage] | None = None
     semantic_highlights: bool = False
 
 

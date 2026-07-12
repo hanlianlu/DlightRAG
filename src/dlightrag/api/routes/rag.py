@@ -37,7 +37,7 @@ from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
-from dlightrag.core.client_contracts import IngestSpec, dump_optional_list
+from dlightrag.core.client_contracts import IngestSpec
 from dlightrag.core.client_payloads import (
     answer_payload,
     project_contexts_for_client,
@@ -202,7 +202,6 @@ async def answer(
     if not body.stream:
         result = await manager.aanswer(
             body.query,
-            conversation_history=dump_optional_list(body.conversation_history),
             workspaces=resolved_workspaces,
             top_k=body.top_k,
             chunk_top_k=body.chunk_top_k,
@@ -226,13 +225,11 @@ async def answer(
             input={"query": body.query},
             metadata={
                 "workspaces": resolved_workspaces,
-                "history_turns": len(body.conversation_history or []),
             },
         ):
             try:
                 contexts, token_iter = await manager.aanswer_stream(
                     body.query,
-                    conversation_history=dump_optional_list(body.conversation_history),
                     workspaces=resolved_workspaces,
                     top_k=body.top_k,
                     chunk_top_k=body.chunk_top_k,

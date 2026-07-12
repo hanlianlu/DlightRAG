@@ -77,7 +77,7 @@ Connection budgets are split deliberately:
 - `postgres_lightrag_pool_max_size` controls LightRAG's PostgreSQL backend
   pool and is bridged to `POSTGRES_MAX_CONNECTIONS`.
 - `postgres_pool_min_size` / `postgres_pool_max_size` control DlightRAG-owned
-  domain stores such as metadata, workspaces, checkpoints, and BM25.
+  domain stores such as metadata, workspaces, Web conversations, and BM25.
 - Docker Compose defaults `max_connections` to `80` for the local profile.
   Production deployments should size the server limit from the number of
   DlightRAG processes and their two pool caps.

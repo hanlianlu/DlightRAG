@@ -62,7 +62,7 @@ class TestValidateImageUrl:
         assert _validate_image_url("data:image/png;base64,abc", label="t1") is not None
 
     def test_dlightrag_image_passes(self) -> None:
-        assert _validate_image_url("dlightrag-image://img_123", label="t2") is not None
+        assert _validate_image_url("dlightrag-image://img_123", label="t2") is None
 
     def test_https_passes(self) -> None:
         assert _validate_image_url("https://example.com/img.png", label="t3") is not None
@@ -191,7 +191,7 @@ class TestAnswerImageBudgetUrlValidation:
             min_quality=79,
         )
         result = budget.add_user_image(
-            {"type": "image_url", "image_url": {"url": "dlightrag-image://img_123"}},
+            {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
             label="x7",
         )
         assert result is not None

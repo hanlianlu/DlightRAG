@@ -4,20 +4,22 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import ValidationError
 
 from dlightrag.access_control import AccessAction
-from dlightrag.core.client_contracts import dump_optional_list
-from dlightrag.utils import log_safe, normalize_workspace
+from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.utils import normalize_workspace
 from dlightrag.utils.images import decode_image_base64, image_url_block
 from dlightrag.web.answer_events import stream_answer_events
+from dlightrag.web.conversations import WebConversationService
 from dlightrag.web.deps import (
     enforce_web_access,
     filter_web_workspace_records,
     get_manager,
     get_request_scope,
+    get_web_conversation_service,
     get_workspace,
     templates,
 )
@@ -26,75 +28,6 @@ from dlightrag.web.requests import WebAnswerRequest
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-@router.get("/history")
-async def get_checkpoint_history(
-    request: Request,
-    session_id: str = Query(default=""),
-    workspace: str = Depends(get_workspace),
-):
-    """Return conversation history for a session from the checkpoint store.
-
-    Reconstructs the scoped session key using the current request scope
-    so that the same session_id returns the same history across page
-    refreshes and browser restarts.
-    """
-    if not session_id:
-        return JSONResponse({"history": []})
-
-    manager = get_manager(request)
-    scope = get_request_scope(request, [workspace])
-    await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace)
-
-    try:
-        history = await manager.aget_checkpoint_history(
-            session_id=session_id,
-            scope=scope,
-        )
-        return JSONResponse({"history": history})
-    except Exception:
-        logger.warning(
-            "Failed to load checkpoint history for session %s",
-            log_safe(session_id),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to load conversation history",
-        ) from None
-
-
-@router.delete("/history")
-async def delete_checkpoint_history(
-    request: Request,
-    session_id: str = Query(default=""),
-    workspace: str = Depends(get_workspace),
-):
-    """Delete all conversation history checkpoints for a session."""
-    if not session_id:
-        return JSONResponse({"deleted": 0})
-
-    manager = get_manager(request)
-    scope = get_request_scope(request, [workspace])
-    await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, workspace)
-
-    try:
-        deleted = await manager.adelete_checkpoint_session(
-            session_id=session_id,
-            scope=scope,
-        )
-        return JSONResponse({"deleted": deleted})
-    except Exception:
-        logger.warning(
-            "Failed to delete checkpoint history for session %s",
-            log_safe(session_id),
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to delete conversation history",
-        ) from None
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -148,6 +81,7 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
 async def answer_stream(
     request: Request,
     workspace: str = Depends(get_workspace),
+    conversation_service: WebConversationService = Depends(get_web_conversation_service),
 ):
     """Stream answer via SSE, then swap in enriched citations."""
     try:
@@ -159,11 +93,15 @@ async def answer_stream(
     if not query:
         return HTMLResponse("<span>Please enter a question.</span>")
 
-    conversation_history = dump_optional_list(body.conversation_history)
+    prepared_conversation = await conversation_service.prepare_answer(
+        getattr(request.state, "user_context", None),
+        str(body.conversation_id),
+    )
+    if prepared_conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     # Extract browser uploads as modern image_url blocks. The manager handles
-    # answer budgeting, semantic VLM enhancement, session memory, and direct
-    # visual retrieval from that single shape.
+    # answer budgeting, semantic VLM enhancement, and direct visual retrieval.
     clean_images: list[dict[str, Any]] = []
     if body.images:
         for image_payload in body.images:
@@ -180,7 +118,6 @@ async def answer_stream(
 
     # Extract workspaces (multi-select from frontend).
     workspaces = body.workspaces
-    session_id = body.session_id
     target_workspaces = workspaces or [workspace]
     for ws in target_workspaces:
         await enforce_web_access(request, AccessAction.WORKSPACE_QUERY, ws)
@@ -196,17 +133,20 @@ async def answer_stream(
 
     manager = get_manager(request)
     cfg = manager.config
+    turn = PreparedAnswerTurn(
+        current_query=query,
+        retrieval_query=query,
+        text_history=prepared_conversation.text_history,
+        materialized_query_images=tuple(clean_images),
+    )
 
     return StreamingResponse(
         stream_answer_events(
             manager=manager,
             cfg=cfg,
-            query=query,
-            conversation_history=conversation_history,
+            turn=turn,
             workspaces=workspaces,
             workspace=workspace,
-            query_images=clean_images,
-            session_id=session_id,
             scope=scope,
             downloadable_workspaces=downloadable_workspaces,
         ),

@@ -143,8 +143,8 @@ async def areset(
         logger.warning("areset Phase 4 failed: %s", exc)
 
     # Phase 5: File system cleanup — workspace-scoped only.
-    # Each workspace owns input_dir/<workspace>/; the working_dir root
-    # (checkpoints.db, etc.) is shared and must never be wiped per-workspace.
+    # Each workspace owns input_dir/<workspace>/; the working_dir root is shared
+    # and must never be wiped per-workspace.
     if not keep_files:
         try:
             input_ws_dir = _workspace_input_dir(service.config.input_dir_path, workspace)
@@ -156,22 +156,6 @@ async def areset(
         except Exception as exc:
             errors.append(f"Phase 5 (filesystem): {exc}")
             logger.warning("areset Phase 5 failed: %s", log_safe(exc))
-
-    # Phase 5b: Remove checkpoint data for this workspace
-    try:
-        from dlightrag.storage.checkpoint_pg import PGCheckpointStore
-
-        cp = PGCheckpointStore()
-        await cp.initialize()
-        removed = await cp.delete_sessions_by_workspace(workspace)
-        if removed > 0:
-            stats["checkpoint_sessions_removed"] = removed
-    except Exception:
-        logger.warning(
-            "Failed to clean checkpoint data for workspace %s",
-            log_safe(workspace),
-            exc_info=True,
-        )
 
     service._initialized = False
     logger.info("areset complete for workspace=%s: %s", log_safe(workspace), log_safe(stats))
@@ -303,12 +287,10 @@ async def _clean_orphan_tables(workspace: str, *, dry_run: bool) -> int:
                     )
                 cleaned += 1
 
-        # Do NOT drop emptied tables here. dlightrag_checkpoints, dlightrag_doc_metadata,
-        # and dlightrag_ingest_jobs are global migration-managed tables (schema owned by
-        # dlightrag_schema_migrations) that carry a workspace column, not per-workspace
-        # artifacts. Resetting the last workspace empties them; dropping them orphans the
-        # migration ledger and breaks the running app with UndefinedTableError until the
-        # next restart re-runs apply_migrations.
+        # Do NOT drop emptied tables here. DlightRAG-owned metadata and ingest-job
+        # tables are migration-managed global tables that carry a workspace column,
+        # not per-workspace artifacts. Resetting the last workspace empties them;
+        # dropping them orphans the migration ledger and breaks the running app.
         return cleaned
     except Exception as exc:
         logger.warning("PG orphan table cleanup failed: %s", exc)

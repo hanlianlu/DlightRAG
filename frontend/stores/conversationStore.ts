@@ -1,82 +1,55 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
 import { Store } from './base';
-import { sessionStore } from './sessionStore';
 
-const HISTORY_CAP = 100;
+const ACTIVE_CONVERSATION_KEY = 'dlightrag.active_conversation_id';
 
-type ContentBlock = { type: string; text?: string; image_url?: { url: string } };
-type MessageContent = string | ContentBlock[];
+interface ConversationSummary {
+  conversation_id: string;
+}
 
 class ConversationStore extends Store {
-  #history: Array<{ role: string; content: MessageContent }> = [];
-  #loaded = false;
+  #activeConversationId: string | null = null;
+  #initializing: Promise<string> | null = null;
 
-  get historyWindow(): ReadonlyArray<{ role: string; content: MessageContent }> {
-    return this.#history;
+  get activeConversationId(): string | null {
+    return this.#activeConversationId;
   }
 
-  append(query: string, answer: string, queryImages?: string[]): void {
-    let userContent: MessageContent;
-    if (queryImages && queryImages.length > 0) {
-      const blocks: ContentBlock[] = [
-        { type: 'text', text: query },
-      ];
-      for (const dataUri of queryImages) {
-        blocks.push({
-          type: 'image_url',
-          image_url: { url: dataUri },
-        });
-      }
-      userContent = blocks;
-    } else {
-      userContent = query;
-    }
-    this.#history.push({ role: 'user', content: userContent });
-    this.#history.push({ role: 'assistant', content: answer });
-    if (this.#history.length > HISTORY_CAP) {
-      this.#history.splice(0, this.#history.length - HISTORY_CAP);
-    }
-    this.emit('chatExchangeComplete', undefined);
+  async initialize(): Promise<string> {
+    return this.ensureActive();
   }
 
-  async restoreFromCheckpoint(): Promise<void> {
-    if (this.#loaded || this.#history.length > 0) return;
-    this.#loaded = true;
-
-    const sid = sessionStore.sessionId;
-    if (!sid) return;
-
+  async ensureActive(): Promise<string> {
+    if (this.#activeConversationId) return this.#activeConversationId;
+    if (this.#initializing) return this.#initializing;
+    this.#initializing = this.#loadOrCreateActive();
     try {
-      const response = await fetch(`/web/history?session_id=${encodeURIComponent(sid)}`);
-      if (!response.ok) return;
-      const data = await response.json();
-      const history: Array<{ role: string; content: MessageContent }> =
-        data?.history || [];
-      if (history.length > 0) {
-        this.#history = history;
-        this.emit('chatHistoryRestored', history.length);
-      }
-    } catch {
-      // best-effort — page works fine without history
+      return await this.#initializing;
+    } finally {
+      this.#initializing = null;
     }
   }
 
-  async clear(): Promise<void> {
-    const sid = sessionStore.sessionId;
-    if (sid) {
-      try {
-        await fetch(`/web/history?session_id=${encodeURIComponent(sid)}`, {
-          method: 'DELETE',
-        });
-      } catch {
-        // best-effort — PG cleanup may fail, local state still clears
-      }
-    }
+  async #loadOrCreateActive(): Promise<string> {
+    const response = await fetch('/web/conversations');
+    if (!response.ok) throw new Error('Failed to load conversations');
+    const conversations = await response.json() as ConversationSummary[];
+    const stored = window.localStorage.getItem(ACTIVE_CONVERSATION_KEY);
+    const selected = conversations.find((item) => item.conversation_id === stored)
+      || conversations[0];
+    if (selected) return this.#select(selected.conversation_id);
 
-    this.#history = [];
-    this.#loaded = false;
-    this.emit('chatHistoryCleared', undefined);
+    const created = await fetch('/web/conversations', { method: 'POST' });
+    if (!created.ok) throw new Error('Failed to create conversation');
+    const summary = await created.json() as ConversationSummary;
+    return this.#select(summary.conversation_id);
+  }
+
+  #select(conversationId: string): string {
+    this.#activeConversationId = conversationId;
+    window.localStorage.setItem(ACTIVE_CONVERSATION_KEY, conversationId);
+    return conversationId;
   }
 }
 

@@ -10,7 +10,6 @@ from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.client_contracts import (
     ClientContractModel,
     ContentBlock,
-    ConversationMessage,
     IngestPayload,
     QueryImage,
 )
@@ -47,8 +46,6 @@ class RetrieveRequest(QueryWorkspaceSelection):
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
-    session_id: str | None = None
-    referenced_image_ids: list[str] | None = None
 
 
 class AnswerRequest(QueryWorkspaceSelection):
@@ -59,13 +56,10 @@ class AnswerRequest(QueryWorkspaceSelection):
     answer_context_top_k: int | None = Field(default=None, ge=1)
     filters: MetadataFilterRequest | None = None
     multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
-    conversation_history: list[ConversationMessage] | None = None
-    session_id: str | None = None
-    referenced_image_ids: list[str] | None = None
     semantic_highlights: bool = False
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
     """User-attached images used for VLM semantic enhancement, direct visual
-    retrieval, session image memory, and bounded answer-model image blocks."""
+    retrieval and bounded answer-model image blocks."""
 
 
 class DeleteRequest(ClientContractModel):

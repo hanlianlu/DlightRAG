@@ -2,7 +2,6 @@
 
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
-import {sessionStore} from '../stores/sessionStore.ts';
 import {clearImages, getPendingImageData} from './images.ts';
 import {streamSSE} from '../lib/sse.ts';
 import {createAnswerRenderer, createChatTurn, setAnswerError} from '../lib/chat_renderer.ts';
@@ -43,11 +42,9 @@ export async function submitQuery(query: string): Promise<void> {
     const imageData = getPendingImageData();
     clearImages();
 
-    let renderer: ReturnType<typeof createAnswerRenderer> | null = null;
-    let success = false;
-
     try {
         armIdleTimeout();
+        const conversationId = await conversationStore.ensureActive();
         const response = await fetch('/web/answer', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -56,8 +53,7 @@ export async function submitQuery(query: string): Promise<void> {
                 query: query,
                 images: imageData,
                 workspaces: workspaceStore.active,
-                conversation_history: conversationStore.historyWindow,
-                session_id: sessionStore.sessionId,
+                conversation_id: conversationId,
             }),
         });
 
@@ -67,12 +63,10 @@ export async function submitQuery(query: string): Promise<void> {
         }
 
         const activeRenderer = createAnswerRenderer(turn);
-        renderer = activeRenderer;
         await streamSSE(response, function(eventType, data) {
             armIdleTimeout();
             activeRenderer.handle(eventType, data);
         });
-        success = !activeRenderer.failed;
     } catch (_) {
         setAnswerError(
             turn,
@@ -82,14 +76,6 @@ export async function submitQuery(query: string): Promise<void> {
         clearTimeout(idleTimer);
         if (currentQueryController === controller) currentQueryController = null;
         queryInFlight = false;
-    }
-
-    if (success && renderer && renderer.answer) {
-        conversationStore.append(
-            query,
-            renderer.answer,
-            imageData.length > 0 ? imageData : undefined,
-        );
     }
 }
 

@@ -451,9 +451,7 @@ async for token in token_iter:
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
 | `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
-| `query_images` | `list[QueryImage]` | `None` | User-attached OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, stored in session memory when `session_id` is present, and bounded by the user-image answer budget before being sent to the answer LLM. Capped at 3. |
-| `session_id` | `str \| None` | `None` | Conversation/session key for reusing uploaded query images. |
-| `referenced_image_ids` | `list[str] \| None` | `None` | Image IDs from a previous `image_meta` event or JSON response to include again in retrieval and answer generation. |
+| `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
 
@@ -540,8 +538,7 @@ paths without deleting LightRAG rows, metadata, or local files.
     {"type": "image_ref", "image_id": "fig-1"}
   ],
   "trace": {...},
-  "image_descriptions": ["Image 1: a line chart about revenue"],
-  "current_image_ids": ["img_0"]
+  "image_descriptions": ["Image 1: a line chart about revenue"]
 }
 ```
 
@@ -553,7 +550,7 @@ paths without deleting LightRAG rows, metadata, or local files.
 | `token` | `{type, content}` | LLM answer token (repeats) |
 | `sources` | `{type, data}` | Validated cited sources, after all tokens and before done. Includes `highlight_phrases` when `semantic_highlights` is true and enrichment succeeds. |
 | `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
-| `image_meta` | `{type, current_image_ids, image_descriptions}` | Session image IDs and VLM image descriptions |
+| `image_meta` | `{type, current_image_ids, image_descriptions}` | VLM descriptions for current-request images; `current_image_ids` is empty because public requests do not create durable image IDs |
 | `done` | `{type, answer, answer_images, answer_blocks}` | Stream complete; `answer` is the final normalized answer body after citation validation |
 | `error` | `{type, message}` | Error mid-stream |
 
@@ -568,7 +565,7 @@ data: {"type":"sources","data":[{"id":"1","title":"report.pdf","source_uri":"loc
 
 data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
 
-data: {"type":"image_meta","current_image_ids":["img_0"],"image_descriptions":["Image 1: a line chart"]}
+data: {"type":"image_meta","current_image_ids":[],"image_descriptions":["Image 1: a line chart"]}
 
 data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
 ```
@@ -636,9 +633,9 @@ Retrieved document images are exposed as route references, not embedded bytes:
 | MCP | Same JSON `image_url`/`thumbnail_url` references as REST when a REST image route is reachable | No separate MCP binary stream today |
 | SDK | `answer_images` render references; internal `contexts` may still include `image_data` | In-process caller can inspect internals, but renderers should prefer `answer_images` |
 
-User-supplied `query_images` are different: they can arrive as data URIs, are
-bounded before model use, and may be stored temporarily in session memory so a
-later request can refer to `current_image_ids`.
+User-supplied `query_images` are different: they can arrive as data URIs and are
+bounded before model use. Public answer/retrieve requests do not persist them or
+return durable image identifiers.
 
 ```python
 from dlightrag.core.retrieval.protocols import RetrievalContexts, ChunkContext, EntityContext, RelationshipContext
@@ -854,7 +851,6 @@ data_uri = "data:image/png;base64," + base64.b64encode(img_bytes).decode("ascii"
 result = await manager.aanswer(
     query="What does this diagram show?",
     query_images=[{"type": "image_url", "image_url": {"url": data_uri}}],
-    session_id="chat-123",
 )
 ```
 
@@ -867,8 +863,7 @@ curl -X POST http://localhost:8100/answer \
     "stream": false,
     "query_images": [
       {"type": "image_url", "image_url": {"url": "data:image/png;base64,<base64>"}}
-    ],
-    "session_id": "chat-123"
+    ]
   }'
 
 # REST API — lower-level direct visual payload

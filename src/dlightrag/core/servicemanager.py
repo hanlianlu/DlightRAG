@@ -18,13 +18,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
     from dlightrag.core.query_images import QueryImageEnhancer
-    from dlightrag.core.session_images import SessionImageStore
     from dlightrag.core.source_download import SourceDownloadTarget
-    from dlightrag.storage.checkpoint_pg import PGCheckpointStore
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag.core.answer import AnswerEngine
+from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
@@ -217,33 +216,17 @@ _ERROR_IMAGES_NOT_SUPPORTED = (
 )
 
 
-def _history_has_images(history: list[dict[str, Any]] | None) -> bool:
-    """Return True if any message in *history* contains image_url blocks."""
-    if not history:
-        return False
-    for msg in history:
-        content = msg.get("content")
-        if isinstance(content, list):
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "image_url":
-                    return True
-    return False
-
-
 def _check_vision_support(
     *,
     query_images: list[dict[str, Any]] | None,
-    conversation_history: list[dict[str, Any]] | None,
     supports_vision: bool | None,
 ) -> None:
     """Raise ValueError if images are present but model doesn't support vision.
 
-    Checks both ``query_images`` and ``conversation_history`` for image
-    content. ``None`` means unprobed, so the request is allowed through and
-    the provider surfaces any model-specific error.
+    ``None`` means unprobed, so the request is allowed through and the provider
+    surfaces any model-specific error.
     """
-    has_images = bool(query_images) or _history_has_images(conversation_history)
-    if not has_images:
+    if not query_images:
         return
     if supports_vision is False:
         raise ValueError(f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}")
@@ -279,9 +262,7 @@ class RAGServiceManager:
         )
         self._query_planner: QueryPlanner | None = None
         self._query_image_enhancer: QueryImageEnhancer | None = None
-        self._session_images: SessionImageStore | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
-        self._checkpoint: PGCheckpointStore | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._supports_vision: bool | None = None
@@ -327,8 +308,6 @@ class RAGServiceManager:
 
         await manager._start_ingest_job_recovery()
         await manager._recover_stalled_docs(all_ws)
-        await manager._prune_checkpoint_sessions()
-
         if default_ws in manager._services:
             manager._ready = True
         else:
@@ -545,28 +524,6 @@ class RAGServiceManager:
 
         if total:
             logger.info("Total stalled docs recovered at startup: %d", total)
-
-    async def _prune_checkpoint_sessions(self) -> None:
-        """Prune old checkpoint sessions at startup.
-
-        Checkpoint data (conversation turns, context anchors) grows unboundedly.
-        Sessions whose ``updated_at`` exceeds ``checkpoint_session_ttl_days``
-        are deleted.  Best-effort: the checkpoint SQLite file may not exist yet
-        (no sessions have been created), and failures are logged but never
-        block startup.
-        """
-        max_age_days = int(self._config.checkpoint_session_ttl_days)
-        try:
-            cp = self._get_checkpoint()
-            deleted = await cp.prune_old_sessions(max_age_days=max_age_days)
-            if deleted:
-                logger.info(
-                    "Pruned %d checkpoint session(s) older than %d days",
-                    deleted,
-                    max_age_days,
-                )
-        except Exception:
-            logger.debug("Checkpoint session pruning skipped", exc_info=True)
 
     async def _probe_vision_support(self) -> None:
         """Probe chat-model vision capability once at startup.
@@ -912,120 +869,6 @@ class RAGServiceManager:
             )
         return self._query_planner
 
-    def _get_session_images(self) -> SessionImageStore:
-        """Lazy-create session image memory."""
-        if self._session_images is None:
-            from dlightrag.core.session_images import SessionImageStore
-
-            cfg = self._config.query_images
-            self._session_images = SessionImageStore(
-                max_images_per_session=cfg.session_max_images,
-                max_sessions=cfg.session_max_sessions,
-                ttl_seconds=self._config.checkpoint_session_ttl_seconds,
-            )
-        return self._session_images
-
-    async def aget_session_image_data(
-        self,
-        session_id: str | None,
-        image_ids: list[str] | None,
-        *,
-        scope: RequestScope | None = None,
-    ) -> list[str]:
-        """Return stored query image data for web/API presentation layers."""
-        scoped_session_id = scope.session_key(session_id) if scope is not None else session_id
-        return self._get_session_images().get(scoped_session_id, image_ids)
-
-    def _get_checkpoint(self) -> PGCheckpointStore:
-        """Lazy-create conversation checkpoint store."""
-        if self._checkpoint is None:
-            from dlightrag.storage.checkpoint_pg import PGCheckpointStore
-
-            self._checkpoint = PGCheckpointStore()
-        return self._checkpoint
-
-    async def aget_checkpoint_history(
-        self,
-        *,
-        session_id: str,
-        scope: RequestScope | None = None,
-        max_turns: int = 50,
-    ) -> list[dict[str, Any]]:
-        """Return conversation history for a session from the checkpoint store.
-
-        Reconstructs the scoped session key so the same raw ``session_id``
-        returns the same history across requests, matching the scoping used
-        by ``save_turn_checkpoint``.
-        """
-        if not session_id:
-            return []
-        try:
-            cp = self._get_checkpoint()
-            scoped = _scope_for_workspaces(scope, None)
-            scoped_session_id = scoped.session_key(session_id) or session_id
-            return await cp.get_history(scoped_session_id, max_turns=max_turns)
-        except Exception:
-            logger.debug(
-                "Failed to load checkpoint history for session %s", session_id, exc_info=True
-            )
-            return []
-
-    async def adelete_checkpoint_session(
-        self,
-        *,
-        session_id: str,
-        scope: RequestScope | None = None,
-    ) -> int:
-        """Delete all checkpoint rows for a session. Returns count deleted."""
-        if not session_id:
-            return 0
-        try:
-            cp = self._get_checkpoint()
-            scoped = _scope_for_workspaces(scope, None)
-            scoped_session_id = scoped.session_key(session_id) or session_id
-            return await cp.delete_session(scoped_session_id)
-        except Exception:
-            logger.debug("Failed to delete checkpoint session %s", session_id, exc_info=True)
-            return 0
-
-    async def asave_turn_checkpoint(
-        self,
-        session_id: str,
-        query: str,
-        answer: str,
-        contexts: dict[str, Any],
-        cited_chunk_ids: list[str],
-        *,
-        query_content: list[dict[str, Any]] | None = None,
-        answer_content: list[dict[str, Any]] | None = None,
-        workspace: str | None = None,
-        scope: RequestScope | None = None,
-    ) -> None:
-        """Save a complete turn (query + answer + retrieval anchors) to checkpoint."""
-        if not session_id:
-            return
-        try:
-            cp = self._get_checkpoint()
-            effective_workspace = normalize_workspace(
-                workspace
-                or (scope.workspaces[0] if scope is not None and scope.workspaces else "")
-                or self._config.workspace
-            )
-            scoped = _scope_for_workspaces(scope, [effective_workspace])
-            scoped_session_id = scoped.session_key(session_id) or session_id
-            await cp.save_turn_pair(
-                scoped_session_id,
-                workspace=effective_workspace,
-                query=query,
-                answer=answer,
-                query_content=query_content,
-                answer_content=answer_content,
-                contexts=contexts,
-                cited_chunk_ids=cited_chunk_ids,
-            )
-        except Exception:
-            logger.warning("Failed to save checkpoint for session %s", session_id, exc_info=True)
-
     def _get_query_image_enhancer(self) -> QueryImageEnhancer:
         """Lazy-create VLM query image enhancer."""
         if self._query_image_enhancer is None:
@@ -1101,7 +944,6 @@ class RAGServiceManager:
                 output={
                     "standalone_query": plan.standalone_query,
                     "has_metadata_filter": plan.metadata_filter is not None,
-                    "referenced_image_count": len(plan.referenced_image_ids or []),
                 }
             )
             return plan
@@ -1172,10 +1014,11 @@ class RAGServiceManager:
             available_workspaces=available,
         )
 
-    async def _prepare_answer_retrieval(
+    async def _plan_and_retrieve(
         self,
-        query: str,
+        current_query: str,
         *,
+        retrieval_query: str,
         conversation_history: list[dict[str, Any]] | None,
         query_images: list[dict[str, Any]] | None,
         ws_list: list[str],
@@ -1184,7 +1027,7 @@ class RAGServiceManager:
         log_plan: bool = False,
     ) -> tuple[QueryPlan, PreparedQueryImages, _AnswerLimits, RetrievalResult]:
         plan = await self.aplan_query(
-            query,
+            retrieval_query,
             conversation_history=conversation_history,
             workspaces=ws_list,
         )
@@ -1198,13 +1041,7 @@ class RAGServiceManager:
         prepared = await prepare_query_images(
             plan.standalone_query,
             query_images=query_images,
-            session_id=kwargs.pop("session_id", None),
-            referenced_image_ids=kwargs.pop("referenced_image_ids", None)
-            or plan.referenced_image_ids,
-            store_current=True,
-            session_images=self._get_session_images(),
             enhancer=self._get_query_image_enhancer(),
-            scope=scope,
         )
         retrieval_plan = replace(plan, standalone_query=prepared.query)
         if prepared.multimodal_content:
@@ -1212,7 +1049,7 @@ class RAGServiceManager:
             kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         limits = self._resolve_answer_limits(kwargs)
         retrieval = await self.aretrieve(
-            query,
+            current_query,
             plan=retrieval_plan,
             workspaces=ws_list,
             scope=scope,
@@ -1239,8 +1076,6 @@ class RAGServiceManager:
         filters: MetadataFilter | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        session_id: str | None = None,
-        referenced_image_ids: list[str] | None = None,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
         """Retrieve from one or more workspaces (federated if multiple).
@@ -1266,18 +1101,11 @@ class RAGServiceManager:
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
-        scoped = _scope_for_workspaces(scope, ws_list)
         effective_query = plan.standalone_query if plan is not None else query
         prepared = await prepare_query_images(
             effective_query,
             query_images=query_images,
-            session_id=session_id,
-            referenced_image_ids=referenced_image_ids
-            or (plan.referenced_image_ids if plan is not None else None),
-            store_current=False,
-            session_images=self._get_session_images(),
             enhancer=self._get_query_image_enhancer(),
-            scope=scoped,
         )
         effective_query = prepared.query
         if prepared.multimodal_content:
@@ -1327,7 +1155,6 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         all_workspaces: bool = False,
@@ -1337,8 +1164,6 @@ class RAGServiceManager:
         filters: MetadataFilter | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        session_id: str | None = None,
-        referenced_image_ids: list[str] | None = None,
         semantic_highlights: bool = False,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
@@ -1349,6 +1174,7 @@ class RAGServiceManager:
         from retrieval-time ``multimodal_content`` in ``kwargs``: this list
         only affects answer generation, never the retrieval pipeline.
         """
+        turn = PreparedAnswerTurn.stateless(query, query_images)
         ws_list = await self._resolve_manager_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
@@ -1362,15 +1188,12 @@ class RAGServiceManager:
                 "answer_context_top_k": answer_context_top_k,
                 "filters": filters,
                 "multimodal_content": multimodal_content,
-                "session_id": session_id,
-                "referenced_image_ids": referenced_image_ids,
             }
         )
 
         # Guard: reject image input when the model doesn't support it
         _check_vision_support(
-            query_images=query_images,
-            conversation_history=conversation_history,
+            query_images=list(turn.materialized_query_images),
             supports_vision=self._supports_vision,
         )
 
@@ -1384,15 +1207,16 @@ class RAGServiceManager:
                     input={"query": query},
                     metadata={
                         "workspaces": ws_list,
-                        "history_turns": len(conversation_history or []),
-                        "query_image_count": len(query_images or []),
+                        "history_turns": 0,
+                        "query_image_count": len(turn.materialized_query_images),
                         "semantic_highlights": semantic_highlights,
                     },
                 ) as pipeline_trace:
-                    plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
-                        query,
-                        conversation_history=conversation_history,
-                        query_images=query_images,
+                    plan, prepared, limits, retrieval = await self._plan_and_retrieve(
+                        turn.current_query,
+                        retrieval_query=turn.retrieval_query,
+                        conversation_history=None,
+                        query_images=list(turn.materialized_query_images),
                         ws_list=ws_list,
                         scope=scoped,
                         kwargs=kwargs,
@@ -1411,7 +1235,7 @@ class RAGServiceManager:
                             plan.standalone_query,
                             retrieval.contexts,
                             query_images=prepared.answer_images or None,
-                            conversation_history=conversation_history,
+                            conversation_history=None,
                             context_top_k=limits.context_top_k,
                         )
                         generation_trace.update(output=_answer_output(result))
@@ -1450,7 +1274,6 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, Any]] | None = None,
         workspace: str | None = None,
         workspaces: list[str] | None = None,
         all_workspaces: bool = False,
@@ -1460,14 +1283,40 @@ class RAGServiceManager:
         filters: MetadataFilter | None = None,
         multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
-        session_id: str | None = None,
-        referenced_image_ids: list[str] | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Streaming answer from one or more workspaces: plan -> retrieve -> stream.
 
         See ``aanswer`` for ``query_images`` semantics.
         """
+        return await self._aanswer_stream_prepared(
+            PreparedAnswerTurn.stateless(query, query_images),
+            workspace=workspace,
+            workspaces=workspaces,
+            all_workspaces=all_workspaces,
+            top_k=top_k,
+            chunk_top_k=chunk_top_k,
+            answer_context_top_k=answer_context_top_k,
+            filters=filters,
+            multimodal_content=multimodal_content,
+            scope=scope,
+        )
+
+    async def _aanswer_stream_prepared(
+        self,
+        turn: PreparedAnswerTurn,
+        *,
+        workspace: str | None = None,
+        workspaces: list[str] | None = None,
+        all_workspaces: bool = False,
+        top_k: int | None = None,
+        chunk_top_k: int | None = None,
+        answer_context_top_k: int | None = None,
+        filters: MetadataFilter | None = None,
+        multimodal_content: list[dict[str, Any]] | None = None,
+        scope: RequestScope | None = None,
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        """Stream one server-prepared Web turn through the stateless core pipeline."""
         ws_list = await self._resolve_manager_query_workspaces(
             workspace=workspace,
             workspaces=workspaces,
@@ -1481,23 +1330,23 @@ class RAGServiceManager:
                 "answer_context_top_k": answer_context_top_k,
                 "filters": filters,
                 "multimodal_content": multimodal_content,
-                "session_id": session_id,
-                "referenced_image_ids": referenced_image_ids,
             }
         )
+        history = list(turn.text_history) or None
+        query_images = list(turn.materialized_query_images)
 
         # Guard: reject image input when the model doesn't support it
         _check_vision_support(
             query_images=query_images,
-            conversation_history=conversation_history,
             supports_vision=self._supports_vision,
         )
 
         try:
             async with asyncio.timeout(self._config.request_timeout):
-                plan, prepared, limits, retrieval = await self._prepare_answer_retrieval(
-                    query,
-                    conversation_history=conversation_history,
+                plan, prepared, limits, retrieval = await self._plan_and_retrieve(
+                    turn.current_query,
+                    retrieval_query=turn.retrieval_query,
+                    conversation_history=history,
                     query_images=query_images,
                     ws_list=ws_list,
                     scope=scoped,
@@ -1508,7 +1357,7 @@ class RAGServiceManager:
                     plan.standalone_query,
                     retrieval.contexts,
                     query_images=prepared.answer_images or None,
-                    conversation_history=conversation_history,
+                    conversation_history=history,
                     context_top_k=limits.context_top_k,
                 )
                 if stream is not None:

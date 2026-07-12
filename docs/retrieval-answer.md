@@ -59,7 +59,7 @@ RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
   |     LLM-inferred empty candidates fall back to unfiltered retrieval
   |
   |-- Query image preparation
-  |     session image lookup
+  |     current-request images only
   |     VLM semantic descriptions for text/BM25/KG retrieval
   |     raw image payloads for direct multimodal embedding when active
   |
@@ -215,7 +215,7 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
 ```python
 [
     {"role": "system", "content": get_answer_system_prompt()},
-    # optional conversation history
+    # optional server-prepared Web text history
     {
         "role": "user",
         "content": [
@@ -237,8 +237,8 @@ builds OpenAI-style messages with explicit evidence and task boundaries:
 ```
 
 The `## User-attached images` blocks are omitted when no current query images
-fit the user-image budget. Conversation history, when present, is inserted as
-prior messages before the current user message.
+fit the user-image budget. Server-prepared Web text history, when present, is
+inserted as prior messages before the current user message.
 
 The sections are intentional:
 
@@ -252,9 +252,8 @@ The sections are intentional:
 
 Answer generation has two image budgets. Retrieved visual chunks use
 `answer.max_images` plus the answer image byte/quality limits. User-supplied
-`query_images` and history images use `answer.max_user_images`; current-turn
-`query_images` take those user slots before history images. The two budgets do
-not compete, so an uploaded user image does not evict a retrieved page preview.
+request-local query images use `answer.max_user_images`. The two budgets do not
+compete, so an uploaded user image does not evict a retrieved page preview.
 Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When recompression is
 needed, DlightRAG enforces both a long-edge floor and a JPEG quality floor; an
 image that cannot fit within those limits is skipped instead of being degraded

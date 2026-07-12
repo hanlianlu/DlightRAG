@@ -478,7 +478,7 @@ vector scoring inside a small metadata candidate set.
 ## Image Budgets
 
 Root config exposes `answer.max_images` for retrieved RAG context images and
-`answer.max_user_images` for user-supplied `query_images` plus history images.
+`answer.max_user_images` for request-local user images.
 Those slot budgets are independent; user images do not evict retrieved page
 previews. Compression budgets are advanced model transport limits:
 
@@ -533,17 +533,14 @@ answer:
 
 ## Query Images And Visual Assets
 
-User-attached chat images are always described with the VLM before retrieval
-when a VLM is configured. Session, description, and thumbnail cache settings
-are internal resource limits. Session image memory uses
-`checkpoint_session_ttl_days`, so checkpoint-restorable image references expire
-with the Web checkpoint history they belong to:
+Current-request images are described with the VLM before retrieval when a VLM
+is configured. Public REST, MCP, CLI, and Python answer/retrieve calls are
+stateless; durable conversation images belong only to the Web conversation
+store:
 
 ```yaml
 query_images:
   max_described_images: 3
-  session_max_images: 50
-  session_max_sessions: 100
 
 visual_assets:
   thumb_max_px: 300
