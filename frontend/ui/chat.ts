@@ -4,7 +4,13 @@ import {workspaceStore} from '../stores/workspaceStore.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
 import {clearImages, getPendingImageData} from './images.ts';
 import {streamSSE} from '../lib/sse.ts';
-import {createAnswerRenderer, createChatTurn, setAnswerError} from '../lib/chat_renderer.ts';
+import {
+    createAnswerRenderer,
+    createChatTurn,
+    markAnswerUnsaved,
+    setAnswerError,
+} from '../lib/chat_renderer.ts';
+import {bus} from '../events/bus.ts';
 import {
     isDefinitiveSaveOutcome,
     payloadFingerprint,
@@ -48,12 +54,11 @@ export async function submitQuery(query: string): Promise<void> {
 
     try {
         armIdleTimeout();
-        const conversationId = await conversationStore.ensureActive();
+        const conversationId = conversationStore.activeConversationId;
         if (!conversationId) {
             setAnswerError(
                 turn,
-                conversationStore.errorMessage
-                    || 'Conversation service is unavailable. Please try again.',
+                'Conversation service is unavailable. Please retry loading the conversation.',
             );
             return;
         }
@@ -63,13 +68,17 @@ export async function submitQuery(query: string): Promise<void> {
             images: imageData,
             workspaces: activeWorkspaces,
         });
+        if (conversationStore.activeConversationId !== conversationId) {
+            setAnswerError(turn, 'The active conversation changed before this answer started.');
+            return;
+        }
         const submissionId = pendingSubmissionStore.getOrCreate(conversationId, fingerprint);
         clearImages();
         const requestBody = JSON.stringify({
             query: query,
             images: imageData,
             workspaces: activeWorkspaces,
-            conversation_id: conversationId,
+            conversation_id: conversationStore.activeConversationId,
             submission_id: submissionId,
         });
         for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -90,10 +99,20 @@ export async function submitQuery(query: string): Promise<void> {
                 const activeRenderer = createAnswerRenderer(turn);
                 await streamSSE(response, function(eventType, data) {
                     armIdleTimeout();
+                    if (conversationStore.activeConversationId !== conversationId) return;
                     activeRenderer.handle(eventType, data);
                 });
                 if (activeRenderer.failed || isDefinitiveSaveOutcome(activeRenderer.saveOutcome)) {
                     pendingSubmissionStore.clear(conversationId);
+                }
+                const saveOutcome = activeRenderer.saveOutcome;
+                if (saveOutcome?.conversation_saved === true) {
+                    if (saveOutcome.conversation) {
+                        conversationStore.upsertSummary(saveOutcome.conversation);
+                    }
+                    bus.emit('conversationAnswerSaved', {conversationId});
+                } else if (saveOutcome?.conversation_saved === false) {
+                    markAnswerUnsaved(turn, saveOutcome.conversation_save_reason);
                 }
                 return;
             } catch (error) {

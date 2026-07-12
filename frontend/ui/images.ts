@@ -4,6 +4,7 @@ import {detectDropItems} from './folder-upload.ts';
 import {uploadFilesToWorkspace} from './files-panel.ts';
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
+import type {ConversationImageReference} from '../api/conversations.ts';
 
 const MAX_IMAGES = 3;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
@@ -46,7 +47,14 @@ export function getPendingImageData(): string[] {
     return pendingImages.map(function(img) { return img.dataUrl; });
 }
 
-export function renderMessageImages(container: Element): void {
+export function renderMessageImages(
+    container: Element,
+    storedImages?: readonly ConversationImageReference[],
+): void {
+    if (storedImages) {
+        renderStoredMessageImages(container, storedImages);
+        return;
+    }
     if (pendingImages.length === 0) return;
     const msgImages = document.createElement('div');
     msgImages.className = chatStyles.messageImages;
@@ -56,6 +64,79 @@ export function renderMessageImages(container: Element): void {
         imgEl.src = img.dataUrl;
         imgEl.alt = 'Attached image';
         msgImages.appendChild(imgEl);
+    });
+    container.appendChild(msgImages);
+}
+
+function renderStoredMessageImages(
+    container: Element,
+    images: readonly ConversationImageReference[],
+): void {
+    if (images.length === 0) return;
+    const msgImages = document.createElement('div');
+    msgImages.className = chatStyles.messageImages;
+    images.forEach(function(reference) {
+        const card = document.createElement('div');
+        card.className = chatStyles.historyImageCard;
+
+        const imageButton = document.createElement('button');
+        imageButton.type = 'button';
+        imageButton.className = chatStyles.historyImageButton;
+        imageButton.setAttribute('aria-label', `Open ${reference.label}`);
+
+        const status = document.createElement('span');
+        status.className = chatStyles.historyImageStatus;
+        status.setAttribute('role', 'status');
+        status.textContent = `Loading ${reference.label}`;
+
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = chatStyles.historyImageRetry;
+        retry.textContent = 'Retry image';
+        retry.setAttribute('aria-label', `Retry image: ${reference.label}`);
+        retry.hidden = true;
+
+        const imgEl = document.createElement('img');
+        imgEl.className = chatStyles.messageImg;
+        imgEl.alt = reference.label;
+        const thumbnailSrc = _safeImageSrc(reference.thumbnail_url);
+        const fullSrc = _safeImageSrc(reference.url);
+
+        const showError = (): void => {
+            imgEl.hidden = true;
+            imageButton.disabled = true;
+            imageButton.removeAttribute('data-action');
+            status.textContent = `History image failed to load: ${reference.label}`;
+            retry.hidden = false;
+        };
+        imgEl.addEventListener('load', function() {
+            status.hidden = true;
+            retry.hidden = true;
+        });
+        imgEl.addEventListener('error', showError);
+        retry.addEventListener('click', function() {
+            if (!thumbnailSrc || !fullSrc) return;
+            retry.hidden = true;
+            status.hidden = false;
+            status.textContent = `Loading ${reference.label}`;
+            imageButton.disabled = false;
+            imageButton.setAttribute('data-action', 'open-lightbox');
+            imgEl.hidden = false;
+            imgEl.removeAttribute('src');
+            window.requestAnimationFrame(function() { imgEl.src = thumbnailSrc; });
+        });
+
+        if (thumbnailSrc && fullSrc) {
+            imageButton.setAttribute('data-action', 'open-lightbox');
+            imageButton.setAttribute('data-full-src', fullSrc);
+            imgEl.src = thumbnailSrc;
+        } else {
+            showError();
+        }
+
+        imageButton.append(imgEl, status);
+        card.append(imageButton, retry);
+        msgImages.appendChild(card);
     });
     container.appendChild(msgImages);
 }

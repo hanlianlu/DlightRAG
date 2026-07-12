@@ -48,9 +48,77 @@ def test_web_answer_frontend_has_no_legacy_session_or_history_payload() -> None:
     assert not (FRONTEND_UI / "clearHistory.ts").exists()
 
 
+def test_frontend_has_no_browser_owned_prompt_history() -> None:
+    source = "\n".join(path.read_text(encoding="utf-8") for path in FRONTEND.rglob("*.ts"))
+
+    assert "dlightrag.session_id" not in source
+    assert "conversation_history" not in source
+    assert "historyWindow" not in source
+    assert "clearHistory" not in source
+    assert "dlightrag.active_conversation_id" in source
+
+
+def test_answer_request_sends_only_active_conversation() -> None:
+    source = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
+
+    assert "conversation_id: conversationStore.activeConversationId" in source
+    assert "session_id" not in source
+
+
+def test_conversation_projection_has_typed_api_and_stale_history_guard() -> None:
+    api = FRONTEND / "api" / "conversations.ts"
+    store = (FRONTEND / "stores" / "conversationStore.ts").read_text(encoding="utf-8")
+    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+
+    assert api.exists()
+    api_source = api.read_text(encoding="utf-8")
+    for contract in (
+        "ConversationSummary",
+        "ConversationImageReference",
+        "ConversationTurn",
+        "ConversationHistory",
+    ):
+        assert f"interface {contract}" in api_source
+
+    for mutation in (
+        "replaceList",
+        "select",
+        "setHistory",
+        "upsertSummary",
+        "remove",
+        "beginRequest",
+    ):
+        assert f"{mutation}(" in store
+    assert "AbortController" in main
+    assert "generation" in main
+    assert "AbortError" in main
+
+
+def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
+    renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
+    images = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
+
+    assert "renderConversationHistory" in renderer
+    assert "clearChatViewport" in renderer
+    assert "renderStoredAnswer" in renderer
+    assert "llmFragmentFromSanitizedHtml" in renderer
+    assert "stored.answer_html" in renderer
+    assert "stored.user_images" in renderer
+    assert ".innerHTML" not in renderer
+    assert "History image failed to load" in images
+    assert "Retry image" in images
+
+
+def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:
+    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+
+    assert "if (clearSources) clearConversationSources();" in main
+    assert "selectConversation(conversationId, false, false)" in main
+
+
 def test_conversation_bootstrap_cannot_block_independent_ui_initializers() -> None:
     main_source = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
-    bootstrap = main_source.index("void conversationStore.initialize()")
+    bootstrap = main_source.rindex("void initializeConversations()")
 
     for initializer in (
         "initWorkspaces();",
@@ -72,7 +140,7 @@ def test_answer_submission_fails_locally_without_active_conversation() -> None:
 
     assert unavailable_guard < answer_fetch
     guard_body = chat_source[unavailable_guard:answer_fetch]
-    assert "conversationStore.errorMessage" in guard_body
+    assert "Conversation service is unavailable" in guard_body
     assert "setAnswerError(" in guard_body
     assert "return;" in guard_body
 
@@ -86,6 +154,8 @@ def test_dead_history_and_image_id_frontend_surfaces_are_removed() -> None:
         assert legacy_event not in bus_source
     assert ".outOfContext" not in chat_css
     assert ".contextDivider" not in chat_css
+    assert "#clear-history-btn" not in chat_css
+    assert ".clear-history-confirm" not in chat_css
     assert "current_image_ids" not in renderer
     assert "imageIds" not in renderer
 

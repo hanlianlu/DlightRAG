@@ -105,18 +105,6 @@
   /* Modifier for streamingDot — standalone for classList use */
 }
 
-/* === Clear History Button (topbar) === */
-
-#clear-history-btn {
-  /* Inherits .topbar-btn from layout.css */
-
-  /* Hidden until first message — shown via JS */
-}
-
-.clear-history-confirm {
-  color: var(--color-gold-100) !important;
-}
-
 /* === Composer Plus Button === */
 
 .composerPlus {
@@ -214,6 +202,52 @@
   border-radius: var(--radius-sm);
   object-fit: cover;
   border: 1px solid var(--color-border-subtle);
+}
+
+.historyImageCard {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-tight);
+}
+
+.historyImageButton {
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.historyImageButton:disabled {
+  cursor: default;
+}
+
+.historyImageStatus {
+  display: block;
+  font-size: var(--font-size-caption);
+  max-width: 12rem;
+}
+
+.historyImageRetry {
+  background: transparent;
+  border: 0;
+  color: var(--color-gold-100);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--font-size-caption);
+  padding: 0;
+}
+
+.historyImageButton:focus-visible,
+.historyImageRetry:focus-visible {
+  outline: 2px solid var(--color-gold-200);
+  outline-offset: 2px;
+}
+
+.historyImageRetry:hover {
+  color: var(--color-gold-200);
 }
 
 /* === Text Error === */

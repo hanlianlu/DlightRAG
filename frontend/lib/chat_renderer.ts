@@ -5,6 +5,11 @@ import {renderMath} from '../ui/mathjax.ts';
 import {parseData} from './sse.ts';
 import {llmFragmentFromSanitizedHtml, setSanitizedLlmHtml} from './safe_html.ts';
 import chatStyles from '../styles/chat.module.css';
+import type {
+  ConversationHistory,
+  ConversationImageReference,
+  ConversationSummary,
+} from '../api/conversations.ts';
 
 // SSE HTML payloads are sanitized server-side by nh3 and again here before
 // browser insertion. Keep new HTML sinks behind frontend/lib/safe_html.ts.
@@ -19,11 +24,12 @@ interface ChatTurn {
 
 type SSEData = string;
 
-interface DonePayload {
+export interface DonePayload {
   html?: string;
   answer?: string;
   conversation_saved?: boolean;
   conversation_save_reason?: string | null;
+  conversation?: ConversationSummary | null;
 }
 
 interface ProgressPayload {
@@ -72,7 +78,10 @@ function pruneOldMessages(chatMessages: HTMLElement): void {
   }
 }
 
-export function createChatTurn(query: string): ChatTurn {
+export function createChatTurn(
+  query: string,
+  images?: readonly ConversationImageReference[],
+): ChatTurn {
   const chatMessages = document.getElementById('chat-messages')!;
   const chatArea = document.getElementById('chat-area')!;
 
@@ -80,7 +89,7 @@ export function createChatTurn(query: string): ChatTurn {
 
   const userWrapper = document.createElement('div');
   userWrapper.className = chatStyles.userMessageWrapper;
-  renderMessageImages(userWrapper);
+  renderMessageImages(userWrapper, images);
 
   const userDiv = document.createElement('div');
   userDiv.className = chatStyles.userMessage;
@@ -113,6 +122,89 @@ export function createChatTurn(query: string): ChatTurn {
   const turn: ChatTurn = {chatArea, aiDiv, contentDiv};
   scrollToBottom(turn);
   return turn;
+}
+
+function applyFinalAnswerHtml(turn: ChatTurn, html: string): void {
+  const fragment = llmFragmentFromSanitizedHtml(html);
+  const answerContent = fragment.querySelector('#answer-content');
+  const sourceData = fragment.querySelector('#source-data');
+  const imageStrip = fragment.querySelector('.answer-image-strip');
+  const refList = fragment.querySelector('.answer-references');
+
+  if (answerContent) {
+    const answerNodes = Array.from(answerContent.childNodes).map((node) => node.cloneNode(true));
+    turn.contentDiv.replaceChildren(...answerNodes);
+  }
+  if (imageStrip) turn.contentDiv.appendChild(imageStrip.cloneNode(true));
+  if (refList) turn.contentDiv.appendChild(refList.cloneNode(true));
+  if (sourceData) {
+    (sourceData as HTMLElement).className = 'source-data hidden';
+    sourceData.removeAttribute('id');
+    turn.aiDiv.appendChild(sourceData);
+  }
+
+  renderMath(turn.contentDiv);
+  fixExternalLinks(turn.contentDiv);
+}
+
+export function renderStoredAnswer(turn: ChatTurn, html: string): void {
+  applyFinalAnswerHtml(turn, html);
+}
+
+export function clearChatViewport(): void {
+  const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return;
+  const welcome = document.getElementById('welcome');
+  chatMessages.replaceChildren(...(welcome ? [welcome] : []));
+  document.querySelector('.app')?.classList.remove('has-messages');
+}
+
+export function renderConversationHistory(history: ConversationHistory): void {
+  clearChatViewport();
+  for (const stored of history.turns) {
+    const turn = createChatTurn(stored.user_text, stored.user_images);
+    renderStoredAnswer(turn, stored.answer_html);
+  }
+}
+
+function renderConversationState(message: string, isError: boolean): HTMLElement | null {
+  clearChatViewport();
+  activateChatMode();
+  const chatMessages = document.getElementById('chat-messages');
+  if (!chatMessages) return null;
+  const state = document.createElement('div');
+  state.className = isError ? chatStyles.textError : '';
+  state.setAttribute('role', isError ? 'alert' : 'status');
+  state.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+  state.textContent = message;
+  chatMessages.appendChild(state);
+  return state;
+}
+
+export function renderConversationHistoryLoading(): void {
+  renderConversationState('Loading conversation history…', false);
+}
+
+export function renderConversationHistoryError(onRetry: () => void): void {
+  const state = renderConversationState('Conversation history is unavailable.', true);
+  if (!state) return;
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Retry conversation history';
+  retry.setAttribute('aria-label', 'Retry loading conversation history');
+  retry.addEventListener('click', onRetry);
+  state.append(document.createTextNode(' '), retry);
+}
+
+export function markAnswerUnsaved(turn: ChatTurn, reason?: string | null): void {
+  const status = document.createElement('div');
+  status.className = chatStyles.textError;
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  status.textContent = reason === 'conversation_changed'
+    ? 'This answer was not saved because the conversation changed. Reload before retrying.'
+    : 'This answer could not be saved. Retry to keep it in conversation history.';
+  turn.aiDiv.appendChild(status);
 }
 
 export function setAnswerError(turn: ChatTurn, message: unknown): void {
@@ -156,30 +248,7 @@ export function createAnswerRenderer(turn: ChatTurn) {
       saveOutcome = payload as DonePayload;
     }
 
-    const fragment = llmFragmentFromSanitizedHtml(html || '');
-    const answerContent = fragment.querySelector('#answer-content');
-    const sourceData = fragment.querySelector('#source-data');
-    const imageStrip = fragment.querySelector('.answer-image-strip');
-    const refList = fragment.querySelector('.answer-references');
-
-    if (answerContent) {
-      const answerNodes = Array.from(answerContent.childNodes).map((node) => node.cloneNode(true));
-      turn.contentDiv.replaceChildren(...answerNodes);
-    }
-    if (imageStrip) {
-      turn.contentDiv.appendChild(imageStrip.cloneNode(true));
-    }
-    if (refList) {
-      turn.contentDiv.appendChild(refList.cloneNode(true));
-    }
-    if (sourceData) {
-      (sourceData as HTMLElement).className = 'source-data hidden';
-      sourceData.removeAttribute('id');
-      turn.aiDiv.appendChild(sourceData);
-    }
-
-    renderMath(turn.contentDiv);
-    fixExternalLinks(turn.contentDiv);
+    applyFinalAnswerHtml(turn, html || '');
   }
 
   function handleHighlights(data: SSEData): void {
