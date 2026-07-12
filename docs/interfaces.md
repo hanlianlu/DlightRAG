@@ -550,7 +550,7 @@ paths without deleting LightRAG rows, metadata, or local files.
 | `token` | `{type, content}` | LLM answer token (repeats) |
 | `sources` | `{type, data}` | Validated cited sources, after all tokens and before done. Includes `highlight_phrases` when `semantic_highlights` is true and enrichment succeeds. |
 | `trace` | `{type, data}` | Retrieval trace counts and planner/filter decisions |
-| `image_meta` | `{type, current_image_ids, image_descriptions}` | VLM descriptions for current-request images; `current_image_ids` is empty because public requests do not create durable image IDs |
+| `image_meta` | `{type, image_descriptions}` | VLM descriptions for current-request images |
 | `done` | `{type, answer, answer_images, answer_blocks}` | Stream complete; `answer` is the final normalized answer body after citation validation |
 | `error` | `{type, message}` | Error mid-stream |
 
@@ -565,7 +565,7 @@ data: {"type":"sources","data":[{"id":"1","title":"report.pdf","source_uri":"loc
 
 data: {"type":"trace","data":{"bm25_enabled":true,"fused_chunk_count":8}}
 
-data: {"type":"image_meta","current_image_ids":[],"image_descriptions":["Image 1: a line chart"]}
+data: {"type":"image_meta","image_descriptions":["Image 1: a line chart"]}
 
 data: {"type":"done","answer":"The key findings are...","answer_images":[],"answer_blocks":[{"type":"markdown","text":"The key findings are..."}]}
 ```

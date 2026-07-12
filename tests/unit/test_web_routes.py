@@ -597,7 +597,6 @@ class TestWebSSEBoundary:
         assert json.loads(data_line.removeprefix("data: ")) == {
             "html": "<b>x</b>",
             "answer": "x",
-            "current_image_ids": [],
             "image_descriptions": [],
             "answer_images": [],
             "answer_blocks": [],

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite build --watch",
     "build": "vite build",
+    "test": "node --experimental-strip-types --test stores/conversationStore.test.ts",
     "typecheck": "tsc --noEmit",
     "lint:css": "stylelint 'styles/**/*.css' 'styles/**/*.module.css'"
   },

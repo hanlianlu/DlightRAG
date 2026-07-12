@@ -553,7 +553,7 @@ class TestRouting:
         )
 
         assert prepared.answer_images == current
-        assert prepared.current_image_ids == []
+        assert not hasattr(prepared, "current_image_ids")
         enhancer.enhance.assert_awaited_once_with("query", current)
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
