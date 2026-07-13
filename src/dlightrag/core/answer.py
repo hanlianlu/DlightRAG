@@ -26,6 +26,11 @@ from dlightrag.citations.indexer import CitationIndexer
 from dlightrag.citations.streaming import AnswerStream
 from dlightrag.core.answer_context import AnswerContextPacker
 from dlightrag.core.answer_images import AnswerImageBudget
+from dlightrag.core.answer_prompt import (
+    AnswerPromptAssembler,
+    AssembledImages,
+    CurrentImagePayloadError,
+)
 from dlightrag.core.retrieval.protocols import RetrievalContexts, RetrievalResult
 from dlightrag.prompts import get_answer_system_prompt
 from dlightrag.utils.images import image_data_uri
@@ -71,8 +76,7 @@ class AnswerEngine:
         self,
         *,
         model_func: Callable[..., Any] | None = None,
-        max_images: int = 6,
-        max_user_images: int = 3,
+        effective_max_images: int = 0,
         image_max_bytes: int = 3_000_000,
         image_max_total_bytes: int = 24_000_000,
         image_max_px: int = 1536,
@@ -82,8 +86,7 @@ class AnswerEngine:
         context_top_k: int | None = 30,
     ) -> None:
         self.model_func = model_func
-        self._max_images = max_images
-        self._max_user_images = max_user_images
+        self._effective_max_images = effective_max_images
         self._image_max_bytes = image_max_bytes
         self._image_max_total_bytes = image_max_total_bytes
         self._image_max_px = image_max_px
@@ -91,6 +94,7 @@ class AnswerEngine:
         self._image_quality = image_quality
         self._image_min_quality = image_min_quality
         self._context_top_k = context_top_k
+        self._assembler = AnswerPromptAssembler()
 
     # ------------------------------------------------------------------
     # Public API
@@ -255,10 +259,25 @@ class AnswerEngine:
         context_top_k: int | None = None,
     ) -> _PreparedModelCall:
         system_prompt = get_answer_system_prompt()
+        # One adaptive transport budget, consumed in allocation order:
+        # current query images reserve slots first, then history images, then
+        # RAG context images take the remainder.
+        budget = self._new_image_budget()
+        current_blocks = self._budget_current_images(query_images, budget)
+        history_messages, history_blocks = self._build_history_messages(
+            conversation_history, budget
+        )
         prepared = self._prepare_prompt_context(
             query,
             contexts,
             context_top_k=context_top_k,
+            image_budget=budget,
+        )
+        assembled = self._assembler.assemble(
+            current_images=current_blocks,
+            history_images=history_blocks,
+            rag_visual_blocks=list(prepared.chunk_image_blocks.values()),
+            effective_max_images=self._effective_max_images,
         )
         no_context = not _has_answer_evidence(
             prepared.contexts,
@@ -267,15 +286,15 @@ class AnswerEngine:
         )
         if no_context:
             prepared.trace["answer_no_context"] = True
-        messages = self._build_messages(
+        self._apply_image_trace(prepared.trace, assembled, budget)
+        messages = self._compose_user_messages(
             system_prompt,
             prepared.user_prompt,
             prepared.contexts,
-            indexer=prepared.indexer,
-            conversation_history=conversation_history,
-            query_images=query_images,
+            prepared.indexer,
+            current_blocks=current_blocks,
+            history_messages=history_messages,
             chunk_image_blocks_by_chunk_id=prepared.chunk_image_blocks,
-            trace=prepared.trace,
         )
         return _PreparedModelCall(
             contexts=prepared.contexts,
@@ -296,61 +315,120 @@ class AnswerEngine:
         chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
         trace: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build OpenAI-format messages with independent dual image budgets.
+        """Build OpenAI-format messages under one adaptive image budget.
 
-        RAG context images (from ``_prepare_prompt_context``) use a separate
-        budget from user images (``query_images`` + ``conversation_history``).
-        Within the user budget, current-turn ``query_images`` take priority;
-        history images consume remaining slots.
+        A single ``effective_max_images`` budget is consumed in allocation
+        order: current-turn ``query_images`` reserve slots first, then
+        ``conversation_history`` images, then RAG context images take the
+        remainder. Current images have no silent fallback -- an overflow raises
+        :class:`CurrentImagePayloadError`.
         """
-        user_budget = self._new_user_image_budget()
-
-        # ---- Phase 1: current-turn query_images reserve user image slots first ----
-        resolved_query_blocks: list[dict[str, Any]] = []
-        if query_images:
-            for idx, img in enumerate(query_images, start=1):
-                block = user_budget.add_user_image(img, label=f"query_image_{idx}")
-                if block is not None:
-                    resolved_query_blocks.append(block)
-
-        # ---- Phase 2: conversation_history gets leftovers ----
-        history_messages: list[dict[str, Any]] = []
-        if conversation_history:
-            for hmsg in conversation_history:
-                hcontent = hmsg.get("content")
-                if isinstance(hcontent, list):
-                    budgeted: list[Any] = []
-                    for block in hcontent:
-                        if isinstance(block, str):
-                            budgeted.append(block)
-                        elif block.get("type") == "text":
-                            budgeted.append(block)
-                        elif block.get("type") == "image_url":
-                            bounded = user_budget.add_user_image(
-                                block,
-                                label=f"history_img_{user_budget.count + 1}",
-                            )
-                            if bounded is not None:
-                                budgeted.append(bounded)
-                        else:
-                            budgeted.append(block)
-                    history_messages.append({"role": hmsg["role"], "content": budgeted})
-                else:
-                    history_messages.append(hmsg)
-
-        # ---- Phase 3: RAG context uses its own budget ----
+        budget = self._new_image_budget()
+        current_blocks = self._budget_current_images(query_images, budget)
+        history_messages, history_blocks = self._build_history_messages(
+            conversation_history, budget
+        )
         if chunk_image_blocks_by_chunk_id is None:
-            prepared = self._prepare_prompt_context("", contexts)
+            prepared = self._prepare_prompt_context("", contexts, image_budget=budget)
             contexts = prepared.contexts
             indexer = prepared.indexer
             chunk_image_blocks_by_chunk_id = prepared.chunk_image_blocks
 
+        assembled = self._assembler.assemble(
+            current_images=current_blocks,
+            history_images=history_blocks,
+            rag_visual_blocks=list(chunk_image_blocks_by_chunk_id.values()),
+            effective_max_images=self._effective_max_images,
+        )
+        messages = self._compose_user_messages(
+            system_prompt,
+            user_prompt,
+            contexts,
+            indexer,
+            current_blocks=current_blocks,
+            history_messages=history_messages,
+            chunk_image_blocks_by_chunk_id=chunk_image_blocks_by_chunk_id,
+        )
+        if trace is not None:
+            self._apply_image_trace(trace, assembled, budget)
+        return messages
+
+    def _budget_current_images(
+        self,
+        query_images: list[dict[str, Any]] | None,
+        budget: AnswerImageBudget,
+    ) -> list[dict[str, Any]]:
+        """Reserve budget for current-turn images; raise on any overflow.
+
+        Current images are explicit user input with no silent fallback: if they
+        exceed the effective count, or a payload cannot fit the byte/quality
+        budget, the request fails and names the offending image.
+        """
+        current = query_images or []
+        if len(current) > self._effective_max_images:
+            raise CurrentImagePayloadError(
+                f"{len(current)} current-turn images exceed the effective "
+                f"answer-image capacity of {self._effective_max_images}"
+            )
+        blocks: list[dict[str, Any]] = []
+        for idx, img in enumerate(current, start=1):
+            label = f"query_image_{idx}"
+            block = budget.add_user_image(img, label=label)
+            if block is None:
+                raise CurrentImagePayloadError(
+                    f"current image {label} could not fit the answer image budget"
+                )
+            blocks.append(block)
+        return blocks
+
+    def _build_history_messages(
+        self,
+        conversation_history: list[dict[str, Any]] | None,
+        budget: AnswerImageBudget,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Budget history-turn images into leftover slots, keeping turn text.
+
+        History images that miss a slot are dropped from transport while their
+        surrounding text is preserved, so overflow images still contribute
+        their stored descriptions.
+        """
+        history_messages: list[dict[str, Any]] = []
+        history_blocks: list[dict[str, Any]] = []
+        if not conversation_history:
+            return history_messages, history_blocks
+        for hmsg in conversation_history:
+            hcontent = hmsg.get("content")
+            if not isinstance(hcontent, list):
+                history_messages.append(hmsg)
+                continue
+            budgeted: list[Any] = []
+            for block in hcontent:
+                if isinstance(block, str) or block.get("type") != "image_url":
+                    budgeted.append(block)
+                    continue
+                bounded = budget.add_user_image(block, label=f"history_img_{budget.count + 1}")
+                if bounded is not None:
+                    budgeted.append(bounded)
+                    history_blocks.append(bounded)
+            history_messages.append({"role": hmsg["role"], "content": budgeted})
+        return history_messages, history_blocks
+
+    def _compose_user_messages(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        contexts: RetrievalContexts,
+        indexer: CitationIndexer | None,
+        *,
+        current_blocks: list[dict[str, Any]],
+        history_messages: list[dict[str, Any]],
+        chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Place budgeted image blocks into the final message structure."""
         content: list[dict[str, Any]] = []
-
-        if resolved_query_blocks:
+        if current_blocks:
             content.append({"type": "text", "text": "## User-attached images\n"})
-            content.extend(resolved_query_blocks)
-
+            content.extend(current_blocks)
         content.extend(
             self._build_excerpt_blocks(
                 contexts,
@@ -358,37 +436,32 @@ class AnswerEngine:
                 image_blocks_by_chunk_id=chunk_image_blocks_by_chunk_id,
             )
         )
-
         content.append({"type": "text", "text": user_prompt})
-
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
         ]
         if history_messages:
             messages.extend(history_messages)
         messages.append({"role": "user", "content": content})
-        if trace is not None:
-            trace["answer_user_images_sent"] = user_budget.count
-            trace["answer_user_image_budget_used_bytes"] = user_budget.used_bytes
         return messages
 
-    def _new_rag_budget(self) -> AnswerImageBudget:
-        """RAG context images — independent from user images."""
-        return AnswerImageBudget(
-            max_images=self._max_images,
-            max_total_bytes=self._image_max_total_bytes,
-            max_bytes_per_image=self._image_max_bytes,
-            max_px=self._image_max_px,
-            min_px=self._image_min_px,
-            quality=self._image_quality,
-            min_quality=self._image_min_quality,
-        )
+    @staticmethod
+    def _apply_image_trace(
+        trace: dict[str, Any],
+        assembled: AssembledImages,
+        budget: AnswerImageBudget,
+    ) -> None:
+        trace["answer_images_current"] = assembled.counts["current"]
+        trace["answer_images_history"] = assembled.counts["history"]
+        trace["answer_images_rag"] = assembled.counts["rag"]
+        trace["answer_images_total"] = len(assembled.blocks)
+        trace["answer_image_budget_used_bytes"] = budget.used_bytes
 
-    def _new_user_image_budget(self) -> AnswerImageBudget:
-        """User images (query + history) — independent from RAG context."""
+    def _new_image_budget(self) -> AnswerImageBudget:
+        """Single adaptive budget shared by current, history, and RAG images."""
         return AnswerImageBudget(
-            max_images=self._max_user_images,
-            max_total_bytes=self._image_max_total_bytes // 2,
+            max_images=self._effective_max_images,
+            max_total_bytes=self._image_max_total_bytes,
             max_bytes_per_image=self._image_max_bytes,
             max_px=self._image_max_px,
             min_px=self._image_min_px,
@@ -408,8 +481,10 @@ class AnswerEngine:
         contexts: RetrievalContexts,
         *,
         context_top_k: int | None = None,
+        image_budget: AnswerImageBudget | None = None,
     ) -> _PreparedAnswerPrompt:
-        image_budget = self._new_rag_budget()  # user images handled in _build_messages
+        if image_budget is None:
+            image_budget = self._new_image_budget()
         effective_context_top_k = self._context_top_k if context_top_k is None else context_top_k
         packed = AnswerContextPacker().pack(
             contexts,
@@ -418,8 +493,6 @@ class AnswerEngine:
         )
         user_prompt, indexer = self._build_user_prompt(query, packed.contexts)
         trace = dict(packed.trace)
-        trace["answer_context_image_budget_count"] = image_budget.count
-        trace["answer_context_image_budget_used_bytes"] = image_budget.used_bytes
         return _PreparedAnswerPrompt(
             contexts=packed.contexts,
             user_prompt=user_prompt,
