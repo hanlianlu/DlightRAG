@@ -11,6 +11,13 @@ engine, always queried in `mix` mode, while DlightRAG adds metadata
 management, optional direct multimodal image search, PostgreSQL BM25, RRF
 fusion, reranking, citations, and answer generation.
 
+REST, MCP, and Python answer/retrieve calls remain stateless: each call owns
+only its current query, images, and search scope. The Web-only conversation
+lifecycle is a principal-scoped adapter around the same answer pipeline. It
+loads server-owned text history, persists complete successful turns and current
+images, and applies 30-day inactivity retention without changing retrieval or
+ingest storage.
+
 ## Ingestion Shape
 
 ```text
@@ -258,6 +265,12 @@ Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When recompression is
 needed, DlightRAG enforces both a long-edge floor and a JPEG quality floor; an
 image that cannot fit within those limits is skipped instead of being degraded
 into a low-quality preview.
+
+For Web conversations, validated current-turn images always have priority and
+are the only durable chat images used in Slice A. Slice B will resolve references
+to historical images and replace the separate user/RAG limits with one unified
+answer transport budget. Public REST/MCP/Python calls remain request-local in
+both slices.
 
 `/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
 override the configured chunk/visual candidate budget; otherwise DlightRAG uses

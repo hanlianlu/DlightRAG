@@ -4,14 +4,57 @@
 import pytest
 
 
+def _open_ready_page(page) -> None:
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "GET" and response.url.endswith("/history") and response.ok
+        ),
+        timeout=10000,
+    ) as history_response:
+        page.goto("/web/")
+    history_response.value.finished()
+    page.wait_for_selector(".composer-input", timeout=10000)
+
+
 def _inject_answer_with_sources(page) -> None:
+    page.wait_for_selector("[aria-current='page']", timeout=10000)
+    page.wait_for_function(
+        "!document.querySelector('#chat-messages [role=\"status\"]')",
+        timeout=10000,
+    )
+    conversation_id = page.locator("[aria-current='page']").get_attribute("data-conversation-id")
+    assert conversation_id
+    ai_selector = '[class*="aiMessage"]:not([class*="Content"]):not([class*="Header"])'
+    initial_ai_count = page.locator(ai_selector).count()
     page.locator(".composer-input").fill("show cited source")
-    page.click(".composer-send")
+    with page.expect_response(
+        lambda response: (
+            response.request.method == "GET"
+            and response.url.endswith(f"/web/conversations/{conversation_id}/history")
+            and response.ok
+        ),
+        timeout=10000,
+    ) as history_response:
+        page.click(".composer-send")
+        page.wait_for_function(
+            "([selector, count]) => document.querySelectorAll(selector).length > count",
+            arg=[ai_selector, initial_ai_count],
+            timeout=10000,
+        )
+    history_response.value.finished()
+    page.evaluate(
+        """
+        () => new Promise((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(resolve));
+        })
+        """
+    )
     page.wait_for_function(
         """
         () => {
           const messages = document.querySelectorAll('[class*="aiMessageContent"]');
-          return Array.from(messages).some((message) => message.textContent.includes('DlightRAG'));
+          const latest = messages[messages.length - 1];
+          return latest?.textContent.includes('DlightRAG');
         }
         """,
         timeout=10000,
@@ -19,7 +62,10 @@ def _inject_answer_with_sources(page) -> None:
     page.evaluate(
         """
         () => {
-          const ai = document.querySelector('[class*="aiMessage"]:not([class*="Content"]):not([class*="Header"])');
+          const messages = document.querySelectorAll(
+            '[class*="aiMessage"]:not([class*="Content"]):not([class*="Header"])'
+          );
+          const ai = messages[messages.length - 1];
           const content = ai?.querySelector('[class*="aiMessageContent"]');
           if (!ai || !content) throw new Error('AI message not rendered');
           content.insertAdjacentHTML('beforeend', `
@@ -83,8 +129,7 @@ def _inject_answer_with_sources(page) -> None:
 @pytest.mark.e2e
 def test_reference_item_keyboard_opens_source_panel(page):
     """Keyboard activation on a reference item opens its expanded source."""
-    page.goto("/web/")
-    page.wait_for_selector(".composer-input", timeout=10000)
+    _open_ready_page(page)
     _inject_answer_with_sources(page)
 
     page.locator(".answer-ref-item").press("Enter")
@@ -97,8 +142,7 @@ def test_reference_item_keyboard_opens_source_panel(page):
 
 @pytest.mark.e2e
 def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
-    page.goto("/web/")
-    page.wait_for_selector(".composer-input", timeout=10000)
+    _open_ready_page(page)
     _inject_answer_with_sources(page)
     page.locator(".answer-ref-item").press("Enter")
 
