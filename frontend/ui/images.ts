@@ -96,6 +96,8 @@ function renderStoredMessageImages(
         const imgEl = document.createElement('img');
         imgEl.className = chatStyles.messageImg;
         imgEl.alt = reference.label;
+        imgEl.loading = 'lazy';
+        imgEl.decoding = 'async';
         const thumbnailSrc = _safeImageSrc(reference.thumbnail_url);
         const fullSrc = _safeImageSrc(reference.url);
 
@@ -428,9 +430,15 @@ export function setupImageInputs(): void {
         openLightbox(src);
     });
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') { closeLightbox(); return; }
         const box = document.getElementById('image-lightbox');
         if (!box || !box.classList.contains(lightboxStyles.open)) return;
+        if (e.key === 'Escape') {
+            if (document.querySelector('dialog[open]')) return;
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            closeLightbox();
+            return;
+        }
         if (e.key === 'ArrowLeft') { e.preventDefault(); _navigateLightbox(-1); }
         if (e.key === 'ArrowRight') { e.preventDefault(); _navigateLightbox(1); }
         if (e.key === 'Tab') {
@@ -454,5 +462,5 @@ export function setupImageInputs(): void {
                 first.focus();
             }
         }
-    });
+    }, true);
 }

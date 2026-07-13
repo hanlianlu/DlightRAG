@@ -156,3 +156,39 @@ def test_source_download_is_persistent_sibling_and_keyboard_reachable(page):
     assert download.get_attribute("download") == ""
     download.focus()
     assert download.evaluate("element => element === document.activeElement") is True
+
+
+@pytest.mark.e2e
+def test_escape_closes_source_lightbox_only_and_restores_image_focus(page):
+    _open_ready_page(page)
+    _inject_answer_with_sources(page)
+    page.locator(".answer-ref-item").press("Enter")
+    page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]')
+    page.evaluate(
+        """
+        () => {
+          const button = document.createElement('button');
+          button.id = 'stacked-source-image';
+          button.type = 'button';
+          button.setAttribute('aria-label', 'Open source image');
+          button.setAttribute('data-action', 'open-lightbox');
+          button.setAttribute(
+            'data-src',
+            'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+          );
+          document.querySelector('#panel-content')?.appendChild(button);
+        }
+        """
+    )
+
+    image = page.get_by_role("button", name="Open source image")
+    image.click()
+    page.locator("#image-lightbox[aria-hidden='false']").wait_for()
+    page.keyboard.press("Escape")
+
+    page.wait_for_function(
+        "document.querySelector('#image-lightbox')?.getAttribute('aria-hidden') === 'true'"
+    )
+    assert page.locator("#panel").get_attribute("aria-hidden") is None
+    assert page.locator("#panel").evaluate("element => element.classList.contains('open')") is True
+    assert image.evaluate("element => document.activeElement === element") is True

@@ -202,10 +202,10 @@ export function openWorkspacePopover(): void {
     popover.appendChild(createRow());
     selector.appendChild(popover);
     popoverEl = popover;
+    document.addEventListener('keydown', onEscapeKey, true);
 
     setTimeout(() => {
         document.addEventListener('click', onOutsideClick);
-        document.addEventListener('keydown', onEscapeKey);
     }, 0);
 }
 
@@ -259,7 +259,7 @@ function closeWorkspacePopover(): void {
     const selector = document.getElementById('workspace-selector');
     if (selector) selector.classList.remove('open');
     document.removeEventListener('click', onOutsideClick);
-    document.removeEventListener('keydown', onEscapeKey);
+    document.removeEventListener('keydown', onEscapeKey, true);
 }
 
 function onOutsideClick(event: MouseEvent): void {
@@ -268,7 +268,11 @@ function onOutsideClick(event: MouseEvent): void {
 }
 
 function onEscapeKey(event: KeyboardEvent): void {
-    if (event.key === 'Escape') closeWorkspacePopover();
+    if (event.key !== 'Escape' || !popoverEl) return;
+    if (document.querySelector('dialog[open]')) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeWorkspacePopover();
 }
 
 function showDeleteWorkspaceDialog(workspace: string): void {

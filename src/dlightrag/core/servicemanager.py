@@ -915,10 +915,23 @@ class RAGServiceManager:
         self,
         query: str,
         *,
-        conversation_history: list[dict[str, Any]] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
-        """Plan a query using the manager-owned planner and config limits."""
+        """Plan one stateless query using the manager-owned planner."""
+        return await self._aplan_query_prepared(
+            query,
+            text_history=None,
+            workspaces=workspaces,
+        )
+
+    async def _aplan_query_prepared(
+        self,
+        query: str,
+        *,
+        text_history: list[dict[str, Any]] | None,
+        workspaces: list[str] | tuple[str, ...] | None = None,
+    ) -> QueryPlan:
+        """Plan a server-prepared query with request-local text history."""
         planner = self._get_query_planner()
         from dlightrag.observability import trace_observation
 
@@ -928,13 +941,13 @@ class RAGServiceManager:
             input={"query": query},
             metadata={
                 "workspaces": list(workspaces or []),
-                "history_turns": len(conversation_history or []),
+                "history_turns": len(text_history or []),
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
             plan = await planner.plan(
                 query,
-                conversation_history=conversation_history,
+                conversation_history=text_history,
                 max_turns=self._config.max_conversation_turns,
                 max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
@@ -953,10 +966,27 @@ class RAGServiceManager:
         contexts: RetrievalContexts,
         *,
         query_images: list[dict[str, Any]] | None = None,
-        conversation_history: list[dict[str, Any]] | None = None,
         context_top_k: int | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
-        """Generate a streaming answer from already-retrieved contexts."""
+        """Generate a stateless streaming answer from retrieved contexts."""
+        return await self._agenerate_stream_from_contexts_prepared(
+            query,
+            contexts,
+            query_images=query_images,
+            text_history=None,
+            context_top_k=context_top_k,
+        )
+
+    async def _agenerate_stream_from_contexts_prepared(
+        self,
+        query: str,
+        contexts: RetrievalContexts,
+        *,
+        query_images: list[dict[str, Any]] | None = None,
+        text_history: list[dict[str, Any]] | None,
+        context_top_k: int | None = None,
+    ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
+        """Generate from server-prepared contexts and request-local text history."""
         engine = self._get_answer_engine()
         await self._answer_stream_sem.acquire()
         try:
@@ -964,7 +994,7 @@ class RAGServiceManager:
                 query,
                 contexts,
                 query_images=query_images,
-                conversation_history=conversation_history,
+                conversation_history=text_history,
                 context_top_k=context_top_k,
             )
         except BaseException:
@@ -1018,16 +1048,16 @@ class RAGServiceManager:
         current_query: str,
         *,
         retrieval_query: str,
-        conversation_history: list[dict[str, Any]] | None,
+        text_history: list[dict[str, Any]] | None,
         query_images: list[dict[str, Any]] | None,
         ws_list: list[str],
         scope: RequestScope,
         kwargs: dict[str, Any],
         log_plan: bool = False,
     ) -> tuple[QueryPlan, PreparedQueryImages, _AnswerLimits, RetrievalResult]:
-        plan = await self.aplan_query(
+        plan = await self._aplan_query_prepared(
             retrieval_query,
-            conversation_history=conversation_history,
+            text_history=text_history,
             workspaces=ws_list,
         )
         if log_plan:
@@ -1213,7 +1243,7 @@ class RAGServiceManager:
                     plan, prepared, limits, retrieval = await self._plan_and_retrieve(
                         turn.current_query,
                         retrieval_query=turn.retrieval_query,
-                        conversation_history=None,
+                        text_history=None,
                         query_images=list(turn.materialized_query_images),
                         ws_list=ws_list,
                         scope=scoped,
@@ -1343,18 +1373,18 @@ class RAGServiceManager:
                 plan, prepared, limits, retrieval = await self._plan_and_retrieve(
                     turn.current_query,
                     retrieval_query=turn.retrieval_query,
-                    conversation_history=history,
+                    text_history=history,
                     query_images=query_images,
                     ws_list=ws_list,
                     scope=scoped,
                     kwargs=kwargs,
                     log_plan=True,
                 )
-                contexts, stream = await self.agenerate_stream_from_contexts(
+                contexts, stream = await self._agenerate_stream_from_contexts_prepared(
                     plan.standalone_query,
                     retrieval.contexts,
                     query_images=prepared.answer_images or None,
-                    conversation_history=history,
+                    text_history=history,
                     context_top_k=limits.context_top_k,
                 )
                 if stream is not None:

@@ -19,7 +19,7 @@ from dlightrag.storage.web_conversations import (
     PGWebConversationStore,
     StoredConversationImage,
 )
-from dlightrag.utils.images import ValidatedWebImage
+from dlightrag.utils.images import ValidatedWebImage, thumbnail_bytes
 from dlightrag.web.conversation_models import (
     ConversationHistory,
     ConversationImageReference,
@@ -39,6 +39,11 @@ _AMBIGUOUS_COMMIT_EXCEPTIONS = (
     *POSTGRES_UNAVAILABLE_EXCEPTIONS,
     asyncpg.exceptions.InterfaceError,
 )
+_HISTORY_THUMBNAIL_MAX_PX = 320
+_HISTORY_THUMBNAIL_MAX_BYTES = 128 * 1024
+_HISTORY_THUMBNAIL_QUALITY = 82
+_HISTORY_THUMBNAIL_MIN_QUALITY = 50
+_HISTORY_THUMBNAIL_MIN_PX = 64
 
 
 class WebConversationUnavailableError(RuntimeError):
@@ -191,6 +196,35 @@ class WebConversationService:
                 image_id,
                 ttl_days=self._ttl_days,
             )
+        )
+
+    async def thumbnail(
+        self,
+        user: UserContext | None,
+        conversation_id: str,
+        image_id: str,
+    ) -> StoredConversationImage | None:
+        """Derive one bounded UI thumbnail after the scoped original lookup."""
+        image = await self.image(user, conversation_id, image_id)
+        if image is None:
+            return None
+        try:
+            payload, mime_type = await asyncio.to_thread(
+                thumbnail_bytes,
+                image.image_bytes,
+                max_px=_HISTORY_THUMBNAIL_MAX_PX,
+                max_bytes=_HISTORY_THUMBNAIL_MAX_BYTES,
+                quality=_HISTORY_THUMBNAIL_QUALITY,
+                min_quality=_HISTORY_THUMBNAIL_MIN_QUALITY,
+                min_px=_HISTORY_THUMBNAIL_MIN_PX,
+            )
+        except Exception:
+            logger.warning("Failed to derive Web conversation thumbnail", exc_info=True)
+            return None
+        return StoredConversationImage(
+            image_id=image.image_id,
+            mime_type=mime_type,
+            image_bytes=payload,
         )
 
     async def commit_answer(
@@ -358,7 +392,7 @@ def _image_reference(
         ordinal=ordinal,
         mime_type=str(image["mime_type"]),
         url=url,
-        thumbnail_url=url,
+        thumbnail_url=url + "/thumbnail",
         label=f"Turn {turn_number}, image {ordinal}",
     )
 

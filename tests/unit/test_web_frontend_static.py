@@ -558,6 +558,15 @@ def test_answer_image_strip_uses_shared_thumbnail_field() -> None:
     assert "img.thumb_url" not in answer_done
 
 
+def test_history_images_are_lazy_async_thumbnails_with_on_demand_originals() -> None:
+    images_source = (FRONTEND_UI / "images.ts").read_text(encoding="utf-8")
+
+    assert "imgEl.loading = 'lazy'" in images_source
+    assert "imgEl.decoding = 'async'" in images_source
+    assert "imgEl.src = thumbnailSrc" in images_source
+    assert "imageButton.setAttribute('data-full-src', fullSrc)" in images_source
+
+
 def test_panel_resize_uses_pointer_capture_and_cancel_cleanup() -> None:
     resize_js = (FRONTEND_UI / "resize.ts").read_text(encoding="utf-8")
 

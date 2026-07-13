@@ -4,6 +4,7 @@
 import asyncio
 import importlib
 import inspect
+from annotationlib import Format
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -92,11 +93,18 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
     ):
         assert name in retrieve_params
 
-    for method_name in ("aretrieve", "aanswer", "aanswer_stream"):
-        parameters = inspect.signature(getattr(RAGServiceManager, method_name)).parameters
-        assert "conversation_history" not in parameters
-        assert "session_id" not in parameters
-        assert "referenced_image_ids" not in parameters
+    forbidden_state = {"conversation_history", "session_id", "referenced_image_ids"}
+    for method_name in dir(RAGServiceManager):
+        if method_name.startswith("_"):
+            continue
+        method = getattr(RAGServiceManager, method_name)
+        if not callable(method):
+            continue
+        parameters = inspect.signature(
+            method,
+            annotation_format=Format.STRING,
+        ).parameters
+        assert forbidden_state.isdisjoint(parameters), method_name
 
     answer_params = inspect.signature(RAGServiceManager.aanswer).parameters
     for name in (
@@ -138,7 +146,43 @@ async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
 
     await_args = manager._plan_and_retrieve.await_args
     assert await_args is not None
-    assert await_args.kwargs["conversation_history"] == [{"role": "user", "content": "Earlier"}]
+    assert await_args.kwargs["text_history"] == [{"role": "user", "content": "Earlier"}]
+
+
+async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    planner = AsyncMock()
+    planner.plan.return_value = SimpleNamespace(
+        standalone_query="standalone",
+        metadata_filter=None,
+    )
+    manager._query_planner = planner
+    manager._get_schema = AsyncMock(return_value={})  # type: ignore[method-assign]
+    history = [{"role": "user", "content": "Earlier"}]
+
+    await manager._aplan_query_prepared(
+        "follow up",
+        text_history=history,
+        workspaces=["default"],
+    )
+
+    assert planner.plan.await_args.kwargs["conversation_history"] == history
+
+
+async def test_private_generation_helper_hands_prepared_history_to_engine(test_cfg) -> None:
+    manager = RAGServiceManager(config=test_cfg)
+    engine = AsyncMock()
+    engine.generate_stream.return_value = ({"chunks": []}, None)
+    manager._answer_engine = engine
+    history = [{"role": "user", "content": "Earlier"}]
+
+    await manager._agenerate_stream_from_contexts_prepared(
+        "follow up",
+        {"chunks": []},
+        text_history=history,
+    )
+
+    assert engine.generate_stream.await_args.kwargs["conversation_history"] == history
 
 
 @pytest.fixture()
