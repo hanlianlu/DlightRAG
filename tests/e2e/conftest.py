@@ -45,9 +45,9 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def e2e_base_url() -> Generator[str, Any]:
-    """Start a real FastAPI server with a mocked manager on a random port."""
+    """Start one real FastAPI server for the E2E session on a random port."""
     manager = AsyncMock()
     manager.config = SimpleNamespace(
         workspace="default",
@@ -55,6 +55,10 @@ def e2e_base_url() -> Generator[str, Any]:
         answer_stream_idle_timeout=120.0,
         citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False)),
         embedding=SimpleNamespace(model="voyage-multimodal-3.5"),
+        query_images=SimpleNamespace(
+            max_current_images=3,
+            max_upload_bytes=10 * 1024 * 1024,
+        ),
     )
 
     async def _token_stream() -> Any:
@@ -102,9 +106,9 @@ def e2e_base_url() -> Generator[str, Any]:
         t.join(timeout=3)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def browser() -> Generator[Browser, Any]:
-    """Module-scoped browser — reuse across tests for speed."""
+    """Session-scoped browser — reuse across tests for speed."""
     with sync_playwright() as pw:
         b = pw.chromium.launch(headless=True)
         try:

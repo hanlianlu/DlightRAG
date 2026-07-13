@@ -28,6 +28,10 @@ export function cancelQuery(): void {
     currentQueryController?.abort(new DOMException('Query cancelled', 'AbortError'));
 }
 
+export function isQueryInFlight(): boolean {
+    return queryInFlight;
+}
+
 function submitComposerForm(form: HTMLFormElement): void {
     form.requestSubmit();
 }
@@ -39,6 +43,7 @@ function isLineBreakInput(e: InputEvent): boolean {
 export async function submitQuery(query: string): Promise<void> {
     if (queryInFlight) return;
     queryInFlight = true;
+    bus.emit('conversationStreamChanged', {active: true});
 
     const conversationId = conversationStore.answerConversationId;
     if (conversationId) conversationStore.beginLiveAnswer(conversationId);
@@ -153,6 +158,7 @@ export async function submitQuery(query: string): Promise<void> {
         clearTimeout(idleTimer);
         if (currentQueryController === controller) currentQueryController = null;
         queryInFlight = false;
+        bus.emit('conversationStreamChanged', {active: false});
     }
 }
 

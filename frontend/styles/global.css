@@ -39,6 +39,18 @@ body {
     -webkit-font-smoothing: antialiased;
 }
 
+body.conversation-drawer-open {
+    overflow: hidden;
+}
+
+:root {
+    --layout-chat-sidebar-width: clamp(260px, 22vw, 288px);
+    --layout-chat-min-width: 520px;
+    --conversation-shell-duration: 220ms;
+    --conversation-shell-easing: cubic-bezier(0.4, 0, 0.2, 1);
+    --conversation-top-row-height: calc(var(--size-button) + (2 * var(--space-tight)));
+}
+
 /* === Context Window Indicator === */
 
 .out-of-context {

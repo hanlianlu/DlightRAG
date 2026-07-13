@@ -3,6 +3,8 @@
 const PANEL_DISMISS_EXEMPT_SELECTOR = [
     '.panel',
     '#files-btn',
+    '#chat-sidebar',
+    '#conversation-sidebar-open',
     '#composer',
     '[data-action="filter-source"]',
     '[data-action="open-ref-source"]',
@@ -26,6 +28,7 @@ function shouldDismissPanelOnOutsideClick(target: EventTarget | null): boolean {
 export function openPanel(title?: string): void {
     const panel = document.getElementById('panel');
     if (!panel) return;
+    document.body.dispatchEvent(new CustomEvent('panelOpening'));
     panel.classList.add('open');
     document.body.classList.add('panel-open');
     if (!title) return;

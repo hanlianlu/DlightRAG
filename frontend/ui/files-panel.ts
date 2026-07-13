@@ -26,6 +26,19 @@ let nextPanelRequestId = 0;
 let ingestPollController: AbortController | null = null;
 let ingestPollTimer: number | null = null;
 let ingestPollWorkspace: string | null = null;
+let activeFileMutations = 0;
+
+export function hasActiveFileMutation(): boolean {
+    return activeFileMutations > 0;
+}
+
+function beginFileMutation(): void {
+    activeFileMutations += 1;
+}
+
+function finishFileMutation(): void {
+    activeFileMutations = Math.max(0, activeFileMutations - 1);
+}
 
 function isAbortError(error: unknown): boolean {
     return error instanceof DOMException && error.name === 'AbortError';
@@ -371,6 +384,7 @@ export async function uploadFilesToWorkspace(
     });
 
     const name = uploadLabel(files, label);
+    beginFileMutation();
     setUploadBusy(true);
     showToast('Uploading ' + name + '...');
 
@@ -390,6 +404,7 @@ export async function uploadFilesToWorkspace(
         if (isAbortError(error)) return;
         showToast('Upload failed: ' + (error instanceof Error ? error.message : String(error)), 5000);
     } finally {
+        finishFileMutation();
         if (isCurrentPanelRequest(request)) setUploadBusy(false);
         finishPanelRequest(request);
     }
@@ -406,6 +421,7 @@ async function deleteFile(filePath: string): Promise<void> {
     if (workspace) url.searchParams.set('workspace', workspace);
     url.searchParams.set('file_path', filePath);
 
+    beginFileMutation();
     try {
         const response = await fetch(url.pathname + url.search, {
             method: 'DELETE',
@@ -418,6 +434,7 @@ async function deleteFile(filePath: string): Promise<void> {
         if (isAbortError(error)) return;
         showToast('Deletion failed.', 5000);
     } finally {
+        finishFileMutation();
         finishPanelRequest(request);
     }
 }

@@ -68,7 +68,7 @@ def test_answer_request_sends_only_active_conversation() -> None:
 def test_conversation_projection_has_typed_api_and_stale_history_guard() -> None:
     api = FRONTEND / "api" / "conversations.ts"
     store = (FRONTEND / "stores" / "conversationStore.ts").read_text(encoding="utf-8")
-    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
 
     assert api.exists()
     api_source = api.read_text(encoding="utf-8")
@@ -89,9 +89,46 @@ def test_conversation_projection_has_typed_api_and_stale_history_guard() -> None
         "beginRequest",
     ):
         assert f"{mutation}(" in store
-    assert "AbortController" in main
-    assert "generation" in main
-    assert "AbortError" in main
+    assert "AbortController" in controller
+    assert "requestGeneration" in controller
+    assert "AbortError" in controller
+
+
+def test_index_has_final_conversation_shell() -> None:
+    template = (ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    )
+
+    for selector in (
+        'id="chat-sidebar"',
+        'id="new-conversation-btn"',
+        'id="conversation-list"',
+        'id="conversation-sidebar-toggle"',
+        'id="conversation-sidebar-open"',
+        'id="delete-conversation-dialog"',
+        'id="discard-draft-dialog"',
+    ):
+        assert selector in template
+    assert 'aria-label="Conversations"' in template
+    assert "Clear" not in template
+    assert ">Chats<" not in template
+
+
+def test_conversation_sidebar_keeps_single_store_and_protected_ui_surfaces() -> None:
+    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
+    styles = (FRONTEND_STYLES / "conversations.module.css").read_text(encoding="utf-8")
+
+    assert "conversationStore.initialSelection()" in controller
+    assert "conversationStore.isCurrentRequest(requestGeneration)" in controller
+    assert "conversationStyles.root" in controller
+    assert "isQueryInFlight()" in controller
+    assert "hasActiveFileMutation()" in controller
+    assert "getPendingImageData()" in controller
+    assert "clearConversationSources()" in controller
+    assert ".innerHTML" not in controller
+    assert ".root" in styles
+    assert ":global(.conversation-row:focus-within)" in styles
+    assert ':global(.conversation-row[aria-current="page"])' in styles
 
 
 def test_history_renderer_reuses_sanitized_answer_pipeline() -> None:
@@ -129,24 +166,24 @@ def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None
 
 
 def test_saved_answer_refresh_does_not_close_its_source_panel() -> None:
-    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
 
-    assert "if (clearSources) clearConversationSources();" in main
-    assert "selectConversation(conversationId, false, false)" in main
+    assert "if (clearSources) clearConversationSources();" in controller
+    assert "selectConversation(conversationId, false, false)" in controller
 
 
 def test_live_answer_owns_viewport_against_late_history_render() -> None:
     chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
 
     assert chat.index("conversationStore.beginLiveAnswer") < chat.index("createChatTurn(query)")
     assert "conversationStore.finishLiveAnswer" in chat
-    assert "conversationStore.canRenderHistory(generation)" in main
-    assert "conversationStore.canRenderHistory(bootstrapGeneration)" in main
-    assert "if (conversationStore.setHistory(history, generation))" in main
-    assert "if (!conversationStore.select(conversationId)) return;" in main
+    assert "conversationStore.canRenderHistory(requestGeneration)" in controller
+    assert "conversationStore.isCurrentRequest(requestGeneration)" in controller
+    assert "conversationStore.setHistory(history, requestGeneration)" in controller
+    assert "if (!conversationStore.select(conversationId)) return false;" in controller
     assert "conversationDeferredSelectionReady" in chat
-    assert "conversationDeferredSelectionReady" in main
+    assert "conversationDeferredSelectionReady" in controller
     assert "shouldKeepLiveConversation(saveOutcome)" in chat
     assert "const conversationId = conversationStore.answerConversationId" in chat
 
@@ -154,7 +191,7 @@ def test_live_answer_owns_viewport_against_late_history_render() -> None:
 def test_unknown_save_outcome_has_typed_accessible_recovery_action() -> None:
     renderer = (FRONTEND / "lib" / "chat_renderer.ts").read_text(encoding="utf-8")
     chat = (FRONTEND_UI / "chat.ts").read_text(encoding="utf-8")
-    main = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
+    controller = (FRONTEND_UI / "conversations.ts").read_text(encoding="utf-8")
     bus = (FRONTEND / "events" / "bus.ts").read_text(encoding="utf-8")
 
     save_state = (FRONTEND / "stores" / "pendingSubmissionStore.ts").read_text(encoding="utf-8")
@@ -165,13 +202,13 @@ def test_unknown_save_outcome_has_typed_accessible_recovery_action() -> None:
     assert "addEventListener('click', onRecovery)" in renderer
     assert "conversationSaveCheckRequested" in bus
     assert "conversationSaveCheckRequested" in chat
-    assert "conversationSaveCheckRequested" in main
-    assert "void selectConversation(conversationId, true, false)" in main
+    assert "conversationSaveCheckRequested" in controller
+    assert "void selectConversation(conversationId, true, false)" in controller
 
 
 def test_conversation_bootstrap_cannot_block_independent_ui_initializers() -> None:
     main_source = (FRONTEND_UI / "main.ts").read_text(encoding="utf-8")
-    bootstrap = main_source.rindex("void initializeConversations()")
+    bootstrap = main_source.rindex("setupConversations()")
 
     for initializer in (
         "initWorkspaces();",
