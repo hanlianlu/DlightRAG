@@ -448,6 +448,9 @@ def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page)
     page.get_by_role("button", name="Files", exact=True).click()
 
     page.set_viewport_size({"width": 900, "height": 800})
+    page.wait_for_function(
+        "document.querySelector('#panel')?.getAttribute('aria-modal') === 'true'"
+    )
 
     assert page.locator("#panel").get_attribute("aria-modal") == "true"
     assert page.locator("#composer").evaluate("element => element.inert") is True

@@ -536,18 +536,32 @@ answer:
 Current-request images are described with the VLM before retrieval when a VLM
 is configured. Public REST, MCP, CLI, and Python answer/retrieve calls are
 stateless; durable conversation images belong only to the Web conversation
-store:
+store. `max_upload_bytes` is the decoded per-image Web admission limit, not the
+answer-model compression budget. Its default is 15 MiB and the backend and
+browser consume the same value:
 
 ```yaml
 query_images:
   max_current_images: 3
-  max_upload_bytes: 15728640
+  max_upload_bytes: 15728640  # 15 MiB per current Web image
   max_described_images: 3
+
+web_conversations:
+  max_turns: 100
+  ttl_days: 30
 
 visual_assets:
   thumb_max_px: 300
   thumb_cache_size: 256
 ```
+
+`web_conversations` applies only to the principal-scoped Web-only conversation
+lifecycle. It keeps at most 100 complete turns and uses 30-day inactivity
+retention; expired conversations are hidden immediately and pruned without
+touching ingest documents, chunks, vectors, graph data, source files, visual
+assets, or jobs. Current-turn images always have priority. Slice B adds
+historical-image resolution and a unified answer-image transport budget; these
+retention and upload controls do not pre-implement that behavior.
 
 ## REST API
 

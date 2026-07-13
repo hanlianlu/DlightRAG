@@ -406,6 +406,31 @@ LightRAG's document status and DlightRAG's content-hash guard.
 | `answer_images` | Registry of cited visual assets available for rendering. Entries reference image routes, not inline document image bytes. |
 | `answer_blocks` | Display plan for answers: markdown text blocks plus `image_ref` blocks that point into `answer_images`. |
 
+### Web Conversation Boundary
+
+The Web-only conversation lifecycle is server-owned and principal-scoped. The
+browser creates, lists, selects, renames, deletes, and reloads conversations
+through `/web/conversations`; it sends only `conversation_id`, the current query,
+current images, and the selected search workspaces to `/web/answer`. Conversation
+IDs are server-generated UUIDs and are never credentials. History and image
+reads always filter by both the authenticated principal and conversation ID, so
+another principal receives the same 404 as a missing conversation.
+
+Web conversations retain up to 100 complete turns with 30-day inactivity
+retention. Current Web images are admitted using `query_images.max_current_images`
+and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB per
+decoded image. Current-turn images always have priority. Slice B owns historical
+image reference resolution and the unified answer-image transport budget.
+
+REST, MCP, and Python answer/retrieve calls remain stateless. They do not accept
+`conversation_id`, caller-supplied history, or durable historical-image IDs.
+Their `query_images` belong only to the current request and are never persisted.
+
+The Web shell defaults answer scope to `Search in: All authorized workspaces`.
+That authorization-relative multi-workspace selection is independent from
+`Files in`, which continues to name one workspace for file management and
+ingestion.
+
 ### Python SDK
 
 ```python
@@ -721,7 +746,7 @@ matches `[ref_id-chunk_idx]` markers instead of page sorting. `source_uri` is
 stable provenance. HTTP adapters project the internal document ID and source
 workspace to an authorized `download_url`, then look up the locator server-side;
 raw storage locators and workspace-routing fields are never public.
-REST links use `/files/raw/{document_id}`; Web links use the Web-session-owned
+REST links use `/files/raw/{document_id}`; Web links use the Web-authenticated
 `/web/files/raw/{document_id}`. Transport-neutral SDK/MCP payloads leave
 `download_url` null.
 
@@ -876,11 +901,13 @@ curl -X POST http://localhost:8100/answer \
   }'
 ```
 
-`query_images` is the user-facing chat path: DlightRAG stores bounded session
-images, asks the VLM for concise semantic descriptions, embeds the raw image
-for direct visual retrieval, and sends a bounded image preview to the answer
-model. `multimodal_content` remains the lower-level direct visual retrieval
-input for programmatic callers.
+`query_images` is the user-facing current-request image path. REST, MCP, CLI,
+and Python calls ask the VLM for concise semantic descriptions, embed the raw
+image for direct visual retrieval, and send a bounded image preview to the
+answer model without persistence. The Web route additionally commits validated
+current-turn images with the complete successful turn in its principal-scoped
+conversation. `multimodal_content` remains the lower-level direct visual
+retrieval input for programmatic callers.
 
 Answer-model previews are quality-preserving. Budgeted JPEG, PNG, and WebP
 payloads pass through unchanged; oversized images are recompressed only down to

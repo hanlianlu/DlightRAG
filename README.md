@@ -170,8 +170,19 @@ same filesystem as your shell.
 ### Web
 
 The Web UI is served by the REST API at `/web/`. It supports workspace
-selection, file/folder upload, chat, session image memory, citations, source
-panels, and semantic highlights.
+selection, file/folder upload, durable principal-scoped conversations and
+current-turn images, citations, source panels, and semantic highlights. The
+Web-only conversation lifecycle provides New chat, select, rename, delete, and
+reload persistence with 30-day inactivity retention. `Search in: All authorized
+workspaces` is the answer default; the independent `Files in` selector remains a
+single-workspace file-management target.
+
+REST, MCP, and Python answer/retrieve calls remain stateless. They accept only
+the current request and never accept a Web conversation ID or caller-supplied
+history. Web current-image admission is configurable and defaults to three
+images at 15 MiB each. Durable current-turn images always have priority over any
+historical image selection; historical-image resolution and unified answer
+transport budgeting are reserved for Slice B.
 
 ### REST
 

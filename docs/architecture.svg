@@ -60,7 +60,7 @@
 
   <rect class="box box-indigo" x="382" y="160" width="244" height="64"/>
   <text class="label" text-anchor="middle" x="504" y="184">RAGServiceManager</text>
-  <text class="small" text-anchor="middle" x="504" y="202">workspace routing, session images</text>
+  <text class="small" text-anchor="middle" x="504" y="202">workspace routing, stateless answers</text>
   <text class="small" text-anchor="middle" x="504" y="216">service lifecycle, ingest jobs</text>
 
   <rect class="box box-indigo" x="704" y="160" width="244" height="64"/>

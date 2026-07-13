@@ -19,6 +19,60 @@ from dlightrag.mcp.contracts import AnswerInput, RetrieveInput
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_no_legacy_conversation_contract_remains() -> None:
+    forbidden = {
+        "src/dlightrag/storage/checkpoint_pg.py",
+        "src/dlightrag/core/session_images.py",
+        "frontend/stores/sessionStore.ts",
+        "frontend/ui/clearHistory.ts",
+    }
+    assert all(not (ROOT / path).exists() for path in forbidden)
+    scanned = [ROOT / "src", ROOT / "frontend", ROOT / "README.md", ROOT / "docs"]
+    offenders: list[str] = []
+    for base in scanned:
+        paths = [base] if base.is_file() else list(base.rglob("*"))
+        for path in paths:
+            if not path.is_file() or "superpowers" in path.parts or "static/generated" in str(path):
+                continue
+            text = path.read_text(errors="ignore")
+            for legacy in (
+                "dlightrag.session_id",
+                "dlightrag-image://",
+                "checkpoint_saved",
+                "session images",
+            ):
+                if legacy in text:
+                    offenders.append(f"{path.relative_to(ROOT)}:{legacy}")
+    assert offenders == []
+
+
+def test_public_docs_describe_slice_a_conversation_boundaries() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    configuration = (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    interfaces = (ROOT / "docs/interfaces.md").read_text(encoding="utf-8")
+    retrieval = (ROOT / "docs/retrieval-answer.md").read_text(encoding="utf-8")
+    public_docs = "\n".join((readme, configuration, interfaces, retrieval))
+
+    for required in (
+        "Web-only conversation lifecycle",
+        "principal-scoped",
+        "30-day inactivity retention",
+        "REST, MCP, and Python answer/retrieve calls remain stateless",
+        "Search in: All authorized workspaces",
+        "Files in",
+        "15 MiB",
+        "current-turn images always have priority",
+        "Slice B",
+    ):
+        assert required in public_docs
+
+    for stale in (
+        "Web-session-owned source route",
+        "stores bounded session images",
+    ):
+        assert stale not in public_docs
+
+
 def test_public_requests_reject_conversation_fields() -> None:
     for model in (RetrieveRequest, AnswerRequest, RetrieveInput, AnswerInput):
         fields = set(model.model_fields)
