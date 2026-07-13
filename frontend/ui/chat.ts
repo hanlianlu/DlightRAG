@@ -20,16 +20,25 @@ import {
 } from '../stores/pendingSubmissionStore.ts';
 
 let queryInFlight = false;
+let queryStopping = false;
 let currentQueryController: AbortController | null = null;
 const STREAM_IDLE_TIMEOUT_MS = 120_000;
 
 /** Abort the in-flight answer request (user stop / navigation), if any. */
 export function cancelQuery(): void {
-    currentQueryController?.abort(new DOMException('Query cancelled', 'AbortError'));
+    if (currentQueryController && !currentQueryController.signal.aborted) {
+        queryStopping = true;
+        currentQueryController.abort(new DOMException('Query cancelled', 'AbortError'));
+    }
 }
 
 export function isQueryInFlight(): boolean {
     return queryInFlight;
+}
+
+/** User pressed Stop — abort was sent, waiting for stream cleanup. */
+export function isQueryStopping(): boolean {
+    return queryStopping;
 }
 
 function submitComposerForm(form: HTMLFormElement): void {
@@ -158,6 +167,7 @@ export async function submitQuery(query: string): Promise<void> {
         clearTimeout(idleTimer);
         if (currentQueryController === controller) currentQueryController = null;
         queryInFlight = false;
+        queryStopping = false;
         bus.emit('conversationStreamChanged', {active: false});
     }
 }

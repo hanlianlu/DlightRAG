@@ -17,7 +17,7 @@ import {
     renderConversationHistoryLoading,
 } from '../lib/chat_renderer.ts';
 import {conversationStore} from '../stores/conversationStore.ts';
-import {isQueryInFlight} from './chat.ts';
+import {isQueryInFlight, isQueryStopping} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
 import {clearImages, getPendingImageData} from './images.ts';
 import {closePanel} from './panel.ts';
@@ -126,7 +126,9 @@ async function confirmDiscardDraft(resolveReturnTarget: FocusResolver): Promise<
 
 function lifecycleBlocked(): boolean {
     if (!isQueryInFlight()) return false;
-    showToast('Stop the current response before changing conversations.', 4000);
+    if (!isQueryStopping()) {
+        showToast('Stop the current response before changing conversations.', 4000);
+    }
     return true;
 }
 
