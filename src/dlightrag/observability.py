@@ -15,6 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _client: Any = None  # Langfuse client when enabled, None otherwise
+_trace_sensitive: bool = True  # Attach sensitive data (query, error text, raw IDs) to traces
 _LANGFUSE_TRACER_SCOPE = "langfuse-sdk"
 _SENSITIVE_KEY_PARTS = (
     "api_key",
@@ -34,11 +35,13 @@ def init_tracing(config: Any) -> None:
     No-op if disabled. Langfuse's SDK performs export asynchronously; DlightRAG
     avoids calling the SDK's blocking ``auth_check()`` in production startup.
     """
-    global _client
+    global _client, _trace_sensitive
+    _trace_sensitive = bool(getattr(config, "langfuse_trace_sensitive_data", True))
     if not config.langfuse_public_key or not config.langfuse_secret_key:
         _client = None
         logger.info("Langfuse tracing disabled (keys missing in config)")
         return
+
     try:
         from langfuse import Langfuse
 
@@ -69,6 +72,11 @@ def init_tracing(config: Any) -> None:
             "Langfuse enabled but initialization failed. Falling back to tracing disabled.",
             exc_info=True,
         )
+
+
+def trace_sensitive_enabled() -> bool:
+    """Whether sensitive request data may be attached to traces (config switch)."""
+    return _trace_sensitive
 
 
 def shutdown_tracing() -> None:
@@ -508,7 +516,7 @@ async def trace_observation(
         yield _ObservationHandle(None)
         return
     observation_kwargs: dict[str, Any] = {"as_type": as_type, "name": name}
-    if input is not None:
+    if input is not None and _trace_sensitive:
         observation_kwargs["input"] = input
     if metadata is not None:
         observation_kwargs["metadata"] = metadata
@@ -530,7 +538,8 @@ async def trace_observation(
             exc_type = type(caught)
             exc = caught
             tb = caught.__traceback__
-            _safe_update(observation, level="ERROR", status_message=str(caught))
+            status = str(caught) if _trace_sensitive else "error"
+            _safe_update(observation, level="ERROR", status_message=status)
             raise
     finally:
         _exit_observation(cm, exc_type, exc, tb)

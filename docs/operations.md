@@ -131,7 +131,7 @@ Langfuse Cloud account. It runs as its own Docker Compose project on isolated
 ports and is wired to DlightRAG by two helper scripts under `scripts/langfuse/`.
 
 Non-secret SDK behavior (`langfuse_host`, `langfuse_export_external_spans`,
-`langfuse_environment`, sample rate, timeout) lives in
+`langfuse_trace_sensitive_data`, `langfuse_environment`, sample rate, timeout) lives in
 [configuration.md](configuration.md). This section covers running the stack.
 
 Prerequisites: Docker and Compose. The Langfuse stack is separate from the

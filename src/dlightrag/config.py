@@ -1119,6 +1119,16 @@ class DlightragConfig(BaseSettings):
         description="Export third-party GenAI/LLM OpenTelemetry spans to Langfuse. "
         "Disabled by default because DlightRAG records model calls manually.",
     )
+    langfuse_trace_sensitive_data: bool = Field(
+        default=True,
+        description=(
+            "Include sensitive request data in Langfuse traces for full "
+            "debuggability: the user query, raw error messages, and raw "
+            "principal/conversation IDs. Enabled by default. Set to false to "
+            "redact them (privacy mode: query omitted, generic error text, "
+            "hashed IDs). Does not affect LLM prompt/response capture."
+        ),
+    )
     langfuse_environment: str | None = Field(
         default=None,
         description="Optional Langfuse tracing environment label, e.g. production or staging.",
