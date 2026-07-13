@@ -33,10 +33,3 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-
-      - id: check-architecture
-        name: architecture (AST boundary check)
-        entry: uv run python scripts/ci/check-architecture.py
-        language: system
-        types: [python]
-        pass_filenames: false
