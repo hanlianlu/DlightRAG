@@ -287,6 +287,31 @@ async def test_backend_embeds_query_images_directly(tmp_path: Path) -> None:
     assert result.contexts["chunks"][0]["chunk_id"] == "img1"
 
 
+async def test_backend_query_image_dedup_keeps_closest_distance(tmp_path: Path) -> None:
+    lightrag = MagicMock()
+    lightrag.aquery_data = AsyncMock(
+        return_value={"data": {"chunks": [], "entities": [], "relationships": []}}
+    )
+    stores = _stores(raw_chunks=[None])
+    # Two query-image vectors both retrieve the same chunk at different distances;
+    # the merge must keep the CLOSEST (smallest distance), not whichever arrived last.
+    stores.chunks_vdb.query = AsyncMock(
+        side_effect=[
+            [{"id": "dup", "content": "far", "file_path": "a", "distance": 0.9}],
+            [{"id": "dup", "content": "near", "file_path": "a", "distance": 0.1}],
+        ]
+    )
+    embedder = MagicMock()
+    embedder.embed_query_images = AsyncMock(return_value=[[0.1], [0.2]])
+
+    backend = LightRAGMixBackend(lightrag=lightrag, stores=stores, embedder=embedder)
+    result = await backend.aretrieve("q", multimodal_content=[_image_payload()])
+
+    visual = [c for c in result.contexts["chunks"] if c["chunk_id"] == "dup"]
+    assert len(visual) == 1
+    assert visual[0]["relevance_score"] == 0.1  # closest kept, not the last-seen 0.9
+
+
 async def test_backend_decodes_query_images_off_event_loop(
     monkeypatch: Any,
 ) -> None:

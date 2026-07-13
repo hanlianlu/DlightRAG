@@ -137,7 +137,9 @@ class LightRAGMixBackend:
                 "content": raw.get("content", ""),
                 "reference_id": str(raw.get("reference_id", "")),
                 "file_path": raw.get("file_path", ""),
-                "relevance_score": raw.get("score") or raw.get("distance"),
+                "relevance_score": (
+                    raw.get("score") if raw.get("score") is not None else raw.get("distance")
+                ),
             }
             for key in ("full_doc_id", "sidecar", "sidecar_location", "page_idx"):
                 if raw.get(key) is not None:
@@ -194,8 +196,10 @@ class LightRAGMixBackend:
                 if not cid:
                     continue
                 dist = c.get("distance")
-                if cid not in merged or (
-                    dist is not None and dist < merged[cid].get("distance", float("inf"))
+                existing = merged.get(cid)
+                existing_dist = existing.get("relevance_score") if existing else None
+                if existing is None or (
+                    dist is not None and (existing_dist is None or dist < existing_dist)
                 ):
                     merged[cid] = {
                         "chunk_id": cid,
@@ -206,9 +210,12 @@ class LightRAGMixBackend:
                     }
                     if c.get("full_doc_id"):
                         merged[cid]["full_doc_id"] = c["full_doc_id"]
-        return sorted(merged.values(), key=lambda c: c.get("relevance_score") or float("inf"))[
-            :top_k
-        ]
+        return sorted(
+            merged.values(),
+            key=lambda c: (
+                c["relevance_score"] if c.get("relevance_score") is not None else float("inf")
+            ),
+        )[:top_k]
 
     async def _hydrate_chunk_provenance(self, chunks: list[ContextRow]) -> None:
         await hydrate_lightrag_chunk_provenance(self._stores, chunks)
