@@ -118,11 +118,12 @@
     --radius-message: var(--radius-xl);
 
     /* ── Interactive sizing ── */
-    --size-button: clamp(28px, 2.8vw, 34px);  /* composer buttons, small interactive */
+    --size-button: clamp(28px, 2.8vw, 34px);  /* custom: between space-m and space-l for touch safety */
+    --size-icon-sm: var(--space-xs);  /* aligns with Utopia space scale */
+    --size-icon-md: var(--space-s);   /* aligns with Utopia space scale */
     --size-lightbox-nav-width: clamp(44px, 6vw, 72px);
     --inset-lightbox-nav-block: max(var(--space-layout), 12vh);
     --font-size-lightbox-nav-icon: clamp(30px, 4vw, 42px);
-    --size-icon-sm: clamp(12px, 1.2vw, 16px);  /* small icons */
-    --size-icon-md: clamp(16px, 1.6vw, 20px);  /* medium icons */
+    --stroke-composer-plus-icon: 1.25;
     --stroke-composer-plus-icon: 1.25;
 }
