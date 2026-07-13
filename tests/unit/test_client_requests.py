@@ -8,6 +8,8 @@ from pydantic import ValidationError
 
 from dlightrag.api.models import AnswerRequest, RetrievalResponse, RetrieveRequest
 from dlightrag.citations.schemas import SourceReference, SourceReferencePayload
+from dlightrag.config import QueryImagesConfig
+from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestDocument, IngestSpec
 from dlightrag.core.client_requests import (
     ingest_kwargs_from_payload,
@@ -103,6 +105,31 @@ def test_tracked_specs_record_slice_a_completion_and_future_multimodal_work() ->
         "10 张成功时 effective=10",
     ):
         assert stale not in specs
+
+
+def test_tracked_spec_matches_per_interface_current_image_admission() -> None:
+    durable = (
+        ROOT / "docs/superpowers/specs/2026-07-12-durable-scoped-multimodal-conversations-design.md"
+    ).read_text(encoding="utf-8")
+    images = [
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,image-{index}"}}
+        for index in range(4)
+    ]
+
+    web_policy = QueryImagesConfig(max_current_images=4)
+    assert web_policy.max_current_images == 4
+
+    for model in (RetrieveRequest, AnswerRequest, RetrieveInput, AnswerInput):
+        with pytest.raises(ValidationError):
+            model.model_validate({"query": "four images", "query_images": images})
+
+    python_turn = PreparedAnswerTurn.stateless("four images", images)
+    assert len(python_turn.materialized_query_images) == 4
+
+    assert "可配置的 Web current-upload admission count" in durable
+    assert "REST 和 MCP 保持各自 schema-level max 3 contract" in durable
+    assert "Python 保持无状态且不执行等价的 current-upload admission" in durable
+    assert "Web、REST、MCP 和 Python 公共验证使用同一配置" not in durable
 
 
 def test_public_requests_reject_conversation_fields() -> None:
