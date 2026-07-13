@@ -376,8 +376,8 @@ body.conversation-sidebar-open .panel {
 
 #panel-title {
     color: var(--color-text-subtle);
-    font-size: var(--font-size-caption);
-    font-weight: 600;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
     letter-spacing: 0;
 }
 
