@@ -149,7 +149,6 @@ class CompletionProvider(ABC):
         self._base_url = base_url
         self._timeout = timeout
         self._max_retries = max_retries
-        self.supports_vision: bool | None = None
         self.last_reasoning: str = ""
 
     @abstractmethod

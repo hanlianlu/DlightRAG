@@ -4,8 +4,6 @@
 from unittest.mock import AsyncMock
 
 from dlightrag.core.vision_probe import probe_image_capability, probe_vision_support
-from dlightrag.models.providers.anthropic_native import AnthropicProvider
-from dlightrag.models.providers.gemini_native import GeminiProvider
 
 
 class TestProbeImageCapability:
@@ -97,7 +95,3 @@ class TestProbeVisionSupport:
         user_content = call_messages[0]["content"]
         assert isinstance(user_content, list)
         assert any(block.get("type") == "image_url" for block in user_content)
-
-    def test_native_providers_start_unprobed(self) -> None:
-        assert AnthropicProvider(api_key="test").supports_vision is None
-        assert GeminiProvider(api_key="test").supports_vision is None

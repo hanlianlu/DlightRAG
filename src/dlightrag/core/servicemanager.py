@@ -209,21 +209,23 @@ _ERROR_IMAGES_NOT_SUPPORTED = (
 )
 
 
-def _check_vision_support(
+def _check_answer_image_capability(
     *,
     query_images: list[dict[str, Any]] | None,
-    supports_vision: bool | None,
+    capability: AnswerImageCapability | None,
 ) -> None:
-    """Raise ValueError if images are present but model doesn't support vision.
+    """Raise ValueError if current images are present but the query-role answer
+    model cannot accept them.
 
-    ``None`` means unprobed, so the request is allowed through and the provider
-    surfaces any model-specific error.
+    Gates on the capability of ``model_for_role(config, "query")`` -- the model
+    that actually receives the images -- not ``llm.default``. ``None``/``unknown``
+    is allowed through (the transport budget and provider surface any deeper
+    failure); only an explicit ``unsupported`` verdict rejects at the boundary.
     """
     if not query_images:
         return
-    if supports_vision is False:
+    if capability is not None and capability.status == "unsupported":
         raise ValueError(f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}")
-    # None (unprobed) or True — allow through
 
 
 class RAGServiceManager:
@@ -258,7 +260,7 @@ class RAGServiceManager:
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
-        self._supports_vision: bool | None = None
+        self._default_supports_vision: bool | None = None
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
@@ -543,6 +545,7 @@ class RAGServiceManager:
         ceiling = int(self._config.answer.max_images)
         cfg = model_for_role(self._config, "query")
         default = self._config.llm.default
+        provider: Any = None
         try:
             provider = get_provider(
                 cfg.provider,
@@ -557,6 +560,9 @@ class RAGServiceManager:
             from dlightrag.core.vision_probe import ImageProbeOutcome
 
             outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
+        finally:
+            if provider is not None:
+                await provider.aclose()
         self._answer_image_capability = AnswerImageCapability(
             status=outcome.status,
             configured_ceiling=ceiling,
@@ -581,7 +587,7 @@ class RAGServiceManager:
         Stores the result on this manager instance so SDK callers can run
         multiple managers with different model configs in one process.
         """
-        if self._supports_vision is not None and self._rerank_supports_vision is not None:
+        if self._default_supports_vision is not None and self._rerank_supports_vision is not None:
             return  # already probed
 
         from dlightrag.core.vision_probe import probe_vision_support
@@ -618,8 +624,8 @@ class RAGServiceManager:
             finally:
                 await provider.aclose()
 
-        if self._supports_vision is None:
-            self._supports_vision = await probe_model(default, label="Chat model")
+        if self._default_supports_vision is None:
+            self._default_supports_vision = await probe_model(default, label="Chat model")
 
         if (
             self._rerank_supports_vision is None
@@ -634,7 +640,7 @@ class RAGServiceManager:
                 and (rerank_model.api_key or default.api_key) == default.api_key
             )
             self._rerank_supports_vision = (
-                self._supports_vision
+                self._default_supports_vision
                 if same_as_default
                 else await probe_model(rerank_model, label="Rerank model")
             )
@@ -1296,10 +1302,10 @@ class RAGServiceManager:
             }
         )
 
-        # Guard: reject image input when the model doesn't support it
-        _check_vision_support(
+        # Guard: reject current images when the query-role answer model can't accept them
+        _check_answer_image_capability(
             query_images=list(turn.materialized_query_images),
-            supports_vision=self._supports_vision,
+            capability=self._answer_image_capability,
         )
 
         from dlightrag.observability import trace_observation
@@ -1440,10 +1446,10 @@ class RAGServiceManager:
         history = list(turn.text_history) or None
         query_images = list(turn.materialized_query_images)
 
-        # Guard: reject image input when the model doesn't support it
-        _check_vision_support(
+        # Guard: reject current images when the query-role answer model can't accept them
+        _check_answer_image_capability(
             query_images=query_images,
-            supports_vision=self._supports_vision,
+            capability=self._answer_image_capability,
         )
 
         try:

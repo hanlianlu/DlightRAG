@@ -1,12 +1,15 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Sole creator of final answer image blocks under one transport budget.
+"""Answer image transport allocation policy and accounting.
 
 A single ``effective_max_images`` counter governs how many raw images reach the
 answer model. Allocation is strictly ordered: current-turn images reserve slots
-first, then selected history images, then reranked RAG visual chunks. Overflow
-history and RAG images silently keep their stored text descriptions elsewhere;
-current-turn images have no silent fallback -- if they cannot all fit, the
-request fails and names the overflow.
+first, then selected history images, then reranked RAG visual chunks. This
+computes the per-origin counts used for observability and enforces the
+current-image invariant; the shared ``AnswerImageBudget`` applies the same
+ordering when the engine places blocks into the final multi-turn messages.
+Overflow history and RAG images keep their stored text descriptions; current
+images have no silent fallback -- if they cannot all fit, the request fails and
+names the overflow.
 """
 
 from __future__ import annotations
