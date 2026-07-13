@@ -369,6 +369,43 @@ WITH deleted AS (
 SELECT COUNT(*)::int AS count FROM deleted
 """
 
+_LIST_IMAGE_CATALOG = """
+SELECT
+    i.image_id::text AS image_id,
+    t.turn_number,
+    i.ordinal,
+    i.vlm_description
+FROM web_conversation_images AS i
+JOIN web_conversation_turns AS t
+  ON t.principal_id = i.principal_id
+ AND t.conversation_id = i.conversation_id
+ AND t.turn_id = i.turn_id
+JOIN web_conversations AS c
+  ON c.principal_id = i.principal_id
+ AND c.conversation_id = i.conversation_id
+WHERE i.principal_id = $1
+  AND i.conversation_id = $2::text::uuid
+  AND c.updated_at >= NOW() - ($3 * INTERVAL '1 day')
+ORDER BY t.turn_number DESC, i.ordinal ASC
+LIMIT $4
+"""
+
+_FETCH_IMAGES_BY_IDS = """
+SELECT
+    i.image_id::text AS image_id,
+    i.mime_type,
+    i.image_bytes,
+    i.vlm_description
+FROM web_conversation_images AS i
+JOIN web_conversations AS c
+  ON c.principal_id = i.principal_id
+ AND c.conversation_id = i.conversation_id
+WHERE i.principal_id = $1
+  AND i.conversation_id = $2::text::uuid
+  AND i.image_id = ANY($3::uuid[])
+  AND c.updated_at >= NOW() - ($4 * INTERVAL '1 day')
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class ConversationSnapshot:
@@ -409,6 +446,7 @@ class StoredConversationImage:
     image_id: str
     mime_type: str
     image_bytes: bytes
+    vlm_description: str | None = None
 
 
 def _row_dict(row: Any) -> dict[str, Any]:
@@ -508,6 +546,57 @@ class PGWebConversationStore:
     async def _ensure_initialized(self) -> None:
         if not self._initialized:
             await self.initialize()
+
+    async def list_image_catalog(
+        self, principal_id: str, conversation_id: str, *, max_turns: int, ttl_days: int
+    ) -> list[dict[str, Any]]:
+        """Return scoped ``{image_id, turn_number, ordinal, vlm_description}`` rows.
+
+        Captions only — never image bytes — so the web-variant planner can pick
+        which prior images the follow-up refers to without loading blobs.
+        """
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> list[dict[str, Any]]:
+            rows = await conn.fetch(
+                _LIST_IMAGE_CATALOG, principal_id, conversation_id, ttl_days, max_turns
+            )
+            return [dict(row) for row in rows]
+
+        return await self._run_read(_operation)
+
+    async def fetch_images_by_ids(
+        self,
+        principal_id: str,
+        conversation_id: str,
+        image_ids: list[str],
+        *,
+        ttl_days: int,
+    ) -> list[StoredConversationImage]:
+        """Return owned, unexpired image bytes + captions for the given ids.
+
+        The caption travels with the bytes so the web layer can fold persisted
+        descriptions into the retrieval query without re-running the VLM.
+        """
+        if not image_ids:
+            return []
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> list[StoredConversationImage]:
+            rows = await conn.fetch(
+                _FETCH_IMAGES_BY_IDS, principal_id, conversation_id, image_ids, ttl_days
+            )
+            return [
+                StoredConversationImage(
+                    image_id=row["image_id"],
+                    mime_type=row["mime_type"],
+                    image_bytes=row["image_bytes"],
+                    vlm_description=row["vlm_description"],
+                )
+                for row in rows
+            ]
+
+        return await self._run_read(_operation)
 
     async def create_conversation(self, principal_id: str) -> dict[str, Any]:
         """Create and return an empty conversation owned by ``principal_id``."""
