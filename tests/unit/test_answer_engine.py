@@ -546,151 +546,19 @@ class TestAnswerEngineStream:
 # ---------------------------------------------------------------------------
 
 
-class TestBuildMessages:
-    """Test _build_messages method."""
+class TestAnswerImageBudget:
+    """Single adaptive current->history->RAG image transport budget.
 
-    def test_text_only(self) -> None:
-        """_build_messages without images returns text content."""
-        contexts: RetrievalContexts = {"chunks": [{"content": "text chunk"}]}
-        engine = AnswerEngine()
-        messages = engine._build_messages("system", "user prompt", contexts)
-
-        assert len(messages) == 2
-        assert messages[0]["role"] == "system"
-        assert messages[0]["content"] == "system"
-        assert messages[1]["role"] == "user"
-        # user content should be a list with text entries
-        user_content = messages[1]["content"]
-        # Should contain at least the user prompt text block
-        text_blocks = [e for e in user_content if e.get("type") == "text"]
-        assert any("user prompt" in e["text"] for e in text_blocks)
-
-    def test_with_images_grouped_by_document(self) -> None:
-        """_build_messages groups images by document with section headers."""
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "content": "text",
-                    "image_data": _PNG_B64,
-                    "file_path": "/docs/report.pdf",
-                    "page_idx": 3,
-                },
-                {
-                    "chunk_id": "c2",
-                    "reference_id": "1",
-                    "content": "more text",
-                    "file_path": "/docs/report.pdf",
-                    "page_idx": 5,
-                },
-            ],
-        }
-        engine = AnswerEngine(effective_max_images=6)
-        messages = engine._build_messages("system", "user prompt", contexts)
-
-        user_content = messages[1]["content"]
-        image_entries = [e for e in user_content if e.get("type") == "image_url"]
-        text_entries = [e for e in user_content if e.get("type") == "text"]
-
-        # One image from chunk c1
-        assert len(image_entries) == 1
-        assert "base64" in image_entries[0]["image_url"]["url"]
-
-        # Should have Document Excerpts header and document section header
-        all_text = " ".join(e["text"] for e in text_entries)
-        assert "Document Excerpts" in all_text
-        assert "Document [1]" in all_text
-        assert "report.pdf" in all_text
-
-    def test_with_images_labelled_by_indexer(self) -> None:
-        """_build_messages with indexer labels images with enriched metadata."""
-        from dlightrag.citations.indexer import CitationIndexer
-
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "2",
-                    "content": "chart data",
-                    "image_data": _PNG_B64,
-                    "file_path": "/docs/report.pdf",
-                    "page_idx": 7,
-                    "metadata": {"doc_title": "2025 Annual Report"},
-                },
-            ],
-        }
-        flat = list(contexts["chunks"])
-        indexer = CitationIndexer()
-        indexer.build_index(flat)
-
-        engine = AnswerEngine(effective_max_images=6)
-        messages = engine._build_messages("sys", "prompt", contexts, indexer=indexer)
-        user_content = messages[1]["content"]
-
-        # Find image label text
-        label_entries = [
-            e for e in user_content if e.get("type") == "text" and "[2-1]" in e.get("text", "")
-        ]
-        assert len(label_entries) >= 1
-        # Should have enriched label with metadata
-        label_text = label_entries[0]["text"]
-        assert '"2025 Annual Report"' in label_text
-        assert "Page 7" in label_text
-
-    def test_multiple_images_from_different_docs(self) -> None:
-        """_build_messages with images from multiple documents groups them correctly."""
-        contexts: RetrievalContexts = {
-            "chunks": [
-                {
-                    "chunk_id": "c1",
-                    "reference_id": "1",
-                    "content": "a",
-                    "image_data": _PNG_B64,
-                    "file_path": "/docs/doc1.pdf",
-                },
-                {
-                    "chunk_id": "c2",
-                    "reference_id": "2",
-                    "content": "b",
-                    "image_data": _PNG_B64,
-                    "file_path": "/docs/doc2.pdf",
-                },
-                {
-                    "chunk_id": "c3",
-                    "reference_id": "2",
-                    "content": "c",
-                    "file_path": "/docs/doc2.pdf",
-                },
-            ],
-        }
-        engine = AnswerEngine(effective_max_images=6)
-        messages = engine._build_messages("sys", "prompt", contexts)
-        user_content = messages[1]["content"]
-
-        image_entries = [e for e in user_content if e.get("type") == "image_url"]
-        assert len(image_entries) == 2
-
-        # Check document grouping headers exist
-        all_text = " ".join(e["text"] for e in user_content if e.get("type") == "text")
-        assert "Document [1]" in all_text
-        assert "Document [2]" in all_text
-
-    def test_empty_chunks(self) -> None:
-        """_build_messages with empty chunks returns text-only content."""
-        contexts: RetrievalContexts = {"chunks": []}
-        engine = AnswerEngine()
-        messages = engine._build_messages("sys", "prompt", contexts)
-        user_content = messages[1]["content"]
-        # Should have at least the user prompt text block
-        assert any(e.get("type") == "text" for e in user_content)
+    Excerpt grouping/labelling is covered directly by ``TestBuildExcerptBlocks``;
+    these tests assert budget allocation through the shipping
+    ``_prepare_model_call`` path.
+    """
 
     def test_history_image_blocks_are_budgeted(self) -> None:
         contexts: RetrievalContexts = {"chunks": []}
         engine = AnswerEngine(effective_max_images=3)
 
-        messages = engine._build_messages(
-            "sys",
+        prepared = engine._prepare_model_call(
             "prompt",
             contexts,
             conversation_history=[
@@ -704,16 +572,14 @@ class TestBuildMessages:
             ],
         )
 
-        history_content = messages[1]["content"]
+        history_content = prepared.messages[1]["content"]
         assert any(block.get("type") == "image_url" for block in history_content)
 
-    def test_current_query_images_use_user_budget_before_history_images(self) -> None:
+    def test_current_query_images_reserve_before_history(self) -> None:
         contexts: RetrievalContexts = {"chunks": []}
         engine = AnswerEngine(effective_max_images=1)
-        trace: dict[str, int] = {}
 
-        messages = engine._build_messages(
-            "sys",
+        prepared = engine._prepare_model_call(
             "prompt",
             contexts,
             query_images=[_image_block()],
@@ -726,14 +592,13 @@ class TestBuildMessages:
                     ],
                 }
             ],
-            trace=trace,
         )
 
-        history_content = messages[1]["content"]
-        final_user_content = messages[2]["content"]
+        history_content = prepared.messages[1]["content"]
+        final_user_content = prepared.messages[2]["content"]
         assert not any(block.get("type") == "image_url" for block in history_content)
         assert sum(1 for block in final_user_content if block.get("type") == "image_url") == 1
-        assert trace["answer_images_current"] == 1
+        assert prepared.trace["answer_images_current"] == 1
 
     def test_single_budget_allocates_current_then_history_then_rag(self) -> None:
         contexts: RetrievalContexts = {
@@ -748,10 +613,8 @@ class TestBuildMessages:
             ]
         }
         engine = AnswerEngine(effective_max_images=2)
-        trace: dict[str, int] = {}
 
-        messages = engine._build_messages(
-            "sys",
+        prepared = engine._prepare_model_call(
             "prompt",
             contexts,
             query_images=[_image_block()],
@@ -761,23 +624,22 @@ class TestBuildMessages:
                     "content": [{"type": "text", "text": "prev"}, _image_block()],
                 }
             ],
-            trace=trace,
         )
 
         # current(1) + history(1) exhaust the shared budget of 2; the RAG image
         # is dropped from transport even though its chunk text remains.
         total_images = sum(
             1
-            for message in messages
+            for message in prepared.messages
             if isinstance(message["content"], list)
             for block in message["content"]
             if isinstance(block, dict) and block.get("type") == "image_url"
         )
         assert total_images == 2
-        assert trace["answer_images_current"] == 1
-        assert trace["answer_images_history"] == 1
-        assert trace["answer_images_rag"] == 0
-        assert trace["answer_images_total"] == 2
+        assert prepared.trace["answer_images_current"] == 1
+        assert prepared.trace["answer_images_history"] == 1
+        assert prepared.trace["answer_images_rag"] == 0
+        assert prepared.trace["answer_images_total"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1021,9 +883,9 @@ class TestBuildExcerptBlocks:
         }
         engine = AnswerEngine(effective_max_images=0)
 
-        messages = engine._build_messages("sys", "prompt", contexts)
+        prepared = engine._prepare_model_call("prompt", contexts)
 
-        user_content = messages[1]["content"]
+        user_content = prepared.messages[1]["content"]
         assert not any(block.get("type") == "image_url" for block in user_content)
         all_text = "\n".join(block["text"] for block in user_content if block.get("type") == "text")
         assert "Page image" not in all_text
