@@ -89,8 +89,7 @@
 .source-doc-title {
     flex: 1;
     font-size: var(--font-size-detail);
-    font-weight: 500;
-    color: var(--color-text-secondary);
+    color: var(--color-text-tertiary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
