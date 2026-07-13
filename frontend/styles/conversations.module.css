@@ -1,0 +1,365 @@
+/* Conversation lifecycle shell. Fine three-panel geometry is owned by Task 8. */
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules global selectors */
+
+.root {
+    isolation: isolate;
+}
+
+:global(#chat-sidebar) {
+    background: color-mix(in srgb, var(--color-bg-surface) 92%, var(--color-bg-base));
+    box-shadow: 12px 0 36px rgb(0 0 0 / 18%);
+    color: var(--color-text-secondary);
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    inset: 0 auto 0 0;
+    overflow: hidden;
+    position: fixed;
+    transform: translateX(-100%);
+    transition: transform var(--conversation-shell-duration) var(--conversation-shell-easing);
+    width: var(--layout-chat-sidebar-width);
+    z-index: 120;
+}
+
+:global(.conversation-top-row) {
+    align-items: center;
+    display: flex;
+    flex: 0 0 var(--conversation-top-row-height);
+    gap: var(--space-tight);
+    padding: var(--space-tight) var(--space-related);
+}
+
+:global(#new-conversation-btn) {
+    align-items: center;
+    background: rgb(87 74 36 / 36%);
+    border: 1px solid rgb(210 182 97 / 22%);
+    border-radius: var(--radius-sm);
+    color: var(--color-gold-100);
+    cursor: pointer;
+    display: inline-flex;
+    flex: 1;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    font-weight: 600;
+    min-height: var(--size-button);
+    padding: var(--space-tight) var(--space-component);
+    transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+:global(#new-conversation-btn:hover) {
+    background: rgb(87 74 36 / 50%);
+    border-color: rgb(210 182 97 / 36%);
+    color: var(--color-text-primary);
+}
+
+:global(#new-conversation-btn:disabled),
+:global(.conversation-select:disabled),
+:global(.conversation-actions-menu button:disabled) {
+    cursor: not-allowed;
+    opacity: 0.46;
+}
+
+:global(#conversation-sidebar-toggle),
+:global(#conversation-sidebar-open),
+:global(.conversation-actions-button) {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-subtle);
+    cursor: pointer;
+    display: inline-flex;
+    flex: 0 0 auto;
+    height: var(--size-button);
+    justify-content: center;
+    width: var(--size-button);
+}
+
+:global(#conversation-sidebar-toggle:hover),
+:global(#conversation-sidebar-open:hover),
+:global(.conversation-actions-button:hover) {
+    background: var(--color-bg-hover);
+    color: var(--color-text-secondary);
+}
+
+:global(#conversation-sidebar-open) {
+    display: inline-flex;
+    margin-right: var(--space-tight);
+}
+
+:global(#conversation-list) {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-inline);
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-tight) var(--space-component);
+}
+
+:global(.conversation-row) {
+    align-items: center;
+    border-radius: var(--radius-sm);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: calc(var(--size-button) + var(--space-tight));
+    padding: var(--space-inline);
+    position: relative;
+}
+
+:global(.conversation-row:hover),
+:global(.conversation-row:focus-within) {
+    background: var(--color-bg-hover);
+}
+
+:global(.conversation-row[aria-current="page"]) {
+    background: rgb(120 113 108 / 13%);
+}
+
+:global(.conversation-select) {
+    background: transparent;
+    border: 0;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    overflow: hidden;
+    padding: var(--space-tight);
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+:global(.conversation-row[aria-current="page"] .conversation-select) {
+    color: var(--color-text-primary);
+    font-weight: 550;
+}
+
+:global(.conversation-actions-button) {
+    font-size: var(--font-size-caption);
+    opacity: 0;
+    transition: opacity 120ms, background 120ms, color 120ms;
+}
+
+:global(.conversation-row:hover .conversation-actions-button),
+:global(.conversation-row:focus-within .conversation-actions-button),
+:global(.conversation-row[aria-current="page"] .conversation-actions-button),
+:global(.conversation-actions-button[aria-expanded="true"]) {
+    opacity: 1;
+}
+
+:global(.conversation-actions-menu) {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 12px 28px rgb(0 0 0 / 42%);
+    display: flex;
+    flex-direction: column;
+    min-width: 132px;
+    padding: var(--space-inline);
+    position: absolute;
+    right: var(--space-inline);
+    top: calc(100% - var(--space-inline));
+    z-index: 5;
+}
+
+:global(.conversation-actions-menu button) {
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-xs);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-component);
+    text-align: left;
+}
+
+:global(.conversation-actions-menu button:hover),
+:global(.conversation-actions-menu button:focus-visible) {
+    background: var(--color-bg-hover);
+}
+
+:global(.conversation-actions-menu .conversation-delete-action) {
+    color: var(--color-danger);
+}
+
+:global(.conversation-row input) {
+    background: var(--color-bg-subtle);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-xs);
+    color: var(--color-text-primary);
+    font: inherit;
+    font-size: var(--font-size-detail);
+    min-width: 0;
+    outline: none;
+    padding: var(--space-tight);
+}
+
+:global(.conversation-row input:focus) {
+    border-color: rgb(210 182 97 / 52%);
+    box-shadow: 0 0 0 2px rgb(210 182 97 / 8%);
+}
+
+:global(.conversation-list-status) {
+    align-items: flex-start;
+    color: var(--color-text-subtle);
+    display: flex;
+    flex-direction: column;
+    font-size: var(--font-size-detail);
+    gap: var(--space-tight);
+    line-height: var(--line-height-control);
+    padding: var(--space-related) var(--space-tight);
+}
+
+:global(.conversation-list-status button) {
+    background: transparent;
+    border: 0;
+    color: var(--color-gold-200);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: 0;
+}
+
+:global(.conversation-skeleton) {
+    animation: conversation-pulse 1.5s ease-in-out infinite;
+    background: rgb(120 113 108 / 10%);
+    border-radius: var(--radius-sm);
+    height: calc(var(--size-button) + var(--space-tight));
+}
+
+:global(.conversation-retention-note) {
+    color: var(--color-text-dim);
+    flex: 0 0 auto;
+    font-size: var(--font-size-caption);
+    line-height: var(--line-height-control);
+    padding: var(--space-component) var(--space-related) var(--space-related);
+}
+
+:global(#conversation-sidebar-backdrop) {
+    background: rgb(0 0 0 / 48%);
+    inset: 0;
+    position: fixed;
+    z-index: 110;
+}
+
+:global(#delete-conversation-dialog),
+:global(#discard-draft-dialog) {
+    background: var(--color-bg-surface);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: 0 18px 48px rgb(0 0 0 / 52%);
+    color: var(--color-text-secondary);
+    max-width: 420px;
+    padding: var(--space-section);
+    width: min(420px, calc(100vw - 32px));
+}
+
+:global(#delete-conversation-dialog::backdrop),
+:global(#discard-draft-dialog::backdrop) {
+    background: rgb(0 0 0 / 58%);
+}
+
+:global(#delete-conversation-dialog h2),
+:global(#discard-draft-dialog h2) {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-subhead);
+    margin-bottom: var(--space-component);
+}
+
+:global(#delete-conversation-dialog p),
+:global(#discard-draft-dialog p) {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-detail);
+    line-height: var(--line-height-control);
+}
+
+:global(.conversation-dialog-actions) {
+    display: flex;
+    gap: var(--space-tight);
+    justify-content: flex-end;
+    margin-top: var(--space-section);
+}
+
+:global(.conversation-dialog-actions button) {
+    background: transparent;
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--font-size-detail);
+    padding: var(--space-tight) var(--space-component);
+}
+
+:global(.conversation-dialog-actions .conversation-dialog-danger) {
+    background: #b91c1c;
+    border-color: transparent;
+    color: var(--color-text-primary);
+}
+
+:global(#chat-sidebar button:focus-visible),
+:global(#chat-sidebar input:focus-visible),
+:global(#conversation-sidebar-open:focus-visible),
+:global(.conversation-dialog-actions button:focus-visible) {
+    outline: 2px solid rgb(210 182 97 / 64%);
+    outline-offset: 2px;
+}
+
+@keyframes conversation-pulse {
+    0%, 100% { opacity: 0.45; }
+    50% { opacity: 1; }
+}
+
+@media (width >= 1200px) {
+    :global(body.conversation-sidebar-open #chat-sidebar) {
+        transform: translateX(0);
+    }
+
+    :global(body.conversation-sidebar-open .topbar),
+    :global(body.conversation-sidebar-open .chat-area),
+    :global(body.conversation-sidebar-open .composer) {
+        margin-left: var(--layout-chat-sidebar-width);
+        transition: margin-left var(--conversation-shell-duration) var(--conversation-shell-easing);
+    }
+
+    :global(body.conversation-sidebar-open #conversation-sidebar-open) {
+        display: none;
+    }
+}
+
+@media (641px <= width < 1200px) {
+    :global(#chat-sidebar) {
+        width: min(320px, calc(100vw - var(--space-layout)));
+    }
+
+    :global(body.conversation-drawer-open #chat-sidebar) {
+        transform: translateX(0);
+    }
+}
+
+@media (width <= 640px) {
+    :global(#chat-sidebar) {
+        box-shadow: none;
+        width: 100vw;
+    }
+
+    :global(body.conversation-drawer-open #chat-sidebar) {
+        transform: translateX(0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :global(#chat-sidebar),
+    :global(body.conversation-sidebar-open .topbar),
+    :global(body.conversation-sidebar-open .chat-area),
+    :global(body.conversation-sidebar-open .composer) {
+        transition: none;
+    }
+
+    :global(.conversation-skeleton) {
+        animation: none;
+    }
+}

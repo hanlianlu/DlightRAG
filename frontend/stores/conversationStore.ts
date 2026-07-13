@@ -43,6 +43,13 @@ export class ConversationStore extends Store {
     this.emit('conversationListChanged', {conversations: this.#conversations});
   }
 
+  initialSelection(): ConversationSummary | null {
+    const stored = this.#activeConversationId;
+    return this.#conversations.find(
+      (conversation) => conversation.conversation_id === stored,
+    ) ?? this.#conversations[0] ?? null;
+  }
+
   select(conversationId: string): boolean {
     if (
       this.#liveAnswerConversationId !== null
@@ -107,6 +114,10 @@ export class ConversationStore extends Store {
   beginRequest(): number {
     this.#generation += 1;
     return this.#generation;
+  }
+
+  isCurrentRequest(generation: number): boolean {
+    return generation === this.#generation;
   }
 
   beginLiveAnswer(conversationId: string): number {

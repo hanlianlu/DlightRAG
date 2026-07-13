@@ -53,6 +53,32 @@ test('conversation store restores only the active server id from local storage',
   assert.equal(store.history, null);
 });
 
+test('conversation store resolves initial server selection from its one active id', () => {
+  installStorage({'dlightrag.active_conversation_id': 'second'});
+  const store = new ConversationStore();
+  store.replaceList([FIRST, SECOND]);
+
+  assert.equal(store.initialSelection()?.conversation_id, 'second');
+
+  installStorage({'dlightrag.active_conversation_id': 'expired'});
+  const expired = new ConversationStore();
+  expired.replaceList([FIRST, SECOND]);
+  assert.equal(expired.initialSelection()?.conversation_id, 'first');
+
+  expired.replaceList([]);
+  assert.equal(expired.initialSelection(), null);
+});
+
+test('conversation store is the sole authority for request generations', () => {
+  installStorage();
+  const store = new ConversationStore();
+  const stale = store.beginRequest();
+  const current = store.beginRequest();
+
+  assert.equal(store.isCurrentRequest(stale), false);
+  assert.equal(store.isCurrentRequest(current), true);
+});
+
 test('conversation store exposes only server projection mutations', () => {
   installStorage();
   const store = new ConversationStore();
@@ -67,6 +93,8 @@ test('conversation store exposes only server projection mutations', () => {
     'beginLiveAnswer',
     'finishLiveAnswer',
     'canRenderHistory',
+    'initialSelection',
+    'isCurrentRequest',
   ] as const) {
     assert.equal(typeof store[mutation], 'function', mutation);
   }
