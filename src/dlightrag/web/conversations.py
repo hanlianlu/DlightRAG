@@ -49,6 +49,10 @@ _HISTORY_THUMBNAIL_MAX_BYTES = 128 * 1024
 _HISTORY_THUMBNAIL_QUALITY = 82
 _HISTORY_THUMBNAIL_MIN_QUALITY = 50
 _HISTORY_THUMBNAIL_MIN_PX = 64
+# Per-image ceiling for persisted captions folded into the dense retrieval query.
+# Bounds a verbose stored description so it cannot dominate a short query and drift
+# the embedding centroid away from the user's intent.
+_MAX_FOLDED_CAPTION_CHARS = 160
 
 
 class WebConversationUnavailableError(RuntimeError):
@@ -245,10 +249,19 @@ class WebConversationService:
                 if image is None:
                     continue
                 history_blocks.append(_history_image_block(image))
-                if image.vlm_description:
-                    captions.append(image.vlm_description)
+                caption = (image.vlm_description or "").strip()
+                if caption:
+                    if len(caption) > _MAX_FOLDED_CAPTION_CHARS:
+                        caption = (
+                            caption[:_MAX_FOLDED_CAPTION_CHARS].rsplit(" ", 1)[0].rstrip() + "…"
+                        )
+                    captions.append(caption)
             if captions:
-                # Fold persisted captions into the retrieval text; no re-VLM.
+                # Fold persisted captions into the DENSE retrieval query only; the BM25
+                # channel stays focused on the planner's extracted keywords so multi-
+                # sentence visual descriptions cannot dilute lexical matching. Each
+                # caption is length-bounded above to keep a verbose stored description
+                # from drifting the embedding centroid away from the user's intent.
                 plan.standalone_query = (
                     f"{plan.standalone_query}\n\nReferenced prior images:\n" + "\n".join(captions)
                 )
