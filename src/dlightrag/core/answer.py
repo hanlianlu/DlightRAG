@@ -304,55 +304,6 @@ class AnswerEngine:
             no_context=no_context,
         )
 
-    def _build_messages(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        contexts: RetrievalContexts,
-        indexer: CitationIndexer | None = None,
-        query_images: list[dict[str, Any]] | None = None,
-        conversation_history: list[dict[str, Any]] | None = None,
-        chunk_image_blocks_by_chunk_id: dict[str, dict[str, Any]] | None = None,
-        trace: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Build OpenAI-format messages under one adaptive image budget.
-
-        A single ``effective_max_images`` budget is consumed in allocation
-        order: current-turn ``query_images`` reserve slots first, then
-        ``conversation_history`` images, then RAG context images take the
-        remainder. Current images have no silent fallback -- an overflow raises
-        :class:`CurrentImagePayloadError`.
-        """
-        budget = self._new_image_budget()
-        current_blocks = self._budget_current_images(query_images, budget)
-        history_messages, history_blocks = self._build_history_messages(
-            conversation_history, budget
-        )
-        if chunk_image_blocks_by_chunk_id is None:
-            prepared = self._prepare_prompt_context("", contexts, image_budget=budget)
-            contexts = prepared.contexts
-            indexer = prepared.indexer
-            chunk_image_blocks_by_chunk_id = prepared.chunk_image_blocks
-
-        assembled = self._assembler.assemble(
-            current_images=current_blocks,
-            history_images=history_blocks,
-            rag_visual_blocks=list(chunk_image_blocks_by_chunk_id.values()),
-            effective_max_images=self._effective_max_images,
-        )
-        messages = self._compose_user_messages(
-            system_prompt,
-            user_prompt,
-            contexts,
-            indexer,
-            current_blocks=current_blocks,
-            history_messages=history_messages,
-            chunk_image_blocks_by_chunk_id=chunk_image_blocks_by_chunk_id,
-        )
-        if trace is not None:
-            self._apply_image_trace(trace, assembled, budget)
-        return messages
-
     def _budget_current_images(
         self,
         query_images: list[dict[str, Any]] | None,
@@ -677,7 +628,7 @@ class AnswerEngine:
         by :meth:`_build_excerpt_blocks`.
 
         Returns the prompt string **and** the indexer so that
-        :meth:`_build_messages` can label inline images with their
+        :meth:`_build_excerpt_blocks` can label inline images with their
         ``[n-m]`` citation markers.
         """
         # Build indexer first so KG context includes citation tags
