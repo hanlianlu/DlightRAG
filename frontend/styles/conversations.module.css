@@ -34,7 +34,7 @@
     background: transparent;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    color: var(--color-gold-200);
+    color: var(--color-text-secondary);
     cursor: pointer;
     display: inline-flex;
     flex: 1;
@@ -45,7 +45,7 @@
     height: var(--size-button);
     min-height: var(--size-button);
     padding: 0 var(--space-component);
-    transition: background 150ms, border-color 150ms, color 150ms;
+    transition: background 150ms, color 150ms;
 }
 
 :global(.new-chat-icon) {
@@ -53,8 +53,7 @@
 }
 
 :global(#new-conversation-btn:hover) {
-    background: rgb(87 74 36 / 24%);
-    border-color: rgb(210 182 97 / 16%);
+    background: var(--color-bg-hover);
     color: var(--color-text-primary);
 }
 
