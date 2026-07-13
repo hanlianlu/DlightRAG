@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Startup vision capability probe for chat/answer models.
+"""Startup vision capability probe for chat/answer and rerank models.
 
-Sends one 1×1 pixel PNG image to the model and checks whether the
-response is a valid text completion (``"ok"``) or an error.
-The result is cached on ``provider.supports_vision``.
+Sends one 1×1 pixel PNG image to the model and checks whether the response is a
+valid text completion (``"ok"``) or an error. The result is recorded on the
+owning ``RAGServiceManager`` (never on the provider).
 """
 
 import logging
@@ -36,7 +36,7 @@ async def probe_vision_support(
     generous but bounded content budget rather than the absolute minimum.
 
     The probe is idempotent — callers normally run it once at startup
-    and cache the result on ``provider.supports_vision``.
+    and record the result on the owning ``RAGServiceManager``.
     """
     messages: list[dict[str, Any]] = [
         {

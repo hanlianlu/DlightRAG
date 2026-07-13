@@ -1628,7 +1628,7 @@ async def test_vision_probe_result_is_manager_scoped(
         }
     )
     first = RAGServiceManager(config=test_cfg)
-    first._supports_vision = False
+    first._default_supports_vision = False
     second = RAGServiceManager(config=test_cfg)
     provider = SimpleNamespace(aclose=AsyncMock())
     probe = AsyncMock(return_value=True)
@@ -1638,8 +1638,8 @@ async def test_vision_probe_result_is_manager_scoped(
 
     await second._probe_vision_support()
 
-    assert first._supports_vision is False
-    assert second._supports_vision is True
+    assert first._default_supports_vision is False
+    assert second._default_supports_vision is True
     assert second._rerank_supports_vision is True
     probe.assert_awaited_once_with(provider, model="gpt-5.4-mini", model_kwargs=model_kwargs)
 

@@ -62,7 +62,11 @@ async def test_capability_probe_targets_query_role(monkeypatch) -> None:
         probed["ceiling"] = ceiling
         return ImageProbeOutcome(status="supported")
 
-    monkeypatch.setattr("dlightrag.models.providers.get_provider", lambda *a, **k: object())
+    class _StubProvider:
+        async def aclose(self) -> None:
+            pass
+
+    monkeypatch.setattr("dlightrag.models.providers.get_provider", lambda *a, **k: _StubProvider())
     monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", fake_probe)
 
     await manager._probe_answer_image_capability()
