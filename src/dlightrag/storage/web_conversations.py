@@ -500,26 +500,16 @@ class PGWebConversationStore:
         self._pool = pool
         self._initialized = False
 
-    async def _run_read(self, operation):
+    async def _run_read(self, operation, *, retry: bool = True):
         if self._pool is not None:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
 
         from dlightrag.storage.pool import pg_pool
 
-        return await pg_pool.run(operation)
+        return await (pg_pool.run(operation) if retry else pg_pool.run_once(operation))
 
     async def _run_write(self, operation):
-        if self._pool is not None:
-            async with self._pool.acquire() as conn:
-                return await operation(conn)
-
-        from dlightrag.storage.pool import pg_pool
-
-        return await pg_pool.run_once(operation)
-
-    async def _run_read_once(self, operation):
-        """Run an outcome-reconciliation read once without the default retry budget."""
         if self._pool is not None:
             async with self._pool.acquire() as conn:
                 return await operation(conn)
@@ -753,8 +743,13 @@ class PGWebConversationStore:
         submission_id: str,
         *,
         ttl_days: int,
+        retry: bool = True,
     ) -> CommitTurnResult | None:
-        """Return the authoritative completed turn for one scoped submission key."""
+        """Return the authoritative completed turn for one scoped submission key.
+
+        ``retry=False`` performs a single bounded-protocol lookup without the
+        storage-layer retry budget, used by outcome reconciliation.
+        """
         await self._ensure_initialized()
 
         async def _operation(conn: Any) -> CommitTurnResult | None:
@@ -767,30 +762,7 @@ class PGWebConversationStore:
             )
             return _committed_result(row, replayed=True) if row is not None else None
 
-        return await self._run_read(_operation)
-
-    async def find_committed_turn_once(
-        self,
-        principal_id: str,
-        conversation_id: str,
-        submission_id: str,
-        *,
-        ttl_days: int,
-    ) -> CommitTurnResult | None:
-        """Perform one bounded-protocol lookup without storage-layer retries."""
-        await self._ensure_initialized()
-
-        async def _operation(conn: Any) -> CommitTurnResult | None:
-            row = await conn.fetchrow(
-                _GET_COMMITTED_TURN,
-                principal_id,
-                conversation_id,
-                submission_id,
-                ttl_days,
-            )
-            return _committed_result(row, replayed=True) if row is not None else None
-
-        return await self._run_read_once(_operation)
+        return await self._run_read(_operation, retry=retry)
 
     async def commit_turn(
         self,

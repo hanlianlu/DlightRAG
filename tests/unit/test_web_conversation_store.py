@@ -241,11 +241,12 @@ async def test_commit_reconciliation_lookup_uses_single_attempt_pool_path(monkey
     store._initialized = True
 
     assert (
-        await store.find_committed_turn_once(
+        await store.find_committed_turn(
             "p1",
             "c1",
             "00000000-0000-4000-8000-000000000001",
             ttl_days=30,
+            retry=False,
         )
         is None
     )
