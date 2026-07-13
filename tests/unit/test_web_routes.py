@@ -3,8 +3,10 @@
 
 import base64
 import datetime
+import html
 import io
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -383,6 +385,43 @@ class TestWebIndex:
 
         assert resp.status_code == 200
         assert 'data-primary="test_ws"' in resp.text
+
+    async def test_web_default_search_scope_is_all_authorized_workspaces(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        response = await client.get("/web/")
+
+        assert response.status_code == 200
+        active_match = re.search(r"data-active='([^']+)'", response.text)
+        assert active_match is not None
+        assert json.loads(html.unescape(active_match.group(1))) == ["default", "test_ws"]
+        assert 'data-primary="default"' in response.text
+        assert "Search in:" in response.text
+        assert "Files in:" in response.text
+
+    async def test_web_invalid_saved_scope_falls_back_to_all_authorized_workspaces(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        client.cookies.set("dlightrag_workspace_ids", "deleted")
+
+        response = await client.get("/web/")
+
+        active_match = re.search(r"data-active='([^']+)'", response.text)
+        assert active_match is not None
+        assert json.loads(html.unescape(active_match.group(1))) == ["default", "test_ws"]
+
+    async def test_files_primary_target_remains_independent_of_saved_search_scope(
+        self, client: AsyncClient, test_config: DlightragConfig
+    ) -> None:
+        client.cookies.set("dlightrag_workspace", "default")
+        client.cookies.set("dlightrag_workspace_ids", "test_ws")
+
+        response = await client.get("/web/")
+
+        assert 'data-primary="default"' in response.text
+        active_match = re.search(r"data-active='([^']+)'", response.text)
+        assert active_match is not None
+        assert json.loads(html.unescape(active_match.group(1))) == ["test_ws"]
 
     async def test_index_projects_configured_query_image_policy(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
@@ -1402,6 +1441,24 @@ class TestSourcePanelTemplate:
 
         assert "p.0" in html
         assert "#1" not in html
+
+    def test_markdown_source_keeps_visible_download_action_when_url_exists(self) -> None:
+        from dlightrag.web.deps import templates
+
+        rendered = templates.env.get_template("partials/source_panel.html").render(
+            sources=[
+                {
+                    "id": "1",
+                    "title": "notes.md",
+                    "download_url": "/web/files/raw/doc-notes?workspace=default",
+                    "chunks": [],
+                }
+            ]
+        )
+
+        assert "notes.md" in rendered
+        assert 'href="/web/files/raw/doc-notes?workspace=default"' in rendered
+        assert 'aria-label="Download source"' in rendered
 
 
 async def test_web_answer_done_builder_projects_http_source_payloads(

@@ -63,11 +63,12 @@ def test_workspace_selector_labels_all_when_scope_covers_every_workspace(page):
 
     page.locator("#workspace-selector").click()
     page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
 
-    assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
+    assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
     assert (
         page.locator(
-            ".ui-popover--workspace .ui-popover-item", has_text="All Workspaces"
+            ".ui-popover--workspace .ui-popover-item", has_text="All workspaces"
         ).get_attribute("aria-selected")
         == "true"
     )
@@ -81,12 +82,13 @@ def test_workspace_selector_all_sets_default_primary(page):
 
     page.locator("#workspace-selector").click()
     page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="All Workspaces").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="All workspaces").click()
     page.locator("#files-btn").click()
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
-    assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
-    assert page.locator(".ingest-target-name").text_content() == "default"
+    assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
+    assert page.locator(".ingest-target-name").text_content() == "Default"
 
 
 @pytest.mark.e2e
@@ -97,8 +99,9 @@ def test_workspace_selector_auto_all_keeps_last_explicit_primary(page):
 
     page.locator("#workspace-selector").click()
     page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
     page.locator("#files-btn").click()
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
-    assert page.locator("#workspace-label").text_content() == "All Workspaces (2)"
-    assert page.locator(".ingest-target-name").text_content() == "research"
+    assert page.locator("#workspace-label").text_content() == "All workspaces (2)"
+    assert page.locator(".ingest-target-name").text_content() == "Research"

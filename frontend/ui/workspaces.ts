@@ -77,12 +77,16 @@ function renderWorkspaceSelector(): void {
 
     dot.classList.toggle('multi', activeCount > 1 || allSelected);
 
+    const scopeAnchor = workspaceStore.active.includes(workspaceStore.primary)
+        ? workspaceStore.primary
+        : workspaceStore.active[0] || '';
+
     if (activeCount === 0 || allSelected) {
-        label.textContent = total > 0 ? `All Workspaces (${total})` : 'All Workspaces';
+        label.textContent = total > 0 ? `All workspaces (${total})` : 'All workspaces';
     } else if (activeCount === 1) {
-        label.textContent = workspaceName(workspaceStore.primary);
+        label.textContent = workspaceName(scopeAnchor);
     } else {
-        label.textContent = `${workspaceName(workspaceStore.primary)} + ${activeCount - 1}`;
+        label.textContent = `${workspaceName(scopeAnchor)} + ${activeCount - 1}`;
     }
 }
 
@@ -135,7 +139,7 @@ export function openWorkspacePopover(): void {
     allItem.setAttribute('aria-selected', isAllSelected ? 'true' : 'false');
     allCheck.className = `${workspaceStyles.workspacePopoverCheck}${isAllSelected ? ' ' + workspaceStyles.on : ''}`;
     allItem.appendChild(allCheck);
-    allItem.appendChild(document.createTextNode('All Workspaces'));
+    allItem.appendChild(document.createTextNode('All workspaces'));
     allItem.addEventListener('click', (event) => {
         event.stopPropagation();
         selectAllWorkspaces();

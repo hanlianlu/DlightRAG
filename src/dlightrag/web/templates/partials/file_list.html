@@ -2,19 +2,10 @@
     {% include "partials/ingest_progress.html" %}
 {% endif %}
 <div class="upload-zone" id="upload-zone">
-    <svg class="upload-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    <p class="upload-text">Drop files or folders here</p>
-    <p class="upload-hint">or use the buttons below</p>
-    <div class="upload-buttons">
-        <button type="button" class="upload-btn" data-action="upload-file" aria-label="Upload files">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-            Files
-        </button>
-        <button type="button" class="upload-btn" data-action="upload-folder" aria-label="Upload folder">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-            Folder
-        </button>
-    </div>
+    <button type="button" class="upload-zone-file-action" data-action="upload-file" aria-label="Choose files">
+        <span class="upload-text">Drop files or folders, or click to choose files</span>
+    </button>
+    <button type="button" class="upload-folder-action" data-action="upload-folder">Choose folder</button>
     <input class="hidden" type="file" id="file-input" name="files" multiple>
     <div id="upload-spinner" class="file-status">Uploading...</div>
 </div>

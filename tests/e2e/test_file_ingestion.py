@@ -13,8 +13,13 @@ def test_ingestion_panel_opens(page):
     page.click("#files-btn")
 
     page.wait_for_function("document.querySelector('#panel').classList.contains('open')")
-    assert page.locator("#panel-title").text_content() == "FILES"
+    assert page.locator("#panel-title").text_content() == ""
+    assert page.locator(".ingest-target-label").text_content() == "Files in:"
+    assert not page.locator("#files-btn").is_visible()
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
+    upload_zone = page.locator("#upload-zone")
+    assert upload_zone.get_attribute("role") is None
+    assert upload_zone.locator(":scope > .upload-zone-file-action").count() == 1
 
 
 @pytest.mark.e2e
@@ -47,7 +52,7 @@ def test_file_panel_workspace_switch_replaces_loading_state(page):
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
     assert "Loading files..." not in page.locator("#panel-content").text_content()
-    assert page.locator(".ingest-target-name").text_content() == "research"
+    assert page.locator(".ingest-target-name").text_content() == "Research"
 
 
 @pytest.mark.e2e
@@ -57,8 +62,8 @@ def test_file_panel_uses_last_selected_topbar_workspace(page):
     page.wait_for_selector(".app", timeout=10000)
 
     page.click("#workspace-selector")
-    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Research").click()
+    page.locator(".ui-popover--workspace .ui-popover-item", has_text="Default").click()
     page.click("#files-btn")
 
     page.wait_for_selector("#panel-content #upload-zone", timeout=10000)
-    assert page.locator(".ingest-target-name").text_content() == "research"
+    assert page.locator(".ingest-target-name").text_content() == "Research"

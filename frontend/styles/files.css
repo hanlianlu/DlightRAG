@@ -11,6 +11,9 @@
 /* === Files Panel — Ingest Target Pill === */
 
 .ingest-target {
+    align-items: center;
+    display: flex;
+    gap: var(--space-tight);
     position: relative;
 }
 
@@ -93,6 +96,10 @@
     background: var(--color-bg-hover);
 }
 
+.file-item:focus-within {
+    background: var(--color-bg-hover);
+}
+
 .file-name {
     color: var(--color-text-tertiary);
     font-size: var(--font-size-detail);
@@ -124,7 +131,12 @@
         opacity: 0;
     }
 
-    .file-item:hover .file-delete {
+    .file-delete:focus-visible {
+        opacity: 1;
+    }
+
+    .file-item:hover .file-delete,
+    .file-item:focus-within .file-delete {
         opacity: 1;
     }
 }
@@ -224,7 +236,7 @@
 .upload-zone {
     border: 1.5px dashed var(--color-border-strong);
     border-radius: var(--radius-md);
-    padding: var(--space-section) var(--space-related) var(--space-related);
+    padding: var(--space-related);
     text-align: center;
     color: var(--color-text-dim);
     cursor: pointer;
@@ -232,28 +244,22 @@
     transition: border-color 0.2s, background 0.2s;
 }
 
-.upload-icon {
-    color: var(--color-text-dim);
-    margin-bottom: var(--space-tight);
+.upload-zone-file-action {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    display: block;
+    font: inherit;
+    padding: 0;
+    width: 100%;
 }
 
 .upload-text {
-    font-size: var(--font-size-body);
+    display: block;
+    font-size: var(--font-size-detail);
     color: var(--color-text-muted);
-    margin-bottom: var(--space-inline);
-}
-
-.upload-hint {
-    font-size: var(--font-size-caption);
-    color: var(--color-text-dim);
-    margin-bottom: var(--space-component);
-}
-
-.upload-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-tight);
-    justify-content: center;
+    margin-bottom: var(--space-tight);
 }
 
 .upload-zone:hover {
@@ -261,31 +267,28 @@
     background: rgb(210 182 97 / 3%);
 }
 
-.upload-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-inline);
-    padding: var(--space-tight) var(--space-related);
-    background: rgb(41 37 36 / 64%);
-    border: 1px solid var(--color-border-subtle);
-    color: var(--color-text-muted);
+.upload-zone:has(.upload-zone-file-action:focus-visible) {
+    border-color: rgb(210 182 97 / 48%);
+    outline: 2px solid rgb(210 182 97 / 12%);
+    outline-offset: 2px;
+}
+
+.upload-folder-action {
+    background: transparent;
+    border: 0;
+    color: var(--color-text-subtle);
     font-family: inherit;
-    border-radius: var(--radius-sm);
+    font-size: var(--font-size-caption);
     cursor: pointer;
-    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    padding: var(--space-inline) var(--space-tight);
+    text-decoration: underline;
+    text-decoration-color: transparent;
+    text-underline-offset: 0.2em;
+    transition: color 0.15s, text-decoration-color 0.15s;
 }
 
-.upload-btn:hover {
-    background: var(--color-bg-hover);
-    border-color: var(--color-border-strong);
+.upload-folder-action:hover,
+.upload-folder-action:focus-visible {
     color: var(--color-text-secondary);
-}
-
-.upload-btn svg {
-    flex-shrink: 0;
-    opacity: 0.7;
-}
-
-.upload-btn:hover svg {
-    opacity: 1;
+    text-decoration-color: currentcolor;
 }

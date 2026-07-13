@@ -71,7 +71,7 @@ function clearDraft(): void {
 }
 
 function clearConversationSources(): void {
-    if (document.getElementById('panel-title')?.textContent !== 'SOURCES') return;
+    if (document.getElementById('panel')?.dataset.panelKind !== 'sources') return;
     document.getElementById('panel-content')?.replaceChildren();
     closePanel();
 }
@@ -394,7 +394,7 @@ function closeCompactDrawer(restoreFocus = false): void {
 }
 
 function setBackgroundInert(inert: boolean): void {
-    for (const selector of ['.topbar', '.chat-area', '.composer', '#panel']) {
+    for (const selector of ['.topbar', '.chat-area', '.composer']) {
         const element = document.querySelector<HTMLElement>(selector);
         if (element) element.inert = inert;
     }
@@ -428,7 +428,9 @@ function applySidebarState(): void {
         }
     }
     if (backdrop) backdrop.hidden = desktop || !drawerOpen;
-    setBackgroundInert(!desktop && drawerOpen);
+    setBackgroundInert(
+        (!desktop && drawerOpen) || document.body.classList.contains('panel-drawer-open'),
+    );
 }
 
 function openSidebar(trigger: HTMLElement | null): void {

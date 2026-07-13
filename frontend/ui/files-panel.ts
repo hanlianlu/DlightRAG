@@ -46,8 +46,7 @@ function isAbortError(error: unknown): boolean {
 
 function isFilesPanelActive(): boolean {
     const panel = document.getElementById('panel');
-    const title = document.getElementById('panel-title');
-    return Boolean(panel?.classList.contains('open') && title?.textContent === 'FILES');
+    return Boolean(panel?.classList.contains('open') && panel.dataset.panelKind === 'files');
 }
 
 function filePanelUrl(path: string, workspace: string): string {
@@ -198,11 +197,20 @@ function renderIngestPill(): void {
     if (!container) return;
     container.replaceChildren();
 
+    const label = document.createElement('span');
+    label.className = 'ingest-target-label';
+    label.textContent = 'Files in:';
+    container.appendChild(label);
+
     const pill = document.createElement('span');
     pill.className = 'ingest-target-pill';
     pill.setAttribute('role', 'button');
     pill.setAttribute('tabindex', '0');
-    pill.setAttribute('aria-label', 'Select ingest workspace');
+    const record = getIngestWorkspaceRecords().find(
+        (item) => item.workspace === ingestStore.workspace,
+    );
+    const displayName = record?.displayName || ingestStore.workspace;
+    pill.setAttribute('aria-label', `Files in ${displayName}; choose file workspace`);
 
     const dot = document.createElement('span');
     dot.className = 'ingest-target-dot';
@@ -210,7 +218,7 @@ function renderIngestPill(): void {
 
     const name = document.createElement('span');
     name.className = 'ingest-target-name';
-    name.textContent = ingestStore.workspace;
+    name.textContent = displayName;
     pill.appendChild(name);
 
     const caret = document.createElement('span');
@@ -329,7 +337,15 @@ function selectIngestWorkspace(workspace: string): void {
 
 function updateIngestPillLabel(): void {
     const nameEl = document.querySelector('.ingest-target-name');
-    if (nameEl) nameEl.textContent = ingestStore.workspace;
+    const record = getIngestWorkspaceRecords().find(
+        (item) => item.workspace === ingestStore.workspace,
+    );
+    const displayName = record?.displayName || ingestStore.workspace;
+    if (nameEl) nameEl.textContent = displayName;
+    document.querySelector('.ingest-target-pill')?.setAttribute(
+        'aria-label',
+        `Files in ${displayName}; choose file workspace`,
+    );
 }
 
 function closeIngestPopover(): void {
@@ -561,6 +577,13 @@ export function setupFilesPanel(): void {
         panelContent.addEventListener('change', function(e) {
             const target = e.target instanceof HTMLInputElement ? e.target : null;
             if (target?.id === 'file-input') handleFileInputChange(target);
+        });
+        panelContent.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const uploadZone = closestElement(e.target, '#upload-zone');
+            if (!uploadZone || closestElement(e.target, '[data-action]')) return;
+            e.preventDefault();
+            document.getElementById('file-input')?.click();
         });
     }
 
