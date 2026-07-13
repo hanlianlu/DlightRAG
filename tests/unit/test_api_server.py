@@ -2020,6 +2020,52 @@ class TestAnswerStreamMode:
         assert "text/event-stream" in resp.headers["content-type"]
         mock_manager.aanswer_stream.assert_awaited_once()
 
+    async def test_answer_image_capability_error_maps_to_400(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        """A non-streaming capability rejection surfaces as HTTP 400 + stable error_kind."""
+        from dlightrag.core.answer_errors import CURRENT_IMAGES_UNSUPPORTED, AnswerImageError
+
+        mock_manager.aanswer = AsyncMock(
+            side_effect=AnswerImageError(
+                "[IMAGES_NOT_SUPPORTED_BY_MODEL] no vision",
+                error_kind=CURRENT_IMAGES_UNSUPPORTED,
+            )
+        )
+        app.state.manager = mock_manager
+        resp = await client.post("/answer", json={"query": "hi", "stream": False})
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["error_type"] == "validation"
+        assert body["error_kind"] == CURRENT_IMAGES_UNSUPPORTED
+
+    async def test_stream_capability_error_becomes_structured_sse_error(
+        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
+    ) -> None:
+        """A capability rejection during streaming surfaces as a classified SSE error."""
+        import json as json_mod
+
+        from dlightrag.core.answer_errors import ANSWER_IMAGE_CAPABILITY_UNKNOWN, AnswerImageError
+
+        mock_manager.aanswer_stream = AsyncMock(
+            side_effect=AnswerImageError(
+                "[ANSWER_IMAGE_CAPABILITY_UNKNOWN] unknown",
+                error_kind=ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+            )
+        )
+        app.state.manager = mock_manager
+        resp = await client.post("/answer", json={"query": "hi", "stream": True})
+        assert resp.status_code == 200
+        events = [
+            json_mod.loads(line.removeprefix("data: "))
+            for line in resp.text.split("\n")
+            if line.startswith("data: ")
+        ]
+        error_events = [e for e in events if e["type"] == "error"]
+        assert len(error_events) == 1
+        assert error_events[0]["error_kind"] == ANSWER_IMAGE_CAPABILITY_UNKNOWN
+        assert "Internal server error" not in error_events[0]["message"]
+
 
 class TestAPIContracts:
     """Request and response contracts are explicit in OpenAPI."""
