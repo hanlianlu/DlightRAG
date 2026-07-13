@@ -216,6 +216,8 @@ _ERROR_CAPABILITY_UNKNOWN = (
     "Answer-model image capability is unknown: the startup probe did not confirm image support. "
     "Provide a vision-capable query model or retry once the model is reachable."
 )
+# Lazy re-probe cooldown for an `unknown` answer-image capability (transient recovery).
+_ANSWER_CAPABILITY_REPROBE_COOLDOWN_SECONDS = 30.0
 
 
 def _check_answer_image_capability(
@@ -281,6 +283,8 @@ class RAGServiceManager:
         self._default_supports_vision: bool | None = None
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
+        self._answer_capability_reprobe_lock = asyncio.Lock()
+        self._answer_capability_last_probe: float = 0.0
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
@@ -546,17 +550,43 @@ class RAGServiceManager:
         return self._answer_image_capability
 
     async def _probe_answer_image_capability(self) -> None:
-        """Discover the query-role answer model's image capability once at startup.
-
-        Probes ``model_for_role(config, "query")`` — the model the AnswerEngine
-        actually uses — not ``llm.default``.  Records a tri-state capability
-        (supported/unsupported/unknown) and the effective transport ceiling on
-        this manager instance.  Best-effort: failures degrade to ``unknown`` and
-        never block startup.
-        """
+        """Discover the query-role answer model's image capability once at startup."""
         if self._answer_image_capability is not None:
             return
-        from dlightrag.core.vision_probe import probe_image_capability
+        self._answer_image_capability = await self._discover_answer_image_capability()
+
+    async def _maybe_reprobe_answer_image_capability(self) -> None:
+        """Lazily re-probe when the cached capability is ``unknown``.
+
+        ``supported``/``unsupported`` are terminal and never re-probed. An
+        ``unknown`` verdict (a transient startup probe failure) is retried on
+        demand -- when an image request actually needs it -- at most once per
+        cooldown window under a single-flight lock, so a genuinely-unreachable
+        model is never hammered.
+        """
+        capability = self._answer_image_capability
+        if capability is not None and capability.status != "unknown":
+            return
+        async with self._answer_capability_reprobe_lock:
+            capability = self._answer_image_capability
+            if capability is not None and capability.status != "unknown":
+                return
+            now = time.monotonic()
+            if (
+                now - self._answer_capability_last_probe
+                < _ANSWER_CAPABILITY_REPROBE_COOLDOWN_SECONDS
+            ):
+                return
+            self._answer_capability_last_probe = now
+            self._answer_image_capability = await self._discover_answer_image_capability()
+
+    async def _discover_answer_image_capability(self) -> AnswerImageCapability:
+        """Probe ``model_for_role(config, "query")`` and build a tri-state capability.
+
+        Probes the model the AnswerEngine actually uses -- not ``llm.default``.
+        Best-effort: failures degrade to ``unknown`` and never block the caller.
+        """
+        from dlightrag.core.vision_probe import ImageProbeOutcome, probe_image_capability
         from dlightrag.models.llm_roles import model_for_role
         from dlightrag.models.providers import get_provider
 
@@ -575,13 +605,11 @@ class RAGServiceManager:
             outcome = await probe_image_capability(provider, model=cfg.model, ceiling=ceiling)
         except Exception:
             logger.debug("Answer image capability probe failed", exc_info=True)
-            from dlightrag.core.vision_probe import ImageProbeOutcome
-
             outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
         finally:
             if provider is not None:
                 await provider.aclose()
-        self._answer_image_capability = AnswerImageCapability(
+        capability = AnswerImageCapability(
             status=outcome.status,
             configured_ceiling=ceiling,
             effective_max_images=derive_effective_max_images(
@@ -594,10 +622,11 @@ class RAGServiceManager:
         )
         logger.info(
             "Answer image capability: status=%s effective=%d model=%s",
-            outcome.status,
-            self._answer_image_capability.effective_max_images,
+            capability.status,
+            capability.effective_max_images,
             cfg.model,
         )
+        return capability
 
     async def _probe_vision_support(self) -> None:
         """Probe chat-model vision capability once at startup.
@@ -1320,9 +1349,13 @@ class RAGServiceManager:
             }
         )
 
-        # Guard: reject current images when the query-role answer model can't accept them
+        # Guard: reject current images when the query-role answer model can't accept them.
+        # Lazily re-probe first so a transient startup `unknown` can recover.
+        current_images = list(turn.materialized_query_images)
+        if current_images:
+            await self._maybe_reprobe_answer_image_capability()
         _check_answer_image_capability(
-            query_images=list(turn.materialized_query_images),
+            query_images=current_images,
             capability=self._answer_image_capability,
         )
 
@@ -1464,7 +1497,10 @@ class RAGServiceManager:
         history = list(turn.text_history) or None
         query_images = list(turn.materialized_query_images)
 
-        # Guard: reject current images when the query-role answer model can't accept them
+        # Guard: reject current images when the query-role answer model can't accept them.
+        # Lazily re-probe first so a transient startup `unknown` can recover.
+        if query_images:
+            await self._maybe_reprobe_answer_image_capability()
         _check_answer_image_capability(
             query_images=query_images,
             capability=self._answer_image_capability,
