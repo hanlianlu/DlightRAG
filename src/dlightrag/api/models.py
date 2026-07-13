@@ -209,3 +209,9 @@ class HealthResponse(ClientContractModel):
 class ErrorDetail(ClientContractModel):
     detail: str
     error_type: str  # "unavailable", "validation", "auth", "internal"
+    error_kind: str | None = None  # stable Slice B answer-image error kind, if applicable
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """Serialize omitting the optional error_kind unless a classification applies."""
+        kwargs.setdefault("exclude_none", True)
+        return super().model_dump(**kwargs)

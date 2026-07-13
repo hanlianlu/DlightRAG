@@ -35,6 +35,7 @@ from dlightrag.api.models import (
 from dlightrag.app_state import request_config
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
+from dlightrag.core.answer_errors import ANSWER_STREAM_FAILED, classify_answer_error
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
 from dlightrag.core.client_contracts import IngestSpec
@@ -287,11 +288,16 @@ async def answer(
             except asyncio.CancelledError:
                 logger.debug("Client disconnected during SSE streaming")
                 raise
-            except Exception:
-                logger.exception("Error during SSE streaming")
-                yield sse_data_event(
-                    AnswerErrorStreamEvent(message="Internal server error during streaming")
-                )
+            except Exception as exc:
+                error_kind = classify_answer_error(exc)
+                if error_kind == ANSWER_STREAM_FAILED:
+                    logger.exception("Error during SSE streaming")
+                    message = "Internal server error during streaming"
+                else:
+                    # Actionable capability/transport error: surface the reason and kind.
+                    logger.info("Answer image request rejected during streaming (%s)", error_kind)
+                    message = str(exc)
+                yield sse_data_event(AnswerErrorStreamEvent(message=message, error_kind=error_kind))
             finally:
                 await aclose_answer_stream(token_iter)
 

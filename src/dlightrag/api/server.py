@@ -18,6 +18,8 @@ from dlightrag.api.middleware import RequestIdMiddleware, install_request_id_log
 from dlightrag.api.models import ErrorDetail
 from dlightrag.api.routes import router
 from dlightrag.app_state import request_config
+from dlightrag.core.answer_errors import CURRENT_IMAGE_LIMIT_EXCEEDED, AnswerImageError
+from dlightrag.core.answer_prompt import CurrentImagePayloadError
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,25 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     ) -> JSONResponse:
         body = ErrorDetail(detail=str(exc), error_type="auth")
         return JSONResponse(status_code=403, content=body.model_dump())
+
+    @application.exception_handler(AnswerImageError)
+    async def answer_image_error_handler(
+        request: Request,  # noqa: ARG001
+        exc: AnswerImageError,
+    ) -> JSONResponse:
+        """Answer-image capability/transport rejection -> 400 with a stable error_kind."""
+        body = ErrorDetail(detail=str(exc), error_type="validation", error_kind=exc.error_kind)
+        return JSONResponse(status_code=400, content=body.model_dump())
+
+    @application.exception_handler(CurrentImagePayloadError)
+    async def current_image_payload_handler(
+        request: Request,  # noqa: ARG001
+        exc: CurrentImagePayloadError,
+    ) -> JSONResponse:
+        body = ErrorDetail(
+            detail=str(exc), error_type="validation", error_kind=CURRENT_IMAGE_LIMIT_EXCEEDED
+        )
+        return JSONResponse(status_code=400, content=body.model_dump())
 
     # -- API routes --
     application.include_router(router)

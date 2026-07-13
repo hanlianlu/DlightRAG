@@ -45,6 +45,7 @@ class AnswerDoneStreamEvent(ClientContractModel):
 class AnswerErrorStreamEvent(ClientContractModel):
     type: Literal["error"] = "error"
     message: str
+    error_kind: str | None = None
 
 
 type AnswerStreamEvent = (
