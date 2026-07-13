@@ -18,7 +18,7 @@ from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
 from dlightrag.core.scope import RequestScope
-from dlightrag.observability import trace_observation
+from dlightrag.observability import trace_observation, trace_sensitive_enabled
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils import log_safe
 from dlightrag.utils.images import ValidatedWebImage
@@ -172,18 +172,28 @@ async def stream_answer_events(
 ) -> AsyncGenerator[str]:
     """Yield browser SSE events for one answer request, under a request-root span."""
     ws_list = workspaces or [workspace or manager.config.workspace]
+    if trace_sensitive_enabled():
+        identity = {
+            "principal_id": prepared_conversation.principal_id,
+            "conversation_id": prepared_conversation.conversation_id,
+        }
+    else:
+        identity = {
+            "principal_hash": prepared_conversation.principal_id,
+            "conversation_hash": hashlib.sha256(
+                prepared_conversation.conversation_id.encode("utf-8")
+            ).hexdigest(),
+        }
     metadata = {
         "workspaces": ws_list,
-        "principal_hash": prepared_conversation.principal_id,
-        "conversation_hash": hashlib.sha256(
-            prepared_conversation.conversation_id.encode("utf-8")
-        ).hexdigest(),
+        **identity,
         "history_turns_loaded": len(turn.text_history) // 2,
         "current_image_count": len(validated_images),
     }
     async with trace_observation(
         "answer_stream_pipeline",
         as_type="chain",
+        input={"query": turn.current_query},
         metadata=metadata,
     ) as observation:
         if prepared_conversation.committed_submission is not None:
@@ -407,11 +417,12 @@ async def _emit_answer_events(
         elif not conversation_saved:
             save_reason = "cancelled"
         raise
-    except Exception:
+    except Exception as exc:
         if not conversation_saved:
             save_reason = "answer_failed"
         if observation is not None:
-            observation.update(level="ERROR", status_message="answer_stream_failed")
+            status = str(exc) if trace_sensitive_enabled() else "answer_stream_failed"
+            observation.update(level="ERROR", status_message=status)
         logger.exception("Answer streaming failed")
         yield sse_event("error", AnswerErrorEvent(message="Service error. Please try again."))
     finally:

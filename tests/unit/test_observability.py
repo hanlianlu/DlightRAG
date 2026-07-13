@@ -55,9 +55,82 @@ class _RecordingLangfuse:
 @pytest.fixture(autouse=True)
 def reset_langfuse_client() -> Generator[None]:
     previous = observability._client
+    previous_sensitive = observability._trace_sensitive
     observability._client = None
+    observability._trace_sensitive = True
     yield
     observability._client = previous
+    observability._trace_sensitive = previous_sensitive
+
+
+async def test_trace_observation_captures_input_when_enabled() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+    observability._trace_sensitive = True
+
+    async with observability.trace_observation(
+        "answer_pipeline", as_type="chain", input={"query": "q"}
+    ):
+        pass
+
+    assert client.observations[-1].kwargs.get("input") == {"query": "q"}
+
+
+async def test_trace_observation_redacts_input_in_privacy_mode() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+    observability._trace_sensitive = False
+
+    async with observability.trace_observation(
+        "answer_pipeline", as_type="chain", input={"query": "secret prompt"}
+    ):
+        pass
+
+    assert "input" not in client.observations[-1].kwargs
+
+
+async def test_trace_observation_records_error_text_when_enabled() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+    observability._trace_sensitive = True
+
+    with pytest.raises(RuntimeError):
+        async with observability.trace_observation("answer_pipeline", as_type="chain"):
+            raise RuntimeError("secret provider detail")
+
+    assert client.observations[-1].updates[-1]["status_message"] == "secret provider detail"
+
+
+async def test_trace_observation_redacts_error_text_in_privacy_mode() -> None:
+    client = _RecordingLangfuse()
+    observability._client = client
+    observability._trace_sensitive = False
+
+    with pytest.raises(RuntimeError):
+        async with observability.trace_observation("answer_pipeline", as_type="chain"):
+            raise RuntimeError("secret provider detail")
+
+    update = client.observations[-1].updates[-1]
+    assert update["status_message"] == "error"
+    assert "secret provider detail" not in str(update)
+
+
+def test_init_tracing_reads_trace_sensitive_flag() -> None:
+    observability.init_tracing(
+        SimpleNamespace(
+            langfuse_public_key=None,
+            langfuse_secret_key=None,
+            langfuse_trace_sensitive_data=False,
+        )
+    )
+    assert observability._trace_sensitive is False
+
+
+def test_trace_sensitive_enabled_reflects_flag() -> None:
+    observability._trace_sensitive = False
+    assert observability.trace_sensitive_enabled() is False
+    observability._trace_sensitive = True
+    assert observability.trace_sensitive_enabled() is True
 
 
 async def test_chat_wrapper_uses_generation_observation() -> None:

@@ -242,4 +242,5 @@ web_conversations:
 ## Unset falls back to Langfuse Cloud. See docs/operations.md.
 langfuse_host: http://host.docker.internal:3300
 # langfuse_export_external_spans: false
+# langfuse_trace_sensitive_data: true   # true = full detail (query, raw errors, raw IDs) for ops/dev; false = redact (privacy mode)
 # langfuse_environment: production

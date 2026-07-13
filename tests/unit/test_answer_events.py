@@ -208,9 +208,7 @@ async def test_cancellation_propagates_without_committing(
     }
 
 
-async def test_failure_records_terminal_unsaved_observation_without_exception_text(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
     captured = _record_observations(monkeypatch)
 
     async def failing_tokens():
@@ -245,20 +243,44 @@ async def test_failure_records_terminal_unsaved_observation_without_exception_te
             submission_id="22222222-2222-4222-8222-222222222222",
         )
     ]
+    return captured
+
+
+async def test_failure_records_error_detail_and_raw_ids_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = await _run_failing_stream(monkeypatch)
 
     serialized = json.dumps(captured)
-    assert "private prompt" not in serialized
+    start = captured["start"]
+    assert isinstance(start, dict)
+    # Full traceability by default: query, raw error text, and raw IDs are captured.
+    assert start["input"] == {"query": "private prompt"}
+    assert start["metadata"]["principal_id"] == "a" * 64
+    assert start["metadata"]["conversation_id"] == "11111111-1111-4111-8111-111111111111"
+    assert "secret provider detail" in serialized
+    assert '"conversation_saved": false' in serialized
+    assert "answer_failed" in serialized
+    assert '"level": "ERROR"' in serialized
+
+
+async def test_privacy_mode_redacts_error_text_and_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("dlightrag.observability._trace_sensitive", False)
+    captured = await _run_failing_stream(monkeypatch)
+
+    serialized = json.dumps(captured)
+    # Privacy mode: generic error text and hashed IDs; raw values must not leak.
     assert "secret provider detail" not in serialized
     assert "11111111-1111-4111-8111-111111111111" not in serialized
+    assert "answer_stream_failed" in serialized
     start = captured["start"]
     assert isinstance(start, dict)
     metadata = start["metadata"]
     assert len(metadata["principal_hash"]) == 64
     assert len(metadata["conversation_hash"]) == 64
     assert metadata["history_turns_loaded"] == 0
-    assert '"conversation_saved": false' in serialized
-    assert "answer_failed" in serialized
-    assert '"level": "ERROR"' in serialized
 
 
 @pytest.mark.parametrize(
