@@ -18,6 +18,7 @@ from .planner import (
     PLANNER_HISTORY_TEMPLATE,
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
+    PLANNER_WEB_SELECTION_TEMPLATE,
 )
 from .rag import (
     ANSWER_CORE,
@@ -43,6 +44,7 @@ __all__ = [
     "PLANNER_SYSTEM_PROMPT",
     "PLANNER_HISTORY_TEMPLATE",
     "PLANNER_NO_HISTORY_TEMPLATE",
+    "PLANNER_WEB_SELECTION_TEMPLATE",
     # rag
     "ANSWER_CORE",
     "get_answer_system_prompt",
