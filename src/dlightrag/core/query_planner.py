@@ -26,6 +26,7 @@ from dlightrag.prompts import (
     PLANNER_HISTORY_TEMPLATE,
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
+    PLANNER_WEB_SELECTION_TEMPLATE,
 )
 from dlightrag.utils import log_safe
 from dlightrag.utils.tokens import truncate_conversation_history
@@ -50,18 +51,22 @@ def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
             text = content
         else:
             text_parts: list[str] = []
-            image_count = 0
+            uncaptioned = 0
             for block in content:
                 if isinstance(block, str):
                     text_parts.append(block)
                 elif block.get("type") == "text":
                     text_parts.append(str(block.get("text", "")))
                 elif block.get("type") == "image_url":
-                    image_count += 1
+                    caption = block.get("vlm_description")
+                    if caption:
+                        text_parts.append(f" [image: {caption}]")
+                    else:
+                        uncaptioned += 1
             text = "".join(text_parts)
-            if image_count > 0:
-                s = "s" if image_count > 1 else ""
-                text += f" [user shared {image_count} image{s}]"
+            if uncaptioned > 0:
+                s = "s" if uncaptioned > 1 else ""
+                text += f" [user shared {uncaptioned} image{s}]"
         lines.append(f"{role}: {text}")
     return "\n".join(lines)
 
@@ -77,6 +82,7 @@ class QueryPlan:
     metadata_filter_source: str | None = None
     metadata_filter_confidence: str | None = None
     metadata_filter_evidence: list[dict[str, Any]] | None = None
+    selected_history_image_ids: tuple[str, ...] = ()
 
 
 class QueryPlannerFilterEvidence(BaseModel):
@@ -121,6 +127,22 @@ class QueryPlannerStructuredResponse(BaseModel):
 QUERY_PLAN_STRUCTURED_OUTPUT = StructuredOutput(
     name="query_plan",
     schema=QueryPlannerStructuredResponse,
+)
+
+
+class WebQueryPlannerStructuredResponse(QueryPlannerStructuredResponse):
+    """Web-variant planner schema: adds scoped history-image selection.
+
+    Used only when a conversation image catalog is supplied.  The public schema
+    stays byte-identical, so REST/MCP/Python planning is provably unchanged.
+    """
+
+    selected_history_image_ids: list[str] = Field(default_factory=list)
+
+
+QUERY_PLAN_WEB_STRUCTURED_OUTPUT = StructuredOutput(
+    name="query_plan",
+    schema=WebQueryPlannerStructuredResponse,
 )
 
 
@@ -188,7 +210,13 @@ class QueryPlanner:
         self._schema_ts: float = 0.0
         self._schema_ttl = schema_ttl
 
-    async def _call_llm(self, query: str, system_prompt: str) -> str:
+    async def _call_llm(
+        self,
+        query: str,
+        system_prompt: str,
+        *,
+        structured_output: StructuredOutput = QUERY_PLAN_STRUCTURED_OUTPUT,
+    ) -> str:
         """Call the planner LLM using DlightRAG's messages-first contract."""
         llm_func = self._llm_func
         if llm_func is None:
@@ -199,7 +227,7 @@ class QueryPlanner:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query},
             ],
-            structured_output=QUERY_PLAN_STRUCTURED_OUTPUT,
+            structured_output=structured_output,
         )
 
     async def aclose(self) -> None:
@@ -217,6 +245,8 @@ class QueryPlanner:
         max_turns: int = 25,
         max_tokens: int = 65536,
         schema: dict[str, Any] | None = None,
+        image_catalog: list[dict[str, Any]] | None = None,
+        allowed_history_image_count: int = 0,
     ) -> QueryPlan:
         """Produce a full QueryPlan from one LLM call.
 
@@ -258,12 +288,30 @@ class QueryPlanner:
             history_section=history_section,
         )
 
+        # Web-variant: append the image catalog + selection guidance and switch to
+        # the schema that carries selected_history_image_ids. The public prompt and
+        # schema stay byte-identical when no catalog is supplied.
+        structured_output = QUERY_PLAN_STRUCTURED_OUTPUT
+        if image_catalog:
+            structured_output = QUERY_PLAN_WEB_STRUCTURED_OUTPUT
+            catalog_lines = "\n".join(
+                f"{row['image_id']} | turn {row['turn_number']} | "
+                f"ord {row['ordinal']} | {row['vlm_description']}"
+                for row in image_catalog
+            )
+            system_prompt += PLANNER_WEB_SELECTION_TEMPLATE.format(
+                allowed_count=max(0, allowed_history_image_count),
+                catalog_lines=catalog_lines,
+            )
+
         # LLM call with adaptive retry (up to 2 retries with exponential backoff)
         _MAX_RETRIES = 2
         response: str | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
-                response = await self._call_llm(query, system_prompt)
+                response = await self._call_llm(
+                    query, system_prompt, structured_output=structured_output
+                )
                 logger.info(
                     "[Planner] LLM call: %.1fs (attempt %d)", time.monotonic() - t1, attempt
                 )
@@ -291,9 +339,21 @@ class QueryPlanner:
         # Parse response (response is guaranteed str here; None means all retries failed)
         if response is None:
             return fallback
-        plan = self._parse_response(response, query)
+        plan = self._parse_response(response, query, structured_output=structured_output)
         if plan is None:
             return fallback
+
+        # LLM output is not authorization: keep only ids present in the scoped
+        # catalog, deduped and truncated to the allowed count.
+        if image_catalog:
+            allowed = {str(row["image_id"]) for row in image_catalog}
+            deduped: dict[str, None] = {}
+            for image_id in plan.selected_history_image_ids:
+                if str(image_id) in allowed:
+                    deduped.setdefault(str(image_id), None)
+            plan.selected_history_image_ids = tuple(
+                list(deduped)[: max(0, allowed_history_image_count)]
+            )
 
         # Merge explicit filter (explicit wins)
         if explicit_filter is not None and not _is_empty_filter(explicit_filter):
@@ -313,12 +373,18 @@ class QueryPlanner:
         )
         return plan
 
-    def _parse_response(self, response: str, query: str) -> QueryPlan | None:
+    def _parse_response(
+        self,
+        response: str,
+        query: str,
+        *,
+        structured_output: StructuredOutput = QUERY_PLAN_STRUCTURED_OUTPUT,
+    ) -> QueryPlan | None:
         """Parse LLM JSON response into a QueryPlan."""
         if not response:
             return None
         try:
-            parsed = QUERY_PLAN_STRUCTURED_OUTPUT.parse(response)
+            parsed = structured_output.parse(response)
         except ValidationError, ValueError, TypeError:
             logger.warning(
                 "QueryPlanner: invalid structured output for query: %s",
@@ -328,6 +394,7 @@ class QueryPlanner:
 
         data = parsed.model_dump()
         standalone = data.get("standalone_query", query)
+        selected = tuple(str(i) for i in data.get("selected_history_image_ids", []) if i)
         raw_filters = data.get("filters", {}) or {}
         filter_confidence = str(data.get("filter_confidence") or "").lower() or None
         filter_evidence = data.get("filter_evidence") or []
@@ -346,6 +413,7 @@ class QueryPlanner:
                 metadata_filter_evidence=filter_evidence
                 if isinstance(filter_evidence, list)
                 else None,
+                selected_history_image_ids=selected,
             )
 
         # Handle date fields specially
@@ -377,6 +445,7 @@ class QueryPlanner:
             metadata_filter_source="llm_inferred" if metadata_filter is not None else None,
             metadata_filter_confidence=filter_confidence,
             metadata_filter_evidence=filter_evidence if isinstance(filter_evidence, list) else None,
+            selected_history_image_ids=selected,
         )
 
     @staticmethod

@@ -18,3 +18,16 @@ PLANNER_NO_HISTORY_TEMPLATE = """\
 Query: {query}
 
 """
+
+PLANNER_WEB_SELECTION_TEMPLATE = """\
+
+You are also given a catalog of images shared earlier in this conversation. When \
+the current message refers to earlier images (e.g. "the second revenue chart", \
+"the diagram from before"), select the matching image ids by comparing the user's \
+wording against each image's description. Never invent ids; choose only from the \
+catalog below. Return them in `selected_history_image_ids`, most relevant first, at \
+most {allowed_count}. Still return the rewritten standalone query and any filters as usual.
+
+Prior images (id | turn | ordinal | description):
+{catalog_lines}
+"""

@@ -74,6 +74,101 @@ class TestQueryPlan:
 
 
 # ---------------------------------------------------------------------------
+# QueryPlanner web-variant image selection
+# ---------------------------------------------------------------------------
+
+_ID1 = "11111111-1111-1111-1111-111111111111"
+_ID2 = "22222222-2222-2222-2222-222222222222"
+
+
+def _image_catalog() -> list[dict[str, object]]:
+    return [
+        {"image_id": _ID1, "turn_number": 1, "ordinal": 0, "vlm_description": "2023 revenue chart"},
+        {
+            "image_id": _ID2,
+            "turn_number": 2,
+            "ordinal": 0,
+            "vlm_description": "org headcount chart",
+        },
+    ]
+
+
+class TestPlanWebVariant:
+    async def test_without_catalog_has_empty_selection(self):
+        llm = AsyncMock(
+            return_value=json.dumps({"standalone_query": "revenue 2023", "filters": {}})
+        )
+        planner = QueryPlanner(llm_func=llm)
+        plan = await planner.plan("explain that", conversation_history=[])
+        assert plan.selected_history_image_ids == ()
+
+    async def test_web_variant_returns_scoped_selection(self):
+        llm = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "standalone_query": "2023 revenue trend",
+                    "filters": {},
+                    "selected_history_image_ids": [_ID1],
+                }
+            )
+        )
+        planner = QueryPlanner(llm_func=llm)
+        plan = await planner.plan(
+            "explain that revenue chart",
+            conversation_history=[],
+            image_catalog=_image_catalog(),
+            allowed_history_image_count=2,
+        )
+        # standalone proves the web schema parsed (public schema forbids the extra field)
+        assert plan.standalone_query == "2023 revenue trend"
+        assert plan.selected_history_image_ids == (_ID1,)
+
+    async def test_web_variant_drops_out_of_scope_and_truncates(self):
+        llm = AsyncMock(
+            return_value=json.dumps(
+                {
+                    "standalone_query": "q",
+                    "filters": {},
+                    "selected_history_image_ids": [
+                        "deadbeef-0000-0000-0000-000000000000",
+                        _ID1,
+                        _ID2,
+                    ],
+                }
+            )
+        )
+        planner = QueryPlanner(llm_func=llm)
+        plan = await planner.plan(
+            "q",
+            conversation_history=[],
+            image_catalog=_image_catalog(),
+            allowed_history_image_count=1,
+        )
+        assert plan.selected_history_image_ids == (_ID1,)
+
+
+def test_history_text_includes_persisted_captions():
+    from dlightrag.core.query_planner import _convert_history_to_text
+
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "here is our data"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "..."},
+                    "vlm_description": "2023 revenue chart",
+                },
+            ],
+        }
+    ]
+    text = _convert_history_to_text(history)
+    assert "2023 revenue chart" in text
+    assert "[user shared" not in text  # captioned image should not fall back to a placeholder
+
+
+# ---------------------------------------------------------------------------
 # QueryPlanner.plan()
 # ---------------------------------------------------------------------------
 
