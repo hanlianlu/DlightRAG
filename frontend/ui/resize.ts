@@ -4,7 +4,13 @@ const STORAGE_KEY = 'dlightrag-panel-width';
 const MIN_WIDTH = 320;
 const COMPACT_MAX_WIDTH = 420;
 
-let preferredWidth = 420;
+let preferredWidth = 0;
+
+function cssPanelDefault(): number {
+    const raw = getComputedStyle(document.documentElement).getPropertyValue('--panel-width').trim();
+    const px = parseInt(raw, 10);
+    return !isNaN(px) && px >= MIN_WIDTH ? px : 420;
+}
 
 function getMaxWidth(): number {
     if (window.innerWidth <= 640) return window.innerWidth;
@@ -31,7 +37,7 @@ function loadPreferredWidth(): number {
             if (!isNaN(n) && n >= MIN_WIDTH) return n;
         }
     } catch (_) { /* localStorage unavailable */ }
-    return 420;
+    return cssPanelDefault();
 }
 
 export function syncPanelEffectiveWidth(): number {
