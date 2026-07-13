@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -123,6 +124,21 @@ def _open_delete_dialog_with_keyboard(page: Page, conversation_id: str) -> None:
     page.get_by_role("dialog", name="Delete conversation").wait_for()
 
 
+def _delete_dialog_accessible_description(page: Page) -> str:
+    session = page.context.new_cdp_session(page)
+    try:
+        tree: dict[str, Any] = session.send("Accessibility.getFullAXTree")
+    finally:
+        session.detach()
+    dialog = next(
+        node
+        for node in tree["nodes"]
+        if node.get("role", {}).get("value") == "dialog"
+        and node.get("name", {}).get("value") == "Delete conversation"
+    )
+    return str(dialog.get("description", {}).get("value", ""))
+
+
 @pytest.mark.e2e
 def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     state = _install_conversation_routes(page)
@@ -212,6 +228,9 @@ def test_active_delete_cancel_preserves_draft_selection_and_keyboard_focus(page:
     _open_delete_dialog_with_keyboard(page, active_id)
     dialog = page.get_by_role("dialog", name="Delete conversation")
     dialog.get_by_text("Your unsent draft and attachments will also be discarded.").wait_for()
+    assert "Your unsent draft and attachments will also be discarded." in (
+        _delete_dialog_accessible_description(page)
+    )
     dialog.get_by_role("button", name="Cancel").click()
 
     page.wait_for_function(
@@ -222,6 +241,21 @@ def test_active_delete_cancel_preserves_draft_selection_and_keyboard_focus(page:
     assert _active_id(page) == active_id
     assert page.get_by_role("textbox", name="Message").input_value() == "draft stays on cancel"
     assert page.locator("#thumbnail-strip").locator(":scope > *").count() == 1
+
+
+@pytest.mark.e2e
+def test_active_clean_delete_accessible_description_omits_draft_warning(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    active_id = _active_id(page)
+
+    _open_delete_dialog_with_keyboard(page, active_id)
+    description = _delete_dialog_accessible_description(page)
+    assert "This conversation and its history will be permanently deleted." in description
+    assert "Your unsent draft and attachments will also be discarded." not in description
+    page.get_by_role("dialog", name="Delete conversation").get_by_role(
+        "button", name="Cancel"
+    ).click()
 
 
 @pytest.mark.e2e
@@ -285,6 +319,9 @@ def test_inactive_delete_never_touches_active_draft(page: Page) -> None:
     assert not dialog.get_by_text(
         "Your unsent draft and attachments will also be discarded."
     ).is_visible()
+    description = _delete_dialog_accessible_description(page)
+    assert "This conversation and its history will be permanently deleted." in description
+    assert "Your unsent draft and attachments will also be discarded." not in description
     dialog.get_by_role("button", name="Delete").click()
 
     page.wait_for_function(
