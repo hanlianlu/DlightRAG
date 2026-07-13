@@ -182,7 +182,7 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_empty_chunks_with_query_image_still_calls_model(self) -> None:
         model_func = AsyncMock(return_value="The image shows a chart.")
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(model_func=model_func, effective_max_images=3)
         contexts: RetrievalContexts = {"chunks": [], "entities": [], "relationships": []}
 
         await engine.generate("describe this image", contexts, query_images=[_image_block()])
@@ -194,7 +194,7 @@ class TestAnswerEngineGenerate:
         """generate() includes images in messages content array."""
         raw = "ok\n\n### References\n- [1] chart.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(model_func=model_func, effective_max_images=6)
 
         contexts = _image_contexts()
         await engine.generate("describe", contexts)
@@ -208,7 +208,7 @@ class TestAnswerEngineGenerate:
     @pytest.mark.asyncio
     async def test_generate_returns_structured_answer_images_for_sdk(self) -> None:
         model_func = AsyncMock(return_value="The chart shows growth [1-1].")
-        engine = AnswerEngine(model_func=model_func)
+        engine = AnswerEngine(model_func=model_func, effective_max_images=6)
 
         result = await engine.generate("describe", _image_contexts())
 
@@ -228,10 +228,10 @@ class TestAnswerEngineGenerate:
         ]
 
     @pytest.mark.asyncio
-    async def test_query_images_do_not_consume_retrieved_visual_chunk_budget(self) -> None:
+    async def test_current_image_and_rag_share_single_budget(self) -> None:
         raw = "ok"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, max_images=1, max_user_images=1)
+        engine = AnswerEngine(model_func=model_func, effective_max_images=2)
         contexts: RetrievalContexts = {
             "chunks": [
                 {
@@ -251,7 +251,8 @@ class TestAnswerEngineGenerate:
         result = await engine.generate("describe this", contexts, query_images=[_image_block()])
 
         assert [chunk["chunk_id"] for chunk in result.contexts["chunks"]] == ["visual-only"]
-        assert result.trace["answer_user_images_sent"] == 1
+        assert result.trace["answer_images_current"] == 1
+        assert result.trace["answer_images_rag"] == 1
         assert result.trace["answer_context_images_sent"] == 1
         assert result.trace["answer_context_images_skipped"] == 0
         messages = model_func.call_args.kwargs["messages"]
@@ -279,7 +280,7 @@ class TestAnswerEngineGenerate:
         """generate() returns the contexts actually sent to the answer model."""
         raw = "answer\n\n### References\n- [1] report.pdf"
         model_func = AsyncMock(return_value=raw)
-        engine = AnswerEngine(model_func=model_func, max_images=0)
+        engine = AnswerEngine(model_func=model_func, effective_max_images=0)
         contexts: RetrievalContexts = {
             "chunks": [
                 {
@@ -584,7 +585,7 @@ class TestBuildMessages:
                 },
             ],
         }
-        engine = AnswerEngine()
+        engine = AnswerEngine(effective_max_images=6)
         messages = engine._build_messages("system", "user prompt", contexts)
 
         user_content = messages[1]["content"]
@@ -622,7 +623,7 @@ class TestBuildMessages:
         indexer = CitationIndexer()
         indexer.build_index(flat)
 
-        engine = AnswerEngine()
+        engine = AnswerEngine(effective_max_images=6)
         messages = engine._build_messages("sys", "prompt", contexts, indexer=indexer)
         user_content = messages[1]["content"]
 
@@ -662,7 +663,7 @@ class TestBuildMessages:
                 },
             ],
         }
-        engine = AnswerEngine()
+        engine = AnswerEngine(effective_max_images=6)
         messages = engine._build_messages("sys", "prompt", contexts)
         user_content = messages[1]["content"]
 
@@ -685,7 +686,7 @@ class TestBuildMessages:
 
     def test_history_image_blocks_are_budgeted(self) -> None:
         contexts: RetrievalContexts = {"chunks": []}
-        engine = AnswerEngine()
+        engine = AnswerEngine(effective_max_images=3)
 
         messages = engine._build_messages(
             "sys",
@@ -707,7 +708,7 @@ class TestBuildMessages:
 
     def test_current_query_images_use_user_budget_before_history_images(self) -> None:
         contexts: RetrievalContexts = {"chunks": []}
-        engine = AnswerEngine(max_user_images=1)
+        engine = AnswerEngine(effective_max_images=1)
         trace: dict[str, int] = {}
 
         messages = engine._build_messages(
@@ -731,7 +732,51 @@ class TestBuildMessages:
         final_user_content = messages[2]["content"]
         assert not any(block.get("type") == "image_url" for block in history_content)
         assert sum(1 for block in final_user_content if block.get("type") == "image_url") == 1
-        assert trace["answer_user_images_sent"] == 1
+        assert trace["answer_images_current"] == 1
+
+    def test_single_budget_allocates_current_then_history_then_rag(self) -> None:
+        contexts: RetrievalContexts = {
+            "chunks": [
+                {
+                    "chunk_id": "c1",
+                    "reference_id": "1",
+                    "content": "chart",
+                    "image_data": _PNG_B64,
+                    "file_path": "/docs/report.pdf",
+                }
+            ]
+        }
+        engine = AnswerEngine(effective_max_images=2)
+        trace: dict[str, int] = {}
+
+        messages = engine._build_messages(
+            "sys",
+            "prompt",
+            contexts,
+            query_images=[_image_block()],
+            conversation_history=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "prev"}, _image_block()],
+                }
+            ],
+            trace=trace,
+        )
+
+        # current(1) + history(1) exhaust the shared budget of 2; the RAG image
+        # is dropped from transport even though its chunk text remains.
+        total_images = sum(
+            1
+            for message in messages
+            if isinstance(message["content"], list)
+            for block in message["content"]
+            if isinstance(block, dict) and block.get("type") == "image_url"
+        )
+        assert total_images == 2
+        assert trace["answer_images_current"] == 1
+        assert trace["answer_images_history"] == 1
+        assert trace["answer_images_rag"] == 0
+        assert trace["answer_images_total"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -973,7 +1018,7 @@ class TestBuildExcerptBlocks:
                 }
             ]
         }
-        engine = AnswerEngine(max_images=0)
+        engine = AnswerEngine(effective_max_images=0)
 
         messages = engine._build_messages("sys", "prompt", contexts)
 

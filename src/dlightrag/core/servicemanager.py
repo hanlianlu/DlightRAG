@@ -878,10 +878,11 @@ class RAGServiceManager:
             from dlightrag.models.llm import get_query_model_func
 
             answer_cfg = self._config.answer
+            capability = self._answer_image_capability
+            effective_max_images = capability.effective_max_images if capability is not None else 0
             self._answer_engine = AnswerEngine(
                 model_func=get_query_model_func(self._config),
-                max_images=answer_cfg.max_images,
-                max_user_images=answer_cfg.max_user_images,
+                effective_max_images=effective_max_images,
                 image_max_bytes=answer_cfg.image_max_bytes,
                 image_max_total_bytes=answer_cfg.image_max_total_bytes,
                 image_max_px=answer_cfg.image_max_px,
