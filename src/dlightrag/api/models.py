@@ -196,6 +196,15 @@ class HealthStorageResponse(ClientContractModel):
     kv: str
 
 
+class AnswerImageCapabilityResponse(ClientContractModel):
+    """Query-role answer-model image capability, discovered at startup."""
+
+    status: str  # "supported" | "unsupported" | "unknown"
+    effective_max_images: int
+    configured_ceiling: int
+    model: str | None = None
+
+
 class HealthResponse(ClientContractModel):
     status: Literal["healthy", "degraded"]
     rag_initialized: bool
@@ -204,6 +213,7 @@ class HealthResponse(ClientContractModel):
     storage: HealthStorageResponse
     warnings: list[str] | None = None
     postgres: str
+    answer_image_capability: AnswerImageCapabilityResponse | None = None
 
 
 class ErrorDetail(ClientContractModel):

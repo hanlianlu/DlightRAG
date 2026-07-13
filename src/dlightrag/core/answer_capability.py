@@ -46,4 +46,34 @@ class AnswerImageCapability:
     failure_kind: str | None
 
 
-__all__ = ["AnswerImageCapability", "CapabilityStatus", "derive_effective_max_images"]
+def answer_image_capability_summary(
+    capability: AnswerImageCapability | None,
+) -> dict[str, object]:
+    """Client-facing capability summary shared by REST ``/health`` and MCP.
+
+    Exposes only the fields a caller needs to decide whether and how many images
+    to send; internal transport details (``base_url``) are omitted. A missing or
+    unprobed capability is reported as ``unknown`` with zero slots, matching the
+    fail-closed answer-image guard.
+    """
+    if capability is None:
+        return {
+            "status": "unknown",
+            "effective_max_images": 0,
+            "configured_ceiling": 0,
+            "model": None,
+        }
+    return {
+        "status": capability.status,
+        "effective_max_images": capability.effective_max_images,
+        "configured_ceiling": capability.configured_ceiling,
+        "model": capability.model,
+    }
+
+
+__all__ = [
+    "AnswerImageCapability",
+    "CapabilityStatus",
+    "answer_image_capability_summary",
+    "derive_effective_max_images",
+]

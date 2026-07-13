@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 
 from dlightrag.api.models import HealthResponse
 from dlightrag.app_state import request_config
+from dlightrag.core.answer_capability import answer_image_capability_summary
 
 from .deps import get_manager
 
@@ -34,6 +35,7 @@ async def health(request: Request) -> dict[str, object]:
             "graph": config.graph_storage,
             "kv": config.kv_storage,
         },
+        "answer_image_capability": answer_image_capability_summary(manager.answer_image_capability),
     }
     if warnings:
         status["warnings"] = warnings

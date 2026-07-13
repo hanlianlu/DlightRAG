@@ -146,6 +146,17 @@ def mock_manager(mock_service, test_config):
     manager.is_degraded = lambda: False
     manager.get_warnings = lambda: []
     manager.get_error_info = lambda: {"last_error": None, "timestamp": None, "retry_after": 30.0}
+    from dlightrag.core.answer_capability import AnswerImageCapability
+
+    manager.answer_image_capability = AnswerImageCapability(
+        status="supported",
+        configured_ceiling=8,
+        effective_max_images=8,
+        provider="test",
+        base_url=None,
+        model="test-model",
+        failure_kind=None,
+    )
     manager.close = AsyncMock()
     return manager
 
@@ -1284,6 +1295,11 @@ class TestHealthEndpoint:
         assert body["status"] == "healthy"
         assert "rag_initialized" in body
         assert "storage" in body
+        cap = body["answer_image_capability"]
+        assert cap["status"] == "supported"
+        assert cap["effective_max_images"] == 8
+        assert cap["configured_ceiling"] == 8
+        assert cap["model"] == "test-model"
 
 
 # ---------------------------------------------------------------------------
