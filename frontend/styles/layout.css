@@ -311,10 +311,10 @@ body.panel-open .composer-inner {
 }
 
 .composer-plus-icon {
-    height: var(--size-composer-plus-icon);
+    height: var(--size-icon-md);
     pointer-events: none;
     stroke-width: var(--stroke-composer-plus-icon);
-    width: var(--size-composer-plus-icon);
+    width: var(--size-icon-md);
 }
 
 .composer-plus:hover {

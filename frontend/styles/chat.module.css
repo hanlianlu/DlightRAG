@@ -125,10 +125,10 @@
 }
 
 .composerPlusIcon {
-  height: var(--size-composer-plus-icon);
+  height: var(--size-icon-md);
   pointer-events: none;
   stroke-width: var(--stroke-composer-plus-icon);
-  width: var(--size-composer-plus-icon);
+  width: var(--size-icon-md);
 }
 
 .composerPlus:hover {
