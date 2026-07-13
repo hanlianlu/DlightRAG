@@ -404,6 +404,24 @@ def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
 
 
 @pytest.mark.e2e
+def test_escape_closes_files_workspace_popover_without_closing_panel(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.locator("#upload-zone").wait_for()
+
+    ingest_target = page.locator("#ingest-target [role='button']")
+    ingest_target.click()
+    page.get_by_role("listbox", name="Select ingest workspace").wait_for()
+    page.keyboard.press("Escape")
+
+    assert page.get_by_role("listbox", name="Select ingest workspace").count() == 0
+    assert page.locator("#panel").evaluate("element => element.classList.contains('open')") is True
+
+
+@pytest.mark.e2e
 @pytest.mark.parametrize("viewport", [(900, 800), (390, 844)])
 def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
     page: Page, viewport: tuple[int, int]
@@ -556,3 +574,49 @@ def test_attachment_only_does_not_enable_send(page: Page) -> None:
     assert send.is_disabled()
     page.get_by_role("textbox", name="Message").fill("Question")
     assert send.is_enabled()
+
+
+@pytest.mark.e2e
+def test_offscreen_history_loads_lazy_thumbnails_and_original_only_on_lightbox(
+    page: Page,
+    e2e_conversation_service: Any,
+) -> None:
+    turn_count = 40
+    conversation_id = e2e_conversation_service.seed_image_history(turn_count=turn_count)
+    thumbnail_requests: list[str] = []
+    original_requests: list[str] = []
+
+    def record_image_request(request) -> None:
+        path = urlparse(request.url).path
+        prefix = f"/web/conversations/{conversation_id}/images/"
+        if not path.startswith(prefix):
+            return
+        if path.endswith("/thumbnail"):
+            thumbnail_requests.append(path)
+        else:
+            original_requests.append(path)
+
+    page.on("request", record_image_request)
+    page.set_viewport_size({"width": 1440, "height": 720})
+    page.goto("/web/")
+    history_images = page.locator("#chat-messages button[data-full-src] img")
+    page.wait_for_function(
+        "count => document.querySelectorAll('#chat-messages button[data-full-src] img').length === count",
+        arg=turn_count,
+    )
+    page.wait_for_timeout(500)
+
+    assert original_requests == []
+    assert 0 < len(thumbnail_requests) < turn_count
+    assert (
+        history_images.evaluate_all(
+            "images => images.filter(image => image.naturalWidth > 0).length"
+        )
+        > 0
+    )
+    last_image_button = page.locator("#chat-messages button[data-full-src]").last
+    last_image_button.click()
+    page.locator("#image-lightbox[aria-hidden='false']").wait_for()
+    page.wait_for_function("document.querySelector('#image-lightbox img')?.naturalWidth > 0")
+
+    assert len(original_requests) == 1

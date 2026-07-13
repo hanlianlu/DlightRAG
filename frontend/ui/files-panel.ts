@@ -321,10 +321,10 @@ function toggleIngestPopover(container: HTMLElement): void {
 
     container.appendChild(popover);
     ingestPopoverEl = popover;
+    document.addEventListener('keydown', onIngestPopoverEscape, true);
 
     setTimeout(() => {
         document.addEventListener('click', onIngestPopoverOutside);
-        document.addEventListener('keydown', onIngestPopoverEscape);
     }, 0);
 }
 
@@ -360,7 +360,7 @@ function closeIngestPopover(): void {
         if (pill) pill.setAttribute('aria-expanded', 'false');
     }
     document.removeEventListener('click', onIngestPopoverOutside);
-    document.removeEventListener('keydown', onIngestPopoverEscape);
+    document.removeEventListener('keydown', onIngestPopoverEscape, true);
 }
 
 function onIngestPopoverOutside(e: MouseEvent): void {
@@ -369,7 +369,11 @@ function onIngestPopoverOutside(e: MouseEvent): void {
 }
 
 function onIngestPopoverEscape(e: KeyboardEvent): void {
-    if (e.key === 'Escape') closeIngestPopover();
+    if (e.key !== 'Escape' || !ingestPopoverEl) return;
+    if (document.querySelector('dialog[open]')) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeIngestPopover();
 }
 
 function setUploadBusy(isBusy: boolean): void {

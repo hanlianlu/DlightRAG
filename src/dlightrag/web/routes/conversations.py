@@ -103,4 +103,21 @@ async def conversation_image(
     )
 
 
+@router.get("/conversations/{conversation_id}/images/{image_id}/thumbnail")
+async def conversation_image_thumbnail(
+    conversation_id: UUID,
+    image_id: UUID,
+    request: Request,
+    service: WebConversationService = Depends(get_web_conversation_service),
+) -> Response:
+    thumbnail = await service.thumbnail(_user(request), str(conversation_id), str(image_id))
+    if thumbnail is None:
+        raise HTTPException(status_code=404, detail="Thumbnail not available")
+    return Response(
+        content=thumbnail.image_bytes,
+        media_type=thumbnail.mime_type,
+        headers={"Cache-Control": "private, max-age=86400, immutable"},
+    )
+
+
 __all__ = ["router"]

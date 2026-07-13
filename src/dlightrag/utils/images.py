@@ -377,7 +377,14 @@ def bounded_embedding_image_data_uri(
 
 
 def thumbnail_bytes(
-    raw: bytes, *, max_px: int, output_mime: str | None = None
+    raw: bytes,
+    *,
+    max_px: int,
+    output_mime: str | None = None,
+    max_bytes: int | None = None,
+    quality: int = 82,
+    min_quality: int = 50,
+    min_px: int = 64,
 ) -> tuple[bytes, str]:
     """Return thumbnail bytes and media type for browser serving."""
     max_px = max(1, int(max_px))
@@ -389,12 +396,47 @@ def thumbnail_bytes(
             if output_mime and output_mime.startswith("image/")
             else detect_image_mime(raw)
         )
-        fmt = "JPEG" if mime == "image/jpeg" else "PNG"
-        if fmt == "JPEG" and image.mode != "RGB":
-            image = image.convert("RGB")
-        buf = io.BytesIO()
-        image.save(buf, format=fmt)
-        return buf.getvalue(), "image/jpeg" if fmt == "JPEG" else "image/png"
+        if max_bytes is None:
+            fmt = "JPEG" if mime == "image/jpeg" else "PNG"
+            if fmt == "JPEG" and image.mode != "RGB":
+                image = image.convert("RGB")
+            return _encode_image(image, fmt), "image/jpeg" if fmt == "JPEG" else "image/png"
+
+        byte_limit = max(1, int(max_bytes))
+        try:
+            png = _encode_image(image, "PNG")
+        except OSError:
+            png = _encode_image(flatten_image_to_rgb(image), "PNG")
+        if len(png) <= byte_limit:
+            return png, "image/png"
+
+        current = flatten_image_to_rgb(image)
+        quality = min(95, max(1, int(quality)))
+        min_quality = min(quality, max(1, int(min_quality)))
+        floor_px = min(max(current.size), max(1, int(min_px)))
+        while True:
+            for current_quality in _quality_steps(quality, min_quality):
+                payload = _encode_image(
+                    current,
+                    "JPEG",
+                    quality=current_quality,
+                    optimize=True,
+                )
+                if len(payload) <= byte_limit:
+                    return payload, "image/jpeg"
+            long_edge = max(current.size)
+            if long_edge <= floor_px:
+                break
+            next_long_edge = max(floor_px, int(long_edge * 0.75))
+            scale = next_long_edge / long_edge
+            next_size = (
+                max(1, int(current.width * scale)),
+                max(1, int(current.height * scale)),
+            )
+            if next_size == current.size:
+                break
+            current = current.resize(next_size, Image.Resampling.LANCZOS)
+    raise ValueError("image cannot fit the thumbnail byte budget")
 
 
 def image_url_block(value: str | dict[str, Any]) -> dict[str, Any] | None:

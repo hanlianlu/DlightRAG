@@ -76,12 +76,12 @@ def _request_origin(request: Request) -> tuple[str, str, int] | None:
     return request.url.scheme, hostname.lower(), port
 
 
-def _is_cookie_conversation_mutation(request: Request, source: str | None) -> bool:
+def _is_cookie_web_mutation(request: Request, source: str | None) -> bool:
     path = request.url.path
     return (
         source == "cookie"
         and request.method.upper() in _UNSAFE_METHODS
-        and (path == "/web/conversations" or path.startswith("/web/conversations/"))
+        and path.startswith("/web/")
     )
 
 
@@ -189,9 +189,7 @@ class WebAuthMiddleware(BaseHTTPMiddleware):
                 return response
             return PlainTextResponse(str(exc.detail), status_code=exc.status_code)
 
-        if _is_cookie_conversation_mutation(request, source) and not _has_exact_same_origin(
-            request
-        ):
+        if _is_cookie_web_mutation(request, source) and not _has_exact_same_origin(request):
             return PlainTextResponse("Cross-origin request rejected", status_code=403)
 
         return await call_next(request)

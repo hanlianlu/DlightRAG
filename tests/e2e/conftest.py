@@ -10,6 +10,7 @@ Usage (opt-in, requires Playwright)::
     pytest tests/e2e/ -m e2e
 """
 
+import base64
 import socket
 import threading
 import time
@@ -157,6 +158,66 @@ class E2EConversationService:
                 return None
             return value["images"].get(image_id)
 
+    async def thumbnail(
+        self, _user: Any, conversation_id: str, image_id: str
+    ) -> StoredConversationImage | None:
+        return await self.image(_user, conversation_id, image_id)
+
+    def seed_image_history(self, *, turn_count: int) -> str:
+        """Create one long image conversation for browser loading probes."""
+        conversation_id = str(uuid4())
+        now = datetime.now(UTC)
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
+            "x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+        )
+        value: dict[str, Any] = {
+            "conversation_id": conversation_id,
+            "title": "Image history",
+            "content_revision": turn_count,
+            "created_at": now,
+            "updated_at": now,
+            "turns": [],
+            "images": {},
+        }
+        for index in range(1, turn_count + 1):
+            image_id = str(uuid4())
+            original_url = f"/web/conversations/{conversation_id}/images/{image_id}"
+            value["images"][image_id] = StoredConversationImage(
+                image_id=image_id,
+                mime_type="image/png",
+                image_bytes=png,
+            )
+            value["turns"].append(
+                ConversationTurn(
+                    turn_id=str(uuid4()),
+                    turn_number=index,
+                    user_text=f"Image question {index}",
+                    assistant_text=f"Image answer {index}",
+                    user_images=[
+                        ConversationImageReference(
+                            image_id=image_id,
+                            ordinal=1,
+                            mime_type="image/png",
+                            url=original_url,
+                            thumbnail_url=original_url + "/thumbnail",
+                            label=f"Turn {index}, image 1",
+                        )
+                    ],
+                    answer_sources={},
+                    answer_html=safe_answer_done(
+                        answer=f"Image answer {index}",
+                        sources=[],
+                        answer_images=[],
+                    ),
+                    queried_workspaces=["default"],
+                    created_at=now,
+                )
+            )
+        with self._lock:
+            self._conversations[conversation_id] = value
+        return conversation_id
+
     async def commit_answer(
         self,
         prepared: PreparedWebConversation,
@@ -193,7 +254,8 @@ class E2EConversationService:
                             f"/web/conversations/{prepared.conversation_id}/images/{image.image_id}"
                         ),
                         thumbnail_url=(
-                            f"/web/conversations/{prepared.conversation_id}/images/{image.image_id}"
+                            f"/web/conversations/{prepared.conversation_id}/images/"
+                            f"{image.image_id}/thumbnail"
                         ),
                         label=f"Turn {turn_number}, image {image.ordinal}",
                     )

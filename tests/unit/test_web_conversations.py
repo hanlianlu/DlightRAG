@@ -2,6 +2,8 @@
 """Tests for durable Web conversation lifecycle adapters and routes."""
 
 import datetime
+import io
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID
@@ -9,11 +11,13 @@ from uuid import UUID
 import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
+from PIL import Image
 
 from dlightrag.api.auth import UserContext
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
-from dlightrag.storage.web_conversations import ConversationSnapshot
+from dlightrag.storage.web_conversations import ConversationSnapshot, StoredConversationImage
+from dlightrag.utils.images import thumbnail_bytes
 
 
 @pytest.fixture
@@ -60,6 +64,7 @@ async def cookie_conversation_client(
     test_config.api_auth_token = "secret-token"
     application = create_app(include_web=True)
     application.state.web_conversation_service = conversation_service
+    application.state.manager = AsyncMock(config=test_config)
     transport = ASGITransport(app=application)
     async with AsyncClient(
         transport=transport,
@@ -186,6 +191,68 @@ async def test_scoped_image_of_other_principal_is_404(
     assert response.status_code == 404
 
 
+async def test_scoped_thumbnail_response_is_private_and_immutable(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    conversation_service.thumbnail.return_value = SimpleNamespace(
+        image_id="00000000-0000-0000-0000-000000000002",
+        mime_type="image/jpeg",
+        image_bytes=b"derived-thumbnail",
+    )
+
+    response = await conversation_client.get(
+        "/web/conversations/00000000-0000-0000-0000-000000000001/images/"
+        "00000000-0000-0000-0000-000000000002/thumbnail"
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"derived-thumbnail"
+    assert response.headers["content-type"] == "image/jpeg"
+    assert response.headers["cache-control"] == "private, max-age=86400, immutable"
+    conversation_service.thumbnail.assert_awaited_once()
+
+
+async def test_scoped_thumbnail_failure_does_not_fall_back_to_original(
+    conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    conversation_service.thumbnail.return_value = None
+
+    response = await conversation_client.get(
+        "/web/conversations/00000000-0000-0000-0000-000000000001/images/"
+        "00000000-0000-0000-0000-000000000002/thumbnail"
+    )
+
+    assert response.status_code == 404
+    assert response.content != b"png-bytes"
+    conversation_service.thumbnail.assert_awaited_once()
+
+
+async def test_scoped_thumbnail_requires_web_auth(
+    test_config: DlightragConfig,
+    conversation_service: AsyncMock,
+) -> None:
+    test_config.auth_mode = "simple"
+    test_config.api_auth_token = "secret-token"
+    application = create_app(include_web=True)
+    application.state.web_conversation_service = conversation_service
+    transport = ASGITransport(app=application)
+    async with AsyncClient(
+        transport=transport,
+        base_url="https://app.example.com",
+        follow_redirects=False,
+    ) as client:
+        response = await client.get(
+            "/web/conversations/00000000-0000-0000-0000-000000000001/images/"
+            "00000000-0000-0000-0000-000000000002/thumbnail"
+        )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/web/login")
+    conversation_service.thumbnail.assert_not_awaited()
+
+
 _COOKIE_MUTATIONS = (
     pytest.param("POST", "/web/conversations", None, "create", 201, id="create"),
     pytest.param(
@@ -274,6 +341,101 @@ async def test_bearer_lifecycle_mutation_does_not_require_browser_origin(
 
     assert response.status_code == 201
     conversation_service.create.assert_awaited_once()
+
+
+_WEB_ANSWER_BODY = {
+    "query": "hello",
+    "conversation_id": "00000000-0000-0000-0000-000000000001",
+    "submission_id": "00000000-0000-4000-8000-000000000099",
+}
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "text/plain"])
+async def test_cookie_web_answer_accepts_exact_origin_independent_of_content_type(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+    content_type: str,
+) -> None:
+    conversation_service.prepare_answer.return_value = None
+
+    response = await cookie_conversation_client.post(
+        "/web/answer",
+        content=json.dumps(_WEB_ANSWER_BODY),
+        headers={
+            "Content-Type": content_type,
+            "Origin": "https://app.example.com",
+        },
+    )
+
+    assert response.status_code == 404
+    conversation_service.prepare_answer.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        pytest.param("https://evil.example.com", id="sibling-origin"),
+        pytest.param("https://app.example.com/path", id="malformed-origin"),
+        pytest.param(None, id="missing-origin"),
+    ],
+)
+async def test_cookie_web_answer_rejects_non_exact_origin_before_service(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+    origin: str | None,
+) -> None:
+    conversation_service.prepare_answer.return_value = None
+    headers = {"Content-Type": "text/plain"}
+    if origin is not None:
+        headers["Origin"] = origin
+
+    response = await cookie_conversation_client.post(
+        "/web/answer",
+        content=json.dumps(_WEB_ANSWER_BODY),
+        headers=headers,
+    )
+
+    assert response.status_code == 403
+    conversation_service.prepare_answer.assert_not_awaited()
+
+
+async def test_bearer_web_answer_does_not_require_browser_origin(
+    cookie_conversation_client: AsyncClient,
+    conversation_service: AsyncMock,
+) -> None:
+    conversation_service.prepare_answer.return_value = None
+
+    response = await cookie_conversation_client.post(
+        "/web/answer",
+        json=_WEB_ANSWER_BODY,
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert response.status_code == 404
+    conversation_service.prepare_answer.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        pytest.param("POST", "/web/files/upload", id="file-upload"),
+        pytest.param(
+            "DELETE",
+            "/web/files?workspace=default&file_path=report.pdf",
+            id="file-delete",
+        ),
+        pytest.param("POST", "/web/workspaces/create", id="workspace-create"),
+        pytest.param("POST", "/web/workspaces/delete", id="workspace-delete"),
+    ],
+)
+async def test_cookie_web_mutations_reject_missing_origin(
+    cookie_conversation_client: AsyncClient,
+    method: str,
+    path: str,
+) -> None:
+    response = await cookie_conversation_client.request(method, path)
+
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -522,13 +684,89 @@ async def test_history_projects_safe_images_sources_and_rendered_answer(
         "00000000-0000-0000-0000-000000000020"
     )
     assert image.url == expected_url
-    assert image.thumbnail_url == expected_url
+    assert image.thumbnail_url == expected_url + "/thumbnail"
     assert image.label == "Turn 1, image 1"
     assert turn.answer_sources["sources"][0]["download_url"].startswith("/web/")
     assert "citation-badge" in turn.answer_html
     assert "image_bytes" not in turn.model_dump_json()
     assert "principal_id" not in turn.model_dump_json()
     conversation_store.list_conversations.assert_not_awaited()
+
+
+async def test_history_thumbnail_is_principal_scoped_and_resource_bounded(
+    service_under_test,
+    conversation_store: AsyncMock,
+    jwt_user: UserContext,
+) -> None:
+    source = Image.effect_noise((1600, 1200), 100).convert("RGB")
+    original_buffer = io.BytesIO()
+    source.save(original_buffer, format="PNG")
+    original = original_buffer.getvalue()
+    conversation_store.get_image.return_value = StoredConversationImage(
+        image_id="00000000-0000-0000-0000-000000000020",
+        mime_type="image/png",
+        image_bytes=original,
+    )
+
+    thumbnail = await service_under_test.thumbnail(
+        jwt_user,
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000020",
+    )
+
+    assert thumbnail is not None
+    assert thumbnail.mime_type in {"image/jpeg", "image/png"}
+    assert len(thumbnail.image_bytes) <= 128 * 1024
+    assert len(thumbnail.image_bytes) < len(original)
+    with Image.open(io.BytesIO(thumbnail.image_bytes)) as derived:
+        assert max(derived.size) <= 320
+        assert derived.format in {"JPEG", "PNG"}
+    from dlightrag.web.principal import principal_id_from_user
+
+    conversation_store.get_image.assert_awaited_once_with(
+        principal_id_from_user(jwt_user),
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000020",
+        ttl_days=30,
+    )
+
+
+async def test_history_thumbnail_generation_failure_returns_none(
+    service_under_test,
+    conversation_store: AsyncMock,
+    jwt_user: UserContext,
+) -> None:
+    original = b"durable-original-but-not-a-decodable-image"
+    conversation_store.get_image.return_value = StoredConversationImage(
+        image_id="00000000-0000-0000-0000-000000000020",
+        mime_type="image/png",
+        image_bytes=original,
+    )
+
+    thumbnail = await service_under_test.thumbnail(
+        jwt_user,
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000020",
+    )
+
+    assert thumbnail is None
+
+
+def test_bounded_thumbnail_handles_valid_cmyk_jpeg() -> None:
+    source = Image.new("CMYK", (640, 480), (0, 127, 127, 0))
+    original_buffer = io.BytesIO()
+    source.save(original_buffer, format="JPEG")
+
+    payload, mime_type = thumbnail_bytes(
+        original_buffer.getvalue(),
+        max_px=320,
+        max_bytes=128 * 1024,
+    )
+
+    assert mime_type in {"image/jpeg", "image/png"}
+    assert len(payload) <= 128 * 1024
+    with Image.open(io.BytesIO(payload)) as derived:
+        assert max(derived.size) <= 320
 
 
 async def test_prepare_answer_uses_one_snapshot_and_text_only_messages(
