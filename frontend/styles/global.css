@@ -44,7 +44,7 @@ body.conversation-drawer-open {
 }
 
 :root {
-    --layout-chat-sidebar-width: clamp(260px, 22vw, 288px);
+    --layout-chat-sidebar-width: clamp(244px, 18vw, 272px);
     --layout-chat-min-width: 520px;
     --layout-shell-duration: 180ms;
     --layout-shell-easing: cubic-bezier(0.2, 0, 0, 1);
