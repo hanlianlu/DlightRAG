@@ -454,6 +454,85 @@ def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page)
 
 
 @pytest.mark.e2e
+def test_wide_panel_effective_width_tracks_sidebar_and_viewport_transitions(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    page.get_by_role("button", name="Collapse conversations").click()
+    page.get_by_role("button", name="Files", exact=True).click()
+    page.wait_for_timeout(220)
+    handle = page.locator("#panel .panel-resize-handle")
+    handle_box = handle.bounding_box()
+    assert handle_box is not None
+    page.mouse.move(handle_box["x"] + handle_box["width"] / 2, 180)
+    page.mouse.down()
+    page.mouse.move(480, 180, steps=8)
+    page.mouse.up()
+    page.wait_for_function("!document.body.hasAttribute('data-resizing')")
+
+    def shell_geometry() -> dict[str, float]:
+        return page.evaluate(
+            """() => {
+                const rect = selector => document.querySelector(selector).getBoundingClientRect();
+                const sidebar = rect('#chat-sidebar');
+                const composer = rect('#composer');
+                const panel = rect('#panel');
+                return {
+                    sidebarWidth: sidebar.width,
+                    composerX: composer.x,
+                    composerWidth: composer.width,
+                    composerRight: composer.right,
+                    panelX: panel.x,
+                    panelWidth: panel.width,
+                    effectiveWidth: parseFloat(
+                        getComputedStyle(document.documentElement).getPropertyValue('--panel-width')
+                    ),
+                };
+            }"""
+        )
+
+    collapsed = shell_geometry()
+    assert collapsed["panelWidth"] == pytest.approx(920, abs=1)
+    assert collapsed["effectiveWidth"] == pytest.approx(collapsed["panelWidth"], abs=1)
+    assert collapsed["composerWidth"] == pytest.approx(520, abs=1)
+    assert collapsed["composerRight"] == pytest.approx(collapsed["panelX"], abs=1)
+    assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == "920"
+
+    page.get_by_role("button", name="Open conversations").click()
+    page.wait_for_timeout(220)
+    expanded = shell_geometry()
+    assert expanded["composerX"] == pytest.approx(expanded["sidebarWidth"], abs=1)
+    assert expanded["composerWidth"] == pytest.approx(520, abs=1)
+    assert expanded["panelWidth"] == pytest.approx(632, abs=1)
+    assert expanded["composerRight"] == pytest.approx(expanded["panelX"], abs=1)
+    assert expanded["effectiveWidth"] == pytest.approx(expanded["panelWidth"], abs=1)
+    assert page.evaluate("localStorage.getItem('dlightrag-panel-width')") == "920"
+
+    page.set_viewport_size({"width": 1280, "height": 820})
+    page.wait_for_timeout(220)
+    narrower = shell_geometry()
+    assert narrower["composerWidth"] >= 520
+    assert narrower["composerRight"] == pytest.approx(narrower["panelX"], abs=1)
+    assert narrower["effectiveWidth"] == pytest.approx(narrower["panelWidth"], abs=1)
+
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.wait_for_timeout(220)
+    restored = shell_geometry()
+    assert restored["composerWidth"] >= 520
+    assert restored["composerRight"] == pytest.approx(restored["panelX"], abs=1)
+    assert restored["effectiveWidth"] == pytest.approx(restored["panelWidth"], abs=1)
+
+    page.get_by_role("button", name="Collapse conversations").click()
+    page.wait_for_timeout(220)
+    recollapsed = shell_geometry()
+    assert recollapsed["panelWidth"] == pytest.approx(920, abs=1)
+    assert recollapsed["composerWidth"] == pytest.approx(520, abs=1)
+    assert recollapsed["composerRight"] == pytest.approx(recollapsed["panelX"], abs=1)
+
+
+@pytest.mark.e2e
 def test_attachment_only_does_not_enable_send(page: Page) -> None:
     _install_conversation_routes(page)
     page.goto("/web/")
