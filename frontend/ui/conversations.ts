@@ -21,6 +21,7 @@ import {isQueryInFlight} from './chat.ts';
 import {hasActiveFileMutation} from './files-panel.ts';
 import {clearImages, getPendingImageData} from './images.ts';
 import {closePanel} from './panel.ts';
+import {syncPanelEffectiveWidth} from './resize.ts';
 import {showToast} from './toast.ts';
 
 const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
@@ -411,6 +412,7 @@ function applySidebarState(): void {
     document.body.classList.toggle('conversation-sidebar-open', expanded);
     document.body.classList.toggle('conversation-sidebar-collapsed', desktop && desktopCollapsed);
     document.body.classList.toggle('conversation-drawer-open', !desktop && drawerOpen);
+    syncPanelEffectiveWidth();
     open?.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     if (toggle) {
         toggle.setAttribute('aria-label', desktop ? 'Collapse conversations' : 'Close conversations');

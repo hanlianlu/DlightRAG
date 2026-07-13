@@ -2,9 +2,13 @@
 
 const STORAGE_KEY = 'dlightrag-panel-width';
 const MIN_WIDTH = 320;
+const COMPACT_MAX_WIDTH = 420;
+
+let preferredWidth = 420;
 
 function getMaxWidth(): number {
-    if (window.innerWidth < 1200) return Math.floor(window.innerWidth * 0.5);
+    if (window.innerWidth <= 640) return window.innerWidth;
+    if (window.innerWidth < 1200) return COMPACT_MAX_WIDTH;
     const styles = getComputedStyle(document.documentElement);
     const chatMinWidth = parseFloat(styles.getPropertyValue('--layout-chat-min-width')) || 520;
     const sidebar = document.body.classList.contains('conversation-sidebar-open')
@@ -14,18 +18,26 @@ function getMaxWidth(): number {
 }
 
 function clampWidth(w: number): number {
-    return Math.max(MIN_WIDTH, Math.min(w, getMaxWidth()));
+    const maxWidth = getMaxWidth();
+    const minWidth = Math.min(MIN_WIDTH, maxWidth);
+    return Math.max(minWidth, Math.min(w, maxWidth));
 }
 
-function loadWidth(): number {
+function loadPreferredWidth(): number {
     try {
         const saved = localStorage.getItem(STORAGE_KEY);
         if (saved !== null) {
             const n = parseInt(saved, 10);
-            if (!isNaN(n) && n >= MIN_WIDTH) return clampWidth(n);
+            if (!isNaN(n) && n >= MIN_WIDTH) return n;
         }
     } catch (_) { /* localStorage unavailable */ }
     return 420;
+}
+
+export function syncPanelEffectiveWidth(): number {
+    const effectiveWidth = clampWidth(preferredWidth);
+    document.documentElement.style.setProperty('--panel-width', effectiveWidth + 'px');
+    return effectiveWidth;
 }
 
 function saveWidth(w: number): void {
@@ -38,8 +50,8 @@ export function setupPanelResize(): void {
     const panel = document.getElementById('panel');
     if (!panel) return;
 
-    const initial = loadWidth();
-    document.documentElement.style.setProperty('--panel-width', initial + 'px');
+    preferredWidth = loadPreferredWidth();
+    syncPanelEffectiveWidth();
 
     let handle = panel.querySelector('.panel-resize-handle');
     if (!handle) {
@@ -118,7 +130,9 @@ export function setupPanelResize(): void {
         resizePanel.style.backdropFilter = '';
         resizePanel.style.boxShadow = '';
         const finalWidth = resizePanel.getBoundingClientRect().width;
-        saveWidth(Math.round(finalWidth));
+        preferredWidth = Math.round(finalWidth);
+        saveWidth(preferredWidth);
+        syncPanelEffectiveWidth();
         setTimeout(function () {
             document.body.removeAttribute('data-resizing');
         }, 0);
@@ -130,9 +144,5 @@ export function setupPanelResize(): void {
     document.addEventListener('pointercancel', finishDrag);
     window.addEventListener('blur', finishDrag);
 
-    window.addEventListener('resize', function () {
-        const current = resizePanel.getBoundingClientRect().width;
-        const clamped = clampWidth(current);
-        document.documentElement.style.setProperty('--panel-width', clamped + 'px');
-    });
+    window.addEventListener('resize', syncPanelEffectiveWidth);
 }
