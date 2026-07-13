@@ -108,7 +108,7 @@ _CREATE_CONVERSATION = f"""
 INSERT INTO web_conversations (principal_id, conversation_id)
 VALUES ($1, $2::text::uuid)
 RETURNING {_SUMMARY_COLUMNS}
-"""
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _PRUNE_PRINCIPAL = """
 DELETE FROM web_conversations
@@ -122,7 +122,7 @@ FROM web_conversations
 WHERE principal_id = $1
   AND updated_at >= NOW() - ($2 * INTERVAL '1 day')
 ORDER BY updated_at DESC, conversation_id DESC
-"""
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _RENAME_CONVERSATION = f"""
 UPDATE web_conversations
@@ -132,7 +132,7 @@ WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
   AND updated_at >= NOW() - ($4 * INTERVAL '1 day')
 RETURNING {_SUMMARY_COLUMNS}
-"""
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _DELETE_CONVERSATION = """
 DELETE FROM web_conversations
@@ -242,7 +242,7 @@ WHERE principal_id = $1
   AND conversation_id = $2::text::uuid
   AND content_revision = $3
 RETURNING {_SUMMARY_COLUMNS}
-"""
+"""  # noqa: S608 - interpolates only the trusted _SUMMARY_COLUMNS constant
 
 _INSERT_TURN = """
 INSERT INTO web_conversation_turns (
