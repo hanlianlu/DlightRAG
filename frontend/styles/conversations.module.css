@@ -41,7 +41,7 @@
     font: inherit;
     font-size: var(--font-size-detail);
     font-weight: 550;
-    gap: var(--space-inline);
+    gap: var(--space-tight);
     height: var(--size-button);
     min-height: var(--size-button);
     padding: 0 var(--space-component);

@@ -50,7 +50,7 @@
     align-items: center;
     gap: var(--space-tight);
     width: 100%;
-    padding: var(--space-component) var(--space-component);
+    padding: var(--space-tight) var(--space-component);
     background: transparent;
     transition: background 0.15s ease;
 }
@@ -97,8 +97,8 @@
 
 .source-doc-badge {
     font-size: var(--font-size-caption);
-    color: var(--color-gold-300);
-    font-weight: 600;
+    color: var(--color-text-muted);
+    font-weight: 500;
 }
 
 .source-doc-count {
@@ -348,8 +348,8 @@
 }
 
 .source-dl-icon-svg {
-    width: 20px;
-    height: 20px;
+    width: var(--size-icon-md);
+    height: var(--size-icon-md);
     pointer-events: none;
     stroke-width: 1.5;
 }
