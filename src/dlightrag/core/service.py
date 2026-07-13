@@ -1807,16 +1807,24 @@ class RAGService:
                 self.config.rerank.enabled,
             )
             return
+
+        limit = chunk_top_k or top_k or len(chunks)
         if self._rerank_func is None:
+            # No reranker configured: still honor the requested budget by keeping
+            # the top-``limit`` fused chunks (already RRF-sorted) rather than
+            # leaking the full semantic∪BM25 union into downstream token budgets.
+            if len(chunks) > limit:
+                result.contexts["chunks"] = chunks[:limit]
+            result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
             logger.info(
-                "[Rerank] skipped: strategy=%s enabled=%s chunks=%d reason=no_function",
+                "[Rerank] skipped: strategy=%s enabled=%s chunks=%d limit=%d reason=no_function",
                 self.config.rerank.strategy,
                 self.config.rerank.enabled,
                 len(chunks),
+                limit,
             )
             return
 
-        limit = chunk_top_k or top_k or len(chunks)
         try:
             result.contexts["chunks"] = await self._rerank_func(
                 query=query,
@@ -1837,7 +1845,13 @@ class RAGService:
                 top_score,
             )
         except Exception:
-            logger.warning("Rerank failed; returning fused chunk order", exc_info=True)
+            # Rerank failed: fall back to the top-``limit`` fused chunks (RRF
+            # order) so a transient reranker error still honors the budget
+            # instead of leaking the full union downstream.
+            logger.warning("Rerank failed; returning top fused chunks", exc_info=True)
+            if len(chunks) > limit:
+                result.contexts["chunks"] = chunks[:limit]
+            result.trace["reranked_chunk_count"] = len(result.contexts["chunks"])
 
     async def aget_visual_asset(self, chunk_id: str, *, size: str = "full") -> Any | None:
         """Resolve a chunk image asset for API/Web image routes."""

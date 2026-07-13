@@ -306,6 +306,36 @@ class TestRAGServiceRetrieve:
         assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["bm25-visual", "semantic-a"]
         assert result.trace["reranked_chunk_count"] == 2
 
+    async def test_aretrieve_caps_fused_chunks_when_rerank_disabled(
+        self, test_config, monkeypatch: pytest.MonkeyPatch
+    ):
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = self._make_retrieval_service(test_config)
+        service._retrieval_orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [{"chunk_id": f"c{i}", "content": f"c{i}"} for i in range(5)],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+
+        async def hydrate(_stores, chunks):
+            return None
+
+        service._rerank_func = None  # reranker disabled
+        monkeypatch.setattr(
+            "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            hydrate,
+        )
+
+        result = await service.aretrieve("test query", chunk_top_k=3)
+
+        # Budget is honored even without a reranker: only the top-3 fused chunks
+        # survive instead of leaking the full semantic∪BM25 union.
+        assert [c["chunk_id"] for c in result.contexts["chunks"]] == ["c0", "c1", "c2"]
+        assert result.trace["reranked_chunk_count"] == 3
+
     async def test_aretrieve_skips_chunks_hydrated_by_backend(
         self, test_config, monkeypatch: pytest.MonkeyPatch
     ):
