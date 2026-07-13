@@ -205,6 +205,32 @@ class TestRecoverStalledDocs:
         ]
         assert "stalled-abc" in flat_args
 
+    async def test_update_reapplies_stall_predicates_to_avoid_toctou(self) -> None:
+        """The reset UPDATE re-checks status + age so it cannot clobber a doc
+        another worker moved back to active between the SELECT and the write."""
+        from dlightrag.storage.stalled_doc_scanner import recover_stalled_docs
+
+        rows = [_StalledRow("stalled-abc", "processing", "/tmp/x.pdf")]
+        conn = _MockConn(stalled_rows=rows, update_result="UPDATE 1")
+        cfg = _patch_config()
+
+        with (
+            patch("asyncpg.connect", new_callable=AsyncMock, return_value=conn),
+            patch("dlightrag.config.get_config", return_value=cfg),
+        ):
+            await recover_stalled_docs(workspace="default", timeout_seconds=1800)
+
+        update_query, update_args = next(c for c in conn.execute_calls if "UPDATE" in c[0])
+        assert "status = ANY(" in update_query  # status guard re-applied
+        assert "updated_at < NOW()" in update_query  # age guard re-applied
+        flat_args = [
+            item
+            for arg in update_args
+            for item in (list(arg) if isinstance(arg, (list, tuple)) else [arg])
+        ]
+        assert "processing" in flat_args
+        assert 1800 in flat_args  # UPDATE uses the same timeout as the scan
+
 
 class TestRecoverStalledDocsIntegration:
     """Integration tests with RAGServiceManager."""
