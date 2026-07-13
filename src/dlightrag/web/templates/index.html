@@ -104,10 +104,13 @@
 
     <div class="toast" id="toast"></div>
 
-    <dialog id="delete-conversation-dialog" aria-labelledby="delete-conversation-title">
+    <dialog id="delete-conversation-dialog"
+            aria-labelledby="delete-conversation-title"
+            aria-describedby="delete-conversation-message delete-conversation-draft-warning">
         <form method="dialog">
             <h2 id="delete-conversation-title">Delete conversation</h2>
-            <p>This conversation and its history will be permanently deleted.</p>
+            <p id="delete-conversation-message">This conversation and its history will be permanently deleted.</p>
+            <p id="delete-conversation-draft-warning" hidden>Your unsent draft and attachments will also be discarded.</p>
             <div class="conversation-dialog-actions">
                 <button type="submit" value="cancel">Cancel</button>
                 <button type="submit" value="delete" class="conversation-dialog-danger">Delete</button>
