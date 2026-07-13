@@ -4,13 +4,18 @@
 import asyncio
 import datetime
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
 
+from dlightrag.core.answer_capability import AnswerImageCapability
+from dlightrag.core.answer_prompt import CurrentImagePayloadError
 from dlightrag.core.answer_turn import PreparedAnswerTurn
+from dlightrag.core.query_planner import QueryPlan
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils.images import ValidatedWebImage
 from dlightrag.web.answer_events import stream_answer_events
@@ -33,6 +38,44 @@ def _record_observations(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
 
     monkeypatch.setattr("dlightrag.web.answer_events.trace_observation", fake_observation)
     return captured
+
+
+class _TracedStream:
+    """Async token iterator exposing a trace, like the real AnswerStream."""
+
+    def __init__(self, tokens: list[str], trace: dict[str, Any]) -> None:
+        self._tokens = list(tokens)
+        self.trace = trace
+        self.answer = "".join(self._tokens)
+        self.image_descriptions: dict[str, str] = {}
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        return self._iter()
+
+    async def _iter(self) -> AsyncIterator[str]:
+        for token in self._tokens:
+            yield token
+
+
+def _start_metadata(captured: dict[str, object]) -> dict[str, Any]:
+    start = captured["start"]
+    assert isinstance(start, dict)
+    metadata = start.get("metadata")
+    assert isinstance(metadata, dict)
+    return metadata
+
+
+def _metadata_updates(captured: dict[str, object]) -> list[dict[str, Any]]:
+    updates = captured["updates"]
+    assert isinstance(updates, list)
+    result: list[dict[str, Any]] = []
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        metadata = update.get("metadata")
+        if isinstance(metadata, dict):
+            result.append(metadata)
+    return result
 
 
 async def _tokens():
@@ -159,6 +202,147 @@ async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
 
     assert any("event: error" in event for event in events)
     assert not any("event: done" in event for event in events)
+    service.commit_answer.assert_not_awaited()
+
+
+async def test_transport_and_capability_metrics_reach_observation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _record_observations(monkeypatch)
+    now = datetime.datetime(2026, 7, 13, tzinfo=datetime.UTC)
+    service = AsyncMock()
+    service.commit_answer.return_value = CommitTurnResult(
+        saved=True,
+        reason=None,
+        summary={
+            "conversation_id": "11111111-1111-4111-8111-111111111111",
+            "title": "Hi",
+            "content_revision": 3,
+            "created_at": now,
+            "updated_at": now,
+        },
+        turn_id="turn-id",
+        current_image_ids=(),
+    )
+    trace = {
+        "answer_images_current": 1,
+        "answer_images_history": 1,
+        "answer_images_rag": 0,
+        "answer_images_total": 2,
+        "answer_image_budget_used_bytes": 4096,
+        "answer_context_images_sent": 0,
+        "answer_context_images_skipped": 3,
+    }
+    manager = SimpleNamespace(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        answer_image_capability=AnswerImageCapability(
+            status="supported",
+            configured_ceiling=8,
+            effective_max_images=6,
+            provider="test",
+            base_url=None,
+            model="m",
+            failure_kind=None,
+        ),
+        _aanswer_stream_prepared=AsyncMock(
+            return_value=({"chunks": []}, _TracedStream(["answer"], trace))
+        ),
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+    turn = PreparedAnswerTurn(
+        current_query="hi",
+        retrieval_query="hi",
+        plan=QueryPlan(
+            original_query="hi",
+            standalone_query="hi",
+            selected_history_image_ids=("img-1",),
+        ),
+        history_image_catalog_count=2,
+        history_image_resolution_status="degraded",
+    )
+
+    async for _event in stream_answer_events(
+        manager=manager,
+        cfg=SimpleNamespace(citations=SimpleNamespace(highlights=SimpleNamespace(enabled=False))),
+        turn=turn,
+        workspaces=["default"],
+        workspace="default",
+        conversation_service=service,
+        prepared_conversation=prepared,
+        validated_images=(),
+        submission_id="22222222-2222-4222-8222-222222222222",
+    ):
+        pass
+
+    start = _start_metadata(captured)
+    assert start["answer_image_capability_status"] == "supported"
+    assert start["answer_image_configured_ceiling"] == 8
+    assert start["answer_image_effective_limit"] == 6
+    assert start["history_image_catalog_count"] == 2
+    assert start["history_images_selected"] == 1
+    assert start["history_image_resolution_status"] == "degraded"
+
+    transport = [
+        metadata for metadata in _metadata_updates(captured) if "answer_images_total" in metadata
+    ]
+    assert transport, "transport metrics were not emitted"
+    metrics = transport[-1]
+    assert metrics["answer_images_total"] == 2
+    assert metrics["answer_images_current"] == 1
+    assert metrics["answer_images_history"] == 1
+    assert metrics["answer_images_rag"] == 0
+    assert metrics["answer_image_bytes_total"] == 4096
+    assert metrics["rag_raw_images_skipped"] == 3
+    assert metrics["rag_visual_descriptions_included"] == 3
+
+
+async def test_current_image_payload_error_maps_to_limit_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _record_observations(monkeypatch)
+    service = AsyncMock()
+    manager = SimpleNamespace(
+        config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
+        answer_image_capability=None,
+        _aanswer_stream_prepared=AsyncMock(
+            side_effect=CurrentImagePayloadError("2 current-turn images exceed 1")
+        ),
+    )
+    prepared = PreparedWebConversation(
+        principal_id="a" * 64,
+        conversation_id="11111111-1111-4111-8111-111111111111",
+        content_revision=2,
+        text_history=(),
+    )
+
+    events = [
+        event
+        async for event in stream_answer_events(
+            manager=manager,
+            cfg=SimpleNamespace(),
+            turn=PreparedAnswerTurn(current_query="hi", retrieval_query="hi"),
+            workspaces=["default"],
+            workspace="default",
+            conversation_service=service,
+            prepared_conversation=prepared,
+            validated_images=(),
+            submission_id="22222222-2222-4222-8222-222222222222",
+        )
+    ]
+
+    assert any("event: error" in event for event in events)
+    assert not any("event: token" in event for event in events)
+    error_kinds = [
+        metadata["error_kind"]
+        for metadata in _metadata_updates(captured)
+        if "error_kind" in metadata
+    ]
+    assert error_kinds == ["CURRENT_IMAGE_LIMIT_EXCEEDED"]
     service.commit_answer.assert_not_awaited()
 
 
