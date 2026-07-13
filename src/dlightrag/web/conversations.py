@@ -171,11 +171,12 @@ class WebConversationService:
         if submission_id is not None:
             try:
                 async with asyncio.timeout(_RECONCILE_ATTEMPT_TIMEOUT_SECONDS):
-                    committed_submission = await self._store.find_committed_turn_once(
+                    committed_submission = await self._store.find_committed_turn(
                         principal_id,
                         conversation_id,
                         submission_id,
                         ttl_days=self._ttl_days,
+                        retry=False,
                     )
             except _AMBIGUOUS_COMMIT_EXCEPTIONS as exc:
                 raise WebConversationUnavailableError from exc
@@ -392,11 +393,12 @@ class WebConversationService:
         for attempt in range(_RECONCILE_ATTEMPTS):
             try:
                 async with asyncio.timeout(_RECONCILE_ATTEMPT_TIMEOUT_SECONDS):
-                    committed = await self._store.find_committed_turn_once(
+                    committed = await self._store.find_committed_turn(
                         prepared.principal_id,
                         prepared.conversation_id,
                         submission_id,
                         ttl_days=self._ttl_days,
+                        retry=False,
                     )
             except _AMBIGUOUS_COMMIT_EXCEPTIONS:
                 if attempt + 1 < _RECONCILE_ATTEMPTS:

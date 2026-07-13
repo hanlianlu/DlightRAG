@@ -152,29 +152,15 @@ class AnswerImageBudget:
         # Only validate strings that look like URLs (have a scheme://).
         # Bare base64, raw bytes, or unrecognized formats fall through
         # to the byte-budget pipeline.
-        colon = text.find(":")
-        if colon < 0 or "//" not in text:
+        if text.find(":") < 0 or "//" not in text:
             return self.add_base64(text, label=label)
 
-        scheme = text[:colon].lower().rstrip("/")
-        if scheme in ("http", "https"):
-            safe = _validate_image_url(text, label=label)
-            if safe is None:
-                return None
-            self.count += 1
-            return {"type": "image_url", "image_url": {"url": safe}}
-
-        # Unknown scheme — not safe to pass through as a URL
-        if scheme != "data":  # data: already handled above
-            logger.warning(
-                "Rejected image source with unsafe scheme '%s' · %s · %.80s",
-                log_safe(scheme),
-                log_safe(label),
-                log_safe(text),
-            )
+        # Any scheme:// source goes through the single whitelist / SSRF gate.
+        safe = _validate_image_url(text, label=label)
+        if safe is None:
             return None
-
-        return self.add_base64(text, label=label)
+        self.count += 1
+        return {"type": "image_url", "image_url": {"url": safe}}
 
     def _add_image_url_block(self, value: dict[str, Any], *, label: str) -> dict[str, Any] | None:
         """Add an OpenAI-style image block after validating the inner URL.
