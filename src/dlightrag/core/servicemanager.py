@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
 
 from dlightrag.core.answer import AnswerEngine
+from dlightrag.core.answer_capability import AnswerImageCapability, derive_effective_max_images
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
@@ -259,6 +260,7 @@ class RAGServiceManager:
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
         self._supports_vision: bool | None = None
         self._rerank_supports_vision: bool | None = None
+        self._answer_image_capability: AnswerImageCapability | None = None
         self._answer_stream_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
         self._direct_llm_sem = asyncio.Semaphore(max(1, int(self._config.max_async)))
 
@@ -289,6 +291,7 @@ class RAGServiceManager:
 
         # ── Vision probe (once at startup, not per workspace) ──────────
         await manager._probe_vision_support()
+        await manager._probe_answer_image_capability()
 
         default_err: Exception | None = None
         try:
@@ -516,6 +519,61 @@ class RAGServiceManager:
 
         if total:
             logger.info("Total stalled docs recovered at startup: %d", total)
+
+    @property
+    def answer_image_capability(self) -> AnswerImageCapability | None:
+        """Query-role answer-model image capability, discovered at startup."""
+        return self._answer_image_capability
+
+    async def _probe_answer_image_capability(self) -> None:
+        """Discover the query-role answer model's image capability once at startup.
+
+        Probes ``model_for_role(config, "query")`` — the model the AnswerEngine
+        actually uses — not ``llm.default``.  Records a tri-state capability
+        (supported/unsupported/unknown) and the effective transport ceiling on
+        this manager instance.  Best-effort: failures degrade to ``unknown`` and
+        never block startup.
+        """
+        if self._answer_image_capability is not None:
+            return
+        from dlightrag.core.vision_probe import probe_image_capability
+        from dlightrag.models.llm_roles import model_for_role
+        from dlightrag.models.providers import get_provider
+
+        ceiling = int(self._config.answer.max_images)
+        cfg = model_for_role(self._config, "query")
+        default = self._config.llm.default
+        try:
+            provider = get_provider(
+                cfg.provider,
+                api_key=cfg.api_key or default.api_key,
+                base_url=cfg.base_url,
+                timeout=cfg.timeout,
+                max_retries=cfg.max_retries,
+            )
+            outcome = await probe_image_capability(provider, model=cfg.model, ceiling=ceiling)
+        except Exception:
+            logger.debug("Answer image capability probe failed", exc_info=True)
+            from dlightrag.core.vision_probe import ImageProbeOutcome
+
+            outcome = ImageProbeOutcome(status="unknown", failure_kind="probe_error")
+        self._answer_image_capability = AnswerImageCapability(
+            status=outcome.status,
+            configured_ceiling=ceiling,
+            effective_max_images=derive_effective_max_images(
+                outcome.status, ceiling, outcome.provider_max
+            ),
+            provider=cfg.provider,
+            base_url=cfg.base_url,
+            model=cfg.model,
+            failure_kind=outcome.failure_kind,
+        )
+        logger.info(
+            "Answer image capability: status=%s effective=%d model=%s",
+            outcome.status,
+            self._answer_image_capability.effective_max_images,
+            cfg.model,
+        )
 
     async def _probe_vision_support(self) -> None:
         """Probe chat-model vision capability once at startup.
