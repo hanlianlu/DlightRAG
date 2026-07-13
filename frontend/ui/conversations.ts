@@ -27,6 +27,7 @@ const COLLAPSED_KEY = 'dlightrag.conversation_sidebar_collapsed';
 const DESKTOP_MEDIA = '(min-width: 1200px)';
 
 type ListState = 'loading' | 'ready' | 'error' | 'empty-error';
+type FocusResolver = () => HTMLElement | null;
 
 let historyController: AbortController | null = null;
 let bootstrapController: AbortController | null = null;
@@ -75,19 +76,51 @@ function clearConversationSources(): void {
     closePanel();
 }
 
-function dialogResult(dialog: HTMLDialogElement): Promise<string> {
+function resolveConversationActions(conversationId: string): HTMLButtonElement | null {
+    return document.querySelector<HTMLButtonElement>(
+        `[data-conversation-id="${CSS.escape(conversationId)}"] [aria-label="Conversation actions"]`,
+    );
+}
+
+function resolveConversationSelect(conversationId: string): HTMLButtonElement | null {
+    return document.querySelector<HTMLButtonElement>(
+        `[data-conversation-id="${CSS.escape(conversationId)}"] .conversation-select`,
+    );
+}
+
+function resolveActiveConversationSelect(): HTMLButtonElement | null {
+    const conversationId = conversationStore.activeConversationId;
+    return conversationId ? resolveConversationSelect(conversationId) : null;
+}
+
+function resolveNewConversationButton(): HTMLButtonElement | null {
+    return document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
+}
+
+function restoreStableFocus(resolveTarget: FocusResolver): void {
+    window.requestAnimationFrame(function() { resolveTarget()?.focus(); });
+}
+
+function dialogResult(
+    dialog: HTMLDialogElement,
+    resolveReturnTarget: FocusResolver,
+): Promise<string> {
     dialog.returnValue = '';
     dialog.showModal();
     return new Promise(function(resolve) {
-        dialog.addEventListener('close', function() { resolve(dialog.returnValue); }, {once: true});
+        dialog.addEventListener('close', function() {
+            const result = dialog.returnValue;
+            restoreStableFocus(resolveReturnTarget);
+            resolve(result);
+        }, {once: true});
     });
 }
 
-async function confirmDiscardDraft(): Promise<boolean> {
+async function confirmDiscardDraft(resolveReturnTarget: FocusResolver): Promise<boolean> {
     if (!hasUnsavedDraft()) return true;
     const dialog = document.getElementById('discard-draft-dialog') as HTMLDialogElement | null;
     if (!dialog) return false;
-    return await dialogResult(dialog) === 'discard';
+    return await dialogResult(dialog, resolveReturnTarget) === 'discard';
 }
 
 function lifecycleBlocked(): boolean {
@@ -503,7 +536,11 @@ async function requestSelectConversation(conversationId: string): Promise<void> 
         focusComposer();
         return;
     }
-    if (pendingLifecycleAction || lifecycleBlocked() || !await confirmDiscardDraft()) return;
+    if (
+        pendingLifecycleAction
+        || lifecycleBlocked()
+        || !await confirmDiscardDraft(function() { return resolveConversationSelect(conversationId); })
+    ) return;
     setLifecyclePending(true);
     const accepted = await loadConversation(conversationId, true, true);
     if (accepted) {
@@ -515,7 +552,11 @@ async function requestSelectConversation(conversationId: string): Promise<void> 
 }
 
 async function requestNewConversation(): Promise<void> {
-    if (pendingLifecycleAction || lifecycleBlocked() || !await confirmDiscardDraft()) return;
+    if (
+        pendingLifecycleAction
+        || lifecycleBlocked()
+        || !await confirmDiscardDraft(resolveNewConversationButton)
+    ) return;
     setLifecyclePending(true);
     const requestGeneration = conversationStore.beginRequest();
     try {
@@ -542,17 +583,17 @@ async function requestNewConversation(): Promise<void> {
     }
 }
 
-async function selectFallbackConversation(): Promise<void> {
+async function selectFallbackConversation(focusAfter = true): Promise<void> {
     const fallback = conversationStore.conversations[0];
     if (fallback) {
         await loadConversation(fallback.conversation_id, true, true);
-        focusComposer();
+        if (focusAfter) focusComposer();
         return;
     }
-    await createFallbackConversation();
+    await createFallbackConversation(focusAfter);
 }
 
-async function createFallbackConversation(): Promise<void> {
+async function createFallbackConversation(focusAfter = true): Promise<void> {
     const requestGeneration = conversationStore.beginRequest();
     try {
         const summary = await createConversation();
@@ -560,7 +601,7 @@ async function createFallbackConversation(): Promise<void> {
         conversationStore.upsertSummary(summary);
         listState = 'ready';
         await loadConversation(summary.conversation_id, true, true, requestGeneration);
-        focusComposer();
+        if (focusAfter) focusComposer();
     } catch {
         if (!conversationStore.isCurrentRequest(requestGeneration)) return;
         listState = 'empty-error';
@@ -572,30 +613,50 @@ async function createFallbackConversation(): Promise<void> {
 
 async function requestDelete(conversationId: string): Promise<void> {
     if (pendingLifecycleAction || lifecycleBlocked()) return;
+    const wasActive = conversationStore.activeConversationId === conversationId;
+    const discardsDraft = wasActive && hasUnsavedDraft();
+    const resolveActions = function(): HTMLElement | null {
+        return resolveConversationActions(conversationId);
+    };
     openMenuId = null;
     renderConversationList();
     const dialog = document.getElementById('delete-conversation-dialog') as HTMLDialogElement | null;
-    if (!dialog || await dialogResult(dialog) !== 'delete') return;
+    const warning = document.getElementById('delete-conversation-draft-warning');
+    if (warning) warning.hidden = !discardsDraft;
+    if (!dialog || await dialogResult(dialog, resolveActions) !== 'delete') return;
     if (lifecycleBlocked()) return;
 
     setLifecyclePending(true);
-    const wasActive = conversationStore.activeConversationId === conversationId;
+    let resolveFinalFocus: FocusResolver = function() {
+        return resolveConversationActions(conversationId)
+            || resolveActiveConversationSelect()
+            || resolveNewConversationButton();
+    };
     try {
         await deleteConversation(conversationId);
+        if (wasActive) clearDraft();
         conversationStore.remove(conversationId);
         if (wasActive) {
             clearConversationSources();
-            await selectFallbackConversation();
+            await selectFallbackConversation(false);
         }
+        resolveFinalFocus = function() {
+            return resolveActiveConversationSelect() || resolveNewConversationButton();
+        };
     } catch (error) {
         if (error instanceof ConversationApiError && error.status === 404) {
+            if (wasActive) clearDraft();
             conversationStore.remove(conversationId);
-            if (wasActive) await selectFallbackConversation();
+            if (wasActive) await selectFallbackConversation(false);
+            resolveFinalFocus = function() {
+                return resolveActiveConversationSelect() || resolveNewConversationButton();
+            };
         } else {
             showToast('Could not delete the conversation.', 5000);
         }
     } finally {
         setLifecyclePending(false);
+        restoreStableFocus(resolveFinalFocus);
     }
 }
 
