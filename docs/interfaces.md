@@ -419,8 +419,11 @@ another principal receives the same 404 as a missing conversation.
 Web conversations retain up to 100 complete turns with 30-day inactivity
 retention. Current Web images are admitted using `query_images.max_current_images`
 and `query_images.max_upload_bytes`; the defaults are three images and 15 MiB per
-decoded image. Current-turn images always have priority. Slice B owns historical
-image reference resolution and the unified answer-image transport budget.
+decoded image, and the browser upload entry is gated by the query-role answer
+model's discovered image capability (unsupported or unknown disables uploads).
+Current-turn images always have priority. Referenced historical images are
+resolved by the planner and share one adaptive `answer.max_images` transport
+budget with current and RAG images.
 
 REST, MCP, and Python answer/retrieve calls remain stateless. They do not accept
 `conversation_id`, caller-supplied history, or durable historical-image IDs.
