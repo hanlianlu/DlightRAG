@@ -319,6 +319,7 @@ def test_answer_helpers_derive_visual_images_and_blocks() -> None:
             "url": "/images/default/fig-1?size=full",
             "thumbnail_url": "/images/default/fig-1?size=thumb",
             "label": "report.pdf",
+            "answer_image_sent": True,
         }
     ]
     assert answer_blocks_from_markdown("Diagram below [1-1]. Details after.", images) == [
