@@ -20,6 +20,13 @@ repos:
   # ── local tools (run via uv from the project venv) ────────────────
   - repo: local
     hooks:
+      - id: ruff-security
+        name: ruff (security / bandit, src + scripts)
+        entry: uv run ruff check src/ scripts/ --select S
+        language: system
+        types: [python]
+        pass_filenames: false
+
       - id: pyright
         name: pyright (strict type-check)
         entry: uv run pyright
