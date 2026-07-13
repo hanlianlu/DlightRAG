@@ -429,6 +429,16 @@ REST, MCP, and Python answer/retrieve calls remain stateless. They do not accept
 `conversation_id`, caller-supplied history, or durable historical-image IDs.
 Their `query_images` belong only to the current request and are never persisted.
 
+Image support is a deployment capability, not a per-request negotiation, so callers
+discover it up front. REST `GET /health` returns `answer_image_capability`
+(`status`, `effective_max_images`, `configured_ceiling`, `model`); the MCP
+`get_capabilities` tool returns the same summary; and the Python SDK exposes it as
+`manager.answer_image_capability`. When `status` is not `supported`, attaching
+`query_images` is rejected fail-closed with a stable `error_kind`
+(`CURRENT_IMAGES_UNSUPPORTED` or `ANSWER_IMAGE_CAPABILITY_UNKNOWN`): REST returns
+HTTP 400 (or a classified SSE `error` event carrying `error_kind` when streaming),
+MCP returns the error text, and the SDK raises `AnswerImageError`.
+
 The Web shell defaults answer scope to `Search in: All authorized workspaces`.
 That authorization-relative multi-workspace selection is independent from
 `Files in`, which continues to name one workspace for file management and

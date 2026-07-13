@@ -68,6 +68,30 @@ def mock_mcp_manager(monkeypatch):
     return manager
 
 
+async def test_get_capabilities_reports_answer_image_capability(
+    mock_mcp_manager: AsyncMock,
+) -> None:
+    from dlightrag.core.answer_capability import AnswerImageCapability
+
+    mock_mcp_manager.answer_image_capability = AnswerImageCapability(
+        status="supported",
+        configured_ceiling=8,
+        effective_max_images=6,
+        provider="test",
+        base_url=None,
+        model="test-model",
+        failure_kind=None,
+    )
+
+    result = await mcp_server.mcp_app.call_tool("get_capabilities", {})
+
+    cap = _tool_json(result)["answer_image_capability"]
+    assert cap["status"] == "supported"
+    assert cap["effective_max_images"] == 6
+    assert cap["configured_ceiling"] == 8
+    assert cap["model"] == "test-model"
+
+
 def test_mcp_server_info_uses_dlightrag_version() -> None:
     assert mcp_server.server.version == dlightrag.__version__
 

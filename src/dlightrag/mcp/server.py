@@ -19,6 +19,7 @@ from pydantic import Field
 import dlightrag
 from dlightrag.access_control import AccessAction, AccessDeniedError, access_control_from_config
 from dlightrag.config import DlightragConfig, get_config, load_config, set_config
+from dlightrag.core.answer_capability import answer_image_capability_summary
 from dlightrag.core.client_contracts import (
     MetadataPolicy,
     SourceType,
@@ -329,6 +330,23 @@ async def list_workspaces_tool() -> dict[str, Any]:
     return {
         "workspaces": [row["workspace"] for row in records],
         "records": records,
+    }
+
+
+@mcp_app.tool(
+    name="get_capabilities",
+    description=(
+        "Report deployment capabilities to honor before sending images. Returns "
+        "answer_image_capability with status (supported/unsupported/unknown), "
+        "effective_max_images (max images the answer model accepts; 0 means send none), "
+        "configured_ceiling, and model. Query images reach the answer model only when "
+        "status is 'supported'."
+    ),
+)
+async def get_capabilities_tool() -> dict[str, Any]:
+    manager = await _ensure_manager()
+    return {
+        "answer_image_capability": answer_image_capability_summary(manager.answer_image_capability)
     }
 
 
