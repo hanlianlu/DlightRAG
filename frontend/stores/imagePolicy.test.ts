@@ -5,11 +5,16 @@ import {test} from 'node:test';
 
 import {
   acceptsImageUpload,
+  canAddImage,
   getImageAdmissionPolicy,
   ImageReadAdmissionController,
 } from '../ui/image_policy.ts';
 
-const policy = {maxCurrentImages: 3, maxUploadBytes: 15 * 1024 * 1024};
+const policy = {
+  effectiveCurrentUploadLimit: 3,
+  maxUploadBytes: 15 * 1024 * 1024,
+  capabilityStatus: 'supported' as const,
+};
 
 test('browser image admission accepts the exact configured byte limit', () => {
   assert.equal(
@@ -32,9 +37,19 @@ test('browser image admission rejects bytes or count above configured limits', (
     false,
   );
   assert.equal(
-    acceptsImageUpload({type: 'image/png', size: 1}, policy.maxCurrentImages, policy),
+    acceptsImageUpload({type: 'image/png', size: 1}, policy.effectiveCurrentUploadLimit, policy),
     false,
   );
+});
+
+test('canAddImage blocks non-supported capability at the single entry', () => {
+  assert.equal(canAddImage({status: 'unsupported', limit: 3, current: 0}), false);
+  assert.equal(canAddImage({status: 'unknown', limit: 3, current: 0}), false);
+});
+
+test('canAddImage allows supported uploads up to the effective limit', () => {
+  assert.equal(canAddImage({status: 'supported', limit: 2, current: 1}), true);
+  assert.equal(canAddImage({status: 'supported', limit: 2, current: 2}), false);
 });
 
 function policyRoot(dataset: Record<string, string>): HTMLElement {
@@ -43,46 +58,98 @@ function policyRoot(dataset: Record<string, string>): HTMLElement {
 
 test('SSR image policy fails closed for missing and malformed attributes', () => {
   assert.equal(getImageAdmissionPolicy(null), null);
-  assert.equal(getImageAdmissionPolicy(policyRoot({maxCurrentImages: '3'})), null);
-  assert.equal(getImageAdmissionPolicy(policyRoot({maxUploadBytes: '100'})), null);
   assert.equal(
-    getImageAdmissionPolicy(policyRoot({maxCurrentImages: 'three', maxUploadBytes: '100'})),
+    getImageAdmissionPolicy(policyRoot({effectiveCurrentUploadLimit: '3'})),
     null,
   );
   assert.equal(
-    getImageAdmissionPolicy(policyRoot({maxCurrentImages: '-1', maxUploadBytes: '100'})),
+    getImageAdmissionPolicy(
+      policyRoot({effectiveCurrentUploadLimit: '3', maxUploadBytes: '100'}),
+    ),
     null,
   );
   assert.equal(
-    getImageAdmissionPolicy(policyRoot({maxCurrentImages: '3.5', maxUploadBytes: '100'})),
+    getImageAdmissionPolicy(
+      policyRoot({maxUploadBytes: '100', answerImageCapability: 'supported'}),
+    ),
     null,
   );
   assert.equal(
-    getImageAdmissionPolicy(policyRoot({maxCurrentImages: '3', maxUploadBytes: '0'})),
+    getImageAdmissionPolicy(
+      policyRoot({
+        effectiveCurrentUploadLimit: 'three',
+        maxUploadBytes: '100',
+        answerImageCapability: 'supported',
+      }),
+    ),
     null,
   );
   assert.equal(
-    getImageAdmissionPolicy(policyRoot({
-      maxCurrentImages: '9007199254740992',
-      maxUploadBytes: '100',
-    })),
+    getImageAdmissionPolicy(
+      policyRoot({
+        effectiveCurrentUploadLimit: '-1',
+        maxUploadBytes: '100',
+        answerImageCapability: 'supported',
+      }),
+    ),
     null,
   );
   assert.equal(
-    getImageAdmissionPolicy(policyRoot({
-      maxCurrentImages: '3',
-      maxUploadBytes: '9007199254740992',
-    })),
+    getImageAdmissionPolicy(
+      policyRoot({
+        effectiveCurrentUploadLimit: '3',
+        maxUploadBytes: '0',
+        answerImageCapability: 'supported',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    getImageAdmissionPolicy(
+      policyRoot({
+        effectiveCurrentUploadLimit: '9007199254740992',
+        maxUploadBytes: '100',
+        answerImageCapability: 'supported',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    getImageAdmissionPolicy(
+      policyRoot({
+        effectiveCurrentUploadLimit: '3',
+        maxUploadBytes: '9007199254740992',
+        answerImageCapability: 'supported',
+      }),
+    ),
+    null,
+  );
+  assert.equal(
+    getImageAdmissionPolicy(
+      policyRoot({
+        effectiveCurrentUploadLimit: '3',
+        maxUploadBytes: '100',
+        answerImageCapability: 'bogus',
+      }),
+    ),
     null,
   );
 });
 
-test('SSR zero-count policy is valid but admits no images', () => {
+test('SSR zero-limit policy is valid but admits no images', () => {
   const zeroPolicy = getImageAdmissionPolicy(
-    policyRoot({maxCurrentImages: '0', maxUploadBytes: '100'}),
+    policyRoot({
+      effectiveCurrentUploadLimit: '0',
+      maxUploadBytes: '100',
+      answerImageCapability: 'supported',
+    }),
   );
 
-  assert.deepEqual(zeroPolicy, {maxCurrentImages: 0, maxUploadBytes: 100});
+  assert.deepEqual(zeroPolicy, {
+    effectiveCurrentUploadLimit: 0,
+    maxUploadBytes: 100,
+    capabilityStatus: 'supported',
+  });
   assert.equal(acceptsImageUpload({type: 'image/png', size: 1}, 0, zeroPolicy!), false);
 });
 
@@ -130,8 +197,8 @@ test('file input, drop, and paste share synchronous in-flight count reservations
   const admitted = sources.map((source) => controller.admit(imageFile(source)));
 
   assert.deepEqual(admitted, [true, true, true, false]);
-  assert.equal(controller.inFlightCount, policy.maxCurrentImages);
-  assert.equal(readers.length, policy.maxCurrentImages);
+  assert.equal(controller.inFlightCount, policy.effectiveCurrentUploadLimit);
+  assert.equal(readers.length, policy.effectiveCurrentUploadLimit);
 
   readers[0].succeed('data:image/png;base64,one');
   assert.equal(controller.inFlightCount, 2);

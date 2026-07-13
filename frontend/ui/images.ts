@@ -5,7 +5,7 @@ import {uploadFilesToWorkspace} from './files-panel.ts';
 import chatStyles from '../styles/chat.module.css';
 import lightboxStyles from '../styles/lightbox.module.css';
 import type {ConversationImageReference} from '../api/conversations.ts';
-import {getImageAdmissionPolicy, ImageReadAdmissionController} from './image_policy.ts';
+import {getImageAdmissionPolicy, canAddImage, ImageReadAdmissionController} from './image_policy.ts';
 
 const SAFE_DATA_IMAGE_SRC_RE = /^data:image\/(?:avif|bmp|gif|jpeg|jpg|png|webp);base64,[a-z0-9+/=]+$/i;
 const pendingImages: PendingImage[] = [];
@@ -38,6 +38,24 @@ function eventElement(event: Event): Element | null {
 
 export function addImage(file: File): void {
     imageAdmission.admit(file);
+}
+
+function applyUploadCapabilityGate(plusBtn: HTMLElement): void {
+    const policy = getImageAdmissionPolicy();
+    const uploadsAllowed =
+        policy !== null &&
+        canAddImage({
+            status: policy.capabilityStatus,
+            limit: policy.effectiveCurrentUploadLimit,
+            current: 0,
+        });
+    if (uploadsAllowed) return;
+    if (plusBtn instanceof HTMLButtonElement) plusBtn.disabled = true;
+    plusBtn.setAttribute('aria-disabled', 'true');
+    plusBtn.title =
+        policy !== null && policy.capabilityStatus !== 'supported'
+            ? 'Image input is unavailable: the answer model does not support images.'
+            : 'Image input is currently unavailable.';
 }
 
 export function getPendingImageData(): string[] {
@@ -369,6 +387,7 @@ export function setupImageInputs(): void {
     const plusBtn = document.getElementById('composer-plus');
     const imageInput = document.getElementById('image-input') as HTMLInputElement | null;
     if (plusBtn && imageInput) {
+        applyUploadCapabilityGate(plusBtn);
         plusBtn.addEventListener('click', function() { imageInput.click(); });
         imageInput.addEventListener('change', function() {
             Array.from(imageInput.files || []).forEach(function(f) { addImage(f); });

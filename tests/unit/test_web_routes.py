@@ -18,6 +18,7 @@ from PIL import Image
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from dlightrag.core.answer_capability import AnswerImageCapability
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.conversations import PreparedWebConversation
@@ -37,6 +38,15 @@ def mock_manager():
     manager.is_ready.return_value = True
     manager.is_degraded.return_value = False
     manager.get_warnings.return_value = []
+    manager.answer_image_capability = AnswerImageCapability(
+        status="supported",
+        configured_ceiling=8,
+        effective_max_images=8,
+        provider="test",
+        base_url=None,
+        model="test-model",
+        failure_kind=None,
+    )
     manager.alist_workspaces = AsyncMock(return_value=["default", "test_ws"])
     manager.alist_workspace_records = AsyncMock(
         return_value=[
@@ -446,6 +456,48 @@ class TestWebIndex:
         assert resp.status_code == 200
         assert 'data-max-current-images="4"' in resp.text
         assert 'data-max-upload-bytes="12345"' in resp.text
+
+    async def test_index_projects_supported_capability_effective_limit(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        test_config.query_images.max_current_images = 3
+        web_app.state.manager.config = test_config
+        web_app.state.manager.answer_image_capability = AnswerImageCapability(
+            status="supported",
+            configured_ceiling=8,
+            effective_max_images=2,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind=None,
+        )
+
+        resp = await client.get("/web/")
+
+        assert resp.status_code == 200
+        assert 'data-answer-image-capability="supported"' in resp.text
+        # min(max_current_images=3, effective_max_images=2) == 2
+        assert 'data-effective-current-upload-limit="2"' in resp.text
+
+    async def test_index_unknown_capability_disables_upload(
+        self, client: AsyncClient, test_config: DlightragConfig, web_app
+    ) -> None:
+        web_app.state.manager.config = test_config
+        web_app.state.manager.answer_image_capability = AnswerImageCapability(
+            status="unknown",
+            configured_ceiling=8,
+            effective_max_images=0,
+            provider="test",
+            base_url=None,
+            model="test-model",
+            failure_kind="timeout",
+        )
+
+        resp = await client.get("/web/")
+
+        assert resp.status_code == 200
+        assert 'data-answer-image-capability="unknown"' in resp.text
+        assert 'data-effective-current-upload-limit="0"' in resp.text
 
     def test_web_markup_keeps_behavior_in_static_js(self) -> None:
         web_root = Path(__file__).parents[2] / "src" / "dlightrag" / "web"

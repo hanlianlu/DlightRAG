@@ -83,6 +83,17 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
     if primary not in known:
         primary = "default" if "default" in known else (authorized[0] if authorized else "")
 
+    capability = manager.answer_image_capability
+    if capability is None:
+        capability_status = "unknown"
+        effective_current_upload_limit = 0
+    else:
+        capability_status = capability.status
+        effective_current_upload_limit = min(
+            manager.config.query_images.max_current_images,
+            capability.effective_max_images,
+        )
+
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -93,6 +104,8 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "active_workspaces": active,
             "query_image_max_current_images": manager.config.query_images.max_current_images,
             "query_image_max_upload_bytes": manager.config.query_images.max_upload_bytes,
+            "answer_image_capability_status": capability_status,
+            "effective_current_upload_limit": effective_current_upload_limit,
         },
     )
 

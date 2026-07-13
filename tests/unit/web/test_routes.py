@@ -39,6 +39,8 @@ def app():
     )
     real_app.state.manager = mock_manager
 
+    mock_manager.answer_image_capability = None
+
     return real_app
 
 

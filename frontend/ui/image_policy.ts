@@ -1,8 +1,20 @@
 // Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 
+export type CapabilityStatus = 'supported' | 'unsupported' | 'unknown';
+
 export interface ImageAdmissionPolicy {
-    maxCurrentImages: number;
+    effectiveCurrentUploadLimit: number;
     maxUploadBytes: number;
+    capabilityStatus: CapabilityStatus;
+}
+
+export function canAddImage(input: {
+    status: CapabilityStatus;
+    limit: number;
+    current: number;
+}): boolean {
+    if (input.status !== 'supported') return false;
+    return input.current < input.limit;
 }
 
 interface ImageUploadCandidate {
@@ -24,14 +36,26 @@ function parseInteger(value: string | undefined, minimum: number): number | null
     return parsed;
 }
 
+function parseCapabilityStatus(value: string | undefined): CapabilityStatus | null {
+    if (value === 'supported' || value === 'unsupported' || value === 'unknown') return value;
+    return null;
+}
+
 export function getImageAdmissionPolicy(
     root: Pick<HTMLElement, 'dataset'> | null = document.getElementById('app'),
 ): ImageAdmissionPolicy | null {
     if (!root) return null;
-    const maxCurrentImages = parseInteger(root.dataset.maxCurrentImages, 0);
+    const effectiveCurrentUploadLimit = parseInteger(root.dataset.effectiveCurrentUploadLimit, 0);
     const maxUploadBytes = parseInteger(root.dataset.maxUploadBytes, 1);
-    if (maxCurrentImages === null || maxUploadBytes === null) return null;
-    return {maxCurrentImages, maxUploadBytes};
+    const capabilityStatus = parseCapabilityStatus(root.dataset.answerImageCapability);
+    if (
+        effectiveCurrentUploadLimit === null ||
+        maxUploadBytes === null ||
+        capabilityStatus === null
+    ) {
+        return null;
+    }
+    return {effectiveCurrentUploadLimit, maxUploadBytes, capabilityStatus};
 }
 
 export function acceptsImageUpload(
@@ -40,7 +64,11 @@ export function acceptsImageUpload(
     policy: ImageAdmissionPolicy,
 ): boolean {
     return (
-        currentCount < policy.maxCurrentImages &&
+        canAddImage({
+            status: policy.capabilityStatus,
+            limit: policy.effectiveCurrentUploadLimit,
+            current: currentCount,
+        }) &&
         file.type.startsWith('image/') &&
         file.size <= policy.maxUploadBytes
     );
