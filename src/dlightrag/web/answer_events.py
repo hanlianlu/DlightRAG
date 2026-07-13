@@ -382,6 +382,17 @@ async def _emit_answer_events(
         )
         if has_highlights:
             yield sse_event("highlights", safe_source_panel(sources=highlighted_sources))
+            if conversation_saved:
+                await conversation_service.update_answer_highlights(
+                    prepared_conversation,
+                    submission_id=submission_id,
+                    answer_sources={
+                        "sources": [
+                            source.model_dump(mode="json") for source in highlighted_sources
+                        ],
+                        "answer_images": payload.done.answer_images,
+                    },
+                )
 
     except asyncio.CancelledError, GeneratorExit:
         if persistence_started and commit_task is not None:

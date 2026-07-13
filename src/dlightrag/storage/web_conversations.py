@@ -275,6 +275,14 @@ VALUES (
 RETURNING turn_id::text AS turn_id, turn_number
 """
 
+_UPDATE_TURN_SOURCES = """
+UPDATE web_conversation_turns
+SET answer_sources = $4::jsonb
+WHERE principal_id = $1
+  AND conversation_id = $2::text::uuid
+  AND submission_id = $3::text::uuid
+"""
+
 _GET_COMMITTED_TURN = """
 SELECT
     c.conversation_id::text AS conversation_id,
@@ -796,6 +804,34 @@ class PGWebConversationStore:
                         if image.vlm_description is not None
                     },
                 )
+
+        return await self._run_write(_operation)
+
+    async def update_turn_sources(
+        self,
+        *,
+        principal_id: str,
+        conversation_id: str,
+        submission_id: str,
+        answer_sources: dict[str, Any],
+    ) -> bool:
+        """Overwrite one committed turn's answer_sources snapshot.
+
+        Used to fold post-answer semantic highlights into the stored turn so
+        history and page reloads render the same highlighted sources the live
+        answer showed. Returns whether a row matched the submission key.
+        """
+        await self._ensure_initialized()
+
+        async def _operation(conn: Any) -> bool:
+            status = await conn.execute(
+                _UPDATE_TURN_SOURCES,
+                principal_id,
+                conversation_id,
+                submission_id,
+                json.dumps(answer_sources),
+            )
+            return status.rsplit(" ", 1)[-1] == "1"
 
         return await self._run_write(_operation)
 

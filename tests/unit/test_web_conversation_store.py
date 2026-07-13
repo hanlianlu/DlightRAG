@@ -146,6 +146,51 @@ async def test_reads_keep_retrying_pool_path(monkeypatch) -> None:
     assert production_pool.single_attempt_calls == 0
 
 
+class _UpdatingConnection(FakeConnection):
+    async def execute(self, query: str, *args: Any) -> str:
+        self.calls.append((query, args))
+        return "UPDATE 1"
+
+
+async def test_update_turn_sources_writes_snapshot_by_submission_key() -> None:
+    conn = _UpdatingConnection()
+    store = make_store(conn)
+
+    updated = await store.update_turn_sources(
+        principal_id="p1",
+        conversation_id="c1",
+        submission_id="00000000-0000-4000-8000-000000000001",
+        answer_sources={
+            "sources": [{"id": "1", "chunks": [{"highlight_phrases": ["neural nets"]}]}],
+            "answer_images": [],
+        },
+    )
+
+    assert updated is True
+    query, args = conn.calls[-1]
+    assert "UPDATE web_conversation_turns" in query
+    assert "answer_sources" in query
+    assert args[0] == "p1"
+    assert args[1] == "c1"
+    assert args[2] == "00000000-0000-4000-8000-000000000001"
+    assert "highlight_phrases" in args[3]
+
+
+async def test_update_turn_sources_reports_missing_turn() -> None:
+    conn = FakeConnection()  # execute() returns "OK" → no row matched the submission key
+    store = make_store(conn)
+
+    assert (
+        await store.update_turn_sources(
+            principal_id="p1",
+            conversation_id="c1",
+            submission_id="00000000-0000-4000-8000-000000000002",
+            answer_sources={},
+        )
+        is False
+    )
+
+
 async def test_commit_reconciliation_lookup_uses_single_attempt_pool_path(monkeypatch) -> None:
     conn = FakeConnection()
     production_pool = FakeProductionPool(conn)

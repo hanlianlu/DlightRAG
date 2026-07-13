@@ -4,6 +4,8 @@
  * thumbnails, streaming indicator, and composer plus.
  */
 
+/* stylelint-disable selector-pseudo-class-no-unknown -- CSS Modules global selectors */
+
 /* === Messages === */
 
 .userMessage {
@@ -381,15 +383,17 @@
   text-decoration: underline;
 }
 
-/* Pygments highlight container inside answer */
-.aiMessageContent .highlight {
+/* Pygments highlight container inside answer. `.highlight` is emitted by the
+   server-side Pygments formatter (literal class), so it must stay global and
+   not be scoped/hashed by the CSS Module. */
+.aiMessageContent :global(.highlight) {
   background: var(--color-bg-elevated);
   border-radius: var(--radius-sm);
   margin: 1em 0;
   overflow-x: auto;
 }
 
-.aiMessageContent .highlight pre {
+.aiMessageContent :global(.highlight) pre {
   margin: 0;
   background: transparent;
 }

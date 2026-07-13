@@ -275,6 +275,29 @@ class WebConversationService:
         except _AMBIGUOUS_COMMIT_EXCEPTIONS:
             return await self._reconcile_commit(prepared, submission_id)
 
+    async def update_answer_highlights(
+        self,
+        prepared: PreparedWebConversation,
+        *,
+        submission_id: str,
+        answer_sources: dict[str, Any],
+    ) -> None:
+        """Persist semantic highlights into a committed turn's stored sources.
+
+        Best-effort: highlights are a display enhancement computed after the
+        turn is committed, so a failure here must never affect the answer.
+        """
+        try:
+            async with asyncio.timeout(_COMMIT_ATTEMPT_TIMEOUT_SECONDS):
+                await self._store.update_turn_sources(
+                    principal_id=prepared.principal_id,
+                    conversation_id=prepared.conversation_id,
+                    submission_id=submission_id,
+                    answer_sources=answer_sources,
+                )
+        except Exception:
+            logger.warning("Failed to persist semantic highlights", exc_info=True)
+
     async def _reconcile_commit(
         self,
         prepared: PreparedWebConversation,
