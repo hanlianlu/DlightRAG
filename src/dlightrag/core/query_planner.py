@@ -51,22 +51,18 @@ def _convert_history_to_text(history: list[dict[str, Any]] | None) -> str:
             text = content
         else:
             text_parts: list[str] = []
-            uncaptioned = 0
+            image_count = 0
             for block in content:
                 if isinstance(block, str):
                     text_parts.append(block)
                 elif block.get("type") == "text":
                     text_parts.append(str(block.get("text", "")))
                 elif block.get("type") == "image_url":
-                    caption = block.get("vlm_description")
-                    if caption:
-                        text_parts.append(f" [image: {caption}]")
-                    else:
-                        uncaptioned += 1
+                    image_count += 1
             text = "".join(text_parts)
-            if uncaptioned > 0:
-                s = "s" if uncaptioned > 1 else ""
-                text += f" [user shared {uncaptioned} image{s}]"
+            if image_count > 0:
+                s = "s" if image_count > 1 else ""
+                text += f" [user shared {image_count} image{s}]"
         lines.append(f"{role}: {text}")
     return "\n".join(lines)
 

@@ -11,6 +11,7 @@ import asyncpg
 
 from dlightrag.api.auth import UserContext
 from dlightrag.citations.schemas import SourceReferencePayload
+from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.storage.pool import POSTGRES_UNAVAILABLE_EXCEPTIONS
 from dlightrag.storage.web_conversations import (
     CommitTurnResult,
@@ -19,7 +20,11 @@ from dlightrag.storage.web_conversations import (
     PGWebConversationStore,
     StoredConversationImage,
 )
-from dlightrag.utils.images import ValidatedWebImage, thumbnail_bytes
+from dlightrag.utils.images import (
+    ValidatedWebImage,
+    image_bytes_to_data_uri,
+    thumbnail_bytes,
+)
 from dlightrag.web.conversation_models import (
     ConversationHistory,
     ConversationImageReference,
@@ -182,6 +187,79 @@ class WebConversationService:
             committed_submission=committed_submission,
         )
 
+    async def prepare_answer_turn(
+        self,
+        *,
+        manager: Any,
+        prepared: PreparedWebConversation,
+        query: str,
+        current_images: list[dict[str, Any]],
+        workspaces: list[str] | None = None,
+    ) -> PreparedAnswerTurn:
+        """Plan the turn and materialize any referenced history images.
+
+        The web-variant planner rewrites the query and selects scoped history
+        images in one call; the selected ids are re-validated and materialized
+        here (web owns the store), and the finished plan is injected so core
+        skips re-planning. Current images always come first and are never
+        displaced by history selection.
+        """
+        capability = getattr(manager, "answer_image_capability", None)
+        effective = capability.effective_max_images if capability is not None else 0
+        remaining = max(0, effective - len(current_images))
+
+        catalog: list[dict[str, Any]] = []
+        if remaining > 0:
+            catalog = await self._store_call(
+                self._store.list_image_catalog(
+                    prepared.principal_id,
+                    prepared.conversation_id,
+                    max_turns=self._max_turns,
+                    ttl_days=self._ttl_days,
+                )
+            )
+
+        plan = await manager.aplan_query(
+            query,
+            text_history=list(prepared.text_history),
+            image_catalog=catalog or None,
+            allowed_history_image_count=remaining,
+            workspaces=workspaces,
+        )
+
+        history_blocks: list[dict[str, Any]] = []
+        if plan.selected_history_image_ids:
+            owned = await self._store_call(
+                self._store.fetch_images_by_ids(
+                    prepared.principal_id,
+                    prepared.conversation_id,
+                    list(plan.selected_history_image_ids),
+                    ttl_days=self._ttl_days,
+                )
+            )
+            by_id = {image.image_id: image for image in owned}
+            captions: list[str] = []
+            for image_id in plan.selected_history_image_ids:  # preserve relevance order
+                image = by_id.get(image_id)
+                if image is None:
+                    continue
+                history_blocks.append(_history_image_block(image))
+                if image.vlm_description:
+                    captions.append(image.vlm_description)
+            if captions:
+                # Fold persisted captions into the retrieval text; no re-VLM.
+                plan.standalone_query = (
+                    f"{plan.standalone_query}\n\nReferenced prior images:\n" + "\n".join(captions)
+                )
+
+        return PreparedAnswerTurn(
+            current_query=query,
+            retrieval_query=query,
+            text_history=tuple(prepared.text_history),
+            materialized_query_images=tuple([*current_images, *history_blocks]),
+            plan=plan,
+        )
+
     async def image(
         self,
         user: UserContext | None,
@@ -341,6 +419,11 @@ class WebConversationService:
             return await operation
         except POSTGRES_UNAVAILABLE_EXCEPTIONS as exc:
             raise WebConversationUnavailableError from exc
+
+
+def _history_image_block(image: StoredConversationImage) -> dict[str, Any]:
+    data_uri = image_bytes_to_data_uri(image.image_bytes, fallback_mime=image.mime_type)
+    return {"type": "image_url", "image_url": {"url": data_uri}}
 
 
 def _conversation_summary(row: dict[str, Any]) -> ConversationSummary:
