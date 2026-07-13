@@ -268,6 +268,17 @@ export function createAnswerRenderer(turn: ChatTurn) {
     const sourceData = turn.aiDiv.querySelector('.source-data');
     if (sourceData) {
       setSanitizedLlmHtml(sourceData, typeof highlightsHtml === 'string' ? highlightsHtml : '');
+      // If the Sources panel is already open, refresh it so the user sees highlights.
+      const panel = document.getElementById('panel');
+      if (panel?.classList.contains('open') && panel.dataset.panelKind === 'sources') {
+        const panelContent = document.getElementById('panel-content');
+        if (panelContent) {
+          panelContent.replaceChildren();
+          const clone = sourceData.cloneNode(true) as HTMLElement;
+          clone.classList.remove('hidden');
+          while (clone.firstChild) panelContent.appendChild(clone.firstChild);
+        }
+      }
     }
   }
 
