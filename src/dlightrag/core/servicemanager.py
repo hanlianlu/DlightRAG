@@ -973,12 +973,23 @@ class RAGServiceManager:
         self,
         query: str,
         *,
+        text_history: list[dict[str, Any]] | None = None,
+        image_catalog: list[dict[str, Any]] | None = None,
+        allowed_history_image_count: int = 0,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
-        """Plan one stateless query using the manager-owned planner."""
+        """Plan one query using the manager-owned planner.
+
+        Stateless callers pass no history/catalog. The web prepare step passes
+        request-local ``text_history`` and, when the answer model supports
+        images, an ``image_catalog`` so the planner also selects scoped history
+        images in the same call.
+        """
         return await self._aplan_query_prepared(
             query,
-            text_history=None,
+            text_history=text_history,
+            image_catalog=image_catalog,
+            allowed_history_image_count=allowed_history_image_count,
             workspaces=workspaces,
         )
 
@@ -987,6 +998,8 @@ class RAGServiceManager:
         query: str,
         *,
         text_history: list[dict[str, Any]] | None,
+        image_catalog: list[dict[str, Any]] | None = None,
+        allowed_history_image_count: int = 0,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
         """Plan a server-prepared query with request-local text history."""
@@ -1000,6 +1013,7 @@ class RAGServiceManager:
             metadata={
                 "workspaces": list(workspaces or []),
                 "history_turns": len(text_history or []),
+                "history_image_catalog_count": len(image_catalog or []),
             },
         ) as trace:
             schema = await self._get_schema(workspaces)
@@ -1009,6 +1023,8 @@ class RAGServiceManager:
                 max_turns=self._config.max_conversation_turns,
                 max_tokens=self._config.max_conversation_tokens,
                 schema=schema,
+                image_catalog=image_catalog,
+                allowed_history_image_count=allowed_history_image_count,
             )
             trace.update(
                 output={
@@ -1111,13 +1127,15 @@ class RAGServiceManager:
         ws_list: list[str],
         scope: RequestScope,
         kwargs: dict[str, Any],
+        plan: QueryPlan | None = None,
         log_plan: bool = False,
     ) -> tuple[QueryPlan, PreparedQueryImages, _AnswerLimits, RetrievalResult]:
-        plan = await self._aplan_query_prepared(
-            retrieval_query,
-            text_history=text_history,
-            workspaces=ws_list,
-        )
+        if plan is None:
+            plan = await self._aplan_query_prepared(
+                retrieval_query,
+                text_history=text_history,
+                workspaces=ws_list,
+            )
         if log_plan:
             logger.info(
                 "Query plan: original=%r, standalone=%r",
@@ -1306,6 +1324,7 @@ class RAGServiceManager:
                         ws_list=ws_list,
                         scope=scoped,
                         kwargs=kwargs,
+                        plan=turn.plan,
                     )
                     engine = self._get_answer_engine()
                     async with trace_observation(
@@ -1436,6 +1455,7 @@ class RAGServiceManager:
                     ws_list=ws_list,
                     scope=scoped,
                     kwargs=kwargs,
+                    plan=turn.plan,
                     log_plan=True,
                 )
                 contexts, stream = await self._agenerate_stream_from_contexts_prepared(

@@ -657,7 +657,11 @@ class TestAnswerViaEngine:
                 "name": "query_planning",
                 "as_type": "chain",
                 "input": {"query": "raw query"},
-                "metadata": {"workspaces": ["ws_a"], "history_turns": 0},
+                "metadata": {
+                    "workspaces": ["ws_a"],
+                    "history_turns": 0,
+                    "history_image_catalog_count": 0,
+                },
                 "updates": [
                     {
                         "output": {
@@ -1864,3 +1868,38 @@ class TestPlannerSchemaScope:
         assert "jurisdiction" not in first_prompt
         assert "jurisdiction" in second_prompt
         assert "department" not in second_prompt
+
+    async def test_aplan_query_threads_image_catalog_to_web_variant(self, test_cfg) -> None:
+        manager = RAGServiceManager(config=test_cfg)
+        reports = AsyncMock()
+        reports._metadata_index.get_field_schema = AsyncMock(
+            return_value={"columns": [], "custom_keys": []}
+        )
+        manager._services = {"reports": reports}
+
+        llm = AsyncMock(
+            return_value=(
+                '{"standalone_query": "2023 revenue trend", "filters": {}, '
+                '"selected_history_image_ids": ["11111111-1111-1111-1111-111111111111"]}'
+            )
+        )
+        manager._query_planner = QueryPlanner(llm_func=llm)
+
+        catalog = [
+            {
+                "image_id": "11111111-1111-1111-1111-111111111111",
+                "turn_number": 1,
+                "ordinal": 0,
+                "vlm_description": "2023 revenue chart",
+            }
+        ]
+        plan = await manager.aplan_query(
+            "explain that chart",
+            workspaces=["reports"],
+            image_catalog=catalog,
+            allowed_history_image_count=2,
+        )
+
+        prompt = llm.await_args_list[0].kwargs["messages"][0]["content"]
+        assert "2023 revenue chart" in prompt  # catalog folded into the web-variant prompt
+        assert plan.selected_history_image_ids == ("11111111-1111-1111-1111-111111111111",)
