@@ -24,7 +24,12 @@ def answer_images_from_sources(
         label = source.title or source_id
         for chunk in source.chunks or []:
             chunk_id = chunk.chunk_id
-            if not chunk_id or chunk_id in seen or sent.get(chunk_id) is False:
+            # Transport state no longer gates gallery/citation inclusion: a cited
+            # visual chunk renders from its stored URL even when its raw image
+            # missed the answer-image budget. Only malformed empty chunks (no URL)
+            # are excluded; empty-content unsent chunks are already dropped upstream
+            # in answer_context packing so they can never be cited here.
+            if not chunk_id or chunk_id in seen:
                 continue
             url = _public_render_url(chunk.image_url)
             thumbnail_url = _public_render_url(chunk.thumbnail_url) or url
@@ -42,6 +47,7 @@ def answer_images_from_sources(
                     "url": url,
                     "thumbnail_url": thumbnail_url,
                     "label": label,
+                    "answer_image_sent": sent.get(chunk_id, True),
                 }
             )
             seen.add(chunk_id)

@@ -220,6 +220,7 @@ class TestAnswerEngineGenerate:
                 "url": "/images/default/c1?size=full",
                 "thumbnail_url": "/images/default/c1?size=thumb",
                 "label": "chart.pdf",
+                "answer_image_sent": True,
             }
         ]
         assert result.answer_blocks == [
