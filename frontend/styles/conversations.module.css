@@ -31,25 +31,30 @@
 
 :global(#new-conversation-btn) {
     align-items: center;
-    background: rgb(87 74 36 / 36%);
-    border: 1px solid rgb(210 182 97 / 22%);
+    background: transparent;
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    color: var(--color-gold-100);
+    color: var(--color-gold-200);
     cursor: pointer;
     display: inline-flex;
     flex: 1;
     font: inherit;
     font-size: var(--font-size-detail);
-    font-weight: 600;
+    font-weight: 550;
+    gap: var(--space-inline);
     height: var(--size-button);
     min-height: var(--size-button);
     padding: 0 var(--space-component);
     transition: background 150ms, border-color 150ms, color 150ms;
 }
 
+:global(.new-chat-icon) {
+    flex-shrink: 0;
+}
+
 :global(#new-conversation-btn:hover) {
-    background: rgb(87 74 36 / 50%);
-    border-color: rgb(210 182 97 / 36%);
+    background: rgb(87 74 36 / 24%);
+    border-color: rgb(210 182 97 / 16%);
     color: var(--color-text-primary);
 }
 
