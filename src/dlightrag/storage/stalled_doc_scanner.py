@@ -93,6 +93,7 @@ async def recover_stalled_docs(
                 conn,
                 workspace=workspace,
                 doc_ids=stalled_ids,
+                timeout_seconds=timeout_seconds,
             )
         else:
             reset_count = 0
@@ -158,17 +159,28 @@ async def _reset_stalled_docs(
     *,
     workspace: str,
     doc_ids: list[str],
+    timeout_seconds: int,
 ) -> int:
-    """Reset stalled docs to PENDING. Returns count of rows updated."""
+    """Reset stalled docs to PENDING. Returns count of rows updated.
+
+    The scan's age/status predicates are re-applied in the UPDATE itself so a
+    document another worker moved back into an active state (or that finished)
+    between the SELECT and this write is left untouched -- closing the
+    check-then-act window in shared multi-instance deployments.
+    """
     result = await conn.execute(
         "UPDATE LIGHTRAG_DOC_STATUS "
         "SET status = 'pending', "
         "    error_msg = '', "
         "    updated_at = NOW() "
         "WHERE workspace = $1 "
-        "  AND id = ANY($2::text[])",
+        "  AND id = ANY($2::text[]) "
+        "  AND status = ANY($3::text[]) "
+        "  AND updated_at < NOW() - ($4 * INTERVAL '1 second')",
         workspace,
         doc_ids,
+        list(_STALLED_STATUSES),
+        timeout_seconds,
     )
     # asyncpg execute returns a string like "UPDATE N" for UPDATE statements
     count = _parse_update_count(result)
