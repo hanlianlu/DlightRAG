@@ -4,7 +4,13 @@ const STORAGE_KEY = 'dlightrag-panel-width';
 const MIN_WIDTH = 320;
 
 function getMaxWidth(): number {
-    return Math.floor(window.innerWidth * 0.5);
+    if (window.innerWidth < 1200) return Math.floor(window.innerWidth * 0.5);
+    const styles = getComputedStyle(document.documentElement);
+    const chatMinWidth = parseFloat(styles.getPropertyValue('--layout-chat-min-width')) || 520;
+    const sidebar = document.body.classList.contains('conversation-sidebar-open')
+        ? document.getElementById('chat-sidebar')?.getBoundingClientRect().width || 0
+        : 0;
+    return Math.max(MIN_WIDTH, Math.floor(window.innerWidth - sidebar - chatMinWidth));
 }
 
 function clampWidth(w: number): number {

@@ -139,6 +139,21 @@ def _delete_dialog_accessible_description(page: Page) -> str:
     return str(dialog.get("description", {}).get("value", ""))
 
 
+def _text_bottom(page: Page, selector: str) -> float:
+    return float(
+        page.locator(selector).evaluate(
+            """element => {
+                const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+                const node = walker.nextNode();
+                if (!node) throw new Error(`No text node in ${element.id || element.className}`);
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                return range.getBoundingClientRect().bottom;
+            }"""
+        )
+    )
+
+
 @pytest.mark.e2e
 def test_new_select_rename_delete_survive_reload(page: Page) -> None:
     state = _install_conversation_routes(page)
@@ -331,3 +346,131 @@ def test_inactive_delete_never_touches_active_draft(page: Page) -> None:
     assert _active_id(page) == active_id
     assert page.get_by_role("textbox", name="Message").input_value() == "active draft remains"
     assert page.locator("#thumbnail-strip").locator(":scope > *").count() == 1
+
+
+@pytest.mark.e2e
+def test_desktop_scope_baseline_and_two_panel_geometry(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    search_scope = page.locator("#workspace-selector")
+    closed_panel = page.locator("#panel")
+    assert closed_panel.get_attribute("aria-hidden") == "true"
+    assert closed_panel.evaluate("element => element.inert") is True
+    assert page.get_by_text("Search in:", exact=True).is_visible()
+    assert "All workspaces (2)" in search_scope.inner_text()
+    active_scope = search_scope.get_attribute("data-active")
+
+    files_trigger = page.get_by_role("button", name="Files", exact=True)
+    files_trigger.click()
+    page.locator("#upload-zone").wait_for()
+    assert closed_panel.get_attribute("aria-hidden") is None
+    assert closed_panel.evaluate("element => element.inert") is False
+    assert page.get_by_text("Files in:", exact=True).is_visible()
+    assert page.locator("#panel-title").inner_text() == ""
+    assert page.get_by_role("button", name="Choose folder").is_visible()
+    assert page.get_by_role("button", name="Upload files").count() == 0
+    assert not files_trigger.is_visible()
+    page.wait_for_timeout(220)
+
+    new_bottom = _text_bottom(page, "#new-conversation-btn")
+    search_bottom = _text_bottom(page, ".topbar-scope-label")
+    files_bottom = _text_bottom(page, ".ingest-target-label")
+    assert (
+        max(new_bottom, search_bottom, files_bottom) - min(new_bottom, search_bottom, files_bottom)
+        <= 1.5
+    )
+
+    composer = page.locator("#composer").bounding_box()
+    sidebar = page.locator("#chat-sidebar").bounding_box()
+    panel = page.locator("#panel").bounding_box()
+    assert composer is not None and sidebar is not None and panel is not None
+    assert composer["x"] >= sidebar["x"] + sidebar["width"]
+    assert composer["x"] + composer["width"] <= panel["x"]
+
+    composer_edge_inset = page.locator("#query-form").evaluate(
+        "form => form.querySelector('.composer-plus-icon').getBoundingClientRect().left"
+        " - form.getBoundingClientRect().left"
+    )
+    assert 6 <= composer_edge_inset <= 12
+
+    page.get_by_role("button", name="New chat").click()
+    page.wait_for_function(
+        "active => document.querySelector('#workspace-selector')?.getAttribute('data-active') === active",
+        arg=active_scope,
+    )
+
+
+@pytest.mark.e2e
+@pytest.mark.parametrize("viewport", [(900, 800), (390, 844)])
+def test_compact_drawers_are_modal_mutually_exclusive_and_restore_focus(
+    page: Page, viewport: tuple[int, int]
+) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": viewport[0], "height": viewport[1]})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    open_conversations = page.get_by_role("button", name="Open conversations")
+    open_conversations.click()
+    sidebar = page.locator("#chat-sidebar")
+    assert sidebar.get_attribute("role") == "dialog"
+    assert sidebar.get_attribute("aria-modal") == "true"
+    assert page.locator("#composer").evaluate("element => element.inert") is True
+    page.keyboard.press("Escape")
+    page.wait_for_function("document.activeElement?.id === 'conversation-sidebar-open'")
+
+    files = page.get_by_role("button", name="Files", exact=True)
+    files.click()
+    panel = page.locator("#panel")
+    assert panel.get_attribute("role") == "dialog"
+    assert panel.get_attribute("aria-modal") == "true"
+    assert page.locator("#composer").evaluate("element => element.inert") is True
+    new_bottom = _text_bottom(page, "#new-conversation-btn")
+    search_bottom = _text_bottom(page, ".topbar-scope-label")
+    files_bottom = _text_bottom(page, ".ingest-target-label")
+    assert (
+        max(new_bottom, search_bottom, files_bottom) - min(new_bottom, search_bottom, files_bottom)
+        <= 1.5
+    )
+    page.keyboard.press("Escape")
+    page.wait_for_function("document.activeElement?.id === 'files-btn'")
+
+
+@pytest.mark.e2e
+def test_resizing_open_files_panel_to_compact_keeps_background_inert(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+    page.get_by_role("button", name="Files", exact=True).click()
+
+    page.set_viewport_size({"width": 900, "height": 800})
+
+    assert page.locator("#panel").get_attribute("aria-modal") == "true"
+    assert page.locator("#composer").evaluate("element => element.inert") is True
+
+
+@pytest.mark.e2e
+def test_attachment_only_does_not_enable_send(page: Page) -> None:
+    _install_conversation_routes(page)
+    page.goto("/web/")
+    page.locator("[aria-current='page']").wait_for()
+
+    send = page.get_by_role("button", name="Send")
+    assert send.is_disabled()
+    page.locator("#image-input").set_input_files(
+        files={
+            "name": "only-image.png",
+            "mimeType": "image/png",
+            "buffer": b"\x89PNG\r\n\x1a\n",
+        }
+    )
+    page.wait_for_function("document.querySelector('#thumbnail-strip')?.children.length === 1")
+    assert send.is_disabled()
+    page.get_by_role("textbox", name="Message").fill("  ")
+    assert send.is_disabled()
+    page.get_by_role("textbox", name="Message").fill("Question")
+    assert send.is_enabled()

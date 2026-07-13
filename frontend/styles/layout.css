@@ -20,13 +20,19 @@
 /* === Top Bar — ghost style === */
 
 .topbar {
-    display: flex;
     align-items: center;
-    padding: var(--space-tight) var(--space-related);
+    display: flex;
+    flex: 0 0 var(--conversation-top-row-height);
     flex-shrink: 0;
+    gap: var(--space-tight);
+    padding: 0 var(--space-related);
 }
 
 .topbar-spacer { flex: 1; }
+
+body.files-panel-open #files-btn {
+    display: none;
+}
 
 .topbar-btn,
 .upload-btn,
@@ -42,10 +48,24 @@
     border: none;
     color: var(--color-text-subtle);
     flex-shrink: 0;
-    padding: var(--space-tight) var(--space-component);
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    height: var(--size-button);
+    padding: 0 var(--space-component);
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: color 0.15s, background 0.15s;
+    text-transform: none;
+}
+
+.topbar-scope-label,
+.ingest-target-label {
+    color: var(--color-text-subtle);
+    flex: 0 0 auto;
+    font-size: var(--font-size-detail);
+    font-weight: 500;
+    line-height: var(--line-height-control);
+    white-space: nowrap;
 }
 
 .topbar-btn:hover {
@@ -65,9 +85,10 @@
     font-size: var(--font-size-detail);
     font-weight: 500;
     gap: var(--space-tight);
+    height: var(--size-button);
     max-width: min(320px, 58vw);
     min-width: 0;
-    padding: var(--space-tight) var(--space-related);
+    padding: 0 var(--space-related);
     position: relative;
     transition: background 0.15s, border-color 0.15s;
     user-select: none;
@@ -164,17 +185,17 @@
 /* Panel-open layout: primary app chrome shifts left */
 body.panel-open .topbar {
     margin-right: var(--layout-panel-width);
-    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
 }
 
 body.panel-open .chat-area {
     margin-right: var(--layout-panel-width);
-    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
 }
 
 body.panel-open .composer {
     margin-right: var(--layout-panel-width);
-    transition: margin-right 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: margin-right var(--layout-shell-duration) var(--layout-shell-easing);
 }
 
 /* Chat content shrinks to fit when panel is open, capped by fluid width */
@@ -210,7 +231,7 @@ body.panel-open .composer-inner {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-composer);
-    padding: var(--space-composer-y) var(--space-composer-trailing) var(--space-composer-y) var(--space-composer-leading);
+    padding: var(--space-composer-y) var(--space-composer-trailing) var(--space-composer-y) var(--space-inline);
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -286,6 +307,7 @@ body.panel-open .composer-inner {
     flex-shrink: 0;
     border-radius: 50%;
     transition: color 0.15s, background 0.15s;
+    margin-right: var(--space-inline);
 }
 
 .composer-plus-icon {
@@ -321,14 +343,14 @@ body.panel-open .composer-inner {
     top: 0;
     right: 0;
     width: var(--layout-panel-width);
-    max-width: 50vw;
+    max-width: calc(100vw - var(--layout-chat-min-width));
     min-width: var(--layout-panel-min);
     height: 100vh;
     background: var(--color-bg-surface);
     border-left: 1px solid var(--color-border-subtle);
     backdrop-filter: blur(20px);
     transform: translateX(100%);
-    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: transform var(--layout-shell-duration) var(--layout-shell-easing);
     z-index: 100;
     display: flex;
     flex-direction: column;
@@ -336,16 +358,20 @@ body.panel-open .composer-inner {
     box-shadow: -8px 0 32px rgb(0 0 0 / 30%);
 }
 
+body.conversation-sidebar-open .panel {
+    max-width: calc(100vw - var(--layout-chat-sidebar-width) - var(--layout-chat-min-width));
+}
+
 .panel.open {
     transform: translateX(0);
 }
 
 .panel-header {
-    display: flex;
     align-items: center;
+    display: flex;
+    flex: 0 0 var(--conversation-top-row-height);
     gap: var(--space-tight);
-    padding: var(--space-related) var(--space-section);
-    border-bottom: 1px solid var(--color-border-subtle);
+    padding: 0 var(--space-section);
 }
 
 #panel-title {
@@ -353,6 +379,11 @@ body.panel-open .composer-inner {
     font-size: var(--font-size-caption);
     font-weight: 600;
     letter-spacing: 0;
+}
+
+#panel-title:empty,
+#ingest-target:empty {
+    display: none;
 }
 
 .panel-close {
@@ -365,6 +396,13 @@ body.panel-open .composer-inner {
     padding: var(--space-inline) var(--space-tight);
     border-radius: var(--radius-sm);
     transition: background 0.15s, color 0.15s;
+}
+
+#panel-backdrop {
+    background: rgb(0 0 0 / 48%);
+    inset: 0;
+    position: fixed;
+    z-index: 90;
 }
 
 .panel-close:hover {
@@ -464,12 +502,11 @@ body.panel-open .composer-inner {
     opacity: 0.42;
 }
 
-@media (width <= 640px) {
+@media (width < 1200px) {
     .panel {
-        border-left: none;
-        max-width: none;
+        max-width: min(420px, calc(100vw - var(--space-layout)));
         min-width: 0;
-        width: 100vw;
+        width: min(var(--layout-panel-width), calc(100vw - var(--space-layout)));
     }
 
     .panel-resize-handle {
@@ -485,5 +522,22 @@ body.panel-open .composer-inner {
     body.panel-open .chat-messages,
     body.panel-open .composer-inner {
         max-width: var(--layout-content-width);
+    }
+}
+
+@media (width <= 640px) {
+    .panel {
+        border-left: none;
+        max-width: none;
+        width: 100vw;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .panel,
+    body.panel-open .topbar,
+    body.panel-open .chat-area,
+    body.panel-open .composer {
+        transition: none;
     }
 }

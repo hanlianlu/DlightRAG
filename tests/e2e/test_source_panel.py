@@ -90,7 +90,7 @@ def test_reference_item_keyboard_opens_source_panel(page):
     page.locator(".answer-ref-item").press("Enter")
 
     page.wait_for_selector('#panel-content .source-doc.expanded[data-ref="1"]', timeout=10000)
-    assert page.locator("#panel-title").text_content() == "SOURCES"
+    assert page.locator("#panel-title").text_content() == "Sources"
     assert page.locator("#panel-content .source-chunk-content").text_content() == "Evidence text"
     assert "Wrong decoy" not in page.locator("#panel-content").text_content()
 

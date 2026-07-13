@@ -16,7 +16,7 @@
     overflow: hidden;
     position: fixed;
     transform: translateX(-100%);
-    transition: transform var(--conversation-shell-duration) var(--conversation-shell-easing);
+    transition: transform var(--layout-shell-duration) var(--layout-shell-easing);
     width: var(--layout-chat-sidebar-width);
     z-index: 120;
 }
@@ -41,8 +41,9 @@
     font: inherit;
     font-size: var(--font-size-detail);
     font-weight: 600;
+    height: var(--size-button);
     min-height: var(--size-button);
-    padding: var(--space-tight) var(--space-component);
+    padding: 0 var(--space-component);
     transition: background 150ms, border-color 150ms, color 150ms;
 }
 
@@ -322,7 +323,7 @@
     :global(body.conversation-sidebar-open .chat-area),
     :global(body.conversation-sidebar-open .composer) {
         margin-left: var(--layout-chat-sidebar-width);
-        transition: margin-left var(--conversation-shell-duration) var(--conversation-shell-easing);
+        transition: margin-left var(--layout-shell-duration) var(--layout-shell-easing);
     }
 
     :global(body.conversation-sidebar-open #conversation-sidebar-open) {
