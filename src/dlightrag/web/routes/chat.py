@@ -8,7 +8,6 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import ValidationError
 
 from dlightrag.access_control import AccessAction
-from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.utils import normalize_workspace
 from dlightrag.utils.images import validate_web_images
 from dlightrag.web.answer_events import stream_answer_events
@@ -152,11 +151,12 @@ async def answer_stream(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    turn = PreparedAnswerTurn(
-        current_query=query,
-        retrieval_query=query,
-        text_history=prepared_conversation.text_history,
-        materialized_query_images=tuple(image.model_block for image in validated_images),
+    turn = await conversation_service.prepare_answer_turn(
+        manager=manager,
+        prepared=prepared_conversation,
+        query=query,
+        current_images=[image.model_block for image in validated_images],
+        workspaces=target_workspaces,
     )
 
     return StreamingResponse(

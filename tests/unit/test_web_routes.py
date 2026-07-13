@@ -18,6 +18,7 @@ from PIL import Image
 
 from dlightrag.api.server import create_app
 from dlightrag.config import DlightragConfig
+from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.web.conversations import PreparedWebConversation
 
@@ -84,6 +85,16 @@ def web_app(mock_manager, test_config: DlightragConfig):
             text_history=({"role": "user", "content": "Earlier"},),
         )
     )
+
+    async def _prepare_answer_turn(*, manager, prepared, query, current_images, workspaces=None):
+        return PreparedAnswerTurn(
+            current_query=query,
+            retrieval_query=query,
+            text_history=tuple(prepared.text_history),
+            materialized_query_images=tuple(current_images),
+        )
+
+    conversation_service.prepare_answer_turn = AsyncMock(side_effect=_prepare_answer_turn)
     conversation_service.commit_answer = AsyncMock(
         return_value=CommitTurnResult(
             saved=True,

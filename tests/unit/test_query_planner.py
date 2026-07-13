@@ -147,25 +147,21 @@ class TestPlanWebVariant:
         assert plan.selected_history_image_ids == (_ID1,)
 
 
-def test_history_text_includes_persisted_captions():
+def test_history_text_uses_placeholder_for_uncaptioned_images():
     from dlightrag.core.query_planner import _convert_history_to_text
 
     history = [
         {
             "role": "user",
             "content": [
-                {"type": "text", "text": "here is our data"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": "..."},
-                    "vlm_description": "2023 revenue chart",
-                },
+                {"type": "text", "text": "look at this"},
+                {"type": "image_url", "image_url": {"url": "..."}},
             ],
         }
     ]
-    text = _convert_history_to_text(history)
-    assert "2023 revenue chart" in text
-    assert "[user shared" not in text  # captioned image should not fall back to a placeholder
+    # History image semantics reach the planner through the scoped catalog, not
+    # the transcript; the transcript keeps a neutral placeholder.
+    assert "[user shared 1 image]" in _convert_history_to_text(history)
 
 
 # ---------------------------------------------------------------------------
