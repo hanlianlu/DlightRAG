@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dlightrag.core.query_planner import QueryPlan
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +18,7 @@ class PreparedAnswerTurn:
     retrieval_query: str
     text_history: tuple[dict[str, Any], ...] = ()
     materialized_query_images: tuple[dict[str, Any], ...] = ()
+    plan: QueryPlan | None = None
 
     @classmethod
     def stateless(
