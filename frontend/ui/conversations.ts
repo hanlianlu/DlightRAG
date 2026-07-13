@@ -623,6 +623,14 @@ async function requestDelete(conversationId: string): Promise<void> {
     const dialog = document.getElementById('delete-conversation-dialog') as HTMLDialogElement | null;
     const warning = document.getElementById('delete-conversation-draft-warning');
     if (warning) warning.hidden = !discardsDraft;
+    if (dialog) {
+        dialog.setAttribute(
+            'aria-describedby',
+            discardsDraft
+                ? 'delete-conversation-message delete-conversation-draft-warning'
+                : 'delete-conversation-message',
+        );
+    }
     if (!dialog || await dialogResult(dialog, resolveActions) !== 'delete') return;
     if (lifecycleBlocked()) return;
 
