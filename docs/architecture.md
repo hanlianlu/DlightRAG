@@ -120,5 +120,4 @@ The layering checks are part of local and CI verification:
 
 ```bash
 uv run lint-imports
-uv run python scripts/ci/check-architecture.py
 ```
