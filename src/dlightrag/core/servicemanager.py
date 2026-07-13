@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 
 from dlightrag.core.answer import AnswerEngine
 from dlightrag.core.answer_capability import AnswerImageCapability, derive_effective_max_images
+from dlightrag.core.answer_errors import (
+    ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+    CURRENT_IMAGES_UNSUPPORTED,
+    AnswerImageError,
+)
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_contracts import IngestSpec, SourceType
 from dlightrag.core.client_requests import ingest_kwargs_from_payload
@@ -207,6 +212,10 @@ class RAGServiceUnavailableError(Exception):
 _ERROR_IMAGES_NOT_SUPPORTED = (
     "Current model does not support image input. Use a vision-capable model or remove query_images."
 )
+_ERROR_CAPABILITY_UNKNOWN = (
+    "Answer-model image capability is unknown: the startup probe did not confirm image support. "
+    "Provide a vision-capable query model or retry once the model is reachable."
+)
 
 
 def _check_answer_image_capability(
@@ -214,18 +223,27 @@ def _check_answer_image_capability(
     query_images: list[dict[str, Any]] | None,
     capability: AnswerImageCapability | None,
 ) -> None:
-    """Raise ValueError if current images are present but the query-role answer
-    model cannot accept them.
+    """Reject current images unless the query-role answer model is confirmed to accept them.
 
-    Gates on the capability of ``model_for_role(config, "query")`` -- the model
-    that actually receives the images -- not ``llm.default``. ``None``/``unknown``
-    is allowed through (the transport budget and provider surface any deeper
-    failure); only an explicit ``unsupported`` verdict rejects at the boundary.
+    Gates on the capability of ``model_for_role(config, "query")`` -- the model that
+    actually receives the images -- not ``llm.default``. Fail-closed: only a confirmed
+    ``supported`` verdict is admitted; ``unsupported`` raises
+    ``CURRENT_IMAGES_UNSUPPORTED`` and ``unknown``/unprobed raises
+    ``ANSWER_IMAGE_CAPABILITY_UNKNOWN``, so every surface returns the same clear error
+    instead of a late provider or transport-budget failure.
     """
     if not query_images:
         return
-    if capability is not None and capability.status == "unsupported":
-        raise ValueError(f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}")
+    if capability is None or capability.status == "unknown":
+        raise AnswerImageError(
+            f"[ANSWER_IMAGE_CAPABILITY_UNKNOWN] {_ERROR_CAPABILITY_UNKNOWN}",
+            error_kind=ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+        )
+    if capability.status == "unsupported":
+        raise AnswerImageError(
+            f"[IMAGES_NOT_SUPPORTED_BY_MODEL] {_ERROR_IMAGES_NOT_SUPPORTED}",
+            error_kind=CURRENT_IMAGES_UNSUPPORTED,
+        )
 
 
 class RAGServiceManager:

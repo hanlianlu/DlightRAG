@@ -12,9 +12,9 @@ from typing import Any
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
+from dlightrag.core.answer_errors import classify_answer_error
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
-from dlightrag.core.answer_prompt import CurrentImagePayloadError
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
@@ -41,21 +41,6 @@ from dlightrag.web.sse import sse_event
 
 logger = logging.getLogger(__name__)
 _PERSISTENCE_HEARTBEAT_SECONDS = 10.0
-
-# Slice B answer-image error taxonomy (design §14.2).
-ANSWER_ERROR_CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
-ANSWER_ERROR_CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
-ANSWER_ERROR_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
-ANSWER_ERROR_STREAM_FAILED = "ANSWER_STREAM_FAILED"
-
-
-def _classify_answer_error(exc: BaseException) -> str:
-    """Map an answer-stream failure to a Slice B error kind (design §14.2)."""
-    if isinstance(exc, CurrentImagePayloadError):
-        return ANSWER_ERROR_CURRENT_IMAGE_LIMIT_EXCEEDED
-    if "[IMAGES_NOT_SUPPORTED_BY_MODEL]" in str(exc):
-        return ANSWER_ERROR_CURRENT_IMAGES_UNSUPPORTED
-    return ANSWER_ERROR_STREAM_FAILED
 
 
 def _capability_metrics(manager: Any, turn: PreparedAnswerTurn) -> dict[str, Any]:
@@ -479,7 +464,7 @@ async def _emit_answer_events(
     except Exception as exc:
         if not conversation_saved:
             save_reason = "answer_failed"
-        error_kind = _classify_answer_error(exc)
+        error_kind = classify_answer_error(exc)
         if observation is not None:
             status = str(exc) if trace_sensitive_enabled() else "answer_stream_failed"
             observation.update(
