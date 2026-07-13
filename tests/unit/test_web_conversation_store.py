@@ -91,6 +91,48 @@ def make_store(connection: FakeConnection) -> PGWebConversationStore:
     return store
 
 
+async def test_list_image_catalog_returns_caption_fields() -> None:
+    conn = FakeConnection()
+    conn.fetch_result = [
+        {"image_id": "img-1", "turn_number": 1, "ordinal": 0, "vlm_description": "a red square"},
+    ]
+    store = make_store(conn)
+
+    catalog = await store.list_image_catalog("alice", "c1", max_turns=100, ttl_days=30)
+
+    assert catalog == [
+        {"image_id": "img-1", "turn_number": 1, "ordinal": 0, "vlm_description": "a red square"}
+    ]
+
+
+async def test_fetch_images_by_ids_carries_vlm_description() -> None:
+    conn = FakeConnection()
+    conn.fetch_result = [
+        {
+            "image_id": "img-1",
+            "mime_type": "image/png",
+            "image_bytes": b"PNG",
+            "vlm_description": "a red square",
+        },
+    ]
+    store = make_store(conn)
+
+    images = await store.fetch_images_by_ids("alice", "c1", ["img-1"], ttl_days=30)
+
+    assert len(images) == 1
+    assert isinstance(images[0], StoredConversationImage)
+    assert images[0].image_bytes == b"PNG"
+    assert images[0].vlm_description == "a red square"
+
+
+async def test_fetch_images_by_ids_empty_short_circuits() -> None:
+    conn = FakeConnection()
+    store = make_store(conn)
+
+    assert await store.fetch_images_by_ids("alice", "c1", [], ttl_days=30) == []
+    assert conn.calls == []  # never issues a query for an empty id list
+
+
 async def test_outcome_sensitive_mutations_use_single_attempt_pool_path(monkeypatch) -> None:
     conn = FakeConnection()
     production_pool = FakeProductionPool(conn)
