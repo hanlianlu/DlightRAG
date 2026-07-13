@@ -612,9 +612,7 @@ class RAGServiceManager:
         capability = AnswerImageCapability(
             status=outcome.status,
             configured_ceiling=ceiling,
-            effective_max_images=derive_effective_max_images(
-                outcome.status, ceiling, outcome.provider_max
-            ),
+            effective_max_images=derive_effective_max_images(outcome.status, ceiling),
             provider=cfg.provider,
             base_url=cfg.base_url,
             model=cfg.model,

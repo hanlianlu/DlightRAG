@@ -1,9 +1,12 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Startup vision capability probe for chat/answer and rerank models.
+"""Startup vision capability probes for answer and rerank models.
 
-Sends one 1×1 pixel PNG image to the model and checks whether the response is a
-valid text completion (``"ok"``) or an error. The result is recorded on the
-owning ``RAGServiceManager`` (never on the provider).
+Both probes share one 1×1 pixel PNG payload but differ in how they read the
+result. ``probe_image_capability`` (answer models) treats transport acceptance
+as the signal -- a completed request means the model accepts ``image_url``
+blocks -- and returns a tri-state outcome. ``probe_vision_support`` (rerank
+models) additionally expects the magic reply ``"ok"``. Results are recorded on
+the owning ``RAGServiceManager`` (never on the provider).
 """
 
 import logging
@@ -80,7 +83,6 @@ class ImageProbeOutcome:
     """Structured tri-state result of an answer-model image probe."""
 
     status: Literal["supported", "unsupported", "unknown"]
-    provider_max: int | None = None
     failure_kind: str | None = None
 
 
@@ -101,9 +103,14 @@ async def probe_image_capability(
     """Probe whether *model* accepts ``image_url`` blocks.
 
     Success means the transport accepted the image request; the reply text is
-    NOT inspected for a magic word.  Explicit provider rejections classify as
-    ``unsupported``; timeouts / 401 / 429 / 5xx / unclassified errors classify
-    as ``unknown`` (never ``unsupported``).  A non-positive ``ceiling`` short
+    deliberately NOT inspected. Content-grounded probing (asking the model to
+    describe a probe image and matching the reply) is rejected on purpose: it
+    would trade a benign false positive -- a lenient provider that silently
+    ignores the image, costing only wasted bytes on a request that still
+    succeeds -- for a harmful false negative that blocks a genuinely capable
+    model whose phrasing failed to match. Explicit provider rejections classify
+    as ``unsupported``; timeouts / 401 / 429 / 5xx / unclassified errors classify
+    as ``unknown`` (never ``unsupported``). A non-positive ``ceiling`` short
     circuits to ``unsupported`` with ``config_disabled`` and no model call.
     """
     if ceiling <= 0:

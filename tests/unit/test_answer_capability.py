@@ -14,24 +14,16 @@ from dlightrag.core.vision_probe import ImageProbeOutcome
 
 
 def test_config_disabled_forces_zero() -> None:
-    assert derive_effective_max_images("unsupported", 0, None) == 0
+    assert derive_effective_max_images("unsupported", 0) == 0
 
 
 def test_supported_uses_configured_ceiling() -> None:
-    assert derive_effective_max_images("supported", 6, None) == 6
-
-
-def test_provider_max_caps_below_ceiling() -> None:
-    assert derive_effective_max_images("supported", 6, 4) == 4
-
-
-def test_provider_max_above_ceiling_is_clamped() -> None:
-    assert derive_effective_max_images("supported", 6, 10) == 6
+    assert derive_effective_max_images("supported", 6) == 6
 
 
 def test_unknown_and_unsupported_are_zero() -> None:
-    assert derive_effective_max_images("unknown", 6, None) == 0
-    assert derive_effective_max_images("unsupported", 6, None) == 0
+    assert derive_effective_max_images("unknown", 6) == 0
+    assert derive_effective_max_images("unsupported", 6) == 0
 
 
 def test_capability_snapshot_is_frozen() -> None:

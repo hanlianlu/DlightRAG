@@ -18,18 +18,15 @@ CapabilityStatus = Literal["supported", "unsupported", "unknown"]
 def derive_effective_max_images(
     status: CapabilityStatus,
     configured_ceiling: int,
-    provider_max: int | None,
 ) -> int:
     """Effective final image-block count for the answer transport budget.
 
-    ``supported`` clamps the deployment ceiling to any provider-declared max;
-    every other status (``unsupported``/``unknown``) or a non-positive ceiling
-    yields ``0`` (no raw images, text descriptions only).
+    ``supported`` uses the configured deployment ceiling; every other status
+    (``unsupported``/``unknown``) or a non-positive ceiling yields ``0`` (no raw
+    images, text descriptions only).
     """
     if status != "supported" or configured_ceiling <= 0:
         return 0
-    if provider_max is not None:
-        return max(0, min(configured_ceiling, provider_max))
     return configured_ceiling
 
 
