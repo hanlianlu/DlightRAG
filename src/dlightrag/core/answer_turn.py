@@ -19,6 +19,8 @@ class PreparedAnswerTurn:
     text_history: tuple[dict[str, Any], ...] = ()
     materialized_query_images: tuple[dict[str, Any], ...] = ()
     plan: QueryPlan | None = None
+    history_image_catalog_count: int = 0
+    history_image_resolution_status: str = "ok"
 
     @classmethod
     def stateless(

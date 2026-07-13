@@ -252,12 +252,19 @@ class WebConversationService:
                     f"{plan.standalone_query}\n\nReferenced prior images:\n" + "\n".join(captions)
                 )
 
+        # History-image resolution is degraded when the planner selected images
+        # that could not all be materialized (fetch/ownership loss); the turn
+        # still continues text-only.
+        selected_count = len(plan.selected_history_image_ids)
+        resolution_status = "degraded" if selected_count > len(history_blocks) else "ok"
         return PreparedAnswerTurn(
             current_query=query,
             retrieval_query=query,
             text_history=tuple(prepared.text_history),
             materialized_query_images=tuple([*current_images, *history_blocks]),
             plan=plan,
+            history_image_catalog_count=len(catalog),
+            history_image_resolution_status=resolution_status,
         )
 
     async def image(

@@ -14,6 +14,7 @@ from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.citations.streaming import aclose_answer_stream, iter_answer_tokens
 from dlightrag.core.answer_highlights import enrich_semantic_highlights
 from dlightrag.core.answer_media import answer_blocks_from_markdown, answer_images_from_sources
+from dlightrag.core.answer_prompt import CurrentImagePayloadError
 from dlightrag.core.answer_turn import PreparedAnswerTurn
 from dlightrag.core.client_payloads import project_source_payloads
 from dlightrag.core.retrieval.source_links import SourceDownloadLinkBuilder
@@ -40,6 +41,60 @@ from dlightrag.web.sse import sse_event
 
 logger = logging.getLogger(__name__)
 _PERSISTENCE_HEARTBEAT_SECONDS = 10.0
+
+# Slice B answer-image error taxonomy (design §14.2).
+ANSWER_ERROR_CURRENT_IMAGES_UNSUPPORTED = "CURRENT_IMAGES_UNSUPPORTED"
+ANSWER_ERROR_CURRENT_IMAGE_LIMIT_EXCEEDED = "CURRENT_IMAGE_LIMIT_EXCEEDED"
+ANSWER_ERROR_CAPABILITY_UNKNOWN = "ANSWER_IMAGE_CAPABILITY_UNKNOWN"
+ANSWER_ERROR_STREAM_FAILED = "ANSWER_STREAM_FAILED"
+
+
+def _classify_answer_error(exc: BaseException) -> str:
+    """Map an answer-stream failure to a Slice B error kind (design §14.2)."""
+    if isinstance(exc, CurrentImagePayloadError):
+        return ANSWER_ERROR_CURRENT_IMAGE_LIMIT_EXCEEDED
+    if "[IMAGES_NOT_SUPPORTED_BY_MODEL]" in str(exc):
+        return ANSWER_ERROR_CURRENT_IMAGES_UNSUPPORTED
+    return ANSWER_ERROR_STREAM_FAILED
+
+
+def _capability_metrics(manager: Any, turn: PreparedAnswerTurn) -> dict[str, Any]:
+    """Resolver/selection/capability metrics known before generation (design §18)."""
+    capability = getattr(manager, "answer_image_capability", None)
+    plan = turn.plan
+    return {
+        "history_image_catalog_count": turn.history_image_catalog_count,
+        "history_images_selected": len(plan.selected_history_image_ids) if plan is not None else 0,
+        "history_image_resolution_status": turn.history_image_resolution_status,
+        "answer_image_capability_status": capability.status
+        if capability is not None
+        else "unknown",
+        "answer_image_configured_ceiling": (
+            capability.configured_ceiling if capability is not None else 0
+        ),
+        "answer_image_effective_limit": (
+            capability.effective_max_images if capability is not None else 0
+        ),
+    }
+
+
+def _answer_transport_metrics(trace: dict[str, Any]) -> dict[str, Any]:
+    """Transport metrics derived from the final assembled answer messages (design §18).
+
+    ``answer_images_total`` is the count of image blocks the assembler placed in
+    the final messages, not the RAG-only budget.
+    """
+    sent = int(trace.get("answer_context_images_sent", 0) or 0)
+    skipped = int(trace.get("answer_context_images_skipped", 0) or 0)
+    return {
+        "answer_images_current": int(trace.get("answer_images_current", 0) or 0),
+        "answer_images_history": int(trace.get("answer_images_history", 0) or 0),
+        "answer_images_rag": int(trace.get("answer_images_rag", 0) or 0),
+        "answer_images_total": int(trace.get("answer_images_total", 0) or 0),
+        "answer_image_bytes_total": int(trace.get("answer_image_budget_used_bytes", 0) or 0),
+        "rag_visual_descriptions_included": sent + skipped,
+        "rag_raw_images_skipped": skipped,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +244,7 @@ async def stream_answer_events(
         **identity,
         "history_turns_loaded": len(turn.text_history) // 2,
         "current_image_count": len(validated_images),
+        **_capability_metrics(manager, turn),
     }
     async with trace_observation(
         "answer_stream_pipeline",
@@ -378,7 +434,10 @@ async def _emit_answer_events(
         trace = getattr(token_iter, "trace", None)
         if isinstance(trace, dict) and trace:
             yield sse_event("trace", AnswerTraceEvent(trace=trace))
-
+        if observation is not None:
+            observation.update(
+                metadata=_answer_transport_metrics(trace if isinstance(trace, dict) else {})
+            )
         highlighted_sources = await enrich_semantic_highlights(
             payload.sources,
             answer_text=done.answer,
@@ -420,9 +479,14 @@ async def _emit_answer_events(
     except Exception as exc:
         if not conversation_saved:
             save_reason = "answer_failed"
+        error_kind = _classify_answer_error(exc)
         if observation is not None:
             status = str(exc) if trace_sensitive_enabled() else "answer_stream_failed"
-            observation.update(level="ERROR", status_message=status)
+            observation.update(
+                level="ERROR",
+                status_message=status,
+                metadata={"error_kind": error_kind},
+            )
         logger.exception("Answer streaming failed")
         yield sse_event("error", AnswerErrorEvent(message="Service error. Please try again."))
     finally:
