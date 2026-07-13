@@ -249,6 +249,7 @@ body.panel-open .composer-inner {
     font-family: inherit;
     line-height: var(--line-height-control);
     padding: 0;
+    margin-left: var(--space-inline);
     min-height: calc(var(--font-size-body) * var(--line-height-control));
     outline: none;
     resize: none;
@@ -307,7 +308,6 @@ body.panel-open .composer-inner {
     flex-shrink: 0;
     border-radius: 50%;
     transition: color 0.15s, background 0.15s;
-    margin-right: var(--space-inline);
 }
 
 .composer-plus-icon {
