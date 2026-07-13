@@ -477,10 +477,12 @@ vector scoring inside a small metadata candidate set.
 
 ## Image Budgets
 
-Root config exposes `answer.max_images` for retrieved RAG context images and
-`answer.max_user_images` for request-local user images.
-Those slot budgets are independent; user images do not evict retrieved page
-previews. Compression budgets are advanced model transport limits:
+Root config exposes a single `answer.max_images` ceiling for the whole answer
+image transport (current + history + RAG). At startup it is clamped to the
+query-role answer model's discovered image capability, and slots are filled
+current images first, then resolved history images, then retrieved RAG visual
+chunks. It must be `>= query_images.max_current_images` so current uploads
+always fit. Compression budgets are advanced model transport limits:
 
 `chat_llm_reranker` can use its own `rerank.provider` and `rerank.model`. When
 those are omitted, it reuses `llm.default`.
@@ -521,8 +523,7 @@ rerank:
   image_min_quality: 76
 
 answer:
-  max_images: 6
-  max_user_images: 3
+  max_images: 8
   image_max_bytes: 3000000
   image_max_total_bytes: 24000000
   image_max_px: 1536
@@ -544,7 +545,6 @@ browser consume the same value:
 query_images:
   max_current_images: 3
   max_upload_bytes: 15728640  # 15 MiB per current Web image
-  max_described_images: 3
 
 web_conversations:
   max_turns: 100

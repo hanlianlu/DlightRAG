@@ -252,19 +252,22 @@ The sections are intentional:
 - `## User-attached images` are part of the user's question, not retrieved evidence.
 - `## Document Excerpts` contains retrieved text and page/image previews grouped by document.
 - Excerpt labels such as `[1-1] report.pdf, Page 3` give the model the citation marker it must use.
-- Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the RAG image budget.
+- Retrieved document images are preceded by a text label, then sent as an `image_url` block only if they fit the answer image budget.
 - `## Knowledge Graph Context` gives entity/relationship facts, with source document tags when available.
 - `## Reference List` maps citation IDs to documents.
 - `## Question` is the actual user task and is placed last.
 
-Answer generation has two image budgets. Retrieved visual chunks use
-`answer.max_images` plus the answer image byte/quality limits. User-supplied
-request-local query images use `answer.max_user_images`. The two budgets do not
-compete, so an uploaded user image does not evict a retrieved page preview.
-Budgeted JPEG, PNG, and WebP payloads are preserved as-is. When recompression is
-needed, DlightRAG enforces both a long-edge floor and a JPEG quality floor; an
-image that cannot fit within those limits is skipped instead of being degraded
-into a low-quality preview.
+Answer generation uses one adaptive image transport budget. A single
+`answer.max_images` ceiling -- clamped at startup to the query-role answer
+model's discovered image capability -- governs how many `image_url` blocks reach
+the model. Slots are filled in priority order: current-turn images first, then
+resolved history images, then retrieved RAG visual chunks. Current images have
+no silent fallback; if they cannot all fit, the request fails and names the
+overflow. History and RAG images that miss a slot still contribute their stored
+text descriptions. Budgeted JPEG, PNG, and WebP payloads are preserved as-is.
+When recompression is needed, DlightRAG enforces both a long-edge floor and a
+JPEG quality floor; an image that cannot fit within those limits is skipped
+instead of being degraded into a low-quality preview.
 
 For Web conversations, validated current-turn images always have priority and
 are the only durable chat images used in Slice A. Slice B will resolve references

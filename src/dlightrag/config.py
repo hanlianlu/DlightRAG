@@ -445,14 +445,9 @@ class AnswerConfig(BaseModel):
         description="Maximum chunks included in the final answer LLM prompt.",
     )
     max_images: int = Field(
-        default=6,
+        default=8,
         ge=0,
-        description="Maximum RAG context images sent to the answer LLM.",
-    )
-    max_user_images: int = Field(
-        default=3,
-        ge=0,
-        description="Maximum user-attached images (query_images + history) sent to the answer LLM.",
+        description="Maximum image blocks sent to the answer LLM (current + history + RAG).",
     )
 
     # Vision support is runtime manager state, not config. Users do not set it
@@ -511,7 +506,6 @@ class QueryImagesConfig(BaseModel):
         ge=1,
         description="Maximum durable bytes accepted for each current Web image.",
     )
-    max_described_images: int = Field(default=3, ge=0)
 
 
 class VisualAssetsConfig(BaseModel):
@@ -1176,7 +1170,16 @@ class DlightragConfig(BaseSettings):
         self._validate_bm25_profiles()
         self._validate_auth_mode()
         self._validate_access_control()
+        self._validate_answer_image_ceiling()
         return self
+
+    def _validate_answer_image_ceiling(self) -> None:
+        """The answer image transport ceiling must admit every current image."""
+        if self.answer.max_images < self.query_images.max_current_images:
+            raise ValueError(
+                "answer.max_images must be >= query_images.max_current_images so current "
+                "images never exceed the answer image transport ceiling"
+            )
 
     def _validate_bm25_profiles(self) -> None:
         """Validate BM25 profile routing configuration."""

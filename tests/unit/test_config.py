@@ -260,11 +260,14 @@ class TestAnswerConfig:
         assert cfg.image_quality == 89
         assert cfg.image_min_quality == 79
 
+    def test_max_images_is_single_unified_ceiling(self):
+        assert AnswerConfig().max_images == 8
+        assert "max_user_images" not in AnswerConfig.model_fields
+
     @pytest.mark.parametrize(
         "kwargs",
         [
             {"max_images": -1},
-            {"max_user_images": -1},
             {"image_max_total_bytes": 0},
             {"image_min_px": 0},
             {"image_min_quality": 96},
@@ -274,10 +277,9 @@ class TestAnswerConfig:
         with pytest.raises(ValidationError):
             AnswerConfig(**kwargs)
 
-    def test_zero_image_slots_are_valid_disable_knobs(self) -> None:
-        cfg = AnswerConfig(max_images=0, max_user_images=0)
+    def test_zero_image_slots_are_valid_disable_knob(self) -> None:
+        cfg = AnswerConfig(max_images=0)
         assert cfg.max_images == 0
-        assert cfg.max_user_images == 0
 
 
 class TestQueryAndVisualConfig:
@@ -285,7 +287,6 @@ class TestQueryAndVisualConfig:
         ("cls", "kwargs"),
         [
             (QueryImagesConfig, {"max_current_images": -1}),
-            (QueryImagesConfig, {"max_described_images": -1}),
             (VisualAssetsConfig, {"thumb_max_px": 0}),
             (VisualAssetsConfig, {"thumb_cache_size": 0}),
         ],
@@ -293,6 +294,9 @@ class TestQueryAndVisualConfig:
     def test_rejects_invalid_numeric_bounds(self, cls: type, kwargs: dict[str, Any]) -> None:
         with pytest.raises(ValidationError):
             cast(Any, cls)(**kwargs)
+
+    def test_removed_described_images_field(self) -> None:
+        assert "max_described_images" not in QueryImagesConfig.model_fields
 
 
 class TestMetadataConfig:
@@ -640,7 +644,7 @@ def test_multimodal_retrieval_defaults() -> None:
     assert cfg.rerank.image_quality == 86
     assert cfg.rerank.image_min_quality == 76
     assert cfg.citations.highlights.enabled is True
-    assert cfg.answer.max_images == 6
+    assert cfg.answer.max_images == 8
     assert cfg.answer.image_max_bytes == 3_000_000
     assert cfg.answer.image_max_total_bytes == 24_000_000
     assert cfg.answer.image_max_px == 1536
@@ -651,7 +655,6 @@ def test_multimodal_retrieval_defaults() -> None:
     assert cfg.web_conversations.ttl_days == 30
     assert cfg.query_images.max_current_images == 3
     assert cfg.query_images.max_upload_bytes == 15 * 1024 * 1024
-    assert cfg.query_images.max_described_images == 3
     assert "checkpoint_session_ttl_days" not in type(cfg).model_fields
     assert "session_max_images" not in type(cfg.query_images).model_fields
     assert "session_max_sessions" not in type(cfg.query_images).model_fields
@@ -1209,7 +1212,7 @@ def test_stalled_doc_timeout_allows_disable_but_rejects_too_small_values() -> No
         {"parser_sidecars": {"mineru": {"max_polls": 0}}},
         {"query_images": {"max_current_images": -1}},
         {"query_images": {"max_upload_bytes": 0}},
-        {"query_images": {"max_described_images": -1}},
+        {"answer": {"max_images": 2}, "query_images": {"max_current_images": 3}},
         {"visual_assets": {"thumb_max_px": 0}},
     ],
 )
