@@ -347,6 +347,19 @@ function renderConversationRow(conversation: ConversationSummary): HTMLElement {
     return row;
 }
 
+function updateConversationListDisabledState(): void {
+    const disabled = isQueryInFlight() || pendingLifecycleAction;
+    const newButton = document.getElementById('new-conversation-btn') as HTMLButtonElement | null;
+    if (newButton) newButton.disabled = disabled;
+    const list = document.getElementById('conversation-list');
+    if (!list) return;
+    list.querySelectorAll<HTMLButtonElement>(
+        '.conversation-select, .conversation-delete-action',
+    ).forEach((btn) => {
+        btn.disabled = disabled;
+    });
+}
+
 function renderConversationList(): void {
     const list = document.getElementById('conversation-list');
     if (!list) return;
@@ -742,7 +755,7 @@ export function setupConversations(): void {
 
     bus.on('conversationListChanged', renderConversationList);
     bus.on('conversationSelected', renderConversationList);
-    bus.on('conversationStreamChanged', renderConversationList);
+    bus.on('conversationStreamChanged', updateConversationListDisabledState);
     bus.on('conversationAnswerSaved', function({conversationId}) {
         if (conversationStore.activeConversationId !== conversationId) return;
         void selectConversation(conversationId, false, false);

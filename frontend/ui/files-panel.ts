@@ -2,6 +2,7 @@
 
 import {bus} from '../events/bus.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
+import {installListboxArrowNavigation} from '../lib/listbox.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {closestElement, openPanel} from './panel.ts';
@@ -321,6 +322,7 @@ function toggleIngestPopover(container: HTMLElement): void {
 
     container.appendChild(popover);
     ingestPopoverEl = popover;
+    installListboxArrowNavigation(popover);
     document.addEventListener('keydown', onIngestPopoverEscape, true);
 
     setTimeout(() => {
