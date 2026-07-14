@@ -21,8 +21,8 @@ _IMAGES_NOT_SUPPORTED_MARKER = "[IMAGES_NOT_SUPPORTED_BY_MODEL]"
 class AnswerImageError(ValueError):
     """Answer-image request rejected at the capability/transport boundary.
 
-    Carries a stable ``error_kind`` from the Slice B taxonomy so every surface
-    surfaces the same machine-readable classification.
+    Carries a stable ``error_kind`` from the answer-image taxonomy so every
+    surface surfaces the same machine-readable classification.
     """
 
     def __init__(self, message: str, *, error_kind: str) -> None:
@@ -31,7 +31,7 @@ class AnswerImageError(ValueError):
 
 
 def classify_answer_error(exc: BaseException) -> str:
-    """Map an answer-stream failure to a Slice B error kind (design §14.2)."""
+    """Map an answer-stream failure to a stable answer-image error kind."""
     if isinstance(exc, AnswerImageError):
         return exc.error_kind
     if isinstance(exc, CurrentImagePayloadError):

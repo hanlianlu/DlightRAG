@@ -270,10 +270,9 @@ JPEG quality floor; an image that cannot fit within those limits is skipped
 instead of being degraded into a low-quality preview.
 
 For Web conversations, validated current-turn images always have priority and
-are the only durable chat images used in Slice A. Slice B will resolve references
-to historical images and replace the separate user/RAG limits with one unified
-answer transport budget. Public REST/MCP/Python calls remain request-local in
-both slices.
+are the only durable chat images sent as pixels; historical images contribute
+their stored text descriptions. Public REST/MCP/Python calls remain
+request-local.
 
 `/retrieve` and `/answer` both accept an explicit `chunk_top_k` request to
 override the configured chunk/visual candidate budget; otherwise DlightRAG uses

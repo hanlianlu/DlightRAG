@@ -181,8 +181,8 @@ REST, MCP, and Python answer/retrieve calls remain stateless. They accept only
 the current request and never accept a Web conversation ID or caller-supplied
 history. Web current-image admission is configurable and defaults to three
 images at 15 MiB each. Durable current-turn images always have priority over any
-historical image selection; historical-image resolution and unified answer
-transport budgeting are reserved for Slice B.
+historical image selection; historical images that miss a transport slot
+contribute their stored text descriptions rather than raw pixels.
 
 ### REST
 

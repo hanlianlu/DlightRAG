@@ -64,7 +64,6 @@ def test_public_docs_describe_slice_a_conversation_boundaries() -> None:
         "Files in",
         "15 MiB",
         "current-turn images always have priority",
-        "Slice B",
     ):
         assert required in public_docs
 

@@ -305,14 +305,16 @@ async def upload_files(
             selected_workspace,
             IngestSpec(source_type="local", path=str(upload_dir)),
         )
-    except Exception as e:
+    except Exception:
         logger.exception(
             "Failed to start ingest job for workspace %s",
             log_safe(selected_workspace),
         )
         if upload_dir is not None:
             shutil.rmtree(upload_dir, ignore_errors=True)
-        return error_response(f"Upload staged but ingest did not start: {e}", status_code=500)
+        return error_response(
+            "Upload staged but ingest did not start. Please retry.", status_code=500
+        )
 
     return templates.TemplateResponse(
         request,

@@ -34,7 +34,7 @@ jobs:
       - run: uv run ruff check src/ tests/ scripts/
       - run: uv run ruff check src/ scripts/ --select S
       - run: uv run ruff format --check src/ tests/ scripts/
-      - run: uv run pyright src/
+      - run: uv run pyright
       - run: uv run lint-imports
       - run: uv run shellcheck $(git ls-files '*.sh')
       - run: npm --prefix frontend ci
