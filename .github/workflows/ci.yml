@@ -49,7 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg17
+        image: ghcr.io/${{ github.repository_owner }}/dlightrag-postgres:pg18
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
         env:
           POSTGRES_DB: dlightrag
           POSTGRES_USER: dlightrag
@@ -58,9 +61,9 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U dlightrag -d dlightrag"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
