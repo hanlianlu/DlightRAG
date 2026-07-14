@@ -98,7 +98,7 @@ def test_mineru_installer_creates_dedicated_service_env(tmp_path: Path) -> None:
     )
     assert capture.read_text(encoding="utf-8").splitlines() == [
         f"venv --python 3.13 {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[{default_extras}]>=3.4.3",
+        f"pip install --python {service_env}/bin/python -U mineru[{default_extras}]>=3.4.4",
     ]
 
 
@@ -134,7 +134,7 @@ def test_mineru_installer_defaults_to_mlx_on_apple_silicon(tmp_path: Path) -> No
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
         f"venv --python 3.13 {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.4.3",
+        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.4.4",
     ]
 
 
@@ -170,7 +170,7 @@ def test_mineru_installer_defaults_to_core_off_apple_silicon(tmp_path: Path) -> 
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
         f"venv --python 3.13 {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[core]>=3.4.3",
+        f"pip install --python {service_env}/bin/python -U mineru[core]>=3.4.4",
     ]
 
 
@@ -308,7 +308,7 @@ def test_mineru_installer_pins_python_interpreter(tmp_path: Path) -> None:
 
     assert capture.read_text(encoding="utf-8").splitlines() == [
         f"venv --python 3.12 {service_env}",
-        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.4.3",
+        f"pip install --python {service_env}/bin/python -U mineru[core,mlx]>=3.4.4",
     ]
 
 
