@@ -7,7 +7,6 @@ from dlightrag.core.answer_capability import AnswerImageCapability
 from dlightrag.core.query_planner import QueryPlan
 from dlightrag.storage.web_conversations import StoredConversationImage
 from dlightrag.web.conversations import (
-    _MAX_FOLDED_CAPTION_CHARS,
     PreparedWebConversation,
     WebConversationService,
 )
@@ -110,7 +109,6 @@ async def test_prepare_answer_turn_injects_plan_and_orders_current_first() -> No
     assert len(urls) == 2  # current + one materialized history image
     assert turn.plan is not None
     assert turn.plan.standalone_query.startswith("2023 revenue trend")
-    assert "2023 revenue chart" in turn.plan.standalone_query  # persisted caption folded in
     assert manager.plan_kwargs["allowed_history_image_count"] == 5  # 6 effective - 1 current
     assert store.fetched == [[_ID]]  # only the selected id is materialized
 
@@ -132,39 +130,3 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
     assert manager.plan_kwargs["allowed_history_image_count"] == 0
     assert store.fetched == []  # nothing materialized
     assert turn.materialized_query_images == ()
-
-
-async def test_prepare_answer_turn_bounds_long_history_caption() -> None:
-    long_caption = "word " * 100  # 500 chars, far above the fold ceiling
-
-    class _LongCaptionStore(_FakeStore):
-        async def fetch_images_by_ids(
-            self, principal_id: str, conversation_id: str, image_ids: list[str], *, ttl_days: int
-        ) -> list[StoredConversationImage]:
-            self.fetched.append(list(image_ids))
-            return [
-                StoredConversationImage(
-                    image_id=_ID,
-                    mime_type="image/png",
-                    image_bytes=b"PNGDATA",
-                    vlm_description=long_caption,
-                )
-            ]
-
-    store = _LongCaptionStore()
-    manager = _FakeManager(effective=6)
-    service = _service(store)
-
-    turn = await service.prepare_answer_turn(
-        manager=manager,
-        prepared=_prepared(),
-        query="explain that chart",
-        current_images=[],
-        workspaces=["default"],
-    )
-
-    assert turn.plan is not None
-    folded_caption = turn.plan.standalone_query.split("Referenced prior images:\n", 1)[1]
-    assert folded_caption.endswith("…")  # truncation marker appended
-    assert len(folded_caption) <= _MAX_FOLDED_CAPTION_CHARS + 1  # bounded (+ ellipsis)
-    assert "  " not in folded_caption.rstrip("…")  # trimmed at a clean word boundary

@@ -26,7 +26,10 @@ the current message refers to earlier images (e.g. "the second revenue chart", \
 "the diagram from before"), select the matching image ids by comparing the user's \
 wording against each image's description. Never invent ids; choose only from the \
 catalog below. Return them in `selected_history_image_ids`, most relevant first, at \
-most {allowed_count}. Still return the rewritten standalone query and any filters as usual.
+most {allowed_count}. When you select an image, fold its salient visual details \
+(objects, visible text, chart/table cues from its description) into the rewritten \
+standalone query so retrieval can find related documents. Return the rewritten \
+standalone query and any filters as usual.
 
 Prior images (id | turn | ordinal | description):
 {catalog_lines}
