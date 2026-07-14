@@ -24,7 +24,7 @@ from dlightrag.config import (
     set_config,
 )
 from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.query_images import prepare_query_images
+from dlightrag.core.query_images import images_to_multimodal_content, prepare_query_images
 from dlightrag.core.query_planner import QueryPlanner, QueryPlannerStructuredResponse
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
@@ -620,21 +620,20 @@ class TestRouting:
         assert retrieve_kwargs["bm25_query"] == "alpha beta"
 
     async def test_query_images_are_current_request_only(self, test_cfg) -> None:
-        enhancer = AsyncMock()
-        enhancer.enhance = AsyncMock(
-            side_effect=lambda query, images: MagicMock(query=query, descriptions={})
-        )
+        describer = AsyncMock()
+        describer.describe = AsyncMock(return_value={"1": "Image 1: chart"})
         current = [_image_block()]
 
         prepared = await prepare_query_images(
-            "query",
             query_images=current,
-            enhancer=enhancer,
+            describer=describer,
         )
 
-        assert prepared.answer_images == current
-        assert not hasattr(prepared, "current_image_ids")
-        enhancer.enhance.assert_awaited_once_with("query", current)
+        assert prepared.multimodal_content == images_to_multimodal_content(current)
+        assert prepared.descriptions == ["Image 1: chart"]
+        assert prepared.descriptions_by_ordinal == {"1": "Image 1: chart"}
+        assert not hasattr(prepared, "answer_images")
+        describer.describe.assert_awaited_once_with(current)
 
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aanswer_calls_aretrieve_then_engine(self, mock_create, test_cfg) -> None:

@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from dlightrag.core.retrieval.models import MetadataFilter
 from dlightrag.models.structured import StructuredOutput
 from dlightrag.prompts import (
+    PLANNER_CURRENT_IMAGE_TEMPLATE,
     PLANNER_HISTORY_TEMPLATE,
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
@@ -243,6 +244,7 @@ class QueryPlanner:
         schema: dict[str, Any] | None = None,
         image_catalog: list[dict[str, Any]] | None = None,
         allowed_history_image_count: int = 0,
+        current_image_descriptions: list[str] | None = None,
     ) -> QueryPlan:
         """Produce a full QueryPlan from one LLM call.
 
@@ -298,6 +300,14 @@ class QueryPlanner:
             system_prompt += PLANNER_WEB_SELECTION_TEMPLATE.format(
                 allowed_count=max(0, allowed_history_image_count),
                 catalog_lines=catalog_lines,
+            )
+
+        # Current-turn images are always incorporated (no selection): fold their
+        # descriptions into the query so bm25/filters/rewrite become image-aware
+        # even for stateless REST/MCP calls with no conversation history.
+        if current_image_descriptions:
+            system_prompt += PLANNER_CURRENT_IMAGE_TEMPLATE.format(
+                image_lines="\n".join(f"- {desc}" for desc in current_image_descriptions)
             )
 
         # LLM call with adaptive retry (up to 2 retries with exponential backoff)

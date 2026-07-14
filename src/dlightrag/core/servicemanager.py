@@ -11,13 +11,13 @@ import logging
 import time
 from collections import defaultdict
 from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 if TYPE_CHECKING:
     from dlightrag.config import DlightragConfig
-    from dlightrag.core.query_images import QueryImageEnhancer
+    from dlightrag.core.query_images import QueryImageDescriber
     from dlightrag.core.source_download import SourceDownloadTarget
     from dlightrag.storage.file_panel import PGFilePanelStore
     from dlightrag.storage.workspaces import PGWorkspaceRegistry
@@ -35,7 +35,11 @@ from dlightrag.core.client_requests import ingest_kwargs_from_payload
 from dlightrag.core.federation import federated_retrieve
 from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
-from dlightrag.core.query_images import PreparedQueryImages, prepare_query_images
+from dlightrag.core.query_images import (
+    PreparedQueryImages,
+    images_to_multimodal_content,
+    prepare_query_images,
+)
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
 from dlightrag.core.query_workspaces import (
     resolve_query_workspaces,
@@ -276,7 +280,7 @@ class RAGServiceManager:
             input_root=self._config.input_dir_path,
         )
         self._query_planner: QueryPlanner | None = None
-        self._query_image_enhancer: QueryImageEnhancer | None = None
+        self._query_image_describer: QueryImageDescriber | None = None
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
@@ -971,15 +975,15 @@ class RAGServiceManager:
             )
         return self._query_planner
 
-    def _get_query_image_enhancer(self) -> QueryImageEnhancer:
-        """Lazy-create VLM query image enhancer."""
-        if self._query_image_enhancer is None:
-            from dlightrag.core.query_images import QueryImageEnhancer
+    def _get_query_image_describer(self) -> QueryImageDescriber:
+        """Lazy-create the VLM query-image describer."""
+        if self._query_image_describer is None:
+            from dlightrag.core.query_images import QueryImageDescriber
             from dlightrag.models.llm import get_vlm_model_func
 
             cfg = self._config.query_images
             transport = self._config.answer
-            self._query_image_enhancer = QueryImageEnhancer(
+            self._query_image_describer = QueryImageDescriber(
                 vlm_func=self._sem_bound(get_vlm_model_func(self._config)),
                 max_images=cfg.max_current_images,
                 max_total_bytes=transport.image_max_total_bytes,
@@ -989,7 +993,7 @@ class RAGServiceManager:
                 quality=transport.image_quality,
                 min_quality=transport.image_min_quality,
             )
-        return self._query_image_enhancer
+        return self._query_image_describer
 
     async def _get_schema(
         self,
@@ -1028,6 +1032,7 @@ class RAGServiceManager:
         text_history: list[dict[str, Any]] | None = None,
         image_catalog: list[dict[str, Any]] | None = None,
         allowed_history_image_count: int = 0,
+        current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
         """Plan one query using the manager-owned planner.
@@ -1042,8 +1047,24 @@ class RAGServiceManager:
             text_history=text_history,
             image_catalog=image_catalog,
             allowed_history_image_count=allowed_history_image_count,
+            current_image_descriptions=current_image_descriptions,
             workspaces=workspaces,
         )
+
+    async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
+        """Describe current-turn images (ordinal -> text) for image-aware planning.
+
+        The web prepare step calls this before ``aplan_query`` so the planner can
+        fold image semantics into the standalone query, bm25, and filters, then
+        carries the descriptions on the turn to avoid re-describing in retrieval.
+        """
+        if not images:
+            return {}
+        prepared = await prepare_query_images(
+            query_images=images,
+            describer=self._get_query_image_describer(),
+        )
+        return prepared.descriptions_by_ordinal
 
     async def _aplan_query_prepared(
         self,
@@ -1052,6 +1073,7 @@ class RAGServiceManager:
         text_history: list[dict[str, Any]] | None,
         image_catalog: list[dict[str, Any]] | None = None,
         allowed_history_image_count: int = 0,
+        current_image_descriptions: list[str] | None = None,
         workspaces: list[str] | tuple[str, ...] | None = None,
     ) -> QueryPlan:
         """Plan a server-prepared query with request-local text history."""
@@ -1077,6 +1099,7 @@ class RAGServiceManager:
                 schema=schema,
                 image_catalog=image_catalog,
                 allowed_history_image_count=allowed_history_image_count,
+                current_image_descriptions=current_image_descriptions,
             )
             trace.update(
                 output={
@@ -1180,13 +1203,31 @@ class RAGServiceManager:
         scope: RequestScope,
         kwargs: dict[str, Any],
         plan: QueryPlan | None = None,
+        current_image_descriptions: dict[str, str] | None = None,
         log_plan: bool = False,
     ) -> tuple[QueryPlan, PreparedQueryImages, _AnswerLimits, RetrievalResult]:
+        current_images = list(query_images or [])
         if plan is None:
+            # Describe current images first so the planner's rewrite, bm25, and
+            # filters become image-aware, then plan against those descriptions.
+            prepared = await prepare_query_images(
+                query_images=current_images,
+                describer=self._get_query_image_describer(),
+            )
             plan = await self._aplan_query_prepared(
                 retrieval_query,
                 text_history=text_history,
+                current_image_descriptions=prepared.descriptions or None,
                 workspaces=ws_list,
+            )
+        else:
+            # Web planned upstream in prepare_answer_turn with these same image
+            # descriptions; only build direct-visual content here.
+            described = dict(current_image_descriptions or {})
+            prepared = PreparedQueryImages(
+                multimodal_content=images_to_multimodal_content(current_images),
+                descriptions=list(described.values()),
+                descriptions_by_ordinal=described,
             )
         if log_plan:
             logger.info(
@@ -1195,19 +1236,13 @@ class RAGServiceManager:
                 plan.standalone_query[:60],
             )
 
-        prepared = await prepare_query_images(
-            plan.standalone_query,
-            query_images=query_images,
-            enhancer=self._get_query_image_enhancer(),
-        )
-        retrieval_plan = replace(plan, standalone_query=prepared.query)
         if prepared.multimodal_content:
             existing_mm = kwargs.get("multimodal_content") or []
             kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         limits = self._resolve_answer_limits(kwargs)
         retrieval = await self.aretrieve(
             current_query,
-            plan=retrieval_plan,
+            plan=plan,
             workspaces=ws_list,
             scope=scope,
             **kwargs,
@@ -1258,16 +1293,26 @@ class RAGServiceManager:
             workspaces=workspaces,
             all_workspaces=all_workspaces,
         )
+        current_images = list(query_images or [])
+        descriptions: list[str] = []
+        if plan is None and current_images:
+            # Direct retrieve with images: describe and plan so the query is
+            # image-aware. Without images, the raw-query shortcut is kept.
+            prepared = await prepare_query_images(
+                query_images=current_images,
+                describer=self._get_query_image_describer(),
+            )
+            descriptions = prepared.descriptions
+            plan = await self._aplan_query_prepared(
+                query,
+                text_history=None,
+                current_image_descriptions=prepared.descriptions or None,
+                workspaces=ws_list,
+            )
+            if prepared.multimodal_content:
+                existing_mm = kwargs.get("multimodal_content") or []
+                kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         effective_query = plan.standalone_query if plan is not None else query
-        prepared = await prepare_query_images(
-            effective_query,
-            query_images=query_images,
-            enhancer=self._get_query_image_enhancer(),
-        )
-        effective_query = prepared.query
-        if prepared.multimodal_content:
-            existing_mm = kwargs.get("multimodal_content") or []
-            kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         if plan is not None:
             kwargs.setdefault("_plan", plan)
         from dlightrag.observability import trace_observation
@@ -1293,12 +1338,12 @@ class RAGServiceManager:
                         result = await federated_retrieve(
                             effective_query, ws_list, self._get_service, **kwargs
                         )
-                    result.image_descriptions = prepared.descriptions
-                    result.trace["query_image_description_count"] = len(prepared.descriptions)
+                    result.image_descriptions = descriptions
+                    result.trace["query_image_description_count"] = len(descriptions)
                     trace.update(
                         output={
                             **_context_output(result.contexts),
-                            "query_image_description_count": len(prepared.descriptions),
+                            "query_image_description_count": len(descriptions),
                         }
                     )
                     return result
@@ -1381,6 +1426,7 @@ class RAGServiceManager:
                         scope=scoped,
                         kwargs=kwargs,
                         plan=turn.plan,
+                        current_image_descriptions=turn.current_image_descriptions,
                     )
                     engine = self._get_answer_engine()
                     async with trace_observation(
@@ -1515,6 +1561,7 @@ class RAGServiceManager:
                     scope=scoped,
                     kwargs=kwargs,
                     plan=turn.plan,
+                    current_image_descriptions=turn.current_image_descriptions,
                     log_plan=True,
                 )
                 contexts, stream = await self._agenerate_stream_from_contexts_prepared(
@@ -1594,7 +1641,7 @@ class RAGServiceManager:
         for component in (
             self._answer_engine,
             self._query_planner,
-            self._query_image_enhancer,
+            self._query_image_describer,
         ):
             close = getattr(component, "aclose", None)
             if not callable(close):

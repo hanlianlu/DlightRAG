@@ -34,3 +34,15 @@ standalone query and any filters as usual.
 Prior images (id | turn | ordinal | description):
 {catalog_lines}
 """
+
+
+PLANNER_CURRENT_IMAGE_TEMPLATE = """\
+
+The user attached image(s) with the current message (described below). Fold their \
+salient content -- visible text, objects, chart/table cues, identifiers -- into the \
+rewritten standalone query, the bm25 keywords, and any metadata filters you are confident \
+about, even when there is no conversation history. Treat the query as image-grounded.
+
+Current image descriptions:
+{image_lines}
+"""

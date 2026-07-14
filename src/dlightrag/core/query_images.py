@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""VLM-assisted query image semantic enhancement."""
+"""VLM-assisted query-image description for retrieval planning."""
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from dlightrag.core.answer_images import AnswerImageBudget
@@ -14,17 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class QueryImageEnhancement:
-    """Result of query-image semantic enhancement."""
-
-    query: str
-    descriptions: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
 class PreparedQueryImages:
-    query: str
-    answer_images: list[dict[str, Any]]
+    """Current-request image inputs: direct-visual content + VLM descriptions."""
+
     multimodal_content: list[dict[str, Any]]
     descriptions: list[str]
     descriptions_by_ordinal: dict[str, str]
@@ -43,8 +35,8 @@ def images_to_multimodal_content(images: list[dict[str, Any]]) -> list[dict[str,
     return items
 
 
-class QueryImageEnhancer:
-    """Describe user query images for semantic/BM25/KG retrieval."""
+class QueryImageDescriber:
+    """Describe user query images for semantic/BM25/KG retrieval planning."""
 
     def __init__(
         self,
@@ -68,19 +60,18 @@ class QueryImageEnhancer:
         self._min_quality = max(1, int(min_quality))
 
     async def aclose(self) -> None:
-        """Release VLM worker resources owned by this enhancer."""
+        """Release VLM worker resources owned by this describer."""
         from dlightrag.utils.concurrency import shutdown_async_callable
 
         await shutdown_async_callable(self._vlm_func)
 
-    async def enhance(
+    async def describe(
         self,
-        query: str,
         images: list[dict[str, Any]] | None,
-    ) -> QueryImageEnhancement:
-        """Append concise visual descriptions to the retrieval query."""
+    ) -> dict[str, str]:
+        """Return concise per-image visual descriptions keyed by 1-based ordinal."""
         if self._vlm_func is None or not images or self._max_images <= 0:
-            return QueryImageEnhancement(query=query)
+            return {}
         vlm_func = self._vlm_func
 
         async def _describe(item: tuple[int, dict[str, Any]]) -> tuple[str, str] | None:
@@ -139,38 +130,27 @@ class QueryImageEnhancer:
             if isinstance(item, tuple):
                 key, text = item
                 descriptions[key] = text
-
-        if not descriptions:
-            return QueryImageEnhancement(query=query)
-        visual_context = "\n".join(descriptions.values())
-        return QueryImageEnhancement(
-            query=f"{query}\n\nVisual context from user-supplied images:\n{visual_context}",
-            descriptions=descriptions,
-        )
+        return descriptions
 
 
 async def prepare_query_images(
-    query: str,
     *,
     query_images: list[dict[str, Any]] | None,
-    enhancer: Any,
+    describer: Any,
 ) -> PreparedQueryImages:
-    """Create semantic and direct-retrieval inputs from current request images."""
+    """Describe current request images and build direct-visual retrieval content."""
     current_images = list(query_images or [])
-    enhanced = await enhancer.enhance(query, current_images)
+    descriptions = await describer.describe(current_images)
     return PreparedQueryImages(
-        query=enhanced.query,
-        answer_images=current_images,
         multimodal_content=images_to_multimodal_content(current_images),
-        descriptions=list(enhanced.descriptions.values()),
-        descriptions_by_ordinal=enhanced.descriptions,
+        descriptions=list(descriptions.values()),
+        descriptions_by_ordinal=descriptions,
     )
 
 
 __all__ = [
     "PreparedQueryImages",
-    "QueryImageEnhancement",
-    "QueryImageEnhancer",
+    "QueryImageDescriber",
     "images_to_multimodal_content",
     "prepare_query_images",
 ]
