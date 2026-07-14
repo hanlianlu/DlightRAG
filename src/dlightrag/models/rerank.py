@@ -103,6 +103,29 @@ def _resolve_input_modality(input_modality: InputModality, model: str) -> Resolv
     return "multimodal" if model_id in _MULTIMODAL_RERANK_MODELS else "text"
 
 
+def rerank_consumes_images(rc: RerankConfig, *, supports_vision: bool | None) -> bool:
+    """Whether the configured reranker reads chunk ``image_data``.
+
+    Mirrors :func:`build_rerank_func`'s modality resolution so callers can skip
+    the expensive pre-rerank image hydration for a text-only reranker. Errs
+    toward ``True`` (keep hydration) only for the chat_llm_reranker unknown-probe
+    case, so a wrong verdict never starves a multimodal reranker of image bytes.
+    """
+    if not rc.enabled:
+        return False
+    if rc.strategy == "chat_llm_reranker":
+        if rc.input_modality == "text":
+            return False
+        if rc.input_modality == "multimodal":
+            return True
+        return supports_vision is not False  # auto: unknown/True -> True (safe)
+    model = rc.model
+    if model is None:
+        # Unknown model family: honour an explicit modality, else keep hydration.
+        return rc.input_modality != "text"
+    return _resolve_input_modality(rc.input_modality, model) == "multimodal"
+
+
 def _chunk_text(chunk: dict[str, Any]) -> str:
     return str(chunk.get("content") or "")
 

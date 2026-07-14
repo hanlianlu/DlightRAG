@@ -256,6 +256,7 @@ class RAGService:
         # Callbacks for decoupled integration
         self._cancel_checker = cancel_checker
         self._rerank_supports_vision = rerank_supports_vision
+        self._rerank_consumes_images: bool = True
 
         # Direct LightRAG runtime and DlightRAG orchestration.
         self._lightrag: Any = None  # Direct LightRAG reference
@@ -527,6 +528,11 @@ class RAGService:
         default_func_lr = get_default_model_func_for_lightrag(config)
         rerank_func = get_rerank_func(config, supports_vision=self._rerank_supports_vision)
         self._rerank_func = rerank_func
+        from dlightrag.models.rerank import rerank_consumes_images
+
+        self._rerank_consumes_images = rerank_consumes_images(
+            config.rerank, supports_vision=self._rerank_supports_vision
+        )
         role_overrides = build_role_llm_configs(config)
         if role_overrides is not None:
             logger.info("LightRAG role overrides: %s", sorted(role_overrides.keys()))
@@ -1763,7 +1769,14 @@ class RAGService:
                     if str(chunk.get("chunk_id") or "") not in hydrated_ids
                 ]
                 if pending_chunks:
-                    await hydrate_lightrag_chunk_provenance(stores, pending_chunks)
+                    # Defer the expensive image base64 read past rerank truncation
+                    # for a text-only reranker, so chunks that rerank drops never
+                    # read their image bytes.
+                    await hydrate_lightrag_chunk_provenance(
+                        stores,
+                        pending_chunks,
+                        include_image_data=self._rerank_consumes_images,
+                    )
 
         await self._rerank_retrieval_chunks(
             query,
@@ -1771,6 +1784,17 @@ class RAGService:
             top_k=top_k,
             chunk_top_k=chunk_top_k,
         )
+
+        # Text-reranker path: image bytes were deferred above, so hydrate them for
+        # the surviving chunks now (already-hydrated chunks skip the read).
+        if stores is not None and not self._rerank_consumes_images:
+            survivors = kg_result.contexts.get("chunks", [])
+            if survivors:
+                from dlightrag.core.retrieval.provenance import (
+                    hydrate_lightrag_chunk_provenance,
+                )
+
+                await hydrate_lightrag_chunk_provenance(stores, survivors)
 
         # --- Step 3: Enrich chunks with document metadata ---
         await self._enrich_chunks_with_metadata(kg_result)
