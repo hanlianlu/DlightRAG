@@ -20,7 +20,7 @@ default_mineru_python="3.13"
 # Lowest MinerU release DlightRAG supports. Fresh installs and `-U` upgrades must
 # land on this version or newer ("and onward"). Override MINERU_MIN_VERSION in
 # .env.mineru to raise the floor, or set MINERU_VERSION to pin an exact release.
-default_mineru_min_version="3.4.3"
+default_mineru_min_version="3.4.4"
 
 default_mineru_install_extras() {
   local system machine
