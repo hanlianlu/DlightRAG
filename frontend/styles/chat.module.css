@@ -117,7 +117,7 @@
   height: var(--size-button);
   background: transparent;
   border: none;
-  color: rgb(210 182 97 / 78%);
+  color: var(--color-accent-text);
   /* stylelint-disable-next-line declaration-property-value-disallowed-list */
   line-height: 1;
   cursor: pointer;
@@ -406,7 +406,7 @@
   padding: var(--space-tight) 0 var(--space-inline);
   overflow-x: auto;
   scroll-behavior: smooth;
-  border-top: 1px solid rgb(120 113 108 / 12%);
+  border-top: 1px solid var(--color-divider);
   margin-top: var(--space-tight);
 }
 
@@ -418,12 +418,12 @@
   cursor: pointer;
   overflow: hidden;
   position: relative;
-  border: 1px solid rgb(120 113 108 / 16%);
+  border: 1px solid var(--color-border-subtle);
   transition: border-color 0.15s;
 }
 
 .answerImageItem:hover {
-  border-color: rgb(210 182 97 / 40%);
+  border-color: var(--color-accent-border-strong);
 }
 
 .answerImageItem img {
@@ -437,7 +437,7 @@
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(transparent, rgb(0 0 0 / 70%));
+  background: linear-gradient(transparent, var(--color-scrim-gradient));
   color: #d6d3d1;
   font-size: var(--font-size-caption);
   padding: var(--space-tight) var(--space-inline) var(--space-inline);

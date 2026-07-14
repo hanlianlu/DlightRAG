@@ -204,7 +204,7 @@
 
 :global(.conversation-row input:focus) {
     border-color: rgb(210 182 97 / 52%);
-    box-shadow: 0 0 0 2px rgb(210 182 97 / 8%);
+    box-shadow: 0 0 0 2px var(--color-accent-hover);
 }
 
 :global(.conversation-list-status) {
@@ -230,7 +230,7 @@
 
 :global(.conversation-skeleton) {
     animation: conversation-pulse 1.5s ease-in-out infinite;
-    background: rgb(120 113 108 / 10%);
+    background: var(--color-bg-hover);
     border-radius: var(--radius-sm);
     height: calc(var(--size-button) + var(--space-tight));
 }
@@ -244,7 +244,7 @@
 }
 
 :global(#conversation-sidebar-backdrop) {
-    background: rgb(0 0 0 / 48%);
+    background: var(--color-scrim);
     inset: 0;
     position: fixed;
     z-index: 110;
@@ -255,7 +255,7 @@
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    box-shadow: 0 18px 48px rgb(0 0 0 / 52%);
+    box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
     max-width: 420px;
     padding: var(--space-section);
@@ -264,7 +264,7 @@
 
 :global(#delete-conversation-dialog::backdrop),
 :global(#discard-draft-dialog::backdrop) {
-    background: rgb(0 0 0 / 58%);
+    background: var(--color-scrim-strong);
 }
 
 :global(#delete-conversation-dialog h2),
