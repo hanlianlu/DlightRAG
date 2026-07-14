@@ -322,7 +322,9 @@ class UnifiedIngestionEngine:
                         filename = safe_source_filename(
                             str(entry.metadata_record.get("filename") or entry.parser_path.name)
                         )
-                        logger.warning("Document finalization failed for %s", filename)
+                        logger.warning(
+                            "Document finalization failed for %s", filename, exc_info=True
+                        )
                         errors.append(f"{filename}: document processing failed")
 
         return {
