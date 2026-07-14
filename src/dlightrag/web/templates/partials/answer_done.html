@@ -2,7 +2,8 @@
 {% if answer_images %}
 <div class="answer-image-strip">
   {% for img in answer_images %}
-  <div class="answer-image-item" data-action="open-lightbox" data-src="{{ img.url }}">
+  <div class="answer-image-item" data-action="open-lightbox" data-src="{{ img.url }}"
+       role="button" tabindex="0" aria-label="Open image: {{ img.label }}">
     <img src="{{ img.thumbnail_url }}" alt="{{ img.label }}" loading="lazy">
     <span class="answer-image-label">{{ img.label }}</span>
   </div>

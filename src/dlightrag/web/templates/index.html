@@ -2,7 +2,6 @@
 {% block content %}
 <div class="app"
      id="app"
-     data-max-current-images="{{ query_image_max_current_images }}"
      data-max-upload-bytes="{{ query_image_max_upload_bytes }}"
      data-answer-image-capability="{{ answer_image_capability_status }}"
      data-effective-current-upload-limit="{{ effective_current_upload_limit }}">
@@ -118,7 +117,7 @@
     </aside>
     <div id="panel-backdrop" hidden></div>
 
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
     <dialog id="delete-conversation-dialog"
             aria-labelledby="delete-conversation-title"

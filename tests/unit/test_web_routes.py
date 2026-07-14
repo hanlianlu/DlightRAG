@@ -447,14 +447,12 @@ class TestWebIndex:
     async def test_index_projects_configured_query_image_policy(
         self, client: AsyncClient, test_config: DlightragConfig, web_app
     ) -> None:
-        test_config.query_images.max_current_images = 4
         test_config.query_images.max_upload_bytes = 12_345
         web_app.state.manager.config = test_config
 
         resp = await client.get("/web/")
 
         assert resp.status_code == 200
-        assert 'data-max-current-images="4"' in resp.text
         assert 'data-max-upload-bytes="12345"' in resp.text
 
     async def test_index_projects_supported_capability_effective_limit(

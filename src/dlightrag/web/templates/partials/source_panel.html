@@ -35,7 +35,8 @@
         <img src="{{ chunk.thumbnail_url or chunk.image_url }}"
              data-full-src="{{ chunk.image_url or chunk.thumbnail_url }}"
              alt="Page {{ chunk.page_idx or '' }}" loading="lazy"
-             data-action="open-lightbox">
+             data-action="open-lightbox"
+             role="button" tabindex="0" aria-label="Open page image">
       </div>
       {% endif %}
       {% if chunk.content %}

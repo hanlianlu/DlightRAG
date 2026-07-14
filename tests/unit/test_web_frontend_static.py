@@ -154,7 +154,7 @@ def test_browser_image_admission_has_no_live_duplicated_numeric_policy() -> None
     assert "MAX_IMAGE_SIZE" not in images
     assert "10 * 1024 * 1024" not in images
     assert "10 * 1024 * 1024" not in policy
-    assert "data-max-current-images" in (
+    assert "data-effective-current-upload-limit" in (
         ROOT / "src" / "dlightrag" / "web" / "templates" / "index.html"
     ).read_text(encoding="utf-8")
     assert "data-max-upload-bytes" in (

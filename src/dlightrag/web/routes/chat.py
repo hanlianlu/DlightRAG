@@ -102,7 +102,6 @@ async def index(request: Request, workspace: str = Depends(get_workspace)):
             "workspaces": workspaces,
             "primary_workspace": primary,
             "active_workspaces": active,
-            "query_image_max_current_images": manager.config.query_images.max_current_images,
             "query_image_max_upload_bytes": manager.config.query_images.max_upload_bytes,
             "answer_image_capability_status": capability_status,
             "effective_current_upload_limit": effective_current_upload_limit,
