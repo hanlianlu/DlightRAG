@@ -40,7 +40,7 @@
 
 .ingest-target-pill:hover {
     background: var(--color-accent-hover-strong);
-    border-color: rgb(210 182 97 / 35%);
+    border-color: var(--color-accent-border-soft);
 }
 
 .ingest-target-dot {
@@ -142,7 +142,7 @@
 }
 
 .file-delete:hover {
-    background: rgb(248 113 113 / 15%);
+    background: var(--color-danger-surface);
     color: var(--color-danger);
 }
 
@@ -263,13 +263,13 @@
 }
 
 .upload-zone:hover {
-    border-color: rgb(210 182 97 / 35%);
+    border-color: var(--color-accent-border-soft);
     background: rgb(210 182 97 / 3%);
 }
 
 .upload-zone:has(.upload-zone-file-action:focus-visible) {
     border-color: rgb(210 182 97 / 48%);
-    outline: 2px solid rgb(210 182 97 / 12%);
+    outline: 2px solid var(--color-accent-surface);
     outline-offset: 2px;
 }
 

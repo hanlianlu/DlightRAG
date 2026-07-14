@@ -77,6 +77,6 @@
 }
 
 .workspacePopoverDelete:hover {
-  background: rgb(248 113 113 / 15%);
+  background: var(--color-danger-surface);
   color: var(--color-danger);
 }

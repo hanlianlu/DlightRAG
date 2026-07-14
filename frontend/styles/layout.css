@@ -102,7 +102,7 @@ body.files-panel-open #files-btn {
 }
 
 .workspace-dot {
-    background: rgb(210 182 97 / 72%);
+    background: var(--color-accent-indicator);
     border-radius: 50%;
     flex-shrink: 0;
     height: var(--space-tight);
@@ -111,10 +111,10 @@ body.files-panel-open #files-btn {
 
 .workspace-dot.multi {
     background: transparent;
-    border: 1px solid rgb(210 182 97 / 72%);
+    border: 1px solid var(--color-accent-indicator);
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     border-radius: 999px;
-    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 rgb(210 182 97 / 72%);
+    box-shadow: 5px 0 0 -1px var(--color-bg-base), 6px 0 0 0 var(--color-accent-indicator);
     width: var(--space-related);
 }
 
@@ -236,8 +236,8 @@ body.panel-open .composer-inner {
 }
 
 .composer-form:focus-within {
-    border-color: rgb(210 182 97 / 35%);
-    box-shadow: 0 0 0 2px rgb(210 182 97 / 6%);
+    border-color: var(--color-accent-border-soft);
+    box-shadow: 0 0 0 2px var(--color-accent-ghost);
 }
 
 .composer-input {
@@ -301,7 +301,7 @@ body.panel-open .composer-inner {
     height: var(--size-button);
     background: transparent;
     border: none;
-    color: rgb(210 182 97 / 78%);
+    color: var(--color-accent-text);
     /* stylelint-disable-next-line declaration-property-value-disallowed-list */
     line-height: 1;
     cursor: pointer;
@@ -399,7 +399,7 @@ body.conversation-sidebar-open .panel {
 }
 
 #panel-backdrop {
-    background: rgb(0 0 0 / 48%);
+    background: var(--color-scrim);
     inset: 0;
     position: fixed;
     z-index: 90;
@@ -422,7 +422,7 @@ body.conversation-sidebar-open .panel {
     background: var(--color-bg-surface);
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
-    box-shadow: 0 18px 48px rgb(0 0 0 / 52%);
+    box-shadow: var(--shadow-overlay);
     color: var(--color-text-secondary);
     max-width: clamp(320px, 32vw, 420px);
     padding: var(--space-section);
@@ -430,7 +430,7 @@ body.conversation-sidebar-open .panel {
 }
 
 .workspace-dialog::backdrop {
-    background: rgb(0 0 0 / 58%);
+    background: var(--color-scrim-strong);
 }
 
 .workspace-dialog-title {
@@ -468,7 +468,7 @@ body.conversation-sidebar-open .panel {
 }
 
 .workspace-dialog-input:focus {
-    border-color: rgb(210 182 97 / 38%);
+    border-color: var(--color-accent-border);
 }
 
 .workspace-dialog-actions {

@@ -128,7 +128,7 @@ body.conversation-drawer-open {
 .primary-btn {
     align-items: center;
     background: var(--color-gold-500);
-    border: 1px solid rgb(210 182 97 / 24%);
+    border: 1px solid var(--color-accent-border-faint);
     border-radius: var(--radius-sm);
     color: var(--color-gold-100);
     cursor: pointer;
@@ -143,7 +143,7 @@ body.conversation-drawer-open {
 
 .primary-btn:hover {
     background: var(--color-gold-400);
-    border-color: rgb(210 182 97 / 40%);
+    border-color: var(--color-accent-border-strong);
     color: var(--color-text-primary);
 }
 
@@ -214,7 +214,7 @@ body.conversation-drawer-open {
 }
 
 .ui-popover-input:focus {
-    border-color: rgb(210 182 97 / 38%);
+    border-color: var(--color-accent-border);
 }
 
 .ui-popover-input::placeholder {
@@ -224,7 +224,7 @@ body.conversation-drawer-open {
 .ui-popover-create-btn {
     align-items: center;
     background: rgb(87 74 36 / 28%);
-    border: 1px solid rgb(210 182 97 / 24%);
+    border: 1px solid var(--color-accent-border-faint);
     border-radius: var(--radius-sm);
     color: var(--color-gold-100);
     cursor: pointer;
@@ -239,7 +239,7 @@ body.conversation-drawer-open {
 
 .ui-popover-create-btn:hover {
     background: rgb(87 74 36 / 42%);
-    border-color: rgb(210 182 97 / 40%);
+    border-color: var(--color-accent-border-strong);
 }
 
 /* === Streaming Indicator === */

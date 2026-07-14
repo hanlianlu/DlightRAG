@@ -79,9 +79,29 @@
     /* ── Color: Border ── */
     --color-border-subtle: rgba(120, 113, 108, 0.16);
     --color-border-strong: rgba(120, 113, 108, 0.28);
+    --color-divider: rgba(120, 113, 108, 0.12);
 
     /* ── Color: Semantic ── */
     --color-danger: #f87171;
+    --color-danger-surface: rgba(248, 113, 113, 0.15);
+
+    /* ── Color: Accent surfaces & borders (gold-200 at alpha) ── */
+    --color-accent-text: rgba(210, 182, 97, 0.78);
+    --color-accent-indicator: rgba(210, 182, 97, 0.72);
+    --color-accent-border-strong: rgba(210, 182, 97, 0.40);
+    --color-accent-border: rgba(210, 182, 97, 0.38);
+    --color-accent-border-soft: rgba(210, 182, 97, 0.35);
+    --color-accent-border-faint: rgba(210, 182, 97, 0.24);
+    --color-accent-surface: rgba(210, 182, 97, 0.12);
+    --color-accent-ghost: rgba(210, 182, 97, 0.06);
+
+    /* ── Color: Overlay / scrim (black at alpha) ── */
+    --color-scrim: rgba(0, 0, 0, 0.48);
+    --color-scrim-strong: rgba(0, 0, 0, 0.58);
+    --color-scrim-gradient: rgba(0, 0, 0, 0.70);
+
+    /* ── Shadow ── */
+    --shadow-overlay: 0 18px 48px rgba(0, 0, 0, 0.52);
 
     /* ── Font sizes (semantic aliases to Utopia type scale) ── */
     --font-size-caption:  var(--step--2);  /* badges, tiny labels */
