@@ -28,8 +28,15 @@ logger = logging.getLogger(__name__)
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
-async def hydrate_lightrag_chunk_provenance(stores: Any, chunks: list[dict[str, Any]]) -> None:
-    """Hydrate image bytes and page labels from LightRAG chunk/full_doc sidecars."""
+async def hydrate_lightrag_chunk_provenance(
+    stores: Any, chunks: list[dict[str, Any]], *, include_image_data: bool = True
+) -> None:
+    """Hydrate page labels and, when ``include_image_data``, image bytes.
+
+    ``include_image_data=False`` resolves the cheap provenance metadata (page
+    index, bbox) but skips the expensive base64 image read, so a caller can defer
+    image hydration until after rerank truncation for a text-only reranker.
+    """
     if not chunks:
         return
 
@@ -60,13 +67,14 @@ async def hydrate_lightrag_chunk_provenance(stores: Any, chunks: list[dict[str, 
                 if provenance.bbox is not None and chunk.get("bbox") is None:
                     chunk["bbox"] = provenance.bbox
 
-        await _hydrate_image_data(
-            chunk,
-            sidecar,
-            stores=stores,
-            raw_chunk=raw_chunk,
-            full_doc_cache=full_doc_cache,
-        )
+        if include_image_data:
+            await _hydrate_image_data(
+                chunk,
+                sidecar,
+                stores=stores,
+                raw_chunk=raw_chunk,
+                full_doc_cache=full_doc_cache,
+            )
 
         # Sidecar image chunks have asset paths as file_path (e.g., .blocks.assets/hash.jpg).
         # Remap to the parent document's file_path so citation grouping works correctly.

@@ -286,7 +286,7 @@ class TestRAGServiceRetrieve:
             }
         )
 
-        async def hydrate(_stores, chunks):
+        async def hydrate(_stores, chunks, *, include_image_data=True):
             chunks[1]["image_data"] = "hydrated-image"
 
         async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]:
@@ -320,7 +320,7 @@ class TestRAGServiceRetrieve:
             }
         )
 
-        async def hydrate(_stores, chunks):
+        async def hydrate(_stores, chunks, *, include_image_data=True):
             return None
 
         service._rerank_func = None  # reranker disabled
@@ -359,7 +359,7 @@ class TestRAGServiceRetrieve:
         )
         seen: list[list[str]] = []
 
-        async def hydrate(_stores, chunks):
+        async def hydrate(_stores, chunks, *, include_image_data=True):
             seen.append([chunk["chunk_id"] for chunk in chunks])
             chunks[0]["page_idx"] = 7
 
@@ -372,6 +372,54 @@ class TestRAGServiceRetrieve:
 
         assert seen == [["bm25-b"]]
         assert result.contexts["chunks"][1]["page_idx"] == 7
+
+    async def test_aretrieve_defers_image_hydration_for_text_reranker(
+        self, test_config, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Text reranker: image bytes are read only for chunks that survive rerank."""
+        from dlightrag.core.retrieval.protocols import RetrievalResult
+
+        service = self._make_retrieval_service(test_config)
+        service._rerank_consumes_images = False  # text-only reranker
+        service._retrieval_orchestrator.aretrieve.return_value = RetrievalResult(
+            contexts={
+                "chunks": [
+                    {"chunk_id": "keep", "content": "keep"},
+                    {"chunk_id": "drop", "content": "drop"},
+                ],
+                "entities": [],
+                "relationships": [],
+            }
+        )
+
+        calls: list[tuple[list[str], bool]] = []
+
+        async def hydrate(_stores, chunks, *, include_image_data=True):
+            calls.append(([c["chunk_id"] for c in chunks], include_image_data))
+            if include_image_data:
+                for c in chunks:
+                    c["image_data"] = f"img-{c['chunk_id']}"
+
+        async def rerank_func(query: str, chunks: list[dict], top_k: int) -> list[dict]:
+            # Image bytes are still deferred at rerank time for a text reranker.
+            assert "image_data" not in chunks[0]
+            return [c for c in chunks if c["chunk_id"] == "keep"]
+
+        service._rerank_func = rerank_func
+        monkeypatch.setattr(
+            "dlightrag.core.retrieval.provenance.hydrate_lightrag_chunk_provenance",
+            hydrate,
+        )
+
+        result = await service.aretrieve("test query", chunk_top_k=3)
+
+        # Pass 1 hydrates metadata only (no image bytes) for the union; pass 2
+        # reads image bytes for the single surviving chunk.
+        assert calls[0] == (["keep", "drop"], False)
+        assert calls[1] == (["keep"], True)
+        survivors = result.contexts["chunks"]
+        assert [c["chunk_id"] for c in survivors] == ["keep"]
+        assert survivors[0]["image_data"] == "img-keep"
 
     async def test_aretrieve_not_initialized_raises(self, test_config):
         service = RAGService(config=test_config)
