@@ -86,7 +86,7 @@ def verify_bearer_token(
 
     if mode == "simple":
         if not cfg.api_auth_token or not secrets.compare_digest(raw_token, cfg.api_auth_token):
-            raise HTTPException(status_code=403, detail="Invalid token")
+            raise HTTPException(status_code=401, detail="Invalid token")
         return UserContext(user_id=default_user_id, auth_mode="simple")
 
     if mode == "jwt":
