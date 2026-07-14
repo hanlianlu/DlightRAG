@@ -13,7 +13,7 @@ from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.stdio import stdio_server
-from mcp.types import ContentBlock, TextContent
+from mcp.types import ContentBlock, TextContent, ToolAnnotations
 from pydantic import Field
 
 import dlightrag
@@ -195,6 +195,7 @@ async def _resolve_authorized_query_workspaces(
         "Query the RAG knowledge base for relevant information. Supports structured "
         "metadata filters and default or selected workspaces for precise document lookups."
     ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def retrieve_tool(
     query: Annotated[str, Field(description="The search query")],
@@ -258,6 +259,7 @@ async def retrieve_tool(
         "Ask a question and get an LLM-generated answer backed by retrieved context "
         "from the default or selected workspaces in the knowledge base."
     ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def answer_tool(
     query: Annotated[str, Field(description="The question to answer")],
@@ -322,6 +324,7 @@ async def answer_tool(
         "records containing workspace, display_name, embedding_model, created_at, "
         "and updated_at. Use display_name as the user-facing workspace label."
     ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def list_workspaces_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
@@ -336,17 +339,28 @@ async def list_workspaces_tool() -> dict[str, Any]:
 @mcp_app.tool(
     name="get_capabilities",
     description=(
-        "Report deployment capabilities to honor before sending images. Returns "
+        "Report deployment capabilities agents should honor. Returns "
         "answer_image_capability with status (supported/unsupported/unknown), "
         "effective_max_images (max images the answer model accepts; 0 means send none), "
-        "configured_ceiling, and model. Query images reach the answer model only when "
-        "status is 'supported'."
+        "configured_ceiling, and model — query images reach the answer model only when "
+        "status is 'supported'. Also returns metadata_schema (declared filterable fields "
+        "with their types and filter_ops, plus allow_ad_hoc_json) so callers can build "
+        "valid retrieve/answer filters without guessing field names."
     ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def get_capabilities_tool() -> dict[str, Any]:
     manager = await _ensure_manager()
+    config = _get_config()
     return {
-        "answer_image_capability": answer_image_capability_summary(manager.answer_image_capability)
+        "answer_image_capability": answer_image_capability_summary(manager.answer_image_capability),
+        "metadata_schema": {
+            "allow_ad_hoc_json": config.metadata.allow_ad_hoc_json,
+            "fields": {
+                name: {"type": field.type, "filter_ops": field.filter_ops}
+                for name, field in config.metadata.fields.items()
+            },
+        },
     }
 
 
@@ -357,6 +371,7 @@ async def get_capabilities_tool() -> dict[str, Any]:
         "the user-facing label; response returns normalized workspace id, display_name, "
         "and created."
     ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
 )
 async def create_workspace_tool(
     workspace: Annotated[str, Field(description="Workspace name to create.")],
@@ -387,6 +402,7 @@ async def create_workspace_tool(
         "dry_run and keep_files; response returns normalized workspace id, deleted, "
         "and result."
     ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
 )
 async def delete_workspace_tool(
     workspace: Annotated[str, Field(description="Workspace name to delete.")],
@@ -426,6 +442,7 @@ async def delete_workspace_tool(
         "locators are separate; signed fetches require retention or a queryless locator. "
         "Response includes job_id, status, and workspace."
     ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False),
 )
 async def ingest_tool(
     source_type: Annotated[SourceTypeParam, Field(description="Type of data source")],
@@ -588,6 +605,7 @@ async def ingest_tool(
         "Return status for an ingest job_id returned by ingest, including the job workspace "
         "when available."
     ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def get_ingest_job_tool(
     job_id: Annotated[str, Field(description="Ingest job id returned by the ingest tool.")],
@@ -609,6 +627,7 @@ async def get_ingest_job_tool(
     description=(
         "List documents ingested in one workspace. Response returns files, count, and workspace."
     ),
+    annotations=ToolAnnotations(readOnlyHint=True),
 )
 async def list_files_tool(
     workspace: Annotated[
@@ -630,6 +649,7 @@ async def list_files_tool(
         "Delete or dry_run matching documents from one workspace by filename or file_path. "
         "Response returns results and workspace."
     ),
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True),
 )
 async def delete_files_tool(
     filenames: Annotated[
