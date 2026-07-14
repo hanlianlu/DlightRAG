@@ -5,7 +5,6 @@ import logging
 from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -35,15 +34,16 @@ class _FakePostgresConn:
 class TestRAGServiceAingest:
     """Test ingestion logic -- replace defaults, azure lifecycle."""
 
-    def _make_initialized_service(self, config: DlightragConfig) -> RAGService:
+    def _make_initialized_service(self, config: DlightragConfig) -> tuple[RAGService, MagicMock]:
         service = RAGService(config=config)
         service._initialized = True
-        service._ingestion_engine = MagicMock()
-        service._ingestion_engine.aingest_file = AsyncMock(return_value={"status": "success"})
-        service._ingestion_engine.aingest_files = AsyncMock(
+        ingestion = MagicMock()
+        ingestion.aingest_file = AsyncMock(return_value={"status": "success"})
+        ingestion.aingest_files = AsyncMock(
             return_value={"processed": 1, "errors": [], "results": [{"status": "success"}]}
         )
-        return service
+        service._ingestion_engine = ingestion
+        return service, ingestion
 
     @patch("dlightrag.storage.workspaces.PGWorkspaceRegistry")
     async def test_workspace_meta_upsert_uses_canonical_workspace_id(
@@ -77,9 +77,9 @@ class TestRAGServiceAingest:
         test_config.ingestion_replace_default = True
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
-        service = self._make_initialized_service(test_config)
+        service, ingestion = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path=str(fake_pdf))
-        call_kwargs = cast(MagicMock, service._ingestion_engine).aingest_file.call_args
+        call_kwargs = ingestion.aingest_file.call_args
         assert call_kwargs.kwargs["replace"] is True
 
     async def test_aingest_replace_explicit_overrides_config(
@@ -88,9 +88,9 @@ class TestRAGServiceAingest:
         test_config.ingestion_replace_default = True
         fake_pdf = tmp_path / "file.pdf"
         fake_pdf.write_bytes(b"%PDF-fake")
-        service = self._make_initialized_service(test_config)
+        service, ingestion = self._make_initialized_service(test_config)
         await service.aingest(source_type="local", path=str(fake_pdf), replace=False)
-        call_kwargs = cast(MagicMock, service._ingestion_engine).aingest_file.call_args
+        call_kwargs = ingestion.aingest_file.call_args
         assert call_kwargs.kwargs["replace"] is False
 
     # -- Azure blob lifecycle --
@@ -99,7 +99,7 @@ class TestRAGServiceAingest:
         self, test_config: DlightragConfig
     ) -> None:
         """When neither blob_path nor prefix provided, prefix defaults to '' (entire container)."""
-        service = self._make_initialized_service(test_config)
+        service, _ = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
         seen_prefixes: list[str | None] = []
 
@@ -114,7 +114,7 @@ class TestRAGServiceAingest:
 
     async def test_aingest_azure_calls_aclose(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called after successful ingestion."""
-        service = self._make_initialized_service(test_config)
+        service, _ = self._make_initialized_service(test_config)
         mock_source = AsyncMock()
 
         async def _aiter_documents(prefix: str | None = None):
@@ -127,10 +127,8 @@ class TestRAGServiceAingest:
 
     async def test_aingest_azure_calls_aclose_on_error(self, test_config: DlightragConfig) -> None:
         """source.aclose() is called even when ingestion raises."""
-        service = self._make_initialized_service(test_config)
-        cast(MagicMock, service._ingestion_engine).aingest_files = AsyncMock(
-            side_effect=RuntimeError("ingestion failed")
-        )
+        service, ingestion = self._make_initialized_service(test_config)
+        ingestion.aingest_files = AsyncMock(side_effect=RuntimeError("ingestion failed"))
         mock_source = AsyncMock()
 
         async def _aiter_documents(prefix: str | None = None):
@@ -212,62 +210,61 @@ class TestRAGServiceClose:
 class TestRAGServiceRetrieve:
     """Test aretrieve delegation to RetrievalEngine."""
 
-    def _make_retrieval_service(self, config: DlightragConfig) -> RAGService:
+    def _make_retrieval_service(self, config: DlightragConfig) -> tuple[RAGService, MagicMock]:
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
         service = RAGService(config=config)
         service._initialized = True
-        service._retrieval_orchestrator = MagicMock()
-        service._retrieval_orchestrator.aretrieve = AsyncMock(
-            return_value=RetrievalResult(contexts={"chunks": []})
-        )
+        orchestrator = MagicMock()
+        orchestrator.aretrieve = AsyncMock(return_value=RetrievalResult(contexts={"chunks": []}))
+        service._retrieval_orchestrator = orchestrator
         service._lightrag_stores = MagicMock()
-        return service
+        return service, orchestrator
 
     async def test_aretrieve_delegates_to_orchestrator(self, test_config):
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query")
-        cast(MagicMock, service._retrieval_orchestrator).aretrieve.assert_awaited_once()
+        orchestrator.aretrieve.assert_awaited_once()
 
     async def test_aretrieve_passes_multimodal_content(self, test_config):
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         mc = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
         await service.aretrieve("test query", multimodal_content=mc)
-        call_kwargs = cast(MagicMock, service._retrieval_orchestrator).aretrieve.call_args.kwargs
+        call_kwargs = orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["multimodal_content"] == mc
 
     async def test_aretrieve_forwards_caller_bm25_query(self, test_config):
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query", bm25_query="alpha beta")
-        call_kwargs = cast(MagicMock, service._retrieval_orchestrator).aretrieve.call_args.kwargs
+        call_kwargs = orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["bm25_query"] == "alpha beta"
 
     async def test_aretrieve_caller_bm25_query_overrides_plan(self, test_config):
         from types import SimpleNamespace
 
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         plan = SimpleNamespace(
             metadata_filter=None, metadata_filter_source=None, bm25_query="plan terms"
         )
         await service.aretrieve("test query", bm25_query="caller terms", _plan=plan)
-        call_kwargs = cast(MagicMock, service._retrieval_orchestrator).aretrieve.call_args.kwargs
+        call_kwargs = orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["bm25_query"] == "caller terms"
 
     async def test_aretrieve_blank_bm25_query_falls_back_to_plan(self, test_config):
         from types import SimpleNamespace
 
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         plan = SimpleNamespace(
             metadata_filter=None, metadata_filter_source=None, bm25_query="plan terms"
         )
         await service.aretrieve("test query", bm25_query="   ", _plan=plan)
-        call_kwargs = cast(MagicMock, service._retrieval_orchestrator).aretrieve.call_args.kwargs
+        call_kwargs = orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["bm25_query"] == "plan terms"
 
     async def test_aretrieve_without_bm25_query_or_plan_passes_none(self, test_config):
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query")
-        call_kwargs = cast(MagicMock, service._retrieval_orchestrator).aretrieve.call_args.kwargs
+        call_kwargs = orchestrator.aretrieve.call_args.kwargs
         assert call_kwargs["bm25_query"] is None
 
     async def test_aretrieve_reranks_after_hydrating_fused_chunks(
@@ -275,8 +272,8 @@ class TestRAGServiceRetrieve:
     ):
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = self._make_retrieval_service(test_config)
-        cast(MagicMock, service._retrieval_orchestrator).aretrieve.return_value = RetrievalResult(
+        service, orchestrator = self._make_retrieval_service(test_config)
+        orchestrator.aretrieve.return_value = RetrievalResult(
             contexts={
                 "chunks": [
                     {"chunk_id": "semantic-a", "content": "semantic"},
@@ -312,8 +309,8 @@ class TestRAGServiceRetrieve:
     ):
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = self._make_retrieval_service(test_config)
-        cast(MagicMock, service._retrieval_orchestrator).aretrieve.return_value = RetrievalResult(
+        service, orchestrator = self._make_retrieval_service(test_config)
+        orchestrator.aretrieve.return_value = RetrievalResult(
             contexts={
                 "chunks": [{"chunk_id": f"c{i}", "content": f"c{i}"} for i in range(5)],
                 "entities": [],
@@ -342,8 +339,8 @@ class TestRAGServiceRetrieve:
     ):
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = self._make_retrieval_service(test_config)
-        cast(MagicMock, service._retrieval_orchestrator).aretrieve.return_value = RetrievalResult(
+        service, orchestrator = self._make_retrieval_service(test_config)
+        orchestrator.aretrieve.return_value = RetrievalResult(
             contexts={
                 "chunks": [
                     {
@@ -380,9 +377,9 @@ class TestRAGServiceRetrieve:
         """Text reranker: image bytes are read only for chunks that survive rerank."""
         from dlightrag.core.retrieval.protocols import RetrievalResult
 
-        service = self._make_retrieval_service(test_config)
+        service, orchestrator = self._make_retrieval_service(test_config)
         service._rerank_consumes_images = False  # text-only reranker
-        cast(MagicMock, service._retrieval_orchestrator).aretrieve.return_value = RetrievalResult(
+        orchestrator.aretrieve.return_value = RetrievalResult(
             contexts={
                 "chunks": [
                     {"chunk_id": "keep", "content": "keep"},
