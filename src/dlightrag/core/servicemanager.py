@@ -1376,7 +1376,7 @@ class RAGServiceManager:
                         turn.current_query,
                         retrieval_query=turn.retrieval_query,
                         text_history=None,
-                        query_images=list(turn.materialized_query_images),
+                        query_images=list(turn.current_query_images),
                         ws_list=ws_list,
                         scope=scoped,
                         kwargs=kwargs,
@@ -1395,7 +1395,7 @@ class RAGServiceManager:
                         result = await engine.generate(
                             plan.standalone_query,
                             retrieval.contexts,
-                            query_images=prepared.answer_images or None,
+                            query_images=current_images or None,
                             conversation_history=None,
                             context_top_k=limits.context_top_k,
                         )
@@ -1510,7 +1510,7 @@ class RAGServiceManager:
                     turn.current_query,
                     retrieval_query=turn.retrieval_query,
                     text_history=history,
-                    query_images=query_images,
+                    query_images=list(turn.current_query_images),
                     ws_list=ws_list,
                     scope=scoped,
                     kwargs=kwargs,
@@ -1520,7 +1520,7 @@ class RAGServiceManager:
                 contexts, stream = await self._agenerate_stream_from_contexts_prepared(
                     plan.standalone_query,
                     retrieval.contexts,
-                    query_images=prepared.answer_images or None,
+                    query_images=query_images or None,
                     text_history=history,
                     context_top_k=limits.context_top_k,
                 )

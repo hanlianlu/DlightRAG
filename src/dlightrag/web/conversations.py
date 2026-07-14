@@ -255,6 +255,7 @@ class WebConversationService:
             retrieval_query=query,
             text_history=tuple(prepared.text_history),
             materialized_query_images=tuple([*current_images, *history_blocks]),
+            current_query_images=tuple(current_images),
             plan=plan,
             history_image_catalog_count=len(catalog),
             history_image_resolution_status=resolution_status,
