@@ -152,3 +152,25 @@ forbidden_modules = [
     "dlightrag.models",
     "dlightrag.citations",
 ]
+
+[[tool.importlinter.contracts]]
+id = "foundation-layers"
+name = "Foundation packages follow the documented layering"
+type = "layers"
+layers = [
+    "dlightrag.models",
+    "dlightrag.config",
+    "dlightrag.observability",
+    "dlightrag.prompts | dlightrag.utils",
+]
+
+[[tool.importlinter.contracts]]
+id = "core-coordination-layers"
+name = "Core coordination stack is layered"
+type = "layers"
+containers = ["dlightrag.core"]
+layers = [
+    "servicemanager",
+    "service",
+    "reset",
+]
