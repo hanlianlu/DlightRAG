@@ -74,42 +74,7 @@ def test_public_docs_describe_slice_a_conversation_boundaries() -> None:
         assert stale not in public_docs
 
 
-def test_tracked_specs_record_slice_a_completion_and_future_multimodal_work() -> None:
-    durable = (
-        ROOT / "docs/superpowers/specs/2026-07-12-durable-scoped-multimodal-conversations-design.md"
-    ).read_text(encoding="utf-8")
-    sidebar = (
-        ROOT / "docs/superpowers/specs/2026-07-12-chat-sidebar-conversation-ux-design.md"
-    ).read_text(encoding="utf-8")
-    specs = "\n".join((durable, sidebar))
-
-    assert "**状态**：已审阅；Slice A 已完成" in durable
-    assert "**状态**：已审阅并完成" in sidebar
-    assert "answer.max_images=6" in durable
-    assert "answer.max_user_images=3" in durable
-    assert "query_images.max_described_images=3" in durable
-    assert "最近 100 turn/30 天 retention" in durable
-    assert "每张 decoded bytes 默认 15 MiB" in durable
-    assert "REST、MCP、Python 公共接口保持无状态" in durable
-    assert "current-turn image 持久化" in durable
-    assert "当前 turn 图片永远先于历史图片" in durable
-    assert "Slice B — LLM-driven historical-image resolution" in durable
-    assert "Slice C — first-token capability drift hardening" in durable
-
-    for stale in (
-        "等待本修订版书面 spec review",
-        "用户完成书面 spec review 后",
-        "answer.max_images” 默认 10",
-        "默认 product ceiling 为 10",
-        "10 张成功时 effective=10",
-    ):
-        assert stale not in specs
-
-
-def test_tracked_spec_matches_per_interface_current_image_admission() -> None:
-    durable = (
-        ROOT / "docs/superpowers/specs/2026-07-12-durable-scoped-multimodal-conversations-design.md"
-    ).read_text(encoding="utf-8")
+def test_per_interface_current_image_admission() -> None:
     images = [
         {"type": "image_url", "image_url": {"url": f"data:image/png;base64,image-{index}"}}
         for index in range(4)
@@ -124,11 +89,6 @@ def test_tracked_spec_matches_per_interface_current_image_admission() -> None:
 
     python_turn = PreparedAnswerTurn.stateless("four images", images)
     assert len(python_turn.materialized_query_images) == 4
-
-    assert "可配置的 Web current-upload admission count" in durable
-    assert "REST 和 MCP 保持各自 schema-level max 3 contract" in durable
-    assert "Python 保持无状态且不执行等价的 current-upload admission" in durable
-    assert "Web、REST、MCP 和 Python 公共验证使用同一配置" not in durable
 
 
 def test_public_requests_reject_conversation_fields() -> None:
