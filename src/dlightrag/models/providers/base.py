@@ -128,15 +128,6 @@ class CompletionProvider(ABC):
     ``json_object`` mode or a strict-mode json_schema via the OpenAI API.
     """
 
-    supports_vision: bool | None = None
-    """Whether this provider's model accepts ``image_url`` content blocks.
-
-    ``None`` means "unprobed" — call :func:`probe_vision_support` to
-    determine at startup.  ``True`` / ``False`` is the known answer.
-    Per-instance so that a probe result on one instance doesn't leak
-    to others via the class attribute.
-    """
-
     def __init__(
         self,
         *,

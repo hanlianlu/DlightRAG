@@ -1,11 +1,7 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Provider-neutral embedding input records."""
 
-import base64
-import io
 from dataclasses import dataclass
-
-from PIL import Image
 
 
 @dataclass(frozen=True)
@@ -22,13 +18,6 @@ class ImageEmbeddingInput:
     data_uri: str | None = None
     path: str | None = None
     url: str | None = None
-
-    @classmethod
-    def from_pil(cls, image: Image.Image) -> ImageEmbeddingInput:
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-        return cls(data_uri=f"data:image/png;base64,{encoded}")
 
     def as_payload_value(self) -> str:
         if self.data_uri:
