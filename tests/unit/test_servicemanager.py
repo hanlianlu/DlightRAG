@@ -526,6 +526,18 @@ class TestBackoff:
 class TestRouting:
     """Test single-workspace vs federated routing."""
 
+    @pytest.fixture(autouse=True)
+    def _stub_planning(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # aretrieve now always plans; stub the describe+plan helper so routing
+        # tests do not invoke a real planner LLM.
+        async def _fake(self_: object, query: str, **_kwargs: object) -> tuple[object, object]:
+            return (
+                SimpleNamespace(standalone_query=query, metadata_filter=None),
+                SimpleNamespace(descriptions=[], multimodal_content=[]),
+            )
+
+        monkeypatch.setattr(RAGServiceManager, "_describe_and_plan", _fake)
+
     @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
     async def test_aretrieve_single_workspace(self, mock_create, test_cfg) -> None:
         mock_svc = AsyncMock()

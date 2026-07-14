@@ -1097,6 +1097,32 @@ class RAGServiceManager:
             )
             return plan
 
+    async def _describe_and_plan(
+        self,
+        query: str,
+        *,
+        text_history: list[dict[str, Any]] | None,
+        query_images: list[dict[str, Any]] | None,
+        ws_list: list[str],
+    ) -> tuple[QueryPlan, PreparedQueryImages]:
+        """Describe current-turn images, then plan an image-aware query.
+
+        Shared by the stateless /retrieve and /answer paths so both consistently
+        run the planner (BM25 keyword extraction, metadata-filter inference, and
+        image-aware query construction). Describing zero images is a no-op.
+        """
+        prepared = await prepare_query_images(
+            query_images=list(query_images or []),
+            describer=self._get_query_image_describer(),
+        )
+        plan = await self._aplan_query_prepared(
+            query,
+            text_history=text_history,
+            current_image_descriptions=prepared.descriptions or None,
+            workspaces=ws_list,
+        )
+        return plan, prepared
+
     async def agenerate_stream_from_contexts(
         self,
         query: str,
@@ -1196,17 +1222,13 @@ class RAGServiceManager:
     ) -> tuple[QueryPlan, PreparedQueryImages, _AnswerLimits, RetrievalResult]:
         current_images = list(query_images or [])
         if plan is None:
-            # Describe current images first so the planner's rewrite, bm25, and
-            # filters become image-aware, then plan against those descriptions.
-            prepared = await prepare_query_images(
-                query_images=current_images,
-                describer=self._get_query_image_describer(),
-            )
-            plan = await self._aplan_query_prepared(
+            # Stateless answer: describe current images then plan so BM25,
+            # metadata filters, and the rewrite are image-aware.
+            plan, prepared = await self._describe_and_plan(
                 retrieval_query,
                 text_history=text_history,
-                current_image_descriptions=prepared.descriptions or None,
-                workspaces=ws_list,
+                query_images=current_images,
+                ws_list=ws_list,
             )
         else:
             # Web planned upstream in prepare_answer_turn with these same image
@@ -1283,20 +1305,17 @@ class RAGServiceManager:
         )
         current_images = list(query_images or [])
         descriptions: list[str] = []
-        if plan is None and current_images:
-            # Direct retrieve with images: describe and plan so the query is
-            # image-aware. Without images, the raw-query shortcut is kept.
-            prepared = await prepare_query_images(
-                query_images=current_images,
-                describer=self._get_query_image_describer(),
-            )
-            descriptions = prepared.descriptions
-            plan = await self._aplan_query_prepared(
+        if plan is None:
+            # Stateless retrieve always plans so BM25 keyword extraction,
+            # metadata-filter inference, and image-aware query construction match
+            # the answer path. Describing zero images is a free short-circuit.
+            plan, prepared = await self._describe_and_plan(
                 query,
                 text_history=None,
-                current_image_descriptions=prepared.descriptions or None,
-                workspaces=ws_list,
+                query_images=current_images,
+                ws_list=ws_list,
             )
+            descriptions = prepared.descriptions
             if prepared.multimodal_content:
                 existing_mm = kwargs.get("multimodal_content") or []
                 kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
