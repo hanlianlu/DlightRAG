@@ -284,7 +284,6 @@ class RAGServiceManager:
         self._workspace_registry: PGWorkspaceRegistry | None = None
         self._file_panel_store: PGFilePanelStore | None = None
         self._schema_cache: dict[tuple[str, ...], tuple[float, dict[str, Any]]] = {}
-        self._default_supports_vision: bool | None = None
         self._rerank_supports_vision: bool | None = None
         self._answer_image_capability: AnswerImageCapability | None = None
         self._answer_capability_reprobe_lock = asyncio.Lock()
@@ -631,68 +630,57 @@ class RAGServiceManager:
         return capability
 
     async def _probe_vision_support(self) -> None:
-        """Probe chat-model vision capability once at startup.
+        """Probe the rerank scoring model's image capability once at startup.
 
-        Stores the result on this manager instance so SDK callers can run
+        Only the ``chat_llm_reranker`` strategy sends image blocks to a scoring
+        model, so probing is skipped entirely for other strategies (and when
+        reranking is disabled). Uses the same transport-acceptance probe as the
+        answer path. Stored on this manager instance so SDK callers can run
         multiple managers with different model configs in one process.
         """
-        if self._default_supports_vision is not None and self._rerank_supports_vision is not None:
+        if self._rerank_supports_vision is not None:
             return  # already probed
+        if not (
+            self._config.rerank.enabled and self._config.rerank.strategy == "chat_llm_reranker"
+        ):
+            return  # no rerank model consumes image input; nothing to probe
 
-        from dlightrag.core.vision_probe import probe_vision_support
+        from dlightrag.core.vision_probe import probe_image_capability
         from dlightrag.models.llm import get_chat_rerank_scoring_config
         from dlightrag.models.providers import get_provider
 
         default = self._config.llm.default
-
-        async def probe_model(cfg: Any, *, label: str) -> bool | None:
+        rerank_model = get_chat_rerank_scoring_config(self._config)
+        provider: Any = None
+        try:
             provider = get_provider(
-                cfg.provider,
-                api_key=cfg.api_key or default.api_key,
-                base_url=cfg.base_url,
-                timeout=cfg.timeout,
-                max_retries=cfg.max_retries,
+                rerank_model.provider,
+                api_key=rerank_model.api_key or default.api_key,
+                base_url=rerank_model.base_url,
+                timeout=rerank_model.timeout,
+                max_retries=rerank_model.max_retries,
             )
-            try:
-                has_vision = await probe_vision_support(
-                    provider,
-                    model=cfg.model,
-                    model_kwargs=cfg.model_kwargs,
-                )
-                logger.info(
-                    "%s vision probe: %s (model=%s, provider=%s)",
-                    label,
-                    "supported" if has_vision else "not supported",
-                    cfg.model,
-                    cfg.provider,
-                )
-                return has_vision
-            except Exception:
-                logger.debug("%s vision probe failed", label, exc_info=True)
-                return None
-            finally:
+            outcome = await probe_image_capability(
+                provider,
+                model=rerank_model.model,
+                ceiling=1,
+                model_kwargs=rerank_model.model_kwargs,
+            )
+            self._rerank_supports_vision = {"supported": True, "unsupported": False}.get(
+                outcome.status
+            )
+            logger.info(
+                "Rerank model image probe: status=%s (model=%s, provider=%s)",
+                outcome.status,
+                rerank_model.model,
+                rerank_model.provider,
+            )
+        except Exception:
+            logger.debug("Rerank model image probe failed", exc_info=True)
+            self._rerank_supports_vision = None
+        finally:
+            if provider is not None:
                 await provider.aclose()
-
-        if self._default_supports_vision is None:
-            self._default_supports_vision = await probe_model(default, label="Chat model")
-
-        if (
-            self._rerank_supports_vision is None
-            and self._config.rerank.enabled
-            and self._config.rerank.strategy == "chat_llm_reranker"
-        ):
-            rerank_model = get_chat_rerank_scoring_config(self._config)
-            same_as_default = (
-                rerank_model.provider == default.provider
-                and rerank_model.model == default.model
-                and rerank_model.base_url == default.base_url
-                and (rerank_model.api_key or default.api_key) == default.api_key
-            )
-            self._rerank_supports_vision = (
-                self._default_supports_vision
-                if same_as_default
-                else await probe_model(rerank_model, label="Rerank model")
-            )
 
     async def astart_ingest_job(
         self,
