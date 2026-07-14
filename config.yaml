@@ -38,8 +38,8 @@ llm:
     model_kwargs:
       reasoning:
         enabled: false
-      usage:
-        include: true
+#     usage:
+#       include: true
   roles:
     extract:
       provider: openai
