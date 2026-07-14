@@ -16,11 +16,7 @@ def _get(payload: Any, name: str, default: Any = None) -> Any:
     return getattr(payload, name, default)
 
 
-def query_kwargs_from_payload(
-    payload: Any,
-    *,
-    include_multimodal_content: bool = True,
-) -> dict[str, Any]:
+def query_kwargs_from_payload(payload: Any) -> dict[str, Any]:
     """Return manager keyword arguments shared by retrieve/answer clients."""
     kwargs: dict[str, Any] = {}
 
@@ -31,10 +27,6 @@ def query_kwargs_from_payload(
     bm25_query = _get(payload, "bm25_query")
     if bm25_query:
         kwargs["bm25_query"] = bm25_query
-
-    multimodal_content = _get(payload, "multimodal_content")
-    if include_multimodal_content and multimodal_content:
-        kwargs["multimodal_content"] = dump_optional_list(multimodal_content)
 
     query_images = _get(payload, "query_images")
     if query_images:

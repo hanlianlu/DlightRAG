@@ -1245,20 +1245,6 @@ class TestRetrieveEndpoint:
         assert resp.status_code == 200
         assert mock_manager.aretrieve.call_args.kwargs["chunk_top_k"] == 5
 
-    async def test_retrieve_forwards_multimodal_content(
-        self, client: AsyncClient, mock_config: DlightragConfig, mock_manager
-    ) -> None:
-        app.state.manager = mock_manager
-        multimodal_content = [
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-        ]
-        resp = await client.post(
-            "/retrieve",
-            json={"query": "Find the matching drawing", "multimodal_content": multimodal_content},
-        )
-        assert resp.status_code == 200
-        assert mock_manager.aretrieve.call_args.kwargs["multimodal_content"] == multimodal_content
-
 
 # ---------------------------------------------------------------------------
 # TestHealthEndpoint

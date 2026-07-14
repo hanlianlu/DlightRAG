@@ -9,7 +9,6 @@ from pydantic import Field
 from dlightrag.citations.schemas import SourceReferencePayload
 from dlightrag.core.client_contracts import (
     ClientContractModel,
-    ContentBlock,
     IngestPayload,
     QueryImage,
 )
@@ -44,7 +43,6 @@ class RetrieveRequest(QueryWorkspaceSelection):
     chunk_top_k: int | None = None
     bm25_query: str | None = Field(default=None, max_length=1024)
     filters: MetadataFilterRequest | None = None
-    multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
 
 
@@ -55,7 +53,6 @@ class AnswerRequest(QueryWorkspaceSelection):
     chunk_top_k: int | None = None
     answer_context_top_k: int | None = Field(default=None, ge=1)
     filters: MetadataFilterRequest | None = None
-    multimodal_content: list[ContentBlock] | None = Field(default=None, max_length=3)
     semantic_highlights: bool = False
     query_images: list[QueryImage] | None = Field(default=None, max_length=3)
     """User-attached images used for VLM semantic enhancement, direct visual
