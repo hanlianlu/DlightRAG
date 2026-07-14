@@ -488,7 +488,6 @@ async for token in token_iter:
 | `chunk_top_k` | `int \| None` | config default | Explicit chunk/visual candidates fetched for `/retrieve` and before `/answer` packing. Maps to LightRAG `QueryParam.chunk_top_k`, not `QueryParam.top_k`. |
 | `answer_context_top_k` | `int \| None` | `answer.context_top_k` | `/answer` only. Maximum chunks included in the final answer prompt after image-budget packing and backfill. |
 | `stream` | `bool` | `true` for REST `/answer` | `true` returns SSE; pass `false` to opt into one JSON response |
-| `multimodal_content` | `list[dict]` | `None` | Raw direct visual-retrieval inputs. Use for programmatic image embedding when the answer model does not need to see the image. |
 | `query_images` | `list[QueryImage]` | `None` | Current-request OpenAI-style `image_url` blocks. They are described by the VLM for semantic/BM25 retrieval, embedded directly for visual retrieval, and bounded before being sent to the answer LLM. Capped at 3. |
 | `semantic_highlights` | `bool` | `false` | `/answer` only. When true and `citations.highlights.enabled` is true, fills `sources[].chunks[].highlight_phrases` with answer-aware phrase highlights. |
 | `filters` | `MetadataFilter \| None` | `None` | Structured metadata filter (also auto-detected from query); supports declared metadata fields such as filename, extension, title, author, dates, and custom fields |
@@ -903,15 +902,6 @@ curl -X POST http://localhost:8100/answer \
       {"type": "image_url", "image_url": {"url": "data:image/png;base64,<base64>"}}
     ]
   }'
-
-# REST API — lower-level direct visual payload
-curl -X POST http://localhost:8100/answer \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "What does this diagram show?",
-    "stream": false,
-    "multimodal_content": [{"type": "image", "data": "<base64>"}]
-  }'
 ```
 
 `query_images` is the user-facing current-request image path. REST, MCP, CLI,
@@ -919,8 +909,7 @@ and Python calls ask the VLM for concise semantic descriptions, embed the raw
 image for direct visual retrieval, and send a bounded image preview to the
 answer model without persistence. The Web route additionally commits validated
 current-turn images with the complete successful turn in its principal-scoped
-conversation. `multimodal_content` remains the lower-level direct visual
-retrieval input for programmatic callers.
+conversation.
 
 Answer-model previews are quality-preserving. Budgeted JPEG, PNG, and WebP
 payloads pass through unchanged; oversized images are recompressed only down to

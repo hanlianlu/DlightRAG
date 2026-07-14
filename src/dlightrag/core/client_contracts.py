@@ -1,9 +1,9 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
 """Transport-neutral client payload contracts."""
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
 class ClientContractModel(BaseModel):
@@ -17,20 +17,11 @@ class ImageURL(ClientContractModel):
     detail: Literal["auto", "low", "high"] | None = None
 
 
-class TextContentBlock(ClientContractModel):
-    type: Literal["text"]
-    text: str
-
-
 class ImageURLContentBlock(ClientContractModel):
     type: Literal["image_url"]
     image_url: ImageURL
 
 
-type ContentBlock = Annotated[
-    TextContentBlock | ImageURLContentBlock,
-    Field(discriminator="type"),
-]
 type QueryImage = ImageURLContentBlock
 
 
@@ -214,7 +205,6 @@ def dump_optional_list(value: list[Any] | None) -> list[Any] | None:
 
 __all__ = [
     "ClientContractModel",
-    "ContentBlock",
     "ImageURL",
     "ImageURLContentBlock",
     "IngestDocument",
@@ -223,7 +213,6 @@ __all__ = [
     "MetadataPolicy",
     "QueryImage",
     "SourceType",
-    "TextContentBlock",
     "dump_optional_list",
     "model_dump_json_safe",
 ]

@@ -247,7 +247,7 @@ async def retrieve_tool(
         top_k=args.top_k,
         chunk_top_k=args.chunk_top_k,
         scope=scope,
-        **query_kwargs_from_payload(args, include_multimodal_content=False),
+        **query_kwargs_from_payload(args),
     )
     return retrieval_payload(result)
 
@@ -310,7 +310,7 @@ async def answer_tool(
         answer_context_top_k=args.answer_context_top_k,
         semantic_highlights=args.semantic_highlights,
         scope=scope,
-        **query_kwargs_from_payload(args, include_multimodal_content=False),
+        **query_kwargs_from_payload(args),
     )
     return answer_payload(result)
 
