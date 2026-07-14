@@ -149,6 +149,42 @@ async def test_prepared_stream_keeps_server_history_internal(test_cfg) -> None:
     assert await_args.kwargs["text_history"] == [{"role": "user", "content": "Earlier"}]
 
 
+async def test_prepared_stream_retrieval_excludes_history_images(test_cfg) -> None:
+    """Current images drive retrieval; history images only reach the answer model."""
+    from dlightrag.core.answer_capability import AnswerImageCapability
+
+    answer_turn = importlib.import_module("dlightrag.core.answer_turn")
+    current = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,CUR"}}]
+    history = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,HIST"}}]
+    turn = answer_turn.PreparedAnswerTurn(
+        current_query="Follow up",
+        retrieval_query="Standalone",
+        materialized_query_images=tuple(current + history),
+        current_query_images=tuple(current),
+    )
+    manager = RAGServiceManager(config=test_cfg)
+    manager._answer_image_capability = AnswerImageCapability(
+        status="supported",
+        configured_ceiling=6,
+        effective_max_images=6,
+        provider="openai",
+        base_url=None,
+        model="gpt-4o",
+        failure_kind=None,
+    )
+    manager._maybe_reprobe_answer_image_capability = AsyncMock()  # type: ignore[attr-defined,method-assign]
+    manager._plan_and_retrieve = AsyncMock(  # type: ignore[attr-defined,method-assign]
+        side_effect=RuntimeError("stop after prepared handoff")
+    )
+
+    with pytest.raises(RuntimeError, match="stop after prepared handoff"):
+        await manager._aanswer_stream_prepared(turn, workspaces=["default"])
+
+    await_args = manager._plan_and_retrieve.await_args
+    assert await_args is not None
+    assert await_args.kwargs["query_images"] == current  # retrieval sees current only, not history
+
+
 async def test_private_planner_helper_hands_prepared_history_to_planner(test_cfg) -> None:
     manager = RAGServiceManager(config=test_cfg)
     planner = AsyncMock()
