@@ -230,7 +230,7 @@ class TestWebAuth:
                 headers={"Authorization": "Bearer wrong-token"},
             )
 
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
     async def test_simple_login_sets_cookie_and_grants_access(
         self, test_config: DlightragConfig, mock_manager
