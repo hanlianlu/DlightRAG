@@ -62,7 +62,7 @@ async def download_source(
         if exc.status_code == 403:
             logger.info(
                 "source_download_projection_outcome",
-                extra={"outcome": "unauthorized", "workspace": safe_workspace},
+                extra={"outcome": "unauthorized", "workspace": log_safe(safe_workspace)},
             )
         raise
 
