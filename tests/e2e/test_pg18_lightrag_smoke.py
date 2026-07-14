@@ -111,6 +111,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         assert doc_ids == [doc_id]
 
         assert service._metadata_index is not None
+        assert service._lightrag_stores is not None
         candidate_chunks = await metadata_retrieve(
             metadata_index=service._metadata_index,
             stores=service._lightrag_stores,
@@ -126,6 +127,7 @@ async def test_unified_text_ingest_replace_and_filtered_retrieval(
         )
         assert any(row["chunk_id"] == chunk_id for row in bm25_rows)
 
+        assert service._lightrag_stores is not None
         raw_chunks = await service._lightrag_stores.get_text_chunks([chunk_id])
         indexed_text = str(raw_chunks[0]["content"])
         query_embedding = stable_vector(f"document:{indexed_text}", dim=cfg.embedding.dim)
