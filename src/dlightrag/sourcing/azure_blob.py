@@ -18,15 +18,9 @@ def _parse_connection_string(connection_string: str) -> dict[str, str]:
         part = part.strip()
         if "=" in part:
             key, _, value = part.partition("=")
-            # AccountKey values contain '=' (base64), so only split on first '='
+            # partition splits on the first '=' only, so base64 AccountKey
+            # values (which contain '=' padding) are preserved intact.
             pairs[key] = value
-    # AccountKey may have been truncated — re-extract properly
-    if "AccountKey" in connection_string:
-        start = connection_string.index("AccountKey=") + len("AccountKey=")
-        end = connection_string.find(";", start)
-        pairs["AccountKey"] = (
-            connection_string[start:end] if end != -1 else connection_string[start:]
-        )
     return pairs
 
 
