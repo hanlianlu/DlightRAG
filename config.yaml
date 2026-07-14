@@ -30,16 +30,14 @@
 llm:
   default:
     provider: openai
-    model: google/gemma-4-31b-it:free
-    base_url: https://openrouter.ai/api/v1
+    model: MiniMax-M3
+    base_url: https://api.minimaxi.com/v1
     structured_output: json_schema
     temperature: 0.5
     timeout: 120.0
     model_kwargs:
-      reasoning:
-        enabled: false
-#     usage:
-#       include: true
+      thinking:
+        type: disabled
   roles:
     extract:
       provider: openai
@@ -69,8 +67,8 @@ llm:
     #   temperature: 0.5
     #   timeout: 120.0
     #   model_kwargs:
-    #     usage:
-    #       include: true
+    #     thinking:
+    #       type: disabled
     vlm:
       provider: openai
       model: huihui-ai/Huihui-Qwythos-9B-Claude-Mythos-5-1M-abliterated-GGUF:Q8_0
