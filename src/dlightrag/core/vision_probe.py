@@ -8,11 +8,8 @@ deliberately not inspected. Both the answer path and the rerank path use it.
 Results are recorded on the owning ``RAGServiceManager`` (never on the provider).
 """
 
-import logging
 from dataclasses import dataclass
 from typing import Any, Literal
-
-logger = logging.getLogger(__name__)
 
 # Minimal 1×1 white PNG — base64-encoded so no filesystem dependency.
 _ONE_PIXEL_PNG_B64 = (

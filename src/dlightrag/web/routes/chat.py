@@ -40,6 +40,8 @@ async def _read_limited_answer_body(
             if int(content_length) > max_body_bytes:
                 raise HTTPException(status_code=413, detail="Web answer request body is too large")
         except ValueError:
+            # Malformed Content-Length header: ignore it and rely on the
+            # streaming byte cap below to bound the request body size.
             pass
     body = bytearray()
     async for chunk in request.stream():

@@ -23,6 +23,7 @@ from dlightrag.core.source_download import (
     SourceDownloadTarget,
     SourceDownloadUnavailableError,
 )
+from dlightrag.utils import log_safe
 
 from .deps import enforce_access, get_manager, resolve_workspace
 
@@ -133,7 +134,7 @@ async def _enforce_source_download_access(
         if exc.status_code == 403:
             logger.info(
                 "source_download_projection_outcome",
-                extra={"outcome": "unauthorized", "workspace": workspace},
+                extra={"outcome": "unauthorized", "workspace": log_safe(workspace)},
             )
         raise
 
