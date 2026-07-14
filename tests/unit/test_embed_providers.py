@@ -89,6 +89,43 @@ def test_dashscope_qwen_fused_payload_sets_enable_fusion() -> None:
     assert payload["parameters"] == {"dimension": 2048, "enable_fusion": True}
 
 
+def test_voyage_fused_payload_interleaves_text_then_image() -> None:
+    payload = VoyageEmbedProvider().build_payload(
+        "voyage-multimodal-3.5",
+        [
+            MultimodalEmbeddingInput(
+                parts=[
+                    TextEmbeddingInput(text="a bar chart of GDP"),
+                    ImageEmbeddingInput(data_uri="data:image/png;base64,abc"),
+                ]
+            )
+        ],
+        context="document",
+        asymmetric=False,
+        output_dimension=1024,
+    )
+
+    assert payload["inputs"][0]["content"] == [
+        {"type": "text", "text": "a bar chart of GDP"},
+        {"type": "image_base64", "image_base64": "data:image/png;base64,abc"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [
+        (VoyageEmbedProvider(), True),
+        (DashScopeQwenEmbedProvider(), True),
+        (GeminiEmbedProvider(), False),
+        (JinaEmbedProvider(), False),
+        (OpenAICompatibleEmbedProvider(), False),
+        (OllamaEmbedProvider(), False),
+    ],
+)
+def test_supports_fused_multimodal_capability(provider: EmbedProvider, expected: bool) -> None:
+    assert provider.supports_fused_multimodal is expected
+
+
 def test_gemini_embedding_2_payload_is_multimodal_without_task_type() -> None:
     provider = GeminiEmbedProvider()
     payload = provider.build_payload(

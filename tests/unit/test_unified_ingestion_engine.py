@@ -27,6 +27,7 @@ def _make_engine(**overrides):
     lightrag = AsyncMock()
     lightrag.apipeline_enqueue_documents.return_value = "track-1"
     stores = AsyncMock()
+    stores.fetch_chunk_contents.return_value = []
     stores.get_doc_status.return_value = {
         "status": "processed",
         "chunks_list": ["chunk-a"],
@@ -664,7 +665,6 @@ async def test_image_file_ingest_delegates_to_lightrag_parser(
     source = tmp_path / "image.png"
     Image.new("RGB", (1, 1), "white").save(source)
     embedder = AsyncMock()
-    embedder.embed_index_images.return_value = [[0.1, 0.2, 0.3]]
     engine, deps = _make_engine(multimodal_embedder=embedder)
 
     result = await engine.aingest_file(source)
@@ -809,8 +809,12 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
         encoding="utf-8",
     )
     embedder = AsyncMock()
-    embedder.embed_index_images.return_value = [[0.1, 0.2, 0.3]]
+    embedder.supports_fused_multimodal = True
+    embedder.embed_index_fused.return_value = [[0.1, 0.2, 0.3]]
     engine, deps = _make_engine(multimodal_embedder=embedder)
+    deps["stores"].fetch_chunk_contents.return_value = [
+        {"id": mm_chunk_id, "content": "public/private sector mapping chart"}
+    ]
     deps["stores"].get_doc_status.side_effect = [
         None,
         None,
@@ -865,7 +869,8 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
         encoding="utf-8",
     )
     embedder = AsyncMock()
-    embedder.embed_index_images.return_value = [[0.1, 0.2, 0.3]]
+    embedder.supports_fused_multimodal = True
+    embedder.embed_index_fused.return_value = [[0.1, 0.2, 0.3]]
     engine, deps = _make_engine(
         multimodal_embedder=embedder,
         direct_image_embedding_enabled=False,
@@ -889,7 +894,7 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
     result = await engine.aingest_file(source, replace=False)
 
     assert result["chunks"] == ["chunk-a", mm_chunk_id]
-    embedder.embed_index_images.assert_not_awaited()
+    embedder.embed_index_fused.assert_not_awaited()
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
@@ -1069,7 +1074,11 @@ async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeyp
     )
     engine, deps = _make_engine()
     deps["stores"].overwrite_chunk_vectors = AsyncMock()
-    deps["multimodal_embedder"].embed_index_images = AsyncMock(return_value=[[0.1, 0.2]])
+    deps["stores"].fetch_chunk_contents = AsyncMock(
+        return_value=[{"id": "doc-1-mm-drawing-000", "content": "chart"}]
+    )
+    deps["multimodal_embedder"].supports_fused_multimodal = True
+    deps["multimodal_embedder"].embed_index_fused = AsyncMock(return_value=[[0.1, 0.2]])
     calls = []
 
     async def fake_to_thread(func, *args, **kwargs):
@@ -1113,7 +1122,11 @@ async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypa
     )
     engine, deps = _make_engine()
     deps["stores"].overwrite_chunk_vectors = AsyncMock()
-    deps["multimodal_embedder"].embed_index_images = AsyncMock(
+    deps["stores"].fetch_chunk_contents = AsyncMock(
+        return_value=[{"id": "doc-1-mm-drawing-000", "content": "chart"}]
+    )
+    deps["multimodal_embedder"].supports_fused_multimodal = True
+    deps["multimodal_embedder"].embed_index_fused = AsyncMock(
         side_effect=RuntimeError("provider rejected oversized image")
     )
 
@@ -1129,6 +1142,60 @@ async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypa
         chunk_ids={"doc-1-mm-drawing-000"},
     )
 
+    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
+
+
+async def test_parser_image_sidecar_skips_overwrite_when_embedder_not_fused(
+    tmp_path: Path,
+) -> None:
+    # An image-capable but non-fused embedder keeps LightRAG's native VLM->text
+    # vector for the visual chunk (no override), so it stays text-retrievable.
+    source = tmp_path / "sample[mineru-iteP].pdf"
+    source.write_bytes(b"%PDF-1.4")
+    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
+    mm_chunk_id = f"{doc_id}-mm-drawing-000"
+    artifact_dir = tmp_path / "sample.parsed"
+    assets_dir = artifact_dir / "sample.blocks.assets"
+    assets_dir.mkdir(parents=True)
+    (artifact_dir / "sample.blocks.jsonl").write_text("", encoding="utf-8")
+    Image.new("RGB", (128, 128), "white").save(assets_dir / "fig.png")
+    (artifact_dir / "sample.drawings.json").write_text(
+        """
+        {
+          "drawings": {
+            "fig-1": {
+              "id": "fig-1",
+              "path": "sample.blocks.assets/fig.png",
+              "llm_analyze_result": {"status": "success", "description": "d"}
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+    embedder = AsyncMock()
+    embedder.supports_fused_multimodal = False
+    engine, deps = _make_engine(multimodal_embedder=embedder)
+    deps["stores"].get_doc_status.side_effect = [
+        None,
+        None,
+        {
+            "chunks_list": ["chunk-a", mm_chunk_id],
+            "content_hash": "sha256:parsed",
+            "status": "processed",
+        },
+    ]
+    deps["stores"].get_full_doc.return_value = {
+        "parse_engine": "mineru",
+        "process_options": "iteP",
+        "chunk_options": {},
+        "sidecar_location": artifact_dir.as_uri(),
+    }
+
+    result = await engine.aingest_file(source, replace=False)
+
+    assert result["chunks"] == ["chunk-a", mm_chunk_id]
+    embedder.embed_index_fused.assert_not_awaited()
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 

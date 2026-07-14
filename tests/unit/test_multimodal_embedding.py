@@ -125,6 +125,61 @@ def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
     assert index_payload["content"]["parts"][0]["inline_data"]["mime_type"] == "image/png"
 
 
+def test_voyage_embedder_exposes_fused_multimodal_support() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=1024,
+        provider=VoyageEmbedProvider(),
+    )
+
+    assert embedder.supports_fused_multimodal is True
+    payload = embedder.build_fused_payload_for_test(
+        "a bar chart", Image.new("RGB", (2, 2), "white"), context="document"
+    )
+    content = payload["inputs"][0]["content"]
+    assert content[0] == {"type": "text", "text": "a bar chart"}
+    assert content[1]["type"] == "image_base64"
+    assert content[1]["image_base64"].startswith("data:image/")
+
+
+def test_fused_payload_degrades_to_image_only_when_description_blank() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=1024,
+        provider=VoyageEmbedProvider(),
+    )
+
+    payload = embedder.build_fused_payload_for_test(
+        "   ", Image.new("RGB", (2, 2), "white"), context="document"
+    )
+    content = payload["inputs"][0]["content"]
+    assert len(content) == 1
+    assert content[0]["type"] == "image_base64"
+
+
+def test_image_capable_but_non_fused_provider_rejects_fused_payload() -> None:
+    # Gemini can embed images but does not fuse text+image into one vector,
+    # so the embedder must not offer the fused path (keeps LightRAG's native VLM->text).
+    embedder = MultimodalEmbedder(
+        model="gemini-embedding-2",
+        base_url="https://generativelanguage.googleapis.com/v1beta",
+        api_key="key",
+        dim=1536,
+        provider=GeminiEmbedProvider(),
+    )
+
+    assert embedder.supports_images is True
+    assert embedder.supports_fused_multimodal is False
+    with pytest.raises(ValueError, match="does not support fused"):
+        embedder.build_fused_payload_for_test(
+            "x", Image.new("RGB", (2, 2), "white"), context="document"
+        )
+
+
 def test_image_embedder_uses_asymmetric_by_default_for_capable_provider() -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",

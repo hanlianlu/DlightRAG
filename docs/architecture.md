@@ -29,7 +29,7 @@ Clients
 LightRAG remains the core RAG engine. It owns parser routing, staged ingest,
 document chunks, document status, vector storage, and the knowledge graph.
 DlightRAG adds product-layer source staging, metadata governance, durable ingest
-jobs, PostgreSQL BM25, direct image-vector alignment, answer orchestration,
+jobs, PostgreSQL BM25, fused visual-vector alignment, answer orchestration,
 citations, REST, Web, SDK, and MCP interfaces.
 
 DlightRAG does not reimplement LightRAG parser sidecars, document status, KG
@@ -46,17 +46,17 @@ source file or upload
   -> LightRAG staged ingest
        chunks, multimodal semantic text, KG entities/relations, vector rows
   -> DlightRAG post-ingest maintenance
-       active direct image embedding overwrites canonical LightRAG drawing chunk vectors
+       active fused text+image embedding overwrites canonical LightRAG drawing chunk vectors
        chunk language labels update BM25 partial indexes
        declared metadata updates filterable columns
 ```
 
 Source files and parser-extracted images both go through LightRAG's multimodal
-path. When the configured embedding provider supports image inputs and the
+path. When the configured embedding provider fuses text and image inputs and the
 startup probe succeeds, DlightRAG aligns the existing canonical LightRAG visual
-chunk with a raw image embedding. With a text-only embedding model, this
-alignment is skipped and LightRAG's semantic visual chunk remains the
-multimodal ingestion path.
+chunk with a fused vector that interleaves the VLM description and the image. With
+a text-only or non-fusing embedding model, this alignment is skipped and
+LightRAG's semantic visual chunk remains the multimodal ingestion path.
 
 ## Retrieval And Answer Flow
 

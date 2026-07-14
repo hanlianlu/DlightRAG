@@ -533,47 +533,57 @@ class UnifiedIngestionEngine:
     ) -> None:
         if not self._direct_image_embedding_enabled:
             return
+        # Only a unified multimodal model (fused text+image -> one vector) gets the
+        # visual-vector override; otherwise the chunk keeps LightRAG's native
+        # VLM->text vector, which stays reachable by text queries.
+        if not self._multimodal_embedder.supports_fused_multimodal:
+            return
 
         artifact_dir = sidecar_dir_from_location(sidecar_location)
         if artifact_dir is None or not artifact_dir.exists():
             return
 
+        assets = [
+            asset
+            for asset in collect_lightrag_drawing_assets(artifact_dir, doc_id=doc_id)
+            if asset.chunk_id in chunk_ids and asset.image_path.exists()
+        ]
+        if not assets:
+            return
+
+        descriptions = await self._fetch_chunk_descriptions([a.chunk_id for a in assets])
+
         vectors: dict[str, list[float]] = {}
-        for asset in collect_lightrag_drawing_assets(
-            artifact_dir,
-            doc_id=doc_id,
-        ):
-            chunk_id = asset.chunk_id
-            if chunk_id not in chunk_ids:
-                continue
-            image_path = asset.image_path
-            if not image_path.exists():
-                continue
+        for asset in assets:
             try:
-                dims = await asyncio.to_thread(_image_dims, image_path)
+                dims = await asyncio.to_thread(_image_dims, asset.image_path)
                 if dims is not None and (
                     dims[0] < self._min_image_pixel or dims[1] < self._min_image_pixel
                 ):
                     logger.debug(
                         "Skipping sidecar image %s (%dx%d < %dpx min)",
-                        image_path,
+                        asset.image_path,
                         dims[0],
                         dims[1],
                         self._min_image_pixel,
                     )
                     continue
-                vector = await _embed_image_path(self._multimodal_embedder, image_path)
+                vector = await _embed_fused_image_path(
+                    self._multimodal_embedder,
+                    asset.image_path,
+                    descriptions.get(asset.chunk_id, ""),
+                )
             except Exception:
                 # One unreadable/oversized image (e.g. a decompression bomb the
-                # PIL guard rejects) must not fail the whole document — skip its
-                # direct vector and keep the parsed text/other images.
+                # PIL guard rejects) must not fail the whole document -- skip its
+                # visual vector and keep the parsed text/other images.
                 logger.warning(
                     "Skipping sidecar image that could not be embedded: %s",
-                    log_safe(str(image_path)),
+                    log_safe(str(asset.image_path)),
                     exc_info=True,
                 )
                 continue
-            vectors[chunk_id] = vector
+            vectors[asset.chunk_id] = vector
 
         if vectors:
             await self._stores.overwrite_chunk_vectors(
@@ -582,6 +592,11 @@ class UnifiedIngestionEngine:
                     self._multimodal_embedder, "dim", len(next(iter(vectors.values())))
                 ),
             )
+
+    async def _fetch_chunk_descriptions(self, chunk_ids: list[str]) -> dict[str, str]:
+        """Return {chunk_id: VLM description} to fuse into visual-chunk vectors."""
+        rows = await self._stores.fetch_chunk_contents(chunk_ids)
+        return {str(row["id"]): str(row.get("content") or "") for row in rows if row.get("id")}
 
     async def _label_bm25_languages(self, chunk_ids: list[str]) -> None:
         if self._bm25_language_classifier is None or not chunk_ids:
@@ -611,10 +626,10 @@ class UnifiedIngestionEngine:
         }
 
 
-async def _embed_image_path(embedder: Any, image_path: Path) -> list[float]:
+async def _embed_fused_image_path(embedder: Any, image_path: Path, description: str) -> list[float]:
     image = await asyncio.to_thread(_open_rgb_image, image_path)
     try:
-        return (await embedder.embed_index_images([image]))[0]
+        return (await embedder.embed_index_fused([(description, image)]))[0]
     finally:
         image.close()
 

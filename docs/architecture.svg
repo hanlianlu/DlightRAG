@@ -95,7 +95,7 @@
   <text class="small" text-anchor="middle" x="256" y="497">staging, metadata, LightRAG enqueue</text>
 
   <rect class="box box-pink" x="118" y="535" width="276" height="50"/>
-  <text class="label" text-anchor="middle" x="256" y="556">Image Vector Alignment</text>
+  <text class="label" text-anchor="middle" x="256" y="556">Fused Visual Alignment</text>
   <text class="small" text-anchor="middle" x="256" y="574">existing LightRAG drawing chunks</text>
 
   <path class="line-blue" d="M 248 389 H 270"/>
