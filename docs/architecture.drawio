@@ -50,7 +50,7 @@
         <mxCell id="ingestion" value="&lt;b&gt;Unified Ingestion Engine&lt;/b&gt;&lt;br&gt;staging, metadata, LightRAG enqueue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e0f2fe;strokeColor=#0284c7;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="455" width="276" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="visual_path" value="&lt;b&gt;Image Vector Alignment&lt;/b&gt;&lt;br&gt;existing LightRAG drawing chunks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
+        <mxCell id="visual_path" value="&lt;b&gt;Fused Visual Alignment&lt;/b&gt;&lt;br&gt;existing LightRAG drawing chunks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#db2777;arcSize=8;fontFamily=Inter;fontSize=12;fontColor=#111827;spacing=8;" vertex="1" parent="1">
           <mxGeometry x="118" y="535" width="276" height="50" as="geometry"/>
         </mxCell>
 

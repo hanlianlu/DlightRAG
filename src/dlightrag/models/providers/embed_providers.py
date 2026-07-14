@@ -133,6 +133,7 @@ class VoyageEmbedProvider(EmbedProvider):
     endpoint = "/multimodalembeddings"
     image_input_capability = "native"
     supports_asymmetric = True
+    supports_fused_multimodal = True
 
     def build_payload(
         self,
@@ -188,6 +189,7 @@ class DashScopeQwenEmbedProvider(EmbedProvider):
     endpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
     image_input_capability = "native"
     supports_asymmetric = False
+    supports_fused_multimodal = True
 
     def build_payload(
         self,

@@ -141,9 +141,14 @@ response is validated.
 | OpenAI-compatible extension (`openai_compatible`) | Conservative text only | Text only | Opt into the existing data-URI image payload; probe failure stops startup |
 
 `text` guarantees the embedding provider receives text only. It disables both
-document image-vector overwrite and query-image vector retrieval. Images,
+the document visual-vector overwrite and query-image vector retrieval. Images,
 tables, and equations may still be described by the VLM; those descriptions
 remain ordinary text in LightRAG's semantic, BM25, and KG paths.
+
+The document visual-vector overwrite additionally requires a provider that fuses
+text and image into one vector (`voyage`, `dashscope_qwen`). Image-capable but
+non-fusing providers (`gemini`, `jina`) still enable query-image retrieval, but
+leave LightRAG's native VLM->text drawing vector in place.
 
 `multimodal` is a capability assertion, not a hint. DlightRAG fails fast when
 the configured adapter cannot serialize images or when the live startup probe

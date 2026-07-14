@@ -379,7 +379,7 @@ async def run_rebuild(
                         multimodal_embedder=multimodal_embedder,
                     )
                     print(
-                        "Sidecar image-vector alignment: "
+                        "Sidecar fused visual-vector alignment: "
                         f"{stats['processed_docs']} processed, {stats['skipped_docs']} skipped"
                     )
     finally:

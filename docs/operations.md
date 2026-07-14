@@ -36,7 +36,7 @@ retry endpoints for that case.
 |---|---:|---|
 | `check` | no | Compare graph records with entity and relationship vector rows. |
 | `graph` | yes | Rebuild entity and relationship vectors from the graph store. |
-| `chunks` | yes | Rebuild chunk vectors from LightRAG text chunks, then refresh BM25 language labels and restore DlightRAG sidecar image-vector alignment. |
+| `chunks` | yes | Rebuild chunk vectors from LightRAG text chunks, then refresh BM25 language labels and restore DlightRAG fused visual-vector alignment. |
 | `all` | yes | Run graph and chunk vector rebuilds, then run the chunk post-rebuild maintenance. |
 
 `graph`, `chunks`, and `all` require `--yes`. Treat them as offline
@@ -101,12 +101,13 @@ row's `dlightrag_bm25_language` label with the configured BM25 language
 profiles. This keeps query-language-routed BM25 partial indexes aligned after
 offline chunk rebuilds.
 
-Second, DlightRAG restores direct image-vector alignment:
+Second, DlightRAG restores fused visual-vector alignment:
 
 1. It reads processed documents and their sidecar locations.
 2. It reuses DlightRAG's multimodal embedder and ingestion alignment code.
-3. It overwrites canonical LightRAG drawing chunk vectors with direct image
-   vectors when the configured image embedding probe succeeds.
+3. It overwrites canonical LightRAG drawing chunk vectors with fused
+   VLM-description + image vectors when the embedder fuses text and image and
+   the image embedding probe succeeds.
 
 This preserves visual retrieval behavior after `--target chunks` or
 `--target all`. Use `--no-restore-sidecar-alignment` only for debugging or for

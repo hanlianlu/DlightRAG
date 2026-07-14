@@ -27,10 +27,11 @@ source file
        LightRAG raw parser route otherwise
   -> LightRAG ingest
        chunks, entities, relationships, graph, vectors, doc status
-  -> image vector alignment when direct image embedding is active
+  -> fused visual-vector alignment when the embedder fuses text+image
        successful LightRAG drawing multimodal chunks keep their VLM text,
        sidecar provenance, BM25, and KG identity; DlightRAG overwrites the
-       existing chunk vector with the raw image embedding
+       existing chunk vector with one fused vector interleaving the VLM
+       description and the image, so text queries still retrieve the figure
   -> DlightRAG metadata/BM25 layer
        declared metadata index, in-filter scope, pg_textsearch BM25
 ```
@@ -40,7 +41,7 @@ through LightRAG parser/routing. Tables, equations, text, and document-derived
 image sidecars stay aligned with the LightRAG document record.
 LightRAG raw-route documents can have no sidecar artifacts; those documents
 still participate in LightRAG text/KG/vector retrieval but do not receive
-image-vector alignment.
+fused visual-vector alignment.
 With DlightRAG's default
 `docx:native-iteP,md:native-iteP,textpack:native-iteP,*:mineru-iteP` rules,
 this is a defensive path rather than the normal document parser route.
@@ -48,12 +49,17 @@ this is a defensive path rather than the normal document parser route.
 Successful drawing sidecars have one canonical chunk identity. LightRAG's
 multimodal semantic chunk owns `llm_analyze_result` text and exposes it through
 `text_chunks`, BM25, and KG extraction. DlightRAG then overwrites that existing
-chunk's vector with the raw image embedding. It does not create a second
-visual-only chunk, so the same VLM description is not exposed twice as independent
-retrieved evidence. When `embedding.input_modality` resolves to text, this
-overwrite is skipped and the LightRAG semantic visual chunk remains untouched.
-In auto mode, a failed native image probe produces the same safe downgrade;
-explicit multimodal mode instead treats probe failure as a startup error.
+chunk's vector with a single fused vector that interleaves the VLM description
+and the image. A bare image-crop vector reintroduces the text/image modality
+gap, so text queries cannot reach the figure; fusing the description back into
+the vector closes that gap while keeping the native multimodal alignment. It
+does not create a second visual-only chunk, so the same VLM description is not
+exposed twice as independent retrieved evidence. The overwrite is skipped --
+leaving LightRAG's native VLM->text vector untouched -- when
+`embedding.input_modality` resolves to text or the provider cannot fuse text and
+image into one vector. In auto mode, a failed native image probe produces the
+same safe downgrade; explicit multimodal mode instead treats probe failure as a
+startup error.
 
 ## Query Pipeline
 

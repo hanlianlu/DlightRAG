@@ -24,7 +24,7 @@ Clients
   -> PostgreSQL 18 storage ecosystem
 ```
 
-DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, direct image-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime and code-layer view is in
+DlightRAG has one unified production RAG path: LightRAG provides fusional one-hop graph traversal and vector retrieval. DlightRAG adds product-layer metadata governance, hybrid BM25 sparse retrieval, fused visual-vector alignment, orchestration, citations, highlighting and standardized interfaces. The full runtime and code-layer view is in
 [docs/architecture.md](docs/architecture.md).
 
 ## Choose Your Deployment Path

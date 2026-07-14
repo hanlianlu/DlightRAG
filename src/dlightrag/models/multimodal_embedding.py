@@ -11,6 +11,7 @@ from PIL import Image
 from dlightrag.models.embedding_inputs import (
     EmbeddingInput,
     ImageEmbeddingInput,
+    MultimodalEmbeddingInput,
     TextEmbeddingInput,
 )
 from dlightrag.models.providers.embed_base import EmbedProvider
@@ -74,6 +75,7 @@ class MultimodalEmbedder:
         self.provider = provider
         self.input_modality = resolve_embedding_input_modality(provider, input_modality)
         self.supports_images = self.input_modality == "multimodal"
+        self.supports_fused_multimodal = self.supports_images and provider.supports_fused_multimodal
         self.asymmetric = resolve_asymmetric(provider, asymmetric)
         self.supports_asymmetric = self.asymmetric
         self.batch_size = batch_size
@@ -139,6 +141,56 @@ class MultimodalEmbedder:
         """Embed document/index-side images."""
         return await self.embed_images(images, context="document")
 
+    def _build_fused_payload(
+        self, description: str, image: Image.Image, *, context: EmbeddingContext
+    ) -> dict:
+        data_uri = bounded_embedding_image_data_uri(image)
+        parts: list[TextEmbeddingInput | ImageEmbeddingInput] = []
+        text = description.strip()
+        if text:
+            parts.append(TextEmbeddingInput(text=text))
+        parts.append(ImageEmbeddingInput(data_uri=data_uri))
+        return self.provider.build_payload(
+            self.model,
+            [MultimodalEmbeddingInput(parts=parts)],
+            context=context,
+            asymmetric=self.asymmetric,
+            output_dimension=self.dim,
+        )
+
+    async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
+        """Embed (description, image) pairs as single fused document vectors.
+
+        Requires a unified multimodal provider (``supports_fused_multimodal``):
+        the VLM description and the image are interleaved into one vector, so the
+        visual chunk stays reachable by text queries (closes the modality gap).
+        An empty description degrades gracefully to an image-only vector.
+        """
+        self._ensure_fused_support()
+        if not items:
+            return []
+
+        async def one(item: tuple[str, Image.Image]) -> list[float]:
+            description, image = item
+            payload = self._build_fused_payload(description, image, context="document")
+            data = await self._post(payload)
+            vectors = self.provider.parse_response(data)
+            self._validate_vectors(vectors, expected_count=1)
+            return vectors[0]
+
+        results = await bounded_map(
+            items,
+            one,
+            max_concurrent=self.batch_size,
+            task_name="fused-embedding",
+        )
+        vectors: list[list[float]] = []
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
+            vectors.append(result)
+        return vectors
+
     async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
         """Embed query-side images."""
         return await self.embed_images(images, context="query")
@@ -152,6 +204,13 @@ class MultimodalEmbedder:
     ) -> dict:
         """Expose payload construction to unit tests without HTTP calls."""
         return self._build_image_payload(image, context=context)
+
+    def build_fused_payload_for_test(
+        self, description: str, image: Image.Image, *, context: EmbeddingContext
+    ) -> dict:
+        """Expose fused payload construction to unit tests without HTTP calls."""
+        self._ensure_fused_support()
+        return self._build_fused_payload(description, image, context=context)
 
     def validate_vectors_for_test(self, vectors: list[list[float]]) -> None:
         """Expose vector validation to unit tests."""
@@ -195,4 +254,10 @@ class MultimodalEmbedder:
         if not self.supports_images:
             raise ValueError(
                 f"{self.provider.__class__.__name__} does not support image embeddings"
+            )
+
+    def _ensure_fused_support(self) -> None:
+        if not self.supports_fused_multimodal:
+            raise ValueError(
+                f"{self.provider.__class__.__name__} does not support fused text+image embeddings"
             )
