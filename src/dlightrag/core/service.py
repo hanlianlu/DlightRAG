@@ -17,7 +17,7 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, I
 from dataclasses import dataclass
 from inspect import isawaitable
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from lightrag.constants import DEFAULT_COSINE_THRESHOLD, PARSED_DIR_NAME
 
@@ -44,6 +44,16 @@ from dlightrag.sourcing.source_contract import (
 )
 from dlightrag.storage.protocols import MetadataIndexProtocol
 from dlightrag.utils import normalize_workspace
+
+if TYPE_CHECKING:
+    from dlightrag.core.ingestion.engine import UnifiedIngestionEngine
+    from dlightrag.core.lightrag_stores import LightRAGStores
+    from dlightrag.core.retrieval.bm25 import PostgresBM25
+    from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
+    from dlightrag.core.retrieval.protocols import RetrievalBackend
+    from dlightrag.core.retrieval.retriever import UnifiedRetriever
+    from dlightrag.core.visual_assets import VisualAssetResolver
+    from dlightrag.models.multimodal_embedding import MultimodalEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -267,18 +277,18 @@ class RAGService:
         self._default_metadata_policy: MetadataIngestPolicy = (
             self.config.metadata.default_ingest_policy
         )
-        self._lightrag_stores: Any = None
-        self._ingestion_engine: Any = None
-        self._bm25: Any = None
-        self._retrieval_orchestrator: Any = None
-        self._multimodal_embedder: Any = None
+        self._lightrag_stores: LightRAGStores | None = None
+        self._ingestion_engine: UnifiedIngestionEngine | None = None
+        self._bm25: PostgresBM25 | None = None
+        self._retrieval_orchestrator: UnifiedRetriever | None = None
+        self._multimodal_embedder: MultimodalEmbedder | None = None
         self._rerank_func: Any = None
         self._direct_image_embedding_enabled = False
-        self._visual_asset_resolver: Any = None
+        self._visual_asset_resolver: VisualAssetResolver | None = None
 
         # Retrieval backend (satisfies RetrievalBackend Protocol).
         # Explicitly wired by the unified LightRAG initialization path.
-        self._backend: Any = None
+        self._backend: RetrievalBackend | None = None
 
     @property
     def lightrag(self) -> Any:
@@ -362,7 +372,7 @@ class RAGService:
         lightrag: Any,
         stores: Any,
         embedder: Any | None = None,
-    ) -> Any:
+    ) -> LightRAGMixBackend:
         """Build the LightRAG retrieval backend from typed DlightRAG config."""
         from dlightrag.core.retrieval.lightrag_backend import LightRAGMixBackend
 
@@ -1179,6 +1189,8 @@ class RAGService:
         parser_filename_override: str | None = None,
     ) -> dict[str, Any]:
         """Download remote objects into ephemeral parser batches and ingest them."""
+        if self._ingestion_engine is None:
+            raise RuntimeError("Ingestion engine not initialized")
         from dlightrag.utils.concurrency import bounded_map
 
         resume_from_window = max(0, int(resume_from_window))
@@ -1350,8 +1362,6 @@ class RAGService:
                     metadata=metadata,
                     metadata_policy=metadata_policy,
                 )
-                if hasattr(batch_result, "model_dump"):
-                    batch_result = batch_result.model_dump()
 
                 processed += int(batch_result.get("processed") or 0)
                 results.extend(batch_result.get("results") or [])
