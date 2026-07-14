@@ -15,6 +15,7 @@ from .guidance import (
 )
 from .identity import CORE_IDENTITY
 from .planner import (
+    PLANNER_CURRENT_IMAGE_TEMPLATE,
     PLANNER_HISTORY_TEMPLATE,
     PLANNER_NO_HISTORY_TEMPLATE,
     PLANNER_SYSTEM_PROMPT,
@@ -45,6 +46,7 @@ __all__ = [
     "PLANNER_HISTORY_TEMPLATE",
     "PLANNER_NO_HISTORY_TEMPLATE",
     "PLANNER_WEB_SELECTION_TEMPLATE",
+    "PLANNER_CURRENT_IMAGE_TEMPLATE",
     # rag
     "ANSWER_CORE",
     "get_answer_system_prompt",

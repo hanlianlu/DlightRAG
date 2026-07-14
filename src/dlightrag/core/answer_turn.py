@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -24,6 +24,10 @@ class PreparedAnswerTurn:
     # images' retrieval semantics are owned by the planner (woven into the
     # standalone query), so they are excluded here to avoid re-describing them.
     current_query_images: tuple[dict[str, Any], ...] = ()
+    # VLM descriptions of current-turn images (ordinal -> text), computed once in
+    # prepare_answer_turn so the planner is image-aware without re-describing them
+    # downstream in retrieval.
+    current_image_descriptions: dict[str, str] = field(default_factory=dict)
     plan: QueryPlan | None = None
     history_image_catalog_count: int = 0
     history_image_resolution_status: str = "ok"

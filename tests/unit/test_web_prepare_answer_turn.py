@@ -56,6 +56,11 @@ class _FakeManager:
             failure_kind=None,
         )
         self.plan_kwargs: dict[str, Any] = {}
+        self.described_images: list[dict[str, Any]] = []
+
+    async def adescribe_query_images(self, images: list[dict[str, Any]]) -> dict[str, str]:
+        self.described_images = list(images)
+        return {"1": "Image 1: revenue chart"} if images else {}
 
     async def aplan_query(
         self,
@@ -64,11 +69,13 @@ class _FakeManager:
         text_history: Any = None,
         image_catalog: Any = None,
         allowed_history_image_count: int = 0,
+        current_image_descriptions: Any = None,
         workspaces: Any = None,
     ) -> QueryPlan:
         self.plan_kwargs = {
             "image_catalog": image_catalog,
             "allowed_history_image_count": allowed_history_image_count,
+            "current_image_descriptions": current_image_descriptions,
             "workspaces": workspaces,
         }
         # Mirror real planner: no catalog -> no selection.
@@ -111,6 +118,11 @@ async def test_prepare_answer_turn_injects_plan_and_orders_current_first() -> No
     assert turn.plan.standalone_query.startswith("2023 revenue trend")
     assert manager.plan_kwargs["allowed_history_image_count"] == 5  # 6 effective - 1 current
     assert store.fetched == [[_ID]]  # only the selected id is materialized
+    # Current images are described before planning; descriptions feed the planner
+    # and are carried on the turn so retrieval never re-describes them.
+    assert manager.described_images == current
+    assert manager.plan_kwargs["current_image_descriptions"] == ["Image 1: revenue chart"]
+    assert turn.current_image_descriptions == {"1": "Image 1: revenue chart"}
 
 
 async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
@@ -128,5 +140,7 @@ async def test_prepare_answer_turn_skips_history_when_no_capacity() -> None:
 
     assert manager.plan_kwargs["image_catalog"] is None  # no room -> no catalog fetched
     assert manager.plan_kwargs["allowed_history_image_count"] == 0
+    assert manager.plan_kwargs["current_image_descriptions"] is None  # no images -> no descriptions
+    assert turn.current_image_descriptions == {}
     assert store.fetched == []  # nothing materialized
     assert turn.materialized_query_images == ()

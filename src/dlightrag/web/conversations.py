@@ -220,11 +220,13 @@ class WebConversationService:
                 )
             )
 
+        described = await manager.adescribe_query_images(current_images)
         plan = await manager.aplan_query(
             query,
             text_history=list(prepared.text_history),
             image_catalog=catalog or None,
             allowed_history_image_count=remaining,
+            current_image_descriptions=list(described.values()) or None,
             workspaces=workspaces,
         )
 
@@ -256,6 +258,7 @@ class WebConversationService:
             text_history=tuple(prepared.text_history),
             materialized_query_images=tuple([*current_images, *history_blocks]),
             current_query_images=tuple(current_images),
+            current_image_descriptions=described,
             plan=plan,
             history_image_catalog_count=len(catalog),
             history_image_resolution_status=resolution_status,
