@@ -40,13 +40,13 @@ async def health(request: Request) -> dict[str, object]:
     if warnings:
         status["warnings"] = warnings
 
-    # Check PostgreSQL connectivity.
+    # Check PostgreSQL connectivity through the shared pool rather than opening a
+    # fresh connection per request -- the latter is wasteful and lets unauthenticated
+    # health traffic exhaust the server's connection slots.
     try:
-        import asyncpg
+        from dlightrag.storage.pool import pg_pool
 
-        conn = await asyncpg.connect(**config.pg_connection_kwargs())
-        await conn.fetchval("SELECT 1")
-        await conn.close()
+        await pg_pool.run_once(lambda conn: conn.fetchval("SELECT 1"))
         status["postgres"] = "connected"
     except Exception:
         logger.warning("Health check: PostgreSQL probe failed", exc_info=True)

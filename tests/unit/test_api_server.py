@@ -322,7 +322,7 @@ class TestWorkspaceLifecycleAPI:
         assert resp.status_code == 401
 
     @pytest.mark.usefixtures("_patch_manager")
-    async def test_simple_invalid_token_403(
+    async def test_simple_invalid_token_401(
         self, client: AsyncClient, mock_config_no_auth_override: DlightragConfig
     ) -> None:
         cfg = mock_config_no_auth_override
@@ -332,7 +332,7 @@ class TestWorkspaceLifecycleAPI:
             "/files",
             headers={"Authorization": "Bearer wrong-token"},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 401
 
     @pytest.mark.parametrize(
         "method,path,body",
@@ -1275,19 +1275,11 @@ class TestHealthEndpoint:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        class MockConnection:
-            async def fetchval(self, query: str) -> int:
-                return 1
+        from unittest.mock import AsyncMock
 
-            async def close(self) -> None:
-                return None
+        from dlightrag.storage.pool import pg_pool
 
-        async def fake_connect(**kwargs):
-            return MockConnection()
-
-        import asyncpg
-
-        monkeypatch.setattr(asyncpg, "connect", fake_connect)
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value=1))
         app.state.manager = mock_manager
         resp = await client.get("/health")
         assert resp.status_code == 200
@@ -1328,19 +1320,11 @@ class TestHealthEndpointEnhanced:
         mock_manager,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        class MockConnection:
-            async def fetchval(self, query: str) -> int:
-                return 1
+        from unittest.mock import AsyncMock
 
-            async def close(self) -> None:
-                return None
+        from dlightrag.storage.pool import pg_pool
 
-        async def fake_connect(**kwargs):
-            return MockConnection()
-
-        import asyncpg
-
-        monkeypatch.setattr(asyncpg, "connect", fake_connect)
+        monkeypatch.setattr(pg_pool, "run_once", AsyncMock(return_value=1))
         mock_manager.is_degraded = lambda: False
         mock_manager.get_warnings = lambda: []
         app.state.manager = mock_manager
