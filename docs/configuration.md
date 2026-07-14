@@ -365,7 +365,7 @@ pg_hnsw_ef_construction: 256
 pg_hnsw_ef_search: 256
 postgres_lightrag_pool_max_size: 16
 postgres_pool_min_size: 2
-postgres_pool_max_size: 10
+postgres_pool_max_size: 16
 postgres_session_settings: {}
 postgres_statement_cache_size:
 postgres_connection_retries: 10
@@ -373,6 +373,13 @@ postgres_connection_retry_backoff: 3.0
 postgres_connection_retry_backoff_max: 30.0
 postgres_pool_close_timeout: 5.0
 ```
+
+`postgres_pool_max_size` sizes the DlightRAG domain-store pool (BM25, metadata,
+conversations, jobs, checkpoints); `postgres_lightrag_pool_max_size` sizes the
+LightRAG backend pool. Each process opens up to the sum of the two, so multiply
+by the worker count and keep the total under PostgreSQL `max_connections`. Raise
+`postgres_pool_max_size` for high single-worker concurrency; lower it when
+running many workers.
 
 Use [postgresql.md](postgresql.md) for production sizing, SSL, shared memory, and extension
 notes.
@@ -402,6 +409,11 @@ queue_size_analyze: 100
 queue_size_insert: 4
 embedding_request_timeout: 120
 ```
+
+`embedding_batch_num` is the number of texts sent per embedding provider
+request. Raise it to match your provider's per-request cap (for example, Voyage
+accepts up to 1000 inputs and OpenAI up to 2048); a value too high for the
+configured provider surfaces as a request error during ingest, so lower it then.
 
 ## BM25
 
@@ -559,9 +571,9 @@ visual_assets:
 lifecycle. It keeps at most 100 complete turns and uses 30-day inactivity
 retention; expired conversations are hidden immediately and pruned without
 touching ingest documents, chunks, vectors, graph data, source files, visual
-assets, or jobs. Current-turn images always have priority. Slice B adds
-historical-image resolution and a unified answer-image transport budget; these
-retention and upload controls do not pre-implement that behavior.
+assets, or jobs. Current-turn images always have priority; historical images
+that miss a transport slot contribute their stored text descriptions. These
+retention and upload controls do not change that behavior.
 
 ## REST API
 

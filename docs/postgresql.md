@@ -58,7 +58,7 @@ postgres_session_settings:
 postgres_statement_cache_size: 256
 postgres_lightrag_pool_max_size: 16
 postgres_pool_min_size: 2
-postgres_pool_max_size: 10
+postgres_pool_max_size: 16
 postgres_connection_retries: 10
 postgres_connection_retry_backoff: 3.0
 postgres_connection_retry_backoff_max: 30.0
