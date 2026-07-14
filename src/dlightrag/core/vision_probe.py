@@ -1,12 +1,11 @@
 # Copyright 2025-2026 Hanlian Lu. SPDX-License-Identifier: Apache-2.0
-"""Startup vision capability probes for answer and rerank models.
+"""Startup image capability probes for answer and rerank models.
 
-Both probes share one 1×1 pixel PNG payload but differ in how they read the
-result. ``probe_image_capability`` (answer models) treats transport acceptance
-as the signal -- a completed request means the model accepts ``image_url``
-blocks -- and returns a tri-state outcome. ``probe_vision_support`` (rerank
-models) additionally expects the magic reply ``"ok"``. Results are recorded on
-the owning ``RAGServiceManager`` (never on the provider).
+``probe_image_capability`` sends one 1×1 pixel PNG and treats transport
+acceptance as the signal -- a completed request means the model accepts
+``image_url`` blocks -- returning a tri-state outcome. The reply text is
+deliberately not inspected. Both the answer path and the rerank path use it.
+Results are recorded on the owning ``RAGServiceManager`` (never on the provider).
 """
 
 import logging
@@ -24,48 +23,7 @@ _ONE_PIXEL_DATA_URI = f"data:image/png;base64,{_ONE_PIXEL_PNG_B64}"
 _VISION_PROBE_MAX_TOKENS = 512
 
 
-async def probe_vision_support(
-    provider: Any,
-    *,
-    model: str,
-    model_kwargs: dict[str, Any] | None = None,
-) -> bool:
-    """Probe whether *model* accepts ``image_url`` blocks.
-
-    Sends a single-turn request with one 1×1 pixel image and expects
-    the model to respond with ``"ok"``.  Returns ``True`` if the model
-    handles images, ``False`` otherwise.  Reasoning-capable models may
-    spend a few tokens before emitting final content, so the probe uses a
-    generous but bounded content budget rather than the absolute minimum.
-
-    The probe is idempotent — callers normally run it once at startup
-    and record the result on the owning ``RAGServiceManager``.
-    """
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Reply with exactly 'ok' and nothing else."},
-                {"type": "image_url", "image_url": {"url": _ONE_PIXEL_DATA_URI}},
-            ],
-        }
-    ]
-    try:
-        response = await provider.complete(
-            messages,
-            model=model,
-            max_tokens=_VISION_PROBE_MAX_TOKENS,
-            temperature=0,
-            model_kwargs=model_kwargs,
-        )
-        text = str(response).strip().lower()
-        return "ok" in text
-    except Exception:
-        logger.debug("Vision probe failed for model %s", model, exc_info=True)
-        return False
-
-
-__all__ = ["probe_image_capability", "probe_vision_support"]
+__all__ = ["probe_image_capability"]
 
 
 _UNSUPPORTED_MARKERS = (

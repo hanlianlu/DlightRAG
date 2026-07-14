@@ -1662,21 +1662,24 @@ async def test_vision_probe_result_is_manager_scoped(
             "rerank": RerankConfig(strategy="chat_llm_reranker"),
         }
     )
+    from dlightrag.core.vision_probe import ImageProbeOutcome
+
     first = RAGServiceManager(config=test_cfg)
-    first._default_supports_vision = False
+    first._rerank_supports_vision = False
     second = RAGServiceManager(config=test_cfg)
     provider = SimpleNamespace(aclose=AsyncMock())
-    probe = AsyncMock(return_value=True)
+    probe = AsyncMock(return_value=ImageProbeOutcome(status="supported"))
 
     monkeypatch.setattr("dlightrag.models.providers.get_provider", MagicMock(return_value=provider))
-    monkeypatch.setattr("dlightrag.core.vision_probe.probe_vision_support", probe)
+    monkeypatch.setattr("dlightrag.core.vision_probe.probe_image_capability", probe)
 
     await second._probe_vision_support()
 
-    assert first._default_supports_vision is False
-    assert second._default_supports_vision is True
+    assert first._rerank_supports_vision is False
     assert second._rerank_supports_vision is True
-    probe.assert_awaited_once_with(provider, model="gpt-5.4-mini", model_kwargs=model_kwargs)
+    probe.assert_awaited_once_with(
+        provider, model="gpt-5.4-mini", ceiling=1, model_kwargs=model_kwargs
+    )
 
 
 class TestDegradedMode:
