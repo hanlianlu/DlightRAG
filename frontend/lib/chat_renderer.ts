@@ -117,6 +117,12 @@ export function createChatTurn(
   contentDiv.appendChild(streamingDot);
   aiDiv.appendChild(contentDiv);
 
+  const liveStatus = document.createElement('span');
+  liveStatus.className = 'sr-only';
+  liveStatus.setAttribute('role', 'status');
+  liveStatus.setAttribute('aria-live', 'polite');
+  aiDiv.appendChild(liveStatus);
+
   chatMessages.appendChild(aiDiv);
   pruneOldMessages(chatMessages);
 
@@ -261,6 +267,8 @@ export function createAnswerRenderer(turn: ChatTurn) {
     }
 
     applyFinalAnswerHtml(turn, html || '');
+    const live = turn.aiDiv.querySelector('.sr-only');
+    if (live) live.textContent = 'Answer ready';
   }
 
   function handleHighlights(data: SSEData): void {
@@ -282,6 +290,8 @@ export function createAnswerRenderer(turn: ChatTurn) {
       dot.className = chatStyles.streamingDot + ' ' + chatStyles.progressPhase;
       dot.setAttribute('data-phase', label || '');
     }
+    const live = turn.aiDiv.querySelector('.sr-only');
+    if (live) live.textContent = label || '';
   }
 
   return {

@@ -429,6 +429,13 @@ REST, MCP, and Python answer/retrieve calls remain stateless. They do not accept
 `conversation_id`, caller-supplied history, or durable historical-image IDs.
 Their `query_images` belong only to the current request and are never persisted.
 
+The REST API uses resource-oriented verbs (for example `POST /workspaces`,
+`DELETE /workspaces/{workspace}`), while the `/web/*` surface uses htmx action
+endpoints that return HTML fragments (for example `POST /web/workspaces/create`,
+`POST /web/workspaces/delete`). This split is intentional: HTML forms cannot
+issue `DELETE`, and Web responses are markup rather than JSON. Prefer REST or the
+SDK for programmatic access.
+
 Image support is a deployment capability, not a per-request negotiation, so callers
 discover it up front. REST `GET /health` returns `answer_image_capability`
 (`status`, `effective_max_images`, `configured_ceiling`, `model`); the MCP

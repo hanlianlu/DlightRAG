@@ -5,7 +5,9 @@
     </div>
     {% if status.docs and status.batchs %}
     {% set pct = (status.cur_batch / status.batchs * 100) | int %}
-    <div class="progress-bar-track">
+    <div class="progress-bar-track" role="progressbar"
+         aria-valuenow="{{ pct }}" aria-valuemin="0" aria-valuemax="100"
+         aria-label="Ingest progress">
         <div class="progress-bar-fill" data-pct="{{ pct }}"></div>
     </div>
     <div class="progress-label">batch {{ status.cur_batch }}/{{ status.batchs }} · {{ status.docs }} doc(s)</div>

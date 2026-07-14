@@ -449,6 +449,14 @@ export function setupImageInputs(): void {
         openLightbox(src);
     });
     document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const item = eventElement(e)?.closest('[data-action="open-lightbox"]');
+        if (!item) return;
+        e.preventDefault();
+        const src = _getLightboxImageSrc(item);
+        if (src) openLightbox(src);
+    });
+    document.addEventListener('keydown', function(e) {
         const box = document.getElementById('image-lightbox');
         if (!box || !box.classList.contains(lightboxStyles.open)) return;
         if (e.key === 'Escape') {

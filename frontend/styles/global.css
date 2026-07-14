@@ -90,7 +90,7 @@ body.conversation-drawer-open {
     content: '';
     width: 2px;
     height: clamp(32px, 3.6vw, 44px);
-    background: rgba(210, 182, 97, 0.3);
+    background: rgb(210 182 97 / 30%);
     border-radius: 1px;
     transition: background 0.15s, height 0.15s;
 }
@@ -299,7 +299,7 @@ body.conversation-drawer-open {
     z-index: 200;
     opacity: 0;
     transition: opacity 0.2s ease-out, transform 0.2s ease-out;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 16px rgb(0 0 0 / 30%);
 }
 
 .toast.visible {
