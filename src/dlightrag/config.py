@@ -679,11 +679,20 @@ class DlightragConfig(BaseSettings):
     postgres_ssl_key: str | None = Field(default=None)
     postgres_ssl_root_cert: str | None = Field(default=None)
     postgres_ssl_crl: str | None = Field(default=None)
+
+    # Advanced (env-only; keep out of curated config.yaml —
+    # see docs/configuration.md "Public Configuration Boundary").
     postgres_pool_min_size: int = Field(
         default=2, description="DlightRAG domain store pool min connections."
     )
     postgres_pool_max_size: int = Field(
-        default=10, description="DlightRAG domain store pool max connections."
+        default=16,
+        description=(
+            "DlightRAG domain store pool max connections per process. Total server "
+            "connections per process = this + postgres_lightrag_pool_max_size; multiply "
+            "by the worker count and keep the sum under PostgreSQL max_connections. "
+            "Raise for high single-worker concurrency; lower it when running many workers."
+        ),
     )
     postgres_command_timeout: float | None = Field(
         default=60.0,
@@ -747,6 +756,7 @@ class DlightragConfig(BaseSettings):
     postgres_required_major: int = Field(default=18)
 
     # pgvector index configuration. LightRAG derives VECTOR/HALFVEC from this.
+    # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary").
     pg_vector_index_type: Literal["HNSW", "HNSW_HALFVEC", "IVFFLAT", "VCHORDRQ"] = Field(
         default="HNSW_HALFVEC",
         description="pgvector index type — case-sensitive (HNSW, HNSW_HALFVEC, IVFFLAT, VCHORDRQ)",
@@ -804,6 +814,9 @@ class DlightragConfig(BaseSettings):
     chunk_p_token_size: int = Field(default=1024)
 
     # ===== Ingestion Performance =====
+    # Advanced (env-only; keep out of curated config.yaml —
+    # see docs/configuration.md "Public Configuration Boundary").
+    # These per-stage worker/queue knobs match LightRAG's own defaults.
     max_parallel_insert: int = Field(
         default=3,
         ge=1,
@@ -841,9 +854,20 @@ class DlightragConfig(BaseSettings):
         ge=1,
         description="LightRAG staged pipeline insert queue size.",
     )
+
+    # Concurrency (product-tier; also surfaced in config.yaml).
     max_async: int = Field(default=8, ge=1)
     embedding_func_max_async: int = Field(default=16, ge=1)
-    embedding_batch_num: int = Field(default=10, ge=1)
+    embedding_batch_num: int = Field(
+        default=32,
+        ge=1,
+        description=(
+            "Texts sent per embedding provider request (the per-request batch size). "
+            "Raise it to match your provider's cap — e.g. Voyage up to 1000, OpenAI up "
+            "to 2048. LightRAG's upstream default is 10; setting it too high for a "
+            "provider surfaces as a request error at ingest time."
+        ),
+    )
     embedding_request_timeout: int = Field(
         default=120,
         gt=0,
@@ -881,6 +905,9 @@ class DlightragConfig(BaseSettings):
     top_k: int = Field(default=60)
     chunk_top_k: int = Field(default=30)
     bm25_enabled: bool = Field(default=True)
+
+    # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary"):
+    # BM25 language profiles, k1/b tuning, and the RRF constant.
     bm25_profiles: list[BM25ProfileConfig] = Field(
         default_factory=lambda: [
             BM25ProfileConfig(name="zh", text_config="public.jiebacfg", languages=["zh"]),
@@ -912,6 +939,9 @@ class DlightragConfig(BaseSettings):
     )
     rrf_k: int = Field(default=60)
     direct_visual_top_k: int = Field(default=20)
+
+    # Advanced (env-only; see docs/configuration.md "Public Configuration Boundary"):
+    # metadata exact-vector threshold and KG token budgets.
     metadata_filter_exact_vector_threshold: int = Field(
         default=8192,
         description="Use exact vector scoring inside metadata candidates at or below this size.",

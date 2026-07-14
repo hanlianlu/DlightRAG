@@ -3,7 +3,7 @@
 # DlightRAG — curated application configuration
 #
 # This file is intentionally small. Keep high-signal product and deployment
-# choices here; keep secrets in .env; keep rare tuning in docs/config-reference.md
+# choices here; keep secrets in .env; keep rare tuning in docs/configuration.md
 # or pass it through environment variables when a deployment needs it.
 #
 # Priority: env vars > .env > config.yaml > code defaults
@@ -175,15 +175,17 @@ workspace: default
 
 max_async: 8                  # LightRAG default 4
 embedding_func_max_async: 16  # LightRAG default 8
-embedding_batch_num: 32       # LightRAG default 10
+embedding_batch_num: 64       # texts per embedding request (provider cap varies: Voyage<=1000, OpenAI<=2048)
 
 # ─────────────────────────────────────────────────────────────────
 # Retrieval and Answering
 # ─────────────────────────────────────────────────────────────────
 
-top_k: 60        # LightRAG KG entity/relationship breadth.
-chunk_top_k: 30  # Chunk/BM25 candidate breadth; not a final /retrieve cap.
-direct_visual_top_k: 20
+# top_k and chunk_top_k are LightRAG QueryParam controls (names mirror LightRAG).
+# direct_visual_top_k, answer.*, and query_images.* are DlightRAG-native.
+top_k: 60        # LightRAG QueryParam: KG entity/relationship breadth.
+chunk_top_k: 30  # LightRAG QueryParam: chunk/BM25 candidate breadth (not a final /retrieve cap).
+direct_visual_top_k: 20  # DlightRAG: direct query-image vector retrieval breadth.
 
 answer:
   context_top_k: 30

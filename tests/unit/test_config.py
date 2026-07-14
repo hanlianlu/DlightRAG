@@ -619,7 +619,7 @@ def test_postgres_vector_and_pool_defaults_export_lightrag_env() -> None:
     assert cfg.pg_hnsw_ef_search == 256
     assert cfg.postgres_lightrag_pool_max_size == 16
     assert cfg.postgres_pool_min_size == 2
-    assert cfg.postgres_pool_max_size == 10
+    assert cfg.postgres_pool_max_size == 16
     assert os.environ["POSTGRES_VECTOR_INDEX_TYPE"] == "HNSW_HALFVEC"
     assert os.environ["POSTGRES_MAX_CONNECTIONS"] == "16"
     assert cfg.postgres_server_settings_dict() == {"hnsw.ef_search": "256"}
