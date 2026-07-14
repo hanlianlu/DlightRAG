@@ -6,8 +6,15 @@ import {workspaceStore} from '../stores/workspaceStore.ts';
 import {showToast} from './toast.ts';
 import workspaceStyles from '../styles/workspaces.module.css';
 import {installListboxArrowNavigation} from '../lib/listbox.ts';
+import {createAutoDismiss} from '../lib/popover.ts';
 
 let popoverEl: HTMLElement | null = null;
+
+const workspaceDismiss = createAutoDismiss({
+    getAnchor: () => document.getElementById('workspace-selector'),
+    isOpen: () => popoverEl !== null,
+    onDismiss: () => closeWorkspacePopover(),
+});
 
 export function getWorkspaceRecords(): readonly WorkspaceRecord[] {
     return workspaceStore.records;
@@ -204,11 +211,7 @@ export function openWorkspacePopover(): void {
     selector.appendChild(popover);
     popoverEl = popover;
     installListboxArrowNavigation(popover);
-    document.addEventListener('keydown', onEscapeKey, true);
-
-    setTimeout(() => {
-        document.addEventListener('click', onOutsideClick);
-    }, 0);
+    workspaceDismiss.activate();
 }
 
 function createRow(): HTMLDivElement {
@@ -260,21 +263,7 @@ function closeWorkspacePopover(): void {
     }
     const selector = document.getElementById('workspace-selector');
     if (selector) selector.classList.remove('open');
-    document.removeEventListener('click', onOutsideClick);
-    document.removeEventListener('keydown', onEscapeKey, true);
-}
-
-function onOutsideClick(event: MouseEvent): void {
-    const selector = document.getElementById('workspace-selector');
-    if (selector && event.target instanceof Node && !selector.contains(event.target)) closeWorkspacePopover();
-}
-
-function onEscapeKey(event: KeyboardEvent): void {
-    if (event.key !== 'Escape' || !popoverEl) return;
-    if (document.querySelector('dialog[open]')) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    closeWorkspacePopover();
+    workspaceDismiss.deactivate();
 }
 
 function showDeleteWorkspaceDialog(workspace: string): void {

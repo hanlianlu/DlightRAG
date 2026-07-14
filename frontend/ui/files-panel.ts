@@ -3,6 +3,7 @@
 import {bus} from '../events/bus.ts';
 import {setSanitizedHtml} from '../lib/safe_html.ts';
 import {installListboxArrowNavigation} from '../lib/listbox.ts';
+import {createAutoDismiss} from '../lib/popover.ts';
 import {ingestStore} from '../stores/ingestStore.ts';
 import {workspaceStore} from '../stores/workspaceStore.ts';
 import {closestElement, openPanel} from './panel.ts';
@@ -28,6 +29,12 @@ let ingestPollController: AbortController | null = null;
 let ingestPollTimer: number | null = null;
 let ingestPollWorkspace: string | null = null;
 let activeFileMutations = 0;
+
+const ingestDismiss = createAutoDismiss({
+    getAnchor: () => document.getElementById('ingest-target'),
+    isOpen: () => ingestPopoverEl !== null,
+    onDismiss: () => closeIngestPopover(),
+});
 
 export function hasActiveFileMutation(): boolean {
     return activeFileMutations > 0;
@@ -323,11 +330,7 @@ function toggleIngestPopover(container: HTMLElement): void {
     container.appendChild(popover);
     ingestPopoverEl = popover;
     installListboxArrowNavigation(popover);
-    document.addEventListener('keydown', onIngestPopoverEscape, true);
-
-    setTimeout(() => {
-        document.addEventListener('click', onIngestPopoverOutside);
-    }, 0);
+    ingestDismiss.activate();
 }
 
 function selectIngestWorkspace(workspace: string): void {
@@ -361,21 +364,7 @@ function closeIngestPopover(): void {
         const pill = container.querySelector('.ingest-target-pill');
         if (pill) pill.setAttribute('aria-expanded', 'false');
     }
-    document.removeEventListener('click', onIngestPopoverOutside);
-    document.removeEventListener('keydown', onIngestPopoverEscape, true);
-}
-
-function onIngestPopoverOutside(e: MouseEvent): void {
-    const container = document.getElementById('ingest-target');
-    if (container && e.target instanceof Node && !container.contains(e.target)) closeIngestPopover();
-}
-
-function onIngestPopoverEscape(e: KeyboardEvent): void {
-    if (e.key !== 'Escape' || !ingestPopoverEl) return;
-    if (document.querySelector('dialog[open]')) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    closeIngestPopover();
+    ingestDismiss.deactivate();
 }
 
 function setUploadBusy(isBusy: boolean): void {
