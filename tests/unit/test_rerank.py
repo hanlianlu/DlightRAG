@@ -476,15 +476,16 @@ class TestChatLlmRerank:
         # Full VLM text (not truncated to 500) — text-only fallback uses full content
         assert long_vlm_text in [c.get("text", "") for c in content]
 
-    async def test_multimodal_true_default_keeps_images(self):
-        """Default multimodal=True sends images and truncated text."""
+    async def test_multimodal_true_keeps_image_and_full_text(self):
+        """Default multimodal=True fuses the image with the FULL VLM description."""
         received_messages = []
 
         async def mock_scoring(messages, **kwargs):
             received_messages.append(messages)
             return "[0.8]"
 
-        chunks = [{"content": "text", "image_data": _PNG_B64}]
+        long_vlm_text = "VLM analysis of image: " + "x" * 600
+        chunks = [{"content": long_vlm_text, "image_data": _PNG_B64}]
         await _chat_llm_rerank(
             "query",
             chunks,
@@ -495,8 +496,10 @@ class TestChatLlmRerank:
         content = received_messages[0][0]["content"]
         marker_idx = next(i for i, c in enumerate(content) if c.get("text") == "\nCandidate 1:")
         image_idx = next(i for i, c in enumerate(content) if c.get("type") == "image_url")
-        text_idx = next(i for i, c in enumerate(content) if c.get("text") == "text")
+        text_idx = next(i for i, c in enumerate(content) if c.get("text") == long_vlm_text)
         assert marker_idx < image_idx < text_idx
+        # Full description is fused with the image -- no arbitrary truncation.
+        assert long_vlm_text in [c.get("text", "") for c in content]
 
     async def test_multimodal_false_concurrent_batches(self):
         """Text-only fallback works correctly with batched concurrent scoring."""
