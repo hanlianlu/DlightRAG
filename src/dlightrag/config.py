@@ -356,9 +356,10 @@ class RerankConfig(BaseModel):
     input_modality: Literal["auto", "text", "multimodal"] = Field(
         default="auto",
         description=(
-            "Reranker input selection. 'auto' lets the strategy use probed or API-level "
-            "capabilities, 'text' always uses chunk content, and 'multimodal' sends "
-            "image_data when the selected model/API supports image documents."
+            "Reranker input selection. For chat_llm_reranker 'auto' follows the scoring "
+            "model's startup vision probe; for HTTP rerankers 'auto' resolves to 'text' "
+            "(no reliable probe). 'text' always uses chunk content; 'multimodal' sends "
+            "image_data and is rejected at startup by a text-only rerank strategy."
         ),
     )
     score_threshold: float | None = Field(

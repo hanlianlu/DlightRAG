@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+from functools import partial
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -10,20 +11,24 @@ import pytest
 
 import dlightrag.models.rerank as rerank_module
 from dlightrag.config import RerankConfig
-from dlightrag.models.rerank import (
-    _aliyun_rerank,
-    _azure_cohere_rerank,
+from dlightrag.models.providers.rerank_base import resolve_rerank_input_modality
+from dlightrag.models.providers.rerank_providers import (
+    AliyunRerankProvider,
+    AzureCohereRerankProvider,
+    CohereRerankProvider,
+    HttpRerankProvider,
+    JinaRerankProvider,
+    VoyageRerankProvider,
     _azure_cohere_rerank_url,
+)
+from dlightrag.models.rerank import (
     _build_scored_chunks,
     _chat_llm_rerank,
-    _cohere_rerank,
-    _http_rerank,
-    _jina_rerank,
     _parse_listwise_scores,
-    _resolve_input_modality,
-    _voyage_rerank,
+    _run_http_rerank,
     build_rerank_func,
 )
+from dlightrag.utils.image_budget import ImagePayloadBudget
 
 _PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
@@ -127,7 +132,7 @@ class TestBuildRerankFunc:
         assert captured["score_threshold"] is None
 
     async def test_provider_default_threshold_keeps_all_scored_candidates(self, monkeypatch):
-        captured = self._capture_threshold(monkeypatch, "_voyage_rerank")
+        captured = self._capture_threshold(monkeypatch, "_run_http_rerank")
         self._stub_http_client(monkeypatch)
 
         fn = build_rerank_func(
@@ -138,7 +143,7 @@ class TestBuildRerankFunc:
         assert captured["score_threshold"] is None
 
     async def test_explicit_provider_threshold_is_preserved(self, monkeypatch):
-        captured = self._capture_threshold(monkeypatch, "_voyage_rerank")
+        captured = self._capture_threshold(monkeypatch, "_run_http_rerank")
         self._stub_http_client(monkeypatch)
 
         fn = build_rerank_func(
@@ -151,6 +156,20 @@ class TestBuildRerankFunc:
         await fn("query", [{"content": "chunk"}], 1)
 
         assert captured["score_threshold"] == 0.42
+
+    def test_provider_requires_api_key(self):
+        with pytest.raises(ValueError, match="requires api_key"):
+            build_rerank_func(RerankConfig(strategy="voyage_reranker"))
+
+    def test_provider_requires_base_url(self):
+        with pytest.raises(ValueError, match="requires base_url"):
+            build_rerank_func(RerankConfig(strategy="aliyun_reranker", api_key="k"))
+
+    def test_multimodal_on_text_only_provider_raises(self):
+        with pytest.raises(ValueError, match="text-only"):
+            build_rerank_func(
+                RerankConfig(strategy="voyage_reranker", api_key="k", input_modality="multimodal")
+            )
 
 
 class TestChatLlmRerank:
@@ -508,7 +527,28 @@ class TestChatLlmRerank:
         assert all(c["rerank_score"] > 0 for c in result)
 
 
-class TestHttpRerank:
+class TestRerankInputModality:
+    def test_auto_defaults_to_text(self):
+        assert resolve_rerank_input_modality("auto") == "text"
+
+    def test_explicit_modality_is_honored(self):
+        assert resolve_rerank_input_modality("text") == "text"
+        assert resolve_rerank_input_modality("multimodal") == "multimodal"
+
+
+def _budget_factory():
+    return partial(
+        ImagePayloadBudget,
+        max_total_bytes=8_000_000,
+        max_bytes_per_image=1_500_000,
+        max_px=1280,
+        min_px=768,
+        quality=86,
+        min_quality=76,
+    )
+
+
+class TestRunHttpRerank:
     async def test_bounds_image_payloads(self, monkeypatch):
         import dlightrag.utils.image_budget as image_budget_module
 
@@ -527,50 +567,58 @@ class TestHttpRerank:
             fake_bounded_image_data_uri,
         )
 
-        result = await _http_rerank(
+        result = await _run_http_rerank(
             "query",
             [{"content": "with image", "image_data": raw_image}],
             top_k=1,
-            url="https://rerank.example",
+            provider=HttpRerankProvider(),
             model="reranker",
+            base_url="https://rerank.example",
+            api_key=None,
+            modality="multimodal",
             score_threshold=0.3,
             client=cast(Any, client),
-            image_max_bytes=456,
-            image_max_total_bytes=789,
-            image_max_px=1024,
-            image_min_px=768,
-            image_quality=86,
-            image_min_quality=76,
+            budget_factory=partial(
+                ImagePayloadBudget,
+                max_total_bytes=789,
+                max_bytes_per_image=456,
+                max_px=1024,
+                min_px=768,
+                quality=86,
+                min_quality=76,
+            ),
         )
 
         assert result[0]["rerank_score"] == pytest.approx(0.9)
         assert client.payload is not None
         assert client.payload["documents"] == [{"image": bounded_uri}]
+        assert client.url == "https://rerank.example/rerank"
         assert raw_image not in str(client.payload)
 
-    async def test_multimodal_false_skips_images_sends_text_only(self):
-        """When multimodal=False, http reranker only sends {"text": ...} documents."""
+    async def test_text_modality_skips_images_sends_text_only(self):
         raw_image = "RAW_ORIGINAL_IMAGE_PAYLOAD"
         client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.85}]})
 
-        result = await _http_rerank(
+        result = await _run_http_rerank(
             "query",
             [{"content": "VLM text description", "image_data": raw_image}],
             top_k=1,
-            url="https://rerank.example",
+            provider=HttpRerankProvider(),
             model="text-only-reranker",
+            base_url="https://rerank.example",
+            api_key=None,
+            modality="text",
             score_threshold=0.3,
             client=cast(Any, client),
-            multimodal=False,
+            budget_factory=_budget_factory(),
         )
 
         assert result[0]["rerank_score"] == pytest.approx(0.85)
-        # Should only have {"text": ...}, no {"image": ...}
         assert client.payload is not None
         assert client.payload["documents"] == [{"text": "VLM text description"}]
         assert raw_image not in str(client.payload)
 
-    async def test_score_threshold_drops_all_http_results_below_threshold(self):
+    async def test_score_threshold_drops_all_results_below_threshold(self):
         client = _CaptureClient(
             {
                 "results": [
@@ -580,150 +628,193 @@ class TestHttpRerank:
             }
         )
 
-        result = await _http_rerank(
+        result = await _run_http_rerank(
             "query",
             [{"content": "low"}, {"content": "also low"}],
             top_k=10,
-            url="https://rerank.example",
+            provider=HttpRerankProvider(),
             model="reranker",
+            base_url="https://rerank.example",
+            api_key=None,
+            modality="text",
             score_threshold=0.5,
             client=cast(Any, client),
+            budget_factory=_budget_factory(),
         )
 
         assert result == []
 
-
-class TestRerankInputModality:
-    def test_auto_uses_known_model_capability(self):
-        assert _resolve_input_modality("auto", "jina-reranker-v3") == "text"
-        assert _resolve_input_modality("auto", "jina-reranker-m0") == "multimodal"
-        assert _resolve_input_modality("auto", "qwen3-vl-rerank") == "multimodal"
-        assert _resolve_input_modality("auto", "rerank-2.5-lite") == "text"
-        assert _resolve_input_modality("auto", "rerank-v4.0") == "text"
-        assert _resolve_input_modality("auto", "rerank-v4.0-fast") == "text"
-        assert _resolve_input_modality("auto", "unknown-reranker") == "text"
-
-    def test_known_text_models_stay_text_when_multimodal_is_forced(self):
-        assert _resolve_input_modality("multimodal", "jina-reranker-v3") == "text"
-        assert _resolve_input_modality("multimodal", "rerank-2.5-lite") == "text"
-        assert _resolve_input_modality("multimodal", "rerank-v4.0") == "text"
-        assert _resolve_input_modality("multimodal", "rerank-v4.0-pro") == "text"
-
-
-class TestJinaRerank:
-    async def test_default_latest_model_uses_text(self):
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.9}]})
-
-        result = await _jina_rerank(
+    async def test_empty_chunks_short_circuits(self):
+        client = _CaptureClient({"results": []})
+        result = await _run_http_rerank(
             "query",
-            [{"content": "VLM text", "image_data": _PNG_B64}],
-            top_k=1,
-            url="https://api.jina.ai/v1/rerank",
-            api_key="jina-key",
-            input_modality="auto",
-            score_threshold=0.5,
+            [],
+            top_k=5,
+            provider=HttpRerankProvider(),
+            model="reranker",
+            base_url="https://rerank.example",
+            api_key=None,
+            modality="text",
+            score_threshold=None,
             client=cast(Any, client),
+            budget_factory=_budget_factory(),
         )
+        assert result == []
+        assert client.payload is None
 
-        assert result[0]["rerank_score"] == pytest.approx(0.9)
-        assert client.payload == {
+
+class TestRerankProviders:
+    def test_jina_text_and_image_documents(self):
+        provider = JinaRerankProvider()
+        assert provider.accepts_images is True
+        assert provider.request_url(None, "m") == "https://api.jina.ai/v1/rerank"
+        text_payload = provider.build_payload(
+            model="jina-reranker-v3", query="q", documents=[("VLM text", None)], top_n=1
+        )
+        assert text_payload == {
             "model": "jina-reranker-v3",
-            "query": "query",
+            "query": "q",
             "documents": ["VLM text"],
             "top_n": 1,
             "return_documents": False,
         }
-        assert _PNG_B64 not in str(client.payload)
-
-    async def test_text_model_auto_uses_vlm_text(self):
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.8}]})
-
-        await _jina_rerank(
-            "query",
-            [{"content": "VLM text", "image_data": _PNG_B64}],
-            top_k=1,
-            url="https://api.jina.ai/v1/rerank",
-            model="jina-reranker-v3",
-            api_key="jina-key",
-            input_modality="auto",
-            score_threshold=0.5,
-            client=cast(Any, client),
-        )
-
-        assert client.payload is not None
-        assert client.payload["documents"] == ["VLM text"]
-        assert _PNG_B64 not in str(client.payload)
-
-    async def test_m0_auto_sends_multimodal_image_document(self):
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.8}]})
-
-        await _jina_rerank(
-            "query",
-            [{"content": "VLM text", "image_data": _PNG_B64}],
-            top_k=1,
-            url="https://api.jina.ai/v1/rerank",
+        image_payload = provider.build_payload(
             model="jina-reranker-m0",
-            api_key="jina-key",
-            input_modality="auto",
-            client=cast(Any, client),
+            query="q",
+            documents=[("VLM text", "data:image/png;base64,ABC")],
+            top_n=1,
         )
+        assert image_payload["documents"] == [{"image": "data:image/png;base64,ABC"}]
 
-        assert client.payload is not None
-        assert client.payload["documents"] == [{"image": f"data:image/png;base64,{_PNG_B64}"}]
-
-
-class TestAliyunRerank:
-    async def test_qwen3_vl_auto_sends_dashscope_multimodal_payload(self):
-        client = _CaptureClient({"output": {"results": [{"index": 0, "relevance_score": 0.93}]}})
-
-        result = await _aliyun_rerank(
-            "query",
-            [{"content": "VLM text", "image_data": _PNG_B64}],
-            top_k=1,
-            url="https://workspace.ap-southeast-1.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
-            model="qwen3-vl-rerank",
-            api_key="aliyun-key",
-            input_modality="auto",
-            score_threshold=0.5,
-            client=cast(Any, client),
+    def test_voyage_text_only_top_k_and_data_key(self):
+        provider = VoyageRerankProvider()
+        assert provider.accepts_images is False
+        payload = provider.build_payload(
+            model="rerank-2.5",
+            query="q",
+            documents=[("first", "data:image/png;base64,ABC"), ("second", None)],
+            top_n=1,
         )
+        assert payload == {
+            "model": "rerank-2.5",
+            "query": "q",
+            "documents": ["first", "second"],
+            "top_k": 1,
+            "truncation": True,
+        }
+        assert provider.parse_results({"data": [{"index": 0, "relevance_score": 0.9}]}) == [
+            {"index": 0, "relevance_score": 0.9}
+        ]
 
-        assert result[0]["rerank_score"] == pytest.approx(0.93)
-        assert client.payload == {
-            "model": "qwen3-vl-rerank",
-            "input": {
-                "query": {"text": "query"},
-                "documents": [{"image": f"data:image/png;base64,{_PNG_B64}"}],
-            },
-            "parameters": {"top_n": 1},
+    def test_cohere_text_only(self):
+        provider = CohereRerankProvider()
+        assert provider.accepts_images is False
+        payload = provider.build_payload(
+            model="rerank-v4.0-fast", query="q", documents=[("first", None)], top_n=2
+        )
+        assert payload == {
+            "model": "rerank-v4.0-fast",
+            "query": "q",
+            "documents": ["first"],
+            "top_n": 2,
         }
 
-    async def test_qwen3_text_uses_compatible_payload(self):
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.86}]})
-
-        await _aliyun_rerank(
-            "query",
-            [{"content": "VLM text", "image_data": _PNG_B64}],
-            top_k=1,
-            url="https://workspace.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/reranks",
+    def test_aliyun_qwen3_text_flat_body(self):
+        provider = AliyunRerankProvider()
+        payload = provider.build_payload(
             model="qwen3-rerank",
-            api_key="aliyun-key",
-            input_modality="auto",
-            score_threshold=0.5,
-            client=cast(Any, client),
+            query="q",
+            documents=[("VLM text", "data:image/png;base64,ABC")],
+            top_n=1,
         )
-
-        assert client.payload == {
+        assert payload == {
             "model": "qwen3-rerank",
-            "query": "query",
+            "query": "q",
             "documents": ["VLM text"],
             "top_n": 1,
         }
-        assert _PNG_B64 not in str(client.payload)
+        assert provider.parse_results({"results": [{"index": 0, "relevance_score": 0.8}]}) == [
+            {"index": 0, "relevance_score": 0.8}
+        ]
+
+    def test_aliyun_qwen3_vl_nested_multimodal_body(self):
+        provider = AliyunRerankProvider()
+        assert provider.accepts_images is True
+        payload = provider.build_payload(
+            model="qwen3-vl-rerank",
+            query="q",
+            documents=[("VLM text", "data:image/png;base64,ABC")],
+            top_n=1,
+        )
+        assert payload == {
+            "model": "qwen3-vl-rerank",
+            "input": {
+                "query": {"text": "q"},
+                "documents": [{"image": "data:image/png;base64,ABC"}],
+            },
+            "parameters": {"top_n": 1},
+        }
+        assert provider.parse_results(
+            {"output": {"results": [{"index": 0, "relevance_score": 0.93}]}}
+        ) == [{"index": 0, "relevance_score": 0.93}]
+
+    def test_http_generic_appends_rerank_path_and_dict_documents(self):
+        provider = HttpRerankProvider()
+        assert provider.requires_api_key is False
+        assert (
+            provider.request_url("https://rerank.example/", "m") == "https://rerank.example/rerank"
+        )
+        payload = provider.build_payload(
+            model="m",
+            query="q",
+            documents=[("text a", None), ("text b", "data:image/png;base64,ABC")],
+            top_n=2,
+        )
+        assert payload == {
+            "model": "m",
+            "query": "q",
+            "documents": [{"text": "text a"}, {"image": "data:image/png;base64,ABC"}],
+            "top_n": 2,
+        }
+
+    def test_azure_cohere_url_derivation(self):
+        assert (
+            _azure_cohere_rerank_url("https://project.services.ai.azure.com")
+            == "https://project.services.ai.azure.com/providers/cohere/v2/rerank"
+        )
+        assert (
+            _azure_cohere_rerank_url("https://example.com/path/.services.ai.azure.com")
+            == "https://example.com/path/.services.ai.azure.com/v1/rerank"
+        )
+        assert (
+            _azure_cohere_rerank_url("https://project.services.ai.azure.com.example.com")
+            == "https://project.services.ai.azure.com.example.com/v1/rerank"
+        )
+
+    def test_azure_cohere_raw_authorization_and_route(self):
+        provider = AzureCohereRerankProvider()
+        assert provider.accepts_images is False
+        assert provider.request_headers("azure-key") == {
+            "Content-Type": "application/json",
+            "Authorization": "azure-key",
+        }
+        assert (
+            provider.request_url("https://project.services.ai.azure.com", "m")
+            == "https://project.services.ai.azure.com/providers/cohere/v2/rerank"
+        )
+        payload = provider.build_payload(
+            model="Cohere-rerank-v4.0-pro", query="q", documents=[("first", None)], top_n=1
+        )
+        assert payload == {
+            "model": "Cohere-rerank-v4.0-pro",
+            "query": "q",
+            "documents": ["first"],
+            "top_n": 1,
+        }
 
 
-class TestVoyageRerank:
-    async def test_sends_voyage_text_payload(self):
+class TestRunHttpRerankIntegration:
+    async def test_voyage_end_to_end_url_headers_and_parse(self):
         client = _CaptureClient(
             {
                 "data": [
@@ -733,15 +824,18 @@ class TestVoyageRerank:
             }
         )
 
-        result = await _voyage_rerank(
+        result = await _run_http_rerank(
             "query",
             [{"content": "first", "image_data": "RAW_IMAGE"}, {"content": "second"}],
             top_k=1,
-            url="https://api.voyageai.com/v1/rerank",
+            provider=VoyageRerankProvider(),
             model="rerank-2.5",
+            base_url=None,
             api_key="voyage-key",
+            modality="text",
             score_threshold=0.5,
             client=cast(Any, client),
+            budget_factory=_budget_factory(),
         )
 
         assert result == [{"content": "second", "rerank_score": 0.91}]
@@ -756,123 +850,6 @@ class TestVoyageRerank:
             "truncation": True,
         }
         assert "RAW_IMAGE" not in str(client.payload)
-
-    async def test_default_threshold_keeps_negative_scores(self):
-        client = _CaptureClient(
-            {
-                "data": [
-                    {"index": 0, "relevance_score": -0.1},
-                    {"index": 1, "relevance_score": -0.2},
-                ]
-            }
-        )
-
-        result = await _voyage_rerank(
-            "query",
-            [{"content": "first"}, {"content": "second"}],
-            top_k=2,
-            api_key="voyage-key",
-            client=cast(Any, client),
-        )
-
-        assert result == [
-            {"content": "first", "rerank_score": -0.1},
-            {"content": "second", "rerank_score": -0.2},
-        ]
-
-
-class TestCohereRerank:
-    async def test_sends_cohere_text_payload(self):
-        client = _CaptureClient(
-            {
-                "results": [
-                    {"index": 0, "relevance_score": 0.88},
-                    {"index": 1, "relevance_score": 0.4},
-                ]
-            }
-        )
-
-        result = await _cohere_rerank(
-            "query",
-            [{"content": "first"}, {"content": "second", "image_data": "RAW_IMAGE"}],
-            top_k=2,
-            url="https://api.cohere.com/v2/rerank",
-            model="rerank-v4.0-fast",
-            api_key="cohere-key",
-            score_threshold=0.5,
-            client=cast(Any, client),
-        )
-
-        assert result == [{"content": "first", "rerank_score": 0.88}]
-        assert client.url == "https://api.cohere.com/v2/rerank"
-        assert client.headers is not None
-        assert client.headers["Authorization"] == "Bearer cohere-key"
-        assert client.payload == {
-            "model": "rerank-v4.0-fast",
-            "query": "query",
-            "documents": ["first", "second"],
-            "top_n": 2,
-        }
-        assert "RAW_IMAGE" not in str(client.payload)
-
-
-class TestAzureCohereRerank:
-    def test_project_endpoint_matching_uses_hostname_only(self):
-        assert (
-            _azure_cohere_rerank_url("https://project.services.ai.azure.com")
-            == "https://project.services.ai.azure.com/providers/cohere/v2/rerank"
-        )
-        assert (
-            _azure_cohere_rerank_url("https://example.com/path/.services.ai.azure.com")
-            == "https://example.com/path/.services.ai.azure.com/v1/rerank"
-        )
-        assert (
-            _azure_cohere_rerank_url("https://project.services.ai.azure.com.example.com")
-            == "https://project.services.ai.azure.com.example.com/v1/rerank"
-        )
-
-    async def test_project_endpoint_uses_provider_route(self):
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.88}]})
-
-        result = await _azure_cohere_rerank(
-            "query",
-            [{"content": "first"}, {"content": "second"}],
-            top_k=1,
-            endpoint="https://project.services.ai.azure.com",
-            api_key="azure-key",
-            deployment="Cohere-rerank-v4.0-pro",
-            score_threshold=0.5,
-            client=cast(Any, client),
-        )
-
-        assert result == [{"content": "first", "rerank_score": 0.88}]
-        assert client.url == "https://project.services.ai.azure.com/providers/cohere/v2/rerank"
-        assert client.headers is not None
-        assert client.headers["Authorization"] == "azure-key"
-        assert client.payload == {
-            "model": "Cohere-rerank-v4.0-pro",
-            "query": "query",
-            "documents": ["first", "second"],
-            "top_n": 1,
-        }
-
-    async def test_model_endpoint_uses_v1_rerank_route(self):
-        client = _CaptureClient({"results": [{"index": 0, "relevance_score": 0.88}]})
-
-        await _azure_cohere_rerank(
-            "query",
-            [{"content": "first"}],
-            top_k=1,
-            endpoint="https://cohere-rerank-v4-pro.example.eastus.models.ai.azure.com/",
-            api_key="azure-key",
-            deployment="model",
-            client=cast(Any, client),
-        )
-
-        assert (
-            client.url
-            == "https://cohere-rerank-v4-pro.example.eastus.models.ai.azure.com/v1/rerank"
-        )
 
 
 class _CaptureClient:
