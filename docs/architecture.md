@@ -52,10 +52,10 @@ source file or upload
 ```
 
 Source files and parser-extracted images both go through LightRAG's multimodal
-path. When the configured embedding provider fuses text and image inputs and the
-startup probe succeeds, DlightRAG aligns the existing canonical LightRAG visual
-chunk with a fused vector that interleaves the VLM description and the image. With
-a text-only or non-fusing embedding model, this alignment is skipped and
+path. When the configured embedding provider is a unified multimodal model and
+the startup probe succeeds, DlightRAG aligns the existing canonical LightRAG
+visual chunk with a fused vector that interleaves the VLM description and the
+image. With a text-only embedding model, this alignment is skipped and
 LightRAG's semantic visual chunk remains the multimodal ingestion path.
 
 ## Retrieval And Answer Flow
@@ -65,7 +65,7 @@ query
   -> query planning and optional metadata filter inference
   -> strict metadata in-filtering when filters are explicit
   -> LightRAG mix retrieval
-  -> direct query-image retrieval when image embedding is active
+  -> direct image->image retrieval when fused visual embedding is active
   -> pg_textsearch BM25 over the same candidate scope
   -> RRF fusion
   -> provenance hydration and final rerank

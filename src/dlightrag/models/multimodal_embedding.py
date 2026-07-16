@@ -15,7 +15,6 @@ from dlightrag.models.embedding_inputs import (
     TextEmbeddingInput,
 )
 from dlightrag.models.providers.embed_base import EmbedProvider
-from dlightrag.utils.concurrency import bounded_map
 from dlightrag.utils.images import bounded_embedding_image_data_uri
 
 logger = logging.getLogger(__name__)
@@ -75,7 +74,6 @@ class MultimodalEmbedder:
         self.provider = provider
         self.input_modality = resolve_embedding_input_modality(provider, input_modality)
         self.supports_images = self.input_modality == "multimodal"
-        self.supports_fused_multimodal = self.supports_images and provider.supports_fused_multimodal
         self.asymmetric = resolve_asymmetric(provider, asymmetric)
         self.supports_asymmetric = self.asymmetric
         self.batch_size = batch_size
@@ -109,108 +107,90 @@ class MultimodalEmbedder:
         self._validate_vectors(vectors, expected_count=len(texts))
         return vectors
 
-    async def embed_images(
-        self, images: list[Image.Image], *, context: EmbeddingContext
-    ) -> list[list[float]]:
-        """Embed images with explicit query/document context."""
-        self._ensure_image_support()
-        if not images:
-            return []
-
-        async def one(image: Image.Image) -> list[float]:
-            payload = self._build_image_payload(image, context=context)
-            data = await self._post(payload)
-            vectors = self.provider.parse_response(data)
-            self._validate_vectors(vectors, expected_count=1)
-            return vectors[0]
-
-        results = await bounded_map(
-            images,
-            one,
-            max_concurrent=self.batch_size,
-            task_name="image-embedding",
-        )
-        vectors: list[list[float]] = []
-        for result in results:
-            if isinstance(result, Exception):
-                raise result
-            vectors.append(result)
-        return vectors
-
-    async def embed_index_images(self, images: list[Image.Image]) -> list[list[float]]:
-        """Embed document/index-side images."""
-        return await self.embed_images(images, context="document")
-
-    def _build_fused_payload(
-        self, description: str, image: Image.Image, *, context: EmbeddingContext
-    ) -> dict:
+    def _fused_input(self, description: str, image: Image.Image) -> MultimodalEmbeddingInput:
+        """Build one interleaved text+image input for fused embedding."""
         data_uri = bounded_embedding_image_data_uri(image)
         parts: list[TextEmbeddingInput | ImageEmbeddingInput] = []
         text = description.strip()
         if text:
             parts.append(TextEmbeddingInput(text=text))
         parts.append(ImageEmbeddingInput(data_uri=data_uri))
-        return self.provider.build_payload(
+        return MultimodalEmbeddingInput(parts=parts)
+
+    async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
+        """Embed (description, image) pairs as fused document vectors in one request.
+
+        Any image-capable provider is a unified multimodal model, so each VLM
+        description and its image are interleaved into one vector and the visual
+        chunk stays reachable by text queries (closes the modality gap). An empty
+        description degrades gracefully to an image-only vector.
+
+        All pairs are sent as a single provider request; callers chunk the input
+        to respect provider batch limits.
+        """
+        self._ensure_image_support()
+        if not items:
+            return []
+        inputs: list[EmbeddingInput] = [
+            self._fused_input(description, image) for description, image in items
+        ]
+        payload = self.provider.build_payload(
             self.model,
-            [MultimodalEmbeddingInput(parts=parts)],
-            context=context,
+            inputs,
+            context="document",
             asymmetric=self.asymmetric,
             output_dimension=self.dim,
         )
-
-    async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
-        """Embed (description, image) pairs as single fused document vectors.
-
-        Requires a unified multimodal provider (``supports_fused_multimodal``):
-        the VLM description and the image are interleaved into one vector, so the
-        visual chunk stays reachable by text queries (closes the modality gap).
-        An empty description degrades gracefully to an image-only vector.
-        """
-        self._ensure_fused_support()
-        if not items:
-            return []
-
-        async def one(item: tuple[str, Image.Image]) -> list[float]:
-            description, image = item
-            payload = self._build_fused_payload(description, image, context="document")
-            data = await self._post(payload)
-            vectors = self.provider.parse_response(data)
-            self._validate_vectors(vectors, expected_count=1)
-            return vectors[0]
-
-        results = await bounded_map(
-            items,
-            one,
-            max_concurrent=self.batch_size,
-            task_name="fused-embedding",
-        )
-        vectors: list[list[float]] = []
-        for result in results:
-            if isinstance(result, Exception):
-                raise result
-            vectors.append(result)
+        data = await self._post(payload)
+        vectors = self.provider.parse_response(data)
+        self._validate_vectors(vectors, expected_count=len(items))
         return vectors
 
     async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
-        """Embed query-side images."""
-        return await self.embed_images(images, context="query")
+        """Embed query-side images (image-only) for direct visual retrieval.
+
+        All images are sent as one query-context request. This preserves the raw
+        visual signal that the VLM-description path loses; the caller fuses these
+        results with the text/BM25/KG legs via RRF, so partial overlap is fine.
+        Works for any image-capable provider: the query-image vector matches the
+        index in the provider's shared text-image space (cross-modal), whether the
+        index vectors are fused or LightRAG's native VLM->text descriptions.
+        """
+        self._ensure_image_support()
+        if not images:
+            return []
+        inputs: list[EmbeddingInput] = [
+            ImageEmbeddingInput(data_uri=bounded_embedding_image_data_uri(image))
+            for image in images
+        ]
+        payload = self.provider.build_payload(
+            self.model,
+            inputs,
+            context="query",
+            asymmetric=self.asymmetric,
+            output_dimension=self.dim,
+        )
+        data = await self._post(payload)
+        vectors = self.provider.parse_response(data)
+        self._validate_vectors(vectors, expected_count=len(images))
+        return vectors
 
     async def probe_image_embedding(self) -> None:
-        """Probe that the configured provider can embed an image."""
-        await self.embed_index_images([Image.new("RGB", (1, 1), "white")])
-
-    def build_image_payload_for_test(
-        self, image: Image.Image, *, context: EmbeddingContext
-    ) -> dict:
-        """Expose payload construction to unit tests without HTTP calls."""
-        return self._build_image_payload(image, context=context)
+        """Probe that the provider can embed an image (gates the direct-visual leg)."""
+        await self.embed_query_images([Image.new("RGB", (1, 1), "white")])
 
     def build_fused_payload_for_test(
         self, description: str, image: Image.Image, *, context: EmbeddingContext
     ) -> dict:
         """Expose fused payload construction to unit tests without HTTP calls."""
-        self._ensure_fused_support()
-        return self._build_fused_payload(description, image, context=context)
+        self._ensure_image_support()
+        return self.provider.build_payload(
+            self.model,
+            [self._fused_input(description, image)],
+            context=context,
+            asymmetric=self.asymmetric,
+            output_dimension=self.dim,
+        )
 
     def validate_vectors_for_test(self, vectors: list[list[float]]) -> None:
         """Expose vector validation to unit tests."""
@@ -222,17 +202,6 @@ class MultimodalEmbedder:
         response = await self._client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         return response.json()
-
-    def _build_image_payload(self, image: Image.Image, *, context: EmbeddingContext) -> dict:
-        self._ensure_image_support()
-        data_uri = bounded_embedding_image_data_uri(image)
-        return self.provider.build_payload(
-            self.model,
-            [ImageEmbeddingInput(data_uri=data_uri)],
-            context=context,
-            asymmetric=self.asymmetric,
-            output_dimension=self.dim,
-        )
 
     def _validate_vectors(
         self,
@@ -254,10 +223,4 @@ class MultimodalEmbedder:
         if not self.supports_images:
             raise ValueError(
                 f"{self.provider.__class__.__name__} does not support image embeddings"
-            )
-
-    def _ensure_fused_support(self) -> None:
-        if not self.supports_fused_multimodal:
-            raise ValueError(
-                f"{self.provider.__class__.__name__} does not support fused text+image embeddings"
             )

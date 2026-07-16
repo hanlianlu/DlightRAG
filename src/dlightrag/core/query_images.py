@@ -15,24 +15,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PreparedQueryImages:
-    """Current-request image inputs: direct-visual content + VLM descriptions."""
+    """Current-request image inputs described for retrieval planning."""
 
-    multimodal_content: list[dict[str, Any]]
     descriptions: list[str]
     descriptions_by_ordinal: dict[str, str]
-
-
-def images_to_multimodal_content(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return direct visual retrieval content blocks for inline data images."""
-    items: list[dict[str, Any]] = []
-    for image in images:
-        block = image_url_block(image)
-        if block is None:
-            continue
-        url = block.get("image_url", {}).get("url")
-        if isinstance(url, str) and url.strip().startswith("data:"):
-            items.append(block)
-    return items
 
 
 class QueryImageDescriber:
@@ -138,11 +124,9 @@ async def prepare_query_images(
     query_images: list[dict[str, Any]] | None,
     describer: Any,
 ) -> PreparedQueryImages:
-    """Describe current request images and build direct-visual retrieval content."""
-    current_images = list(query_images or [])
-    descriptions = await describer.describe(current_images)
+    """Describe current-request images for image-aware retrieval planning."""
+    descriptions = await describer.describe(list(query_images or []))
     return PreparedQueryImages(
-        multimodal_content=images_to_multimodal_content(current_images),
         descriptions=list(descriptions.values()),
         descriptions_by_ordinal=descriptions,
     )
@@ -151,6 +135,5 @@ async def prepare_query_images(
 __all__ = [
     "PreparedQueryImages",
     "QueryImageDescriber",
-    "images_to_multimodal_content",
     "prepare_query_images",
 ]

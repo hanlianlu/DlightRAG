@@ -48,22 +48,6 @@ def _to_voyage_item(item: EmbeddingInput) -> dict[str, list[dict[str, str]]]:
     return {"content": [_to_voyage_content_part(part) for part in _parts(item)]}
 
 
-def _to_dashscope_item(item: EmbeddingInput) -> dict[str, Any]:
-    values: list[dict[str, str]] = []
-    for part in _parts(item):
-        if isinstance(part, TextEmbeddingInput):
-            values.append({"text": part.text})
-        else:
-            values.append({"image": part.as_payload_value()})
-    return values[0] if len(values) == 1 else {"contents": values}
-
-
-def _to_dashscope_part(part: TextEmbeddingInput | ImageEmbeddingInput) -> dict[str, str]:
-    if isinstance(part, TextEmbeddingInput):
-        return {"text": part.text}
-    return {"image": part.as_payload_value()}
-
-
 def _to_jina_image(part: ImageEmbeddingInput) -> dict[str, str]:
     if part.url:
         return {"url": part.url}
@@ -133,7 +117,6 @@ class VoyageEmbedProvider(EmbedProvider):
     endpoint = "/multimodalembeddings"
     image_input_capability = "native"
     supports_asymmetric = True
-    supports_fused_multimodal = True
 
     def build_payload(
         self,
@@ -181,47 +164,6 @@ class JinaEmbedProvider(EmbedProvider):
         if output_dimension is not None:
             payload["dimensions"] = output_dimension
         return payload
-
-
-class DashScopeQwenEmbedProvider(EmbedProvider):
-    """DashScope Qwen3-VL multimodal embedding endpoint."""
-
-    endpoint = "/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding"
-    image_input_capability = "native"
-    supports_asymmetric = False
-    supports_fused_multimodal = True
-
-    def build_payload(
-        self,
-        model: str,
-        inputs: list[EmbeddingInput],
-        *,
-        context: EmbedContext,
-        asymmetric: bool = False,
-        output_dimension: int | None = None,
-    ) -> dict:
-        if any(isinstance(item, MultimodalEmbeddingInput) for item in inputs):
-            if len(inputs) != 1 or not isinstance(inputs[0], MultimodalEmbeddingInput):
-                raise ValueError("DashScope fused embedding expects exactly one multimodal input")
-            payload = {
-                "model": model,
-                "input": {"contents": [_to_dashscope_part(part) for part in inputs[0].parts]},
-            }
-            parameters: dict[str, Any] = {"enable_fusion": True}
-        else:
-            payload = {
-                "model": model,
-                "input": {"contents": [_to_dashscope_item(item) for item in inputs]},
-            }
-            parameters = {}
-        if output_dimension is not None:
-            parameters["dimension"] = output_dimension
-        if parameters:
-            payload["parameters"] = parameters
-        return payload
-
-    def parse_response(self, data: dict) -> list[list[float]]:
-        return [item["embedding"] for item in data["output"]["embeddings"]]
 
 
 class GeminiEmbedProvider(EmbedProvider):
@@ -294,7 +236,6 @@ class OllamaEmbedProvider(EmbedProvider):
 
 _EMBED_REGISTRY: dict[str, type[EmbedProvider]] = {
     "voyage": VoyageEmbedProvider,
-    "dashscope_qwen": DashScopeQwenEmbedProvider,
     "gemini": GeminiEmbedProvider,
     "jina": JinaEmbedProvider,
     "openai_compatible": OpenAICompatibleEmbedProvider,

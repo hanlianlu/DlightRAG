@@ -37,7 +37,6 @@ from dlightrag.core.ingest_job_coordinator import IngestJobCoordinator
 from dlightrag.core.ingestion.paths import is_explicit_upload_batch_dir
 from dlightrag.core.query_images import (
     PreparedQueryImages,
-    images_to_multimodal_content,
     prepare_query_images,
 )
 from dlightrag.core.query_planner import QueryPlan, QueryPlanner
@@ -1232,10 +1231,9 @@ class RAGServiceManager:
             )
         else:
             # Web planned upstream in prepare_answer_turn with these same image
-            # descriptions; only build direct-visual content here.
+            # descriptions; reuse them (retrieval runs through the planner query).
             described = dict(current_image_descriptions or {})
             prepared = PreparedQueryImages(
-                multimodal_content=images_to_multimodal_content(current_images),
                 descriptions=list(described.values()),
                 descriptions_by_ordinal=described,
             )
@@ -1246,15 +1244,13 @@ class RAGServiceManager:
                 plan.standalone_query[:60],
             )
 
-        if prepared.multimodal_content:
-            existing_mm = kwargs.get("multimodal_content") or []
-            kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         limits = self._resolve_answer_limits(kwargs)
         retrieval = await self.aretrieve(
             current_query,
             plan=plan,
             workspaces=ws_list,
             scope=scope,
+            query_images=current_images,
             **kwargs,
         )
         retrieval.trace["query_image_description_count"] = len(prepared.descriptions)
@@ -1276,7 +1272,6 @@ class RAGServiceManager:
         chunk_top_k: int | None = None,
         bm25_query: str | None = None,
         filters: MetadataFilter | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
@@ -1294,8 +1289,6 @@ class RAGServiceManager:
             kwargs["filters"] = filters
         if bm25_query is not None:
             kwargs["bm25_query"] = bm25_query
-        if multimodal_content:
-            kwargs["multimodal_content"] = multimodal_content
         kwargs["top_k"] = requested_top_k or self._config.top_k
         kwargs["chunk_top_k"] = requested_chunk_top_k or self._config.chunk_top_k
         ws_list = await self._resolve_manager_query_workspaces(
@@ -1304,6 +1297,8 @@ class RAGServiceManager:
             all_workspaces=all_workspaces,
         )
         current_images = list(query_images or [])
+        if current_images:
+            kwargs["query_image_blocks"] = current_images
         descriptions: list[str] = []
         if plan is None:
             # Stateless retrieve always plans so BM25 keyword extraction,
@@ -1316,9 +1311,6 @@ class RAGServiceManager:
                 ws_list=ws_list,
             )
             descriptions = prepared.descriptions
-            if prepared.multimodal_content:
-                existing_mm = kwargs.get("multimodal_content") or []
-                kwargs["multimodal_content"] = [*existing_mm, *prepared.multimodal_content]
         effective_query = plan.standalone_query if plan is not None else query
         if plan is not None:
             kwargs.setdefault("_plan", plan)
@@ -1335,7 +1327,6 @@ class RAGServiceManager:
                         "top_k": kwargs["top_k"],
                         "chunk_top_k": kwargs["chunk_top_k"],
                         "has_filters": "filters" in kwargs,
-                        "multimodal_count": len(kwargs.get("multimodal_content") or []),
                     },
                 ) as trace:
                     if len(ws_list) == 1:
@@ -1370,17 +1361,15 @@ class RAGServiceManager:
         chunk_top_k: int | None = None,
         answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
         semantic_highlights: bool = False,
         scope: RequestScope | None = None,
     ) -> RetrievalResult:
         """Answer from one or more workspaces: plan -> retrieve -> generate.
 
-        ``query_images`` are user-attached ``image_url`` blocks inlined into
-        the answer LLM call. Distinct
-        from retrieval-time ``multimodal_content`` in ``kwargs``: this list
-        only affects answer generation, never the retrieval pipeline.
+        ``query_images`` are user-attached ``image_url`` blocks inlined into the
+        answer LLM call; they inform answer generation and (via VLM descriptions)
+        the retrieval plan, but are not embedded for retrieval.
         """
         turn = PreparedAnswerTurn.stateless(query, query_images)
         ws_list = await self._resolve_manager_query_workspaces(
@@ -1395,7 +1384,6 @@ class RAGServiceManager:
                 "chunk_top_k": chunk_top_k,
                 "answer_context_top_k": answer_context_top_k,
                 "filters": filters,
-                "multimodal_content": multimodal_content,
             }
         )
 
@@ -1494,7 +1482,6 @@ class RAGServiceManager:
         chunk_top_k: int | None = None,
         answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
         query_images: list[dict[str, Any]] | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
@@ -1511,7 +1498,6 @@ class RAGServiceManager:
             chunk_top_k=chunk_top_k,
             answer_context_top_k=answer_context_top_k,
             filters=filters,
-            multimodal_content=multimodal_content,
             scope=scope,
         )
 
@@ -1526,7 +1512,6 @@ class RAGServiceManager:
         chunk_top_k: int | None = None,
         answer_context_top_k: int | None = None,
         filters: MetadataFilter | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
         scope: RequestScope | None = None,
     ) -> tuple[RetrievalContexts, AsyncIterator[str] | None]:
         """Stream one server-prepared Web turn through the stateless core pipeline."""
@@ -1542,7 +1527,6 @@ class RAGServiceManager:
                 "chunk_top_k": chunk_top_k,
                 "answer_context_top_k": answer_context_top_k,
                 "filters": filters,
-                "multimodal_content": multimodal_content,
             }
         )
         history = list(turn.text_history) or None

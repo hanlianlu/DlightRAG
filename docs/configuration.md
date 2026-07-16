@@ -103,13 +103,12 @@ endpoint itself.
 | `provider` | Endpoint appended to `base_url` | Image policy | Asymmetric | Authentication | `dim` behavior |
 |---|---|---|---|---|---|
 | `voyage` | `/multimodalembeddings` | Native | Yes | Bearer token | Sent as `output_dimension`; returned vectors are validated |
-| `dashscope_qwen` | `/api/v1/services/embeddings/multimodal-embedding/multimodal-embedding` | Native | No | Bearer token | Sent as `parameters.dimension`; returned vectors are validated |
 | `gemini` | `/models/{model}:embedContent` | Native | No | `x-goog-api-key` | Sent as `output_dimensionality`; returned vectors are validated |
 | `jina` | `/v1/embeddings` | Native | Yes | Bearer token | Sent as `dimensions`; returned vectors are validated |
 | `openai_compatible` | `/embeddings` | Text by default; explicit image opt-in | No | Optional bearer token | Sent as `dimensions`; returned vectors are validated |
 | `ollama` | `/api/embed` | Text only | No | None | Not sent; returned vectors are still validated |
 
-The supported provider values are exactly the six names above. For example,
+The supported provider values are exactly the five names above. For example,
 LM Studio is `openai_compatible` because it exposes an OpenAI-style
 `/v1/embeddings` API. Ollama has a native provider because its embedding API is
 `/api/embed`, not `/v1/embeddings`.
@@ -134,21 +133,31 @@ response is validated.
 
 ### Input modality
 
+DlightRAG only pairs with unified multimodal embedding models, which embed text
+and images into one shared space AND fuse interleaved text+image into a single
+vector. `input_modality` is the whole capability signal -- there is no separate
+per-provider fusion table to maintain, and the startup probe verifies the live
+endpoint actually embeds an image.
+
 | Provider capability | `auto` | `text` | `multimodal` |
 |---|---|---|---|
-| Native multimodal (`voyage`, `dashscope_qwen`, `gemini`, `jina`) | Enable direct image embedding and run the startup probe | Disable all raw image embedding locally | Require image embedding; probe failure stops startup |
+| Native multimodal (`voyage`, `gemini`, `jina`) | Enable both image paths (image->image query retrieval AND the fused visual-vector overwrite); run the startup probe | Disable both locally | Require image embedding; probe failure stops startup |
 | Native text-only (`ollama`) | Text only | Text only | Fail before service initialization |
-| OpenAI-compatible extension (`openai_compatible`) | Conservative text only | Text only | Opt into the existing data-URI image payload; probe failure stops startup |
+| OpenAI-compatible extension (`openai_compatible`) | Conservative text only | Text only | Opt into the data-URI image payload; probe failure stops startup |
 
 `text` guarantees the embedding provider receives text only. It disables both
-the document visual-vector overwrite and query-image vector retrieval. Images,
+the document visual-vector overwrite and image->image query retrieval. Images,
 tables, and equations may still be described by the VLM; those descriptions
-remain ordinary text in LightRAG's semantic, BM25, and KG paths.
+remain ordinary text in LightRAG's semantic, BM25, and KG paths, and current
+query images are still described by the VLM to shape the query plan.
 
-The document visual-vector overwrite additionally requires a provider that fuses
-text and image into one vector (`voyage`, `dashscope_qwen`). Image-capable but
-non-fusing providers (`gemini`, `jina`) still enable query-image retrieval, but
-leave LightRAG's native VLM->text drawing vector in place.
+Both DlightRAG image paths turn on together from this one signal. The
+**image->image query leg** embeds the query image and matches the index in the
+provider's shared text-image space, complementing the VLM-description text path.
+The **document visual-vector overwrite** replaces a drawing chunk's vector with
+one fused text+image vector, so the figure stays reachable by text queries.
+Because every supported multimodal model fuses, no provider is left with one
+path but not the other.
 
 `multimodal` is a capability assertion, not a hint. DlightRAG fails fast when
 the configured adapter cannot serialize images or when the live startup probe

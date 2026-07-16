@@ -48,7 +48,7 @@ class LightRAGMixBackend:
         mode: str = "mix",
         top_k: int | None = None,
         chunk_top_k: int | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
+        query_image_blocks: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> RetrievalResult:
         del mode, kwargs
@@ -64,7 +64,22 @@ class LightRAGMixBackend:
             enable_rerank=False,
             include_references=True,
         )
-        raw = await self._lightrag.aquery_data(query, param=param)
+        # Run the image->image visual leg concurrently with LightRAG's mix query:
+        # it embeds the raw query image (lossless visual signal) and searches the
+        # fused visual vectors, complementing the lossy VLM-description text path.
+        visual_task = (
+            asyncio.create_task(
+                self._retrieve_query_images(query_image_blocks, top_k=self._direct_visual_top_k)
+            )
+            if self._embedder is not None and self._direct_visual_top_k > 0 and query_image_blocks
+            else None
+        )
+        try:
+            raw = await self._lightrag.aquery_data(query, param=param)
+        except BaseException:
+            if visual_task is not None:
+                await asyncio.gather(visual_task, return_exceptions=True)
+            raise
         data = raw.get("data", {})
 
         chunks = self._chunks_from_lightrag(data.get("chunks", []))
@@ -76,10 +91,8 @@ class LightRAGMixBackend:
             "direct_visual_chunk_count": 0,
             "hydrated_chunk_count": 0,
         }
-        direct_visual_chunks = await self._retrieve_query_images(
-            multimodal_content,
-            top_k=self._direct_visual_top_k,
-        )
+
+        direct_visual_chunks = await visual_task if visual_task is not None else []
         trace["direct_visual_chunk_count"] = len(direct_visual_chunks)
         if direct_visual_chunks:
             chunks = rrf_fuse([chunks, direct_visual_chunks])[:limit]
@@ -148,19 +161,14 @@ class LightRAGMixBackend:
         return chunks
 
     async def _retrieve_query_images(
-        self,
-        multimodal_content: list[dict[str, Any]] | None,
-        *,
-        top_k: int,
+        self, query_image_blocks: list[dict[str, Any]] | None, *, top_k: int
     ) -> list[ContextRow]:
-        if self._embedder is None:
+        """Embed query images (image-only) and search the fused visual vectors."""
+        if self._embedder is None or top_k <= 0:
             return []
-        if top_k <= 0:
-            return []
-        images = await asyncio.to_thread(_extract_images, multimodal_content)
+        images = await asyncio.to_thread(_extract_images, query_image_blocks)
         if not images:
             return []
-
         try:
             vectors = await self._embedder.embed_query_images(images)
         except Exception:
@@ -170,25 +178,20 @@ class LightRAGMixBackend:
             for image in images:
                 image.close()
 
-        async def _query_vector(vector: list[float]) -> list[ContextRow]:
+        async def _search(vector: list[float]) -> list[ContextRow]:
             return (
-                await self._stores.chunks_vdb.query(
-                    query="",
-                    top_k=top_k,
-                    query_embedding=vector,
-                )
+                await self._stores.chunks_vdb.query(query="", top_k=top_k, query_embedding=vector)
                 or []
             )
 
-        query_results = await bounded_map(
+        results = await bounded_map(
             list(vectors),
-            _query_vector,
+            _search,
             max_concurrent=min(8, max(1, len(vectors))),
             task_name="direct-visual-query",
         )
-
         merged: dict[str, ContextRow] = {}
-        for raw_chunks in query_results:
+        for raw_chunks in results:
             if isinstance(raw_chunks, Exception):
                 continue
             for c in raw_chunks:
@@ -221,9 +224,9 @@ class LightRAGMixBackend:
         await hydrate_lightrag_chunk_provenance(self._stores, chunks)
 
 
-def _extract_images(multimodal_content: list[dict[str, Any]] | None) -> list[Image.Image]:
+def _extract_images(blocks: list[dict[str, Any]] | None) -> list[Image.Image]:
     images: list[Image.Image] = []
-    for item in multimodal_content or []:
+    for item in blocks or []:
         if item.get("type") != "image_url":
             continue
         block = image_url_block(item)

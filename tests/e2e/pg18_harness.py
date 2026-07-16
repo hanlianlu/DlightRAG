@@ -179,6 +179,8 @@ class FakeMultimodalEmbedder:
     """Small deterministic multimodal embedder for local E2E runs."""
 
     supports_asymmetric = True
+    supports_images = True
+    batch_size = 4
 
     def __init__(self, *, dim: int = 8) -> None:
         self.dim = dim
@@ -195,11 +197,14 @@ class FakeMultimodalEmbedder:
     ) -> list[list[float]]:
         return [stable_vector(f"{context}:{text}", dim=self.dim) for text in texts]
 
-    async def embed_index_images(self, images: list[Image.Image]) -> list[list[float]]:
-        return [stable_vector(image_seed(image), dim=self.dim) for image in images]
+    async def embed_index_fused(self, items: list[tuple[str, Image.Image]]) -> list[list[float]]:
+        return [
+            stable_vector(f"{description}:{image_seed(image)}", dim=self.dim)
+            for description, image in items
+        ]
 
     async def embed_query_images(self, images: list[Image.Image]) -> list[list[float]]:
-        return await self.embed_index_images(images)
+        return [stable_vector(f"query:{image_seed(image)}", dim=self.dim) for image in images]
 
 
 def fake_embedding_func(*, dim: int = 8) -> Any:
