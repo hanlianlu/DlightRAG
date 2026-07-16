@@ -13,9 +13,35 @@ export class ConversationStore extends Store {
   #conversations: ConversationSummary[] = [];
   #activeConversationId: string | null = storedActiveConversationId();
   #history: ConversationHistory | null = null;
+  /**
+   * Monotonic request counter and the store's concurrency guard. Bumped at
+   * every lifecycle boundary (`beginRequest`, `beginLiveAnswer`,
+   * `finishLiveAnswer`, and active-conversation `remove`). Async callers
+   * capture the value they started with and re-check it via `isCurrentRequest`
+   * / `canRenderHistory`, so results from a superseded request are dropped
+   * instead of clobbering newer state.
+   */
   #generation = 0;
+  /**
+   * Conversation currently receiving a streamed answer, or `null` when idle.
+   * While non-null it acts as a lock: `select()` of a *different* conversation
+   * is deferred into `#pendingSelectionId` instead of switching, and
+   * `canRenderHistory` returns false so a history load cannot overwrite the
+   * in-progress answer. Cleared only by `finishLiveAnswer`.
+   */
   #liveAnswerConversationId: string | null = null;
+  /**
+   * A selection requested *during* a live answer, held until it ends.
+   * `finishLiveAnswer` returns it (unless discarded) so the caller can apply
+   * the deferred switch; also cleared if its target conversation is removed.
+   */
   #pendingSelectionId: string | null = null;
+  /**
+   * Whether `#activeConversationId`'s history is loaded and thus answerable.
+   * Gates `answerConversationId`; set true by `setHistory`, reset to false when
+   * switching conversations (before history arrives) or when the active
+   * conversation is removed.
+   */
   #answerReady = this.#activeConversationId !== null;
 
   get conversations(): readonly ConversationSummary[] {

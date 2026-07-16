@@ -7,7 +7,7 @@ import hashlib
 import logging
 import time
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dlightrag.citations import finalize_answer
 from dlightrag.citations.schemas import SourceReferencePayload
@@ -39,13 +39,16 @@ from dlightrag.web.events import (
 from dlightrag.web.safe_html import safe_answer_done, safe_answer_preview, safe_source_panel
 from dlightrag.web.sse import sse_event
 
+if TYPE_CHECKING:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
 logger = logging.getLogger(__name__)
 _PERSISTENCE_HEARTBEAT_SECONDS = 10.0
 
 
-def _capability_metrics(manager: Any, turn: PreparedAnswerTurn) -> dict[str, Any]:
+def _capability_metrics(manager: RAGServiceManager, turn: PreparedAnswerTurn) -> dict[str, Any]:
     """Resolver/selection/capability metrics known before generation (design §18)."""
-    capability = getattr(manager, "answer_image_capability", None)
+    capability = manager.answer_image_capability
     plan = turn.plan
     return {
         "history_image_catalog_count": turn.history_image_catalog_count,
@@ -151,7 +154,7 @@ async def _build_answer_done_payload(
     clean_answer: str,
     contexts: dict[str, Any],
     image_descriptions: Any,
-    manager: Any,
+    manager: RAGServiceManager,
     cfg: Any,
     workspace: str,
     downloadable_workspaces: set[str] | None = None,
@@ -198,7 +201,7 @@ async def _build_answer_done_payload(
 
 async def stream_answer_events(
     *,
-    manager: Any,
+    manager: RAGServiceManager,
     cfg: Any,
     turn: PreparedAnswerTurn,
     workspaces: list[str] | None,

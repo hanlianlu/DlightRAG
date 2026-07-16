@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -20,6 +20,16 @@ from dlightrag.storage.web_conversations import CommitTurnResult
 from dlightrag.utils.images import ValidatedWebImage
 from dlightrag.web.answer_events import stream_answer_events
 from dlightrag.web.conversations import PreparedWebConversation, WebConversationUnavailableError
+
+if TYPE_CHECKING:
+    from dlightrag.core.servicemanager import RAGServiceManager
+
+
+def _fake_manager(**attrs: Any) -> RAGServiceManager:
+    # The real manager always exposes answer_image_capability (a property);
+    # default it here so fakes match that interface without repeating it.
+    attrs.setdefault("answer_image_capability", None)
+    return cast("RAGServiceManager", SimpleNamespace(**attrs))
 
 
 def _record_observations(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
@@ -90,7 +100,7 @@ async def _collect(
 ):
     if result is not None:
         service.commit_answer.return_value = result
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
     )
@@ -174,7 +184,7 @@ async def test_model_stream_failure_does_not_commit_partial_turn() -> None:
         raise RuntimeError("provider failed")
 
     service = AsyncMock()
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
     )
@@ -233,7 +243,7 @@ async def test_transport_and_capability_metrics_reach_observation(
         "answer_context_images_sent": 0,
         "answer_context_images_skipped": 3,
     }
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         answer_image_capability=AnswerImageCapability(
             status="supported",
@@ -306,7 +316,7 @@ async def test_current_image_payload_error_maps_to_limit_error(
 ) -> None:
     captured = _record_observations(monkeypatch)
     service = AsyncMock()
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         answer_image_capability=None,
         _aanswer_stream_prepared=AsyncMock(
@@ -356,7 +366,7 @@ async def test_cancellation_propagates_without_committing(
         raise asyncio.CancelledError
 
     service = AsyncMock()
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, cancelled_tokens())),
     )
@@ -400,7 +410,7 @@ async def _run_failing_stream(monkeypatch: pytest.MonkeyPatch) -> dict[str, obje
         raise RuntimeError("secret provider detail")
 
     service = AsyncMock()
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, failing_tokens())),
     )
@@ -635,7 +645,7 @@ async def test_generator_close_after_saving_heartbeat_finishes_commit(
 
     service = AsyncMock()
     service.commit_answer.side_effect = commit_answer
-    manager = SimpleNamespace(
+    manager = _fake_manager(
         config=SimpleNamespace(answer_stream_idle_timeout=30, workspace="default"),
         _aanswer_stream_prepared=AsyncMock(return_value=({"chunks": []}, _tokens())),
     )

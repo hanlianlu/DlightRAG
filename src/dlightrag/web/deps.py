@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import nh3
 from fastapi import Cookie, HTTPException, Request
@@ -15,6 +15,9 @@ from dlightrag.app_state import request_config
 from dlightrag.citations.parser import CITATION_PATTERN
 from dlightrag.core.scope import RequestScope
 from dlightrag.web.markdown import render_chunk_content, render_markdown
+
+if TYPE_CHECKING:
+    from dlightrag.core.servicemanager import RAGServiceManager
 
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
@@ -264,7 +267,7 @@ def get_workspace(dlightrag_workspace: str = Cookie(default=DEFAULT_WORKSPACE)) 
     return normalize_workspace(dlightrag_workspace)
 
 
-def get_manager(request: Request):
+def get_manager(request: Request) -> RAGServiceManager:
     """Get RAGServiceManager from app state."""
     return request.app.state.manager
 

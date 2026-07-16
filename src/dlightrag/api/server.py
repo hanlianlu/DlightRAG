@@ -90,7 +90,9 @@ def create_app(*, include_web: bool = True) -> FastAPI:
     ) -> JSONResponse:
         """Wrap every HTTPException in ErrorDetail for a uniform response schema."""
         status = exc.status_code
-        if 400 <= status < 500:
+        if status == 503:
+            error_type = "unavailable"
+        elif 400 <= status < 500:
             error_type = "validation" if status in {400, 422} else "auth"
         else:
             error_type = "internal"

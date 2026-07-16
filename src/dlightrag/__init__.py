@@ -17,7 +17,15 @@ __credits__ = ["hllyu"]
 
 from dlightrag.access_control import AccessAction, AccessControl, access_control_from_config
 from dlightrag.config import AccessControlConfig, AccessControlRuleConfig, DlightragConfig
-from dlightrag.core.client_contracts import IngestDocument, IngestSpec
+from dlightrag.core.answer_errors import (
+    ANSWER_IMAGE_CAPABILITY_UNKNOWN,
+    ANSWER_STREAM_FAILED,
+    CURRENT_IMAGE_LIMIT_EXCEEDED,
+    CURRENT_IMAGES_UNSUPPORTED,
+    AnswerImageError,
+    classify_answer_error,
+)
+from dlightrag.core.client_contracts import IngestDocument, IngestSpec, QueryImage
 
 if TYPE_CHECKING:
     from dlightrag.core.retrieval.protocols import RetrievalResult
@@ -27,12 +35,19 @@ __all__ = [
     "DlightragConfig",
     "IngestDocument",
     "IngestSpec",
+    "QueryImage",
     "AccessAction",
     "AccessControl",
     "AccessControlConfig",
     "AccessControlRuleConfig",
     "RAGServiceManager",
     "RetrievalResult",
+    "AnswerImageError",
+    "ANSWER_IMAGE_CAPABILITY_UNKNOWN",
+    "ANSWER_STREAM_FAILED",
+    "CURRENT_IMAGES_UNSUPPORTED",
+    "CURRENT_IMAGE_LIMIT_EXCEEDED",
+    "classify_answer_error",
     "__version__",
     "access_control_from_config",
 ]

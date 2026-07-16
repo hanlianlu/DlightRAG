@@ -130,6 +130,13 @@ class IngestJobStatusResponse(ClientContractModel):
     finished_at: datetime.datetime | str | None = None
 
 
+class UploadIngestJobResponse(IngestJobStatusResponse):
+    """Ingest job response for direct file uploads (adds the persisted path)."""
+
+    uploaded_file: str | None = None
+    filename: str | None = None
+
+
 class FileListResponse(ClientContractModel):
     files: list[Any]
     count: int
@@ -175,6 +182,12 @@ class WorkspaceDeleteResponse(ClientContractModel):
 class MetadataResponse(ClientContractModel):
     doc_id: str
     metadata: dict[str, Any]
+
+
+class SearchMetadataResponse(ClientContractModel):
+    document_ids: list[str]
+    count: int
+    workspace: str
 
 
 class MetadataUpdateResponse(ClientContractModel):
