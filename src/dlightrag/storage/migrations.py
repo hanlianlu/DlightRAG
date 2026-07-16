@@ -5,8 +5,6 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
-MIGRATIONS_TABLE = "dlightrag_schema_migrations"
-
 _CREATE_LEDGER = """CREATE TABLE IF NOT EXISTS dlightrag_schema_migrations (
     scope       TEXT NOT NULL,
     version     TEXT NOT NULL,
