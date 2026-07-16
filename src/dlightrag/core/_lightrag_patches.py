@@ -17,12 +17,13 @@ As of LightRAG 1.5.4, these patches remain runtime-gated because some
 upstream surfaces still need local guards.
 
 MinerU parser hygiene: current LightRAG MinerU IR builder serializes unknown
-content-list item types as body text. MinerU emits page furniture such as
-headers, footers, and printed page numbers in content_list outputs; indexing
-those as body text pollutes chunks, KG extraction, BM25, and citations.
-DlightRAG patches the builder at the parser boundary when a runtime behavior
-probe shows upstream still indexes those auxiliary blocks. More ambiguous page
-notes are controlled by ``DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY``.
+content-list item types as body text. Two consequences are patched at the parser
+boundary, each gated by a runtime behavior probe: (1) figure blocks MinerU emits
+as ``chart`` are aliased to ``image`` so they reach the drawing/VLM sidecar path
+instead of being dropped; (2) page furniture (headers, footers, printed page
+numbers) is removed so it does not pollute chunks, KG extraction, BM25, and
+citations. More ambiguous page notes are controlled by
+``DLIGHTRAG_MINERU_AUXILIARY_BLOCK_POLICY``.
 
 Keep this module small and delete patches as upstream covers them.
 
@@ -54,10 +55,10 @@ def apply() -> None:
         applied.append("configure_age")
     if _patch_execute():
         applied.append("execute")
-    from dlightrag.core.ingestion.parser_hygiene import apply_mineru_auxiliary_block_filter
+    from dlightrag.core.ingestion.parser_hygiene import apply_mineru_content_list_hygiene
 
-    if apply_mineru_auxiliary_block_filter():
-        applied.append("mineru_auxiliary_blocks")
+    if apply_mineru_content_list_hygiene():
+        applied.append("mineru_content_list_hygiene")
     if _patch_failed_doc_loop():
         applied.append("preserve_failed_docs")
     if applied:
