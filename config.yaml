@@ -33,7 +33,7 @@ llm:
     model: MiniMax-M3
     base_url: https://api.minimaxi.com/v1
     structured_output: json_schema
-    temperature: 0.5
+    temperature: 0.4
     timeout: 120.0
     model_kwargs:
       thinking:
