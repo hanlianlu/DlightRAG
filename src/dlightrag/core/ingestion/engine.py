@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from lightrag.constants import (
+    DEFAULT_MM_IMAGE_MIN_PIXEL,
     FULL_DOCS_FORMAT_PENDING_PARSE,
 )
 from lightrag.parser.routing import (
@@ -101,7 +102,7 @@ class UnifiedIngestionEngine:
         metadata_registry: MetadataFieldRegistry | None = None,
         allow_ad_hoc_metadata: bool = True,
         default_metadata_policy: MetadataIngestPolicy = "validate",
-        min_image_pixel: int = 100,
+        min_image_pixel: int | None = None,
         fused_embed_batch_size: int = 8,
         bm25_language_classifier: Any | None = None,
     ) -> None:
@@ -116,7 +117,11 @@ class UnifiedIngestionEngine:
         self._metadata_registry = metadata_registry or MetadataFieldRegistry.from_config({})
         self._allow_ad_hoc_metadata = allow_ad_hoc_metadata
         self._default_metadata_policy: MetadataIngestPolicy = default_metadata_policy
-        self._min_image_pixel = min_image_pixel
+        # None defers to LightRAG's native minimum so DlightRAG's own sidecar
+        # embedding gate matches the upstream drawing-analysis gate.
+        self._min_image_pixel = (
+            min_image_pixel if min_image_pixel is not None else DEFAULT_MM_IMAGE_MIN_PIXEL
+        )
         self._fused_embed_batch_size = fused_embed_batch_size
         self._bm25_language_classifier = bm25_language_classifier
         self._ingest_locks: dict[str, asyncio.Lock] = {}
