@@ -44,7 +44,7 @@ class EvalError(RuntimeError):
 
 # OpenAI-compatible embedding providers — their api_key + base_url work
 # with langchain's OpenAIEmbeddings. Native transports (voyage, gemini,
-# jina, dashscope_qwen, ollama) are excluded because they do not expose
+# jina, ollama) are excluded because they do not expose
 # that OpenAI embeddings contract.
 _OPENAI_COMPATIBLE_EMBED_PROVIDERS = frozenset({"openai_compatible"})
 DEFAULT_RESULTS_DIR = Path("ragas_eval_results")

@@ -106,7 +106,7 @@ Second, DlightRAG restores fused visual-vector alignment:
 1. It reads processed documents and their sidecar locations.
 2. It reuses DlightRAG's multimodal embedder and ingestion alignment code.
 3. It overwrites canonical LightRAG drawing chunk vectors with fused
-   VLM-description + image vectors when the embedder fuses text and image and
+   VLM-description + image vectors when direct image embedding is enabled and
    the image embedding probe succeeds.
 
 This preserves visual retrieval behavior after `--target chunks` or

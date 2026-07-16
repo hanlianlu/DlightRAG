@@ -146,7 +146,6 @@ class EmbeddingConfig(BaseModel):
 
     provider: Literal[
         "voyage",
-        "dashscope_qwen",
         "gemini",
         "jina",
         "openai_compatible",

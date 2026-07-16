@@ -64,9 +64,9 @@ async def test_native_multimodal_provider_can_be_forced_to_text() -> None:
 
     try:
         assert embedder.supports_images is False
-        with pytest.raises(ValueError, match="does not support image embeddings"):
-            embedder.build_image_payload_for_test(
-                Image.new("RGB", (1, 1), "white"), context="document"
+        with pytest.raises(ValueError, match="does not support image"):
+            embedder.build_fused_payload_for_test(
+                "x", Image.new("RGB", (1, 1), "white"), context="document"
             )
     finally:
         await embedder.aclose()
@@ -104,28 +104,7 @@ async def test_openai_compatible_explicit_multimodal_enables_images() -> None:
         await embedder.aclose()
 
 
-def test_image_embedder_auto_falls_back_for_unsupported_provider() -> None:
-    provider = GeminiEmbedProvider()
-    embedder = MultimodalEmbedder(
-        model="gemini-embedding-2",
-        base_url="https://generativelanguage.googleapis.com/v1beta",
-        api_key="key",
-        dim=1536,
-        provider=provider,
-        asymmetric="auto",
-    )
-
-    image = Image.new("RGB", (1, 1), "white")
-    index_payload = embedder.build_image_payload_for_test(image, context="document")
-    query_payload = embedder.build_image_payload_for_test(image, context="query")
-
-    assert embedder.supports_asymmetric is False
-    assert "input_type" not in index_payload
-    assert "input_type" not in query_payload
-    assert index_payload["content"]["parts"][0]["inline_data"]["mime_type"] == "image/png"
-
-
-def test_voyage_embedder_exposes_fused_multimodal_support() -> None:
+def test_multimodal_embedder_builds_fused_voyage_payload() -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
@@ -134,7 +113,7 @@ def test_voyage_embedder_exposes_fused_multimodal_support() -> None:
         provider=VoyageEmbedProvider(),
     )
 
-    assert embedder.supports_fused_multimodal is True
+    assert embedder.supports_images is True
     payload = embedder.build_fused_payload_for_test(
         "a bar chart", Image.new("RGB", (2, 2), "white"), context="document"
     )
@@ -161,9 +140,9 @@ def test_fused_payload_degrades_to_image_only_when_description_blank() -> None:
     assert content[0]["type"] == "image_base64"
 
 
-def test_image_capable_but_non_fused_provider_rejects_fused_payload() -> None:
-    # Gemini can embed images but does not fuse text+image into one vector,
-    # so the embedder must not offer the fused path (keeps LightRAG's native VLM->text).
+def test_image_capable_provider_builds_fused_payload() -> None:
+    # Gemini Embedding 2 is a unified multimodal model: multiple parts in one
+    # content aggregate into a single fused vector, so the fused index path works.
     embedder = MultimodalEmbedder(
         model="gemini-embedding-2",
         base_url="https://generativelanguage.googleapis.com/v1beta",
@@ -173,11 +152,12 @@ def test_image_capable_but_non_fused_provider_rejects_fused_payload() -> None:
     )
 
     assert embedder.supports_images is True
-    assert embedder.supports_fused_multimodal is False
-    with pytest.raises(ValueError, match="does not support fused"):
-        embedder.build_fused_payload_for_test(
-            "x", Image.new("RGB", (2, 2), "white"), context="document"
-        )
+    payload = embedder.build_fused_payload_for_test(
+        "x", Image.new("RGB", (2, 2), "white"), context="document"
+    )
+    parts = payload["content"]["parts"]
+    assert parts[0] == {"text": "x"}
+    assert "inline_data" in parts[1]
 
 
 def test_image_embedder_uses_asymmetric_by_default_for_capable_provider() -> None:
@@ -191,8 +171,8 @@ def test_image_embedder_uses_asymmetric_by_default_for_capable_provider() -> Non
     )
 
     image = Image.new("RGB", (1, 1), "white")
-    index_payload = embedder.build_image_payload_for_test(image, context="document")
-    query_payload = embedder.build_image_payload_for_test(image, context="query")
+    index_payload = embedder.build_fused_payload_for_test("chart", image, context="document")
+    query_payload = embedder.build_fused_payload_for_test("chart", image, context="query")
 
     assert embedder.supports_asymmetric is True
     assert index_payload["input_type"] == "document"
@@ -208,8 +188,8 @@ def test_image_embedder_bounds_oversized_images_before_send() -> None:
         provider=VoyageEmbedProvider(),
     )
 
-    payload = embedder.build_image_payload_for_test(
-        Image.new("RGB", (6000, 5000), "white"), context="document"
+    payload = embedder.build_fused_payload_for_test(
+        "", Image.new("RGB", (6000, 5000), "white"), context="document"
     )
 
     data_uri = payload["inputs"][0]["content"][0]["image_base64"]
@@ -229,30 +209,12 @@ def test_image_embedder_can_disable_asymmetric_for_capable_provider() -> None:
         asymmetric="disable",
     )
 
-    payload = embedder.build_image_payload_for_test(
-        Image.new("RGB", (1, 1), "white"), context="query"
+    payload = embedder.build_fused_payload_for_test(
+        "chart", Image.new("RGB", (1, 1), "white"), context="query"
     )
 
     assert embedder.supports_asymmetric is False
     assert "input_type" not in payload
-
-
-def test_gemini_embedding_2_uses_symmetric_fallback() -> None:
-    embedder = MultimodalEmbedder(
-        model="gemini-embedding-2",
-        base_url="https://generativelanguage.googleapis.com/v1beta",
-        api_key="key",
-        dim=1536,
-        provider=GeminiEmbedProvider(),
-        asymmetric="auto",
-    )
-
-    payload = embedder.build_image_payload_for_test(
-        Image.new("RGB", (1, 1), "white"), context="query"
-    )
-
-    assert embedder.supports_asymmetric is False
-    assert "task_type" not in payload
 
 
 def test_dimension_mismatch_raises() -> None:
@@ -288,6 +250,31 @@ async def test_embed_texts_posts_document_context() -> None:
     assert payload["input_type"] == "document"
 
 
+async def test_embed_query_images_batches_with_query_context() -> None:
+    embedder = MultimodalEmbedder(
+        model="voyage-multimodal-3.5",
+        base_url="https://api.voyageai.com/v1",
+        api_key="key",
+        dim=3,
+        provider=VoyageEmbedProvider(),
+    )
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json.return_value = {
+        "data": [{"embedding": [0.1, 0.2, 0.3]}, {"embedding": [0.4, 0.5, 0.6]}]
+    }
+    embedder._client.post = AsyncMock(return_value=response)
+
+    result = await embedder.embed_query_images(
+        [Image.new("RGB", (2, 2), "white"), Image.new("RGB", (2, 2), "black")]
+    )
+
+    assert result == [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    payload = embedder._client.post.call_args.kwargs["json"]
+    assert payload["input_type"] == "query"
+    assert len(payload["inputs"]) == 2  # both images in ONE batched request
+
+
 async def test_text_only_embedder_keeps_text_embedding_and_rejects_images() -> None:
     embedder = MultimodalEmbedder(
         model="nomic-embed-text",
@@ -305,11 +292,11 @@ async def test_text_only_embedder_keeps_text_embedding_and_rejects_images() -> N
 
     assert result == [[0.1, 0.2, 0.3]]
     assert embedder.supports_images is False
-    with pytest.raises(ValueError, match="does not support image embeddings"):
-        await embedder.embed_index_images([Image.new("RGB", (1, 1), "white")])
+    with pytest.raises(ValueError, match="does not support image"):
+        await embedder.embed_index_fused([("x", Image.new("RGB", (1, 1), "white"))])
 
 
-async def test_probe_image_embedding_uses_index_context() -> None:
+async def test_probe_image_embedding_calls_query_embed() -> None:
     embedder = MultimodalEmbedder(
         model="voyage-multimodal-3.5",
         base_url="https://api.voyageai.com/v1",
@@ -317,11 +304,11 @@ async def test_probe_image_embedding_uses_index_context() -> None:
         dim=3,
         provider=VoyageEmbedProvider(),
     )
-    embedder.embed_index_images = AsyncMock(return_value=[[0.1, 0.2, 0.3]])  # type: ignore[method-assign]
+    embedder.embed_query_images = AsyncMock(return_value=[[0.1, 0.2, 0.3]])  # type: ignore[method-assign]
 
     await embedder.probe_image_embedding()
 
-    embedder.embed_index_images.assert_awaited_once()
+    embedder.embed_query_images.assert_awaited_once()
 
 
 async def test_image_probe_rejects_wrong_vector_count() -> None:

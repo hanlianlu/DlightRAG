@@ -17,9 +17,6 @@ class EmbedProvider(ABC):
     endpoint: str = ""
     image_input_capability: ImageInputCapability = "unsupported"
     supports_asymmetric: bool = False
-    # Whether the provider fuses interleaved text+image into a single vector (a
-    # "unified multimodal" model). Enables text-retrievable visual chunk vectors.
-    supports_fused_multimodal: bool = False
 
     @abstractmethod
     def build_payload(

@@ -27,7 +27,7 @@ source file
        LightRAG raw parser route otherwise
   -> LightRAG ingest
        chunks, entities, relationships, graph, vectors, doc status
-  -> fused visual-vector alignment when the embedder fuses text+image
+  -> fused visual-vector alignment when direct image embedding is active
        successful LightRAG drawing multimodal chunks keep their VLM text,
        sidecar provenance, BM25, and KG identity; DlightRAG overwrites the
        existing chunk vector with one fused vector interleaving the VLM
@@ -64,7 +64,7 @@ startup error.
 ## Query Pipeline
 
 ```text
-RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
+RAGService.aretrieve / aanswer(query, query_images, filters)
   |
   |-- QueryPlanner
   |     declared metadata fields only
@@ -80,8 +80,8 @@ RAGService.aretrieve / aanswer(query, query_images, multimodal_content, filters)
   |     QueryParam(mode="mix")
   |     KG entities + relationships + text chunks
   |
-  |-- Direct image path, when image embedding is active
-  |     query images -> multimodal embedding -> image/vector chunks
+  |-- Direct image->image path, when fused visual embedding is active
+  |     query images -> image embedding (batched) -> fused visual chunks
   |
   |-- BM25 path
   |     pg_textsearch over candidate-scoped chunks
@@ -151,16 +151,19 @@ query + images
   `-- images -> multimodal embedding(context="query") -> image chunks
 ```
 
-Document and sidecar images are embedded with document context at ingestion.
-Query images are embedded with query context when the provider supports
-asymmetric embeddings. If the provider does not expose task-aware routing,
-LightRAG's symmetric embedding mode is used.
+Sidecar visual chunks are embedded as fused (VLM description + image) document
+vectors at ingestion, batched into one provider request per group. Query images
+are embedded image-only with query context when the provider supports asymmetric
+embeddings. If the provider does not expose task-aware routing, LightRAG's
+symmetric embedding mode is used.
 
 Images also produce VLM semantic text through LightRAG's multimodal sidecar
 path. That text feeds BM25 and KG extraction. For successful drawing chunks,
 visual similarity search uses the same LightRAG chunk id after DlightRAG
-overwrites its vector with the raw image embedding, preserving sidecar
-provenance and avoiding duplicate VLM text exposure.
+overwrites its vector with a fused text+image embedding, preserving sidecar
+provenance and avoiding duplicate VLM text exposure. The image->image query leg
+is lossless where the VLM-description text path is lossy, so partial overlap
+between the two is expected and resolved by RRF, dedup, and reranking.
 
 With `embedding.input_modality: text`, DlightRAG skips both image-vector
 overwrite and query-image vector retrieval. Query images can still be described

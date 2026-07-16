@@ -226,13 +226,6 @@ class TestRAGServiceRetrieve:
         await service.aretrieve("test query")
         orchestrator.aretrieve.assert_awaited_once()
 
-    async def test_aretrieve_passes_multimodal_content(self, test_config):
-        service, orchestrator = self._make_retrieval_service(test_config)
-        mc = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
-        await service.aretrieve("test query", multimodal_content=mc)
-        call_kwargs = orchestrator.aretrieve.call_args.kwargs
-        assert call_kwargs["multimodal_content"] == mc
-
     async def test_aretrieve_forwards_caller_bm25_query(self, test_config):
         service, orchestrator = self._make_retrieval_service(test_config)
         await service.aretrieve("test query", bm25_query="alpha beta")
@@ -610,7 +603,7 @@ class TestBuildRetrievalBackend:
 
 
 class TestDirectImageEmbeddingCapability:
-    """Test direct image embedding capability resolution."""
+    """Test image embedding capability resolution for the direct-visual leg."""
 
     async def test_text_only_embedder_disables_direct_image_embedding_without_probe(self) -> None:
         embedder = MagicMock()

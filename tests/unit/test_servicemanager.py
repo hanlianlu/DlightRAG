@@ -24,7 +24,7 @@ from dlightrag.config import (
     set_config,
 )
 from dlightrag.core.client_contracts import IngestSpec
-from dlightrag.core.query_images import images_to_multimodal_content, prepare_query_images
+from dlightrag.core.query_images import prepare_query_images
 from dlightrag.core.query_planner import QueryPlanner, QueryPlannerStructuredResponse
 from dlightrag.core.retrieval.protocols import RetrievalResult
 from dlightrag.core.servicemanager import RAGServiceManager, RAGServiceUnavailableError
@@ -89,7 +89,6 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
         "top_k",
         "chunk_top_k",
         "filters",
-        "multimodal_content",
     ):
         assert name in retrieve_params
 
@@ -112,7 +111,6 @@ def test_public_sdk_signatures_expose_primary_contracts() -> None:
         "chunk_top_k",
         "answer_context_top_k",
         "filters",
-        "multimodal_content",
         "all_workspaces",
     ):
         assert name in answer_params
@@ -533,7 +531,7 @@ class TestRouting:
         async def _fake(self_: object, query: str, **_kwargs: object) -> tuple[object, object]:
             return (
                 SimpleNamespace(standalone_query=query, metadata_filter=None),
-                SimpleNamespace(descriptions=[], multimodal_content=[]),
+                SimpleNamespace(descriptions=[]),
             )
 
         monkeypatch.setattr(RAGServiceManager, "_describe_and_plan", _fake)
@@ -631,6 +629,17 @@ class TestRouting:
         retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
         assert retrieve_kwargs["bm25_query"] == "alpha beta"
 
+    @patch("dlightrag.core.servicemanager.RAGService.acreate", new_callable=AsyncMock)
+    async def test_aretrieve_threads_query_images_to_backend(self, mock_create, test_cfg) -> None:
+        mock_svc = AsyncMock()
+        mock_svc.aretrieve.return_value = MagicMock()
+        mock_create.return_value = mock_svc
+        blocks = [_image_block()]
+        manager = RAGServiceManager(config=test_cfg)
+        await manager.aretrieve("query", workspace="ws_a", query_images=blocks)
+        retrieve_kwargs = mock_svc.aretrieve.await_args.kwargs
+        assert retrieve_kwargs["query_image_blocks"] == blocks
+
     async def test_query_images_are_current_request_only(self, test_cfg) -> None:
         describer = AsyncMock()
         describer.describe = AsyncMock(return_value={"1": "Image 1: chart"})
@@ -641,7 +650,6 @@ class TestRouting:
             describer=describer,
         )
 
-        assert prepared.multimodal_content == images_to_multimodal_content(current)
         assert prepared.descriptions == ["Image 1: chart"]
         assert prepared.descriptions_by_ordinal == {"1": "Image 1: chart"}
         assert not hasattr(prepared, "answer_images")
@@ -769,7 +777,6 @@ class TestAnswerViaEngine:
             "top_k": test_cfg.top_k,
             "chunk_top_k": test_cfg.chunk_top_k,
             "has_filters": False,
-            "multimodal_count": 0,
         }
         assert retrieve["updates"] == [
             {

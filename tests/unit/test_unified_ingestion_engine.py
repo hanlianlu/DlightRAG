@@ -39,11 +39,13 @@ def _make_engine(**overrides):
         "chunk_options": {"paragraph_semantic": {"chunk_token_size": 2000}},
         "sidecar_location": "file:///tmp/sample.parsed/",
     }
+    multimodal_embedder = AsyncMock()
+    multimodal_embedder.batch_size = 4
     defaults = {
         "lightrag": lightrag,
         "stores": stores,
         "metadata_index": AsyncMock(),
-        "multimodal_embedder": AsyncMock(),
+        "multimodal_embedder": multimodal_embedder,
         "workspace": "default",
         "parser_rules": "docx:native-iteP,*:mineru-iteP",
         "chunk_options": {},
@@ -809,7 +811,7 @@ async def test_parser_image_sidecar_overwrites_lightrag_mm_chunk_vector(
         encoding="utf-8",
     )
     embedder = AsyncMock()
-    embedder.supports_fused_multimodal = True
+    embedder.batch_size = 4
     embedder.embed_index_fused.return_value = [[0.1, 0.2, 0.3]]
     engine, deps = _make_engine(multimodal_embedder=embedder)
     deps["stores"].fetch_chunk_contents.return_value = [
@@ -869,7 +871,6 @@ async def test_parser_image_sidecar_skips_vector_overwrite_when_direct_embedding
         encoding="utf-8",
     )
     embedder = AsyncMock()
-    embedder.supports_fused_multimodal = True
     embedder.embed_index_fused.return_value = [[0.1, 0.2, 0.3]]
     engine, deps = _make_engine(
         multimodal_embedder=embedder,
@@ -1077,7 +1078,6 @@ async def test_sidecar_image_prework_runs_off_event_loop(tmp_path: Path, monkeyp
     deps["stores"].fetch_chunk_contents = AsyncMock(
         return_value=[{"id": "doc-1-mm-drawing-000", "content": "chart"}]
     )
-    deps["multimodal_embedder"].supports_fused_multimodal = True
     deps["multimodal_embedder"].embed_index_fused = AsyncMock(return_value=[[0.1, 0.2]])
     calls = []
 
@@ -1125,7 +1125,6 @@ async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypa
     deps["stores"].fetch_chunk_contents = AsyncMock(
         return_value=[{"id": "doc-1-mm-drawing-000", "content": "chart"}]
     )
-    deps["multimodal_embedder"].supports_fused_multimodal = True
     deps["multimodal_embedder"].embed_index_fused = AsyncMock(
         side_effect=RuntimeError("provider rejected oversized image")
     )
@@ -1145,58 +1144,47 @@ async def test_sidecar_image_embed_failure_is_non_fatal(tmp_path: Path, monkeypa
     deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
 
 
-async def test_parser_image_sidecar_skips_overwrite_when_embedder_not_fused(
-    tmp_path: Path,
-) -> None:
-    # An image-capable but non-fused embedder keeps LightRAG's native VLM->text
-    # vector for the visual chunk (no override), so it stays text-retrievable.
-    source = tmp_path / "sample[mineru-iteP].pdf"
-    source.write_bytes(b"%PDF-1.4")
-    doc_id = compute_mdhash_id(normalize_document_file_path(source), prefix="doc-")
-    mm_chunk_id = f"{doc_id}-mm-drawing-000"
+async def test_sidecar_partial_failure_still_embeds_surviving_images(tmp_path: Path) -> None:
+    # Per-image fault isolation at open time: one unreadable image is skipped
+    # while its healthy sibling in the same batch still gets a fused vector.
+    import json
+
     artifact_dir = tmp_path / "sample.parsed"
-    assets_dir = artifact_dir / "sample.blocks.assets"
-    assets_dir.mkdir(parents=True)
-    (artifact_dir / "sample.blocks.jsonl").write_text("", encoding="utf-8")
-    Image.new("RGB", (128, 128), "white").save(assets_dir / "fig.png")
+    artifact_dir.mkdir()
+    (artifact_dir / "sample.blocks.jsonl").write_text("{}\n", encoding="utf-8")
+    Image.new("RGB", (128, 128), color=(0, 200, 0)).save(artifact_dir / "good.png")
+    (artifact_dir / "bad.png").write_bytes(b"not a real image")
     (artifact_dir / "sample.drawings.json").write_text(
-        """
-        {
-          "drawings": {
-            "fig-1": {
-              "id": "fig-1",
-              "path": "sample.blocks.assets/fig.png",
-              "llm_analyze_result": {"status": "success", "description": "d"}
+        json.dumps(
+            {
+                "drawings": {
+                    "im-1": {"path": "good.png", "llm_analyze_result": {"status": "success"}},
+                    "im-2": {"path": "bad.png", "llm_analyze_result": {"status": "success"}},
+                }
             }
-          }
-        }
-        """,
+        ),
         encoding="utf-8",
     )
-    embedder = AsyncMock()
-    embedder.supports_fused_multimodal = False
-    engine, deps = _make_engine(multimodal_embedder=embedder)
-    deps["stores"].get_doc_status.side_effect = [
-        None,
-        None,
-        {
-            "chunks_list": ["chunk-a", mm_chunk_id],
-            "content_hash": "sha256:parsed",
-            "status": "processed",
-        },
-    ]
-    deps["stores"].get_full_doc.return_value = {
-        "parse_engine": "mineru",
-        "process_options": "iteP",
-        "chunk_options": {},
-        "sidecar_location": artifact_dir.as_uri(),
-    }
+    good_chunk = "doc-1-mm-drawing-000"
+    bad_chunk = "doc-1-mm-drawing-001"
+    engine, deps = _make_engine()
+    deps["stores"].fetch_chunk_contents = AsyncMock(
+        return_value=[
+            {"id": good_chunk, "content": "keep"},
+            {"id": bad_chunk, "content": "boom"},
+        ]
+    )
+    deps["multimodal_embedder"].embed_index_fused = AsyncMock(return_value=[[0.5, 0.6]])
 
-    result = await engine.aingest_file(source, replace=False)
+    await engine._overwrite_sidecar_image_vectors(
+        doc_id="doc-1",
+        sidecar_location=artifact_dir.as_uri(),
+        chunk_ids={good_chunk, bad_chunk},
+    )
 
-    assert result["chunks"] == ["chunk-a", mm_chunk_id]
-    embedder.embed_index_fused.assert_not_awaited()
-    deps["stores"].overwrite_chunk_vectors.assert_not_awaited()
+    deps["stores"].overwrite_chunk_vectors.assert_awaited_once()
+    stored = deps["stores"].overwrite_chunk_vectors.await_args.args[0]
+    assert stored == {good_chunk: [0.5, 0.6]}
 
 
 def test_sidecar_dir_from_location_handles_file_scheme() -> None:

@@ -311,10 +311,14 @@ class RAGService:
         startup_probe: bool,
         require_image_support: bool,
     ) -> bool:
-        """Return whether DlightRAG direct image vectors are safe to use.
+        """Return whether DlightRAG image embedding paths are safe to use.
 
-        The probe calls only the embedding provider with an in-memory 1x1
-        image; it does not touch LightRAG storage, PostgreSQL, or local files.
+        One capability drives both DlightRAG image paths -- the image->image
+        direct-visual query leg and the fused visual-chunk vector overwrite.
+        Every image-capable provider is a unified multimodal model that fuses
+        text+image, so ``supports_images`` plus the live probe is the only gate.
+        The probe calls only the embedding provider with an in-memory 1x1 image;
+        it does not touch LightRAG storage, PostgreSQL, or local files.
         """
         if not getattr(embedder, "supports_images", False):
             if require_image_support:
@@ -323,7 +327,7 @@ class RAGService:
                     f"{embedder.__class__.__name__} does not support image inputs"
                 )
             logger.info(
-                "Direct image embedding disabled: %s does not support image inputs",
+                "Image embedding disabled: %s does not support image inputs",
                 embedder.__class__.__name__,
             )
             return False
@@ -338,11 +342,11 @@ class RAGService:
                     "but the startup probe failed"
                 ) from exc
             logger.warning(
-                "Direct image embedding probe failed; using LightRAG semantic visual path only",
+                "Image embedding probe failed; using LightRAG semantic visual path only",
                 exc_info=True,
             )
             return False
-        logger.info("Direct image embedding probe passed — visual chunk vectors enabled")
+        logger.info("Image embedding probe passed — direct-visual leg enabled")
         return True
 
     @staticmethod
@@ -1709,7 +1713,6 @@ class RAGService:
     async def aretrieve(
         self,
         query: str,
-        multimodal_content: list[dict[str, Any]] | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
         is_reretrieve: bool = False,
@@ -1750,7 +1753,6 @@ class RAGService:
 
         kg_result = await self._retrieval_orchestrator.aretrieve(
             query,
-            multimodal_content=multimodal_content,
             metadata_filter=effective_filters,
             metadata_filter_source=filter_source,
             bm25_query=effective_bm25_query,

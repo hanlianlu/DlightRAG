@@ -73,7 +73,6 @@ class UnifiedRetriever:
         *,
         metadata_filter: MetadataFilter | None = None,
         metadata_filter_source: str | None = None,
-        multimodal_content: list[dict[str, Any]] | None = None,
         bm25_query: str | None = None,
         top_k: int | None = None,
         chunk_top_k: int | None = None,
@@ -99,7 +98,6 @@ class UnifiedRetriever:
             lightrag_task = asyncio.create_task(
                 self._backend.aretrieve(
                     query,
-                    multimodal_content=multimodal_content,
                     mode="mix",
                     top_k=top_k,
                     chunk_top_k=chunk_top_k,
@@ -146,7 +144,6 @@ class UnifiedRetriever:
                 query,
                 metadata_filter=None,
                 metadata_filter_source=None,
-                multimodal_content=multimodal_content,
                 bm25_query=bm25_query,
                 top_k=top_k,
                 chunk_top_k=chunk_top_k,
