@@ -256,11 +256,13 @@ class TestPatchIdempotency:
         import dlightrag.core._lightrag_patches as mod
         from dlightrag.core.ingestion.parser_hygiene import (
             mineru_ir_builder_needs_auxiliary_filter,
+            mineru_ir_builder_needs_drawing_alias_normalization,
         )
 
         mod.apply()
 
         assert mineru_ir_builder_needs_auxiliary_filter(MinerUIRBuilder) is False
+        assert mineru_ir_builder_needs_drawing_alias_normalization(MinerUIRBuilder) is False
 
     async def test_apply_twice_no_double_patch(self):
         """Applying patches twice should not double-patch."""
