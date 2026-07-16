@@ -189,7 +189,6 @@ async def _chat_llm_rerank(
             )
             for i, chunk in enumerate(batch):
                 content.append({"type": "text", "text": f"\nCandidate {i + 1}:"})
-                image_included = False
                 if multimodal:
                     img = chunk.get("image_data")
                     if img:
@@ -200,17 +199,8 @@ async def _chat_llm_rerank(
                         if bounded is not None:
                             uri, _ = bounded
                             content.append({"type": "image_url", "image_url": {"url": uri}})
-                            image_included = True
                 if chunk.get("content"):
-                    # image_included=True → image carries rich signal, keep text short.
-                    # image_included=False → text-only path (either multimodal disabled,
-                    # or image exceeded budget, or chunk had no image): send full VLM
-                    # text description for accurate reranking.
-                    text_limit = 500 if image_included else None
-                    text_preview = (
-                        chunk["content"] if text_limit is None else chunk["content"][:text_limit]
-                    )
-                    content.append({"type": "text", "text": text_preview})
+                    content.append({"type": "text", "text": chunk["content"]})
             return content
 
         content = await asyncio.to_thread(_build_content)
